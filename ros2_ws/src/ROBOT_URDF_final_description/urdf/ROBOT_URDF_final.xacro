@@ -1,0 +1,213 @@
+<?xml version="1.0" ?>
+<robot name="ROBOT_URDF_final" xmlns:xacro="http://www.ros.org/wiki/xacro" xmlns:gz="http://gazebosim.org/schema">
+
+<xacro:include filename="$(find ROBOT_URDF_final_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find ROBOT_URDF_final_description)/urdf/ROBOT_URDF_final.ros2control" />
+<xacro:include filename="$(find ROBOT_URDF_final_description)/urdf/ROBOT_URDF_final.gazebo" />
+
+<!-- BASE LINK (Khung xe màu xám kim loại) -->
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.004680971074212348 0.001013778159962492 0.022702840329693212" rpy="0 0 0"/>
+    <mass value="2"/>
+    <inertia ixx="0.032621" iyy="0.088559" izz="0.100296" ixy="-2.7e-05" iyz="0.000162" ixz="0.003248"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="chassis_dark_grey"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.4 0.28 0.10"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- WHEEL LEFT FRONT (Bánh xe màu đen) -->
+<link name="Wheel_LF_1">
+  <inertial>
+    <origin xyz="7.730831169672214e-09 0.020486354622651984 7.0657725812633965e-06" rpy="0 0 0"/>
+    <mass value="0.15"/>
+    <inertia ixx="0.000111" iyy="0.000179" izz="0.000111" ixy="-0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.108 -0.11109 0.0175" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/Wheel_LF_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="black"/>
+  </visual>
+  <collision>
+    <!-- Lật ngang hình trụ 90 độ (1.5708 radian) quanh trục X -->
+    <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+    <geometry>
+      <!-- Bán kính 0.0485m (đường kính 97mm), độ dày 0.04m (4cm) -->
+      <cylinder radius="0.0485" length="0.04"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- WHEEL RIGHT FRONT (Bánh xe màu đen) -->
+<link name="Wheel_RF_1">
+  <inertial>
+    <origin xyz="8.176073262866623e-09 -0.020486352801042898 7.067794141380618e-06" rpy="0 0 0"/>
+    <mass value="0.15"/>
+    <inertia ixx="0.000111" iyy="0.000179" izz="0.000111" ixy="0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.108 0.11109 0.0175" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/Wheel_RF_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="black"/>
+  </visual>
+  <collision>
+    <!-- Lật ngang hình trụ 90 độ (1.5708 radian) quanh trục X -->
+    <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+    <geometry>
+      <!-- Bán kính 0.0485m (đường kính 97mm), độ dày 0.04m (4cm) -->
+      <cylinder radius="0.0485" length="0.04"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- WHEEL RIGHT BACK (Bánh xe màu đen) -->
+<link name="Wheel_RB_1">
+  <inertial>
+    <origin xyz="-1.1186073178848233e-09 -0.020486363591042916 7.059103033960068e-06" rpy="0 0 0"/>
+    <mass value="0.15"/>
+    <inertia ixx="0.000111" iyy="0.000179" izz="0.000111" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.108 0.11109 0.0175" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/Wheel_RB_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="black"/>
+  </visual>
+  <collision>
+    <!-- Lật ngang hình trụ 90 độ (1.5708 radian) quanh trục X -->
+    <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+    <geometry>
+      <!-- Bán kính 0.0485m (đường kính 97mm), độ dày 0.04m (4cm) -->
+      <cylinder radius="0.0485" length="0.04"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- WHEEL LEFT BACK (Bánh xe màu đen) -->
+<link name="Wheel_LB_1">
+  <inertial>
+    <origin xyz="-1.5638501049686226e-09 0.02048636176944614 7.061124594778118e-06" rpy="0 0 0"/>
+    <mass value="0.15"/>
+    <inertia ixx="0.000111" iyy="0.000179" izz="0.000111" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.108 -0.11109 0.0175" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/Wheel_LB_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="black"/>
+  </visual>
+  <collision>
+    <!-- Lật ngang hình trụ 90 độ (1.5708 radian) quanh trục X -->
+    <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+    <geometry>
+      <!-- Bán kính 0.0485m (đường kính 97mm), độ dày 0.04m (4cm) -->
+      <cylinder radius="0.0485" length="0.04"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- CAMERA LINK (Intel RealSense màu trắng) -->
+<link name="IntelRealsense_D435_Multibody_1">
+  <inertial>
+    <origin xyz="0.01195124704164778 -0.0026011079695855525 -6.051171193946492e-05" rpy="0 0 0"/>
+    <mass value="0.35"/>
+    <inertia ixx="0.000227" iyy="3.2e-05" izz="0.000229" ixy="-1e-06" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.043208 0.0 -0.095165" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/IntelRealsense_D435_Multibody_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="camera_white"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.043208 0.0 -0.095165" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/IntelRealsense_D435_Multibody_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- LIDAR LINK (RPLidar màu đen) -->
+<link name="RPLiDAR_A1M8_1">
+  <inertial>
+    <origin xyz="-0.05153713704514566 8.887643777943633e-05 0.027012153068496997" rpy="0 0 0"/>
+    <mass value="0.7"/>
+    <inertia ixx="0.000423" iyy="0.000745" izz="0.000767" ixy="-6e-06" iyz="5e-06" ixz="4.5e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0432 0.0 -0.107565" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/RPLiDAR_A1M8_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="black"/>
+  </visual>
+  
+  <!-- ĐÃ SỬA: Dùng hình trụ va chạm nằm bên dưới mặt quét để tránh cản tia laser -->
+  <collision>
+    <origin xyz="0 0 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <cylinder radius="0.035" length="0.03"/>
+    </geometry>
+  </collision>
+</link>
+
+<!-- JOINTS -->
+<joint name="Wheel_LF_Joint" type="continuous">
+  <origin xyz="0.108 0.11109 -0.0175" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="Wheel_LF_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="Wheel_RF_Joint" type="continuous">
+  <origin xyz="0.108 -0.11109 -0.0175" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="Wheel_RF_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="Wheel_RB_Joint" type="continuous">
+  <origin xyz="-0.108 -0.11109 -0.0175" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="Wheel_RB_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="Wheel_LB_Joint" type="continuous">
+  <origin xyz="-0.108 0.11109 -0.0175" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="Wheel_LB_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="Camera_Joint" type="fixed">
+  <origin xyz="0.043208 0.0 0.095165" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="IntelRealsense_D435_Multibody_1"/>
+</joint>
+
+<joint name="Lidar_Joint" type="fixed">
+  <origin xyz="0.0432 0.0 0.107565" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="RPLiDAR_A1M8_1"/>
+</joint>
+
+</robot>

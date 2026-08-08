@@ -1,0 +1,34 @@
+cd ~/ros2_ws
+rm -rf build/ install/ log/
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch ROBOT_URDF_final_description gazebo.launch.py
+
+source install/setup.bash
+ros2 launch ROBOT_URDF_final_description nav2_bringup.launch.py
+
+source install/setup.bash
+ros2 launch ROBOT_URDF_final_description display.launch.py
+
+source install/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+source install/setup.bash
+ros2 run rviz2 rviz2 --ros-args -p use_sim_time:=true
+
+source install/setup.bash
+ros2 launch ROBOT_URDF_final_description slam.launch.py use_sim_time:=true
+
+
+ros2 topic echo /scan --once
+
+source /opt/ros/$ROS_DISTRO/setup.bash
+ros2 launch teleop_twist_joy teleop-launch.py joy_config:='xbox'
+
+gz sim ~/ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf
+
+ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/src/ROBOT_URDF_final_description/maps/warehouse_map2
+
+
+source ~/ros2_ws/install/setup.bash
+ros2 run rviz2 rviz2 -d $(ros2 pkg prefix nav2_bringup)/share/nav2_bringup/rviz/nav2_default_view.rviz --ros-args -p use_sim_time:=true

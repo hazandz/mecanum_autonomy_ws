@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<robot name="ROBOT_URDF_final" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<!-- Màu xám kim loại đậm (Khung xe base_link) -->
+<material name="chassis_dark_grey">
+  <color rgba="0.32 0.32 0.32 1.0"/>
+</material>
+
+<!-- Màu đen tuyền (4 Bánh xe Mecanum & Cụm Lidar) -->
+<material name="black">
+  <color rgba="0.12 0.12 0.12 1.0"/>
+</material>
+
+<!-- Màu trắng sữa (Thân Camera Intel RealSense D435) -->
+<material name="camera_white">
+  <color rgba="0.90 0.90 0.90 1.0"/>
+</material>
+
+<!-- Màu bạc sáng -->
+<material name="silver">
+  <color rgba="0.75 0.75 0.75 1.0"/>
+</material>
+
+</robot>

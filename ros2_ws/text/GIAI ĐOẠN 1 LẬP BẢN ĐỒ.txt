@@ -1,0 +1,8 @@
+GIAI ĐOẠN 1: LẬP BẢN ĐỒ VỚI SLAM TOOLBOX (CHÚNG TA ĐANG Ở ĐÂY)
+Mục tiêu: Dùng Lidar và dữ liệu di chuyển để vẽ ra bản đồ 2D dạng lưới (Occupancy Grid Map).
+Các việc cụ thể vừa được hướng dẫn:
+Tạo thư mục config, maps.
+Viết file config/mapper_params_online_async.yaml tối ưu cho Lidar 12m.
+Viết file launch/slam.launch.py.
+Cập nhật setup.py để hệ thống nhận diện thư mục mới.Mở 4 Terminal: Chạy Gazebo $\rightarrow$ Chạy SLAM $\rightarrow$ Mở RViz2 $\rightarrow$ Mở teleop lái xe đi dạo.Dùng lệnh map_saver_cli xuất bản đồ thành 2 file: warehouse_map.yaml và warehouse_map.pgm.🚀
+GIAI ĐOẠN 2: ĐIỀU HƯỚNG TỰ HÀNH - NAVIGATION2 (BƯỚC TIẾP THEO)Mục tiêu: Biến chiếc xe thành một robot tự hành hoàn chỉnh, biết tự tìm đường, tự lách né chướng ngại vật và trượt ngang vèo vèo.Các việc sẽ làm (Tôi sẽ hướng dẫn sau khi bạn xong Giai đoạn 1):Cấu trúc Nav2: Tìm hiểu cách Costmap, Controller và Planner phối hợp.File cấu hình "linh hồn": Viết file nav2_params.yaml. Bước này cực kỳ quan trọng vì chúng ta phải tinh chỉnh DWB Local Planner để đánh thức vận tốc trục Y ($v_y$), biến nó thành một xe Mecanum thực thụ chứ không phải xe Differential 2 bánh.Hàm đánh giá (Critics): Bật/tắt các thông số đánh giá quỹ đạo để xe ưu tiên trượt ngang qua khe hẹp thay vì phải quay đầu.Khởi chạy: Viết nav2.launch.py để load bản đồ vừa vẽ ở Giai đoạn 1 và khởi động hệ thống tự hành.Thực chiến: Lên RViz2, định vị xe bằng 2D Pose Estimate và click chuột ra lệnh Nav2 Goal. Ngồi xem xe tự động trượt ngang né đồ vật cực ngầu!

@@ -1,0 +1,14 @@
+digraph G {
+"odom" -> "base_link"[label=" Broadcaster: default_authority\nAverage rate: 50.202\nBuffer length: 4.96\nMost recent transform: 647.28\nOldest transform: 642.32\n"];
+"RPLiDAR_A1M8_1" -> "ROBOT_URDF_final/RPLiDAR_A1M8_1/rplidar"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "RPLiDAR_A1M8_1"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "Wheel_LB_1"[label=" Broadcaster: default_authority\nAverage rate: 20.204\nBuffer length: 4.9\nMost recent transform: 647.26\nOldest transform: 642.36\n"];
+"base_link" -> "Wheel_LF_1"[label=" Broadcaster: default_authority\nAverage rate: 20.204\nBuffer length: 4.9\nMost recent transform: 647.26\nOldest transform: 642.36\n"];
+"base_link" -> "Wheel_RB_1"[label=" Broadcaster: default_authority\nAverage rate: 20.204\nBuffer length: 4.9\nMost recent transform: 647.26\nOldest transform: 642.36\n"];
+"base_link" -> "Wheel_RF_1"[label=" Broadcaster: default_authority\nAverage rate: 20.204\nBuffer length: 4.9\nMost recent transform: 647.26\nOldest transform: 642.36\n"];
+"base_link" -> "IntelRealsense_D435_Multibody_1"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1785945617.937619"[ shape=plaintext ] ;
+}->"odom";
+}

@@ -1,0 +1,17 @@
+# ==========================================
+# 1. ROS2 Ignore (Ubuntu)
+# ==========================================
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# ==========================================
+# 2. STM32 / PlatformIO Ignore (Windows)
+# ==========================================
+firmware_STM32/Debug/
+firmware_STM32/Release/
+.pio/
+*.o
+*.elf
+*.hex
+*.bin

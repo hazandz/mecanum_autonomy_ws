@@ -1,0 +1,144 @@
+<?xml version="1.0" ?>
+<robot name="ROBOT_URDF_final" xmlns:xacro="http://www.ros.org/wiki/xacro" xmlns:gz="http://gazebosim.org/schema">
+
+<xacro:property name="body_color" value="Gazebo/Silver" />
+
+<!-- ==================== CẤU HÌNH VẬT LÝ BASE LINK ==================== -->
+<gazebo reference="base_link">
+  <material>${body_color}</material>
+  <mu1>0.2</mu1>
+  <mu2>0.2</mu2>
+  <self_collide>false</self_collide>
+  <gravity>true</gravity>
+</gazebo>
+
+<!-- ==================== BÁNH XE (MA SÁT BẰNG 0 ĐỂ TRƯỢT) ==================== -->
+<gazebo reference="Wheel_LF_1">
+  <material>Gazebo/DarkGrey</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>false</self_collide>
+</gazebo>
+
+<gazebo reference="Wheel_RF_1">
+  <material>Gazebo/DarkGrey</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>false</self_collide>
+</gazebo>
+
+<gazebo reference="Wheel_RB_1">
+  <material>Gazebo/DarkGrey</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>false</self_collide>
+</gazebo>
+
+<gazebo reference="Wheel_LB_1">
+  <material>Gazebo/DarkGrey</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>false</self_collide>
+</gazebo>
+
+<!-- ==================== HỆ THỐNG KẾT HỢP: VELOCITY + MECANUM ==================== -->
+<gazebo>
+  <!-- 1. VELOCITY CONTROL: Lo việc di chuyển khung xe tịnh tiến -->
+  <plugin 
+    filename="gz-sim-velocity-control-system" 
+    name="gz::sim::systems::VelocityControl">
+    <topic>/cmd_vel</topic>
+  </plugin>
+
+  <!-- 2. MECANUM DRIVE: Lo việc quay 4 bánh xe và phát Odom + TF cho SLAM -->
+  <plugin
+    filename="gz-sim-mecanum-drive-system"
+    name="gz::sim::systems::MecanumDrive">
+    <front_left_joint>Wheel_LF_Joint</front_left_joint>
+    <front_right_joint>Wheel_RF_Joint</front_right_joint>
+    <back_left_joint>Wheel_LB_Joint</back_left_joint>
+    <back_right_joint>Wheel_RB_Joint</back_right_joint>
+    
+    <wheel_separation>0.22218</wheel_separation>
+    <wheelbase>0.216</wheelbase>
+    <wheel_radius>0.0485</wheel_radius>
+    
+    <topic>/cmd_vel</topic>
+    <odom_topic>/odom</odom_topic>
+    <tf_topic>/tf</tf_topic>
+    <frame_id>odom</frame_id>
+    <child_frame_id>base_link</child_frame_id>
+  </plugin>
+
+  <!-- 3. JOINT STATE PUBLISHER: Bắt buộc để gửi trạng thái bánh xe sang RViz2 -->
+  <plugin
+    filename="gz-sim-joint-state-publisher-system"
+    name="gz::sim::systems::JointStatePublisher">
+    <topic>/joint_states</topic>
+  </plugin>
+</gazebo>
+
+<!-- ==================== CAMERA (INTEL REALSENSE D435) ==================== -->
+<gazebo reference="IntelRealsense_D435_Multibody_1">
+  <material>Gazebo/camera_white</material>
+  <self_collide>false</self_collide>
+  <sensor type="camera" name="realsense_camera">
+    <topic>camera/image_raw</topic>
+    <update_rate>30</update_rate>
+    <camera name="head">
+      <horizontal_fov>1.204</horizontal_fov>
+      <image>
+        <width>640</width>
+        <height>480</height>
+        <format>R8G8B8</format>
+      </image>
+      <clip>
+        <near>0.05</near>
+        <far>8.0</far>
+      </clip>
+    </camera>
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+  </sensor>
+</gazebo>
+
+<!-- ==================== RPLIDAR A1M8 ==================== -->
+<gazebo reference="RPLiDAR_A1M8_1">
+  <material>Gazebo/DarkGrey</material>
+  <self_collide>false</self_collide>
+ <!-- ĐÃ SỬA: Đưa về gpu_lidar để tương thích 100% với ogre2 của world -->
+  <sensor type="gpu_lidar" name="rplidar">
+    <topic>/scan</topic>
+    <update_rate>10</update_rate>
+    <pose>0 0 0.05 0 0 0</pose>
+    <frame_id>RPLiDAR_A1M8_1</frame_id>
+    <ray>
+      <scan>
+        <horizontal>
+          <samples>360</samples>
+          <resolution>1</resolution>
+          <min_angle>-3.14159265</min_angle>
+          <max_angle>3.14159265</max_angle>
+        </horizontal>
+      </scan>
+      <range>
+        <min>0.12</min>
+        <max>8.0</max>
+        <resolution>0.01</resolution>
+      </range>
+    </ray>
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+  </sensor>
+</gazebo>
+<!-- ===================================================================== -->
+<!-- ÉP GAZEBO GIỮ NGUYÊN LINK (KHÔNG LUMPING) CHO CÁC KHỚP FIXED QUAN TRỌNG -->
+<!-- ===================================================================== -->
+<gazebo reference="Lidar_Joint">
+  <preserveFixedJoint>true</preserveFixedJoint>
+</gazebo>
+
+<gazebo reference="Camera_Joint">
+  <preserveFixedJoint>true</preserveFixedJoint>
+</gazebo>
+</robot>
