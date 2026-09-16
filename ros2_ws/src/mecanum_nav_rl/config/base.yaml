@@ -1,0 +1,17 @@
+# Shared configuration contract for every runtime profile.
+schema_version: "1.0"
+
+# PPO observation: 72 LiDAR sectors + 9 additional values = 81 values.
+observation:
+  lidar_sector_count: 72
+  goal_feature_count: 3
+  measured_twist_feature_count: 3
+  previous_command_feature_count: 3
+  dimension: 81
+
+# PPO normalized Mecanum action:
+# [vx_normalized, vy_normalized, wz_normalized].
+action:
+  dimension: 3
+  normalized_low: -1.0
+  normalized_high: 1.0

@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://relaxng.org/ns/structure/1.0"?>
+
+<package format="3">
+  <name>mecanum_nav_rl</name>
+  <version>0.1.0</version>
+
+  <description>
+    ROS 2 package for Mecanum navigation using deep reinforcement learning,
+    simulation, evaluation, deployment, and runtime safety.
+  </description>
+
+  <maintainer email="havan.vu1302@gmail.com">Ha Van Vu</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Công cụ dùng để cài đặt package Python vào ROS 2 workspace -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Nền tảng ROS 2 cho Python -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <!-- Custom message của dự án -->
+  <exec_depend>mecanum_nav_rl_interfaces</exec_depend>
+
+  <!-- Message ROS 2 sử dụng trong hệ thống -->
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+
+  <!-- Tra cứu TF giữa map, odom, base_link và LiDAR -->
+  <exec_depend>tf2_ros</exec_depend>
+
+  <!-- Giao tiếp với Gazebo Harmonic -->
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+
+  <!-- Chạy các launch file của package -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Thư viện Python cơ bản có thể cài bằng rosdep -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <!-- Công cụ kiểm tra mã nguồn -->
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

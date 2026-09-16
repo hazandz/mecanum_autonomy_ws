@@ -1,0 +1,487 @@
+MECANUM NAV DRL — CÂY THƯ MỤC DỰ ÁN CHÍNH THỨC
+Thư mục tổng: ~/mecanum_autonomy_ws
+ROS 2 workspace: ~/mecanum_autonomy_ws/ros2_ws
+
+TRẠNG THÁI
+// ARCHITECTURE_FROZEN
+// IMPLEMENTATION_READY
+// NOT_YET_REAL_ROBOT_VALIDATED
+// Gate 3 và Gate 4 chưa được tuyên bố đạt. Thông số robot thật chưa đo giữ TBD_MEASURED.
+
+NGUYÊN TẮC KIẾN TRÚC
+// State estimation tạo odometry cục bộ; localization xác định robot trên map.
+// Nav2 Global Planner tạo global path; PPO chỉ là local controller trong HYBRID_AI_LOCAL.
+// Nav2 Controller chỉ chạy trong NAV2_BASELINE; không chạy đồng thời với PPO controller.
+// SafetySupervisor là tầng duy nhất chọn, giới hạn và xuất lệnh cuối tới /cmd_vel.
+// Ground truth chỉ dùng bởi TrainingTaskOracle/evaluator; không vào policy observation hoặc TF chính.
+// Cây TF chính: map -> odom -> base_link -> lidar_frame.
+// Một TF edge, actuator topic, map và wheel-odometry contract chỉ có một chủ sở hữu.
+
+BỐN CHẾ ĐỘ VẬN HÀNH
+// LOCAL_TRAINING: LiDAR + noisy simulated odometry + local goal -> PPO -> Safety -> simulator.
+// MAPPING: LiDAR + EKF -> SLAM Toolbox; teleop -> Safety -> robot.
+// NAV2_BASELINE: Nav2 Planner + holonomic Controller -> Safety; không chạy PPO controller.
+// HYBRID_AI_LOCAL: Nav2 Planner -> LocalReference -> PPO local controller -> Safety.
+
+~/mecanum_autonomy_ws/
+├── .venv/                                         // Python ML environment, không commit
+├── firmware_STM32/                                // Firmware mức thấp, độc lập ROS workspace
+├── ros2_ws/                                       // ROS 2 Jazzy workspace
+├── docs/                                          // Kiến trúc, contract và safety evidence
+├── artifacts/                                     // Output chạy, map và measurement
+├── datasets/                                      // Rosbag, trajectory, benchmark
+├── scripts/                                       // Tiện ích cấp workspace
+├── .github/workflows/                             // CI
+├── .gitignore  // Loại file sinh và dữ liệu cục bộ khỏi Git
+├── .pre-commit-config.yaml  // Cấu hình kiểm tra mã trước khi commit
+├── pyproject.toml  // Cấu hình công cụ Python cấp dự án
+├── requirements-lock.txt  // Khóa phiên bản thư viện Python
+└── README.md  // Hướng dẫn cài đặt và sử dụng
+
+CHI TIẾT FIRMWARE STM32
+
+~/mecanum_autonomy_ws/firmware_STM32/
+├── Core/
+│   ├── Inc/
+│   │   ├── main.h  // Khai báo phần cứng và hàm chính
+│   │   ├── motor_control.h                        // PWM, chiều và motor enable
+│   │   ├── encoder.h                              // Cumulative ticks FL,FR,RL,RR
+│   │   ├── pid_controller.h                       // PID vận tốc từng bánh
+│   │   ├── mecanum_kinematics.h                   // [vx,vy,wz] -> tốc độ bánh
+│   │   ├── communication.h                        // Pi_STM32_Interface_Contract
+│   │   ├── command_watchdog.h                     // Dừng khi mất command
+│   │   └── safety_io.h                            // E-stop, driver fault, enable
+│   └── Src/
+│       ├── main.c  // Khởi tạo MCU và vòng lặp điều khiển
+│       ├── motor_control.c  // Điều khiển PWM chiều quay và enable
+│       ├── encoder.c  // Đọc và tích lũy xung encoder
+│       ├── pid_controller.c  // Thực thi PID vận tốc bánh
+│       ├── mecanum_kinematics.c  // Đổi vận tốc thân robot sang tốc độ bánh
+│       ├── communication.c  // Đóng gói và giải mã giao tiếp Pi STM32
+│       ├── command_watchdog.c  // Dừng động cơ khi mất lệnh
+│       └── safety_io.c  // Đọc E stop và lỗi driver
+├── Drivers/                                       // HAL và CMSIS
+├── Config/
+│   ├── protocol_version.h                         // Version packet Pi-STM32
+│   ├── motor_params.h                             // Wheel order/sign, CPR, gear ratio
+│   ├── pid_gains.h  // Lưu hệ số PID từng bánh
+│   ├── kinematics_params.h  // Thông số động học sinh từ hardware manifest
+│   └── safety_limits.h  // Giới hạn an toàn firmware
+├── Test/
+│   ├── test_encoder_counter.c  // Kiểm thử encoder counter
+│   ├── test_kinematics.c  // Kiểm thử kinematics
+│   ├── test_pid.c  // Kiểm thử pid
+│   ├── test_watchdog.c  // Kiểm thử watchdog
+│   └── test_estop.c  // Kiểm thử estop
+├── Tools/
+├── CMakeLists.txt  // Cấu hình build CMake hoặc rosidl
+├── Makefile  // Lệnh build firmware rút gọn
+└── README.md  // Hướng dẫn cài đặt và sử dụng
+
+CHI TIẾT ROS 2 WORKSPACE
+
+~/mecanum_autonomy_ws/ros2_ws/
+├── src/
+│   ├── ROBOT_URDF_final_description/              // Package robot/Gazebo hiện có
+│   │   ├── package.xml                             ✔  // Khai báo package và dependency ROS 2
+│   │   ├── CMakeLists.txt                          ✔  // Cấu hình build CMake hoặc rosidl
+│   │   ├── launch/                                 ✔
+│   │   ├── urdf/                                   ✔
+│   │   ├── meshes/                                 ✔
+│   │   ├── worlds/
+│   │   ├── models/
+│   │   ├── config/                                 ✔
+│   │   └── rviz/
+│   │
+│   ├── mecanum_nav_rl_interfaces/                 // Typed ROS interfaces dùng chung
+│   │   ├── package.xml                             ✔  // Nâng version interface lên 2.4.0
+│   │   ├── CMakeLists.txt                          ✔  // Generate đủ bốn ROS messages
+│   │   ├── CHANGELOG.md                               // Ghi thay đổi public interface 2.4.0
+│   │   ├── msg/
+│   │   │   ├── Heartbeat.msg                       ✔  // Báo nhịp sống và bit lỗi
+│   │   │   ├── SafetyState.msg                     ✔  // Công bố quyết định safety
+│   │   │   ├── NavigationState.msg                    // Trạng thái nhiệm vụ có error code
+│   │   │   └── CommandEnvelope.msg                    // Lệnh có source epoch generation
+│   │   └── test/
+│   │       └── test_interface_contracts.py            // Kiểm tra constants fields và version
+│   │
+│   ├── mecanum_base_bridge/                       // Pi 5 <-> STM32 và wheel odometry
+│   │   ├── package.xml  // Khai báo package và dependency ROS 2
+│   │   ├── setup.py  // Cài package Python và console scripts
+│   │   ├── setup.cfg  // Cấu hình executable cho ament Python
+│   │   ├── resource/mecanum_base_bridge  // Marker để ament nhận diện package
+│   │   ├── config/
+│   │   │   ├── transport.yaml  // Cấu hình UART hoặc USB tới STM32
+│   │   │   ├── wheel_geometry.yaml                // Giá trị thật TBD_MEASURED
+│   │   │   └── protocol.yaml                      // Trỏ Pi_STM32_Interface_Contract
+│   │   ├── mecanum_base_bridge/
+│   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   ├── bridge_node.py  // Node cầu nối Raspberry Pi và STM32
+│   │   │   ├── transport.py  // Đọc ghi byte qua đường truyền
+│   │   │   ├── telemetry_decoder.py  // Giải mã gói telemetry STM32
+│   │   │   ├── telemetry_state.py                 // boot_id, epoch, seq, MCU time
+│   │   │   ├── wheel_order.py                     // FL,FR,RL,RR và dấu
+│   │   │   ├── wheel_odometry.py                  // Forward kinematics, không phát TF
+│   │   │   ├── command_encoder.py                 // /cmd_vel cuối -> packet STM32
+│   │   │   ├── heartbeat.py  // Phát heartbeat của bridge hoặc MCU
+│   │   │   └── watchdog.py  // Giám sát timeout và yêu cầu dừng
+│   │   └── test/
+│   │       ├── test_protocol_decode.py  // Kiểm thử protocol decode
+│   │       ├── test_counter_wrap.py  // Kiểm thử counter wrap
+│   │       ├── test_packet_loss.py  // Kiểm thử packet loss
+│   │       ├── test_mcu_reboot.py  // Kiểm thử mcu reboot
+│   │       └── test_wheel_odometry.py  // Kiểm thử wheel odometry
+│   │
+│   ├── mecanum_nav_rl/                            // DRL, hybrid navigation và safety
+│   │   ├── package.xml                             ✔  // Khai báo package và dependency ROS 2
+│   │   ├── setup.py                                ✔  // Cài package Python và console scripts
+│   │   ├── setup.cfg                               ✔  // Cấu hình executable cho ament Python
+│   │   ├── README.md  // Hướng dẫn cài đặt và sử dụng
+│   │   ├── CHANGELOG.md                            ✔  // Ghi thay đổi interface và contract
+│   │   ├── resource/mecanum_nav_rl                 ✔  // Marker để ament nhận diện package
+│   │   ├── config/
+│   │   │   ├── base.yaml                           ✔  // Cấu hình nền dùng chung
+│   │   │   ├── profiles/                           ✔
+│   │   │   │   ├── sim_train.yaml                  ✔  // Cấu hình cho thành phần tương ứng
+│   │   │   │   ├── sim_eval.yaml  // Cấu hình cho thành phần tương ứng
+│   │   │   │   ├── deploy_sim.yaml  // Cấu hình cho thành phần tương ứng
+│   │   │   │   └── deploy_real.yaml  // Cấu hình cho thành phần tương ứng
+│   │   │   ├── algorithms/ppo.yaml  // Siêu tham số huấn luyện PPO
+│   │   │   ├── qos.yaml  // Khai báo các QoS profile
+│   │   │   ├── topics.yaml  // Khóa tên kiểu và chủ sở hữu topic
+│   │   │   ├── frames.yaml  // Khóa frame và chủ sở hữu TF
+│   │   │   ├── acceptance.yaml  // Ngưỡng nghiệm thu đã phê duyệt
+│   │   │   └── measurements.yaml  // Đăng ký phép đo và trạng thái hợp lệ
+│   │   ├── scenarios/
+│   │   │   ├── manifests/{train,validation,final_test}.yaml  // Cấu hình cho thành phần tương ứng
+│   │   │   ├── train/
+│   │   │   ├── validation/
+│   │   │   └── final_test/
+│   │   ├── generated/
+│   │   │   ├── collision_contract.yaml  // Danh sách collision đã trích xuất
+│   │   │   ├── footprint.yaml  // Footprint robot đã xác minh
+│   │   │   └── schema_hashes.yaml  // Lưu hash các contract dữ liệu
+│   │   ├── mecanum_nav_rl/
+│   │   │   ├── __init__.py                         ✔  // Khai báo package Python
+│   │   │   ├── core/
+│   │   │   │   ├── __init__.py                     ✔  // Khai báo package Python
+│   │   │   │   ├── types.py                        ✔  // Kiểu dữ liệu miền thuần Python
+│   │   │   │   ├── frozen_array.py                 ✔  // Tạo mảng float32 bất biến
+│   │   │   │   ├── snapshots.py                    ✔  // Định nghĩa snapshot cảm biến bất biến
+│   │   │   │   ├── transition.py                   ✔  // Định nghĩa dữ liệu một bước RL
+│   │   │   │   ├── protocols.py                    ✔  // Khai báo interface thuần bằng Protocol
+│   │   │   │   ├── enums.py                        ✔  // Khai báo trạng thái và lý do chuẩn
+│   │   │   │   └── exceptions.py                   ✔  // Phân cấp lỗi của dự án
+│   │   │   ├── config/
+│   │   │   │   ├── __init__.py                     ✔  // Khai báo package Python
+│   │   │   │   ├── models.py                       ✔  // Định nghĩa model dữ liệu có kiểu
+│   │   │   │   ├── loader.py                       ✔  // Đọc YAML và chặn dữ liệu sai
+│   │   │   │   ├── compiler.py                     ✔  // Ghép và kiểm tra các lớp cấu hình
+│   │   │   │   ├── hashing.py                      ✔  // Tạo canonical JSON và SHA 256
+│   │   │   │   ├── agent_spec.py                   ✔  // Khóa contract observation và action
+│   │   │   │   └── validators.py  // Kiểm tra invariant của module
+│   │   │   ├── ros/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── runtime.py  // Quản lý vòng đời ROS runtime
+│   │   │   │   ├── callback_groups.py  // Tách callback tránh tranh chấp
+│   │   │   │   ├── clocks.py  // Cung cấp ROS time và steady time
+│   │   │   │   ├── epoch_tracker.py  // Phát hiện reset và clock rollback
+│   │   │   │   ├── sensor_buffers.py  // Lưu sensor cùng metadata nội bộ
+│   │   │   │   ├── synchronizer.py  // Ghép scan odom và reference theo thời gian
+│   │   │   │   ├── qos_profiles.py  // Tạo QoS từ cấu hình đã resolve
+│   │   │   │   ├── tf_provider.py  // Tra TF tại timestamp cảm biến
+│   │   │   │   ├── service_clients.py  // Gọi service với deadline an toàn
+│   │   │   │   └── endpoint_probe.py  // Kiểm tra endpoint topic và QoS
+│   │   │   ├── localization/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── models.py                       // Provider-neutral health state
+│   │   │   │   ├── monitor.py                      // Lifecycle/TF/covariance/jump/map
+│   │   │   │   └── health.py  // Tổng hợp trạng thái sức khỏe module
+│   │   │   ├── navigation/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── modes.py                        // NavigationMode + valid matrix
+│   │   │   │   ├── models.py                       // MissionGoal/Path/LocalReference
+│   │   │   │   ├── nav2_path_provider.py           // ComputePathToPose client
+│   │   │   │   ├── hybrid_navigation_manager.py    // Action server/orchestration
+│   │   │   │   ├── lookahead.py                    // Arc-length progress selector
+│   │   │   │   ├── goal_checker.py                 // Position-only + settle time
+│   │   │   │   ├── path_health.py  // Kiểm tra path hết hạn hoặc lệch
+│   │   │   │   └── navigation_state_publisher.py  // Phát NavigationState typed
+│   │   │   ├── simulation/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── adapter.py  // Interface chung cho simulator
+│   │   │   │   ├── action_barrier.py  // Tạo mốc thời gian sau khi phát lệnh
+│   │   │   │   ├── reset_transaction.py  // Thực hiện reset theo giao dịch
+│   │   │   │   ├── contact_source.py  // Nhận contact ground truth Gazebo
+│   │   │   │   ├── contact_latch.py  // Giữ trạng thái và xung va chạm
+│   │   │   │   ├── entity_control.py  // Đặt pose entity trong Gazebo
+│   │   │   │   └── collision_extractor.py  // Trích tên collision từ URDF SDF
+│   │   │   ├── env/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── mecanum_env.py  // Môi trường Gymnasium của robot
+│   │   │   │   ├── episode_state.py  // Theo dõi trạng thái episode
+│   │   │   │   ├── info_builder.py  // Tạo info trả về từ env
+│   │   │   │   └── checker.py  // Kiểm tra contract Gymnasium
+│   │   │   ├── observations/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── encoder.py  // Ghép observation 81 chiều
+│   │   │   │   ├── lidar.py                        // Angular binning -> 72 sectors
+│   │   │   │   ├── goal_features.py                // LocalReference -> d,sin,cos
+│   │   │   │   ├── motion.py  // Mã hóa hoặc phạt chuyển động
+│   │   │   │   ├── space.py  // Khai báo Gymnasium space
+│   │   │   │   └── validators.py  // Kiểm tra invariant của module
+│   │   │   ├── actions/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── decoder.py  // Đổi action chuẩn hóa sang vận tốc
+│   │   │   │   ├── limits.py  // Áp giới hạn của module
+│   │   │   │   ├── space.py  // Khai báo Gymnasium space
+│   │   │   │   └── command.py  // Tạo lệnh vận tốc miền core
+│   │   │   ├── rewards/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── base.py  // Lớp cơ sở cho reward unit
+│   │   │   │   ├── manager.py  // Điều phối các thành phần trong module
+│   │   │   │   ├── navigation.py  // Reward tiến độ và tới đích
+│   │   │   │   ├── safety.py  // Reward va chạm và khoảng cách
+│   │   │   │   ├── motion.py  // Mã hóa hoặc phạt chuyển động
+│   │   │   │   └── validators.py  // Kiểm tra invariant của module
+│   │   │   ├── termination/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── manager.py  // Điều phối các thành phần trong module
+│   │   │   │   ├── task_conditions.py  // Kiểm tra điều kiện kết thúc nhiệm vụ
+│   │   │   │   ├── time_limit.py  // Xử lý giới hạn thời gian episode
+│   │   │   │   └── result.py  // Đóng gói kết quả termination
+│   │   │   ├── tasks/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── task_state.py  // Trạng thái nhiệm vụ hiện tại
+│   │   │   │   ├── scenario.py  // Định nghĩa một kịch bản chạy
+│   │   │   │   ├── manifest.py  // Đọc và kiểm tra manifest
+│   │   │   │   ├── samplers.py  // Lấy mẫu start goal và scenario
+│   │   │   │   └── curriculum.py  // Điều chỉnh độ khó huấn luyện
+│   │   │   ├── randomization/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── manager.py  // Điều phối các thành phần trong module
+│   │   │   │   ├── sensors.py  // Randomize nhiễu cảm biến
+│   │   │   │   ├── timing.py  // Randomize độ trễ và jitter
+│   │   │   │   ├── dynamics.py  // Randomize động lực học robot
+│   │   │   │   └── environment.py  // Randomize môi trường Gazebo
+│   │   │   ├── training/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── trainer.py  // Điều phối huấn luyện PPO
+│   │   │   │   ├── env_factory.py  // Tạo môi trường train hoặc eval
+│   │   │   │   ├── model_factory.py  // Tạo model PPO Stable Baselines3
+│   │   │   │   ├── callbacks.py  // Callback log checkpoint và đánh giá
+│   │   │   │   ├── checkpoint.py  // Lưu checkpoint nguyên tử
+│   │   │   │   ├── normalization.py  // Quản lý thống kê chuẩn hóa
+│   │   │   │   ├── seed_manager.py  // Tách và ghi seed tái lập
+│   │   │   │   └── run_supervisor.py  // Khởi động lại tiến trình sau lỗi hạ tầng
+│   │   │   ├── evaluation/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── evaluator.py  // Chạy đánh giá độc lập
+│   │   │   │   ├── metrics.py  // Tính chỉ số kết quả và an toàn
+│   │   │   │   ├── reliability.py  // Tính tỷ lệ lỗi và độ tin cậy
+│   │   │   │   ├── recorder.py  // Ghi dữ liệu từng episode
+│   │   │   │   ├── statistics.py  // Tính thống kê và khoảng tin cậy
+│   │   │   │   ├── baseline_runner.py  // Chạy baseline Nav2 cùng điều kiện
+│   │   │   │   └── report.py  // Xuất báo cáo đánh giá
+│   │   │   ├── deployment/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── policy_node.py  // Node suy luận PPO khi chạy
+│   │   │   │   ├── policy_loader.py  // Nạp model và kiểm tra compatibility
+│   │   │   │   ├── inference.py  // Thực hiện forward pass policy
+│   │   │   │   ├── command_adapters.py             // Policy/Nav2/teleop envelope
+│   │   │   │   └── real_robot_adapter.py  // Kết nối env với robot thật
+│   │   │   ├── safety/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── sensor_node.py  // Thu sensor cho safety độc lập
+│   │   │   │   ├── supervisor.py  // Ra quyết định safety cuối
+│   │   │   │   ├── health.py  // Tổng hợp trạng thái sức khỏe module
+│   │   │   │   ├── freshness.py  // Kiểm tra tuổi dữ liệu bằng steady time
+│   │   │   │   ├── navigation_state_guard.py  // Chặn path hoặc quyền chạy không hợp lệ
+│   │   │   │   ├── command_validator.py  // Kiểm tra nguồn epoch sequence và TTL
+│   │   │   │   ├── command_arbiter.py  // Chọn một nguồn lệnh hợp lệ
+│   │   │   │   ├── limits.py  // Áp giới hạn của module
+│   │   │   │   ├── footprint.py  // Xử lý hình học footprint
+│   │   │   │   ├── collision_shield.py  // Dự báo va chạm holonomic
+│   │   │   │   ├── stopping_distance.py  // Tính khoảng dừng theo hướng
+│   │   │   │   ├── watchdog.py  // Giám sát timeout và yêu cầu dừng
+│   │   │   │   └── final_twist_publisher.py  // Publisher duy nhất của cmd vel
+│   │   │   ├── validation/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── config_validator.py  // Kiểm tra cấu hình đã resolve
+│   │   │   │   ├── graph_validator.py  // Kiểm tra node topic và ownership
+│   │   │   │   ├── tf_validator.py  // Kiểm tra cây TF và authority
+│   │   │   │   ├── qos_validator.py  // Kiểm tra tương thích QoS
+│   │   │   │   ├── schema_validator.py  // Kiểm tra schema và hash
+│   │   │   │   ├── map_validator.py  // Kiểm tra map ID hash và phê duyệt
+│   │   │   │   └── deployment_validator.py  // Chặn deploy khi thiếu điều kiện
+│   │   │   ├── measurement/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── registry.py  // Quản lý measurement registry
+│   │   │   │   ├── protocols.py  // Khai báo interface thuần bằng Protocol
+│   │   │   │   └── validator.py  // Kiểm tra record đo và provenance
+│   │   │   ├── cli/
+│   │   │   │   ├── __init__.py  // Khai báo package Python
+│   │   │   │   ├── train.py  // Lệnh CLI khởi động huấn luyện
+│   │   │   │   ├── evaluate.py  // Lệnh CLI chạy đánh giá
+│   │   │   │   ├── deploy.py  // Lệnh CLI chạy deployment
+│   │   │   │   ├── validate.py  // Lệnh CLI kiểm tra contract
+│   │   │   │   └── extract_collision_contract.py  // CLI trích collision contract
+│   │   │   └── utils/
+│   │   │       ├── __init__.py  // Khai báo package Python
+│   │   │       ├── geometry.py  // Hàm hình học dùng chung
+│   │   │       ├── paths.py  // Quản lý đường dẫn an toàn
+│   │   │       ├── logging.py  // Cấu hình log có cấu trúc
+│   │   │       └── serialization.py  // Tuần tự hóa dữ liệu ổn định
+│   │   └── test/
+│   │       ├── unit/
+│   │       │   ├── test_config_compiler.py  // Kiểm thử config compiler
+│   │       │   ├── test_navigation_mode_matrix.py  // Kiểm thử navigation mode matrix
+│   │       │   ├── test_observation_schema.py  // Kiểm thử observation schema
+│   │       │   ├── test_lidar_angular_binning.py  // Kiểm thử lidar angular binning
+│   │       │   ├── test_local_reference_sync.py  // Kiểm thử local reference sync
+│   │       │   ├── test_lookahead_progress.py  // Kiểm thử lookahead progress
+│   │       │   ├── test_goal_settle.py  // Kiểm thử goal settle
+│   │       │   ├── test_command_envelope.py  // Kiểm thử command envelope
+│   │       │   ├── test_map_hash.py  // Kiểm thử map hash
+│   │       │   ├── test_reward_contract.py  // Kiểm thử reward contract
+│   │       │   ├── test_termination_semantics.py  // Kiểm thử termination semantics
+│   │       │   ├── test_contact_latch.py  // Kiểm thử contact latch
+│   │       │   └── test_safety_math.py  // Kiểm thử safety math
+│   │       ├── integration/
+│   │       │   ├── test_env_contract.py  // Kiểm thử env contract
+│   │       │   ├── test_transactional_reset.py  // Kiểm thử transactional reset
+│   │       │   ├── test_topic_qos_tf_contract.py  // Kiểm thử topic qos tf contract
+│   │       │   ├── test_ground_truth_isolation.py  // Kiểm thử ground truth isolation
+│   │       │   ├── test_ekf_tf_ownership.py  // Kiểm thử ekf tf ownership
+│   │       │   ├── test_localization_monitor.py  // Kiểm thử localization monitor
+│   │       │   ├── test_hybrid_navigation.py  // Kiểm thử hybrid navigation
+│   │       │   ├── test_navigation_state_fail_stop.py  // Kiểm thử mất path thì dừng
+│   │       │   ├── test_command_source_modes.py  // Kiểm thử command source modes
+│   │       │   ├── test_gazebo_contact.py  // Kiểm thử gazebo contact
+│   │       │   ├── test_checkpoint_resume.py  // Kiểm thử checkpoint resume
+│   │       │   └── test_train_eval_isolation.py  // Kiểm thử train eval isolation
+│   │       ├── hil/
+│   │       │   ├── test_mcu_watchdog.py  // Kiểm thử mcu watchdog
+│   │       │   ├── test_mcu_reboot.py  // Kiểm thử mcu reboot
+│   │       │   └── test_estop_path.py  // Kiểm thử estop path
+│   │       └── smoke/
+│   │           ├── test_short_training.py  // Kiểm thử short training
+│   │           └── test_policy_inference.py  // Kiểm thử policy inference
+│   │
+│   └── mecanum_nav_bringup/                      // Launch/config cấp toàn hệ thống
+│       ├── package.xml  // Khai báo package và dependency ROS 2
+│       ├── CMakeLists.txt  // Cấu hình build CMake hoặc rosidl
+│       ├── launch/
+│       │   ├── local_training.launch.py  // Khởi chạy huấn luyện cục bộ
+│       │   ├── mapping.launch.py  // Khởi chạy tạo bản đồ
+│       │   ├── nav2_baseline.launch.py  // Khởi chạy baseline Nav2 MPPI Omni
+│       │   ├── hybrid_ai_local.launch.py  // Khởi chạy Planner và PPO local
+│       │   └── deploy_real.launch.py  // Khởi chạy robot thật có khóa Gate 4
+│       ├── config/
+│       │   ├── state_estimation/
+│       │   │   ├── ekf_sim.yaml  // Cấu hình EKF cho mô phỏng
+│       │   │   └── ekf_real.yaml  // Cấu hình EKF cho robot thật
+│       │   ├── slam/slam_toolbox_mapping.yaml  // Cấu hình SLAM chỉ để tạo map
+│       │   ├── localization/amcl_omni.yaml  // Cấu hình AMCL cho Mecanum
+│       │   ├── nav2/
+│       │   │   ├── common.yaml  // Thông số Nav2 dùng chung
+│       │   │   ├── planner.yaml  // Cấu hình global planner
+│       │   │   ├── baseline_controller.yaml  // Cấu hình MPPI Omni baseline
+│       │   │   └── costmaps.yaml  // Cấu hình global và local costmap
+│       │   ├── safety/safety_runtime.yaml  // Cấu hình SafetySupervisor
+│       │   └── modes/
+│       │       ├── local_training.yaml  // Cấu hình cho thành phần tương ứng
+│       │       ├── mapping.yaml  // Cấu hình cho thành phần tương ứng
+│       │       ├── nav2_baseline.yaml  // Cấu hình cho thành phần tương ứng
+│       │       └── hybrid_ai_local.yaml  // Cấu hình cho thành phần tương ứng
+│       ├── test/
+│       │   ├── test_local_training_launch.py       // Kiểm thử launch huấn luyện
+│       │   ├── test_mapping_launch.py              // Kiểm thử launch tạo map
+│       │   ├── test_nav2_baseline_launch.py        // Kiểm thử launch Nav2 MPPI
+│       │   ├── test_hybrid_ai_local_launch.py      // Kiểm thử launch hybrid
+│       │   └── test_safety_fail_stop.py            // Kiểm thử fail safe khi launch
+│       └── rviz/navigation.rviz  // Giao diện RViz cho điều hướng
+├── build/                                         // Colcon sinh, không sửa tay
+├── install/                                       // Colcon install space
+└── log/                                           // Colcon logs
+
+TÀI LIỆU VÀ ARTIFACT CẤP WORKSPACE
+
+~/mecanum_autonomy_ws/docs/
+├── MECANUM_NAV_DRL_Architecture.docx              // Kiến trúc chính thức
+├── MECANUM_NAV_DRL_Architecture.pdf  // Bản PDF để đọc và phát hành
+├── MECANUM_NAV_DRL_Project_Tree.txt                // Cây này
+├── Pi_STM32_Interface_Contract.md                  // Packet, wheel order, counter, handshake
+├── architecture_decisions/
+├── experiment_protocol.md  // Quy trình thí nghiệm và seed
+├── sim_to_real_protocol.md  // Quy trình chuyển từ mô phỏng ra thật
+├── safety_case.md  // Lập luận và bằng chứng an toàn
+└── traceability_matrix.md  // Liên kết yêu cầu module test và Gate
+
+~/mecanum_autonomy_ws/artifacts/
+├── maps/
+│   └── <map_id>/
+│       ├── map.yaml                                // Metadata Map Server
+│       ├── map.pgm                                 // Ảnh occupancy grid chuẩn
+│       ├── map_manifest.json                       // Hash map.yaml và map.pgm
+│       ├── metadata.yaml                           // map_id config và approval
+│       ├── slam_pose_graph.posegraph               // Pose graph để tiếp tục mapping
+│       ├── slam_pose_graph.data                    // Dữ liệu pose graph
+│       └── pose_graph_manifest.json                // Hash hai file pose graph
+├── hardware/                                      // Hardware profile đã đo và phê duyệt
+│   └── <hardware_profile_id>/
+│       ├── hardware_manifest.yaml                 // Nguồn chuẩn geometry encoder và dấu
+│       ├── approval.yaml                          // Người duyệt và trạng thái hiệu lực
+│       └── measurement_records/                   // Bằng chứng đo gốc
+├── firmware_STM32/
+└── mecanum_nav_rl/
+    ├── runs/
+    ├── checkpoints/
+    ├── models/
+    ├── evaluations/
+    ├── reports/
+    ├── diagnostics/
+    └── measurements/
+
+~/mecanum_autonomy_ws/datasets/
+├── rosbags/
+├── trajectories/
+└── benchmarks/
+
+~/mecanum_autonomy_ws/scripts/
+├── bootstrap_workspace.sh  // Khởi tạo workspace và dependency
+├── build.sh  // Build toàn bộ workspace
+├── test.sh  // Chạy bộ kiểm thử dự án
+├── clean_generated.sh  // Dọn output có thể sinh lại
+├── verify_release.sh                              // Kiểm tra điều kiện phát hành
+├── generate_hardware_config.py                    // Sinh YAML bridge và header firmware
+└── verify_hardware_config.py                      // So sánh hardware config hash
+
+QUY TẮC SỞ HỮU
+// mecanum_base_bridge sở hữu forward kinematics và /wheel/odometry_raw nhưng không phát TF.
+// EKF là publisher duy nhất của odom -> base_link trong integration/deployment profiles.
+// MAPPING: SLAM Toolbox sở hữu map -> odom. NAV2_BASELINE/HYBRID: AMCL sở hữu map -> odom.
+// mecanum_nav_bringup sở hữu system launch và config EKF/SLAM/AMCL/Nav2/Safety.
+// mecanum_nav_rl sở hữu DRL, HybridNavigationManager, LocalReference, evaluation và policy nodes.
+// SafetySupervisor là publisher duy nhất của /cmd_vel.
+// Trong HYBRID_AI_LOCAL, NavigationState là safety input; mất/stale/sai epoch-generation phải dừng.
+// artifacts/maps là nguồn map chuẩn; map_manifest.json khóa nội dung map.
+// artifacts/hardware/<id>/hardware_manifest.yaml là nguồn duy nhất cho thông số bánh xe.
+// wheel_geometry.yaml và kinematics_params.h phải được sinh/xác minh bằng hardware_config_hash.
+// Physical E-stop độc lập Linux, ROS 2, DDS và Python.
+
+THỨ TỰ TRIỂN KHAI
+// 1. Hoàn thiện core/config đang làm và cập nhật interface package.
+// 2. Tạo hardware manifest, sinh config bridge/firmware rồi triển khai mecanum_base_bridge.
+// 3. Tạo mecanum_nav_bringup; khóa TF ownership và EKF trước Nav2.
+// 4. Mapping bằng slam_toolbox; tạo, hash và phê duyệt map artifact.
+// 5. AMCL Omni + Planner Server; test NAV2_BASELINE holonomic.
+// 6. Implement LocalReference + HybridNavigationManager + HYBRID_AI_LOCAL.
+// 7. Train/evaluate PPO, domain randomization, HIL và Gate 3.
+// 8. Đo toàn bộ TBD_MEASURED, kiểm chứng E-stop/watchdog/braking rồi mới xét Gate 4.
+
+LƯU Ý
+// Không tạo mọi file rỗng cùng lúc; chỉ tạo khi bắt đầu module tương ứng.
+// Dấu ✔ chỉ phản ánh file/thư mục người dùng đã xác nhận tạo, không phải module đã hoàn tất test.
+// Robot thật dùng YDLIDAR X3; simulation hiện dùng RPLiDAR A1M8.
+// Raw beam count khác nhau được chuẩn hóa bằng angular binning thành 72 sector, không reshape im lặng.

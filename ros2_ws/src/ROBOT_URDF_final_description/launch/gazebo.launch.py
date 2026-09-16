@@ -121,7 +121,8 @@ def generate_launch_description():
             # Lệnh điều khiển xe
             '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
             # Tọa độ Odom
-            '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
+            '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+            '/ground_truth/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             # Dữ liệu Laser RPLidar
            # Lidar chỉ được phép đẩy data 1 chiều từ Gazebo -> ROS 2 bằng dấu '['
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
@@ -131,6 +132,7 @@ def generate_launch_description():
             '/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V',
             # Đồng bộ thời gian mô phỏng
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+            
             # Trạng thái các khớp bánh xe
             '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model'
         ],

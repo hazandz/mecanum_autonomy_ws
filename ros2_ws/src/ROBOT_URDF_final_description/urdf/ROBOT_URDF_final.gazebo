@@ -70,7 +70,22 @@
     <child_frame_id>base_link</child_frame_id>
   </plugin>
 
-  <!-- 3. JOINT STATE PUBLISHER: Bắt buộc để gửi trạng thái bánh xe sang RViz2 -->
+  <!-- 3. GROUND-TRUTH ODOMETRY CHO DRL
+       Tách biệt hoàn toàn với /odom của MecanumDrive.
+       Plugin này lấy chuyển động của model trong Gazebo để đánh giá
+       progress / reward / success mà không bị wheel-odometry đánh lừa. -->
+  <plugin
+    filename="gz-sim-odometry-publisher-system"
+    name="gz::sim::systems::OdometryPublisher">
+    <odom_frame>world</odom_frame>
+    <robot_base_frame>base_link</robot_base_frame>
+    <odom_publish_frequency>50</odom_publish_frequency>
+    <odom_topic>/ground_truth/odom</odom_topic>
+    <dimensions>2</dimensions>
+    <gaussian_noise>0.0</gaussian_noise>
+  </plugin>
+
+  <!-- 4. JOINT STATE PUBLISHER: Bắt buộc để gửi trạng thái bánh xe sang RViz2 -->
   <plugin
     filename="gz-sim-joint-state-publisher-system"
     name="gz::sim::systems::JointStatePublisher">

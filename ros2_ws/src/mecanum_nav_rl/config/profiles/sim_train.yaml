@@ -1,0 +1,19 @@
+# Runtime configuration for PPO training in Gazebo Harmonic.
+runtime:
+  profile: sim_train
+  use_sim_time: true
+
+# Current Gazebo frame contract.
+frames:
+  world_frame: world
+  map_frame: null
+  odom_frame: odom
+  base_frame: base_link
+  lidar_frame: RPLiDAR_A1M8_1
+
+# Initial simulation limits.
+# These are training baselines, not measured real-robot limits.
+motion_limits:
+  max_vx_mps: 0.40
+  max_vy_mps: 0.40
+  max_wz_radps: 1.00
