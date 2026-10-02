@@ -1,0 +1,13 @@
+qos_contracts:
+  scan:
+    field_path: qos.scan
+    token: REQUIRED_BUILD_INPUT
+    reference_id: scan_qos_contract
+  final_command:
+    field_path: qos.final_command
+    token: REQUIRED_BUILD_INPUT
+    reference_id: final_command_qos_contract
+  heartbeat:
+    field_path: qos.heartbeat
+    token: REQUIRED_BUILD_INPUT
+    reference_id: heartbeat_qos_contract

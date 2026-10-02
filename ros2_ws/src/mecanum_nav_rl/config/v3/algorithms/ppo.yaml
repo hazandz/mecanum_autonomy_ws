@@ -1,0 +1,9 @@
+training:
+  algorithm_id: PPO
+  contract_sha256:
+    field_path: training.contract_sha256
+    token: FIXED_ARCH
+    reference_id: ppo_architecture_contract
+observation_action_contract:
+  observation_schema_id: obs-v3-l72-g3-t3-c3-f32
+  action_component_order: [vx, vy, wz]

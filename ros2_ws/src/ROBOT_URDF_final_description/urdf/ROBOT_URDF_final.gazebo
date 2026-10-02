@@ -10,6 +10,13 @@
   <mu2>0.2</mu2>
   <self_collide>false</self_collide>
   <gravity>true</gravity>
+  <sensor type="contact" name="s3_d3_base_contact_sensor">
+    <contact>
+      <collision>s3_d3_base_contact_collision</collision>
+      <topic>/s3_d3/contact/raw</topic>
+    </contact>
+    <always_on>true</always_on>
+  </sensor>
 </gazebo>
 
 <!-- ==================== BÁNH XE (MA SÁT BẰNG 0 ĐỂ TRƯỢT) ==================== -->

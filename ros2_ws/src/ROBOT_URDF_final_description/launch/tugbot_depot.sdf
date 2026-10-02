@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='ASCII'?>
+<?xml version='1.0' encoding='UTF-8'?>
 <sdf version='1.7'>
   <world name='world_demo'>
     <physics name='1ms' type='ignored'>
@@ -10,6 +10,7 @@
     <!-- PLUGINS ĐÃ ĐƯỢC CHUẨN HÓA CHO GAZEBO HARMONIC (ROS 2) -->
     <!-- ===================================================== -->
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>

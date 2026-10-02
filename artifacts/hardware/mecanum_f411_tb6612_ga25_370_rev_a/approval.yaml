@@ -1,0 +1,30 @@
+schema_version: mecanum_hardware_approval/v1
+hardware_profile_id: mecanum_f411_tb6612_ga25_370_rev_a
+
+approval_status: DRAFT
+motor_enable_allowed: false
+approved_hardware_config_hash_hex: null
+required_field_policy: fail_closed_on_tbd_measured
+hardware_config_hash_input: false
+
+required_evidence:
+  geometry_measurement:
+    status: PENDING
+  encoder_scale_quadrature_verification:
+    status: PENDING
+  wheel_motor_encoder_sign_bench_test:
+    status: PENDING
+  uart_protocol_and_reconnect_test:
+    status: PENDING
+  estop_hardware_gate_test:
+    status: PENDING
+  command_watchdog_test:
+    status: PENDING
+  tb6612_current_thermal_test:
+    status: PENDING
+  power_integrity_test:
+    status: PENDING
+
+evidence_note: >
+  Software-only mapping checks are not HIL evidence or physical hardware
+  evidence and must not change approval_status to APPROVED.

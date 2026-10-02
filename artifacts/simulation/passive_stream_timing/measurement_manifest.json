@@ -1,0 +1,34 @@
+{
+  "schema_version": "s3_passive_stream_timing/v1",
+  "status": "DRAFT_EVIDENCE_CAPTURE",
+  "scope": "passive Gazebo stream observation only",
+  "scoped_topics": [
+    "/clock",
+    "/ground_truth/odom",
+    "/odom",
+    "/scan",
+    "/tf"
+  ],
+  "forbidden_operations": [
+    "publisher creation",
+    "topic publish",
+    "service client",
+    "action client",
+    "simulator reset or control",
+    "teleoperation",
+    "policy or Gymnasium runtime",
+    "hardware operation"
+  ],
+  "proposed_protocol": {
+    "independent_idle_runs": 6,
+    "warmup_seconds": 10,
+    "capture_seconds_minimum": 60
+  },
+  "clock_domain_rule": "ROS/simulation timestamps and steady receive timestamps are retained and analyzed separately.",
+  "evidence_labels": [
+    "OBSERVED",
+    "CANDIDATE_FOR_FUTURE_DECISION",
+    "PROPOSED_FROM_MEASUREMENT",
+    "NOT_ESTABLISHED"
+  ]
+}

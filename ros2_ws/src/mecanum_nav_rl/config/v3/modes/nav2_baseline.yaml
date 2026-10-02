@@ -1,0 +1,5 @@
+runtime:
+  navigation_mode: NAV2_BASELINE
+navigation:
+  local_controller_owner: Nav2ControllerServer
+  path_planner_owner: Nav2PlannerServer

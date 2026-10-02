@@ -1,0 +1,11 @@
+frames_tf:
+  map_frame: map
+  odom_frame: odom
+  base_frame: base_link
+  lidar_frame: lidar_frame
+  odom_to_base_link_authority: EKF
+  base_link_to_lidar_authority: robot_state_publisher
+  map_to_odom_authority:
+    field_path: frames_tf.map_to_odom_authority
+    token: FIXED_ARCH
+    reference_id: localization_mode_authority

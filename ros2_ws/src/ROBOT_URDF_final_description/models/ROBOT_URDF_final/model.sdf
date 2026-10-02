@@ -1,0 +1,119 @@
+<?xml version="1.0"?>
+<sdf version="1.11">
+  <!-- STATIC_CONTACT_TWIN_NOT_RUNTIME_READY: S3.3.64 static kinematic parity only. -->
+  <model name="ROBOT_URDF_final">
+    <link name="base_link">
+      <inertial>
+        <pose>-0.004680971074212348 0.001013778159962492 0.022702840329693212 0 0 0</pose>
+        <mass>2</mass>
+        <inertia>
+          <ixx>0.032621</ixx><ixy>-2.7e-05</ixy><ixz>0.003248</ixz>
+          <iyy>0.088559</iyy><iyz>0.000162</iyz><izz>0.100296</izz>
+        </inertia>
+      </inertial>
+      <collision name="s3_d3_base_contact_collision">
+        <pose>0 0 0 0 0 0</pose>
+        <geometry><box><size>0.4 0.28 0.10</size></box></geometry>
+      </collision>
+      <sensor name="s3_d3_base_contact_sensor" type="contact">
+        <always_on>true</always_on>
+        <update_rate>100</update_rate>
+        <contact>
+          <collision>s3_d3_base_contact_collision</collision>
+          <topic>/s3_d3/contact/raw</topic>
+        </contact>
+      </sensor>
+    </link>
+    <link name="Wheel_LF_1">
+      <pose relative_to="Wheel_LF_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>7.730831169672214e-09 0.020486354622651984 7.0657725812633965e-06 0 0 0</pose>
+        <mass>0.15</mass>
+        <inertia><ixx>0.000111</ixx><ixy>-0.0</ixy><ixz>-0.0</ixz><iyy>0.000179</iyy><iyz>0.0</iyz><izz>0.000111</izz></inertia>
+      </inertial>
+      <collision name="Wheel_LF_1_collision">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry>
+      </collision>
+    </link>
+    <link name="Wheel_RF_1">
+      <pose relative_to="Wheel_RF_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>8.176073262866623e-09 -0.020486352801042898 7.067794141380618e-06 0 0 0</pose>
+        <mass>0.15</mass>
+        <inertia><ixx>0.000111</ixx><ixy>0.0</ixy><ixz>-0.0</ixz><iyy>0.000179</iyy><iyz>-0.0</iyz><izz>0.000111</izz></inertia>
+      </inertial>
+      <collision name="Wheel_RF_1_collision">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry>
+      </collision>
+    </link>
+    <link name="Wheel_RB_1">
+      <pose relative_to="Wheel_RB_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-1.1186073178848233e-09 -0.020486363591042916 7.059103033960068e-06 0 0 0</pose>
+        <mass>0.15</mass>
+        <inertia><ixx>0.000111</ixx><ixy>0.0</ixy><ixz>0.0</ixz><iyy>0.000179</iyy><iyz>-0.0</iyz><izz>0.000111</izz></inertia>
+      </inertial>
+      <collision name="Wheel_RB_1_collision">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry>
+      </collision>
+    </link>
+    <link name="Wheel_LB_1">
+      <pose relative_to="Wheel_LB_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-1.5638501049686226e-09 0.02048636176944614 7.061124594778118e-06 0 0 0</pose>
+        <mass>0.15</mass>
+        <inertia><ixx>0.000111</ixx><ixy>-0.0</ixy><ixz>0.0</ixz><iyy>0.000179</iyy><iyz>0.0</iyz><izz>0.000111</izz></inertia>
+      </inertial>
+      <collision name="Wheel_LB_1_collision">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry>
+      </collision>
+    </link>
+    <link name="IntelRealsense_D435_Multibody_1">
+      <pose relative_to="Camera_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.01195124704164778 -0.0026011079695855525 -6.051171193946492e-05 0 0 0</pose>
+        <mass>0.35</mass>
+        <inertia><ixx>0.000227</ixx><ixy>-1e-06</ixy><ixz>-0.0</ixz><iyy>3.2e-05</iyy><iyz>-0.0</iyz><izz>0.000229</izz></inertia>
+      </inertial>
+      <visual name="s3_d3_camera_visual">
+        <pose relative_to="IntelRealsense_D435_Multibody_1">-0.043208 0.0 -0.095165 0 0 0</pose>
+        <geometry><mesh><uri>ROBOT_URDF_final_description/meshes/IntelRealsense_D435_Multibody_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry>
+      </visual>
+    </link>
+    <link name="RPLiDAR_A1M8_1">
+      <pose relative_to="Lidar_Joint">0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-0.05153713704514566 8.887643777943633e-05 0.027012153068496997 0 0 0</pose>
+        <mass>0.7</mass>
+        <inertia><ixx>0.000423</ixx><ixy>-6e-06</ixy><ixz>4.5e-05</ixz><iyy>0.000745</iyy><iyz>5e-06</iyz><izz>0.000767</izz></inertia>
+      </inertial>
+      <visual name="s3_d3_lidar_visual">
+        <pose relative_to="RPLiDAR_A1M8_1">-0.0432 0.0 -0.107565 0 0 0</pose>
+        <geometry><mesh><uri>ROBOT_URDF_final_description/meshes/RPLiDAR_A1M8_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry>
+      </visual>
+    </link>
+
+    <joint name="Wheel_LF_Joint" type="continuous">
+      <pose relative_to="base_link">0.108 0.11109 -0.0175 0 0 0</pose><parent>base_link</parent><child>Wheel_LF_1</child><axis><xyz expressed_in="base_link">0.0 1.0 0.0</xyz></axis>
+    </joint>
+    <joint name="Wheel_RF_Joint" type="continuous">
+      <pose relative_to="base_link">0.108 -0.11109 -0.0175 0 0 0</pose><parent>base_link</parent><child>Wheel_RF_1</child><axis><xyz expressed_in="base_link">0.0 1.0 0.0</xyz></axis>
+    </joint>
+    <joint name="Wheel_RB_Joint" type="continuous">
+      <pose relative_to="base_link">-0.108 -0.11109 -0.0175 0 0 0</pose><parent>base_link</parent><child>Wheel_RB_1</child><axis><xyz expressed_in="base_link">0.0 1.0 0.0</xyz></axis>
+    </joint>
+    <joint name="Wheel_LB_Joint" type="continuous">
+      <pose relative_to="base_link">-0.108 0.11109 -0.0175 0 0 0</pose><parent>base_link</parent><child>Wheel_LB_1</child><axis><xyz expressed_in="base_link">0.0 1.0 0.0</xyz></axis>
+    </joint>
+    <joint name="Camera_Joint" type="fixed">
+      <pose relative_to="base_link">0.043208 0.0 0.095165 0 0 0</pose><parent>base_link</parent><child>IntelRealsense_D435_Multibody_1</child>
+    </joint>
+    <joint name="Lidar_Joint" type="fixed">
+      <pose relative_to="base_link">0.0432 0.0 0.107565 0 0 0</pose><parent>base_link</parent><child>RPLiDAR_A1M8_1</child>
+    </joint>
+  </model>
+</sdf>

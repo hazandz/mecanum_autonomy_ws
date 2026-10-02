@@ -1,0 +1,1 @@
+ROS setup failed before collector initialization because shell nounset was enabled; no collector, command publish, service call, reset, or capture occurred. Launch process group was stopped with SIGINT and excluded from the six planned runs.

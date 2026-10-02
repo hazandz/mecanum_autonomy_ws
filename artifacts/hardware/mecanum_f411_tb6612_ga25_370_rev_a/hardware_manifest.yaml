@@ -1,0 +1,144 @@
+schema_version: mecanum_hardware_manifest/v1
+firmware_hardware_configuration_version: 1
+hardware_profile_id: mecanum_f411_tb6612_ga25_370_rev_a
+
+wheel_order:
+  - FL
+  - FR
+  - RL
+  - RR
+
+kinematics:
+  wheel_diameter_m:
+    value: null
+    status: TBD_MEASURED
+  wheel_radius_m:
+    value: null
+    derived_from: kinematics.wheel_diameter_m
+    status: TBD_MEASURED
+  wheelbase_m:
+    value: null
+    status: TBD_MEASURED
+  track_m:
+    value: null
+    status: TBD_MEASURED
+  roller_orientation:
+    value: x_configuration
+    status: LOCKED
+
+encoders:
+  type: hall_quadrature_ab
+  counts_per_channel_per_motor_revolution:
+    value: null
+    status: TBD_MEASURED
+  quadrature_decode_multiplier:
+    value: 4
+    status: LOCKED
+  gear_ratio_motor_to_wheel:
+    value: null
+    status: TBD_MEASURED
+  ticks_per_wheel_revolution:
+    value: null
+    derived_formula: >
+      counts_per_channel_per_motor_revolution *
+      quadrature_decode_multiplier *
+      gear_ratio_motor_to_wheel
+    status: TBD_MEASURED
+  cumulative_tick_order:
+    - FL
+    - FR
+    - RL
+    - RR
+
+wheel_sign_mapping:
+  FL:
+    motor_command_sign:
+      value: null
+      status: TBD_MEASURED
+    encoder_tick_sign:
+      value: null
+      status: TBD_MEASURED
+  FR:
+    motor_command_sign:
+      value: null
+      status: TBD_MEASURED
+    encoder_tick_sign:
+      value: null
+      status: TBD_MEASURED
+  RL:
+    motor_command_sign:
+      value: null
+      status: TBD_MEASURED
+    encoder_tick_sign:
+      value: null
+      status: TBD_MEASURED
+  RR:
+    motor_command_sign:
+      value: null
+      status: TBD_MEASURED
+    encoder_tick_sign:
+      value: null
+      status: TBD_MEASURED
+
+motor_driver_pins:
+  FL:
+    physical_label: LF
+    pwm: {port: B, pin: 1, timer: TIM3, channel: CH4}
+    direction_1: {signal: BIN1, port: A, pin: 4}
+    direction_2: {signal: BIN2, port: A, pin: 5}
+  FR:
+    physical_label: RF
+    pwm: {port: B, pin: 0, timer: TIM3, channel: CH3}
+    direction_1: {signal: AIN1, port: A, pin: 3}
+    direction_2: {signal: AIN2, port: A, pin: 2}
+  RL:
+    physical_label: LB
+    pwm: {port: B, pin: 4, timer: TIM3, channel: CH1}
+    direction_1: {signal: AIN1, port: B, pin: 13}
+    direction_2: {signal: AIN2, port: B, pin: 12}
+  RR:
+    physical_label: RB
+    pwm: {port: B, pin: 5, timer: TIM3, channel: CH2}
+    direction_1: {signal: BIN1, port: B, pin: 14}
+    direction_2: {signal: BIN2, port: B, pin: 15}
+
+encoder_pins:
+  FL:
+    timer: TIM2
+    channel_a: {port: A, pin: 15}
+    channel_b: {port: B, pin: 3}
+  FR:
+    timer: TIM5
+    channel_a: {port: A, pin: 0}
+    channel_b: {port: A, pin: 1}
+  RL:
+    timer: TIM1
+    channel_a: {port: A, pin: 8}
+    channel_b: {port: A, pin: 9}
+  RR:
+    timer: TIM4
+    channel_a: {port: B, pin: 6}
+    channel_b: {port: B, pin: 7}
+
+uart:
+  electrical_level: 3v3_ttl
+  stm32_tx: {port: A, pin: 11, peripheral: USART6_TX}
+  stm32_rx: {port: A, pin: 12, peripheral: USART6_RX}
+  shared_ground_required: true
+  protocol_version: 0x0001
+
+safety_gate:
+  estop_type: normally_closed
+  estop_open_forces_stby_safe: low
+  tb6612_driver_count: 2
+  mcu_motor_enable:
+    port: B
+    pin: 10
+    direction: output
+    feeds_hardware_gate: true
+    can_override_estop: false
+
+hash_contract:
+  canonicalization: RFC8785_JCS_UTF8
+  digest: SHA-256
+  domain_separator: mecanum_hardware_config_hash/v1

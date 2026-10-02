@@ -1,0 +1,6 @@
+runtime:
+  navigation_mode: HYBRID_AI_LOCAL
+navigation:
+  local_controller_owner: PPO
+  path_planner_owner: Nav2PlannerServer
+  local_reference_owner: LocalReference

@@ -1,0 +1,9 @@
+acceptance:
+  contract_id:
+    field_path: acceptance.contract_id
+    token: TBD_PROJECT_ACCEPTANCE
+    reference_id: project_acceptance_contract
+  contract_sha256:
+    field_path: acceptance.contract_sha256
+    token: TBD_PROJECT_ACCEPTANCE
+    reference_id: project_acceptance_contract

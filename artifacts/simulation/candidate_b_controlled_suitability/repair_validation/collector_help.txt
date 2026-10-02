@@ -1,0 +1,18 @@
+usage: candidate_b_collector.py [-h] [--offline-bootstrap-self-test]
+                                [--run-id RUN_ID] [--run-dir RUN_DIR]
+                                [--warmup-seconds WARMUP_SECONDS]
+                                [--post-probe-guard-seconds POST_PROBE_GUARD_SECONDS]
+                                [--topic-wait-seconds TOPIC_WAIT_SECONDS]
+                                [--preflight-deadline-steady-ns PREFLIGHT_DEADLINE_STEADY_NS]
+
+One approved controlled coordinate measurement
+
+options:
+  -h, --help            show this help message and exit
+  --offline-bootstrap-self-test
+  --run-id RUN_ID
+  --run-dir RUN_DIR
+  --warmup-seconds WARMUP_SECONDS
+  --post-probe-guard-seconds POST_PROBE_GUARD_SECONDS
+  --topic-wait-seconds TOPIC_WAIT_SECONDS
+  --preflight-deadline-steady-ns PREFLIGHT_DEADLINE_STEADY_NS

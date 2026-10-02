@@ -27,6 +27,9 @@ bool scan_fresh
 bool odom_fresh
 bool tf_valid
 bool localization_valid
+bool navigation_state_fresh
+bool path_valid
+bool motion_permitted
 bool policy_alive
 bool mcu_alive
 bool estop_active
@@ -36,6 +39,7 @@ uint32 odom_age_ms
 uint32 policy_heartbeat_age_ms
 uint32 mcu_heartbeat_age_ms
 uint32 command_age_ms
+uint32 navigation_state_age_ms
 
 uint32 fault_bits
 string[] intervention_reasons

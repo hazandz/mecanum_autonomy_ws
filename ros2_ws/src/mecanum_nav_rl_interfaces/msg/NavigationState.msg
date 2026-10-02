@@ -1,0 +1,32 @@
+uint8 STATE_IDLE=0
+uint8 STATE_PLANNING=1
+uint8 STATE_FOLLOWING=2
+uint8 STATE_REPLANNING=3
+uint8 STATE_STOPPING=4
+uint8 STATE_SUCCEEDED=5
+uint8 STATE_CANCELED=6
+uint8 STATE_FAILED=7
+
+uint32 ERROR_NONE=0
+uint32 ERROR_INVALID_GOAL=1
+uint32 ERROR_LOCALIZATION_INVALID=2
+uint32 ERROR_PLANNER_UNAVAILABLE=3
+uint32 ERROR_PLANNING_FAILED=4
+uint32 ERROR_PATH_INVALID=5
+uint32 ERROR_PATH_EXPIRED=6
+uint32 ERROR_TF_FAILURE=7
+uint32 ERROR_INTERNAL=8
+
+std_msgs/Header header
+uint8 state
+string goal_id
+uint64 path_sequence
+uint32 reset_epoch
+uint32 runtime_generation
+uint64 source_instance_id
+uint64 sequence
+bool path_valid
+bool motion_permitted
+float32 distance_remaining_m
+uint32 error_code
+string detail

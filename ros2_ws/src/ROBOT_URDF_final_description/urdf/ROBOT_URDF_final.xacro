@@ -19,7 +19,7 @@
     </geometry>
     <material name="chassis_dark_grey"/>
   </visual>
-  <collision>
+  <collision name="s3_d3_base_contact_collision">
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <geometry>
       <box size="0.4 0.28 0.10"/>

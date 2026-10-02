@@ -1,0 +1,8 @@
+runtime:
+  navigation_mode: LOCAL_TRAINING
+navigation:
+  local_controller_owner: PPO
+  path_planner_owner:
+    field_path: navigation.path_planner_owner
+    token: FIXED_ARCH
+    reference_id: local_training_no_nav2_controller

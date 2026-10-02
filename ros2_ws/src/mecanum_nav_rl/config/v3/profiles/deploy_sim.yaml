@@ -1,0 +1,26 @@
+# V3 overlay skeleton; deployment cannot use a simulation baseline source class.
+runtime:
+  runtime_profile: deploy_sim
+  use_sim_time: true
+  allowed_navigation_modes: [MAPPING, NAV2_BASELINE, HYBRID_AI_LOCAL]
+motion_limits:
+  source_class:
+    field_path: motion_limits.source_class
+    token: TBD_MEASURED
+    reference_id: approved_measured_registry
+  source_id:
+    field_path: motion_limits.source_id
+    token: TBD_MEASURED
+    reference_id: approved_measured_registry
+  max_vx_mps:
+    field_path: motion_limits.max_vx_mps
+    token: TBD_MEASURED
+    reference_id: approved_measured_registry
+  max_vy_mps:
+    field_path: motion_limits.max_vy_mps
+    token: TBD_MEASURED
+    reference_id: approved_measured_registry
+  max_wz_radps:
+    field_path: motion_limits.max_wz_radps
+    token: TBD_MEASURED
+    reference_id: approved_measured_registry

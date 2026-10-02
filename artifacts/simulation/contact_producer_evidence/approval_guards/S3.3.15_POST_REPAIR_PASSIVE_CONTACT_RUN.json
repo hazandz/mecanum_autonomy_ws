@@ -1,0 +1,24 @@
+{
+  "approval_id": "S3.3.15_POST_REPAIR_PASSIVE_CONTACT_RUN",
+  "authority_packet": "docs/S3_D3_Post_Repair_Passive_Contact_Run_Approval_Packet_DRAFT.md",
+  "authority_packet_sha256": "5d7229a67a859bdd3f13e221ec5813b9fc6c275ba916be9040a51f4c53f6ea91",
+  "capacity": 1,
+  "consumed_at_utc": "2026-09-26T15:37:07.614461+00:00",
+  "created_at_utc": "2026-09-26T15:22:51.277275+00:00",
+  "final_status": "INVALID",
+  "literals": {
+    "bridge_argument": "/s3_d3/contact/raw@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
+    "bridge_direction": "GZ_TO_ROS",
+    "collision": "s3_d3_base_contact_collision",
+    "gz_type": "gz.msgs.Contacts",
+    "raw_gz_topic": "/s3_d3/contact/raw",
+    "raw_ros_topic": "/s3_d3/contact/raw",
+    "ros_type": "ros_gz_interfaces/msg/Contacts",
+    "sensor": "s3_d3_base_contact_sensor"
+  },
+  "run_id": "run-contact-replacement-20260926T153527Z-01",
+  "schema": "s3_d3_approval_bound_guard/v1",
+  "state": "consumed",
+  "world": "world_demo",
+  "world_sha256": "1c50f90d151a12559d426796c5d153c829b8777a5b4e8ef94c007a2023f6e271"
+}

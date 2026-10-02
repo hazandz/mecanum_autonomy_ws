@@ -28,6 +28,19 @@ from mecanum_nav_rl.core.protocols import (
 )
 from mecanum_nav_rl.core.snapshots import SensorSnapshot
 from mecanum_nav_rl.core.transition import TaskState, TransitionContext
+from mecanum_nav_rl.core.goal_facts import (
+    GoalFactJoinMode,
+    GoalFactProvenance,
+    GoalOracleFact,
+    TaskOracleResult,
+    TaskOracleStatus,
+)
+from mecanum_nav_rl.core.lifecycle_types import (
+    EpisodeLifecycleIdentity,
+    ExactObservationProvenance,
+    TransitionIdentity,
+)
+from mecanum_nav_rl.core.scenario_session import ScenarioSessionBinding
 from mecanum_nav_rl.core.types import Pose2D, VelocityCommand
 
 __all__ = (
@@ -49,6 +62,15 @@ __all__ = (
     "TerminationReason",
     "TransitionContext",
     "TruncationReason",
+    "EpisodeLifecycleIdentity",
+    "ExactObservationProvenance",
+    "GoalFactJoinMode",
+    "GoalFactProvenance",
+    "GoalOracleFact",
+    "ScenarioSessionBinding",
+    "TaskOracleResult",
+    "TaskOracleStatus",
+    "TransitionIdentity",
     "VelocityCommand",
     "freeze_float32_array",
 )

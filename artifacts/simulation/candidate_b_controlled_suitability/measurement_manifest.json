@@ -1,0 +1,22 @@
+{
+  "schema_version": "s3_candidate_b_controlled_suitability_manifest/v1",
+  "immutable_scope": "One user-approved Gazebo-simulation-only Candidate B controlled suitability run.",
+  "entity": "ROBOT_URDF_final",
+  "gazebo_world_name": "world_demo",
+  "world_file": "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf",
+  "world_file_sha256": "a5e9c9b1e9b8ad11e0399855f06de687f04c702258b8b74ce563523d78ed55fe",
+  "bridge_argument": "/world/world_demo/set_pose@ros_gz_interfaces/srv/SetEntityPose@gz.msgs.Pose@gz.msgs.Boolean",
+  "observed_streams": ["/ground_truth/odom", "/scan", "/clock", "graph metadata"],
+  "prohibited_operations": ["/cmd_vel publish", "teleop", "Nav2", "PPO", "Gymnasium", "SB3", "world control", "pause", "reset world", "step world", "spawn", "delete", "hardware", "firmware", "Pi", "STM32", "UART", "motor"],
+  "probes": [
+    {"order": 1, "probe_id": "B0_START_P0", "x_m": -4.0, "y_m": -3.0, "z_m": 0.1, "yaw_rad": 0.0},
+    {"order": 2, "probe_id": "B1_GOAL_P2", "x_m": -2.0, "y_m": -3.0, "z_m": 0.1, "yaw_rad": -1.57079632679},
+    {"order": 3, "probe_id": "B2_RECT_LL", "x_m": -4.5, "y_m": -3.5, "z_m": 0.1, "yaw_rad": 0.0},
+    {"order": 4, "probe_id": "B3_RECT_LR", "x_m": -1.5, "y_m": -3.5, "z_m": 0.1, "yaw_rad": 0.0},
+    {"order": 5, "probe_id": "B4_RECT_UR", "x_m": -1.5, "y_m": -2.5, "z_m": 0.1, "yaw_rad": 0.0},
+    {"order": 6, "probe_id": "B5_RECT_UL", "x_m": -4.5, "y_m": -2.5, "z_m": 0.1, "yaw_rad": 0.0}
+  ],
+  "provenance_fields": ["pre_call_steady_ns", "ros_request_dispatched_steady_ns", "ros_response_received_steady_ns", "post_response_barrier_steady_ns"],
+  "no_retry": true
+}
+

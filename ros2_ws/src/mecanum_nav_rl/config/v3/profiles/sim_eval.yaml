@@ -1,0 +1,26 @@
+# V3 overlay skeleton; simulation limits remain unresolved baseline inputs.
+runtime:
+  runtime_profile: sim_eval
+  use_sim_time: true
+  allowed_navigation_modes: [NAV2_BASELINE, HYBRID_AI_LOCAL]
+motion_limits:
+  source_class:
+    field_path: motion_limits.source_class
+    token: SIM_BASELINE
+    reference_id: simulation_limit_baseline
+  source_id:
+    field_path: motion_limits.source_id
+    token: SIM_BASELINE
+    reference_id: simulation_limit_baseline
+  max_vx_mps:
+    field_path: motion_limits.max_vx_mps
+    token: SIM_BASELINE
+    reference_id: simulation_limit_baseline
+  max_vy_mps:
+    field_path: motion_limits.max_vy_mps
+    token: SIM_BASELINE
+    reference_id: simulation_limit_baseline
+  max_wz_radps:
+    field_path: motion_limits.max_wz_radps
+    token: SIM_BASELINE
+    reference_id: simulation_limit_baseline

@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package s3_d3.ecs_contact;
+
+message EcsContactSensorDiagnosticReceipt {
+  enum TerminalStatus {
+    TERMINAL_STATUS_UNSPECIFIED = 0;
+    ECS_MODEL_UNCONFIRMED = 1;
+    ECS_LINK_UNCONFIRMED = 2;
+    ECS_SENSOR_UNCONFIRMED = 3;
+    ECS_CONTACT_COMPONENT_MISSING = 4;
+    ECS_CONTACT_CONFIGURATION_INCOMPLETE = 5;
+    ECS_TARGET_COLLISION_CHILD_UNCONFIRMED = 6;
+    ECS_SENSOR_TARGET_COLLISION_CHILD_OBSERVED = 7;
+  }
+  enum ReasonCode {
+    REASON_CODE_UNSPECIFIED = 0;
+    MODEL_EXACT_COUNT_NOT_ONE = 1;
+    LINK_EXACT_COUNT_OR_PARENT_INVALID = 2;
+    SENSOR_EXACT_COUNT_OR_PARENT_INVALID = 3;
+    CONTACT_COMPONENT_NOT_PRESENT = 4;
+    CONTACT_ELEMENT_OR_COLLISION_INVALID = 5;
+    COLLISION_EXACT_COUNT_OR_PARENT_INVALID = 6;
+    EXACT_CHAIN_OBSERVED = 7;
+  }
+
+  uint32 schema_version = 1;
+  string run_id = 2;
+  TerminalStatus terminal_status = 3;
+  ReasonCode reason_code = 4;
+  string world_name = 5;
+  string model_name = 6;
+  string link_name = 7;
+  string sensor_name = 8;
+  uint64 world_id = 9;
+  bool world_id_present = 10;
+  uint64 model_id = 11;
+  bool model_id_present = 12;
+  uint64 link_id = 13;
+  bool link_id_present = 14;
+  uint64 sensor_id = 15;
+  bool sensor_id_present = 16;
+  uint64 collision_id = 17;
+  bool collision_id_present = 18;
+  uint64 model_parent_id = 19;
+  bool model_parent_id_present = 20;
+  uint64 link_parent_id = 21;
+  bool link_parent_id_present = 22;
+  uint64 sensor_parent_id = 23;
+  bool sensor_parent_id_present = 24;
+  uint64 collision_parent_id = 25;
+  bool collision_parent_id_present = 26;
+  string configured_collision_target = 27;
+  string collision_name = 28;
+  uint32 model_exact_count = 29;
+  uint32 link_exact_count = 30;
+  uint32 sensor_exact_count = 31;
+  uint32 collision_exact_count = 32;
+  string hook_name = 33;
+  int64 first_postupdate_sim_time_ns = 34;
+  bool first_postupdate_sim_time_present = 35;
+  int64 terminal_sim_time_ns = 36;
+  bool terminal_sim_time_present = 37;
+  int64 first_postupdate_steady_time_ns = 38;
+  bool first_postupdate_steady_time_present = 39;
+  int64 terminal_steady_time_ns = 40;
+  bool terminal_steady_time_present = 41;
+  int64 system_wait_timeout_sim_time_ns = 42;
+  string plugin_source_sha256 = 43;
+  string plugin_binary_sha256 = 44;
+  // SHA-256 of the immutable base-world template before per-run rendering.
+  string base_world_template_sha256 = 45;
+  string native_model_sha256 = 46;
+  bool sealed_once = 47;
+  string collector_source_sha256 = 48;
+  string collector_binary_sha256 = 49;
+  int64 system_delivery_wait_timeout_steady_ns = 50;
+  int64 collector_receipt_wait_timeout_steady_ns = 51;
+  int64 collector_persist_timeout_steady_ns = 52;
+}

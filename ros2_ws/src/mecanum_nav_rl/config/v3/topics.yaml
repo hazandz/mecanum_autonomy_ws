@@ -1,0 +1,15 @@
+# Exact endpoint identity only; unresolved QoS/freshness remains in qos.yaml.
+topic_contracts:
+  scan: /scan
+  raw_wheel_odometry: /wheel/odometry_raw
+  final_command:
+    name: /cmd_vel
+    publisher_owner: FinalTwistPublisher
+  heartbeat:
+    field_path: topics.heartbeat
+    token: REQUIRED_BUILD_INPUT
+    reference_id: heartbeat_topic_contract
+  safety_state:
+    field_path: topics.safety_state
+    token: REQUIRED_BUILD_INPUT
+    reference_id: safety_state_topic_contract

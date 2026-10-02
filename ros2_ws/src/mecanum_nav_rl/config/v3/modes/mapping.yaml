@@ -1,0 +1,8 @@
+runtime:
+  navigation_mode: MAPPING
+navigation:
+  local_controller_owner: teleop_through_safety
+  path_planner_owner:
+    field_path: navigation.path_planner_owner
+    token: FIXED_ARCH
+    reference_id: mapping_mode_authority

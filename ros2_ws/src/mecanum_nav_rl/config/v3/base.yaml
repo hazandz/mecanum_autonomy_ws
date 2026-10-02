@@ -1,0 +1,48 @@
+# Architecture V3 input skeleton; not a resolved or runtime-ready configuration.
+schema_version: "3.0"
+project:
+  project_id:
+    field_path: project.project_id
+    token: FIXED_ARCH
+    reference_id: architecture_project_identity
+  robot_model_id:
+    field_path: project.robot_model_id
+    token: FIXED_ARCH
+    reference_id: architecture_robot_identity
+  architecture_sha256:
+    field_path: project.architecture_sha256
+    token: REQUIRED_BUILD_INPUT
+    reference_id: architecture_authority_hash
+provenance:
+  config_hash_algorithm: sha256
+  resolution_policy_id:
+    field_path: provenance.resolution_policy_id
+    token: FIXED_ARCH
+    reference_id: v3_resolution_policy
+  source_manifest_sha256:
+    field_path: provenance.source_manifest_sha256
+    token: REQUIRED_BUILD_INPUT
+    reference_id: v3_source_manifest
+observation:
+  schema_id: obs-v3-l72-g3-t3-c3-f32
+  dtype: float32
+  lidar_sector_count: 72
+  local_reference_components: [distance, sin_bearing, cos_bearing]
+  measured_twist_components: [vx, vy, wz]
+  previous_final_issued_command_components: [vx, vy, wz]
+  dimension: 81
+action:
+  component_order: [vx, vy, wz]
+  dimension: 3
+  normalized_minimum: -1.0
+  normalized_maximum: 1.0
+map_identity:
+  source_root: artifacts/maps
+  map_id:
+    field_path: map_identity.map_id
+    token: REQUIRED_BUILD_INPUT
+    reference_id: canonical_map_identity
+  canonical_manifest_sha256:
+    field_path: map_identity.canonical_manifest_sha256
+    token: REQUIRED_BUILD_INPUT
+    reference_id: canonical_map_manifest

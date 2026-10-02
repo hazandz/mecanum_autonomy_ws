@@ -1,0 +1,9 @@
+{
+  "old_s3_3_12_guard_byte_unchanged": true,
+  "old_s3_3_12_guard_sha256_after": "c6891ff53d520345a11b2471493489c4030d0a810ac3584a2bd2cd754a8236c7",
+  "old_s3_3_12_guard_sha256_before": "c6891ff53d520345a11b2471493489c4030d0a810ac3584a2bd2cd754a8236c7",
+  "s3_3_15_approval_id": "S3.3.15_POST_REPAIR_PASSIVE_CONTACT_RUN",
+  "s3_3_15_capacity": 1,
+  "s3_3_15_guard_state": "authorized_not_consumed",
+  "s3_3_15_run_id": null
+}

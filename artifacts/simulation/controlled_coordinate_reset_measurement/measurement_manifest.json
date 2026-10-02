@@ -1,0 +1,134 @@
+{
+  "administrative_guard": {
+    "meaning": "stop guard only; not a settle, freshness, or reset policy",
+    "post_probe_capture_seconds": 10,
+    "warmup_seconds": 10
+  },
+  "approved_probe_order": [
+    "P0",
+    "P1",
+    "P2"
+  ],
+  "approved_probes": [
+    {
+      "probe_id": "P0",
+      "x": -4.0,
+      "y": -3.0,
+      "yaw_rad": 0.0,
+      "z": 0.1
+    },
+    {
+      "probe_id": "P1",
+      "x": -4.0,
+      "y": 0.0,
+      "yaw_rad": 1.57079632679,
+      "z": 0.1
+    },
+    {
+      "probe_id": "P2",
+      "x": -2.0,
+      "y": -3.0,
+      "yaw_rad": -1.57079632679,
+      "z": 0.1
+    }
+  ],
+  "bridge": {
+    "argument": "/world/world_demo/set_pose@ros_gz_interfaces/srv/SetEntityPose@gz.msgs.Pose@gz.msgs.Boolean",
+    "executable": "ros2 run ros_gz_bridge parameter_bridge",
+    "lifecycle": "temporary; start after Gazebo transport preflight and stop by SIGINT at measurement shutdown",
+    "owner": "measurement artifact",
+    "service_count": 1,
+    "topic_bridge_count": 0
+  },
+  "clock_domain_policy": "Keep ROS/simulation timestamps and steady receive timestamps separate; never subtract across domains.",
+  "entity": "ROBOT_URDF_final",
+  "executed_run": {
+    "bridge_shutdown": "SIGINT recovery confirmed no matching temporary bridge process remained",
+    "pose_service": "/world/world_demo/set_pose",
+    "pose_service_type": "ros_gz_interfaces/srv/SetEntityPose",
+    "run_id": "run-controlled-20260924T180000Z-02",
+    "sent_probe_order": [
+      "P0",
+      "P1",
+      "P2"
+    ],
+    "status": "VALID"
+  },
+  "forbidden_operations": [
+    "cmd_vel publish",
+    "teleop",
+    "Nav2",
+    "PPO",
+    "Gymnasium",
+    "world reset",
+    "world pause",
+    "world step",
+    "spawn",
+    "delete",
+    "world-control",
+    "undeclared pose request",
+    "firmware",
+    "hardware"
+  ],
+  "non_claims": [
+    "scenario frame",
+    "TF authority",
+    "atomic reset",
+    "collision contract",
+    "TrainingTaskOracle",
+    "Gym environment",
+    "reward",
+    "termination",
+    "runtime approval"
+  ],
+  "pose_service": "/world/world_demo/set_pose",
+  "pose_service_type": "ros_gz_interfaces/srv/SetEntityPose",
+  "preflight_stop_guard": {
+    "classification": "USER_APPROVED_PREFLIGHT_STOP_GUARD",
+    "non_claim": "not a settle, freshness, reset, or measurement-acceptance policy",
+    "topic_wait_seconds": 90
+  },
+  "replacement_executed_run": {
+    "candidate_rule": "gt.received_steady_ns > post_response_barrier_steady_ns",
+    "run_id": "run-replacement-post-response-20260924T191000Z-03",
+    "scope_note": "POST_RESPONSE_CANDIDATE is not a Gazebo application receipt, atomic reset receipt, settle threshold, or coordinate-mapping proof.",
+    "sent_probe_order": [
+      "P0",
+      "P1",
+      "P2"
+    ],
+    "shutdown": "SIGINT recovery confirmed no matching measurement-created bridge/Gazebo process remained.",
+    "status": "VALID",
+    "timestamp_provenance_complete": true
+  },
+  "replacement_run_authorization": {
+    "approved_probe_order": [
+      "P0",
+      "P1",
+      "P2"
+    ],
+    "no_retry_or_additional_pose_request": true,
+    "post_response_candidate_rule": "gt.received_steady_ns > post_response_barrier_steady_ns",
+    "purpose": "post-response provenance only; not Gazebo-application receipt, reset receipt, settle policy, or coordinate-mapping proof",
+    "required_steady_fields": [
+      "pre_call_steady_ns",
+      "ros_request_dispatched_steady_ns",
+      "ros_response_received_steady_ns",
+      "post_response_barrier_steady_ns"
+    ],
+    "status": "USER_APPROVED_FOR_ONE_REPLACEMENT_CONTROLLED_SIMULATION_RUN"
+  },
+  "schema_version": "s3_controlled_coordinate_measurement_manifest/v1",
+  "scope": "Gazebo simulation-only; exactly three declared SetEntityPose requests",
+  "scoped_topics": [
+    "/clock",
+    "/ground_truth/odom",
+    "/odom",
+    "/scan",
+    "/tf"
+  ],
+  "status": "USER_APPROVED_ONE_CONTROLLED_SIMULATION_MEASUREMENT_COMPLETED",
+  "world_file": "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf",
+  "world_file_sha256": "a5e9c9b1e9b8ad11e0399855f06de687f04c702258b8b74ce563523d78ed55fe",
+  "world_name": "world_demo"
+}

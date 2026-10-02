@@ -13,9 +13,10 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         # Copy các file cần thiết sang install
-        (os.path.join('share', package_name, 'launch'), glob('launch/*')),
+        (os.path.join('share', package_name, 'launch'), [entry for entry in glob('launch/*') if os.path.isfile(entry)]),
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
         (os.path.join('share', package_name, 'meshes'), glob('meshes/*')),
+        (os.path.join('share', package_name, 'models', 'ROBOT_URDF_final'), glob('models/ROBOT_URDF_final/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
     ],

@@ -1,0 +1,4 @@
+pycompile_exit=0
+collector_help_exit=0
+offline_self_test_exit=0
+force_kill_scan_exit=0

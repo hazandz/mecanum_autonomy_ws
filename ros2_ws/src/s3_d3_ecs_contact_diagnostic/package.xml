@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>s3_d3_ecs_contact_diagnostic</name>
+  <version>0.1.0</version>
+  <description>Offline-buildable, read-only Gazebo ECS ContactSensor diagnostic.</description>
+  <maintainer email="havan.vu1302@gmail.com">Ha Van Vu</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>protobuf</build_depend>
+  <build_depend>openssl</build_depend>
+  <exec_depend>protobuf</exec_depend>
+  <exec_depend>openssl</exec_depend>
+  <depend>gz-sim8</depend>
+  <depend>gz-transport13</depend>
+  <depend>gz-msgs10</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
