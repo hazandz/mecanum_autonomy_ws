@@ -73,3 +73,17 @@
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Supersedes | WP-00H-EXECUTION-GOVERNANCE pending-review state |
 | Notes | Governance is active on integration line; no runtime, HIL or real-robot evidence is created. |
+
+### WP-01I-INTEGRATE-REPOSITORY-HYGIENE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-02 |
+| Work branch | wp-01i-integrate-repository-hygiene |
+| Integration base | b4927775bb54754e0914a4cdd90748e992fedefe |
+| Candidate branch | wp-01-repository-hygiene-untrack-cache |
+| Candidate commit | 96790e3cf57514df39a15bb92bbd826adb00b99f |
+| Scope | Integrate approved untracking of generated/cache Git entries and exact ignore rules |
+| Evidence status | IMPLEMENTED_OFFLINE_ONLY |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Notes | Git tracking only; all untracked generated/cache files remain physically present. Historical artifacts, source, firmware and geometry assets are unchanged. |

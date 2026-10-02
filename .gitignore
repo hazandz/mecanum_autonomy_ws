@@ -15,3 +15,14 @@ firmware_STM32/Release/
 *.elf
 *.hex
 *.bin
+
+# Local Python environment and cache
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated output from legacy package-local Colcon invocation
+ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/build/
+ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/install/
+ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/log/
