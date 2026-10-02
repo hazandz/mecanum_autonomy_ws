@@ -57,3 +57,19 @@
 | Evidence status | PENDING_REVIEW |
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Notes | This entry becomes IMPLEMENTED_OFFLINE_ONLY only after separate architecture audit of the resulting commit. |
+
+### WP-00L-INTEGRATE-EXECUTION-GOVERNANCE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-02 |
+| Work branch | wp-00l-integrate-execution-governance |
+| Integration base | 99de9d1839b0d5b1a2da95fc0958b49bac2483a0 |
+| Candidate branch | wp-00k-governance-registry-repair |
+| Candidate commit | 28848315bcdedc96fbdc703af0a9c8168a3bd69d |
+| Integration commit | 07d71f78ba9b37b3103035ab3d9cf506b70c6e87 |
+| Scope | Integrate architecture-audited execution governance into integration line |
+| Evidence status | IMPLEMENTED_OFFLINE_ONLY |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Supersedes | WP-00H-EXECUTION-GOVERNANCE pending-review state |
+| Notes | Governance is active on integration line; no runtime, HIL or real-robot evidence is created. |
