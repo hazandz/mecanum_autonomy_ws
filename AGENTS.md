@@ -287,6 +287,40 @@ Báo cáo bằng tiếng Việt, gồm:
 
 Commit, push, branch hoặc pull request chỉ là `IMPLEMENTED_OFFLINE_ONLY` trừ khi có evidence cấp cao hơn theo kiến trúc.
 
+## Project execution governance
+
+### Nguồn kế hoạch và tiến độ
+
+Trước mọi work package, Codex phải đọc theo thứ tự:
+
+1. `docs/MECANUM_NAV_DRL_Architecture.docx`.
+2. `AGENTS.md`.
+3. `docs/governance/PROJECT_EXECUTION_PLAN.md`.
+4. `docs/governance/CANONICAL_SOURCE_REGISTRY.md`.
+5. Entry mới nhất liên quan trong `docs/governance/PROJECT_PROGRESS_LEDGER.md`.
+6. Contract/source đúng package và đúng phạm vi work package.
+
+`PROJECT_EXECUTION_PLAN.md`, `CANONICAL_SOURCE_REGISTRY.md` và `PROJECT_PROGRESS_LEDGER.md` là governance source cho implementation/progress; chúng không được thay Architecture frozen, không được tự nâng evidence và không thay thế ACR hoặc user decision.
+
+Nếu plan, registry, source hiện hữu hoặc prompt mâu thuẫn Architecture/ACR đã phê duyệt, Codex phải nêu rõ conflict và dừng phần bị ảnh hưởng.
+
+### Git integration line
+
+- `baseline/architecture-frozen-20261002` là snapshot bất biến, không nhận commit mới.
+- `integration/implementation` là integration line duy nhất cho implementation hiện hành.
+- Mỗi work package mới phải bắt đầu từ exact SHA của `origin/integration/implementation` được prompt chỉ định.
+- Codex chỉ được push branch work package riêng khi prompt cấp quyền rõ ràng.
+- Merge vào `integration/implementation` là work package riêng, chỉ được làm sau audit và user approval rõ ràng.
+- `main` không được dùng làm implementation base cho đến khi có user decision riêng.
+
+### Cập nhật kế hoạch và progress
+
+- Codex không được tự đánh dấu work package hoàn thành hoặc tự sửa plan/ledger chỉ dựa trên báo cáo của chính mình.
+- Mỗi báo cáo Codex phải có `PLAN_UPDATE_PROPOSAL`, gồm: work package ID, branch, base SHA, commit SHA, trạng thái evidence, dependency đã thỏa, blocker và next action đề xuất.
+- Plan hoặc ledger chỉ được sửa khi prompt cấp quyền rõ ràng cho đúng file và đúng status transition.
+- Ledger là append-only: không sửa/xóa historical entry; correction phải là entry mới có trường `supersedes`.
+- Status source/offline không được dùng thay runtime, HIL, Gate 3, Gate 4 hoặc real-robot evidence.
+
 ## 8. Quy tắc implementation cho task, reward và reset
 
 - Infrastructure failure không được biến thành RL transition giả hoặc task penalty giả.
