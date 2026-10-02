@@ -235,6 +235,58 @@ Quy tắc runtime:
 - Không gọi cleanup là “SIGINT-only end-to-end” nếu launcher tự escalation sang `SIGTERM`; phải mô tả trung thực là launcher-managed escalation.
 - Không chạy `deploy_real` khi chưa qua Gate 4.
 
+## Git delivery và GitHub
+
+### Nguyên tắc
+
+- GitHub là kênh lưu vết source, contract, tài liệu và offline evidence đã được phê duyệt; không tự biến commit, push hoặc pull request thành runtime, HIL hay real-robot evidence.
+- Codex local worktree đã được xác minh có thể push lên `origin` của repository chính thức: `https://github.com/hazandz/mecanum_autonomy_ws.git`.
+- Mọi thay đổi Git phải giữ nguyên nguyên tắc: DOCX kiến trúc là authority cao nhất; không thay đổi architecture frozen nếu không có quyết định người dùng.
+
+### Quyền tạo branch, commit và push
+
+- Codex chỉ được tạo branch, commit hoặc push khi prompt hiện hành cấp quyền rõ ràng.
+- Mỗi work package phải dùng một branch công việc riêng, bắt đầu từ baseline hoặc commit gốc được prompt chỉ định.
+- Tên branch phải phản ánh work package, ví dụ: `wp-01-canonical-control-plane`.
+- Tuyệt đối không push trực tiếp vào:
+  - `main`
+  - `baseline/architecture-frozen-20261002`
+- Không force push, không sửa remote, không đổi credential, không tự tạo pull request, không merge branch nếu prompt không cấp quyền rõ ràng.
+- Không dùng `git reset --hard`, `git checkout --`, hoặc thao tác phá hủy để làm sạch worktree.
+
+### Điều kiện trước khi push
+
+Trước khi tạo commit hoặc push, Codex phải xác minh:
+
+1. Đúng repository và đúng `origin`.
+2. Đúng branch nguồn/baseline và commit SHA mà prompt yêu cầu.
+3. Phạm vi file thay đổi khớp work package.
+4. Không vô tình stage generated/cache/runtime output, credential, secret, log, rosbag hoặc artifact thô ngoài whitelist.
+5. Các check offline được prompt yêu cầu đã hoàn thành.
+6. `git diff --check` được chạy trong đúng phạm vi; nếu có waiver được phê duyệt thì phải nêu rõ finding, phạm vi và mã/decision waiver.
+
+### Push thất bại hoặc precondition không đạt
+
+- Nếu precondition không đạt: dừng trước khi tạo branch, commit hoặc push; báo cáo `STOPPED_PRECONDITION_FAILED`.
+- Nếu push thất bại: báo cáo `PUSH_FAILED_NO_RETRY`; không retry, không bypass credential, không đổi remote hoặc Git config.
+- Giữ nguyên evidence, index và worktree để người dùng/kiến trúc sư audit.
+- Chỉ retry sau một prompt mới, có phê duyệt rõ ràng.
+
+### Báo cáo bắt buộc khi có Git delivery
+
+Báo cáo bằng tiếng Việt, gồm:
+
+1. Branch nguồn và branch công việc.
+2. Commit SHA nguồn/baseline và commit SHA mới.
+3. URL `origin` đã xác minh.
+4. Danh sách file tạo/sửa và lý do thuộc phạm vi.
+5. Check đã chạy, gồm `git diff --check`.
+6. Kết quả commit và push; URL branch hoặc pull request nếu có.
+7. Những gì không chạy/không thay đổi.
+8. Gaps, blocker và evidence status.
+
+Commit, push, branch hoặc pull request chỉ là `IMPLEMENTED_OFFLINE_ONLY` trừ khi có evidence cấp cao hơn theo kiến trúc.
+
 ## 8. Quy tắc implementation cho task, reward và reset
 
 - Infrastructure failure không được biến thành RL transition giả hoặc task penalty giả.
