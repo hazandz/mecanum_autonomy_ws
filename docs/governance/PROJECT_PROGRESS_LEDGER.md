@@ -87,3 +87,17 @@
 | Evidence status | IMPLEMENTED_OFFLINE_ONLY |
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Notes | Git tracking only; all untracked generated/cache files remain physically present. Historical artifacts, source, firmware and geometry assets are unchanged. |
+
+### WP-02I-INTEGRATE-CANONICAL-SOURCE-SELECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-02 |
+| Work branch | wp-02i-integrate-canonical-source-selection |
+| Integration base | 6094650e799bb66cdcc9f923a7a81c5acf44f28c |
+| Candidate branch | wp-02-canonical-source-selection |
+| Candidate commit | eed009d926e721ed37f27f675bbbe27e04cc14fe |
+| Scope | Integrate approved V3 canonical config-input boundary and legacy exclusion rules |
+| Evidence status | IMPLEMENTED_OFFLINE_ONLY |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Notes | V3 is approved only for core/offline config input. Runtime profile approval, PPO, Gazebo, HIL, deploy_sim and deploy_real remain unapproved. |
