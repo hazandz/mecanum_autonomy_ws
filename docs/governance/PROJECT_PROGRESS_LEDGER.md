@@ -101,3 +101,15 @@
 | Evidence status | IMPLEMENTED_OFFLINE_ONLY |
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Notes | V3 is approved only for core/offline config input. Runtime profile approval, PPO, Gazebo, HIL, deploy_sim and deploy_real remain unapproved. |
+
+### PEP-001-REV-0.2.0-GOVERNANCE-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-04 |
+| Work branch | wp-04-pep-amendment-governance |
+| Base commit | afa23732fb6a74beafceec21c2319a52f5f87b3 |
+| Scope | Candidate PEP revision 0.2.0: narrow WP-04 first deliverable to non-integrated V3 immutable contract primitives |
+| Evidence status | PENDING_REVIEW |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Notes | No code or runtime authorization. WP-04 remains BLOCKED_BY_CONTRACT. Semantic bundle S2 rev.2, Observation Input Contract rev.6 and V3 Observation Boundary rev.7 remains a required recorded gate. Proposal evidence: docs-v3-observation-contract-import at d3ca85536e35b38f7f3dffcf1dfd1bc16983aae9. |
