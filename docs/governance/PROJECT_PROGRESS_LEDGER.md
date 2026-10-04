@@ -101,3 +101,30 @@
 | Evidence status | IMPLEMENTED_OFFLINE_ONLY |
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Notes | V3 is approved only for core/offline config input. Runtime profile approval, PPO, Gazebo, HIL, deploy_sim and deploy_real remain unapproved. |
+
+### PEP-001-REV-0.2.0-GOVERNANCE-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-04 |
+| Work branch | wp-04-pep-amendment-governance |
+| Base commit | afa23732fb6a74beafceec21c2319a52f5f87b3 |
+| Scope | Candidate PEP revision 0.2.0: narrow WP-04 first deliverable to non-integrated V3 immutable contract primitives |
+| Evidence status | PENDING_REVIEW |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Notes | No code or runtime authorization. WP-04 remains BLOCKED_BY_CONTRACT. Semantic bundle S2 rev.2, Observation Input Contract rev.6 and V3 Observation Boundary rev.7 remains a required recorded gate. Proposal evidence: docs-v3-observation-contract-import at d3ca85536e35b38f7f3dffcf1dfd1bc16983aae9. |
+
+### WP-04I-INTEGRATE-PEP-001-REV-0.2.0-GOVERNANCE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-04 |
+| Work branch | wp-04i-integrate-pep-amendment-governance |
+| Integration base | afa23732fb6a74beafceec21c2319a52f5f87b3 |
+| Candidate branch | wp-04-pep-amendment-governance |
+| Candidate commit | 1b4a86b15fdefcf39389a132f57c7e00c62e65fd |
+| Scope | Integrate PEP-001 revision 0.2.0 governance amendment for the constrained WP-04 V3 primitive deliverable |
+| Evidence status | IMPLEMENTED_OFFLINE_ONLY |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Supersedes | PEP-001-REV-0.2.0-GOVERNANCE-CANDIDATE pending-review state |
+| Notes | Governance integration only. WP-04 remains BLOCKED_BY_CONTRACT; code and runtime remain unauthorized. |
