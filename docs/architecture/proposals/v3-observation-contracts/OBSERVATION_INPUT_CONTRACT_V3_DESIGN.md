@@ -1,7 +1,7 @@
 # Observation Input Contract V3 Design
 
 **Revision:** `6`
-**Status:** `REVISED_DRAFT — PENDING_INDEPENDENT_ARCHITECTURE_REVIEW_AND_USER_APPROVAL`
+**Status:** `APPROVED_FOR_FOLLOW_ON_DESIGN_ONLY — SEMANTIC INPUT-BOUNDARY DESIGN`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 **Scope:** resolved V3 configuration shape and pure-core input contract for the
 canonical 81-element observation. This is not an implementation work package.
@@ -40,7 +40,7 @@ an immutable `ResolvedConfigV3`.
 | Architecture §41.1 also requires `sim_train` to form its local goal from the noisy internal emulator output; raw Ground Truth remains only an input of the emulator and task-oracle boundaries. | `sim_train` requires a distinct internal `LocalReference` producer, typed snapshot and time/lifecycle contract. It must not be modelled as the localisation-adapter/TF path used by the other profiles. |
 | Approved ACR revision 6 plus Receipt Topic QoS Contract revision 4. | Receipt interface/QoS ID-hash pairs are fixed references, not duplicated policy definitions. |
 | A0.3 compiler and A0.5 composition ADR. | New field is profile-owned, enters the normal resolved-config hash, and may contain no token in `ResolvedConfigV3`. |
-| ACR S2 is still pending. | This design defines timing-field ownership, but does not choose sensor timing, buffer, or freshness numbers. |
+| ACR S2 semantics are approved for follow-on design only. | This design defines timing-field ownership, but profile-specific numeric sensor timing, buffer, and freshness values/evidence remain unresolved. |
 
 `mecanum_env.py`, `train_ai.py`, V1 observation types, simulator Ground Truth,
 and current V1 assembler code are explicitly non-authoritative for this design.
@@ -432,7 +432,7 @@ producing no vector.
 
 | Concern | Owner | Required response |
 | --- | --- | --- |
-| scan/motion/reference triple selection, buffer capacity, overflow, future-stamp handling and skew | S2 contract `mecanum.snapshot-synchronization-temporal/v1` / `1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f` | One globally ranked coherent triple at/before a shared transaction cut-off; pending S2 approval; no numeric value is chosen here. |
+| scan/motion/reference triple selection, buffer capacity, overflow, future-stamp handling and skew | S2 contract `mecanum.snapshot-synchronization-temporal/v1` / `1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f` | One globally ranked coherent triple at/before a shared transaction cut-off; S2 semantics approved for follow-on design only; profile-specific numeric timing/evidence remains pending and no numeric value is chosen here. |
 | external scan/odom/reference receive ages and reference-to-odometry skew | `ObservationTimingPolicyV3` using approved profile values | Non-ready; no cached input fallback. |
 | `sim_train` internal local-reference and measured-twist timestamp/provenance | `SimulatedOdometryEmulator` / `SimTrainLocalReferenceBuilder` produce snapshots; `SafetyLifecycle` supplies barriers; `ObservationTimingPolicyV3` validates | Require active lifecycle, compatible emulator snapshot contract/sequence, and timestamps strictly after the supplied barrier in the same profile ROS-time unit and epoch. The internal producers consume barriers; they do not create, advance, translate, or replace them. No invented ROS message or cross-process steady timestamp. |
 | action/reset barrier timestamps | `SafetyLifecycle` | Sole owner for every profile. It supplies immutable profile-ROS-time barriers to ingress; no other layer creates, advances, translates, or substitutes them. |
@@ -491,7 +491,7 @@ semantics:
    `topics_qos` binding; and
 4. rejects degenerate LiDAR range bounds.
 
-It remains a design draft and is not implementation authority.
+It remains a follow-on-design document only and is not implementation authority.
 
 Revision 3 closes the remaining profile-completeness gap by adding a typed
 internal `sim_train` local-reference boundary. It does not alter the 81D goal
@@ -524,6 +524,7 @@ timing values or changing the 81D/public receipt contracts:
    rejects a cut-off that is not strictly after both barriers; and
 5. keeps measurement evidence as a later per-profile resolved-config gate.
 
-`OBSERVATION_INPUT_CONTRACT_V3: REVISED_DRAFT_PENDING_REVIEW`
+`OBSERVATION_INPUT_CONTRACT_V3: APPROVED_FOR_FOLLOW_ON_DESIGN_ONLY`
+`OBSERVATION_PROFILE_TIMING: VALUES_UNRESOLVED`
 `V3_OBSERVATION_ASSEMBLER: NOT_AUTHORIZED`
 `RUNTIME_NOT_APPROVED`

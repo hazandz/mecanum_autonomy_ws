@@ -248,3 +248,13 @@ Only then may a later work package implement the connected pure-Python V3 assemb
 `RECEIPT_TOPIC_QOS_CONTRACT: APPROVED_IN_SAME_BUNDLE`
 `V3_OBSERVATION_BOUNDARY: NOT_IMPLEMENTATION_AUTHORITY_YET`
 `RUNTIME_NOT_APPROVED`
+
+## 10. Status-only erratum (2026-10-04)
+
+The semantics of ACR S2 revision 2, Observation Input Contract V3 revision 6,
+and V3 Observation Boundary Specification revision 7 are approved for
+follow-on design only. Profile-specific numerical sensor timing, buffer, and
+freshness values and their evidence remain unresolved. This erratum changes
+status/traceability only; it does not change receipt protocol semantics or the
+approval of this ACR revision 6 and Receipt Topic QoS Contract revision 4.
+No implementation or runtime authorization is granted.

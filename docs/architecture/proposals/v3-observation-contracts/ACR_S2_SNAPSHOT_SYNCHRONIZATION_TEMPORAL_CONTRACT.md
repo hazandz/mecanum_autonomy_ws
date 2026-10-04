@@ -1,7 +1,7 @@
 # ACR S2 — Snapshot Synchronization Temporal Contract
 
 **Revision:** `2`\
-**Status:** `DRAFT — PENDING_INDEPENDENT_ARCHITECTURE_REVIEW_AND_USER_APPROVAL`\
+**Status:** `APPROVED_FOR_FOLLOW_ON_DESIGN_ONLY — SEMANTIC CONTRACT`\
 **Runtime status:** `RUNTIME_NOT_APPROVED`\
 **Scope:** canonical V3 temporal admission and selection for LiDAR, motion
 snapshot and local reference before a pure V3 assembler creates an 81-element
@@ -313,7 +313,7 @@ separate architecture review may decide whether a non-resolving pure-Python V3
 contract/core work package is ready. Resolving or executing any profile still
 requires its section 8.2 evidence.
 
-`ACR_S2_SNAPSHOT_SYNCHRONIZATION_TEMPORAL_CONTRACT: DRAFT`\
+`ACR_S2_SNAPSHOT_SYNCHRONIZATION_TEMPORAL_CONTRACT: APPROVED_FOR_FOLLOW_ON_DESIGN_ONLY — SEMANTIC CONTRACT`\
 `S2_SENSOR_TIMING: VALUES_UNRESOLVED`\
 `V3_OBSERVATION_IMPLEMENTATION: NOT_AUTHORIZED`\
 `RUNTIME_NOT_APPROVED`
