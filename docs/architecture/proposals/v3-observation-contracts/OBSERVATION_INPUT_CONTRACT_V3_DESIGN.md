@@ -411,13 +411,15 @@ from policy observation. Each value divides by the corresponding resolved
 derived from a wheel command, PPO action, decoder result, final command, or
 perfect simulator state.
 
-`REJECT_NON_READY_NO_CLIP` is a **proposed V3 decision** carried forward from
-the boundary specification: non-finite values, rejected validity/covariance, or
-absolute values above their per-axis maximum make the candidate non-ready. It
-is not an architecture fact until this design is approved. The future
-`validity_contract` must define exact estimator validity/fault/covariance
-acceptance with measured or approved simulation provenance; this document does
-not invent its thresholds.
+`REJECT_NON_READY_NO_CLIP` is an approved semantic decision for follow-on
+design only: non-finite values, values invalid under the applicable approved
+validity contract, or absolute values above their corresponding per-axis
+motion limit produce `NON_READY`; they are not clipped. This does not approve
+runtime behavior. The validity contract and profile record must still define
+the applicable estimator validity/fault/covariance criteria and provide the
+required provenance and profile evidence. Covariance/fault thresholds and
+profile-specific evidence remain unresolved here; this document does not
+invent a number or acceptance threshold.
 
 ### 5.5 Receipt `[78..80]`
 
@@ -466,17 +468,36 @@ proposal must include all of the following as one reviewable config/core slice:
 
 ## 8. Approval and readiness gate
 
-This design is ready for independent architectural audit. It is not ready for
-implementation until all of these are approved:
+This document has two distinct readiness gates:
 
-- this model/composition decision, including the proposed no-clip measured
-  twist policy or an explicit replacement;
-- S2 sensor synchronization values/policy for the target profile;
-- a measured-twist validity/covariance contract;
+### 8.1 Non-resolving primitive readiness review
+
+A separate readiness review may assess the non-resolving pure-Python
+primitives constrained by PEP-001 revision `0.2.0`: structural models and
+their validation only. Unresolved profile timing values, measured-twist
+profile evidence, or profile composition do not by themselves block that
+separate review. Such primitives must not resolve a profile, treat fixtures
+as provenance or evidence, or create an observation vector. This wording is
+not implementation authorization; a separate exact implementation packet
+and its approval remain required.
+
+### 8.2 Profile-resolving and integrated implementation gate
+
+Profile-resolving or integrated implementation is not ready until all of the
+following are resolved and approved for the applicable profile:
+
+- the complete profile-resolved contract and composition;
+- S2 timing, buffer, and freshness values with required profile evidence;
+- measured-twist validity, fault/covariance criteria, provenance, and profile
+  evidence;
 - canonical source records for LiDAR, external and internal LocalReference,
   measured twist, and their profile provenance; and
 - concrete profile values, including X3 extrinsic/range/frame evidence for
   `deploy_real`.
+
+These profile and evidence gates are not reduced by §8.1. No
+`deploy_real` measurement, artifact, HIL, Gate 3/4, or runtime approval is
+implied.
 
 ## 9. Corrective revision ledger
 

@@ -47,9 +47,12 @@ already frozen 81D, final-command, safety and ground-truth-isolation semantics,
 without changing a public topic, QoS, TF tree, action schema, reward contract
 or safety boundary. The reset/`observation0` and public receipt decisions in
 section 5 were approved together in ACR revision 6 and Receipt Topic QoS
-Contract revision 4. This specification is still not implementation authority:
-the complete resolved `ObservationInputContractV3` remains to be designed and
-approved.
+Contract revision 4; that receipt boundary retains its approved status. The
+semantic input-boundary design in Observation Input Contract V3 revision 6
+is approved for follow-on design only. The complete profile-resolved contract
+and composition, numerical profile values/evidence, and implementation remain
+unapproved. This specification is not implementation authority and does not
+change the frozen 81D, receipt/QoS, TF, or safety semantics.
 
 ## 3. Canonical V3 boundary
 

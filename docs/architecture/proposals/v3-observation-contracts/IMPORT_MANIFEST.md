@@ -11,4 +11,16 @@ Ngày import: 2026-10-04
 | `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` | `docs/architecture/proposals/v3-observation-contracts/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` | `ae4f92cb05b2a191448922a0a49d5545e5397973c7bfe99af3e36fd1b47c2af0` | `ae4f92cb05b2a191448922a0a49d5545e5397973c7bfe99af3e36fd1b47c2af0` | `3174547faceddef4c007d20ca8f4db9729710dab26628c183820b2bcfa8366b7` |
 | `— (new approval record; no Downloads source)` | `docs/architecture/proposals/v3-observation-contracts/V3_OBSERVATION_SEMANTIC_BUNDLE_APPROVAL_RECORD.md` | `—` | `—` | `742f0ed0a4f29cb8db80381c1a2449d5c44f7705520507253e40de4a1d83ba72` |
 
-Các cập nhật sau import là status/traceability-only; không thay đổi nội dung contract, semantic rules, hay canonical manifest hash. Các source SHA và SHA-256 target tại thời điểm import được giữ nguyên làm provenance; source snapshots được lưu trong lịch sử của proposal branch. SHA-256 target sau cập nhật thể hiện nội dung hiện tại. Không khẳng định các target hiện tại byte-identical với file Downloads hoặc chỉ khác bởi các chuẩn hóa hard-break trước đây.
+Các cập nhật sau import là status/traceability-only; không thay đổi nội dung contract, semantic rules, hay canonical manifest hash. Các source SHA và SHA-256 target tại thời điểm import được giữ nguyên làm provenance; source snapshots được lưu trong lịch sử của proposal branch. SHA-256 target sau approval-record update thể hiện trạng thái tại candidate đó. Không khẳng định các target hiện tại byte-identical với file Downloads hoặc chỉ khác bởi các chuẩn hóa hard-break trước đây.
+
+### SHA-256 target after corrective wording update
+
+| Target path | SHA-256 target after correction |
+| --- | --- |
+| `docs/architecture/proposals/v3-observation-contracts/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` | `1939dae1d31f24c161b75a3ca3470099854fec7f0fdc2ee592f617ba63278a6f` |
+| `docs/architecture/proposals/v3-observation-contracts/OBSERVATION_INPUT_CONTRACT_V3_DESIGN.md` | `48c0afa5ea3baacfdf6f698fcafd2468ad8d792b141dfad4fcfcd2f1f2c8847c` |
+| `docs/architecture/proposals/v3-observation-contracts/V3_OBSERVATION_BOUNDARY_SPECIFICATION.md` | `675e38f5538326d368f1a8ea236f554e561bb35bec0cdd1fdbd106f98a06cf9a` |
+
+The correction only clarifies approval status and the boundary between
+primitive-readiness review and profile-resolving implementation. These hashes
+do not imply byte identity with the Downloads sources.

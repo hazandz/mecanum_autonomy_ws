@@ -33,7 +33,10 @@ It does not alter the 81-element layout or `/cmd_vel` ownership. It introduces a
 | Existing shared DDS interfaces are `Heartbeat`, `SafetyState`, `NavigationState`, and `CommandEnvelope`. | `SafetyState` cannot substitute for a receipt: it lacks ordering, full provenance, schema binding and per-issue identity. |
 | Resolved V3 config contains no tokens and its hash covers resolved semantics. | `TBD_MEASURED` and other tokens are pre-resolution only. |
 
-`ACR_S2_Snapshot_Synchronization_Temporal_Contract` remains pending and owns numerical sensor timing and buffer decisions. This record chooses no timing number and does not override S2.
+ACR S2 revision 2 semantics are approved for follow-on design only. Numerical
+sensor timing, buffer, and freshness values and their evidence remain
+unresolved; this ACR closure selects no such value and does not resolve,
+replace, or override those S2 profile-specific requirements.
 
 ## 3. Decision A — reset closure for `observation0`
 
@@ -254,7 +257,9 @@ Only then may a later work package implement the connected pure-Python V3 assemb
 The semantics of ACR S2 revision 2, Observation Input Contract V3 revision 6,
 and V3 Observation Boundary Specification revision 7 are approved for
 follow-on design only. Profile-specific numerical sensor timing, buffer, and
-freshness values and their evidence remain unresolved. This erratum changes
-status/traceability only; it does not change receipt protocol semantics or the
-approval of this ACR revision 6 and Receipt Topic QoS Contract revision 4.
-No implementation or runtime authorization is granted.
+freshness values and their evidence remain unresolved. This erratum
+supersedes the obsolete S2-pending status statement in §2; it clarifies that
+status only and does not change receipt protocol semantics or the approval of
+this ACR revision 6 and Receipt Topic QoS Contract revision 4. ACR closure
+does not choose or replace unresolved S2 profile values. No implementation
+or runtime authorization is granted.
