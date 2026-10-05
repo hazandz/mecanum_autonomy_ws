@@ -47,6 +47,32 @@ Semantics của revision 4 được giữ nguyên: `RELIABLE`, `TRANSIENT_LOCAL`
 
 Audit evidence hiện có không chỉ ra rằng QoS revision 4 cần thay đổi. Nếu audit sau này tìm thấy evidence cho thấy contract QoS cần sửa, việc đó là finding và quyết định riêng cần user/auditor xử lý; dừng phần thay đổi QoS tại đó. Proposal này không thiết kế, sửa hoặc tạo hash/revision QoS.
 
+### 3.1 Draft Erratum R4-E2 — traceability cho companion ACR
+
+Để xử lý cross-reference còn trỏ tới ACR revision 6, proposal đề xuất một draft Erratum R4-E2 cho `RECEIPT_TOPIC_QOS_CONTRACT` revision 4, theo tiền lệ traceability-only R4-E1. Đây chỉ là nội dung đề xuất để audit; không phải erratum đã được ban hành, không sửa QoS revision 4 trong packet này và không làm thay đổi authority hiện hành.
+
+**Draft wording đề xuất cho R4-E2:**
+
+> In §1 and §10(2), update the companion reference from `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision `6` to revision `7`. This is a traceability-only correction, comparable to Erratum R4-E1. It is effective only if ACR revision 7 and Receipt Topic QoS Contract revision 4 are explicitly approved together and canonically integrated as one bundled approval. This erratum changes no QoS revision, contract ID, canonical QoS manifest or hash, public protocol, QoS profile, or transport semantics.
+
+R4-E2 chỉ có thể có hiệu lực trong bundled approval nếu cả ACR revision 7 và QoS revision 4 được user phê duyệt cùng nhau và tích hợp canonical theo đúng workflow. Không được coi ACR revision 7, draft R4-E2 hoặc bundled approval mới là đã được duyệt hay có hiệu lực chỉ vì nội dung này xuất hiện trong proposal.
+
+### 3.2 Điều kiện QoS §10(3) và câu hỏi audit chưa giải quyết
+
+QoS revision 4 §10 hiện yêu cầu cả ba nội dung sau được phê duyệt cùng nhau:
+
+> 1. this Receipt Topic QoS Contract;
+> 2. `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision 6, which already incorporates the planar-twist and final-publisher-instance rules and removes duplicated gap ownership; and
+> 3. the resulting public-interface version/hash and resolved-config binding.
+
+Draft R4-E2 chỉ đề xuất cập nhật tham chiếu revision trong mục 2. Mục 3 được giữ nguyên chính xác về hiệu lực và nội dung:
+
+> the resulting public-interface version/hash and resolved-config binding.
+
+R4-E2 không miễn, thay đổi hoặc diễn giải lại điều kiện §10(3). Phạm vi áp dụng của điều kiện đó là một câu hỏi mở cần independent audit và user decision: §10(3) có tiếp tục chặn mọi packet Gate A primitive-only, hay chỉ áp dụng cho Gate B connected/profile-resolving? Proposal này không tự kết luận câu trả lời, không coi điều kiện đã được đáp ứng cho Gate A, và không tạo waiver. Cho tới khi có disposition có authority, không được suy luận rằng Gate A được miễn §10(3).
+
+Nếu muốn Gate A đi trước điều kiện §10(3), thay đổi đó cần một bundled contract amendment/change-control riêng được independent audit và user phê duyệt. Không được đưa thay đổi phạm vi như vậy vào R4-E2 hoặc gọi nó là erratum traceability-only.
+
 ## 4. Wording thay thế §8 được đề xuất cho ACR revision 7
 
 > **DRAFT — proposed replacement for ACR §8, revision 7. Not effective unless independently audited, explicitly approved by the user together with re-acknowledgment of Receipt Topic QoS Contract revision 4, and canonically integrated. Until then ACR revision 6 remains the current authority.**
