@@ -1,180 +1,52 @@
-# V3 Pure-Python Work Package Readiness Review
+# Đánh giá readiness cho primitive V3 pure-Python
 
-**Revision:** `3 — scope-closure user approved`\
-**Date:** `2026-10-04`\
-**Mode:** `ARCHITECTURE_READINESS_REVIEW` (static only)\
-**Repository evidence:** `origin/integration/implementation@afa23732fb6a74beafceec21c2319a52f5f87b3f`\
-**Architecture authority:** `MECANUM_NAV_DRL_Architecture(4).docx`, SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`\
-**Governance authority:** `docs/governance/PROJECT_EXECUTION_PLAN.md` at the repository evidence ref\
-**Scope-closure status:** `USER_APPROVED`\
+**Revision:** `4 — reconciliation sau semantic approval`
+**Ngày:** `2026-10-05`
+**Mode:** `ARCHITECTURE_READINESS_REVIEW` (static only)
+**Integration reference:** `integration/implementation@f8933bcff2bb30b1dad57d71d91678e36746326f`
+**PEP authority tại integration reference:** `PEP-001`, revision `0.2.0`
+**Proposal evidence:** branch `wp-04-v3-contract-evidence-import`, commit `5cb311c1f48c507254a536c0499f638fd533ce81`
+**Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-## 1. Purpose and current verdict
+## 1. Kết luận và trạng thái
 
-This document closes a design ambiguity in the first possible V3 pure-Python
-scope. It does not authorize code and does not make a PEP change.
-
-`V3_PURE_PYTHON_READINESS: NOT_READY_PENDING_GOVERNANCE_AND_SEMANTIC_APPROVAL`
-
-The scope closure below passed independent architecture audit and is approved
-by the user. It permits only the next semantic and governance decisions; it
-does not authorize code.
-
-No candidate implementation packet may use a new work-package ID until the PEP
-maps that scope to one. `WP-05A`, `WP-05B`, and a repurposed `WP-06` are not
-canonical identifiers in the current PEP.
-
-## 2. Two gates still outside this review
-
-### Semantic gate
-
-The following documents are technically coherent but remain draft inputs, not
-approved Architecture authority:
-
-| Contract | Revision / exact binding | Intended use after approval |
-| --- | --- | --- |
-| S2 temporal contract | rev.2, `mecanum.snapshot-synchronization-temporal/v1` / `1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f` | post-barrier admission, global coherent triple, shared cut-off and typed non-ready rules |
-| Observation Input Contract | rev.6 | profile variants and V3 input specification |
-| V3 Observation Boundary | rev.7 | fixed 81D boundary, V3-only core, receipt projection |
-
-The required user/Architecture decision is:
+Revision này cập nhật kết luận theo integration reference và các quyết định được ghi nhận trong proposal bundle. Đây là reconciliation tài liệu, không phải ACR amendment, không phải implementation packet và không cấp quyền sửa code.
 
 ```text
-APPROVED_FOR_FOLLOW_ON_DESIGN:
-ACR_S2_SNAPSHOT_SYNCHRONIZATION_TEMPORAL_CONTRACT rev.2,
-ObservationInputContractV3 rev.6, and
-V3 Observation Boundary Specification rev.7.
-
-Approval scope: semantic temporal and input-boundary contract only.
-No profile timing values, code, build, test execution, ROS/runtime, HIL,
-hardware, or deploy_real are authorized by this decision.
-
-RUNTIME_NOT_APPROVED.
+SCOPE_CLOSURE: USER_APPROVED
+SEMANTIC_BUNDLE: USER_APPROVED_FOR_FOLLOW_ON_DESIGN_ONLY
+PEP_MAPPING: WP-04-POLICY-CORE-P0 / PEP-001 rev.0.2.0
+CANONICAL_RECORDING: PENDING_INTEGRATION_REVIEW
+ACR_SCOPE_INTERPRETATION: PENDING_INDEPENDENT_AUDIT
+CONTRACT_AMBIGUITY: PRESENT — ACR §8 chưa xác định rõ phạm vi primitive-only
+IMPLEMENTATION_PACKET: NOT_AUTHORIZED
+WP-04: BLOCKED_BY_CONTRACT
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_NOT_APPROVED
 ```
 
-The text above is a required approval template, not a claim that it has already
-been approved.
+Không ghi `READY_FOR_CODE` hoặc `APPROVED_FOR_IMPLEMENTATION`. Approval record hiện là proposal evidence trong candidate branch; sự hiện diện của nó tại commit `5cb311c` không tự biến record thành canonical integration authority.
 
-### PEP governance gate
+## 2. Scope closure, semantic bundle và PEP mapping
 
-At the evidence ref, the PEP defines:
+Canonical work-package ID là `WP-04-POLICY-CORE-P0`, theo `PEP-001` revision `0.2.0` tại integration reference `f8933bcff2bb30b1dad57d71d91678e36746326f`. Không tạo `WP-05A`, `WP-05B` hoặc ID thay thế. WP-04 vẫn `BLOCKED_BY_CONTRACT`.
 
-| PEP ID | Scope | Initial status |
-| --- | --- | --- |
-| `WP-04-POLICY-CORE-P0` | Normalize LiDAR/`LocalReference` and bind previous command to final-issued receipt | `BLOCKED_BY_CONTRACT` |
-| `WP-05-CANONICAL-ARTIFACT-FOUNDATION` | Map, scenario and hardware provenance/hash foundation | `BLOCKED_BY_CONTRACT` |
-| `WP-06-BRINGUP-SAFETY-OFFLINE` | Bringup, command adapters, safety and final publisher offline implementation | `BLOCKED_BY_DEPENDENCY` |
+Scope closure cho primitive đã được user chấp thuận. Semantic bundle gồm S2 revision 2 (`mecanum.snapshot-synchronization-temporal/v1`, SHA-256 `1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f`), Observation Input Contract revision 6 và V3 Observation Boundary revision 7 được user chấp thuận cho `FOLLOW_ON_DESIGN_ONLY`. Quyết định này không chấp thuận profile values, implementation, test, runtime hoặc hardware.
 
-Before any execution packet, PEP authority must either:
+Các tài liệu và approval record đã import vẫn ở proposal/candidate history cho đến khi được audit và tích hợp theo workflow riêng. Bản review này ghi nhận evidence đó nhưng không tuyên bố canonical recording đã hoàn tất.
 
-1. place the scope in section 4 under existing `WP-04` with narrowed
-   deliverable and dependencies; or
-2. revise the PEP under plan-change control and assign a new canonical ID.
+## 3. Phạm vi A — primitive độc lập, không resolve hoặc kết nối profile
 
-This review does not make that choice.
+Deliverable primitive hẹp được PEP-001 revision `0.2.0` mô tả gồm:
 
-## 3. Scope-closure decision — user approved
+1. `ObservationCutoffV3`: immutable V3 core type và structural fail-closed validation. Type chỉ xác thực transaction facts do caller cung cấp; không tạo action/reset barrier, lifecycle identity, cut-off timestamp, receipt hoặc config hash.
+2. `ObservationInputContractV3`: immutable structural model shapes và validation cho các nhánh/contract references. Đây không phải resolved profile, compiler input mới hay operational provenance record.
+3. Exact contract references được kiểm tra theo design: S2 ID/SHA ở trên; receipt interface `mecanum.final-issued-receipt/v1` / `90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`; receipt QoS `mecanum.final-issued-receipt-topic-qos/v1` / `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`.
 
-### 3.1 Chosen technical shape: model primitives only
+PEP phân quyền sở hữu: `SafetyLifecycle` là owner của barrier; `RobotRuntimeAdapter.wait_transition_snapshot(after=receipt)` là operational creator duy nhất của một cutoff mỗi transition; primitive chỉ định nghĩa type và validation.
 
-The first potential implementation is **not compiler closure**. It is a
-V3-only set of immutable contract primitives that can be constructed only as
-structural in-memory test data until a later compiler/profile migration scope
-is authorized.
-
-It must not modify:
-
-- `ResolvedConfigV3`;
-- raw V3 profile inputs, YAML, loader, compiler, validator, composition or
-  normal config hashing;
-- `CommandSafetyContractV3`;
-- any V1 observation, decoder, history or snapshot implementation;
-- a public ROS message, topic, QoS, TF, sensor adapter, S2 buffer,
-  assembler, encoder or runtime owner.
-
-This removes the previous contradiction: no existing profile is invalidated by
-a newly mandatory field, because the field is not attached to
-`ResolvedConfigV3` in this first scope.
-
-### 3.2 Static input-specification primitives
-
-A future implementation may add a V3-only, non-integrated declarative model
-for the *shape* of `ObservationInputContractV3`. It may define typed union
-members and their structural invariants for:
-
-- LiDAR geometry/range/sectorization descriptors and `T_base_lidar`
-  provenance;
-- `sim_train` internal versus external goal/twist source kinds;
-- S2 contract ID/SHA reference;
-- final-issued receipt interface/topic-QoS ID/SHA references.
-
-It must not create a resolved profile, an operational provenance record, a
-`deploy_sim`/`deploy_real` value, an X3 measurement or numerical timing
-threshold. It must not claim that a configuration hash includes this model
-until compiler closure explicitly integrates it.
-
-### 3.3 `ObservationCutoffV3`: shared transaction primitive, not config
-
-`ObservationCutoffV3` is a runtime transaction fact. Its proposed type owner
-is a new V3-only core module:
-
-```text
-mecanum_nav_rl/core/v3_observation_contracts.py
-```
-
-This module owns immutable type shape and fail-closed validation only. It must
-not select or synthesize a barrier, cut-off timestamp, lifecycle identity or
-receipt. It must not import or extend legacy `core/snapshots.py`, V1
-observation modules, ROS, DDS or configuration loading code.
-
-Operational ownership remains separate:
-
-| Concern | Owner |
-| --- | --- |
-| Action/reset barriers | `SafetyLifecycle` |
-| Creation of exactly one cut-off after `wait_transition_snapshot(after=receipt)` | `RobotRuntimeAdapter` |
-| Immutable type and validation | `core/v3_observation_contracts.py` |
-| Consumption for coherent input selection | later S2/V3 core |
-| Configuration hash calculation and resolved-profile membership | later compiler/config closure |
-
-The primitive may carry an adapter-supplied active `config_hash` only as
-transaction provenance. It neither calculates that hash nor becomes a
-configuration value. Its validation requires a cut-off strictly after the
-provided action and reset barrier timestamps in the same lifecycle identity;
-failure is typed and fail-closed. Later S2 maps that failed condition to
-`CUTOFF_BARRIER_ORDER_NON_READY`.
-
-### 3.4 Deferred compiler/profile closure
-
-A later, separate candidate scope may attach `observation_input` to
-`ResolvedConfigV3`. That later scope must be atomic:
-
-1. add the `ResolvedConfigV3` field and composition/hash ownership;
-2. update raw-config loading, compiler and validator surfaces;
-3. migrate every authoritative raw V3 profile that is eligible to resolve;
-4. update all corresponding structural fixtures/tests in the same change;
-5. reject any profile lacking approved provenance or required numerical
-   evidence.
-
-It must not introduce an optional V3 fallback or a hidden default merely to
-keep old profiles compiling. `deploy_real` remains blocked until its separate
-`MEASURED_REGISTRY` evidence exists. This deferred scope requires a fresh
-readiness review; it is not part of the first primitive scope.
-
-## 4. Static repository evidence
-
-| Finding | Classification | Consequence |
-| --- | --- | --- |
-| `ResolvedConfigV3` has no `observation_input` field. `test_config_v3_schema.py` constructs it directly as a complete object. | `SOURCE_FACT` | Adding a mandatory field without migration would invalidate existing structural construction. |
-| `config/v3_composition.py` derives fragment ownership from `ResolvedConfigV3`; the current runtime-profile fragment owns only `runtime` and `motion_limits`. | `SOURCE_FACT` | Compiler closure must update ownership and hash as part of one later atomic migration. |
-| `config/v3_policy.py`, `v3_compiler.py`, and `v3_validators.py` currently reject `SIM_BASELINE` for `deploy_sim`. | `SOURCE_FACT` | This policy alignment belongs to later compiler closure, not the primitive scope. |
-| Existing `observations/{assembly,encoder,synchronizer,previous_command}.py` are V1-bound. | `SOURCE_FACT` | No direct reuse, delegation, wrapping or modification is permitted. |
-| Existing `core/` contains generic immutable types but also legacy snapshot/lifecycle modules. | `SOURCE_FACT` | The proposed V3 core module must be new and must have an explicit no-legacy-import boundary. |
-| Interfaces contain `CommandEnvelope.msg` and `SafetyState.msg`, not a final-issued receipt message. | `SOURCE_FACT` | Public receipt interface and bridge are out of scope. |
-
-## 5. Candidate primitive scope — not authorized
-
-After both gates in section 2, the candidate’s source area may be limited to:
+Primitive-only không kết nối compiler/profile, receipt bridge/history hay S2 synchronizer và không tạo vector 81D. File dự kiến cho một work package code sau (chỉ là dự kiến, chưa được tạo hoặc cho phép ở revision này):
 
 ```text
 ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/core/v3_observation_contracts.py
@@ -182,52 +54,40 @@ ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_observation_input_models.py
 ros2_ws/src/mecanum_nav_rl/test/test_v3_observation_contract_primitives.py
 ```
 
-The exact eventual file list must be revalidated against the approved PEP
-mapping before edits. No existing compiler/config/profile file is included.
+Fixture tương lai chỉ là dữ liệu structural in-memory, không phải profile, provenance, measurement hoặc runtime evidence.
 
-### Required static-only outcome
+## 4. Phạm vi B — connected/profile-resolving implementation vẫn bị chặn
 
-1. Immutable, V3-only structural model classes that reject malformed values,
-   invalid lifecycle identity and a cut-off at or before either barrier.
-2. An `ObservationCutoffV3` constructed from caller-supplied transaction facts;
-   the class generates neither barrier nor cut-off.
-3. Structural source-kind/union validation with no raw Ground Truth fallback,
-   no V1 imports and no public synthetic odometry/TF route.
-4. Exact identifier/hash pair validation for S2 and final-issued receipt
-   references, without ROS protocol implementation.
-5. Unit tests with only clearly named, in-memory non-canonical fixture data.
+Connected V3 assembler/encoder/history path và profile-resolving work tiếp tục chịu các gate tại ACR §8 và Observation Input Contract Design §8.2. Phạm vi đó bao gồm composition/compiler/profile closure, receipt interface/topic/ingress integration, S2 synchronizer, assembler/encoder, vector construction và các profile/evidence cụ thể. Không phần nào trong số đó được mở bởi readiness review này.
 
-### Fixture rule
+Các thông tin vẫn unresolved gồm profile timing, buffer, freshness, measured-twist validity/fault/covariance/provenance evidence và các giá trị X3 như extrinsic/range/frame. Không chọn hoặc suy diễn giá trị; không chuyển fixture thành profile evidence.
 
-All test data is structural, in-memory and non-canonical. It is not a profile,
-provenance record, hardware measurement, `deploy_sim`/`deploy_real` value or
-runtime evidence. A fixture must not be written to a profile fragment or made
-eligible for `ResolvedConfigV3` deployment use.
+## 5. Cách đọc ACR §8 và ambiguity còn lại
 
-## 6. Acceptance criteria for the future packet
+ACR `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` §8 mở đầu bằng điều kiện “Before a V3 core implementation packet may be issued” rồi liệt kê các gate về canonical recording, receipt protocol/QoS/config binding, `ObservationInputContractV3` cùng compiler/composition validation, receipt ingress và independent audit. Câu kết của section nói sau các gate đó một work package mới có thể triển khai **connected pure-Python V3 assembler/encoder/history path**.
 
-| Area | Static proof required |
-| --- | --- |
-| Isolation | No ROS/Gazebo/Gymnasium/SB3 imports; no V1 observation/decoder/snapshot imports. |
-| Ownership | The core primitive generates no barriers or cut-off timestamp; operational creation is attributed only to the future `RobotRuntimeAdapter` boundary. |
-| Temporal invariant | Cut-off must be strictly later than both caller-supplied barriers and share the same lifecycle identity; invalid input fails closed. |
-| Model boundary | No edit to `ResolvedConfigV3`, loader/compiler/validator/composition/hash, raw profile, YAML or `CommandSafetyContractV3`. |
-| Structural bindings | S2 and receipt ID/SHA pairs must match their approved semantic contract values exactly. |
-| Fixtures | Tests never create a deployment-resolvable profile or stand in for measurement/provenance. |
+Observation Input Contract Design §8.1 tách một `non-resolving primitive readiness review`: unresolved profile timing, measured-twist evidence và profile composition không tự chặn việc đánh giá primitive; nhưng §8.1 cũng nói rõ đây không phải implementation authorization và vẫn cần exact implementation packet cùng approval. PEP-001 revision `0.2.0` mô tả primitive-only deliverable riêng, ngoài connected path và profile/compiler closure.
 
-No test may run unless its eventual implementation packet separately permits
-test execution.
+Vì vậy, cách đọc hẹp đang được đưa ra để audit là: các yêu cầu tích hợp đầy đủ ở ACR §8 phù hợp với phạm vi connected/profile-resolving B; primitive-only A có thể được đánh giá readiness riêng theo Input Design §8.1 và PEP-001. Tuy nhiên, câu mở đầu ACR §8 không giới hạn rõ “V3 core implementation packet” vào connected path. Không thể coi cách đọc hẹp này là đã được giải quyết hoặc là amendment cho ACR. Do đó:
 
-## 7. Final status and next action
+```text
+ACR_SCOPE_INTERPRETATION: ARCHITECTURE_INTERPRETATION_PENDING_INDEPENDENT_AUDIT
+CONTRACT_AMBIGUITY: PRESENT
+```
 
-`SCOPE_CLOSURE_DECISION: USER_APPROVED`\
-`V3_PURE_PYTHON_READINESS: NOT_READY_PENDING_GOVERNANCE_AND_SEMANTIC_APPROVAL`\
-`SEMANTIC_APPROVAL: REQUIRED`\
-`CANONICAL_WORK_PACKAGE_ID: UNRESOLVED`\
-`CANDIDATE_PURE_PYTHON_SCOPE: NOT_AUTHORIZED_FOR_CODE`\
-`RUNTIME_NOT_APPROVED`
+Independent audit phải quyết định liệu ACR §8 có cho phép phát hành một implementation packet primitive-only trước khi hoàn thành toàn bộ các gate được liệt kê hay không. Cho tới khi ambiguity được xử lý bằng audit/authority phù hợp, giữ `WP-04: BLOCKED_BY_CONTRACT`, không phát hành packet code và không sửa ACR đã duyệt.
 
-The next safe action is the user's separate semantic approval (or rejection)
-of the three documents in section 2. After semantic approval, PEP authority
-must map the candidate scope before an implementation packet is drafted. No
-source change is authorized by this review.
+## 6. Điều kiện tiếp theo và giới hạn evidence
+
+- Cần independent audit riêng cho interpretation boundary tại §5 và candidate proposal records.
+- Cần canonical integration review/recording riêng; proposal branch không tự nâng authority.
+- Cần một implementation packet chính xác được audit độc lập và được user phê duyệt riêng trước mọi source edit.
+- Profile values/evidence vẫn là gate riêng; sự chấp thuận semantic bundle chỉ là `FOLLOW_ON_DESIGN_ONLY`.
+- Không có test, build, ROS, Gazebo, Nav2, PPO, HIL, hardware hoặc runtime evidence từ review này.
+
+```text
+IMPLEMENTATION_PACKET: NOT_AUTHORIZED
+WP-04: BLOCKED_BY_CONTRACT
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_NOT_APPROVED
+```

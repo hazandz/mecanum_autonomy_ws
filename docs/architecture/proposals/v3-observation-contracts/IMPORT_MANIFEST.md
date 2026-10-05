@@ -24,3 +24,15 @@ Các cập nhật sau import là status/traceability-only; không thay đổi n�
 The correction only clarifies approval status and the boundary between
 primitive-readiness review and profile-resolving implementation. These hashes
 do not imply byte identity with the Downloads sources.
+
+### Corrective readiness-review update after import commit `5cb311c1f48c507254a536c0499f638fd533ce81`
+
+The readiness review was reconciled as revision 4 on a follow-on candidate
+branch. Historical hash rows above are unchanged. This corrective update does
+not alter the hash or content of the other imported documents.
+
+| Target path | SHA-256 after readiness revision 4 |
+| --- | --- |
+| `docs/architecture/proposals/v3-observation-contracts/V3_PURE_PYTHON_WORK_PACKAGE_READINESS_REVIEW.md` | `c02b8ab223a17026ddfc0cd54b61971faf5a72e0f8e08a291ba850cd6c4886e8` |
+
+`IMPORT_MANIFEST.md` does not contain a hash of itself.
