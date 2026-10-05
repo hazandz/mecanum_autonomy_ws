@@ -67,6 +67,17 @@ QoS revision 4 §10(3) yêu cầu phê duyệt “the resulting public-interface
 
 Nếu đề xuất thay đổi phạm vi §10(3) được chấp thuận, nó phải được xử lý như bundled contract amendment/change-control với ACR revision 7, được audit, user phê duyệt và tích hợp theo đúng workflow. Không được gộp thay đổi scope đó vào R4-E2.
 
+### 3.3 Disposition version/hash được đề xuất — R4-E2 và R4-A1
+
+Theo finding F-04, disposition đề xuất tách rõ transport identity khỏi approval-scope change:
+
+- **Transport QoS:** giữ `RECEIPT_TOPIC_QOS_CONTRACT` revision `4`, ID `mecanum.final-issued-receipt-topic-qos/v1` và manifest SHA-256 `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`, với điều kiện manifest canonical được xác minh byte-identical và hash tính lại vẫn khớp. Candidate source `100f9f17e2142ea206a2a6fd02d94397547f2388` đã được so sánh byte với bản đang kiểm tra; hai byte stream giống nhau và SHA-256 tính lại khớp giá trị trên. Manifest chỉ bind transport contract; nó không chứa wording approval-scope §10(3).
+- **R4-E2:** chỉ là draft traceability-only cho current operative companion reference ở QoS §10(2). Lịch sử §1 ngày `2026-10-03` cùng ACR revision 6 và R4-E1 không đổi.
+- **R4-A1:** định danh riêng cho substantive approval-scope amendment của §10(3), không phải erratum và không phải transport-manifest content. Bundled approval record tương lai phải tham chiếu `R4-A1`, path `docs/architecture/proposals/v3-observation-contracts/RECEIPT_QOS_SECTION_10_3_GATE_SCOPE_AMENDMENT_PROPOSAL.md`, và commit chính xác chứa wording đã audit/duyệt. Không tạo `R4-A1` thành runtime `TopicQosContractV3` field hoặc `config_hash`; không tuyên bố R4-A1 có canonical SHA riêng nếu workflow hiện hành không yêu cầu.
+- **Bundle được đề xuất:** ACR revision 7 + transport QoS revision 4 (ID/manifest hash giữ nguyên theo điều kiện nêu trên) + R4-E2 + R4-A1. Bundle chỉ có hiệu lực sau independent audit, explicit user approval và canonical integration. Approval record mới phải ghi ngày thực tế; không điền trước.
+
+PEP-001, ledger và contract/governance đã đọc không quy định rằng thay đổi approval scope này bắt buộc phải phát hành dưới một transport QoS revision mới. Nếu audit hoặc governance disposition sau này xác định yêu cầu như vậy, không tự chọn revision/hash: dừng với `STOPPED_VERSION_HASH_DISPOSITION_UNRESOLVED`. Disposition trên vẫn chỉ là proposal và không làm ACR revision 7, QoS amendment, R4-E2 hoặc R4-A1 thành approved/canonical.
+
 ## 4. Wording thay thế §8 được đề xuất cho ACR revision 7
 
 > **DRAFT — proposed replacement for ACR §8, revision 7. Not effective unless independently audited, explicitly approved by the user together with re-acknowledgment of Receipt Topic QoS Contract revision 4, and canonically integrated. Until then ACR revision 6 remains the current authority.**
@@ -177,8 +188,9 @@ Proposal, audit, approval bundle, canonical integration, dependency closure và 
 ```text
 ACR_REVISION_7: DRAFT_FOR_INDEPENDENT_AUDIT
 ACR_REVISION_6: CURRENT_AUTHORITY_UNTIL_SUPERSEDED
-RECEIPT_QOS_REVISION_4: UNCHANGED; RE-ACK REQUIRED WITH ACR REVISION 7
-QOS_SECTION_10_3_AMENDMENT: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_APPROVAL
+QOS_REVISION_4: CURRENT_AUTHORITY_UNTIL_APPROVED_AMENDMENT
+R4_E2: DRAFT_TRACEABILITY_ONLY
+R4_A1: DRAFT_APPROVAL_SCOPE_AMENDMENT
 WP-03: BLOCKED_BY_CONTRACT
 WP-04: BLOCKED_BY_CONTRACT
 CODE_AUTHORIZATION: NOT_GRANTED
