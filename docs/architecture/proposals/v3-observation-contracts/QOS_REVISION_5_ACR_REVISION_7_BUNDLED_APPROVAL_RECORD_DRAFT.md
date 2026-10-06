@@ -47,7 +47,7 @@ Architecture SHA-256:  f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d4
 
 Hồ sơ hiện có ghi nhận QoS revision 4 và ACR revision 6 chỉ là **user-approved follow-on-design bundle** trong approval scope đã ghi nhận, bao gồm sự kiện approval lịch sử ngày `2026-10-03`. Approval đó không làm cho hai tài liệu trở thành canonical repository authority; chúng chưa phải canonical repository authority được tích hợp theo governance workflow. Mô tả này không mở rộng approval scope đã ghi nhận.
 
-QoS revision 5 và ACR revision 7 vẫn là proposal draft. Chúng không trở thành current/canonical authority thông qua record draft này. Cho đến khi bundle approval và canonical integration trong tương lai hoàn tất, ACR revision 6 §8 và QoS revision 4 tiếp tục là contract bundle hiện hành cho công việc áp dụng, theo đúng scope được ghi nhận và trạng thái governance của chúng.
+QoS revision 5 và ACR revision 7 vẫn là proposal draft. Chúng không trở thành current/canonical authority thông qua record draft này. Cho đến khi có bundled approval và canonical integration mới, ACR revision 6 §8 và QoS revision 4 §10 tiếp tục áp dụng chỉ trong scope follow-on design đã được user phê duyệt và ghi nhận; chúng chưa phải canonical repository authority được tích hợp theo governance.
 
 ## 5. Scope decision đề xuất để user quyết định sau này
 
