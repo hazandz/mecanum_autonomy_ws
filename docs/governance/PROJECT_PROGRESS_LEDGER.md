@@ -128,3 +128,19 @@
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Supersedes | PEP-001-REV-0.2.0-GOVERNANCE-CANDIDATE pending-review state |
 | Notes | Governance integration only. WP-04 remains BLOCKED_BY_CONTRACT; code and runtime remain unauthorized. |
+
+### WP-04I-QOS5-ACR7-CANONICAL-BUNDLE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-06 |
+| Work branch | wp-04-qos5-acr7-canonical-bundle-integration |
+| Integration base | f8933bcff2bb30b1dad57d71d91678e36746326f |
+| Scope | Canonically record the user-approved QoS Topic Contract rev.5 / ACR rev.7 bundle and its approval/change-control record; governance and contract documents only |
+| Approval record | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md |
+| QoS artifact | docs/RECEIPT_TOPIC_QOS_CONTRACT.md; rev.5; full-document SHA-256 9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b |
+| ACR artifact | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md; rev.7; full-document SHA-256 cb111c84c3b8f7d1393256b4c15f28c5f0bcafa1d2a84dde08e2cb0cd823ce0f |
+| Transport identity | mecanum.final-issued-receipt-topic-qos/v1; manifest SHA-256 a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62 |
+| Evidence status | IMPLEMENTED_OFFLINE_ONLY |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Notes | Records bundled user approval dated 2026-10-06; pre-approval draft labels are superseded for document authority/status only. Technical semantics and historical QoS rev.4 / ACR rev.6 approvals are unchanged. No WP-03 closure, dependency/status change, implementation eligibility, code authorization, or runtime authorization. Commit identity is available from Git history and is not self-embedded. |

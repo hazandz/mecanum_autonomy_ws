@@ -9,6 +9,9 @@ This registry identifies operational source selection. It does not override MECA
 | Source/path | Classification | Permitted use |
 |---|---|---|
 | docs/MECANUM_NAV_DRL_Architecture.docx | ARCHITECTURE_AUTHORITY | Highest architecture authority |
+| docs/RECEIPT_TOPIC_QOS_CONTRACT.md | CANONICAL_APPROVED_DESIGN_CONTRACT | Receipt Topic QoS Contract revision 5; full-document SHA-256 `9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b`; transport identity `mecanum.final-issued-receipt-topic-qos/v1` / `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`; design-contract scope only, no code/runtime authorization |
+| docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 7; full-document SHA-256 `cb111c84c3b8f7d1393256b4c15f28c5f0bcafa1d2a84dde08e2cb0cd823ce0f`; approved Gate A/Gate B scope, without WP-03 closure or dependency/status changes |
+| docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | User-approved bundled integration dated 2026-10-06; pins QoS rev.5 SHA-256 `9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b`, ACR rev.7 SHA-256 `cb111c84c3b8f7d1393256b4c15f28c5f0bcafa1d2a84dde08e2cb0cd823ce0f`, and transport manifest SHA-256 `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`; governance/design scope only, no code/runtime authorization or WP status/dependency change |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
 | ros2_ws/src/mecanum_nav_rl/config/v3/** | APPROVED_FOR_CORE | Only permitted config-input family for new canonical/offline implementation; effective composition remains caller-owned and contract-bound |
