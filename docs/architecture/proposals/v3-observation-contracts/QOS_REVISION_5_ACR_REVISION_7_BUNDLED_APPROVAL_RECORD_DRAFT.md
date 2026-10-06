@@ -45,7 +45,7 @@ Architecture document: docs/MECANUM_NAV_DRL_Architecture.docx
 Architecture SHA-256:  f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860
 ```
 
-Hồ sơ hiện có ghi nhận QoS revision 4 và ACR revision 6 là bundle đã được user approve cho follow-on design, bao gồm sự kiện approval lịch sử ngày `2026-10-03`. Mô tả này chỉ giới hạn trong approval scope được ghi nhận. Không gọi các tài liệu đó là canonical repository authority trừ khi và cho đến khi chúng hiện diện/được tích hợp theo governance workflow áp dụng.
+Hồ sơ hiện có ghi nhận QoS revision 4 và ACR revision 6 chỉ là **user-approved follow-on-design bundle** trong approval scope đã ghi nhận, bao gồm sự kiện approval lịch sử ngày `2026-10-03`. Approval đó không làm cho hai tài liệu trở thành canonical repository authority; chúng chưa phải canonical repository authority được tích hợp theo governance workflow. Mô tả này không mở rộng approval scope đã ghi nhận.
 
 QoS revision 5 và ACR revision 7 vẫn là proposal draft. Chúng không trở thành current/canonical authority thông qua record draft này. Cho đến khi bundle approval và canonical integration trong tương lai hoàn tất, ACR revision 6 §8 và QoS revision 4 tiếp tục là contract bundle hiện hành cho công việc áp dụng, theo đúng scope được ghi nhận và trạng thái governance của chúng.
 
@@ -66,6 +66,8 @@ Các trường sau chưa thể biết tại thời điểm soạn draft và ph�
 User decision/result:                PENDING
 Ngày bundled approval thực tế:       PENDING
 Canonical integration commit cuối:   PENDING
+Canonical approval/change-control record path: PENDING_USER_DECISION
+Canonical record status before canonical integration: DRAFT_ONLY
 ```
 
 Không điền ngày approval trước khi decision thực sự xảy ra. Chỉ điền integration commit sau khi canonical integration commit đã được tạo thực tế và SHA đã xác minh. Không suy luận hai trường này từ proposal commit, branch push, review hoặc draft record này.
@@ -79,6 +81,16 @@ Nếu bundle được approve và tích hợp sau này, canonical record phải 
 3. scope decision Gate A/Gate B chính xác cùng decision/result;
 4. ngày thực tế của approval event; và
 5. SHA của canonical integration commit cuối, chỉ được thêm sau khi commit đó tồn tại và đã xác minh.
+
+Quy tắc promotion được đề xuất:
+
+```text
+Promotion rule: the canonical path must be selected or explicitly approved in
+the bundled user decision. Promotion must occur through a separate authorized
+governance work package. This draft path has no canonical or operative effect.
+```
+
+Không tự chọn canonical path thay cho user. Path của record canonical chỉ được xác định bằng decision bundle; việc promotion cần một governance work package riêng được authorize. Path của draft này không có hiệu lực canonical hoặc operative.
 
 Bất kỳ record nào trong tương lai cũng phải giữ riêng user decision, approval event và canonical integration. Draft này không chứa SHA-256 của chính nó và không được làm thành self-referential.
 
