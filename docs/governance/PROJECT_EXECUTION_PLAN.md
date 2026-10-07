@@ -128,77 +128,36 @@ A plan update must state:
 If an item is blocked, update it to BLOCKED_* with a concrete reason; do not silently reorder or skip it.
 
 
-## Proposed plan change-control record — PEP-001 rev.0.3.0 (candidate only)
+## WP-02 closure status transition — PEP-001 rev.0.3.0
 
-This section is a governance candidate on a work branch. Under the Metadata
-`Activation rule`, this revision is not active until its reviewed commit is
-canonically integrated on `integration/implementation`. It does not enact a
-WP-02 status transition while under review.
+This change-control record applies the explicit user-authorized WP-02 status
+transition. Per the Metadata `Activation rule`, the transition becomes the
+active governance status only when this PEP revision is present on
+`integration/implementation`; on this work branch it remains pending
+integration. The `Initial status` values in `Ordered work packages` remain
+historical and are not rewritten.
 
-| Change-control field | Candidate value |
+| Change-control field | Recorded value |
 |---|---|
 | Plan ID; old/new revision | `PEP-001`; `0.2.0` -> `0.3.0` |
-| Work package | `WP-02-PEP-CLOSURE-TRANSITION-CANDIDATE` |
-| Candidate branch | `wp-02-pep-closure-transition-candidate-3f4a114` |
+| Work package | `WP-02-CANONICAL-CLOSURE-INTEGRATION` |
+| Work branch | `wp-02-close-and-integrate-3f4a114` |
 | Integration base SHA | `3f4a1147d97143995d3cd9c56097a0fb414a40ca` |
-| Candidate commit SHA | The exact PEP-content commit and candidate branch-tip/audit-target SHA are intentionally cross-referenced by the future append-only ledger entry `WP-02-CLOSE-CANONICAL-SOURCE-SELECTION`; this avoids a self-referential SHA inside the PEP content. The candidate delivery/audit metadata must report the same commit identities explicitly. No commit is represented as effective status evidence here. |
-| Exact proposed status transition | `WP-02: BLOCKED_BY_GOVERNANCE -> CLOSED` (`CLOSED` is the user-approved proposed token; it was not defined as a canonical terminal token by PEP-001 rev.0.2.0.) |
-| Candidate/effective status boundary | This transition is proposed and approved for preparation only. The canonical status remains `BLOCKED_BY_GOVERNANCE` until this candidate is audited, integration is explicitly approved by the user, and the revision is canonically integrated. |
-| Approver role | `Project Owner/User`, designated by the user for this status decision. Integration approval is still pending. |
-| Evidence and scope basis | Ledger entry `WP-02I-INTEGRATE-CANONICAL-SOURCE-SELECTION`, candidate commit `eed009d926e721ed37f27f675bbbe27e04cc14fe`, evidence `IMPLEMENTED_OFFLINE_ONLY`; the delivered registry rules cover V3 selection, legacy boundary, and source-registry enforcement at governance/source-selection level, not automated runtime enforcement. |
-| Additional evidence condition | No runtime, HIL, hardware, or physical-measurement evidence is required for WP-02 unless a controlling WP-02 authority explicitly requires it. No such requirement was identified in PEP-001 rev.0.2.0. |
-| Dependency/evidence impact | WP-03 remains `BLOCKED_BY_CONTRACT`, with dependency on WP-02 and required user decisions unchanged. A WP-02 transition alone neither resolves WP-03 decisions nor authorizes WP-03 work. WP-04 remains `BLOCKED_BY_CONTRACT` with all existing WP-03, V3-scope, semantic-bundle, and implementation-packet dependencies unchanged. |
-| Architecture/ACR impact | None proposed; this is a PEP/governance status-control change only. No architecture contract is amended. |
-| User approval | User has approved preparation of this candidate, the proposed `CLOSED` token, and the proposed transition. Explicit approval to integrate this candidate remains required. |
-| Ledger entry to append | Proposed entry `WP-02-CLOSE-CANONICAL-SOURCE-SELECTION`, only after PEP transition approval and canonical integration; expected contents are recorded below. |
+| Source candidate branch | `wp-02-pep-closure-transition-candidate-3f4a114` |
+| Source candidate commit SHA | `6e962f3a14e60a017dd525a5fda9eed4f77cbe2a` |
+| Decision date and authority | `2026-10-07`; explicit user decision in chat, approver role `Project Owner/User` |
+| Exact status transition | `WP-02: BLOCKED_BY_GOVERNANCE -> CLOSED` |
+| WP-02 current status on activation | `CLOSED`, effective when PEP-001 rev.0.3.0 is canonically integrated |
+| Evidence and scope basis | Ledger entry `WP-02I-INTEGRATE-CANONICAL-SOURCE-SELECTION`, candidate commit `eed009d926e721ed37f27f675bbbe27e04cc14fe`, evidence `IMPLEMENTED_OFFLINE_ONLY`; scope coverage is V3 selection, legacy boundary, and source-registry enforcement at governance/source-selection level, not automated runtime enforcement. The closure disposition proposal and its audit are identified in the integration evidence package. |
+| Additional evidence condition | No runtime, HIL, hardware, or physical-measurement evidence is required for WP-02 unless a controlling WP-02 authority explicitly requires it; none was identified in the reviewed scope. |
+| Dependency/status impact | WP-03 remains `BLOCKED_BY_CONTRACT` and retains its dependency on WP-02 plus required user decisions. WP-04 remains `BLOCKED_BY_CONTRACT`; its WP-03, V3-scope, semantic-bundle, and separate implementation-packet dependencies are unchanged. No WP-03 readiness conclusion is made here. |
+| Architecture/ACR impact | None; this is a PEP/governance status-control change only. |
+| Ledger entry | `WP-02-CLOSE-CANONICAL-SOURCE-SELECTION`, appended in the same governance integration. |
+| Integration commit SHA | Identified by the canonical Git history and evidence export; it is not embedded in the content of the commit that contains it. |
+| Authorization boundary | The WP-02 status transition does not authorize WP-03/WP-04 implementation, code, runtime, HIL, hardware, or deployment. Runtime remains `RUNTIME_NOT_APPROVED`. |
 
-The `Ordered work packages` table above intentionally retains its historical
-`Initial status` column and all initial-status values, including WP-02
-`BLOCKED_BY_GOVERNANCE`, WP-03 `BLOCKED_BY_CONTRACT`, and WP-04
-`BLOCKED_BY_CONTRACT`. The proposed transition above is a separate candidate
-record, not a rewrite of those initial values or a present-tense status
-transition.
-
-### Expected append-only ledger entry after approved integration
-
-The following is proposed content for a future ledger append, not an entry
-being added by this candidate. `Date`, integrated revision/commit, and any
-approval reference must be filled from the actual authorized decision and
-canonical integration event; do not infer or predate them.
-
-```yaml
-entry_id: WP-02-CLOSE-CANONICAL-SOURCE-SELECTION
-date: PENDING_ACTUAL_CANONICAL_INTEGRATION
-work_package: WP-02-CANONICAL-SOURCE-SELECTION
-pep_revision: 0.3.0
-transition: "BLOCKED_BY_GOVERNANCE -> CLOSED"
-terminal_status_token: CLOSED  # user-approved proposal; effective only after authorized integration
-approver_role: Project Owner/User
-evidence_status: IMPLEMENTED_OFFLINE_ONLY
-pep_content_commit: PENDING_ACTUAL_CANDIDATE_COMMIT
-candidate_branch_tip_audit_target: PENDING_ACTUAL_AUDIT_TARGET
-evidence:
-  - ledger_entry: WP-02I-INTEGRATE-CANONICAL-SOURCE-SELECTION
-    candidate_commit: eed009d926e721ed37f27f675bbbe27e04cc14fe
-  - scope_coverage: V3 selection; legacy boundary; source-registry enforcement at governance/source-selection level
-runtime_hil_hardware_measurement_evidence: NOT_REQUIRED_BY_REVIEWED_WP02_SCOPE
-  # Revisit only if a controlling WP-02 authority explicitly requires it.
-dependency_impact:
-  WP-03: remains BLOCKED_BY_CONTRACT; WP-02 disposition and required user decisions recorded separately
-  WP-04: remains BLOCKED_BY_CONTRACT; existing dependencies unchanged
-integration_commit: PENDING_ACTUAL_CANONICAL_INTEGRATION
-approval_reference: PENDING_ACTUAL_USER_AND_GOVERNANCE_APPROVAL
-```
-
-The future ledger entry must replace each pending commit field with its exact
-SHA after the relevant event. `pep_content_commit` identifies the commit that
-contains this PEP revision; `candidate_branch_tip_audit_target` identifies the
-exact candidate reviewed by the independent auditor; and `integration_commit`
-identifies the commit actually present on `integration/implementation`. These
-are separate traceability roles even if fast-forward integration makes their
-SHA values identical.
-
-This expected ledger content does not authorize an append or transition. Per the
-ledger's append-only rule, the future entry must be appended after the
-transition is authorized and integrated; historical entries, including the
-WP-02I evidence entry, remain unchanged.
+The `Ordered work packages` table retains its historical `Initial status`
+column and values: WP-02 `BLOCKED_BY_GOVERNANCE`, WP-03
+`BLOCKED_BY_CONTRACT`, and WP-04 `BLOCKED_BY_CONTRACT`. The current WP-02
+status is recorded separately above; WP-03/WP-04 status and dependencies are
+unchanged.

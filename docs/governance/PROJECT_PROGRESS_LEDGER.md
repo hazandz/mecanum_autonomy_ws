@@ -144,3 +144,21 @@
 | Evidence status | IMPLEMENTED_OFFLINE_ONLY |
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Notes | Records bundled user approval dated 2026-10-06; pre-approval draft labels are superseded for document authority/status only. Technical semantics and historical QoS rev.4 / ACR rev.6 approvals are unchanged. No WP-03 closure, dependency/status change, implementation eligibility, code authorization, or runtime authorization. Commit identity is available from Git history and is not self-embedded. |
+
+### WP-02-CLOSE-CANONICAL-SOURCE-SELECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-07 |
+| Work package | WP-02-CANONICAL-CLOSURE-INTEGRATION |
+| Work branch | wp-02-close-and-integrate-3f4a114 |
+| Integration base | 3f4a1147d97143995d3cd9c56097a0fb414a40ca |
+| Source candidate branch | wp-02-pep-closure-transition-candidate-3f4a114 |
+| Source candidate commit | 6e962f3a14e60a017dd525a5fda9eed4f77cbe2a |
+| Decision date and authority | 2026-10-07; explicit user decision in chat; approver role Project Owner/User |
+| PEP revision | PEP-001 rev.0.3.0 |
+| Transition | WP-02: BLOCKED_BY_GOVERNANCE -> CLOSED |
+| Evidence basis | WP-02I-INTEGRATE-CANONICAL-SOURCE-SELECTION; IMPLEMENTED_OFFLINE_ONLY; V3 selection, legacy boundary, and source-registry enforcement at governance/source-selection level |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Dependency/status impact | WP-03 remains BLOCKED_BY_CONTRACT with its WP-02 and required-user-decisions dependencies; WP-04 remains BLOCKED_BY_CONTRACT with all existing dependencies unchanged |
+| Notes | The PEP Ordered work packages table retains WP-02's historical Initial status BLOCKED_BY_GOVERNANCE and WP-03/WP-04 BLOCKED_BY_CONTRACT. This ledger entry records the separate authorized WP-02 transition only after canonical integration. It does not claim runtime, HIL, hardware, or physical-measurement evidence and grants no code/runtime authorization. The integration commit SHA is available from canonical Git history and the evidence export, not self-embedded in this entry. |
