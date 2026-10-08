@@ -1,0 +1,30 @@
+{
+  "closure_version": 1,
+  "encoding": "UTF-8",
+  "dependencies": [
+    {
+      "repository": "https://github.com/ros2/common_interfaces.git",
+      "source_commit": "a941f14bb318d8d904505ed935ccbb97f24a70a4",
+      "path": "std_msgs/msg/Header.msg",
+      "sha256": "d2cea14630e39ed0fa5b432ba9160a7c38855b9427d3344f99e83e83facb53c2"
+    },
+    {
+      "repository": "https://github.com/ros2/rcl_interfaces.git",
+      "source_commit": "7aa3caf43377ea6ad615bc1040832e2c7566bfbe",
+      "path": "builtin_interfaces/msg/Time.msg",
+      "sha256": "dc5a01ddde3aecffee21eb24974fe77cc969f873218a2b1811aa0ac8a456b8bd"
+    },
+    {
+      "repository": "https://github.com/ros2/common_interfaces.git",
+      "source_commit": "a941f14bb318d8d904505ed935ccbb97f24a70a4",
+      "path": "geometry_msgs/msg/Twist.msg",
+      "sha256": "ed471ef861f65af991b1f64d66ef941dd41dd4c0702f6222512b1a16c62d58b0"
+    },
+    {
+      "repository": "https://github.com/ros2/common_interfaces.git",
+      "source_commit": "a941f14bb318d8d904505ed935ccbb97f24a70a4",
+      "path": "geometry_msgs/msg/Vector3.msg",
+      "sha256": "d8b9ea9aad1f424faf4d2b94dae1e1368af1e5d59de11aeed019399cff7f9e1d"
+    }
+  ]
+}

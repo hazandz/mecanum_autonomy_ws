@@ -1,34 +1,33 @@
-# WP-03 — QoS Contract Revision 6 Receipt Interface Amendment Proposal
+# QoS Revision 6 Receipt Interface Amendment Proposal
 
 **Status:** `DRAFT_FOR_INDEPENDENT_AUDIT_AND_USER_DECISION`
-**Baseline:** `integration/implementation@9a4c0d233e8237f01a04880fe99e8a3114528f4`
-**Amends:** Receipt Topic QoS Contract revision 5, §4 and exact interface pin references
-**Proposed schema artifact:** `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg`
-**Proposed interface revision:** `2`
-**Proposed interface ID:** `mecanum.final-issued-receipt/v2`
-**Proposed schema SHA-256:** `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`
+**Current authority at baseline:** QoS revision 5 / ACR revision 7
+**Full-text draft:** `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_CONTRACT_REVISION_6_DRAFT.md`
+**QoS revision:** `6`
+**Full-document SHA-256:** `e8077a93340d99b6cb2ed691fa00f093fb2c3d54a2a8ddff1547f4e928b1d1a1`
 
-This is a companion amendment proposal only. Until the amendment and its ACR companion are independently audited, explicitly approved as a bundle, and canonically integrated, QoS revision 5 remains canonical authority.
+This amendment proposal is not independently authoritative. It must be audited and decided together with the ACR revision 8 full-text draft. QoS revision 5 remains canonical until an approved bundle is integrated.
 
-## Proposed §4 pin disposition
+## Proposed exact interface and dependency pins
 
-If approved, update the interface pin in QoS revision 5 to identify the candidate schema artifact above by its exact path, revision `2`, interface ID `mecanum.final-issued-receipt/v2`, and full schema SHA-256 stated here. Do not assign the v1 ID or its pinned SHA-256 to the v2 bytes. Record the old v1 pin as superseded only by this explicit approved amendment; do not erase its historical value.
+| Pin | Proposed value |
+|---|---|
+| Receipt interface ID | `mecanum.final-issued-receipt/v2` |
+| Schema path | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg` |
+| Schema revision | `2` |
+| Schema SHA-256 | `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a` |
+| Dependency-closure manifest | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json` |
+| Closure-manifest SHA-256 | `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73` |
+| Transport ID | `mecanum.final-issued-receipt-topic-qos/v2` |
+| Transport manifest version/path | `2` / `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json` |
+| Transport-manifest SHA-256 | `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620` |
 
-The v2 field names, widths, and identity constraints are defined by the companion `WP-03_RECEIPT_INTERFACE_V2_CONTRACT_PROPOSAL.md` and the exact `.msg` bytes. This proposal does not amend QoS transport semantics.
+The standalone transport JSON pin includes the interface ID, schema SHA, and closure-manifest SHA. The full QoS document carries the same manifest bytes and all corresponding values.
 
-## Preserved transport identity and semantics
+## Preserved transport behavior and history
 
-Keep unchanged:
+Carry forward the QoS policy values, endpoint, message type name, latest-state/coalescing behavior, ordering classifications, action/reset readiness behavior, and failure classifications from revision 5. Only the versioned receipt/transport identities and manifest bytes are proposed to change.
 
-```text
-Transport contract ID: mecanum.final-issued-receipt-topic-qos/v1
-Transport manifest SHA-256: a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62
-```
+Preserve the prior v1 historical values exactly: receipt interface `mecanum.final-issued-receipt/v1` / SHA-256 `90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`; transport ID `mecanum.final-issued-receipt-topic-qos/v1` / manifest SHA-256 `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`. The v2 schema is not claimed to be the v1 artifact.
 
-The manifest hash identifies the transport JSON, not the interface schema. Preserve QoS revision 5's `RELIABLE`, `TRANSIENT_LOCAL`, `KEEP_LAST(1)`, coalescing/order classification, action/reset barrier eligibility, disabled/infinite deadline and lifespan, and automatic infinite-lease liveliness semantics. Do not change topic, manifest bytes, delivery policy, or transport behavior in this amendment.
-
-The interface schema SHA is a separate pin over the `.msg` proposal file bytes. No hash is embedded in that file.
-
-## Authority and effect
-
-This proposed revision 6 does not take effect by being drafted or pushed. QoS revision 5 remains canonical until the QoS revision 6 / ACR revision 8 bundle completes independent audit, user approval, and canonical integration. No implementation, WP status transition, code authorization, or runtime authorization follows from this proposal.
+The schema SHA, closure-manifest SHA, transport-manifest SHA, and full-document SHA of this QoS draft are distinct. The QoS document's own full-document SHA is recorded externally in the bundled approval-record draft, not embedded here. No approval date is assigned; status remains `PENDING_USER_DECISION`.
