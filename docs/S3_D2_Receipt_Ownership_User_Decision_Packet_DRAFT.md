@@ -1,12 +1,19 @@
 # S3 D2 Receipt Ownership User Decision Packet
 
-Status: DRAFT — PENDING_USER_DECISION
+Status: DRAFT — APPROVED DISPOSITIONS RECORDED; AUDIT AND CANONICAL INTEGRATION PENDING
 
 ## Purpose and authority
 
-This packet asks the user to select the ownership and boundary for a future
-final-issued command receipt. It does not create a receipt type, publish a
-command, open a transport, alter an interface, or authorize runtime behavior.
+This packet records the Project Owner/User-authorized ownership and boundary
+dispositions for reconciliation in this candidate. It does not create a receipt
+type, publish a command, open a transport, alter the canonical interface, or
+authorize implementation or runtime behavior.
+
+Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
+Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+
+The selected dispositions remain a draft candidate until independent audit and
+canonical integration.
 
 Authority is [MECANUM NAV DRL Architecture](MECANUM_NAV_DRL_Architecture.docx),
 schema `3.0`, SHA-256
@@ -32,30 +39,22 @@ transition token, publish outcome, action barrier, or command sequence.
 `Heartbeat.sequence` is heartbeat sequencing, not command sequencing. These
 messages cannot substitute for a receipt.
 
-## Conditional recommendation
+## Approved disposition for this reconciliation candidate
 
-**PROPOSED — PENDING_USER_APPROVAL:** `FinalTwistPublisher` owns
-`FinalIssuedCommandReceipt` after all SafetySupervisor arbitration, validation,
-limiting, and smoothing have completed and after the selected final command has
-successfully crossed the profile-specific final boundary.
+`FinalTwistPublisher` owns `FinalIssuedCommandReceipt` only after the selected
+final command has successfully crossed the applicable approved profile
+boundary. `SafetySupervisor` remains the sole owner of safety arbitration,
+validation, limiting, smoothing, and final-command selection. Receipt creation
+records that result and cannot bypass or repeat safety selection.
 
-`SafetySupervisor` remains owner of the safety decision and final command
-selection. It is not by itself the publish receipt owner. The receipt owner
-must record the selected Safety result and its provenance rather than repeat or
-bypass safety arbitration.
-
-| Profile boundary | Proposed receipt moment | What the receipt proves | What it does not prove |
-| --- | --- | --- | --- |
-| Simulation final `/cmd_vel` boundary | `FinalTwistPublisher` successfully publishes the final selected Twist through the approved simulation command boundary | Final selected command was accepted at the final ROS publish boundary for the active transition | Gazebo application time, robot movement, collision state, reset receipt, or actuator acknowledgement |
-| Deployment transport handoff boundary | `FinalTwistPublisher` successfully hands the final selected command to the approved bridge transport boundary | Final selected command crossed the defined ROS-to-transport handoff for the active transition | MCU ACK, UART delivery, watchdog refresh, motor driver action, or motor movement |
-
-The deployment transport may add independent transport or MCU diagnostics later,
-but those are not this receipt unless a separate authority explicitly changes
-the boundary. A receipt is never MCU ACK or proof of motor motion.
+| Profile | Approved receipt boundary | Explicit non-claim |
+| --- | --- | --- |
+| Simulation | `FinalTwistPublisher` has successfully locally issued the final selected `Twist` through the approved simulation `/cmd_vel` boundary. Starting the publish call is insufficient. | No DDS delivery, Gazebo application, robot movement, collision state, actuator acknowledgement, or achieved velocity is proven. |
+| `deploy_real` | No handoff boundary is approved. Receipt use remains unavailable until a separate D2 contract defines and approves a ROS-to-transport handoff role and success condition. | No UART delivery, MCU acknowledgement, watchdog refresh, motor-driver action, or motion claim. |
 
 ## Proposed core-only binding rule
 
-A future `FinalIssuedCommandReceipt` binds directly to:
+The approved candidate binding for `FinalIssuedCommandReceipt` is directly to:
 
 ```text
 EpisodeLifecycleIdentity
@@ -82,35 +81,41 @@ scenario session.
 | MCU ACK | Transport acknowledgement is not final ROS publish receipt and does not prove motor movement |
 | Measured twist or motor movement | Measurement occurs after command path and does not prove which command crossed the final boundary |
 
-## Decisions required from the user
+## Approved identity, command, and failure dispositions
 
-| Decision | Required approval |
+The receipt binds directly to the active `EpisodeLifecycleIdentity` and
+`TransitionIdentity`; scenario/session linkage is indirect through
+`EpisodeLifecycle`, with no separate `ScenarioSessionBinding`. The v2 schema
+uses its existing primitive fields and this packet adds no wire fields.
+`source`, `sequence`, `reset_epoch`, `runtime_generation`, and
+`source_instance_id` retain the approved `CommandEnvelope` meanings.
+`FinalTwistPublisher` owns `final_publisher_instance_id` and its strictly
+increasing `final_publish_sequence` (starting at 1 per publisher instance and
+not reset by `reset_epoch`). The pair is receipt transport identity, not a
+substitute for `TransitionIdentity`.
+
+The receipt's `final_command` is the final physical `base_link` planar command
+`(vx, vy, wz)` after safety limiting/smoothing. A normalized value may be used
+only when an exact approved profile/config contract supplies conversion,
+axis-order, limits, version, and hash/provenance; this candidate selects no
+numeric or configuration value. A failed publish/handoff never yields a ready
+receipt. A later failure after issuance is `STEP_ABORT` or `FAULT`, without a
+rollback claim. `SafetySupervisor` owns safe-action selection;
+`CommandArbiter` creates the envelope. Reset clears staged/committed receipt
+state before a new lifecycle uses it.
+
+## Remaining evidence and unresolved values
+
+| Obligation | Status |
 | --- | --- |
-| Receipt owner | Approve or replace the conditional recommendation that FinalTwistPublisher owns the receipt after successful final boundary crossing |
-| Exact final boundary | Define simulation `/cmd_vel` publish boundary and deployment ROS-to-transport handoff boundary separately |
-| Command source and sequence | Define allowed source identity, source selection relation to SafetySupervisor, receipt ID and or command sequence, uniqueness scope, replay behavior, and reset/runtime-generation relation |
-| Normalization | Define final physical-to-normalized conversion, axis order, limits/config version/hash, and observation/checkpoint migration |
-| Failure recovery | Define post-publish `STEP_ABORT`/`FAULT`, zero or inhibit owner, diagnostic retention, reset/restart policy, and explicit non-rollback behavior |
-| Runtime evidence | Require proof of final boundary behavior, wrong-generation/replay rejection, failed publish/handoff, action-barrier alignment, and profile-specific simulation/deployment behavior |
-
-## Approval checklist
-
-- [ ] Approve `FinalTwistPublisher` as receipt owner, or identify another owner.
-- [ ] Approve the distinct simulation final publish and deployment transport
-      handoff boundaries.
-- [ ] Approve receipt ID and command-sequence ownership and replay scope.
-- [ ] Approve final physical-to-normalized conversion and its version/hash.
-- [ ] Approve source/arbitration and SafetySupervisor-to-receipt provenance.
-- [ ] Approve post-publish zero/inhibit and recovery ownership without rollback.
-- [ ] Approve required runtime evidence before any receipt implementation is
-      relied upon by observation, reward, rollout, or checkpoint logic.
+| Simulation final-boundary behavior; duplicate/replay and generation/transition rejection; failed publish/handoff; action-barrier alignment | Future runtime evidence required; not claimed to exist. |
+| Profile/config-specific normalized conversion, limits, version and hash | No values selected; requires an exact controlling contract before normalized use. |
+| `deploy_real` receipt/handoff | Unavailable pending a separate approved contract and future evidence. |
 
 ## Conclusion
 
-PENDING_USER_DECISION
+`DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
 
-The architecture supports a conditional FinalTwistPublisher receipt-owner
-recommendation, while SafetySupervisor remains the safety decision owner. The
-exact owner, profile boundaries, conversion, replay rules, recovery policy, and
-runtime evidence remain user decisions. This packet grants no ROS, Gazebo,
-`/cmd_vel`, UART, MCU, motor, or hardware approval.
+The authorized dispositions are recorded for this candidate; no implementation
+or runtime evidence is claimed. This packet grants no code, ROS, ROSIDL, Gazebo,
+`/cmd_vel`, UART, MCU, motor, hardware, `deploy_real`, or runtime approval.

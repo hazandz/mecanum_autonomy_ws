@@ -1,6 +1,6 @@
 # S3 Simulation Scenario Artifact Contract
 
-**Status:** `DRAFT — SCENARIO CONTRACT, VALUES AND RUNTIME NOT APPROVED`
+**Status:** `DRAFT — APPROVED CONVENTION DISPOSITION; VALUES AND RUNTIME NOT APPROVED; AUDIT/INTEGRATION PENDING`
 
 ## 1. Purpose and authority
 
@@ -20,15 +20,27 @@ Authority and constraints:
 - [S3 Training Task Reset And Collision Design Packet](S3_Training_Task_Reset_And_Collision_Design_Packet_DRAFT.md); and
 - [S3 Termination Inputs And Limits Decision Packet](S3_Termination_Inputs_And_Limits_Decision_Packet_DRAFT.md).
 
-The proposed artifact root is `artifacts/scenarios/`, outside
-`ROBOT_URDF_final_description`. Its exact directory convention, canonical
-serialization, and registry process remain `REQUIRED_DECISION`; no path or
-artifact exists by virtue of this design.
+The Project Owner/User-authorized convention recorded in this candidate is
+`artifacts/scenarios/<scenario_id>/scenario.json`, outside
+`ROBOT_URDF_final_description`, serialized as `RFC8785_JCS_UTF8`. The convention
+remains a candidate disposition pending independent audit and canonical
+integration. No scenario artifact, scenario ID, or concrete value is created or
+selected by this decision.
+
+### Approved disposition provenance
+
+Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
+Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+
+The Project Owner/User is the `ScenarioCustodian` and scenario approver unless a
+delegate and approval authority are named in the immutable scenario record.
 
 ## 2. Artifact ownership and immutable identity
 
 A future scenario artifact is owned by the simulation/task layer, not the
-robot-description package, policy, bridge, or firmware. Its complete immutable
+robot-description package, policy, bridge, or firmware. The Project Owner/User
+is the `ScenarioCustodian` and scenario approver unless a delegate and approval
+authority are named in the immutable scenario record. Its complete immutable
 identity must be attached to every future `TrainingTaskFactSnapshot`.
 
 | Identity member | Proposed requirement | Fail-closed meaning |
@@ -45,12 +57,17 @@ The artifact identity is separate from two source strings:
 
 | Value | Domain | What it is not |
 | --- | --- | --- |
-| `GT_ODOM_2D` | Selected hidden 2D oracle coordinate-reference identity. | Not a ROS topic, TF edge, Gazebo world name, or policy frame. |
+| `GT_ODOM_2D` | Evaluator/ground-truth-only 2D coordinate-reference identity. | Not a ROS topic, TF edge, Gazebo world name, policy frame, or policy/observation-core input. |
 | `world` | Runtime-observed `/ground_truth/odom.header.frame_id` metadata. | Not equivalent to `world_demo`, a selected scenario frame, or TF authority. |
 | `world_demo` | Static Gazebo/SDF world identity used by the inspected launch/service path. | Not proven equal to `world` and not automatically a ROS coordinate frame. |
 
 No artifact may claim that these three values are equal or provide an implicit
 SDF/model-local-to-`GT_ODOM_2D` conversion.
+
+`GT_ODOM_2D` is only the evaluator/ground-truth coordinate reference. Raw
+Ground Truth must not enter PPO, policy input, `ObservationAssembler`,
+`ObservationEncoder`, or the observation core. This disposition creates no
+scenario values or coordinate conversion.
 
 ## 3. Proposed schema without concrete values
 
@@ -151,8 +168,10 @@ launch/configuration change.
 
 ## 8. Exit criterion
 
-Only after the user approves this schema and one concrete immutable scenario
-artifact with actual values and a verified hash may a later increment design or
-implement a core-only `TrainingTaskOracle` using test-only facts. Gazebo
+The artifact convention and custodian role are approved for this candidate;
+concrete scenario identity/values and an immutable artifact with verified hash
+remain unselected. Only after that artifact is separately approved and this
+candidate has passed audit and canonical integration may a later increment
+design a core-only `TrainingTaskOracle` using test-only facts. Gazebo
 runtime, reset, collision, reward/termination, Gym/SB3, and policy integration
 remain separately blocked.

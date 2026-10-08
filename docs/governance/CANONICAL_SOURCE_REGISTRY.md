@@ -4,9 +4,24 @@
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
-## Candidate bundle activation
+## Canonical QoS6 / ACR8 bundle
 
-This candidate records the Project Owner/User-approved QoS revision 6 / ACR revision 8 source selection. The new selections become active on the integration line only when this candidate is fast-forwarded to `integration/implementation`; until then the integration baseline remains QoS revision 5 / ACR revision 7 and their historical v1 pins.
+The Project Owner/User-approved QoS revision 6 / ACR revision 8 bundle was
+integrated at `origin/integration/implementation@2e7a2980cb75f0567182ea694c04328d7d8643e0`.
+The Registry entries below record its active document/interface/manifest pins.
+The change records contract identity and pins only; it does not close WP-03 or
+WP-04, change dependencies, or authorize code/runtime. Historical QoS5/ACR7
+approval and v1 pins remain preserved.
+
+## WP-03 disposition reconciliation candidate
+
+The candidate decision record is `docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`.
+Its provenance is packet branch `wp-03-decision-packet-baseline-2e7a2980`,
+commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`, packet SHA-256
+`3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`, with
+user-supplied independent-audit verdict `READINESS_FOR_USER_REVIEW: APPROVABLE`.
+These Registry additions are candidate-only until the reconciliation candidate
+is independently audited and canonically integrated.
 
 ## Registry entries
 
@@ -31,8 +46,10 @@ This candidate records the Project Owner/User-approved QoS revision 6 / ACR revi
 | ros2_ws/src/ROBOT_URDF_final_description/urdf/**, meshes/**, models/** | ROBOT_GEOMETRY_SIMULATION_SOURCE | Geometry/simulation source; not proof of official runtime control profile |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/mecanum_env.py | LEGACY_NONCANONICAL | Excluded from official runtime/architecture evidence |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/train_ai.py | UNCLASSIFIED_LEGACY_DEPENDENT | Not allowed as canonical training/runtime entrypoint pending explicit decision |
-| artifacts/maps/<map_id> | REQUIRED_CANONICAL_MAP_LOCATION_MISSING | Must become map source of truth; do not use ROS-package map copies as canonical |
-| artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml | CANONICAL_LOCATION_PRESENT_VALIDITY_PENDING | Hardware source location exists; values/approval require separate evidence |
+| artifacts/maps/<map_id> | REQUIRED_CANONICAL_MAP_LOCATION_MISSING | Project Owner/User is the approved MapCustodian/map approver unless a delegate is named in the immutable map record; no map ID, map, values, or evidence selected/created. Do not use ROS-package map copies as canonical |
+| artifacts/scenarios/<scenario_id>/scenario.json | APPROVED_SCENARIO_CONVENTION_NO_ARTIFACT_SELECTED | Candidate disposition selects immutable `scenario.json` serialized as `RFC8785_JCS_UTF8` under this root; Project Owner/User is ScenarioCustodian unless delegated. No scenario ID/values/artifact selected. `GT_ODOM_2D` is evaluator-only; raw GT is excluded from policy/observation core. Candidate additions activate only after audit and integration |
+| docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md | DRAFT_WP03_DISPOSITION_RECORD | Packet/audit provenance and Project Owner/User-authorized dispositions for D2, D3, map, scenario, hardware, and record routing; not active until audit and canonical integration |
+| artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml | CANONICAL_LOCATION_PRESENT_VALIDITY_PENDING | Hardware source location exists; candidate decision records Project Owner/User as Hardware Measurement Owner and Technical Approver unless a delegate is named; values/approval require separate evidence |
 | artifacts/simulation/** historical reports/tools | HISTORICAL_OFFLINE_EVIDENCE | Audit/provenance only; never automatic runtime approval |
 | docs/*DRAFT*, approval packet draft and legacy report | DRAFT_OR_HISTORICAL_EVIDENCE | Read for context; not implementation authority without approval |
 | .venv/**, build/**, install/**, log/**, __pycache__/** | GENERATED_NONCANONICAL | Must not be introduced into future integration commits |

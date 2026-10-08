@@ -7,6 +7,18 @@ approved_hardware_config_hash_hex: null
 required_field_policy: fail_closed_on_tbd_measured
 hardware_config_hash_input: false
 
+decision_reconciliation:
+  status: DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION
+  decision_record_path: docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md
+  source_packet_branch: wp-03-decision-packet-baseline-2e7a2980
+  source_packet_commit: 473d1cc6265dc14230fa47a89546b14a9de2a6eb
+  source_packet_sha256: 3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c
+  audit_verdict: "READINESS_FOR_USER_REVIEW: APPROVABLE"
+  measurement_owner_role: "Project Owner/User"
+  technical_approver_role: "Project Owner/User"
+  delegation_rule: "A delegate and its approval authority must be named in the immutable hardware record."
+  measurement_state: "TBD_MEASURED or null remains unavailable and fail-closed."
+
 required_evidence:
   geometry_measurement:
     status: PENDING

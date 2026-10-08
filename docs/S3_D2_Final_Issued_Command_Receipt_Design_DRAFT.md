@@ -1,6 +1,6 @@
 # S3 D2 Final Issued Command Receipt Design
 
-Status: DRAFT — PENDING_USER_DECISION
+Status: DRAFT — APPROVED DISPOSITIONS RECORDED; AUDIT AND CANONICAL INTEGRATION PENDING
 
 ## Purpose and authority
 
@@ -16,9 +16,16 @@ It is reconciled with [S3 Control Step And Simulation Time Contract](S3_Control_
 [S3 Episode Reward Termination Design](S3_Episode_Reward_Termination_Design_DRAFT.md),
 and [S3 Transition Provenance Decision Packet](S3_Transition_Provenance_Decision_Packet_DRAFT.md).
 
-D2-B, explicit `transition_id`, is user-selected for core-only implementation.
-That selection does not choose a runtime receipt owner or prove a command was
-published.
+D2-B, explicit `transition_id`, remains user-selected for core-only token joining.
+The Project Owner/User-authorized D2 dispositions for this candidate are recorded
+in `docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`.
+
+Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
+Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+
+These dispositions remain a documentation candidate until independent audit and
+canonical integration. They do not prove a command was published or authorize
+implementation or runtime.
 
 ## Existing ownership evidence
 
@@ -68,18 +75,17 @@ A future receipt must be immutable and created only after the final safety path
 has accepted the final physical command and its final publish or approved
 transport handoff has succeeded. It is not an actuator acknowledgement.
 
-| Proposed field | Required contract |
+| Receipt contract element | Recorded candidate disposition / v2 schema mapping |
 | --- | --- |
-| `lifecycle_identity` | Exact `EpisodeLifecycleIdentity`, including episode, reset, and runtime generation |
-| `transition_identity` | The active explicit D2-B `TransitionIdentity`; receipt token must equal the transition awaiting commit |
-| `receipt_owner_id` | Versioned identity of the final-publish or handoff owner; no implicit ownership from a topic name |
-| `command_source` | Typed final source selected by the safety path, such as policy, Nav2, teleop, safe stop, or e-stop; must agree with arbitration result |
-| `final_physical_command` | Finite physical `vx_mps`, `vy_mps`, `wz_radps` after all final limiting and smoothing |
-| `normalized_final_command` | Finite normalized three-axis value derived from final physical command using an explicitly versioned conversion rule and limits/hash |
-| `receipt_id` or `command_sequence` | Unique receipt identity and or monotonic source sequence with stated uniqueness scope; not interchangeable with `transition_id` |
-| `action_barrier_ros_ns` | ROS or simulation timestamp marking the final accepted handoff boundary in the same domain as later exact observations |
-| `publish_or_handoff_status` | Explicit successful publish or handoff outcome; failure never carries a ready receipt |
-| `provenance_version` | Receipt schema, normalization rule version, safety/config hash, and any required command-path identity |
+| Lifecycle identity | Bind directly using the v2 primitive fields `episode_generation`, `reset_epoch`, and `runtime_generation`; do not add a nested identity message. |
+| Transition identity | Bind directly using `step_index` and explicit `transition_id` (D2-B). |
+| Logical owner | `FinalTwistPublisher` owns receipt creation after the approved profile boundary; this is a logical ownership decision, not an added wire field. |
+| Safety and source provenance | `SafetySupervisor` remains the sole safety selector. The receipt's `source`, `sequence`, and `source_instance_id` retain their `CommandEnvelope` semantics; `CommandArbiter` creates the new-epoch `SOURCE_SAFE_STOP` zero envelope under SafetySupervisor authority. |
+| Final command | The v2 `final_command` is the finite physical `base_link` planar Twist (`linear.x=vx`, `linear.y=vy`, `angular.z=wz`; other components zero) after final safety limiting/smoothing. |
+| Receipt transport identity | `final_publisher_instance_id` plus `final_publish_sequence`; the latter starts at 1 per publisher instance, increases strictly, and does not reset at `reset_epoch`. It does not replace `TransitionIdentity`. |
+| Timestamp and barriers | `header.stamp` records the receipt timestamp. `SafetyLifecycle` owns action/reset barriers; readiness uses the QoS6 predicate against those externally supplied barriers. No `action_barrier_ros_ns` wire field is added. |
+| Normalized command | The v2 schema carries the physical `final_command`; it adds no normalized-command field. Any normalized use requires an exact approved profile/config conversion rule, axis order, limits, version and provenance. No value or config hash is selected here. |
+| Failure outcome | Failed publish/handoff never produces a ready receipt. Later validation failure after issuance is `STEP_ABORT` or `FAULT`, without a rollback claim. |
 
 The receipt may separately carry local steady receive time for diagnostics, but
 it must not subtract, compare, or derive a simulation interval with
@@ -117,26 +123,19 @@ remain different clock domains.
 No reward, observation runtime, command history, or checkpoint implementation is
 created by this document.
 
-## Decisions and evidence still required
+## Approved dispositions and remaining evidence
 
-| Item | Required status |
-| --- | --- |
-| Receipt owner | `REQUIRED_USER_DECISION`: select the final-publish or final-handoff owner and its lifecycle responsibility |
-| Publish or handoff boundary | `REQUIRED_USER_DECISION`: define the exact successful boundary in simulation and deploy profiles |
-| Safety and arbitration semantics | `REQUIRED_USER_DECISION`: select validation, arbitration, limiting, smoothing, source selection, and safe-stop behavior relevant to receipt creation |
-| Normalized conversion | `REQUIRED_USER_DECISION`: define physical-to-normalized rule, axis order, limits/config version, hash, and migration behavior |
-| Receipt ID and sequence | `REQUIRED_USER_DECISION`: define source, uniqueness scope, replay handling, reset/runtime-generation relation, and retention |
-| Failure and recovery | `REQUIRED_USER_DECISION`: define post-publish fault, zero/inhibit owner, diagnostic retention, reset/restart handling; no rollback claim |
-| ROS, Gazebo, and UART evidence | `REQUIRED_EVIDENCE`: prove final boundary, wrong-generation/replay rejection, failed handoff, barrier alignment, and profile-specific transport behavior |
+The user-authorized choices are recorded for this candidate; they are not a
+canonical status transition or implementation approval.
 
-`Heartbeat.sequence` is a heartbeat sequence, not a command sequence.
-`SafetyState.msg` contains no receipt ID, transition token, publish or handoff
-outcome, action barrier, or command sequence. `Heartbeat.msg` and
-`SafetyState.msg` therefore do not by themselves satisfy this receipt contract.
-Neither message changes the proposal that `FinalIssuedCommandReceipt` binds
-directly to `EpisodeLifecycleIdentity` and `TransitionIdentity`, without a
-separate ScenarioSessionBinding field: a valid lifecycle and transition link
-indirectly to the session binding owned by EpisodeLifecycle.
+| Item | Approved disposition | Remaining evidence or unresolved value |
+| --- | --- | --- |
+| Receipt owner | `FinalTwistPublisher` creates the receipt after the successful profile boundary. `SafetySupervisor` alone owns arbitration, validation, limiting, smoothing, and final selection. | No runtime publisher or graph evidence is claimed. |
+| Profile boundary | Simulation: successful local issuance through the approved `/cmd_vel` boundary; merely starting publish is insufficient. `deploy_real`: no approved handoff boundary and no receipt capability until a separate D2 contract defines and approves one. | Simulation boundary evidence and any future deploy handoff evidence remain obligations. |
+| Identity and sequence | Bind direct lifecycle and transition identities; retain v2 primitive identity/source fields and separate publisher-instance/final-publish sequence semantics. Scenario/session linkage remains indirect via `EpisodeLifecycle`. | Runtime replay, lifecycle, sequence, and barrier evidence remain pending. |
+| Command representation | `final_command` is physical planar Twist after safety selection; normalized reuse requires a separately exact, versioned and hashed conversion rule. | No limits, profile, `config_hash`, or resolved configuration are selected here. |
+| Failure and recovery | No ready receipt on failed publish/handoff. A later validation failure after issuance is `STEP_ABORT` or `FAULT`, without rollback claim. SafetySupervisor selects safe action; CommandArbiter constructs the envelope; reset clears staged/committed receipt state before another lifecycle. | Runtime failure/restart/reset behavior is not evidenced; any profile-specific recovery value remains future contract work. |
+| Evidence | Preserve the packet's future obligations: simulation boundary, duplicate/replay/generation/transition rejection, failure behavior, action-barrier alignment, profile-specific transport, and any future deploy handoff. | These are obligations, not evidence claimed to exist. |
 
 ## Future core test matrix
 
@@ -155,11 +154,10 @@ A later core-only increment must test at minimum:
 
 ## Conclusion
 
-PENDING_USER_DECISION
+`DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
 
-The core can already test transition-token and replay mechanics with a
-`CommandReceiptSnapshot`, but it cannot represent or prove final issue. Receipt
-owner, final boundary, safety semantics, normalization/versioning, sequence,
-recovery policy, and runtime evidence are still required before D2 core or
-runtime implementation approval. This document grants no ROS topic, Gazebo,
-UART, motor, command, or hardware authority.
+The authorized D2 dispositions are recorded for this candidate. The core can
+still test only its existing transition-token/replay mechanics; it does not
+represent or prove final issue. Profile values and runtime evidence remain
+unresolved obligations. This document grants no code, ROS topic, ROSIDL,
+Gazebo, UART, motor, command, hardware, or runtime authority.
