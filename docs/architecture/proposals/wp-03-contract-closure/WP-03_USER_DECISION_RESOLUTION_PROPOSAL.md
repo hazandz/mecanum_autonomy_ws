@@ -1,10 +1,10 @@
 # WP-03 Contract Closure — Proposed User Decision Resolution
 
-**Work package:** WP-03-CONTRACT-CLOSURE-DECISION-RESOLUTION-PROPOSAL  
-**Status:** DRAFT_FOR_USER_APPROVAL_AND_INDEPENDENT_AUDIT  
-**Mode:** DOCUMENTATION_ONLY  
-**Integration baseline:** origin/integration/implementation@9a4c0d233e8237f01a04880fe99e8a3114528f4c  
-**Baseline packet reviewed:** wp-03-user-decision-packet-baseline-9a4c0d2@15009ee9c374661d3ab6018ffa46292e096dceff  
+**Work package:** WP-03-CONTRACT-CLOSURE-DECISION-RESOLUTION-PROPOSAL
+**Status:** DRAFT_FOR_USER_APPROVAL_AND_INDEPENDENT_AUDIT
+**Mode:** DOCUMENTATION_ONLY
+**Integration baseline:** origin/integration/implementation@9a4c0d233e8237f01a04880fe99e8a3114528f4c
+**Baseline packet reviewed:** wp-03-user-decision-packet-baseline-9a4c0d2@15009ee9c374661d3ab6018ffa46292e096dceff
 **Architecture SHA-256:** f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860
 
 ## 1. Purpose and effect
