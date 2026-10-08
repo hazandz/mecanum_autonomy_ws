@@ -162,3 +162,22 @@
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Dependency/status impact | WP-03 remains BLOCKED_BY_CONTRACT with its WP-02 and required-user-decisions dependencies; WP-04 remains BLOCKED_BY_CONTRACT with all existing dependencies unchanged |
 | Notes | The PEP Ordered work packages table retains WP-02's historical Initial status BLOCKED_BY_GOVERNANCE and WP-03/WP-04 BLOCKED_BY_CONTRACT. This ledger entry records the separate authorized WP-02 transition only after canonical integration. It does not claim runtime, HIL, hardware, or physical-measurement evidence and grants no code/runtime authorization. The integration commit SHA is available from canonical Git history and the evidence export, not self-embedded in this entry. |
+
+### WP-03-QOS6-ACR8-CANONICAL-BUNDLE-INTEGRATION-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-08 |
+| Work package | WP-03-RECEIPT-INTERFACE-V2-CANONICAL-BUNDLE-INTEGRATION-CANDIDATE |
+| Work branch | wp-03-qos6-acr8-canonical-bundle-integration-candidate |
+| Integration base | 9a4c0d233e8237f01a04880fe99e8a3114528f4c |
+| Approved source candidate | 8600f4c6b1bd58aa0f1976bf606dbd07b6594822 |
+| User decision | 2026-10-08; Project Owner/User approved exact QoS6/ACR8 bundle and three technical target paths for canonical bundled integration |
+| Approval record | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md; SHA-256 4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529 |
+| Contract artifacts | QoS revision 6 `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`; ACR revision 8 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c` |
+| Interface pins | Receipt v2 schema `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`; dependency closure `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`; transport v2 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620` |
+| Scope | Candidate canonical document/record integration: QoS6, ACR8, approved receipt `.msg`, closure and transport manifests, approval record, Registry selection, and this append-only Ledger entry |
+| Candidate state | PENDING_REVIEW; candidate-branch tip and commit identity are available from Git history, not self-embedded |
+| Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
+| Dependency/status impact | No transition. WP-03 and WP-04 remain BLOCKED_BY_CONTRACT; WP-04 dependency on WP-03 is unchanged. WP-02 remains CLOSED. |
+| Notes | This entry records a review candidate only; its selections become active on `integration/implementation` only after the exact candidate is fast-forwarded. Historical QoS5/ACR7 approval and v1 pins are preserved. No PEP change, WP-03/WP-04 closure, implementation, code, ROSIDL generation/build, test, runtime, HIL, hardware, or deploy_real authorization is granted. |

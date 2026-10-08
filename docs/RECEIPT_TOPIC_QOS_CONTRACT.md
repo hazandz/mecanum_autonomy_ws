@@ -1,12 +1,12 @@
 # Receipt Topic QoS Contract
 
-**Revision:** `5` (proposal draft)
-**Status:** `DRAFT_FOR_INDEPENDENT_AUDIT_AND_USER_APPROVAL`
+**Revision:** `6` (proposal draft)
+**Status:** `DRAFT_FOR_INDEPENDENT_AUDIT_AND_USER_DECISION`
 **Authority role:** proposed revision; not current authority
-**Current authority:** Receipt Topic QoS Contract revision `4` remains current until a revision 5 bundle is approved and canonically integrated.
+**Current authority at baseline:** Receipt Topic QoS Contract revision `5` and ACR revision `7` remain current until a revision 6 / revision 8 bundle is approved and canonically integrated.
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-The following approval and erratum records are reproduced from revision 4 as historical context only; they do not approve this revision 5 draft.
+The following approval and erratum records are reproduced as historical context only; they do not approve this revision 6 draft.
 
 **Bundled approval:** user approval on `2026-10-03` (Asia/Saigon), together
 with `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision `6`. This approval
@@ -50,11 +50,13 @@ implementation, or a runtime approval.
 | Subscriber | `V3ObservationIngress` | Read-only ingress for the V3 observation boundary; it never publishes a command. |
 | Frame | `base_link` | Every accepted receipt has exactly this `header.frame_id`; no frame aliasing. |
 | Topic QoS ID | `Q_FINAL_ISSUED_RECEIPT_V1` | The ID below is part of the resolved topic/QoS record. |
-| Contract ID | `mecanum.final-issued-receipt-topic-qos/v1` | Its canonical manifest is versioned and hashed before implementation. |
+| Contract ID | `mecanum.final-issued-receipt-topic-qos/v2` (proposed) | Its proposed version-2 manifest is separately hashed; revision 5 / transport v1 remains the current authority until bundle approval and integration. |
 
 The future resolved V3 configuration must contain one direct
 `TopicQosContractV3` record with these endpoint values.  The record is not
 created by this design draft.
+
+`Q_FINAL_ISSUED_RECEIPT_V1` is retained because it identifies the unchanged QoS profile/policy, not the receipt-interface or transport-contract version.
 
 ## 3. Proposed QoS profile
 
@@ -213,20 +215,24 @@ reference those same exact values.  A subscriber rejects a message or config
 whose interface ID/hash, topic-QoS ID/hash, observation schema ID, or resolved
 config hash differs from the active resolved contract.
 
-The exact receipt-interface pair required by this topic is
-`mecanum.final-issued-receipt/v1` /
-`90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`.
+The proposed receipt-interface pin for this revision is:
 
-The canonical UTF-8 JSON manifest for this draft has no whitespace or trailing
-newline:
-
-```json
-{"contract_id":"mecanum.final-issued-receipt-topic-qos/v1","frame_contract_id":"BASE_LINK_PLANAR_TWIST_V1","freshness_policy_id":"ACTION_BOUND_RECEIPT_V1","owners":{"publisher":"FinalTwistPublisher","subscriber":"V3ObservationIngress"},"qos":{"deadline":"INFINITE","depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan":"INFINITE","liveliness":"AUTOMATIC","liveliness_lease":"INFINITE","reliability":"RELIABLE"},"receipt_interface":{"contract_id":"mecanum.final-issued-receipt/v1","sha256":"90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e"},"status_policy":{"barrier_timestamp_owner":"SafetyLifecycle","coalesced_gap":"ACCEPT_NEWER","coalesced_gap_detection":"ONLY_AFTER_PRIOR_RECEIPT_SAME_INSTANCE","dead_writer_detection":"NOT_USED","duplicate":"REJECT","message_loss":"REJECT_UNTIL_COMPATIBLE_RECEIPT","nonmonotonic":"REJECT","qos_incompatible":"REJECT_UNTIL_COMPATIBLE_RECEIPT"},"topic":"/mecanum/final_issued_command","type":"mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt","version":1}
+```text
+Interface ID: mecanum.final-issued-receipt/v2
+Interface path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg
+Interface revision: 2
+Interface schema SHA-256: 0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a
+Dependency-closure manifest path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json
+Dependency-closure manifest SHA-256: 0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73
 ```
 
-Its exact SHA-256 is
-`a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`.
-The ID/hash pair is frozen at approval time.  No runtime process may compute a
+The transport manifest is a separate artifact at `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json`. Its UTF-8 JSON bytes have no whitespace or trailing newline and contain the same interface ID, schema SHA, and closure-manifest SHA:
+
+```json
+{"contract_id":"mecanum.final-issued-receipt-topic-qos/v2","frame_contract_id":"BASE_LINK_PLANAR_TWIST_V1","freshness_policy_id":"ACTION_BOUND_RECEIPT_V1","owners":{"publisher":"FinalTwistPublisher","subscriber":"V3ObservationIngress"},"qos":{"deadline":"INFINITE","depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan":"INFINITE","liveliness":"AUTOMATIC","liveliness_lease":"INFINITE","reliability":"RELIABLE"},"receipt_interface":{"contract_id":"mecanum.final-issued-receipt/v2","path":"docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg","revision":2,"sha256":"0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a","dependency_closure_manifest_path":"docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json","dependency_closure_manifest_sha256":"0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73"},"status_policy":{"barrier_timestamp_owner":"SafetyLifecycle","coalesced_gap":"ACCEPT_NEWER","coalesced_gap_detection":"ONLY_AFTER_PRIOR_RECEIPT_SAME_INSTANCE","dead_writer_detection":"NOT_USED","duplicate":"REJECT","message_loss":"REJECT_UNTIL_COMPATIBLE_RECEIPT","nonmonotonic":"REJECT","qos_incompatible":"REJECT_UNTIL_COMPATIBLE_RECEIPT"},"topic":"/mecanum/final_issued_command","type":"mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt","version":2}
+```
+
+Transport manifest ID: `mecanum.final-issued-receipt-topic-qos/v2`; manifest version: `2`; manifest SHA-256: `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`. This transport-manifest hash does not identify the receipt schema, closure manifest, or this full QoS document. The full-document SHA-256 is recorded externally in the bundled approval record. The ID/hash pair is frozen only if the proposed bundle is approved and integrated.  No runtime process may compute a
 replacement, drop a field, or use a compatibility alias.
 
 ## 9. Required design-time acceptance cases
@@ -249,38 +255,37 @@ ingress test seam must nevertheless prove at least:
 
 ## 10. Approval gates and final status
 
-**DRAFT — proposed QoS Contract revision 5.** This section is not effective unless this complete revision 5 draft and ACR revision 7 are independently audited, explicitly approved together, and canonically integrated under the repository workflow. Until then, revision 4 remains current authority and its §10 remains unchanged.
+**DRAFT — proposed QoS Contract revision 6.** This full-text draft is not effective unless revision 6 and ACR revision 8, with their exact full-document hashes in the companion approval record, pass independent audit, receive explicit bundled user approval, and are canonically integrated. At the stated baseline, QoS revision 5 and ACR revision 7 remain canonical authority.
 
-This proposed revision 5 preserves the historical approval event recorded above for revision 4 (approval on `2026-10-03` with ACR revision `6`) and the historical R4-E1 traceability correction. Neither historical record is rewritten or backdated. Any future approval of this revision 5 bundle must be recorded as a separate event on its actual date.
+This revision carries forward the QoS behavior and the prior revision 5 / ACR revision 7 bundle history. It preserves the older revision 4 approval and R4-E1 history without rewriting or backdating it. No approval date is assigned to this proposed bundle.
 
-The transport contract identity remains `mecanum.final-issued-receipt-topic-qos/v1`, with canonical transport-manifest SHA-256 `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`, only on the condition that the canonical manifest remains byte-identical to revision 4 and its hash recomputes to that value. The `/v1` suffix identifies the transport contract/manifest version; it is distinct from this document's revision number. This revision 5 draft changes approval-scope wording only and makes no transport or public-protocol change.
+The proposed transport contract identity is `mecanum.final-issued-receipt-topic-qos/v2`, manifest version `2`, with manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`. The proposed receipt interface is `mecanum.final-issued-receipt/v2` with schema SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a` and dependency-closure manifest SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`. These hashes identify distinct byte sets.
 
 ### 10.1 Proposed bundled approval
 
-If approved, the bundle comprises:
+If approved, the bundle is to identify:
 
-1. this Receipt Topic QoS Contract document revision `5`, identified by its exact document revision and document SHA-256 recorded externally in the companion approval/change-control record;
-2. `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision `7`;
-3. the R4-E2 traceability disposition in this draft's §10.2, which updates the current operative companion reference to ACR revision 7; and
-4. the R4-A1 approval-scope amendment incorporated into this draft's §10.3, not a sidecar with independent or separate authority.
+1. this complete Receipt Topic QoS Contract revision `6` by its full-document SHA-256 recorded externally;
+2. ACR V3 Observation Boundary Closure revision `8` by its full-document SHA-256 recorded externally;
+3. receipt interface ID `mecanum.final-issued-receipt/v2`, proposal path `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg`, schema revision `2`, and schema SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`;
+4. dependency-closure manifest `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json` and SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`;
+5. transport manifest `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json`, transport ID `mecanum.final-issued-receipt-topic-qos/v2`, version `2`, and SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`.
 
-The approval record must distinguish the SHA-256 of this revision 5 document from the canonical transport-manifest SHA-256. The document hash is computed over the finalized document bytes and is recorded externally in the bundled approval record and companion proposal references; it is not embedded in this document, so no self-referential hash is created. The transport-manifest hash continues to identify only the canonical transport manifest.
+The approval record must distinguish schema-file SHA, dependency-closure-manifest SHA, transport-manifest SHA, and the full-document SHA values for QoS revision 6 and ACR revision 8. The full-document hashes are recorded externally; neither document embeds its own hash. No v1 hash or approval history is rewritten. Historical pins remain exactly: interface `mecanum.final-issued-receipt/v1` / `90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`; transport `mecanum.final-issued-receipt-topic-qos/v1` / `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`. These historical v1 values do not identify the proposed v2 artifacts.
 
-R4-E2 is not applied retroactively to historical revision 4. Its proposed effect is represented here by the operative ACR revision 7 reference in this draft. R4-A1 is merged into this proposed revision 5 §10.3; it has no separate normative authority outside this draft and approval bundle. Neither amendment is effective before approval and canonical integration.
+The exact v1 manifest bytes are retained below for historical provenance; they are not the operative v2 manifest:
 
-### 10.2 Proposed companion reference (R4-E2 disposition)
+```json
+{"contract_id":"mecanum.final-issued-receipt-topic-qos/v1","frame_contract_id":"BASE_LINK_PLANAR_TWIST_V1","freshness_policy_id":"ACTION_BOUND_RECEIPT_V1","owners":{"publisher":"FinalTwistPublisher","subscriber":"V3ObservationIngress"},"qos":{"deadline":"INFINITE","depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan":"INFINITE","liveliness":"AUTOMATIC","liveliness_lease":"INFINITE","reliability":"RELIABLE"},"receipt_interface":{"contract_id":"mecanum.final-issued-receipt/v1","sha256":"90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e"},"status_policy":{"barrier_timestamp_owner":"SafetyLifecycle","coalesced_gap":"ACCEPT_NEWER","coalesced_gap_detection":"ONLY_AFTER_PRIOR_RECEIPT_SAME_INSTANCE","dead_writer_detection":"NOT_USED","duplicate":"REJECT","message_loss":"REJECT_UNTIL_COMPATIBLE_RECEIPT","nonmonotonic":"REJECT","qos_incompatible":"REJECT_UNTIL_COMPATIBLE_RECEIPT"},"topic":"/mecanum/final_issued_command","type":"mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt","version":1}
+```
 
-For this proposed revision 5 only, the current operative companion reference is `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision `7`. This replaces the operative revision 6 reference prospectively within the draft. The historical revision 4 approval event and its R4-E1 record remain unchanged; R4-E2 is not applied to or used to rewrite revision 4.
+### 10.2 Proposed companion reference
 
-### 10.3 Proposed approval scope (R4-A1 disposition)
+For this proposed revision 6 only, the prospective companion reference is ACR V3 Observation Boundary Closure revision `8`. This proposal supersedes no historical record by itself. ACR revision 7 remains current until the full revision 6 / revision 8 bundle is approved and canonically integrated.
 
-This subsection is the proposed substantive approval-scope amendment formerly identified as R4-A1. It is incorporated into QoS Contract revision 5 and is not an erratum or a separately authoritative sidecar.
+### 10.3 Proposed approval scope carried forward
 
-This document may become design authority only after the applicable bundle and evidence below are approved together:
-
-1. this Receipt Topic QoS Contract revision 5, including its exact document SHA-256 recorded in the companion approval record and unchanged transport contract ID/manifest hash;
-2. ACR revision 7; and
-3. for Gate B, the resulting public-interface version/hash and resolved-config binding.
+The approval-scope gates below carry forward the semantics of revision 5 §10.3. This receipt-pin and manifest amendment does not broaden or waive them. The exact revision 6 / revision 8 bundle, public-interface pins, and applicable resolved-config binding remain subject to the gate wording below.
 
 #### Gate A — primitive-only
 
@@ -294,19 +299,26 @@ Before connected or profile-resolving implementation, the approved resulting pub
 
 This amendment does not select or waive profile timing, buffer, freshness, measured-twist validity/covariance/provenance, or YDLIDAR X3 extrinsic/range/frame evidence.
 
-This proposed revision changes no transport QoS policy, topic, message fields, public protocol, endpoint, owner, gap/stale behavior, safety boundary, or canonical transport manifest. It does not waive lifecycle, temporal, safety, or Ground Truth isolation requirements; alter WP-04's dependency on WP-03; close WP-03; or authorize code, build, tests, runtime, hardware, or HIL.
+This revision changes only the receipt-interface identity/pin and transport-contract ID/version/manifest bytes as explicitly listed; it does not change QoS policy values, endpoint, owners, delivery/coalescing, gap/stale classification, action/reset readiness, or other transport behavior. It does not waive lifecycle, temporal, safety, or Ground Truth isolation requirements; alter WP-04's dependency on WP-03; close WP-03; or authorize code, build, tests, runtime, hardware, or HIL.
+
+
+
+This amendment changes the versioned receipt-interface pin and transport-manifest identity/bytes. It keeps the QoS policy values, topic, message type name, endpoint, owners, gap/stale classification, action/reset readiness behavior, and transport behavior unchanged. It preserves lifecycle, temporal, safety, and Ground Truth isolation requirements; does not alter WP-04's dependency on WP-03; does not close WP-03; and grants no code, build, test, runtime, hardware, or HIL authorization.
 
 ### 10.4 Draft status
 
 ```text
-QOS_REVISION_5: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_APPROVAL
-QOS_REVISION_4: CURRENT_AUTHORITY_UNTIL_REVISION_5_BUNDLE_APPROVED_AND_CANONICALLY_INTEGRATED
-R4_E2: PROPOSED_IN_REVISION_5_ONLY; NOT_APPLIED_TO_HISTORICAL_REVISION_4
-R4_A1: INCORPORATED_IN_DRAFT_REVISION_5_SECTION_10_3; NO_SEPARATE_AUTHORITY
+QOS_REVISION_6: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_DECISION
+QOS_REVISION_5: CURRENT_CANONICAL_AUTHORITY_UNTIL_REVISION_6_ACR_REVISION_8_BUNDLE_INTEGRATED
+ACR_REVISION_7: CURRENT_CANONICAL_AUTHORITY_UNTIL_REVISION_8_BUNDLE_INTEGRATED
+RECEIPT_INTERFACE_V1: HISTORICAL_PIN_RETAINED; NOT_REPOINTED_TO_V2
+RECEIPT_INTERFACE_V2: PROPOSED; PENDING_USER_DECISION_AND_BUNDLE_APPROVAL
+TRANSPORT_V1: HISTORICAL_PROVENANCE_RETAINED
+TRANSPORT_V2: PROPOSED; PENDING_USER_DECISION_AND_BUNDLE_APPROVAL
 WP-03: BLOCKED_BY_CONTRACT
 WP-04: BLOCKED_BY_CONTRACT
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_NOT_APPROVED
 ```
 
-This document remains a proposal. It does not modify canonical revision 4, ACR revision 6, PEP-001, the progress ledger, source code, interfaces, configuration, or runtime authority.
+This document remains a proposal. It does not modify canonical QoS revision 5, ACR revision 7, PEP-001, the progress ledger, source code, interfaces, configuration, or runtime authority.

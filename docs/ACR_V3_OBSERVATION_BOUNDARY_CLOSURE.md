@@ -1,20 +1,19 @@
-# Đề xuất amendment ACR §8 — revision 6 lên revision 7
+# Đề xuất ACR V3 Observation Boundary Closure — revision 8
 
-**Status:** `ACR_REVISION_7: DRAFT_FOR_INDEPENDENT_AUDIT`
-**Ngày:** `2026-10-05`
-**Work package:** `WP-04-ACR-REVISION-7-FORMAL-AMENDMENT-PROPOSAL`
-**Base candidate:** `wp-04-acr-section-8-scope-clarification@7e0486bceda97bdf4ed02d02a175f958e0b1f063`
-**Integration reference:** `origin/integration/implementation@f8933bcff2bb30b1dad57d71d91678e36746326f`
+**Status:** `ACR_REVISION_8: DRAFT_FOR_INDEPENDENT_AUDIT_AND_USER_DECISION`
+**Work package:** `WP-03-RECEIPT-INTERFACE-V2-BUNDLE-CORRECTION`
+**Source authority:** ACR revision 7 at baseline, full-document SHA-256 `cb111c84c3b8f7d1393256b4c15f28c5f0bcafa1d2a84dde08e2cb0cd823ce0f`
+**Integration baseline:** `origin/integration/implementation@9a4c0d233e8237f01a04880fe99e8a3114528f4`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
 ## 1. Tính chất và hiệu lực của đề xuất
 
-Đây là **đề xuất amendment ACR §8 từ revision 6 lên revision 7**, được lập để independent audit và user decision. Đây không phải clarification có hiệu lực ngay, không sửa nội dung ACR revision 6 và không tự thay đổi authority hiện hành. ACR revision 6 tiếp tục là authority cho tới khi amendment revision 7 được independent audit, được user phê duyệt và được canonical integration theo đúng workflow.
+Đây là full-text proposal cho ACR revision 8, dẫn xuất từ ACR revision 7 tại baseline. Nó chỉ đề xuất cập nhật receipt-interface/dependency pins và bundled manifest references; không có hiệu lực trước independent audit, explicit user approval, và canonical integration. ACR revision 7 tiếp tục là authority hiện hành cho tới khi bundle revision 6/revision 8 được tích hợp.
 
-Audit độc lập của candidate `7e0486bceda97bdf4ed02d02a175f958e0b1f063` xác định rằng câu mở đầu ACR §8 áp các gate trước khi phát hành “a V3 core implementation packet”, trong khi câu kết chỉ giới hạn thời điểm triển khai connected assembler/encoder/history. Câu kết không nói các gate trước chỉ áp dụng cho connected path và không tạo ngoại lệ primitive-only. Observation Input Contract revision 6 §8.1 chỉ cho phép readiness review; nó không phải implementation authorization. Vì vậy, Gate A dưới đây chỉ là wording được đề xuất cho ACR revision 7 và chưa có hiệu lực theo ACR revision 6.
+Phân tích audit của candidate `7e0486bceda97bdf4ed02d02a175f958e0b1f063` được giữ như lịch sử giải thích cho Gate A/B trong ACR revision 7. Tại baseline hiện tại, revision 7 là canonical authority; Gate A/B wording được tiếp tục nguyên nghĩa trong draft revision 8. Observation Input Contract revision 6 §8.1 chỉ cho phép readiness review, không phải implementation authorization.
 
-## 2. ACR revision 6 §8 hiện hành — trích nguyên văn
+## 2. Historical source: ACR revision 6 §8 cited during revision 7 review
 
 > Before a V3 core implementation packet may be issued:
 >
@@ -29,76 +28,60 @@ Audit độc lập của candidate `7e0486bceda97bdf4ed02d02a175f958e0b1f063` x�
 
 ### 2.1 Vì sao câu cuối không tạo ngoại lệ primitive-only
 
-Câu mở đầu áp sáu gate trước khi phát hành bất kỳ “V3 core implementation packet” nào, không giới hạn đối tượng đó vào connected hoặc profile-resolving implementation. Các gate 2–5 bao gồm QoS, compiler/composition, receipt message/topic và ingress, vượt ra ngoài primitive-only scope. Câu cuối chỉ nói connected assembler/encoder/history được triển khai sau các gate; nó không miễn các gate đó cho một packet primitive-only. Do đó không thể dựa vào câu cuối để coi Gate A đã được cho phép theo ACR revision 6.
+Đây là kết luận của lần review revision 7 về cách đọc revision 6 §8; nó được giữ làm lịch sử. Tại baseline hiện tại, ACR revision 7 là authority và Gate A/B wording của nó được carried forward trong draft revision 8.
 
-## 3. Approval bundle đề xuất với Receipt Topic QoS Contract revision 5
+## 3. Proposed revision 8 receipt-pin amendment and bundled change control
 
-ACR revision 6 và `RECEIPT_TOPIC_QOS_CONTRACT` revision 4 vẫn là authority/bundle hiện hành. Theo disposition versioning được đề xuất sau audit, vehicle cho thay đổi normative §10(3) là một draft document revision 5 mới, không phải sửa lịch sử revision 4 hoặc giữ amendment như sidecar. ACR revision 7 và QoS Contract document revision 5 phải được audit và user-approved cùng nhau rồi canonical-integrated theo workflow. Cho đến khi điều đó hoàn tất, QoS revision 4 cùng ACR revision 6 tiếp tục là authority hiện hành.
+At the stated integration baseline, ACR revision 7 and QoS Contract revision 5 are the canonical bundle. This proposed revision 8 updates the receipt-interface/dependency pins, proposes exact target paths for the related artifacts, and carries a versioned transport-manifest reference; it does not make the revision effective. The companion full-text QoS revision 6 draft and this full-text ACR revision 8 draft must be audited and decided as one bundle.
 
-Draft document được đề xuất trong bundle:
-
-```text
-Document:       docs/architecture/proposals/v3-observation-contracts/RECEIPT_TOPIC_QOS_CONTRACT_REVISION_5_PROPOSAL.md
-Document rev:   5 (draft)
-Document SHA-256: 9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b
-```
-
-Document SHA-256 ở trên nhận diện byte của draft QoS revision 5; nó khác với manifest hash chỉ nhận diện transport contract. Hash tài liệu được ghi bên ngoài file QoS để tránh self-reference.
-
-Các định danh transport phải giữ nguyên chính xác:
+The prior revision 7 / revision 5 approval record and all values it pinned remain historical provenance. In particular, the prior receipt interface v1 pin and transport v1 manifest are not rewritten. Historical pins: `mecanum.final-issued-receipt/v1` / `90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`, and `mecanum.final-issued-receipt-topic-qos/v1` / `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`. The proposed next bundle carries the following new pins:
 
 ```text
-Transport contract ID:     mecanum.final-issued-receipt-topic-qos/v1 (unchanged)
-Transport manifest SHA-256: a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62
-Current document authority: revision 4 until revision 5 bundle approval/integration
+QoS full-text proposal: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_CONTRACT_REVISION_6_DRAFT.md
+QoS revision: 6
+ACR full-text proposal: docs/architecture/proposals/wp-03-contract-closure/WP-03_ACR_V3_OBSERVATION_BOUNDARY_CLOSURE_REVISION_8_DRAFT.md
+ACR revision: 8
+Receipt interface ID: mecanum.final-issued-receipt/v2
+Receipt schema path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg
+Receipt schema revision: 2
+Receipt schema SHA-256: 0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a
+Dependency-closure manifest path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json
+Dependency-closure manifest SHA-256: 0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73
+Transport ID: mecanum.final-issued-receipt-topic-qos/v2
+Transport manifest version: 2
+Transport manifest path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json
+Transport manifest SHA-256: 338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620
 ```
 
-Transport-manifest SHA-256 tiếp tục là `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`, chỉ khi JSON canonical byte-identical với revision 4 và hash tính lại khớp. Semantics vận chuyển không đổi: `RELIABLE`, `TRANSIENT_LOCAL`, `KEEP_LAST(1)`; latest-state/coalescing và delivery-order classification; receipt readiness theo action/reset barrier; deadline, lifespan và liveliness lease vô hạn; liveliness không dùng để kết luận dead-writer. Không thêm alias, fallback hoặc giá trị QoS mới.
+### 3.1 Proposed canonical target paths
 
-Document revision 5 chỉ là proposed vehicle cho thay đổi approval-scope §10(3); không đổi transport manifest, contract ID `/v1`, public protocol, QoS profile hoặc transport semantics. Manifest byte identity/hash phải được kiểm tra trực tiếp cho packet này; nếu không đạt, dừng thay vì đổi ID/hash trong phạm vi này.
+The following exact paths are proposed for user/governance decision. Registry entry `ros2_ws/src/mecanum_nav_rl_interfaces/msg/**` establishes the canonical interface directory family, while the exact new message path and manifest locations are not currently defined. These path proposals do not create or canonicalize files:
 
-### 3.1 Disposition traceability kế thừa nhãn R4-E2 — chỉ trong QoS revision 5 draft
+| Artifact | Proposed target path | Status and integration identity rule |
+|---|---|---|
+| Receipt interface schema | `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg` | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal schema SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`. |
+| Dependency-closure manifest | `docs/RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal closure-manifest SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`. |
+| Transport manifest JSON | `docs/RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST.json` (standalone companion to the manifest embedded in QoS §4) | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`, and to the embedded QoS §4 manifest. |
 
-R4-E2 không được áp dụng hoặc gắn vào historical QoS revision 4. Thay vào đó, draft QoS revision 5 tại §10.2 đã ghi current operative companion reference là ACR revision 7. Đây là disposition đề xuất thay thế R4-E2 propositionally; nó chỉ áp dụng nếu revision 5 bundle được audited, approved và canonically integrated. QoS revision 4 §1 historical approval và R4-E1 được giữ nguyên.
+The named proposal artifacts remain under `docs/architecture/proposals/wp-03-contract-closure/`. These paths remain proposed targets only; no artifact is copied to them by this candidate.
 
-**Wording tham chiếu prospective trong QoS revision 5 draft (không áp dụng cho revision 4):**
+QoS policy values and transport behavior are carried forward unchanged. The interface schema, dependency-closure manifest, transport manifest, full QoS document, and full ACR document each have distinct SHA-256 values. Full-document hashes are external in the bundled approval-record draft, avoiding self-reference.
 
-> **Superseded draft disposition — not applied to revision 4:** In the proposed QoS Contract document revision 5 §10.2, set the current operative companion reference to `ACR_V3_OBSERVATION_BOUNDARY_CLOSURE` revision `7`. This proposed reference is effective only if ACR revision 7 and QoS Contract document revision 5 are explicitly approved together and canonically integrated. Preserve revision 4's historical §1 approval and R4-E1 unchanged.
+The proposed canonical targets for QoS and this ACR are `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` and `docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md`. The expected approval-record target follows the existing governance record path convention: `docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md`. For the schema and manifests, §3.1 supplies concrete proposed target paths and marks each `PROPOSED_FOR_USER_DECISION`; those paths are not canonicalized or created by this draft. The standalone transport JSON proposal is a companion copy of the same manifest bytes embedded in QoS §4. Any later approved integration must use bytes identical to the proposal hashes recorded in §3 and the bundled approval record.
 
-QoS revision 5 draft giữ nguyên như historical context record approval `2026-10-03` gắn với ACR revision 6 và R4-E1; điều đó không phải approval của revision 5. Không viết lại history để hàm ý ACR revision 7 hoặc QoS revision 5 đã được phê duyệt ngày đó. Nếu bundle mới được chấp thuận, ghi một sự kiện mới với ngày thực tế.
+This proposal does not supply an approval date, claim approval, or make any artifact canonical. QoS revision 5 and ACR revision 7 remain authority until an exact revision 6 / revision 8 bundle is audited, user-approved, and integrated.
 
-Tham chiếu đề xuất ở QoS revision 5 §10.2 chỉ có thể có hiệu lực sau khi ACR revision 7 và QoS revision 5 được user phê duyệt cùng nhau và tích hợp canonical. Không được coi ACR revision 7, QoS revision 5 hay reference draft là đã được duyệt hoặc có hiệu lực chỉ vì xuất hiện trong proposal.
+## 4. §8 carried forward in the proposed ACR revision 8
 
-Reference trong revision 5 §10.2 chỉ là traceability của current operative reference; approval-scope change ở §10.3 được tích hợp riêng vào chính QoS revision 5 draft. Không dùng traceability update để ngụy trang hoặc miễn điều kiện normative.
-
-### 3.2 QoS §10(3) — disposition tích hợp vào draft QoS revision 5
-
-QoS revision 4 §10(3) hiện hành yêu cầu “the resulting public-interface version/hash and resolved-config binding.” Audit nhận thấy Gate A/Gate B applicability chưa được phân định. Proposed wording Gate A/Gate B được đặt trong §10.3 của draft QoS revision 5 ở file và SHA nêu trên; file `RECEIPT_QOS_SECTION_10_3_GATE_SCOPE_AMENDMENT_PROPOSAL.md` chỉ là supporting rationale cho audit, không còn được đề xuất như sidecar amendment có authority độc lập. Cho đến khi revision 5 bundle được approved/canonical-integrated, QoS revision 4 §10(3) vẫn nguyên hiệu lực.
-
-Thay đổi normative §10(3) được mang bởi QoS revision 5 document (R4-A1 đã được incorporate vào §10.3), bundle cùng ACR revision 7. R4-A1 không có sidecar authority riêng và R4-E2 không áp dụng lên revision 4.
-
-### 3.3 Disposition version/hash được đề xuất — R4-E2 và R4-A1
-
-Theo finding F-04, disposition đề xuất tách rõ transport identity khỏi approval-scope change:
-
-- **Transport identity:** SHA-256 của draft document QoS revision 5 là `9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b`; transport ID `/v1` và manifest SHA `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62` là hai định danh riêng. Chỉ giữ manifest nếu byte-identical và hash tính lại khớp.
-- **Disposition R4-E2:** không áp dụng lên QoS revision 4 lịch sử; tham chiếu prospective được thể hiện tại QoS revision 5 §10.2. Sự kiện §1 lịch sử và R4-E1 giữ nguyên.
-- **Disposition R4-A1:** wording Gate scope đã được tích hợp vào draft revision 5 §10.3. File proposal companion chỉ là rationale/evidence; R4-A1 không có authority độc lập hoặc canonical hash riêng trừ khi governance yêu cầu.
-- **Bundle:** ACR revision 7 + QoS document revision 5 được nhận diện bằng chính xác document SHA + transport ID/manifest hash không đổi. Approval phải là sự kiện mới, ghi ngày thực tế, qua audit, được user phê duyệt bundled và canonical-integrated.
-
-Việc dùng document revision 5 là versioning vehicle theo quyết định được đề xuất cho audit trong work package này; không phải approval nội dung Gate A/Gate B. Draft vẫn pending audit/user decision. Nếu audit yêu cầu thay đổi manifest/transport semantics, dừng `STOPPED_VERSION_HASH_DISPOSITION_UNRESOLVED` thay vì tự đổi ID/hash.
-
-## 4. Wording thay thế §8 được đề xuất cho ACR revision 7
-
-> **DRAFT — proposed replacement for ACR §8, revision 7. Not effective unless independently audited, explicitly approved by the user together with Receipt Topic QoS Contract document revision 5 (document SHA-256 `9f87f4d09ec50aacf8c0cf69e11bff8bceb4219b8d09f68998288907afb8302b`; transport ID/manifest unchanged), and canonically integrated. Until then ACR revision 6 and QoS revision 4 remain current authority.**
+> **DRAFT — ACR §8 carried forward in proposed revision 8. Not effective unless this full-text ACR revision 8 and QoS Contract revision 6 pass independent audit, receive explicit bundled user approval with their full-document SHA-256 values recorded in the approval record, and are canonically integrated. Until then ACR revision 7 and QoS revision 5 remain current authority. Proposed receipt pins: interface v2 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`, dependency closure `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`, transport v2 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`.**
 >
 > ### 8. Gates after approval
 >
-> This section separates (A) the constrained, non-integrated primitive-only first deliverable defined by `PEP-001` revision `0.2.0` for `WP-04-POLICY-CORE-P0`, from (B) connected and/or profile-resolving V3 observation implementation. Gate A is a proposed amendment and is not operative under ACR revision 6. Neither gate changes the PEP dependency, package ownership, approved semantic contracts, or runtime status.
+> This section separates (A) the constrained, non-integrated primitive-only first deliverable defined by `PEP-001` revision `0.3.0` for `WP-04-POLICY-CORE-P0`, from (B) connected and/or profile-resolving V3 observation implementation. Gate A wording is carried forward from the current ACR revision 7 without semantic change; this proposed revision 8 changes only receipt pins and bundle metadata. Neither gate changes the PEP dependency, package ownership, approved semantic contracts, or runtime status.
 >
 > #### Gate A — primitive-only, non-integrated deliverable
 >
-> After the preconditions below have been satisfied, a separate exact implementation packet may be submitted for consideration only for the constrained first deliverable in `PEP-001` revision `0.2.0`:
+> After the preconditions below have been satisfied, a separate exact implementation packet may be submitted for consideration only for the constrained first deliverable in `PEP-001` revision `0.3.0`:
 >
 > 1. immutable `ObservationCutoffV3` core type and structural fail-closed validation; and
 > 2. immutable structural `ObservationInputContractV3` models and structural validation, including exact approved contract references.
@@ -107,7 +90,7 @@ Việc dùng document revision 5 là versioning vehicle theo quyết định đ�
 >
 > A Gate A packet may be considered only after all of the following have occurred:
 >
-> 1. the ACR revision 7 amendment and Receipt Topic QoS Contract document revision 5 (with exact document SHA recorded in the approval record) have passed independent audit, received explicit bundled user approval, and been canonically integrated under the repository workflow;
+> 1. the ACR revision 8 amendment and Receipt Topic QoS Contract document revision 6 (with exact full-document SHAs recorded in the approval record) have passed independent audit, received explicit bundled user approval, and been canonically integrated under the repository workflow;
 > 2. the approved semantic bundle is recorded canonically under the applicable PEP/governance workflow, without altering its approved identities, hashes, revisions, or semantics;
 > 3. the WP-03 dependency is closed, or its treatment is changed by a separate, independently audited and explicitly approved PEP/governance amendment; and
 > 4. the exact implementation packet has passed independent audit and received separate explicit user approval.
@@ -118,7 +101,7 @@ Việc dùng document revision 5 là versioning vehicle theo quyết định đ�
 >
 > #### Gate B — connected and/or profile-resolving implementation
 >
-> Before a connected or profile-resolving V3 implementation packet may be issued, all six existing ACR revision 6 §8 gates remain required:
+> Before a connected or profile-resolving V3 implementation packet may be issued, all six existing ACR revision 7 §8 gates remain required:
 >
 > 1. record the approved ACR in architecture/governance and update the V3 observation specification;
 > 2. approve the bundled Receipt Topic QoS Contract with its canonical ID/hash, delivery/coalescing/action-bound readiness behavior, and `TopicQosContractV3` record; this is separate from S2;
@@ -164,11 +147,15 @@ Structural primitive chỉ giữ type/status contract; không hiện thực sync
 ```text
 S2 contract ID:       mecanum.snapshot-synchronization-temporal/v1
 S2 SHA-256:           1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f
-Receipt interface ID: mecanum.final-issued-receipt/v1
-Receipt interface SHA-256:
-                      90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e
-Receipt QoS ID:       mecanum.final-issued-receipt-topic-qos/v1
-Receipt QoS SHA-256:  a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62
+Receipt interface ID: mecanum.final-issued-receipt/v2 (proposed)
+Receipt interface path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg
+Receipt interface revision: 2
+Receipt interface schema SHA-256: 0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a
+Dependency-closure manifest path: docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json
+Dependency-closure manifest SHA-256: 0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73
+Receipt QoS ID:       mecanum.final-issued-receipt-topic-qos/v2 (proposed)
+Receipt transport-manifest version: 2
+Receipt transport-manifest SHA-256: 338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620
 ```
 
 ### 5.3 Exclusions và profile evidence chưa giải quyết
@@ -177,14 +164,14 @@ Gate A không bao gồm V1, compiler/profile integration, ROS/runtime, receipt b
 
 ## 6. Dependency, authority và các bước không được gộp
 
-Theo PEP-001 revision `0.2.0` trên integration reference, `WP-04-POLICY-CORE-P0` phụ thuộc WP-03; WP-03 và WP-04 đều `BLOCKED_BY_CONTRACT`. Gate A không miễn, đóng hoặc sửa dependency đó, không đổi status và không đổi sequencing. Chỉ closure WP-03 hoặc một PEP/governance amendment riêng, được audit và duyệt độc lập, mới có thể xử lý dependency.
+Theo PEP-001 revision `0.3.0` trên integration baseline, `WP-04-POLICY-CORE-P0` phụ thuộc WP-03; WP-03 và WP-04 đều `BLOCKED_BY_CONTRACT`. Gate A không miễn, đóng hoặc sửa dependency đó, không đổi status và không đổi sequencing. Chỉ closure WP-03 hoặc một PEP/governance amendment riêng, được audit và duyệt độc lập, mới có thể xử lý dependency.
 
 Các bước authority tách biệt theo thứ tự; không bước nào tự hàm ý bước sau:
 
 ```text
-ACR revision 7 amendment proposal
+ACR revision 8 proposal
 → independent audit
-→ explicit bundled user approval of ACR revision 7 and QoS document revision 5
+→ explicit bundled user approval of ACR revision 8 and QoS document revision 6
 → canonical integration of the approved bundle
 → WP-03 dependency closure or separately approved PEP/governance amendment
 → exact implementation packet independent review and separate user approval
@@ -196,16 +183,19 @@ Proposal, audit, approval bundle, canonical integration, dependency closure và 
 ## 7. Trạng thái của proposal
 
 ```text
-ACR_REVISION_7: DRAFT_FOR_INDEPENDENT_AUDIT
-ACR_REVISION_6: CURRENT_AUTHORITY_UNTIL_SUPERSEDED
-QOS_REVISION_4: CURRENT_AUTHORITY_UNTIL_REVISION_5_BUNDLE_APPROVED_AND_CANONICALLY_INTEGRATED
-QOS_REVISION_5: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_APPROVAL
-R4_E2: PROPOSED_REFERENCE_IN_REVISION_5_ONLY; NOT_APPLIED_TO_HISTORICAL_REVISION_4
-R4_A1: INCORPORATED_IN_DRAFT_REVISION_5_SECTION_10_3; NO_SEPARATE_AUTHORITY
+ACR_REVISION_8: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_DECISION
+ACR_REVISION_7: CURRENT_CANONICAL_AUTHORITY_UNTIL_REVISION_8_BUNDLE_INTEGRATED
+QOS_REVISION_6: DRAFT_PENDING_INDEPENDENT_AUDIT_AND_USER_DECISION
+QOS_REVISION_5: CURRENT_CANONICAL_AUTHORITY_UNTIL_REVISION_6_BUNDLE_INTEGRATED
+RECEIPT_INTERFACE_V1: HISTORICAL_PIN_RETAINED
+RECEIPT_INTERFACE_V2: PROPOSED; PENDING_USER_DECISION
+TRANSPORT_V1: HISTORICAL_PROVENANCE_RETAINED
+TRANSPORT_V2: PROPOSED; PENDING_USER_DECISION
+WP-02: CLOSED
 WP-03: BLOCKED_BY_CONTRACT
 WP-04: BLOCKED_BY_CONTRACT
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_NOT_APPROVED
 ```
 
-Đây chỉ là proposal cho audit và user decision. Nó không sửa ACR revision 6, QoS revision 4, PEP-001 hoặc ledger; không canonical-integrate QoS revision 5; không tạo implementation packet; không tuyên bố WP-04 sẵn sàng viết code; và không cấp code hay runtime authorization.
+Đây chỉ là proposal cho audit và user decision. Nó không sửa canonical ACR revision 7, QoS revision 5, PEP-001 hoặc ledger; không canonical-integrate QoS revision 6; không tạo implementation packet; không tuyên bố WP-04 sẵn sàng viết code; và không cấp code hay runtime authorization.
