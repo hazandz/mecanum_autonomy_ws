@@ -1,6 +1,6 @@
 # S3 D2 Final Issued Command Receipt Design
 
-Status: DRAFT — APPROVED DISPOSITIONS RECORDED; AUDIT AND CANONICAL INTEGRATION PENDING
+Status: DRAFT — APPROVED DISPOSITIONS RECORDED; WP-03 CLOSURE ACTIVATION GOVERNED BY PEP-001 REV.0.4.0
 
 ## Purpose and authority
 
@@ -17,15 +17,16 @@ It is reconciled with [S3 Control Step And Simulation Time Contract](S3_Control_
 and [S3 Transition Provenance Decision Packet](S3_Transition_Provenance_Decision_Packet_DRAFT.md).
 
 D2-B, explicit `transition_id`, remains user-selected for core-only token joining.
-The Project Owner/User-authorized D2 dispositions for this candidate are recorded
-in `docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`.
+The Project Owner/User-authorized D2 dispositions are recorded in
+`docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`; canonical
+WP-03 closure activation is governed by PEP-001 rev.0.4.0.
 
 Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
-Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+Independent focused audit: `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; `READINESS_FOR_CANONICAL_INTEGRATION: PASS`.
 
-These dispositions remain a documentation candidate until independent audit and
-canonical integration. They do not prove a command was published or authorize
-implementation or runtime.
+The dispositions are authorized and recorded. Their canonical WP-03 closure
+effect follows the PEP-001 rev.0.4.0 activation rule. They do not prove a command
+was published or authorize implementation or runtime.
 
 ## Existing ownership evidence
 
@@ -125,8 +126,8 @@ created by this document.
 
 ## Approved dispositions and remaining evidence
 
-The user-authorized choices are recorded for this candidate; they are not a
-canonical status transition or implementation approval.
+The user-authorized choices are recorded in the governing decision record; they are not a
+standalone status transition or implementation approval.
 
 | Item | Approved disposition | Remaining evidence or unresolved value |
 | --- | --- | --- |
@@ -154,9 +155,9 @@ A later core-only increment must test at minimum:
 
 ## Conclusion
 
-`DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
+`APPROVED_DISPOSITIONS_RECORDED; WP-03 CLOSURE ACTIVATION PER PEP-001 REV.0.4.0`
 
-The authorized D2 dispositions are recorded for this candidate. The core can
+The authorized D2 dispositions are recorded in the governing decision record. The core can
 still test only its existing transition-token/replay mechanics; it does not
 represent or prove final issue. Profile values and runtime evidence remain
 unresolved obligations. This document grants no code, ROS topic, ROSIDL,

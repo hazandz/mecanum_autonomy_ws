@@ -1,19 +1,19 @@
 # S3 D2 Receipt Ownership User Decision Packet
 
-Status: DRAFT — APPROVED DISPOSITIONS RECORDED; AUDIT AND CANONICAL INTEGRATION PENDING
+Status: DRAFT — APPROVED DISPOSITIONS RECORDED; WP-03 CLOSURE ACTIVATION GOVERNED BY PEP-001 REV.0.4.0
 
 ## Purpose and authority
 
 This packet records the Project Owner/User-authorized ownership and boundary
-dispositions for reconciliation in this candidate. It does not create a receipt
+dispositions for the WP-03 contract records. It does not create a receipt
 type, publish a command, open a transport, alter the canonical interface, or
 authorize implementation or runtime behavior.
 
 Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
-Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+Independent focused audit: `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; `READINESS_FOR_CANONICAL_INTEGRATION: PASS`.
 
-The selected dispositions remain a draft candidate until independent audit and
-canonical integration.
+The dispositions are authorized and recorded. Their canonical WP-03 closure
+effect follows the PEP-001 rev.0.4.0 activation rule.
 
 Authority is [MECANUM NAV DRL Architecture](MECANUM_NAV_DRL_Architecture.docx),
 schema `3.0`, SHA-256
@@ -114,8 +114,8 @@ state before a new lifecycle uses it.
 
 ## Conclusion
 
-`DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
+`APPROVED_DISPOSITIONS_RECORDED; WP-03 CLOSURE ACTIVATION PER PEP-001 REV.0.4.0`
 
-The authorized dispositions are recorded for this candidate; no implementation
+The authorized dispositions are recorded in the governing decision record; no implementation
 or runtime evidence is claimed. This packet grants no code, ROS, ROSIDL, Gazebo,
 `/cmd_vel`, UART, MCU, motor, hardware, `deploy_real`, or runtime approval.

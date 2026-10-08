@@ -181,3 +181,23 @@
 | Runtime/HIL/real status | RUNTIME_NOT_APPROVED |
 | Dependency/status impact | No transition. WP-03 and WP-04 remain BLOCKED_BY_CONTRACT; WP-04 dependency on WP-03 is unchanged. WP-02 remains CLOSED. |
 | Notes | This entry records a review candidate only; its selections become active on `integration/implementation` only after the exact candidate is fast-forwarded. Historical QoS5/ACR7 approval and v1 pins are preserved. No PEP change, WP-03/WP-04 closure, implementation, code, ROSIDL generation/build, test, runtime, HIL, hardware, or deploy_real authorization is granted. |
+
+
+### WP-03-CLOSE-OPEN-CONTRACTS
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-08 |
+| Work package | `WP-03-CLOSURE-AND-SINGLE-INTEGRATION-CANDIDATE` |
+| Work branch | `wp-03-close-and-integrate-once-2e7a2980` |
+| Integration base | `2e7a2980cb75f0567182ea694c04328d7d8643e0` |
+| Audited disposition source | `wp-03-decision-contract-reconciliation-2e7a2980@b234c2fe5831c1a0ea3c2b1805a5715773d6d2a6` |
+| Audit report | `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; `READINESS_FOR_CANONICAL_INTEGRATION: PASS` |
+| PEP change control | PEP-001 rev.0.3.0 -> rev.0.4.0; initial statuses remain historical |
+| Proposed transition | `WP-03: BLOCKED_BY_CONTRACT -> CLOSED`; effective only after the exact reviewed final candidate is fast-forwarded to `integration/implementation` and its remote ref is verified |
+| Scope/evidence basis | Authorized D2 receipt, D3 collision/contact, map, scenario, hardware-intake and record-routing dispositions are recorded. Future obligations remain routed to PEP-001 WP-05 (canonical artifact provenance), WP-06/WP-09 (offline safety/final-publisher and task/contact work under existing dependencies), WP-11 (approved simulation runtime), and WP-12 (physical measurements/HIL); no such evidence is claimed here. |
+| Dependency/status impact | WP-02 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT` and its dependency on WP-03 is unchanged. No other dependency/status transition is recorded. |
+| Candidate content commit | Resolved by Git history for the exact candidate tip; not self-embedded. The audited source commit is identified above. |
+| Runtime/HIL/real status | `RUNTIME_NOT_APPROVED` |
+| Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; no ROS/ROSIDL, build, test, runtime, HIL, hardware operation, `deploy_real`, or deployment authorization. |
+| Notes | This append-only entry is part of the review candidate. Before the PEP activation condition is met, canonical WP-03 remains `BLOCKED_BY_CONTRACT`; after the exact candidate is integrated and the remote ref verified, the transition is `CLOSED`. This record does not alter or supersede any historical Ledger entry. |

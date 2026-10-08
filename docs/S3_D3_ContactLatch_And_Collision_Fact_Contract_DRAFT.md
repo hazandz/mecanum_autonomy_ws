@@ -1,6 +1,6 @@
 # S3 D3 — ContactLatch and Collision Fact Contract
 
-**Status: DRAFT — APPROVED DISPOSITIONS FOR CANDIDATE RECONCILIATION; RUNTIME EVIDENCE PENDING**
+**Status: DRAFT — APPROVED DISPOSITIONS RECORDED; RUNTIME EVIDENCE PENDING; WP-03 CLOSURE ACTIVATION PER PEP-001 REV.0.4.0**
 
 ## Scope and decision boundary
 
@@ -55,7 +55,7 @@ The existing pure-core `ContactCandidateSnapshot` in `core/episode_lifecycle.py`
 
 ## 4. Approved ContactLatch and lifecycle disposition
 
-This candidate records the Project Owner/User-authorized D3 disposition and
+This record captures the Project Owner/User-authorized D3 disposition and
 preserves Architecture §§15–16 as the controlling authority. `EpisodeEvaluator`
 owns `ContactLatch` and per-transition aggregation into `CollisionFact` as a
 logical role assignment; this does not claim that a module or runtime producer
@@ -128,8 +128,8 @@ evidence remain a separate future decision; missing events must never be read as
 | Provenance | Producer identity, entity/link identity, filter-policy ID/version/hash end to end | `FUTURE_RUNTIME_EVIDENCE_REQUIRED` |
 | `deploy_real` | Hardware contact producer, source contract, and evidence | `PENDING_SEPARATE_USER/GOVERNANCE_DECISION` |
 
-The source/role/classification and state-machine dispositions are approved for
-this documentation candidate. They do not claim an approved runtime producer,
+The source/role/classification and state-machine dispositions are authorized
+and recorded. They do not claim an approved runtime producer,
 ContactLatch implementation, or completed evidence.
 
 ## 7. Termination integration boundary
@@ -164,18 +164,20 @@ This document does not derive `out_of_bounds` from `candidate_task_bounds`, does
 **RUNTIME_EVIDENCE_PENDING.** No audited runtime contact sensor, plugin, bridge,
 producer, or ContactLatch implementation is claimed. The user-authorized
 source, classification, role, and Architecture-aligned latch dispositions are
-recorded for this candidate; their runtime evidence remains outstanding.
+recorded in the governing decision record; their runtime evidence remains outstanding.
 A future implementation packet, runtime evidence plan, and authorization are
 separate gates. This document does not authorize reward/termination
 implementation, Gym integration, command publishing, hardware operation, or
 `deploy_real`.
 
-## 9. Decision provenance and candidate status
+## 9. Decision provenance and PEP activation
 
 Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
-Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+Independent focused audit: `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; `READINESS_FOR_CANONICAL_INTEGRATION: PASS`.
 
-The dispositions are recorded in candidate branch
-`wp-03-decision-contract-reconciliation-2e7a2980`, based on integration
-`2e7a2980cb75f0567182ea694c04328d7d8643e0`. This D3 document remains a draft
-candidate until independent audit and canonical integration.
+The audited disposition source is branch
+`wp-03-decision-contract-reconciliation-2e7a2980` at commit
+`b234c2fe5831c1a0ea3c2b1805a5715773d6d2a6`, based on integration
+`2e7a2980cb75f0567182ea694c04328d7d8643e0`. PEP-001 rev.0.4.0 governs when
+the WP-03 closure transition is active. Runtime evidence obligations remain
+separate and outstanding.

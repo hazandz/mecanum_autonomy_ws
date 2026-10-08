@@ -1,6 +1,6 @@
 # S3 Simulation Scenario Artifact Contract
 
-**Status:** `DRAFT — APPROVED CONVENTION DISPOSITION; VALUES AND RUNTIME NOT APPROVED; AUDIT/INTEGRATION PENDING`
+**Status:** `DRAFT — APPROVED CONVENTION DISPOSITION; VALUES AND RUNTIME NOT APPROVED; WP-03 CLOSURE ACTIVATION PER PEP-001 REV.0.4.0`
 
 ## 1. Purpose and authority
 
@@ -20,17 +20,17 @@ Authority and constraints:
 - [S3 Training Task Reset And Collision Design Packet](S3_Training_Task_Reset_And_Collision_Design_Packet_DRAFT.md); and
 - [S3 Termination Inputs And Limits Decision Packet](S3_Termination_Inputs_And_Limits_Decision_Packet_DRAFT.md).
 
-The Project Owner/User-authorized convention recorded in this candidate is
+The Project Owner/User-authorized convention recorded in the WP-03 decision record is
 `artifacts/scenarios/<scenario_id>/scenario.json`, outside
 `ROBOT_URDF_final_description`, serialized as `RFC8785_JCS_UTF8`. The convention
-remains a candidate disposition pending independent audit and canonical
-integration. No scenario artifact, scenario ID, or concrete value is created or
-selected by this decision.
+is an authorized disposition recorded in the governing decision record.
+No scenario artifact, scenario ID, or concrete value is created or selected by
+this decision.
 
 ### Approved disposition provenance
 
 Source decision packet: `WP-03_USER_DECISION_RESOLUTION_PROPOSAL.md`; branch `wp-03-decision-packet-baseline-2e7a2980`; commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`; SHA-256 `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`.
-Independent audit verdict supplied with the authorization: `READINESS_FOR_USER_REVIEW: APPROVABLE` (audit report SHA was not provided).
+Independent focused audit: `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; `READINESS_FOR_CANONICAL_INTEGRATION: PASS`.
 
 The Project Owner/User is the `ScenarioCustodian` and scenario approver unless a
 delegate and approval authority are named in the immutable scenario record.
@@ -168,10 +168,10 @@ launch/configuration change.
 
 ## 8. Exit criterion
 
-The artifact convention and custodian role are approved for this candidate;
+The artifact convention and custodian role are approved dispositions;
 concrete scenario identity/values and an immutable artifact with verified hash
-remain unselected. Only after that artifact is separately approved and this
-candidate has passed audit and canonical integration may a later increment
+remain unselected. Only after that artifact is separately approved and the
+WP-03 closure transition is active under PEP-001 rev.0.4.0 may a later increment
 design a core-only `TrainingTaskOracle` using test-only facts. Gazebo
 runtime, reset, collision, reward/termination, Gym/SB3, and policy integration
 remain separately blocked.

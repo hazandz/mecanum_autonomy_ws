@@ -8,12 +8,15 @@ required_field_policy: fail_closed_on_tbd_measured
 hardware_config_hash_input: false
 
 decision_reconciliation:
-  status: DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION
+  status: AUTHORIZED_DISPOSITIONS_RECORDED
   decision_record_path: docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md
   source_packet_branch: wp-03-decision-packet-baseline-2e7a2980
   source_packet_commit: 473d1cc6265dc14230fa47a89546b14a9de2a6eb
   source_packet_sha256: 3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c
-  audit_verdict: "READINESS_FOR_USER_REVIEW: APPROVABLE"
+  audit_report: "INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md"
+  audit_report_sha256: "7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f"
+  audit_verdict: "READINESS_FOR_CANONICAL_INTEGRATION: PASS"
+  closure_activation_rule: "PEP-001 rev.0.4.0 activates WP-03 CLOSED only when present on integration/implementation."
   measurement_owner_role: "Project Owner/User"
   technical_approver_role: "Project Owner/User"
   delegation_rule: "A delegate and its approval authority must be named in the immutable hardware record."

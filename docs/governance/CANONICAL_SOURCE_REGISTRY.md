@@ -13,15 +13,19 @@ The change records contract identity and pins only; it does not close WP-03 or
 WP-04, change dependencies, or authorize code/runtime. Historical QoS5/ACR7
 approval and v1 pins remain preserved.
 
-## WP-03 disposition reconciliation candidate
+## WP-03 authorized dispositions and closure activation
 
-The candidate decision record is `docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`.
-Its provenance is packet branch `wp-03-decision-packet-baseline-2e7a2980`,
+The decision record is `docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md`.
+Its disposition source is packet branch `wp-03-decision-packet-baseline-2e7a2980`,
 commit `473d1cc6265dc14230fa47a89546b14a9de2a6eb`, packet SHA-256
-`3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`, with
-user-supplied independent-audit verdict `READINESS_FOR_USER_REVIEW: APPROVABLE`.
-These Registry additions are candidate-only until the reconciliation candidate
-is independently audited and canonically integrated.
+`3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`. The
+seven-path reconciliation at `wp-03-decision-contract-reconciliation-2e7a2980`
+commit `b234c2fe5831c1a0ea3c2b1805a5715773d6d2a6` passed `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`
+(SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`). PEP-001 rev.0.4.0 controls activation: WP-03 is
+`BLOCKED_BY_CONTRACT` until the exact reviewed final candidate is fast-forwarded
+to `integration/implementation` and the remote ref is verified; after activation
+its status is `CLOSED`. The transition closes only WP-03 contract dispositions;
+it does not assert runtime or physical evidence or authorize implementation.
 
 ## Registry entries
 
@@ -47,9 +51,9 @@ is independently audited and canonically integrated.
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/mecanum_env.py | LEGACY_NONCANONICAL | Excluded from official runtime/architecture evidence |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/train_ai.py | UNCLASSIFIED_LEGACY_DEPENDENT | Not allowed as canonical training/runtime entrypoint pending explicit decision |
 | artifacts/maps/<map_id> | REQUIRED_CANONICAL_MAP_LOCATION_MISSING | Project Owner/User is the approved MapCustodian/map approver unless a delegate is named in the immutable map record; no map ID, map, values, or evidence selected/created. Do not use ROS-package map copies as canonical |
-| artifacts/scenarios/<scenario_id>/scenario.json | APPROVED_SCENARIO_CONVENTION_NO_ARTIFACT_SELECTED | Candidate disposition selects immutable `scenario.json` serialized as `RFC8785_JCS_UTF8` under this root; Project Owner/User is ScenarioCustodian unless delegated. No scenario ID/values/artifact selected. `GT_ODOM_2D` is evaluator-only; raw GT is excluded from policy/observation core. Candidate additions activate only after audit and integration |
-| docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md | DRAFT_WP03_DISPOSITION_RECORD | Packet/audit provenance and Project Owner/User-authorized dispositions for D2, D3, map, scenario, hardware, and record routing; not active until audit and canonical integration |
-| artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml | CANONICAL_LOCATION_PRESENT_VALIDITY_PENDING | Hardware source location exists; candidate decision records Project Owner/User as Hardware Measurement Owner and Technical Approver unless a delegate is named; values/approval require separate evidence |
+| artifacts/scenarios/<scenario_id>/scenario.json | APPROVED_SCENARIO_CONVENTION_NO_ARTIFACT_SELECTED | Authorized disposition selects immutable `scenario.json` serialized as `RFC8785_JCS_UTF8` under this root; Project Owner/User is ScenarioCustodian unless delegated. No scenario ID/values/artifact selected. `GT_ODOM_2D` is evaluator-only; raw GT is excluded from policy/observation core. WP-03 closure activation is governed by PEP-001 rev.0.4.0 |
+| docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md | WP03_AUTHORIZED_DISPOSITION_AND_CLOSURE_RECORD | Project Owner/User-authorized D2, D3, map, scenario, hardware and routing dispositions; WP-03 closure activation follows PEP-001 rev.0.4.0 and requires the exact reviewed final candidate on integration/implementation |
+| artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml | CANONICAL_LOCATION_PRESENT_VALIDITY_PENDING | Hardware source location exists; records Project Owner/User as Hardware Measurement Owner and Technical Approver unless a delegate is named; values/approval require separate evidence |
 | artifacts/simulation/** historical reports/tools | HISTORICAL_OFFLINE_EVIDENCE | Audit/provenance only; never automatic runtime approval |
 | docs/*DRAFT*, approval packet draft and legacy report | DRAFT_OR_HISTORICAL_EVIDENCE | Read for context; not implementation authority without approval |
 | .venv/**, build/**, install/**, log/**, __pycache__/** | GENERATED_NONCANONICAL | Must not be introduced into future integration commits |

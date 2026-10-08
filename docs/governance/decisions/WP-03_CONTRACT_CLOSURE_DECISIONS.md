@@ -1,9 +1,9 @@
 # WP-03 Contract Closure — Authorized Decision Dispositions
 
-**Record status:** `DRAFT_FOR_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
+**Record status:** Authorized dispositions; WP-03 closure activation governed by PEP-001 rev.0.4.0
 **Work package:** `WP-03-APPROVED-DECISION-CONTRACT-RECONCILIATION`
 **Integration baseline:** `2e7a2980cb75f0567182ea694c04328d7d8643e0`
-**Candidate branch:** `wp-03-decision-contract-reconciliation-2e7a2980`
+**Audited disposition source:** `wp-03-decision-contract-reconciliation-2e7a2980@b234c2fe5831c1a0ea3c2b1805a5715773d6d2a6`
 **Decision authority:** `Project Owner/User` authorized the assistant to select and record the dispositions below.
 **Decision date:** `2026-10-08`
 
@@ -15,12 +15,13 @@ The authorized dispositions are taken from the audited user decision packet:
 - Branch: `wp-03-decision-packet-baseline-2e7a2980`
 - Commit: `473d1cc6265dc14230fa47a89546b14a9de2a6eb`
 - SHA-256: `3559f21a07520f10ac1dceb0c2e6f888597a0215a63a5b8b91fce10d340e583c`
-- Independent-audit verdict supplied by the Project Owner/User: `READINESS_FOR_USER_REVIEW: APPROVABLE`.
+- Independent focused audit: `INDEPENDENT_FOCUSED_STATIC_AUDIT_WP03_DECISION_CONTRACT_RECONCILIATION_B234C2FE.md`; SHA-256 `7db8347459af8762da1b74afd99c765a9121e43c2453363049c3f00c0256110f`; verdict `READINESS_FOR_CANONICAL_INTEGRATION: PASS`.
 
-This record is a candidate. Its dispositions become part of the canonical
-contract records only after this candidate is independently audited and
-canonically integrated. The supplied audit verdict concerns readiness for user
-review; it is not an audit of this reconciliation candidate.
+The dispositions were authorized by the Project Owner/User and the seven-path
+contract reconciliation was independently audited with a PASS verdict. PEP-001
+rev.0.4.0 change control determines when the WP-03 closure transition becomes
+canonical: it activates only when the exact reviewed final candidate is
+fast-forwarded to `integration/implementation` and the remote ref is verified.
 
 ## 2. D2 — final-issued command receipt
 
@@ -144,17 +145,22 @@ The approved routing is packet §6:
 | Hardware | Existing hardware approval/measurement record; retain draft/fail-closed state and route physical/HIL evidence to the applicable later gate. |
 | WP status transition | PEP change control establishes a transition; append-only Ledger records the evidence/result and does not itself make the transition. |
 
-## 6. Status and authorization boundary
+## 6. WP-03 closure transition and authorization boundary
 
-This candidate records documentation dispositions only. It does not close or
-formally start WP-03, change WP-04 status/dependency, update PEP or Ledger,
-authorize code/ROSIDL/build/test, or approve runtime, HIL, hardware operation,
-`deploy_real`, or deployment. All future runtime/physical evidence remains
-pending.
+PEP-001 rev.0.4.0 records `WP-03: BLOCKED_BY_CONTRACT -> CLOSED`, effective
+only when the exact reviewed final candidate is fast-forwarded to
+`integration/implementation` and that remote ref is verified. Before that
+activation, the canonical baseline status remains `BLOCKED_BY_CONTRACT`. The
+transition closes the contract decisions within WP-03 scope; it does not claim
+runtime, ROS, HIL, hardware, or physical-measurement evidence. Future runtime and
+measurement obligations remain with their applicable gates/work packages.
+WP-04 remains `BLOCKED_BY_CONTRACT` with its status and dependency unchanged.
+No code, ROSIDL, build, test, runtime, HIL, hardware-operation, `deploy_real`,
+or deployment authorization is granted.
 
 ```text
 WP-02: CLOSED
-WP-03: BLOCKED_BY_CONTRACT
+WP-03: BLOCKED_BY_CONTRACT before PEP-001 rev.0.4.0 activation; CLOSED after activation
 WP-04: BLOCKED_BY_CONTRACT
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
