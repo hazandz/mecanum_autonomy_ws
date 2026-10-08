@@ -180,9 +180,11 @@ role must preserve the exact state machine in Architecture §16:
 
 - Valid contact sets `contact_active = True` and
   `collision_pulse_pending = True`.
-- Only a valid explicit-empty contact observation for the current epoch may set
-  `contact_active = False`; that empty observation does not clear a pending
-  collision pulse.
+- During normal contact-observation updates, only a valid explicit-empty contact
+  observation for the current epoch may set contact_active = False; that empty
+  observation does not clear a pending collision pulse. RESET_BEGIN(new_epoch)
+  remains the separate atomic lifecycle reset defined in §4.3 and Architecture
+  §16.
 - Silence, a missing message, a delayed/stale message, or invalid provenance
   is not a no-contact observation and must not clear either latch state.
 - At transition consumption, collision is
