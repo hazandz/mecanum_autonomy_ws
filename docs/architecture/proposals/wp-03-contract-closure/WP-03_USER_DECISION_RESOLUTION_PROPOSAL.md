@@ -62,6 +62,12 @@ repeat or bypass safety arbitration.
 **Reason:** the Architecture assigns **FinalTwistPublisher** sole final
 **/cmd_vel** publication, while safety selection is a separate responsibility.
 
+**Safety-path disposition:** receipt creation has no authority to select or
+modify validation, arbitration, limiting, smoothing, or command-source policy.
+Those remain the Architecture-owned **SafetySupervisor** decision. The future
+D2 record must cite the exact approved safety-contract revision and provenance
+used by a receipt; it must not add a second safety path.
+
 ### D2-2 — Profile boundary
 
 **Proposed decision:**
@@ -226,11 +232,12 @@ This proposal does not claim that this evidence exists.
 **Proposed decision:**
 
 - **artifacts/maps/<map_id>/** remains the only canonical map root.
-- A future **MapCustodian** role prepares **map.yaml**, **map.pgm**,
+- The Project Owner/User is the **MapCustodian** and map approver unless a
+  delegate and its approval authority are named in the relevant immutable map
+  record. The custodian prepares **map.yaml**, **map.pgm**,
   **map_manifest.json**, and **metadata.yaml** with the required map identity
   and **map_content_hash**.
-- The Project Owner/User approves a map only through its immutable manifest and
-  evidence record.
+- A map is approved only through its immutable manifest and evidence record.
 - ROS-package map copies may be used as noncanonical inputs during preparation
   but never become the canonical map source by themselves.
 - No map ID, map coordinates, map hash, navigation approval, or runtime map
@@ -241,14 +248,15 @@ This proposal does not claim that this evidence exists.
 **Proposed decision:**
 
 - The canonical scenario root is **artifacts/scenarios/<scenario_id>/**.
+- The canonical scenario file is **scenario.json**, serialized as
+  **RFC8785_JCS_UTF8**. The **scenario_content_sha256** is computed from those
+  canonical UTF-8 bytes.
 - A scenario has an explicit **scenario_id**, **scenario_version**,
   **scenario_content_sha256**, selected Gazebo/SDF world identity and hash, and
   **GT_ODOM_2D** coordinate reference.
-- The future scenario contract must name its canonical serialization and exact
-  filename before a concrete scenario is admitted. It must compute the
-  scenario-content hash over that selected serialization.
-- A **ScenarioCustodian** role prepares an artifact; the Project Owner/User
-  approves it.
+- The Project Owner/User is the **ScenarioCustodian** and scenario approver
+  unless a delegate and its approval authority are named in the immutable
+  scenario record.
 - Concrete goal, valid-area, forbidden-zone, start-pose, and randomization
   values remain absent until coordinate provenance is reviewed. Randomization is
   deferred to a later versioned extension.
@@ -265,9 +273,10 @@ scenario or its values.
 - Every field marked **TBD_MEASURED** or null stays unavailable and must fail
   closed. No value may be copied from simulation, a visual estimate, or another
   robot.
-- A **Hardware Measurement Owner** role is accountable for physical
-  measurements and bench evidence. A **Hardware Technical Approver** role,
-  designated by the Project Owner/User, reviews the evidence and the canonical
+- The Project Owner/User is the **Hardware Measurement Owner** and
+  **Hardware Technical Approver** unless a delegate and its approval authority
+  are named in the hardware approval record. These roles are accountable for
+  physical measurements, bench evidence, review, and the canonical
   hardware-config hash.
 - Required later evidence remains the existing geometry measurement,
   encoder-scale/quadrature verification, wheel/motor/encoder sign bench test,
