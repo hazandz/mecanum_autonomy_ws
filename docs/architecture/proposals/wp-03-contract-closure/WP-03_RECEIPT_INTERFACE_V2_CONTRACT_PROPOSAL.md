@@ -78,6 +78,18 @@ The closure manifest pins these exact transitive message definitions:
 
 The immutable commits were resolved from release tags `5.3.8` and `2.0.4`; the official source file hashes were checked against the installed ROS Jazzy message bytes. The manifest SHA-256 identifies the closure manifest bytes, not the `.msg`, transport manifest, or full contract documents.
 
+### 6.1 Proposed canonical target paths
+
+The Registry identifies the canonical interface directory family but does not specify the exact new message filename or manifest locations. The following paths are concrete proposals for user/governance decision; they are not canonicalized by this document:
+
+| Artifact | Proposed canonical target path | Status and byte-identity condition |
+|---|---|---|
+| Receipt schema | `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg` | `PROPOSED_FOR_USER_DECISION`; on any later approved integration, bytes must match the proposal `.msg` SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`. |
+| Dependency-closure manifest | `docs/RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION`; bytes must match the pinned closure-manifest SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`. |
+| Standalone transport manifest JSON | `docs/RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION`; bytes must match the pinned transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620` and remain byte-identical to the manifest embedded in QoS §4. |
+
+The matching candidate artifacts remain at their proposal paths. Path selection alone does not approve or canonicalize these files.
+
 ## 7. Transport and companion pins
 
 The proposed transport manifest is `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json`, version `2`, ID `mecanum.final-issued-receipt-topic-qos/v2`. It includes the interface v2 ID, `.msg` SHA-256, and closure-manifest SHA-256. Its exact SHA-256 is `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`. QoS policy and transport behavior values are carried forward unchanged.

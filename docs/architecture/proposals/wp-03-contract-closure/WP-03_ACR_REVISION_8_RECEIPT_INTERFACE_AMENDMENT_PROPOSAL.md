@@ -4,7 +4,7 @@
 **Current authority at baseline:** ACR revision 7 / QoS revision 5
 **Full-text draft:** `docs/architecture/proposals/wp-03-contract-closure/WP-03_ACR_V3_OBSERVATION_BOUNDARY_CLOSURE_REVISION_8_DRAFT.md`
 **ACR revision:** `8`
-**Full-document SHA-256:** `f489d996255ea032657cf88157c90c5163f78491c0951e8dc3819046f03e3c49`
+**Full-document SHA-256:** `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`
 
 This amendment proposal accompanies the QoS revision 6 proposal. It is not authoritative until the full QoS6/ACR8 bundle is independently audited, explicitly user-approved, and canonically integrated. The existing QoS revision 5 / ACR revision 7 bundle remains current.
 

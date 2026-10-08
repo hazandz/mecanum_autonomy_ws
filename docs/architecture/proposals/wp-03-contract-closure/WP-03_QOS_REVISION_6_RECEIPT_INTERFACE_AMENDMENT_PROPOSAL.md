@@ -4,7 +4,7 @@
 **Current authority at baseline:** QoS revision 5 / ACR revision 7
 **Full-text draft:** `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_CONTRACT_REVISION_6_DRAFT.md`
 **QoS revision:** `6`
-**Full-document SHA-256:** `e8077a93340d99b6cb2ed691fa00f093fb2c3d54a2a8ddff1547f4e928b1d1a1`
+**Full-document SHA-256:** `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`
 
 This amendment proposal is not independently authoritative. It must be audited and decided together with the ACR revision 8 full-text draft. QoS revision 5 remains canonical until an approved bundle is integrated.
 

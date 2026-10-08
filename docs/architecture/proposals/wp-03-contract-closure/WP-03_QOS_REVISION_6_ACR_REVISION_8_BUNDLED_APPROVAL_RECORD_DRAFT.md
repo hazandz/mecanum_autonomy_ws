@@ -14,17 +14,19 @@ This draft proposes a single approval record for a QoS revision 6 / ACR revision
 |---|---|---|
 | Receipt Topic QoS Contract revision 6 | `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` | Existing canonical contract path. |
 | ACR V3 Observation Boundary Closure revision 8 | `docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` | Existing canonical ACR path. |
-| ROS receipt interface v2 | Proposed path: `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg`; exact canonical target path: `PENDING_USER_DECISION` | Registry identifies the canonical interface directory family, while this proposal does not establish an exact canonical file path. The candidate `.msg` remains under the proposal directory. |
-| Dependency-closure manifest | `PENDING_USER_DECISION` | Registry does not specify a canonical manifest path. Candidate file path is listed below. |
-| Transport manifest | Embedded canonical representation in `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` §4; standalone JSON target `PENDING_USER_DECISION`. | Candidate JSON file path is listed below. |
+| ROS receipt interface v2 | `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg` | `PROPOSED_FOR_USER_DECISION`; follows the Registry's canonical interface directory family and existing package structure. Candidate bytes are pinned by schema SHA-256 below. |
+| Dependency-closure manifest | `docs/RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION`; Registry does not specify a manifest convention. Candidate bytes are pinned by closure-manifest SHA-256 below. |
+| Transport manifest | Embedded canonical representation in `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` §4; proposed standalone target `docs/RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION` for the standalone path; candidate JSON bytes are pinned by transport-manifest SHA-256 below. |
 | Bundled approval record | `PENDING_USER_DECISION` (proposed path: `docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md`) | The existing governance decisions directory provides precedent; exact target requires governance decision. |
+
+These are proposed target paths, not canonical files or approved path decisions. If a bundle is later approved for integration, each proposed target must receive bytes identical to its named proposal artifact: schema SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`, dependency-closure SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`, and transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`. The embedded QoS §4 manifest and proposed standalone transport JSON must be byte-identical. No target is created or canonicalized by this draft.
 
 ## 2. Exact artifacts proposed for review
 
 | Role | Candidate path | Revision / identity | SHA-256 |
 |---|---|---|---|
-| Full QoS document | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_CONTRACT_REVISION_6_DRAFT.md` | QoS Contract revision `6` | `e8077a93340d99b6cb2ed691fa00f093fb2c3d54a2a8ddff1547f4e928b1d1a1` |
-| Full ACR document | `docs/architecture/proposals/wp-03-contract-closure/WP-03_ACR_V3_OBSERVATION_BOUNDARY_CLOSURE_REVISION_8_DRAFT.md` | ACR revision `8` | `f489d996255ea032657cf88157c90c5163f78491c0951e8dc3819046f03e3c49` |
+| Full QoS document | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_CONTRACT_REVISION_6_DRAFT.md` | QoS Contract revision `6` | `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022` |
+| Full ACR document | `docs/architecture/proposals/wp-03-contract-closure/WP-03_ACR_V3_OBSERVATION_BOUNDARY_CLOSURE_REVISION_8_DRAFT.md` | ACR revision `8` | `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c` |
 | Receipt message schema | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_V2_DRAFT.msg` | Interface ID `mecanum.final-issued-receipt/v2`, schema revision `2` | `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a` |
 | Dependency-closure manifest | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST_V1.json` | Closure manifest version `1` | `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73` |
 | Transport manifest | `docs/architecture/proposals/wp-03-contract-closure/WP-03_RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST_V2_DRAFT.json` | Transport ID `mecanum.final-issued-receipt-topic-qos/v2`, version `2` | `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620` |

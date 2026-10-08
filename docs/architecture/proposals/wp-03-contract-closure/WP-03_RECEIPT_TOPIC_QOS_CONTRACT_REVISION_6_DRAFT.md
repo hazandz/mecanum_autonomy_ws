@@ -56,6 +56,8 @@ The future resolved V3 configuration must contain one direct
 `TopicQosContractV3` record with these endpoint values.  The record is not
 created by this design draft.
 
+`Q_FINAL_ISSUED_RECEIPT_V1` is retained because it identifies the unchanged QoS profile/policy, not the receipt-interface or transport-contract version.
+
 ## 3. Proposed QoS profile
 
 | QoS policy | Required value | Why this value is required |
@@ -297,7 +299,7 @@ Before connected or profile-resolving implementation, the approved resulting pub
 
 This amendment does not select or waive profile timing, buffer, freshness, measured-twist validity/covariance/provenance, or YDLIDAR X3 extrinsic/range/frame evidence.
 
-This proposed revision changes no transport QoS policy, topic, message fields, public protocol, endpoint, owner, gap/stale behavior, safety boundary, or canonical transport manifest. It does not waive lifecycle, temporal, safety, or Ground Truth isolation requirements; alter WP-04's dependency on WP-03; close WP-03; or authorize code, build, tests, runtime, hardware, or HIL.
+This revision changes only the receipt-interface identity/pin and transport-contract ID/version/manifest bytes as explicitly listed; it does not change QoS policy values, endpoint, owners, delivery/coalescing, gap/stale classification, action/reset readiness, or other transport behavior. It does not waive lifecycle, temporal, safety, or Ground Truth isolation requirements; alter WP-04's dependency on WP-03; close WP-03; or authorize code, build, tests, runtime, hardware, or HIL.
 
 
 

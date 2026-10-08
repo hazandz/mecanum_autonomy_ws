@@ -32,7 +32,7 @@ Phân tích audit của candidate `7e0486bceda97bdf4ed02d02a175f958e0b1f063` đ�
 
 ## 3. Proposed revision 8 receipt-pin amendment and bundled change control
 
-At the stated integration baseline, ACR revision 7 and QoS Contract revision 5 are the canonical bundle. This proposed revision 8 changes only the receipt-interface/dependency pins and their versioned transport-manifest reference; it does not make the revision effective. The companion full-text QoS revision 6 draft and this full-text ACR revision 8 draft must be audited and decided as one bundle.
+At the stated integration baseline, ACR revision 7 and QoS Contract revision 5 are the canonical bundle. This proposed revision 8 updates the receipt-interface/dependency pins, proposes exact target paths for the related artifacts, and carries a versioned transport-manifest reference; it does not make the revision effective. The companion full-text QoS revision 6 draft and this full-text ACR revision 8 draft must be audited and decided as one bundle.
 
 The prior revision 7 / revision 5 approval record and all values it pinned remain historical provenance. In particular, the prior receipt interface v1 pin and transport v1 manifest are not rewritten. Historical pins: `mecanum.final-issued-receipt/v1` / `90348664c4563997b93de7f10e278b10d4053fcb96909b6bb85c1319db76c40e`, and `mecanum.final-issued-receipt-topic-qos/v1` / `a3bc1a965fc6885825ab961289fa4028862aa7af4b3f3156bc40542f7ee08f62`. The proposed next bundle carries the following new pins:
 
@@ -53,9 +53,21 @@ Transport manifest path: docs/architecture/proposals/wp-03-contract-closure/WP-0
 Transport manifest SHA-256: 338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620
 ```
 
+### 3.1 Proposed canonical target paths
+
+The following exact paths are proposed for user/governance decision. Registry entry `ros2_ws/src/mecanum_nav_rl_interfaces/msg/**` establishes the canonical interface directory family, while the exact new message path and manifest locations are not currently defined. These path proposals do not create or canonicalize files:
+
+| Artifact | Proposed target path | Status and integration identity rule |
+|---|---|---|
+| Receipt interface schema | `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg` | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal schema SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`. |
+| Dependency-closure manifest | `docs/RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST.json` | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal closure-manifest SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`. |
+| Transport manifest JSON | `docs/RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST.json` (standalone companion to the manifest embedded in QoS §4) | `PROPOSED_FOR_USER_DECISION`; if approved and integrated, bytes must be identical to proposal transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`, and to the embedded QoS §4 manifest. |
+
+The named proposal artifacts remain under `docs/architecture/proposals/wp-03-contract-closure/`. These paths remain proposed targets only; no artifact is copied to them by this candidate.
+
 QoS policy values and transport behavior are carried forward unchanged. The interface schema, dependency-closure manifest, transport manifest, full QoS document, and full ACR document each have distinct SHA-256 values. Full-document hashes are external in the bundled approval-record draft, avoiding self-reference.
 
-The proposed canonical targets are `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` and `docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md`. The expected approval-record target follows the existing governance record path convention: `docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md`. The proposed ROSIDL message path is derived from the interface package/type, `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg`; the exact canonical target path remains `PENDING_USER_DECISION` because the Registry specifies the interface directory family rather than this exact file. No file is created there. A standalone canonical target path for the dependency-closure manifest is not established by the reviewed Registry and remains `PENDING_USER_DECISION`. The transport JSON's canonical representation is embedded in the QoS document as its §4 manifest; whether to canonicalize a separate JSON path remains `PENDING_USER_DECISION`.
+The proposed canonical targets for QoS and this ACR are `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` and `docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md`. The expected approval-record target follows the existing governance record path convention: `docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md`. For the schema and manifests, §3.1 supplies concrete proposed target paths and marks each `PROPOSED_FOR_USER_DECISION`; those paths are not canonicalized or created by this draft. The standalone transport JSON proposal is a companion copy of the same manifest bytes embedded in QoS §4. Any later approved integration must use bytes identical to the proposal hashes recorded in §3 and the bundled approval record.
 
 This proposal does not supply an approval date, claim approval, or make any artifact canonical. QoS revision 5 and ACR revision 7 remain authority until an exact revision 6 / revision 8 bundle is audited, user-approved, and integrated.
 
