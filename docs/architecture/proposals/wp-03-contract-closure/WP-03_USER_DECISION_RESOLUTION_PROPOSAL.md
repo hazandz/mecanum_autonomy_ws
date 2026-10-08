@@ -166,14 +166,31 @@ simulation profile, the only accepted future source is an authoritative
 physics-contact event stream delivered through a logical
 **SimulationContactIngress** role.
 
-**SimulationContactIngress** creates typed contact candidates with producer
-identity, event identity, lifecycle and transition identity, source timestamp
-and time domain, involved entity/link identities, and filter-policy
-identity/version/hash. **EpisodeEvaluator** owns **ContactLatch** and
-per-transition aggregation into **CollisionFact**.
+**SimulationContactIngress** only creates typed contact candidates at ingress,
+with producer identity, event identity, lifecycle and transition identity,
+source timestamp and time domain, involved entity/link identities, and
+filter-policy identity/version/hash. It is an upstream logical ingress role; it
+does not replace or bypass the Architecture §§15–16 path: generated contact
+instrumentation, Gazebo `gz.msgs.Contacts`, `ros_gz_bridge`,
+`/mecanum/contacts` (`ros_gz_interfaces/msg/Contacts`), and **ContactLatch**.
 
-These are role decisions for a future contract. They do not claim that a module,
-Gazebo plugin, bridge, ROS topic, or runtime contact producer exists.
+The proposed logical role assignment is that **EpisodeEvaluator** owns
+**ContactLatch** and per-transition aggregation into **CollisionFact**. This
+role must preserve the exact state machine in Architecture §16:
+
+- Valid contact sets `contact_active = True` and
+  `collision_pulse_pending = True`.
+- Only a valid explicit-empty contact observation for the current epoch may set
+  `contact_active = False`; that empty observation does not clear a pending
+  collision pulse.
+- Silence, a missing message, a delayed/stale message, or invalid provenance
+  is not a no-contact observation and must not clear either latch state.
+- At transition consumption, collision is
+  `contact_active OR collision_pulse_pending`; consumption clears only
+  `collision_pulse_pending`, leaving `contact_active` unchanged.
+
+These are proposed role decisions for a future contract. They do not claim that
+a module, Gazebo plugin, bridge, ROS topic, or runtime contact producer exists.
 
 No **deploy_real** collision producer is approved. It remains a separate future
 hardware contract and evidence item.
@@ -202,16 +219,26 @@ runtime collision event.
 - Deduplicate with **(producer_instance_id, event_id)** within one active
   lifecycle and transition.
 - Any accepted collision-class event in the active action interval produces one
-  aggregate **CollisionFact(collision=true)** for that transition.
+  aggregate **CollisionFact(collision=true)** for that transition, subject to
+  the Architecture-owned ContactLatch state below.
 - Simultaneous accepted events retain a stable ordered diagnostic list of their
   identities; the aggregate collision result does not depend on arrival order.
-- A candidate is accepted only after the action barrier and only if it matches
-  the active lifecycle, transition, time domain, and filter-policy identity.
-- Reset or new runtime generation clears staged candidates, deduplication state,
-  consumed-event state, and latch state.
-- Missing, stale, malformed, mismatched, or unavailable contact provenance is
-  not **no collision**. When the fact is required, the outcome is
-  **STEP_ABORT** and **FAULT**.
+- Event ingress/latching follows Architecture §§15–16 and the current reset
+  epoch; the action barrier determines transition consumption, not whether a
+  valid contact is latched. A valid `contact_active` state or pending pulse
+  already held before the barrier must not be discarded merely because its
+  source event preceded that barrier. Lifecycle, transition, time-domain, and
+  filter checks may reject invalid evidence, but may not reinterpret or clear
+  valid latch state.
+- Reset follows Architecture §16 `RESET_BEGIN(new_epoch)`: switch epoch
+  atomically, clear `contact_active`, `collision_pulse_pending`, and latch
+  timestamps, and reject old-epoch messages. No separate reset or generation
+  rule in this proposal may weaken that behavior.
+- Missing, silent, delayed/stale, malformed, mismatched, or unavailable contact
+  provenance is not **no collision** and cannot clear the latch. Preserve the
+  proposal's existing **STEP_ABORT** and **FAULT** outcome when required
+  evidence is invalid or unavailable; do not add a fallback or weaken failure
+  behavior.
 
 The existing precedence remains
 **collision > goal_reached > out_of_bounds > stuck > episode_limit**.
