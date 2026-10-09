@@ -273,3 +273,21 @@
 | WP status/dependency impact | No transition or dependency change. WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT` with existing dependencies unchanged. |
 | Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, tests, build, ROS/ROSIDL, runtime, HIL, hardware, `deploy_sim` or `deploy_real` authorization is created. |
 | Notes | This append-only candidate entry records the user-selected schema for review only. It does not activate a canonical contract, claim Gate A passed, close WP-04, supersede any historical Ledger entry, or alter PEP-001, QoS6, ACR8, WP-05, status, or dependencies. |
+
+### WP-05-UNIFIED-MAP-ARTIFACT-SCHEMA-BASE-REFRESH-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | WP-05-UNIFIED-MAP-ARTIFACT-SCHEMA-BASE-REFRESH |
+| Integration base | f9987be4429349ef9110c45cf97a89728a5e4229 |
+| Candidate branch | wp-05-unified-map-artifact-schema-change-control-f9987be |
+| Prior audited semantics source | `wp-05-unified-map-artifact-schema-change-control-988a74b@617ef28b92b6a17bc4ba00d1b0edd7ccfcdd7b12`; parent `988a74b529fdb4bcf77f341db5c6d115e8511a9b`; stale after integration advanced to this base; provenance only, not integrable |
+| Prior audit verdict | User-supplied `READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS`; refreshed candidate requires focused re-audit |
+| User decision | `USER_DECISION: APPROVED_FOR_WP05_UNIFIED_MAP_ARTIFACT_SCHEMA_CHANGE_CONTROL`; preparation of the same four-path documentation-only candidate, no schema-scope expansion |
+| Scope | Recreate audited map schema ACR and decision semantics, reconcile active RFC 8785 Registry wording, and append this entry; preserve WP-04 canonicalized files/status from base |
+| Candidate state | PENDING_FOCUSED_INDEPENDENT_REAUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION |
+| Activation condition | Focused re-audit passes; Project Owner/User separately authorizes this exact refreshed commit; exact commit is fast-forwarded to integration/implementation and remote ref is verified |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
+| Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario instance, source selection, measurement, code, runtime, HIL, hardware, motor-enable, or deployment authorization is created. |
+| Notes | Ledger is append-only. `617ef28…` is recorded as audited stale provenance only; this entry does not copy or rewrite prior history. |
