@@ -201,3 +201,24 @@
 | Runtime/HIL/real status | `RUNTIME_NOT_APPROVED` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; no ROS/ROSIDL, build, test, runtime, HIL, hardware operation, `deploy_real`, or deployment authorization. |
 | Notes | This append-only entry is part of the review candidate. Before the PEP activation condition is met, canonical WP-03 remains `BLOCKED_BY_CONTRACT`; after the exact candidate is integrated and the remote ref verified, the transition is `CLOSED`. This record does not alter or supersede any historical Ledger entry. |
+
+
+### WP-05-CANONICAL-ARTIFACT-FOUNDATION-REFRESH-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | `WP-05-CANONICAL-ARTIFACT-FOUNDATION-INTEGRATION-CANDIDATE` |
+| Candidate branch | `wp-05-canonical-artifact-foundation-integration-34dbb9d` |
+| Integration base | `34dbb9d17bb5863880838b0c49acac81b8b6dc48` |
+| Prior candidate | `wp-05-canonical-artifact-foundation-integration@28e84ea2758ef8a2f252b3da3e94114bb2705003`; parent `56815516d9a9d000a7b6e41e5290e96bbed7286b`; stale after WP-04 integration advanced the base |
+| Prior audit | User-reported focused audit PASS: candidate integrity, approval-record accuracy, map hash boundary, scenario/GT isolation, hardware fail-closed boundary, Registry/Ledger consistency, WP status/authorization boundary, readiness for integration |
+| Approved decision | `USER_DECISION: APPROVED_FOR_WP05_CANONICAL_ARTIFACT_FOUNDATION_PREPARATION` |
+| Approved packet source | `wp-05-artifact-foundation-decision-packet-56815516@72e47bd1c0a80188abc96f8575d5b345e3767e4d`; packet SHA-256 `b6a3cc428b82d92c437c9b0809f50268d3f409f82d7715c4494c3d27f07bf8d5` |
+| Scope | Refresh the already audited WP-05 governance content on the exact current integration base; decision record, pending-activation Registry references, and this append-only Ledger entry only. No concrete artifact values. |
+| Candidate state | `PENDING_FOCUSED_INDEPENDENT_REAUDIT_AND_USER_INTEGRATION_AUTHORIZATION`; candidate commit SHA is resolved from Git history, not self-embedded. |
+| Activation condition | Focused independent re-audit must pass, the Project Owner/User must separately authorize integration of the exact candidate commit, and that commit must then be fast-forwarded to `integration/implementation` with the remote ref verified. No integration occurs in this work package. |
+| WP status/dependency impact | No transition or dependency change; WP-05 is not closed. WP-04 and all other statuses/dependencies remain unchanged. |
+| Code/runtime/hardware impact | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, runtime, measurement, HIL, hardware approval, motor-enable, deployment, or physical evidence is created. |
+| Evidence status | `DRAFT/PENDING_FOCUSED_INDEPENDENT_REAUDIT_AND_USER_DECISION`; governance/documentation candidate only. |
+| Notes | This entry records refresh provenance and future activation conditions only. It does not activate the foundation decision, supersede prior Ledger entries, or claim canonical integration. |
