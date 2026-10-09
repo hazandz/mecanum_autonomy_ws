@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.4.0` |
+| Revision | `0.5.0` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -60,7 +60,7 @@ immutable baseline
 | 01 | WP-01-REPOSITORY-HYGIENE | Remove generated/cache files from future integration index only; preserve local files/history | 00H and user-approved exact path whitelist | BLOCKED_BY_GOVERNANCE |
 | 02 | WP-02-CANONICAL-SOURCE-SELECTION | V3 selection, legacy boundary, source registry enforcement | 00H | BLOCKED_BY_GOVERNANCE |
 | 03 | WP-03-OPEN-CONTRACT-CLOSURE | Final-issued receipt, collision/contact, map/scenario/hardware intake decisions | 02 and required user decisions | BLOCKED_BY_CONTRACT |
-| 04 | WP-04-POLICY-CORE-P0 | V3 policy-observation core. First constrained deliverable: non-integrated immutable V3 contract primitives — ObservationCutoffV3 core type/validation and ObservationInputContractV3 structural models. Any LiDAR/LocalReference normalization, final-issued receipt integration, V3 assembler/encoder, compiler/profile closure or runtime bridge requires a separate independently approved implementation packet. | WP-03; user-approved V3 scope closure; semantic bundle closure for S2 rev.2, Observation Input Contract rev.6 and V3 Observation Boundary rev.7; separate exact implementation packet | BLOCKED_BY_CONTRACT |
+| 04 | WP-04-POLICY-CORE-P0 | V3 policy-observation core. First constrained deliverable: non-integrated immutable V3 contract primitives — ObservationCutoffV3 core type/validation and ObservationInputContractV3 structural models. Any LiDAR/LocalReference normalization, final-issued receipt integration, V3 assembler/encoder, compiler/profile closure or runtime bridge requires a separate independently approved implementation packet. | WP-03; user-approved V3 scope closure; canonical semantic-bundle record in this PEP for S2 rev.2, Observation Input Contract rev.6, ACR rev.8 and QoS6/ACR8 approval provenance; separate exact implementation packet | BLOCKED_BY_CONTRACT |
 | 05 | WP-05-CANONICAL-ARTIFACT-FOUNDATION | Map, scenario and hardware provenance/hash foundation | 03 | BLOCKED_BY_CONTRACT |
 | 06 | WP-06-BRINGUP-SAFETY-OFFLINE | mecanum_nav_bringup, command adapters, safety and final publisher offline implementation | 03, 04, 05 | BLOCKED_BY_DEPENDENCY |
 | 07 | WP-07-BRIDGE-FIRMWARE-OFFLINE | Serial/telemetry/odometry contract and firmware integration offline | 03, 05 | BLOCKED_BY_DEPENDENCY |
@@ -103,10 +103,12 @@ Explicit prohibitions:
 Fixtures in any later implementation packet are in-memory structural fixtures,
 never profile values, provenance evidence, measurement or runtime evidence.
 
-WP-04 remains `BLOCKED_BY_CONTRACT` until semantic-bundle closure for S2 rev.2,
-Observation Input Contract rev.6 and V3 Observation Boundary rev.7 is recorded
-in its governing documents and a separate exact implementation packet is
-approved.
+WP-04 remains `BLOCKED_BY_CONTRACT`. Its Gate A semantic authority and pins are
+recorded in the PEP-001 rev.0.5.0 semantic-bundle reconciliation below. Only
+after that PEP revision is canonically integrated may the exact Gate A
+implementation packet be prepared and submitted for independent audit. This
+does not authorize source changes or implementation; the exact packet still
+requires separate user approval and code authorization.
 
 
 ## Non-negotiable implementation rules
@@ -198,3 +200,93 @@ values: WP-02 `BLOCKED_BY_GOVERNANCE`, WP-03 `BLOCKED_BY_CONTRACT`, and WP-04
 `BLOCKED_BY_CONTRACT`. WP-03's active status is recorded separately by this
 change-control section after activation; WP-04 status and dependency are not
 changed.
+
+
+## WP-04 Gate A semantic-bundle reconciliation — PEP-001 rev.0.5.0
+
+This change-control record reconciles the Gate A semantic-bundle references
+with the approved source/status authority at the exact integration base. It
+does not rewrite any historical `Initial status` value or WP-02/WP-03
+transition record. At base `56815516d9a9d000a7b6e41e5290e96bbed7286b`,
+WP-03 is `CLOSED` under its previously integrated transition; WP-04 remains
+`BLOCKED_BY_CONTRACT`.
+
+### Canonical semantic-bundle record
+
+The following exact sources identify the semantic bundle used by Gate A. Full
+document hashes are distinguished from an embedded contract/manifest hash.
+
+| Artifact | Revision / identity | Source repository branch and immutable commit | Source path | Full-document SHA-256 / contract pin |
+|---|---|---|---|---|
+| S2 Snapshot Synchronization Temporal Contract | Revision `2`; contract ID `mecanum.snapshot-synchronization-temporal/v1`; canonical contract/manifest SHA-256 `1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f` | `origin/docs-v3-observation-contract-import` @ `d3ca85536e35b38f7f3dffcf1dfd1bc16983aae9` | `docs/architecture/proposals/v3-observation-contracts/ACR_S2_SNAPSHOT_SYNCHRONIZATION_TEMPORAL_CONTRACT.md` | Full document `e1468d0373922a1806e14da91e7cc0336bcc7d70c4cd3ec4fc749078d86b70ab`; contract/manifest pin as stated |
+| Observation Input Contract V3 Design | Revision `6` | `origin/docs-v3-observation-contract-import` @ `d3ca85536e35b38f7f3dffcf1dfd1bc16983aae9` | `docs/architecture/proposals/v3-observation-contracts/OBSERVATION_INPUT_CONTRACT_V3_DESIGN.md` | Full document `200703949d6b326a30ee8e2f75cd2cd14054576e6772ddc6ae3ff670e48eb76c` |
+| ACR V3 Observation Boundary Closure | Revision `8`; current approved Gate A/Gate B ACR authority | `origin/integration/implementation` @ `56815516d9a9d000a7b6e41e5290e96bbed7286b` | `docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md` | Full document `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c` |
+| QoS6 / ACR8 bundled approval provenance | Approval dated `2026-10-08`; current source/status authority | `origin/integration/implementation` @ `56815516d9a9d000a7b6e41e5290e96bbed7286b` | `docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md` | Full document `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529` |
+| QoS Topic Contract | Revision `6`; transport ID `mecanum.final-issued-receipt-topic-qos/v2`; transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620` | `origin/integration/implementation` @ `56815516d9a9d000a7b6e41e5290e96bbed7286b` | `docs/RECEIPT_TOPIC_QOS_CONTRACT.md` | Full document `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`; transport manifest pin as stated |
+
+The S2 value `1be31c...` is its embedded canonical contract/manifest SHA,
+not the full-document SHA; the latter is `e1468d...` above. The full-document
+hashes of the OIC, ACR, approval record and QoS document identify their exact
+bytes and are not interchangeable with contract or transport-manifest hashes.
+
+The V3 Observation Boundary Specification revision 7 is retained as
+supporting semantic-design provenance, not silently omitted: its source is
+`origin/docs-v3-observation-contract-import` @
+`d3ca85536e35b38f7f3dffcf1dfd1bc16983aae9`, path
+`docs/architecture/proposals/v3-observation-contracts/V3_OBSERVATION_BOUNDARY_SPECIFICATION.md`,
+full-document SHA-256
+`47ba6c432cc53798e9f8a97f3c0a97aae586d24bef98113716a4493e57ad4eeb`.
+For Gate A sequencing and approved Gate A/Gate B scope, it is not a separate
+active authority component: the Registry selects ACR revision 8 as the
+`CANONICAL_APPROVED_ACR`, and ACR8 §4 carries forward the approved Gate A/Gate B
+scope. Accordingly ACR8 at the exact path/hash above is the current ACR
+authority for that scope. This statement does not claim that the standalone
+specification is globally superseded for every design subject or alter its
+technical content.
+
+The QoS6/ACR8 sources remain the current source/status authority under the
+Canonical Source Registry and their approval record. `DRAFT` wording in the
+immutable source bytes records the pre-integration history; the approval
+record supersedes those labels only for document authority/status after the
+exact bundle was canonically integrated. PEP-001 rev.0.5.0 is the controlling
+authority for WP sequencing and this Gate A record. It does not change the
+approved QoS/ACR semantics.
+
+### Gate A effect and boundary
+
+This reconciliation records the semantic bundle for Gate A. It permits only
+preparation and independent audit of an exact Gate A implementation packet,
+and only after PEP-001 rev.0.5.0 is canonically integrated. It does not change
+WP-04's status or dependency, does not make WP-04 implementation-eligible,
+does not authorize source edits or code, and grants no runtime approval. The
+exact packet must still receive its own independent audit and explicit user
+approval; code authorization must be separately granted for that exact packet.
+
+WP-03 is `CLOSED` at the stated integration base under the earlier integrated
+WP-03 transition. This reconciliation records no new WP-03 transition. WP-04
+remains `BLOCKED_BY_CONTRACT`, retains its dependency on WP-03, and all other
+WP statuses/dependencies remain unchanged.
+
+### Change control
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.4.0` -> `0.5.0` |
+| Work package | `WP-04-GATE-A-SEMANTIC-BUNDLE-PEP-RECONCILIATION` |
+| Work branch | `wp-04-gate-a-semantic-bundle-pep-reconciliation` |
+| Integration base / source commit | `56815516d9a9d000a7b6e41e5290e96bbed7286b` |
+| Audit authority | `WP04_GATE_A_AUTHORITY_READINESS_AUDIT_56815516.md`; SHA-256 `8328f9560f09e0b03d0210830bc8d3cda03ed8023730554935b4a81694493eb8`; verdict `WP04_GATE_A_CONTRACT_RECONCILIATION_REQUIRED` |
+| Candidate content commit | Resolved by Git history from the exact reviewed branch tip; not embedded in this file to avoid a self-referential commit SHA |
+| Dependency/evidence impact | No dependency or status transition. WP-03 is already `CLOSED` at the integration base; WP-04 remains `BLOCKED_BY_CONTRACT`. Gate A semantic source identities and hashes are now explicit; only exact packet preparation/audit may follow canonical integration of this PEP revision. |
+| Architecture/ACR impact | None. ACR8 is referenced as the current approved contract authority; no Architecture or ACR semantics are amended. |
+| Ledger entry | None in this candidate: no status transition is made; the Progress Ledger remains append-only. |
+| Approval before canonical integration | Explicit user approval is required after independent audit and before this PEP revision is canonically integrated. |
+| Activation / authorization boundary | This branch is a pending PEP proposal under the Metadata Activation rule. Canonical integration activates the governance reconciliation only; it does not grant code authorization, runtime approval, HIL, hardware or `deploy_real` authorization. |
+
+```text
+WP-02: CLOSED
+WP-03: CLOSED
+WP-04: BLOCKED_BY_CONTRACT
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+```
