@@ -81,8 +81,12 @@ it does not assert runtime or physical evidence or authorize implementation.
 
 No world/frame equivalence, goal, start, bounds, zones, seed, randomization value, map/scenario instance, or physical measurement is selected. This foundation activation does not change PEP-001, WP status/dependencies, code authorization, runtime approval, or hardware approval.
 
-## WP-05 map hash serialization RFC 8785 change-control candidate
+## WP-05 map hash serialization RFC 8785 decision — active on integration
 
-**Activation state:** This branch proposes a clarification to Architecture §48; this candidate Registry note does not activate it. The clarification becomes active only after focused independent audit passes, the Project Owner/User separately authorizes integration of the exact candidate, and that exact commit is fast-forwarded to integration/implementation with the remote ref verified.
+**Activation state:** the RFC 8785 clarification was integrated by `wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff@988a74b529fdb4bcf77f341db5c6d115e8511a9b`, based on `c37a5bff9dd6cc32fc503cdd796b31720a58a616`; the remote integration ref is at that commit. The §48 RFC 8785 JCS rule is active. Earlier candidate-pending wording in the RFC decision record describes its pre-integration state and is superseded as to activation state by this Registry entry and the WP-05 static-map schema decision record.
 
-Upon that activation, Architecture §48 will specify RFC 8785 JCS serialized as UTF-8 without BOM or trailing newline. The hashed projection will contain only schema mecanum_map_hash/v1 and the two ordered map.yaml/map.pgm entries with role, relative name, size_bytes and raw-file SHA-256. metadata.yaml, optional pose graph, manifest result fields and map_content_hash are excluded. Until activation, this candidate note is not current serialization authority. It selects no map source or ID and creates no map artifact.
+The active hash projection remains schema `mecanum_map_hash/v1` and exactly two ordered entries: `map_yaml`/`map.yaml`, then `occupancy_image`/`map.pgm`, each with role, name, `size_bytes`, and raw-file SHA-256. Hash only its RFC 8785 JCS bytes encoded UTF-8 without BOM or trailing newline. `metadata.yaml`, optional pose graph, full-manifest result fields and resulting `map_content_hash` are outside the digest. This activation does not activate the separate map-artifact schema or any concrete map instance.
+
+## WP-05 canonical static-map artifact schema — candidate only
+
+The schema/activation proposal at `docs/architecture/ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION.md` and its decision record are candidate-only on this branch. Their schema references become active only after focused independent audit, separate Project Owner/User authorization of the exact candidate, fast-forward to `integration/implementation`, and remote-ref verification. No map ID, source, world/frame relationship, runtime compatibility, or map instance is selected or active by this candidate. The integrated RFC 8785 serialization rule remains active independently of this pending schema decision.

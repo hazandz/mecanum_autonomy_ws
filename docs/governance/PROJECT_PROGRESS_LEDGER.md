@@ -254,3 +254,20 @@
 | WP status/dependency impact | No transition or dependency change. WP-05 remains open; WP-04 is unchanged. |
 | Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario artifact, measurement, code, runtime, HIL, hardware approval or deployment authorization is created. |
 | Notes | This entry is append-only and records a serialization change-control candidate only. It does not claim the Architecture clarification is active or that a map artifact exists. |
+
+### WP-05-UNIFIED-MAP-ARTIFACT-SCHEMA-CHANGE-CONTROL-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | WP-05-UNIFIED-MAP-ARTIFACT-SCHEMA-CHANGE-CONTROL |
+| Integration base | 988a74b529fdb4bcf77f341db5c6d115e8511a9b |
+| Candidate branch | wp-05-unified-map-artifact-schema-change-control-988a74b |
+| User decision | USER_DECISION: APPROVED_FOR_WP05_UNIFIED_MAP_ARTIFACT_SCHEMA_CHANGE_CONTROL; authorizes preparation of a unified documentation-only schema/activation candidate, not a map instance or runtime/code work |
+| Candidate scope | `docs/architecture/ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION.md`; `docs/governance/decisions/WP-05_CANONICAL_STATIC_MAP_ARTIFACT_SCHEMA_DECISION.md`; Registry reconciliation; this append-only entry |
+| RFC 8785 status | Already active at this integration base through commit 988a74b529fdb4bcf77f341db5c6d115e8511a9b; this candidate does not change the §48 map-content hash boundary |
+| Candidate state | PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION |
+| Activation condition | Focused audit passes; Project Owner/User separately authorizes this exact candidate; exact commit is fast-forwarded to integration/implementation and remote ref is verified |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
+| Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario instance, source selection, measurement, code, runtime, HIL, hardware, motor-enable, or deployment authorization is created. |
+| Notes | The Registry/decision wording is reconciled for the already-integrated RFC 8785 change only. Map-artifact schema activation remains pending; no concrete map is active. This entry appends history and does not rewrite prior Ledger records. |
