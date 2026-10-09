@@ -254,3 +254,22 @@
 | WP status/dependency impact | No transition or dependency change. WP-05 remains open; WP-04 is unchanged. |
 | Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario artifact, measurement, code, runtime, HIL, hardware approval or deployment authorization is created. |
 | Notes | This entry is append-only and records a serialization change-control candidate only. It does not claim the Architecture clarification is active or that a map artifact exists. |
+
+
+### WP-04-GATE-A-EXACT-SCHEMA-RECONCILIATION-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | `WP-04-GATE-A-EXACT-SCHEMA-RECONCILIATION` |
+| Candidate branch | `wp-04-gate-a-exact-schema-reconciliation-988a74b` |
+| Integration base | `988a74b529fdb4bcf77f341db5c6d115e8511a9b` |
+| User decision | `APPROVED_FOR_WP04_GATE_A_EXACT_SCHEMA_RECONCILIATION`; exact structural schema selection recorded in this candidate, not implementation authorization |
+| Source decision packet | `wp-04-gate-a-exact-schema-decision-packet-c37a5bff@fc7833d0a491190c88f93d8fdd59da2feb263169`; SHA-256 `e69f0a06b6189a6558d7ee46f6c2c0f645abd6df62c618c39761b2733731042c` |
+| Candidate documents | `docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md`; `docs/governance/decisions/WP-04_GATE_A_EXACT_SCHEMA_DECISION.md` |
+| Scope | Record the selected immutable cutoff schema, reference-only input-contract shape, exact reference pairs, value semantics and fail-closed structural error policy for focused audit; no source implementation |
+| Candidate state | `PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION`; candidate commit identity is resolved from Git history and is not self-embedded |
+| Activation condition | Only after focused independent audit of the exact candidate, separate explicit Project Owner/User authorization to integrate that exact commit, and fast-forward of that exact commit to `integration/implementation` with remote-ref verification may the schema selection become active Registry source selection |
+| WP status/dependency impact | No transition or dependency change. WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT` with existing dependencies unchanged. |
+| Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, tests, build, ROS/ROSIDL, runtime, HIL, hardware, `deploy_sim` or `deploy_real` authorization is created. |
+| Notes | This append-only candidate entry records the user-selected schema for review only. It does not activate a canonical contract, claim Gate A passed, close WP-04, supersede any historical Ledger entry, or alter PEP-001, QoS6, ACR8, WP-05, status, or dependencies. |
