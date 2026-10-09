@@ -80,3 +80,9 @@ it does not assert runtime or physical evidence or authorize implementation.
 - **Hardware foundation:** preserve `artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml` and the distinct approval record. `TBD_MEASURED`/null remain unavailable and fail-closed; `approval_status: DRAFT`; `motor_enable_allowed: false`. No measurement, hash approval, or hardware approval is recorded.
 
 No world/frame equivalence, goal, start, bounds, zones, seed, randomization value, map/scenario instance, or physical measurement is selected. This foundation activation does not change PEP-001, WP status/dependencies, code authorization, runtime approval, or hardware approval.
+
+## WP-05 map hash serialization RFC 8785 change-control candidate
+
+**Activation state:** This branch proposes a clarification to Architecture §48; this candidate Registry note does not activate it. The clarification becomes active only after focused independent audit passes, the Project Owner/User separately authorizes integration of the exact candidate, and that exact commit is fast-forwarded to integration/implementation with the remote ref verified.
+
+Upon that activation, Architecture §48 will specify RFC 8785 JCS serialized as UTF-8 without BOM or trailing newline. The hashed projection will contain only schema mecanum_map_hash/v1 and the two ordered map.yaml/map.pgm entries with role, relative name, size_bytes and raw-file SHA-256. metadata.yaml, optional pose graph, manifest result fields and map_content_hash are excluded. Until activation, this candidate note is not current serialization authority. It selects no map source or ID and creates no map artifact.

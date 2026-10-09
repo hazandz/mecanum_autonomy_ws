@@ -238,3 +238,19 @@
 | WP status/dependency impact | WP-05 remains open and is not closed. No WP status or dependency changed; WP-04 remains `BLOCKED_BY_CONTRACT` with dependencies unchanged. |
 | Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No concrete map/scenario, measurement, code, runtime, HIL, hardware approval, motor enable, deployment, or physical evidence is created. |
 | Correction candidate state | Pending focused independent audit of this status correction; this entry does not itself integrate the correction candidate or close WP-05. |
+### WP-05-MAP-HASH-SERIALIZATION-RFC8785-CHANGE-CONTROL-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | WP-05-MAP-HASH-SERIALIZATION-RFC8785-CHANGE-CONTROL |
+| Integration base | c37a5bff9dd6cc32fc503cdd796b31720a58a616 |
+| Candidate branch | wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff |
+| Source decision packet | wp-05-map-hash-serialization-decision-packet-c37a5bff@38e496dc985969cb0d6a2e421b1eb7363c9b5a1f; SHA-256 ee31375df185c124f82a1fc56ee0daa12b4aa93297d2c5fe2c6e6cb0cd353515 |
+| User decision | USER_DECISION: APPROVED_FOR_WP05_MAP_HASH_SERIALIZATION_CHANGE_CONTROL; selects RFC 8785 JCS, UTF-8 without BOM or trailing newline, for the specified map-hash projection |
+| Scope | Candidate clarification to Architecture §48 and pending-activation Registry note; no map artifact or source selection |
+| Candidate state | PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION |
+| Activation condition | The exact candidate must pass focused independent audit, receive separate Project Owner/User integration authorization, then be fast-forwarded to integration/implementation and remotely verified |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains open; WP-04 is unchanged. |
+| Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario artifact, measurement, code, runtime, HIL, hardware approval or deployment authorization is created. |
+| Notes | This entry is append-only and records a serialization change-control candidate only. It does not claim the Architecture clarification is active or that a map artifact exists. |
