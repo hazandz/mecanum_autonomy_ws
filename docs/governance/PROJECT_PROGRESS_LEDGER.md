@@ -201,3 +201,22 @@
 | Runtime/HIL/real status | `RUNTIME_NOT_APPROVED` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; no ROS/ROSIDL, build, test, runtime, HIL, hardware operation, `deploy_real`, or deployment authorization. |
 | Notes | This append-only entry is part of the review candidate. Before the PEP activation condition is met, canonical WP-03 remains `BLOCKED_BY_CONTRACT`; after the exact candidate is integrated and the remote ref verified, the transition is `CLOSED`. This record does not alter or supersede any historical Ledger entry. |
+
+
+### WP-05-CANONICAL-ARTIFACT-FOUNDATION-DECISION-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-09 |
+| Work package | `WP-05-CANONICAL-ARTIFACT-FOUNDATION` |
+| Candidate branch | `wp-05-canonical-artifact-foundation-integration` |
+| Integration base | `56815516d9a9d000a7b6e41e5290e96bbed7286b` |
+| Approved decision | `USER_DECISION: APPROVED_FOR_WP05_CANONICAL_ARTIFACT_FOUNDATION_PREPARATION` |
+| Approved packet source | `wp-05-artifact-foundation-decision-packet-56815516@72e47bd1c0a80188abc96f8575d5b345e3767e4d`; packet SHA-256 `b6a3cc428b82d92c437c9b0809f50268d3f409f82d7715c4494c3d27f07bf8d5` |
+| Scope | Governance documentation candidate only: immutable WP-05 decision record, pending-activation Registry foundation references, and this append-only Ledger entry. Map hash includes only map.yaml/map.pgm; scenario root/convention and GT isolation; hardware remains fail-closed. No concrete artifact values. |
+| Candidate state | `PENDING_INDEPENDENT_STATIC_AUDIT`; candidate commit identity is resolved from Git history and is not self-embedded. |
+| Activation condition | The independent static audit must pass for the exact candidate commit; that exact commit must then be separately authorized and fast-forwarded to `integration/implementation`, with the remote ref verified. No integration has occurred in this candidate-preparation work package. |
+| WP status/dependency impact | No transition or dependency change. WP-05 is not closed by this entry; WP-04 and all other statuses/dependencies remain unchanged. |
+| Code/runtime/hardware impact | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, runtime, measurement, HIL, hardware approval, motor-enable, deployment, or physical evidence is created. |
+| Evidence status | `DRAFT/PENDING_INDEPENDENT_AUDIT_AND_USER_DECISION`; governance/documentation candidate only. |
+| Notes | This entry is append-only and records decision provenance and future activation conditions. It does not itself activate the decision or claim a canonical integration. |
