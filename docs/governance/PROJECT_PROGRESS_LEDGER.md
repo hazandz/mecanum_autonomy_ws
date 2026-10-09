@@ -222,3 +222,19 @@
 | Code/runtime/hardware impact | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, runtime, measurement, HIL, hardware approval, motor-enable, deployment, or physical evidence is created. |
 | Evidence status | `DRAFT/PENDING_FOCUSED_INDEPENDENT_REAUDIT_AND_USER_DECISION`; governance/documentation candidate only. |
 | Notes | This entry records refresh provenance and future activation conditions only. It does not activate the foundation decision, supersede prior Ledger entries, or claim canonical integration. |
+
+
+### WP-05-FOUNDATION-ACTIVATION-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Work package | `WP-05-FOUNDATION-ACTIVATION-STATUS-CORRECTION` |
+| Supersedes | `WP-05-CANONICAL-ARTIFACT-FOUNDATION-REFRESH-CANDIDATE`, only as to its pending activation state; prior provenance and audit history remain intact |
+| Integrated foundation candidate | `wp-05-canonical-artifact-foundation-integration-34dbb9d@d89f5187c792932e6e77f7ff8db5045f9cce70ed` |
+| Integration base and parent | `34dbb9d17bb5863880838b0c49acac81b8b6dc48` |
+| Audit | Project Owner/User supplied focused independent audit verdict: all listed WP-05 candidate audit categories `PASS`; no correction required |
+| User authorization and integration evidence | Project Owner/User authorized fast-forward of the exact audited candidate; delivery record confirms fast-forward to `integration/implementation` and remote ref verification at `d89f5187c792932e6e77f7ff8db5045f9cce70ed` |
+| Foundation activation | The approved WP-05 artifact-foundation decision and Registry references are active on `integration/implementation` at the exact integrated candidate commit |
+| WP status/dependency impact | WP-05 remains open and is not closed. No WP status or dependency changed; WP-04 remains `BLOCKED_BY_CONTRACT` with dependencies unchanged. |
+| Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No concrete map/scenario, measurement, code, runtime, HIL, hardware approval, motor enable, deployment, or physical evidence is created. |
+| Correction candidate state | Pending focused independent audit of this status correction; this entry does not itself integrate the correction candidate or close WP-05. |
