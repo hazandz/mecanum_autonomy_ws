@@ -103,7 +103,7 @@ Explicit prohibitions:
 Fixtures in any later implementation packet are in-memory structural fixtures,
 never profile values, provenance evidence, measurement or runtime evidence.
 
-WP-04 remains `BLOCKED_BY_CONTRACT`. Its Gate A semantic authority and pins are
+WP-04 remains `BLOCKED_BY_CONTRACT`. Its Gate A semantic provenance pins are
 recorded in the PEP-001 rev.0.5.0 semantic-bundle reconciliation below. Only
 after that PEP revision is canonically integrated may the exact Gate A
 implementation packet be prepared and submitted for independent audit. This
@@ -211,10 +211,12 @@ transition record. At base `56815516d9a9d000a7b6e41e5290e96bbed7286b`,
 WP-03 is `CLOSED` under its previously integrated transition; WP-04 remains
 `BLOCKED_BY_CONTRACT`.
 
-### Canonical semantic-bundle record
+### Gate A semantic-provenance pins and current authority
 
-The following exact sources identify the semantic bundle used by Gate A. Full
-document hashes are distinguished from an embedded contract/manifest hash.
+The following exact immutable source bytes pin semantic-design provenance for
+Gate A. Full-document hashes are distinguished from an embedded
+contract/manifest hash. These provenance pins do not make each pinned source a
+canonical or independently approved architecture authority.
 
 | Artifact | Revision / identity | Source repository branch and immutable commit | Source path | Full-document SHA-256 / contract pin |
 |---|---|---|---|---|
@@ -228,6 +230,15 @@ The S2 value `1be31c...` is its embedded canonical contract/manifest SHA,
 not the full-document SHA; the latter is `e1468d...` above. The full-document
 hashes of the OIC, ACR, approval record and QoS document identify their exact
 bytes and are not interchangeable with contract or transport-manifest hashes.
+
+S2 revision 2 at the pinned source is labeled
+`DRAFT — PENDING_INDEPENDENT_ARCHITECTURE_REVIEW_AND_USER_APPROVAL`; Observation
+Input Contract V3 revision 6 is labeled
+`REVISED_DRAFT — PENDING_INDEPENDENT_ARCHITECTURE_REVIEW_AND_USER_APPROVAL`.
+They are immutable semantic-design provenance only. This PEP pins their exact
+provenance bytes; it does not approve, canonicalize, promote either draft, or
+treat either one independently as satisfying an architecture or approval gate.
+Neither source grants implementation authorization.
 
 The V3 Observation Boundary Specification revision 7 is retained as
 supporting semantic-design provenance, not silently omitted: its source is
@@ -246,11 +257,13 @@ technical content.
 
 The QoS6/ACR8 sources remain the current source/status authority under the
 Canonical Source Registry and their approval record. `DRAFT` wording in the
-immutable source bytes records the pre-integration history; the approval
-record supersedes those labels only for document authority/status after the
-exact bundle was canonically integrated. PEP-001 rev.0.5.0 is the controlling
-authority for WP sequencing and this Gate A record. It does not change the
-approved QoS/ACR semantics.
+immutable QoS6/ACR8 source bytes records the pre-integration history; the
+approval record supersedes those labels only for document authority/status
+after the exact bundle was canonically integrated. The Registry-selected ACR8
+is the current approved ACR authority only for the active Gate A/Gate B scope
+it carries forward. PEP-001 rev.0.5.0 controls WP sequencing and Gate A
+provenance pins; it does not change the approved QoS/ACR semantics or elevate
+the S2/OIC source drafts.
 
 ### Gate A effect and boundary
 
