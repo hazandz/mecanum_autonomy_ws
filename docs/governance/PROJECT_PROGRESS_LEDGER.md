@@ -309,3 +309,19 @@
 | WP status/dependency impact | No status transition or dependency change. WP-02 remains `CLOSED`; WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `NOT_PASSED`. The prior exact-schema candidate Ledger entry is preserved; this entry reconciles only its pending activation state using the verified audit/authorization/integration evidence above. |
 | Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Candidate documentation integration would not itself authorize implementation, ROS, runtime, HIL, hardware, `deploy_sim`, or `deploy_real`. |
 | Notes | Append-only candidate evidence. This entry does not itself integrate this bundle, pass Gate A, close WP-04, alter PEP or WP dependencies, or claim runtime evidence. |
+
+### WP-04-STRUCTURAL-SCHEMA-REGISTRY-STATUS-RECONCILIATION-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-10 |
+| Work package | `WP-04-STRUCTURAL-SCHEMA-REGISTRY-STATUS-RECONCILIATION` |
+| Integration base | `3b357afdec00d7fb769c9d4978372772a91bc307` |
+| Candidate branch | `wp-04-structural-schema-registry-status-reconciliation-3b357af` |
+| Provenance | Base contains the audited preimplementation governance candidate `wp-04-gate-a-preimplementation-governance-bundle-401593a@3b357afdec00d7fb769c9d4978372772a91bc307`. The User-provided audit conclusion states its Registry activation reconciliation is adequately evidenced as active structural-schema source selection at this base. Exact schema SHA-256 is `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; the cited integration ancestry and authorization evidence are recorded in the Registry section at base. |
+| Scope | Registry wording consistency correction only: preserve the active-source-selection reconciliation and convert the older “candidate — not active” section into historical pre-activation provenance with the activation state reconciled to the same evidence. Append this Ledger entry. No schema, contract, PEP, code, test, or WP-05 change. |
+| Candidate state | `PENDING_INDEPENDENT_AUDIT_AND_SEPARATE_USER_AUTHORIZATION_FOR_EXACT_FINAL_COMMIT`; this correction has no operative effect before its own integration. |
+| Activation condition | The exact two-path candidate must pass independent audit, receive separate explicit Project Owner/User authorization for its final commit, and be fast-forwarded to `integration/implementation` with remote-ref verification. No integration occurs in this work package. |
+| WP status/dependency impact | No status transition or dependency change. WP-02 remains `CLOSED`; WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; `GATE_A: NOT_PASSED`. |
+| Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No HIL, hardware, `deploy_sim`, or `deploy_real` authority is created. |
+| Notes | Append-only Registry consistency candidate. It resolves contradictory current-state wording without changing the underlying schema selection, technical semantics, or historical source/audit provenance. It does not pass Gate A or close WP-04. |
