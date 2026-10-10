@@ -325,3 +325,20 @@
 | WP status/dependency impact | No status transition or dependency change. WP-02 remains `CLOSED`; WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; `GATE_A: NOT_PASSED`. |
 | Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No HIL, hardware, `deploy_sim`, or `deploy_real` authority is created. |
 | Notes | Append-only Registry consistency candidate. It resolves contradictory current-state wording without changing the underlying schema selection, technical semantics, or historical source/audit provenance. It does not pass Gate A or close WP-04. |
+
+### WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-10 |
+| Work package | WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL |
+| Integration base | 7f9ed36a10b5f4ab68eb437833f04d4842eff986 |
+| Candidate branch | wp-05-unified-map-metadata-schema-change-control-7f9ed36 |
+| Source decision packet | wp-05-map-metadata-source-traceability-correction-4b21343@361966ececc3c0fde088bffe5ec2987af8f16014; docs/WP-05_MAP_METADATA_SCHEMA_CLOSURE_DECISION_PACKET_DRAFT.md; SHA-256 9bd7c06683299d36b11ffebb0db372f67e24257ab9a2ebb0cc193ee18bb35bd4 |
+| User decisions | The nine metadata decision groups and Option A immutable-history/append-only supersession are recorded as USER_SUPPLIED_DECISION; no conversation audit/approval report hash is asserted. |
+| Scope | Four-path governance candidate for map metadata schema/lifecycle; no artifact instance, source, actor, measurement, or runtime evidence. |
+| Supersession | Metadata remains authoritative for its artifact approval decision; append-only event/index is intended as sole authority for predecessor/successor and effective/current disposition. Event location/schema and acceptance details remain PENDING_OWNER_DECISION as listed in the ACR. |
+| Candidate state | PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION; no activation before audit, exact-commit User authorization, fast-forward, and remote-ref verification. |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
+| Authorization boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No code, runtime, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority. |
+| Notes | Append-only entry. It records proposed governance decisions without claiming integration, schema activation, supersession policy completion, or map approval. |

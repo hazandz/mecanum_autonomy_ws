@@ -113,13 +113,15 @@ No world/frame equivalence, goal, start, bounds, zones, seed, randomization valu
 
 ## WP-05 map hash serialization RFC 8785 decision — active on integration
 
-**Activation state:** the RFC 8785 clarification was integrated by `wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff@988a74b529fdb4bcf77f341db5c6d115e8511a9b`, based on `c37a5bff9dd6cc32fc503cdd796b31720a58a616`; it remains active at current integration base `f9987be4429349ef9110c45cf97a89728a5e4229`. Earlier candidate-pending wording in its decision record describes the pre-integration state and is superseded as to activation state here. This reconciliation does not activate a map schema or any concrete instance.
+**Activation state:** the RFC 8785 clarification was integrated by `wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff@988a74b529fdb4bcf77f341db5c6d115e8511a9b`, based on `c37a5bff9dd6cc32fc503cdd796b31720a58a616`; it remains active at current integration base `7f9ed36a10b5f4ab68eb437833f04d4842eff986`. Earlier candidate-pending wording in its decision record describes the pre-integration state and is superseded as to activation state here. This reconciliation does not activate a map schema or any concrete instance.
 
 The active hash projection remains schema `mecanum_map_hash/v1` and exactly two ordered entries: `map_yaml`/`map.yaml`, then `occupancy_image`/`map.pgm`, each with role, `name`, `size_bytes`, and raw-file SHA-256. Hash only RFC 8785 JCS bytes encoded UTF-8 without BOM or trailing newline. `metadata.yaml`, optional pose graph, full-manifest result fields, and resulting `map_content_hash` are outside the digest. This active rule is unchanged by the pending schema candidate.
 
-## WP-05 canonical static-map artifact schema — refreshed candidate only
+## WP-05 canonical static-map metadata schema — candidate only
 
-This branch carries forward semantics from stale audited candidate `wp-05-unified-map-artifact-schema-change-control-988a74b@617ef28b92b6a17bc4ba00d1b0edd7ccfcdd7b12` (parent `988a74b529fdb4bcf77f341db5c6d115e8511a9b`), for which the supplied verdict was `READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS`. That commit is provenance only and is not integrable on the current base. The refreshed schema references become active only after focused re-audit, separate Project Owner/User authorization of this exact refreshed commit, fast-forward to `integration/implementation`, and remote-ref verification. No map ID, source, world/frame relationship, runtime compatibility, or map instance is selected or active by this candidate. The integrated RFC 8785 rule remains active independently.
+**Candidate state:** the metadata schema remains inactive and non-normative. Candidate branch wp-05-unified-map-metadata-schema-change-control-7f9ed36 is based on 7f9ed36a10b5f4ab68eb437833f04d4842eff986. It carries forward semantics from stale audited candidate wp-05-unified-map-artifact-schema-change-control-988a74b@617ef28b92b6a17bc4ba00d1b0edd7ccfcdd7b12 as provenance only, and records the nine metadata decision groups and Option A supersession as USER_SUPPLIED_DECISION. Unresolved details are marked PENDING_OWNER_DECISION or PROPOSAL_ONLY. This Registry entry itself does not activate them.
+
+The ACR and decision record become active only after focused independent audit of this exact candidate, separate User authorization for its exact commit, fast-forward to integration/implementation, and remote-ref verification. No map instance, source, map_id, or runtime compatibility is selected. The RFC 8785 map-hash rule in the preceding Registry section remains active independently; only map.yaml and map.pgm are in map_content_hash.
 
 ## WP-04 Gate A exact structural schema decision — historical pre-activation record
 

@@ -1,48 +1,30 @@
 # WP-05 Canonical Static-Map Artifact Schema — Decision Record
 
-**Record state:** `CANDIDATE_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION`
-**Work package:** `WP-05-UNIFIED-MAP-ARTIFACT-SCHEMA-CHANGE-CONTROL`
-**Integration base:** `f9987be4429349ef9110c45cf97a89728a5e4229`
-**Candidate branch:** `wp-05-unified-map-artifact-schema-change-control-f9987be`
+**Record state:** CANDIDATE_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION
+**Work package:** WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL
+**Integration base:** 7f9ed36a10b5f4ab68eb437833f04d4842eff986
+**Candidate branch:** wp-05-unified-map-metadata-schema-change-control-7f9ed36
 
-## 1. User decision
+## 1. User-supplied decisions and provenance
 
-The Project Owner/User explicitly supplied:
+The Project Owner/User states that the nine metadata recommendation groups from the prior consolidated analysis are approved for this candidate. This record labels them USER_SUPPLIED_DECISION; it does not claim that the conversation or its audit statements are Git-pinned evidence. The User also explicitly selected Option A: approved metadata/artifact bytes and approval evidence remain immutable, and supersession uses an append-only event/index.
 
-`USER_DECISION: APPROVED_FOR_WP05_UNIFIED_MAP_ARTIFACT_SCHEMA_CHANGE_CONTROL`
+Source decision packet: wp-05-map-metadata-source-traceability-correction-4b21343@361966ececc3c0fde088bffe5ec2987af8f16014; path docs/WP-05_MAP_METADATA_SCHEMA_CLOSURE_DECISION_PACKET_DRAFT.md; SHA-256 9bd7c06683299d36b11ffebb0db372f67e24257ab9a2ebb0cc193ee18bb35bd4. Audit verdicts or User approval are not inferred from Git refs. No audit-report hash or unsupported provenance is asserted.
 
-This decision authorizes preparation of one unified documentation-only candidate with the exact four-path scope below. It approves the listed schema semantics for candidate preparation; it does not approve a map instance, select a map source, ID, world, frame, or scenario, authorize runtime/code, or close WP-05.
+## 2. Recorded metadata decisions
 
-## 2. Candidate decision content
+The candidate ACR records the accepted decisions for identity/version, source provenance, custody/approval actors, lifecycle/evidence principles, world/frame states, runtime compatibility states, predecessor history, and restricted YAML parsing. These decisions do not select any map source, map_id, actor identity, world/frame equivalence, runtime evidence, or artifact instance.
 
-The proposed schema and activation contract is `docs/architecture/ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION.md`. It records the User-approved rules for:
+The active Architecture §48/RFC 8785 map-hash boundary is unchanged: only map.yaml and map.pgm enter map_content_hash; metadata, manifest result fields, pose graph, and hash result remain outside it. The RFC 8785 rule remains active independently of this candidate.
 
-- `map_id` grammar `^[a-z][a-z0-9_]{0,63}$`, repository-wide case-insensitive uniqueness under `artifacts/maps/`, exact directory-name match, collision rejection, approved-artifact immutability, and new identity/history for meaningful changes;
-- strict UTF-8-no-BOM, single-document YAML 1.2 data-only `mecanum_map_metadata/v1`, custody/approval provenance, lifecycle states, immutable evidence, world/frame declarations, runtime-compatibility state, and fail-closed behavior;
-- strict `mecanum_map_manifest/v1`, full-manifest RFC 8785 JCS serialization, exact §48 `mecanum_map_hash/v1` projection, metadata descriptor validation, and no self-reference or self-embedded signature/digest;
-- default `NOT_DECLARED` world/frame relationship and `NOT_VALIDATED` runtime compatibility, each requiring separate immutable evidence before validation;
-- omission of pose graph from the first canonical static-map artifact and separate schema/manifest/work-package/audit if later included;
-- activation only after focused audit, separate exact-candidate user authorization, fast-forward, and remote-ref verification.
+## 3. Supersession decision and pending details
 
-The content-hash boundary remains exactly `map.yaml` and `map.pgm` in §48 order and roles, under the RFC 8785 rule active at the integration base. Metadata descriptor, optional pose graph, full-manifest result fields, and resulting `map_content_hash` remain outside the digest input.
+USER_SUPPLIED_DECISION: Option A. The old approved metadata/artifact and approval evidence are immutable. Metadata is authoritative for that artifact’s approval decision. An append-only supersession event/index is the sole authority for predecessor/successor relations and effective/current disposition; it does not rewrite approval_status.
 
-## 3. RFC 8785 activation reconciliation
+The ACR includes a deterministic PROPOSAL_ONLY event/index design and labels unresolved location/schema, completeness and append-only proof, approver/delegation/evidence, acceptance timing, cross-map_id rules, and consumer fail-closed scope as PENDING_OWNER_DECISION. It does not present those unresolved choices as approved or claim supersession is fully normative. The stored approval decision and derived effective disposition are distinct authority domains.
 
-The map-hash RFC 8785 clarification was integrated at `988a74b529fdb4bcf77f341db5c6d115e8511a9b` and remains active at the current integration base `f9987be4429349ef9110c45cf97a89728a5e4229`. The earlier RFC decision record contains candidate-only wording from before that integration. This candidate reconciles the current Registry activation state and records the now-active RFC rule; it does not change the historical record's bytes or imply that this map-artifact schema or any map instance is active.
+## 4. Candidate and activation boundary
 
-## 4. Exact scope and activation boundary
+This four-path documentation candidate is not active until this exact candidate passes focused independent audit, receives separate Project Owner/User authorization for integration, is fast-forwarded to integration/implementation, and the remote ref is verified. Schema activation remains separate from approval of an individual map instance.
 
-Only these paths belong to this unified candidate:
-
-1. `docs/architecture/ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION.md`
-2. `docs/governance/decisions/WP-05_CANONICAL_STATIC_MAP_ARTIFACT_SCHEMA_DECISION.md`
-3. `docs/governance/CANONICAL_SOURCE_REGISTRY.md`
-4. `docs/governance/PROJECT_PROGRESS_LEDGER.md`
-
-The ACR and this record are candidate-only until this exact candidate passes focused independent audit, receives separate Project Owner/User authorization for integration, and is fast-forwarded with the remote integration ref verified. Schema activation is separate from selection, creation, validation, or approval of an individual map instance.
-
-No `artifacts/maps/**` content is created. No `warehouse_map2`, map source, map ID, world/frame, scenario, goal/start/bounds/zones, seed/randomization value, pose graph, measurement, code, ROS/runtime, HIL, hardware, motor-enable, or deployment is selected or authorized. WP-05 remains open; WP-04 status/dependency is unchanged; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
-
-## 5. Refreshed candidate provenance
-
-The schema semantics are carried forward from the previously audited candidate `wp-05-unified-map-artifact-schema-change-control-988a74b@617ef28b92b6a17bc4ba00d1b0edd7ccfcdd7b12`, whose parent was `988a74b529fdb4bcf77f341db5c6d115e8511a9b`. The supplied focused-audit verdict was `READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS`. That candidate is stale because integration advanced to `f9987be4429349ef9110c45cf97a89728a5e4229`; it is provenance only and is not a candidate for integration. This refreshed candidate remains pending its own focused re-audit and separate user authorization for its exact commit.
+No map artifact or source is selected. No scenario, measurement, code, runtime, ROS, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority is created. No WP status/dependency changes; WP-05 remains open and WP-04 is unchanged. CODE_AUTHORIZATION: NOT_GRANTED. RUNTIME_APPROVED: NOT_APPROVED.
