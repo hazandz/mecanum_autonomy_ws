@@ -291,3 +291,21 @@
 | WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
 | Authorization/evidence boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No map/scenario instance, source selection, measurement, code, runtime, HIL, hardware, motor-enable, or deployment authorization is created. |
 | Notes | Ledger is append-only. `617ef28…` is recorded as audited stale provenance only; this entry does not copy or rewrite prior history. |
+
+### WP-04-GATE-A-PREIMPLEMENTATION-GOVERNANCE-BUNDLE-CANDIDATE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-10 |
+| Work package | `WP-04-GATE-A-PREIMPLEMENTATION-GOVERNANCE-BUNDLE` |
+| Integration base | `401593a4268af572ef4690177539360b1c15410a` |
+| Candidate branch | `wp-04-gate-a-preimplementation-governance-bundle-401593a` |
+| Scope | Four-path documentation/governance candidate: include the audited error-carrier decision record byte-identically; refresh the Gate A implementation-authorization packet to reflect the recorded error-carrier choices; reconcile Registry source-selection status for the exact structural schema; append this entry. No source or test code. |
+| Decision-record provenance | Source `wp-04-gate-a-error-carrier-decision-record-401593a@f5f0a4a0351d40335ad585afa36430f3b639cea3`; path `docs/governance/decisions/WP-04_GATE_A_ERROR_CARRIER_DECISION.md`; SHA-256 `72a2c94df548cb00557b1777e10d11b96b386329894edaf34e1d81c07ed4e94d`; user-supplied focused audit verdict `READINESS_FOR_CANONICAL_INTEGRATION: PASS`. The report identity/hash was not supplied in that decision record and is not asserted here. |
+| Packet provenance | `wp-04-gate-a-implementation-authorization-packet-f9987be@8ef93277502b9cc7282a544459ae3aa495b2f049`; `docs/WP-04_GATE_A_IMPLEMENTATION_AUTHORIZATION_PACKET_DRAFT.md`; SHA-256 `431c993a837a156ea2af2e6cad3e6b6d886caa544fd466f524c6bfe4dd662d11`. |
+| Structural-schema activation evidence | Exact schema `docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md`, SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; correction candidate `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`; focused re-audit report `INDEPENDENT_FOCUSED_STATIC_REAUDIT_WP04_F01_RECEIPT_SELECTOR_ATTRIBUTION_F9987BE4.md`, SHA-256 `6902ebce5ec874a5922e06c2623cba7edb09083f493d7aa8242ecc715c1f60c5`, verdict PASS; explicit user authorization for exact fast-forward was supplied; the exact commit is an ancestor of this integration base and the bytes match. Registry reconciliation records active structural-schema source selection only. |
+| Candidate state | `PENDING_INDEPENDENT_AUDIT_AND_SEPARATE_USER_AUTHORIZATION_FOR_EXACT_FINAL_COMMIT`; the candidate commit identity is resolved from Git history and is not self-embedded. |
+| Activation condition | The complete four-path candidate must pass independent audit, receive separate explicit Project Owner/User authorization for its exact final commit, then be fast-forwarded to `integration/implementation` with the remote ref verified. No integration occurs in this work package. |
+| WP status/dependency impact | No status transition or dependency change. WP-02 remains `CLOSED`; WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `NOT_PASSED`. The prior exact-schema candidate Ledger entry is preserved; this entry reconciles only its pending activation state using the verified audit/authorization/integration evidence above. |
+| Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Candidate documentation integration would not itself authorize implementation, ROS, runtime, HIL, hardware, `deploy_sim`, or `deploy_real`. |
+| Notes | Append-only candidate evidence. This entry does not itself integrate this bundle, pass Gate A, close WP-04, alter PEP or WP dependencies, or claim runtime evidence. |

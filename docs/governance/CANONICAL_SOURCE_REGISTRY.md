@@ -27,6 +27,35 @@ to `integration/implementation` and the remote ref is verified; after activation
 its status is `CLOSED`. The transition closes only WP-03 contract dispositions;
 it does not assert runtime or physical evidence or authorize implementation.
 
+## WP-04 Gate A structural-schema activation reconciliation — active source selection
+
+The exact structural schema `docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md`
+(full-document SHA-256
+`43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`) was
+introduced in the exact-schema candidate ancestry and its receipt-selector
+attribution was corrected by
+`wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`.
+Its focused re-audit report
+`INDEPENDENT_FOCUSED_STATIC_REAUDIT_WP04_F01_RECEIPT_SELECTOR_ATTRIBUTION_F9987BE4.md`
+(SHA-256
+`6902ebce5ec874a5922e06c2623cba7edb09083f493d7aa8242ecc715c1f60c5`)
+reported PASS. The Project Owner/User explicitly authorized integration of
+that exact candidate. Its commit is an ancestor of the current integration
+base `401593a4268af572ef4690177539360b1c15410a`, and the schema bytes at that
+base match the pinned full-document hash. These audit, authorization,
+ancestry, and byte-identity facts establish the schema's active Registry
+source-selection status as of that base.
+
+The schema file's embedded candidate-status wording and its SHA remain
+unchanged as pre-integration document history. This Registry reconciliation
+supersedes that wording only as to activation/source-selection status; it does
+not alter schema semantics, close WP-04, pass Gate A, or grant implementation
+or runtime authorization. The separate error-carrier decision record and
+refreshed implementation-authorization packet in the current review bundle
+remain candidate-only until this exact bundle passes independent audit,
+receives separate explicit user authorization for its final commit, and is
+fast-forwarded with the remote ref verified.
+
 ## Registry entries
 
 | Source/path | Classification | Permitted use |
@@ -35,6 +64,7 @@ it does not assert runtime or physical evidence or authorize implementation.
 | docs/RECEIPT_TOPIC_QOS_CONTRACT.md | CANONICAL_APPROVED_DESIGN_CONTRACT | Receipt Topic QoS Contract revision 6; full-document SHA-256 `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`; transport identity `mecanum.final-issued-receipt-topic-qos/v2` / `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`; QoS policy values and transport behavior unchanged; design-contract scope only, no code/runtime authorization |
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
+| docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
