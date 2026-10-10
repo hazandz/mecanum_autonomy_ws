@@ -222,6 +222,18 @@ def test_reference_fields_require_nonempty_exact_strings(
     assert detail.field_name == field_name
 
 
+def test_contract_reference_rejects_string_subclasses_in_each_field() -> None:
+    class StrSubclass(str):
+        pass
+
+    for field_name in ("contract_id", "contract_sha256"):
+        values: dict[str, object] = {"contract_id": "id", "contract_sha256": "sha"}
+        values[field_name] = StrSubclass("subclass-value")
+        detail = _construction_detail(lambda: ContractReferenceV3(**values))
+        assert detail.reason == "WRONG_TYPE"
+        assert detail.field_name == field_name
+
+
 def test_reference_and_input_contract_exact_pair_validation() -> None:
     valid = _valid_input_contract()
     assert valid.s2_provenance_reference == ContractReferenceV3(
@@ -262,6 +274,22 @@ def test_input_contract_rejects_wrong_reference_type() -> None:
     )
     assert detail.reason == "WRONG_TYPE"
     assert detail.field_name == "s2_provenance_reference"
+
+
+@pytest.mark.parametrize(
+    "reference_field",
+    ("s2_provenance_reference", "receipt_interface_reference"),
+)
+@pytest.mark.parametrize("bad_value", ("not-a-reference", None, object()))
+def test_each_input_contract_member_rejects_wrong_exact_type(
+    reference_field: str,
+    bad_value: object,
+) -> None:
+    detail = _construction_detail(
+        lambda: _valid_input_contract(**{reference_field: bad_value})
+    )
+    assert detail.reason == "WRONG_TYPE"
+    assert detail.field_name == reference_field
 
 
 def test_missing_and_unknown_constructor_fields_are_typed() -> None:
@@ -488,6 +516,41 @@ def test_primitive_subclasses_are_rejected() -> None:
     assert detail.field_name is None
 
 
+def test_model_subclasses_are_rejected_for_all_three_primitives() -> None:
+    valid_values_by_model: tuple[tuple[type[object], dict[str, object]], ...] = (
+        (
+            ObservationCutoffV3,
+            {
+                "lifecycle_identity": "id",
+                "epoch": 0,
+                "generation": 0,
+                "time_domain": "domain",
+                "cutoff_time_ns": 2,
+                "action_barrier_time_ns": 0,
+                "reset_barrier_time_ns": 1,
+            },
+        ),
+        (ContractReferenceV3, {"contract_id": "id", "contract_sha256": "sha"}),
+        (
+            ObservationInputContractV3,
+            {
+                "s2_provenance_reference": ContractReferenceV3(
+                    contract_id=S2_ID, contract_sha256=S2_SHA
+                ),
+                "receipt_interface_reference": ContractReferenceV3(
+                    contract_id=RECEIPT_ID, contract_sha256=RECEIPT_SHA
+                ),
+            },
+        ),
+    )
+
+    for model, valid_values in valid_values_by_model:
+        derived_model = type(f"Derived{model.__name__}", (model,), {})
+        detail = _construction_detail(lambda: derived_model(**valid_values))
+        assert detail.reason == "WRONG_TYPE"
+        assert detail.field_name is None
+
+
 def test_frozen_slots_equality_hash_and_public_error_detail_boundary() -> None:
     values = (
         (_valid_cutoff(), _valid_cutoff(), "epoch"),
@@ -505,10 +568,46 @@ def test_frozen_slots_equality_hash_and_public_error_detail_boundary() -> None:
         with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
             setattr(value, field_name, None)
 
+    assert _valid_cutoff(epoch=0) != _valid_cutoff(epoch=1)
+    assert ContractReferenceV3(contract_id="id", contract_sha256="sha") != (
+        ContractReferenceV3(contract_id="other-id", contract_sha256="sha")
+    )
+
+    cutoff = _valid_cutoff()
+    reference = ContractReferenceV3(contract_id="id", contract_sha256="sha")
+    input_contract = _valid_input_contract()
+    # OIC's exact two reference pairs leave no distinct valid field-value variant.
+    assert repr(cutoff) == (
+        "ObservationCutoffV3(lifecycle_identity='lifecycle-opaque', epoch=0, "
+        "generation=0, time_domain='profile-ros-time', cutoff_time_ns=12, "
+        "action_barrier_time_ns=10, reset_barrier_time_ns=11)"
+    )
+    assert repr(reference) == "ContractReferenceV3(contract_id='id', contract_sha256='sha')"
+    assert repr(input_contract) == (
+        "ObservationInputContractV3(s2_provenance_reference="
+        "ContractReferenceV3(contract_id='mecanum.snapshot-synchronization-temporal/v1', "
+        "contract_sha256='1be31c1915fedd86f269cee5214d794da0899a0d69dbb0ba5392e619813d4a8f'), "
+        "receipt_interface_reference=ContractReferenceV3("
+        "contract_id='mecanum.final-issued-receipt/v2', "
+        "contract_sha256='0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a'))"
+    )
+
     detail = _mapped_detail(lambda: _valid_cutoff(cutoff_time_ns=10))
     assert not hasattr(detail, "__dict__")
-    with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
-        detail.status = "changed"  # type: ignore[misc]
+    for field_name in ("status", "failure_kind", "field_name"):
+        with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
+            setattr(detail, field_name, getattr(detail, field_name))
+
+    construction_detail = _construction_detail(
+        lambda: _valid_input_contract(s2_provenance_reference="not-a-reference")
+    )
+    for field_name in ("reason", "field_name"):
+        with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
+            setattr(
+                construction_detail,
+                field_name,
+                getattr(construction_detail, field_name),
+            )
 
     with pytest.raises(GateASchemaValidationError) as captured:
         _valid_cutoff(cutoff_time_ns=10)
