@@ -60,11 +60,13 @@ class GateASchemaMappedFailure:
 class GateASchemaConstructionFailure:
     """Typed detail for a construction failure, with no ACR8 status member."""
 
-    reason: str
+    reason: str | None
     field_name: str | None
 
     def __post_init__(self) -> None:
-        if type(self.reason) is not str or self.reason not in _CONSTRUCTION_REASONS:
+        if self.reason is not None and (
+            type(self.reason) is not str or self.reason not in _CONSTRUCTION_REASONS
+        ):
             raise ValueError("reason must be an approved diagnostic-only construction label")
         _validate_field_name(self.field_name)
 
@@ -93,7 +95,7 @@ class GateASchemaValidationError(Exception):
         super().__setattr__(name, value)
 
 
-def _raise_construction(reason: str, field_name: str | None) -> None:
+def _raise_construction(reason: str | None, field_name: str | None) -> None:
     raise GateASchemaValidationError(
         GateASchemaConstructionFailure(reason=reason, field_name=field_name)
     )
@@ -137,9 +139,9 @@ class _StrictStructuralValue:
         missing = allowed - supplied
 
         # A simultaneous unknown+missing call has no approved error precedence.
-        # Leave that combined call-shape failure to the generated initializer.
+        # A neutral None reason avoids selecting either diagnostic label.
         if unknown and missing:
-            return object.__new__(cls)
+            _raise_construction(None, None)
         if unknown:
             _raise_construction("UNKNOWN_FIELD", None)
         if missing:

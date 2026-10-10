@@ -98,6 +98,8 @@ def test_positive_construction_and_exact_schema_members() -> None:
 
 
 def test_keyword_only_and_no_implicit_defaults() -> None:
+    """Keyword-only positional rejection is call-shape behavior, not error mapping."""
+
     for model, expected_names in (
         (
             ObservationCutoffV3,
@@ -276,6 +278,36 @@ def test_missing_and_unknown_constructor_fields_are_typed() -> None:
 
     detail = _construction_detail(lambda: _valid_cutoff(unrecognized=1))
     assert detail.reason == "UNKNOWN_FIELD"
+    assert detail.field_name is None
+
+
+def test_simultaneous_missing_and_unknown_fields_use_neutral_typed_detail() -> None:
+    detail = _construction_detail(
+        lambda: ObservationCutoffV3(
+            lifecycle_identity="id",
+            epoch=0,
+            generation=0,
+            time_domain="domain",
+            cutoff_time_ns=12,
+            action_barrier_time_ns=10,
+            unrecognized=1,
+        )
+    )
+    assert detail.reason is None
+    assert detail.field_name is None
+
+
+def test_multiple_missing_fields_keep_typed_failure_without_field_precedence() -> None:
+    detail = _construction_detail(
+        lambda: ObservationCutoffV3(
+            lifecycle_identity="id",
+            epoch=0,
+            time_domain="domain",
+            cutoff_time_ns=12,
+            action_barrier_time_ns=10,
+        )
+    )
+    assert detail.reason == "MISSING_FIELD"
     assert detail.field_name is None
 
 
