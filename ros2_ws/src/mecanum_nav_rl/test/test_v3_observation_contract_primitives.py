@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import inspect
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -281,6 +283,135 @@ def test_missing_and_unknown_constructor_fields_are_typed() -> None:
     assert detail.field_name is None
 
 
+@pytest.mark.parametrize(
+    ("model", "valid_values", "required_field"),
+    [
+        *[
+            (ObservationCutoffV3, {
+                "lifecycle_identity": "lifecycle-opaque",
+                "epoch": 0,
+                "generation": 0,
+                "time_domain": "profile-ros-time",
+                "cutoff_time_ns": 12,
+                "action_barrier_time_ns": 10,
+                "reset_barrier_time_ns": 11,
+            }, field_name)
+            for field_name in ObservationCutoffV3._SCHEMA_FIELDS
+        ],
+        *[
+            (ContractReferenceV3, {"contract_id": "id", "contract_sha256": "sha"}, field_name)
+            for field_name in ContractReferenceV3._SCHEMA_FIELDS
+        ],
+        *[
+            (ObservationInputContractV3, {
+                "s2_provenance_reference": ContractReferenceV3(
+                    contract_id=S2_ID, contract_sha256=S2_SHA
+                ),
+                "receipt_interface_reference": ContractReferenceV3(
+                    contract_id=RECEIPT_ID, contract_sha256=RECEIPT_SHA
+                ),
+            }, field_name)
+            for field_name in ObservationInputContractV3._SCHEMA_FIELDS
+        ],
+    ],
+)
+def test_each_required_constructor_field_missing_is_typed(
+    model: type[object],
+    valid_values: dict[str, object],
+    required_field: str,
+) -> None:
+    supplied = dict(valid_values)
+    del supplied[required_field]
+
+    detail = _construction_detail(lambda: model(**supplied))
+    assert detail.reason == "MISSING_FIELD"
+    assert detail.field_name == required_field
+
+
+@pytest.mark.parametrize(
+    ("model", "valid_values", "required_field"),
+    [
+        *[
+            (ObservationCutoffV3, {
+                "lifecycle_identity": "lifecycle-opaque",
+                "epoch": 0,
+                "generation": 0,
+                "time_domain": "profile-ros-time",
+                "cutoff_time_ns": 12,
+                "action_barrier_time_ns": 10,
+                "reset_barrier_time_ns": 11,
+            }, field_name)
+            for field_name in ObservationCutoffV3._SCHEMA_FIELDS
+        ],
+        *[
+            (ContractReferenceV3, {"contract_id": "id", "contract_sha256": "sha"}, field_name)
+            for field_name in ContractReferenceV3._SCHEMA_FIELDS
+        ],
+        *[
+            (ObservationInputContractV3, {
+                "s2_provenance_reference": ContractReferenceV3(
+                    contract_id=S2_ID, contract_sha256=S2_SHA
+                ),
+                "receipt_interface_reference": ContractReferenceV3(
+                    contract_id=RECEIPT_ID, contract_sha256=RECEIPT_SHA
+                ),
+            }, field_name)
+            for field_name in ObservationInputContractV3._SCHEMA_FIELDS
+        ],
+    ],
+)
+def test_unknown_argument_is_typed_for_each_primitive_and_required_field(
+    model: type[object],
+    valid_values: dict[str, object],
+    required_field: str,
+) -> None:
+    supplied = dict(valid_values)
+    supplied[f"{required_field}__unexpected"] = object()
+
+    detail = _construction_detail(lambda: model(**supplied))
+    assert detail.reason == "UNKNOWN_FIELD"
+    assert detail.field_name is None
+    assert not hasattr(detail, "status")
+
+
+@pytest.mark.parametrize(
+    ("model", "valid_values", "omitted_field"),
+    [
+        (ObservationCutoffV3, {
+            "lifecycle_identity": "lifecycle-opaque",
+            "epoch": 0,
+            "generation": 0,
+            "time_domain": "profile-ros-time",
+            "cutoff_time_ns": 12,
+            "action_barrier_time_ns": 10,
+            "reset_barrier_time_ns": 11,
+        }, "reset_barrier_time_ns"),
+        (ContractReferenceV3, {"contract_id": "id", "contract_sha256": "sha"}, "contract_sha256"),
+        (ObservationInputContractV3, {
+            "s2_provenance_reference": ContractReferenceV3(
+                contract_id=S2_ID, contract_sha256=S2_SHA
+            ),
+            "receipt_interface_reference": ContractReferenceV3(
+                contract_id=RECEIPT_ID, contract_sha256=RECEIPT_SHA
+            ),
+        }, "receipt_interface_reference"),
+    ],
+)
+def test_simultaneous_missing_and_unknown_fields_remain_neutral_for_each_primitive(
+    model: type[object],
+    valid_values: dict[str, object],
+    omitted_field: str,
+) -> None:
+    supplied = dict(valid_values)
+    del supplied[omitted_field]
+    supplied["unrecognized"] = object()
+
+    detail = _construction_detail(lambda: model(**supplied))
+    assert detail.reason is None
+    assert detail.field_name is None
+    assert not hasattr(detail, "status")
+
+
 def test_simultaneous_missing_and_unknown_fields_use_neutral_typed_detail() -> None:
     detail = _construction_detail(
         lambda: ObservationCutoffV3(
@@ -408,3 +539,51 @@ def test_import_is_pure_python_and_does_not_load_ros_modules() -> None:
         for item in vars(module).values()
         if item is not None
     )
+
+    source_path = (
+        Path(__file__).parents[1]
+        / "mecanum_nav_rl"
+        / "core"
+        / "v3_observation_contracts.py"
+    )
+    syntax_tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module if isinstance(node, ast.ImportFrom) else alias.name.split(".")[0]
+        for node in ast.walk(syntax_tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in (node.names if isinstance(node, ast.Import) else [None])
+    }
+    assert imported_modules == {"__future__", "dataclasses", "typing"}
+
+    def call_name(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            prefix = call_name(node.value)
+            return f"{prefix}.{node.attr}" if prefix else None
+        return None
+
+    import_time_calls: set[str | None] = set()
+    def collect_definition_time_calls(node: ast.stmt) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            expressions = [
+                *node.decorator_list,
+                *node.args.defaults,
+                *(default for default in node.args.kw_defaults if default is not None),
+            ]
+        elif isinstance(node, ast.ClassDef):
+            expressions = [*node.decorator_list, *node.bases, *node.keywords]
+            for child in node.body:
+                collect_definition_time_calls(child)
+        else:
+            expressions = [node]
+        for expression in expressions:
+            import_time_calls.update(
+                call_name(call.func)
+                for call in ast.walk(expression)
+                if isinstance(call, ast.Call)
+            )
+
+    for node in syntax_tree.body:
+        collect_definition_time_calls(node)
+    assert import_time_calls <= {"dataclass", "frozenset", "_MODEL_FIELDS.update"}
