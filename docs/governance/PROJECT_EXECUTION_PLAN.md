@@ -360,6 +360,23 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
+#### Source-amendment provenance correction (evidence only)
+
+This correction adds immutable traceability for the source Architecture
+amendment. It does not change the proposed schema or technical semantics and
+does not represent approval, activation, authorization, or Gate B pass.
+
+| Provenance field | Pinned value |
+|---|---|
+| Work package | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT` |
+| Source review branch | `wp-04-observation-input-profile-architecture-amendment-e89aeda5` |
+| Original amendment commit | `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` |
+| Direct parent/base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Evidence record | `docs/governance/evidence/WP-04_OBSERVATION_INPUT_PROFILE_ARCHITECTURE_AMENDMENT_PROVENANCE.json`; SHA-256 `eba5f233a2488d11b5161f6b87abd4994d749763f36eb768d4577f445e326069` |
+| Record purpose | Provenance/evidence only; not approval, activation, authorization, or Gate B pass |
+| Correction successor | `wp-04-observation-input-profile-architecture-amendment-correction-e89aeda5`; correction commit identity is resolved from Git history and is not embedded in its own evidence record |
+| Candidate state | Pending focused audit, separate User authorization for exact correction tip, fast-forward, and remote-ref verification |
+
 ### WP-04 ObservationInputProfileV3 Architecture-amendment candidate — PEP-001 rev.0.9.0
 
 This is a documentation-only Architecture Change Record candidate based on

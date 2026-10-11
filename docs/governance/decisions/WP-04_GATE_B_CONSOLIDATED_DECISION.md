@@ -19,7 +19,7 @@ This record carries forward the eight Owner decisions supplied in the earlier wo
 7. Use the exact existing ACR8 status vocabulary/mapping recorded in §2. Malformed or unverifiable source/provenance for which no authorized mapping exists is `AUTHORITY_CHANGE_REQUIRED`; do not create a new status.
 8. Prepare governance only. Any later work is split into pure-core, ROSIDL, adapter/QoS, and runtime/HIL evidence phases.
 
-The prior review-candidate `ReceiptIngressBindingV3` shape and any proposal to store lifecycle values in a resolved static record are superseded provenance, not active authority. Lifecycle tuple and barrier checks remain runtime ingress semantics; the proposed `ObservationInputProfileV3` contains only static contract references and immutable source provenance. `ResolvedGateBRecordV3`, if used, is an internal compiler/type abstraction only and does not add a root member. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. This Architecture-amendment candidate defines no runtime implementation and is inactive until its exact amendment is audited, separately authorized, integrated, and remotely verified.
+Observation V3 Specification revision 2 and its `ReceiptIngressBindingV3` proposal are historical pinned review provenance only: source branch `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644`, commit `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`. They are superseded and are not described as the current content at that path. The current source amendment is Specification revision 3 at branch `wp-04-observation-input-profile-architecture-amendment-e89aeda5`, commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`; its static `ObservationInputProfileV3` shape is defined at §3.1 and in the companion ACR. The correction successor does not alter that shape or semantics. Lifecycle tuple and barrier checks remain runtime ingress semantics; the static profile contains only contract references and immutable source provenance. `ResolvedGateBRecordV3`, if used, is an internal compiler/type abstraction only and does not add a root member. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. This Architecture-amendment candidate defines no runtime implementation and is inactive until its exact amendment is audited, separately authorized, integrated, and remotely verified.
 
 ## 2. Gate B failure/status matrix
 
@@ -49,24 +49,31 @@ The status identifiers below are existing ACR8 vocabulary. QoS6 transport classi
 
 QoS6 specifies that `COALESCED_GAP` is accepted only when a prior receipt from the same publisher instance has been admitted; a late joiner's first retained sample is `ACCEPTED`. ACR8 status mapping does not override that transport rule. Any future mapping not explicitly present in this table or approved authority must be treated as `AUTHORITY_CHANGE_REQUIRED`, not improvised.
 
-## 3. Superseded exact-data-contract replacement review provenance
+## 3. Superseded exact-data-contract revision-2 historical provenance
 
-The replacement specification is revision 2, candidate-only, at
-`docs/OBSERVATION_V3_SPECIFICATION.md`. Its full-document SHA-256 is recorded
-in the candidate Registry and PEP; the hash is not embedded in the
-specification itself. The prior review candidate used the same proposed
-revision number but was never integrated. Its artifacts and delivery hashes
-are retained only as superseded review provenance; they are not current source
-selection or authority.
+Observation V3 Specification revision 2 and its `ReceiptIngressBindingV3`
+proposal are historical pinned review provenance only:
+`wp-04-gate-b-exact-data-contract-completion-refresh-1e14644@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`,
+path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256
+`ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`.
+Revision 2 is superseded; it is not the current content at that path and is
+not active source selection or authority. At the base of the current
+Architecture-amendment candidate, revision 1 remains active. Revision 3 at
+source branch `wp-04-observation-input-profile-architecture-amendment-e89aeda5`,
+commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, is the current
+candidate-only amendment content. Its `ObservationInputProfileV3` shape is
+defined at §3.1 and in the companion ACR; this historical note does not alter
+that shape or semantics.
 
-The following prior Owner decisions remain part of the Gate-B contract boundary; their candidate-only source history does not itself activate a schema:
+The following decisions remain relevant to the Gate-B boundary. The first two bullets record the historical revision-2 proposal only; they do not describe the current Specification path or add members to `ObservationInputProfileV3`:
 
-- Flat `ReceiptIngressBindingV3`, with the required member set shown in §3 of
-  the specification; keyword-only, required, exact built-in `str`/`int`, no
-  coercion, no defaults, and the selected ranges/value semantics.
-- The binding carries `observation_spec_revision`; the full-document
-  specification SHA is pinned externally. It does not duplicate
-  `ResolvedConfigV3.provenance.config_hash`.
+- Historical revision-2 proposal only: flat `ReceiptIngressBindingV3`, with
+  its member set and semantics pinned by the revision-2 source reference above.
+- Historical revision-2 proposal only: that binding carried
+  `observation_spec_revision` and did not duplicate
+  `ResolvedConfigV3.provenance.config_hash`. The current revision-3 candidate
+  instead defines the static descriptor in `ObservationInputProfileV3` §3.1
+  and the companion ACR; its shape is not overwritten by this history note.
 - Lifecycle is the atomic exact tuple
   `(episode_generation, reset_epoch, runtime_generation)`, mapped to
   `ObservationCutoffV3.epoch == reset_epoch` and

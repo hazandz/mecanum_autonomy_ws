@@ -445,3 +445,20 @@
 | WP status/dependency impact | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
 | Activation rule | This exact six-path candidate must pass focused independent audit, receive separate explicit User authorization for its exact final commit, be fast-forwarded to `integration/implementation`, and have its remote ref verified. Until then, Architecture and active Registry selections at the base remain controlling. |
+
+### WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT-CORRECTION` |
+| Integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Source amendment branch/commit | `wp-04-observation-input-profile-architecture-amendment-e89aeda5@d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`; direct parent/base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Correction branch | `wp-04-observation-input-profile-architecture-amendment-correction-e89aeda5` |
+| Supersedes | Source amendment candidate traceability only: Registry revision-label wording, decision §3 provenance attribution, and PEP source commit/evidence reference. No technical semantics are superseded. |
+| Findings | F-01: Registry distinguishes active revision 1, historical/superseded revision 2, and current candidate-only revision 3. F-02: decision identifies revision 2/`ReceiptIngressBindingV3` as exact historical pinned provenance and revision 3 as current source amendment content. F-03: PEP references immutable JSON evidence for the exact source branch, commit and base. |
+| Evidence record | `docs/governance/evidence/WP-04_OBSERVATION_INPUT_PROFILE_ARCHITECTURE_AMENDMENT_PROVENANCE.json`; SHA-256 `eba5f233a2488d11b5161f6b87abd4994d749763f36eb768d4577f445e326069`; provenance/evidence only, not approval or activation |
+| Scope | Five-path traceability correction only: Registry, Gate B decision, PEP, append-only Ledger, and immutable provenance JSON. The source ACR and Specification are unchanged. |
+| Candidate state | Pending focused consolidated independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; no amendment activation is recorded. |
+| WP status/dependency impact | No change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No runtime, ROS/ROSIDL, HIL, hardware, or deployment authority. |
