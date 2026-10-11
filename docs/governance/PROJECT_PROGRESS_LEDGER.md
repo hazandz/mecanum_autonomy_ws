@@ -392,3 +392,19 @@
 | WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
 | Notes | Candidate-only governance evidence. It does not assert Gate B readiness, Gate A semantic expansion, WP-04 closure, or map artifact/schema changes. |
+
+### WP-05-WAREHOUSE-MAP2-CANONICAL-DRAFT-ARTIFACT
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-05-WAREHOUSE-MAP2-CANONICAL-DRAFT-ARTIFACT` |
+| Integration base | `68174e714cbe8aab61880113496cd7ccd7f97f5d` |
+| Candidate branch | `wp-05-warehouse-map2-canonical-draft-68174e` |
+| User decision | `USER_SUPPLIED_DECISION`: map ID/source pair, `github:hazandz` custodian, Git-only provenance v1, one image-path rewrite to `map.pgm`, lowercase UUIDv4, no pose graph, draft approval, `NOT_DECLARED` world/frame, and `NOT_VALIDATED` runtime compatibility |
+| Evidence | Tracked source YAML and PGM at the exact integration base with SHA-256 values recorded in the decision record. The selected `tugbot_depot.sdf` is not used as artifact provenance; no world/frame or runtime validation is claimed. |
+| Scope | One candidate-only governance clarification and draft static-map artifact. No artifact approval, scenario, measurement, code, runtime or hardware authority. |
+| Candidate state | `PENDING_CONSOLIDATED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION`; no active/canonical instance before exact-candidate audit, separate authorization, fast-forward and remote-ref verification |
+| WP status/dependency impact | No status or dependency transition. WP-05 remains `OPEN`; WP-04 remains unchanged. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No navigation approval, world/frame validation, runtime compatibility, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority. |
+| Notes | The candidate ACR clarifications and draft artifact remain review evidence until this exact candidate is independently audited and separately authorized for integration. RFC 8785 hashing remains independently active; `map_content_hash` covers only `map.yaml` and `map.pgm`. |

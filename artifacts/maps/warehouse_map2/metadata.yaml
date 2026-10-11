@@ -1,0 +1,47 @@
+schema: "mecanum_map_metadata/v1"
+map_id: "warehouse_map2"
+artifact_identity: "4a8a23d0-7e27-4a50-8201-dd1abf1a3db4"
+classification: "static_occupancy_map"
+source_provenance:
+  - source_ref:
+      kind: "git_file"
+      repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+      commit: "68174e714cbe8aab61880113496cd7ccd7f97f5d"
+      path: "ros2_ws/src/ROBOT_URDF_final_description/maps/warehouse_map2.yaml"
+    evidence_ref:
+      kind: "git_file"
+      repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+      commit: "68174e714cbe8aab61880113496cd7ccd7f97f5d"
+      path: "ros2_ws/src/ROBOT_URDF_final_description/maps/warehouse_map2.yaml"
+      sha256: "28e5fdca66783b462946f13c51e6a46bbb2a1f38f0e80714a05569c7ab0ab0c1"
+    provenance_kind: "git_source"
+    raw_sha256: "28e5fdca66783b462946f13c51e6a46bbb2a1f38f0e80714a05569c7ab0ab0c1"
+  - source_ref:
+      kind: "git_file"
+      repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+      commit: "68174e714cbe8aab61880113496cd7ccd7f97f5d"
+      path: "ros2_ws/src/ROBOT_URDF_final_description/maps/warehouse_map2.pgm"
+    evidence_ref:
+      kind: "git_file"
+      repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+      commit: "68174e714cbe8aab61880113496cd7ccd7f97f5d"
+      path: "ros2_ws/src/ROBOT_URDF_final_description/maps/warehouse_map2.pgm"
+      sha256: "32f8a3eb626ebddecc15843748de0db8c6f7adc1b45a5edc1b1b1886407aef55"
+    provenance_kind: "git_source"
+    raw_sha256: "32f8a3eb626ebddecc15843748de0db8c6f7adc1b45a5edc1b1b1886407aef55"
+custody_approval:
+  map_custodian:
+    role: "MAP_CUSTODIAN"
+    principal: "github:hazandz"
+    delegation_evidence: null
+  approver: null
+  approval_status: "draft"
+  approval_evidence: null
+world_frame:
+  state: "NOT_DECLARED"
+  evidence_ref: null
+runtime_compatibility:
+  state: "NOT_VALIDATED"
+  evidence_ref: null
+history:
+  predecessor_ref: null

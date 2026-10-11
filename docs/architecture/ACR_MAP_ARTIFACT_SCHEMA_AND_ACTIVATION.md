@@ -1,10 +1,10 @@
 # ACR: Canonical Static-Map Artifact Schema and Activation
 
 **ACR ID:** ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION
-**Status:** ACTIVE_ON_INTEGRATION
-**Work package:** WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL
-**Integration base:** 793514f8ff3c20c13bfe84bf0529295de4d4d0b4
-**Candidate branch:** wp-05-unified-map-metadata-schema-change-control-793514f
+**Status:** ACTIVE_ON_INTEGRATION; this candidate's narrow clarifications remain pending integration
+**Work package:** WP-05-WAREHOUSE-MAP2-CANONICAL-DRAFT-ARTIFACT
+**Integration base:** 68174e714cbe8aab61880113496cd7ccd7f97f5d
+**Candidate branch:** wp-05-warehouse-map2-canonical-draft-68174e
 
 ## 1. Decision, provenance, and scope
 
@@ -17,6 +17,8 @@ Source content provenance: prior candidate `wp-05-unified-map-metadata-schema-ch
 The candidate-only wording in the integrated source commit described the pre-activation state. USER_SUPPLIED_EVIDENCE: the Project Owner/User supplied a focused consolidated audit verdict of READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS and authorized the fast-forward of this exact commit. Git-verifiable evidence confirms commit d33b93d3c6389872450f1a001e3073c61f355824, with sole parent 793514f8ff3c20c13bfe84bf0529295de4d4d0b4, is present at the verified remote integration ref. Accordingly, this schema is ACTIVE_ON_INTEGRATION effective from d33b93d3c6389872450f1a001e3073c61f355824. No audit-report hash is asserted. This activation selects no map source, map_id, actor identity, world/frame equivalence, runtime-compatibility evidence, or map instance, and does not authorize code, ROS/runtime, HIL, hardware, motor operation, deploy_sim, or deploy_real. WP-05 remains open.
 
 The later status-refresh candidate uses `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04` only as historical source/provenance; its parent is `d33b93d3c6389872450f1a001e3073c61f355824`. The current refresh is based on `572da885d31d98929a1f8b8af4420012f1786fd6` and remains pending its own focused audit and separate authorization. It does not change the schema's activation at d33b93d or any schema semantics.
+
+The schema integrated at `d33b93d3c6389872450f1a001e3073c61f355824` remains active. This candidate proposes only the following Owner-approved, narrowly scoped clarifications for the `warehouse_map2` draft: `provenance_kind` v1 is exactly `git_source`; principal text uses `github:<lowercase-login>`; and the selected source YAML may receive only the exact `image` reference rewrite recorded in the decision record. These additions are candidate-only until this exact candidate passes independent audit, receives separate User authorization for integration, is fast-forwarded, and the remote integration ref is verified.
 
 ## 2. Identity and immutability
 
@@ -56,7 +58,7 @@ Each source_provenance record has exactly source_ref, evidence_ref, provenance_k
 
 source_ref is a mapping with exactly kind, repository, commit, path. For a Git source, kind is git_file; repository is a canonical repository URI; commit is the full Git object ID, never a branch or tag; path is repository-relative and rejects absolute paths, .., backslash, empty components, and symlinks. evidence_ref is the same Git locator plus sha256, exactly 64 lowercase hex; validation resolves commit/path and recomputes SHA-256 over referenced bytes. External evidence references are not accepted by the Git-only v1 evidence validator.
 
-provenance_kind includes USER_ATTESTED, which means an explicit User assertion and never means validation or approval. The exact complete provenance_kind enum remains PENDING_OWNER_DECISION because the accepted prior recommendation included EXTERNAL_SOURCE while also selecting Git-only immutable evidence references. This candidate does not silently reconcile those choices.
+The candidate clarification sets the complete `provenance_kind` v1 enum to exactly `git_source`. It denotes a source file pinned by an immutable Git commit/path and verified SHA-256. `USER_ATTESTED` and `EXTERNAL_SOURCE` are not accepted in v1. Git provenance does not mean User attestation, approval, world/frame validation, or runtime compatibility. This clarification is candidate-only pending the activation conditions in §5.
 
 raw_sha256 is optional, lowercase 64-hex SHA-256 of source raw bytes. Omit before computation; if present, recompute from exact source bytes and require a match. source_provenance order is primary source first, then supporting or derived records in declared order. Duplicate source_ref locators are rejected.
 
@@ -68,7 +70,7 @@ Referenced approval, delegation, world/frame, and runtime evidence must identify
 
 ### 3.5 Custody and approval
 
-custody_approval has exactly map_custodian, approver, approval_status, approval_evidence. Actor mappings have exactly role, principal, delegation_evidence. role is MAP_CUSTODIAN or MAP_APPROVER. principal is a non-empty, stable, issuer-qualified identifier, not a display name; namespace grammar/registry is PENDING_OWNER_DECISION. Direct role holders use delegation_evidence:null; delegates require a Git-pinned immutable delegation reference. No concrete actor is assigned.
+custody_approval has exactly map_custodian, approver, approval_status, approval_evidence. Actor mappings have exactly role, principal, delegation_evidence. role is MAP_CUSTODIAN or MAP_APPROVER. principal is a non-empty, stable identifier, not a display name. The candidate clarification restricts principal text to `github:<lowercase-login>`; this is candidate-only pending the activation conditions in §5. Direct role holders use delegation_evidence:null; delegates require a Git-pinned immutable delegation reference. No actor is assigned by the schema.
 
 map_custodian is required in every state. approver is null in draft/pending_review and an actor mapping in approved/rejected. The Project Owner/User may hold both roles.
 
@@ -108,7 +110,7 @@ Event location and serialization, proof that the set is complete and append-only
 
 ### 3.10 Pending decision register
 
-PENDING_OWNER_DECISION items are: complete provenance_kind enum/external source form; principal namespace and authentication; approval/rejection/delegation/world-frame/runtime evidence document schemas; timestamp and subject-digest requirements; tolerance/uncertainty keys, units, decimal grammar and precision; supersession event/index location, schema/serialization, append-only proof, approver/evidence, acceptance timing and fail-closed scope; and whether supersession may cross map_id. This candidate records accepted decisions but does not claim these details are resolved.
+PENDING_OWNER_DECISION items are: principal authentication; approval/rejection/delegation/world-frame/runtime evidence document schemas; timestamp and subject-digest requirements; tolerance/uncertainty keys, units, decimal grammar and precision; supersession event/index location, schema/serialization, append-only proof, approver/evidence, acceptance timing and fail-closed scope; and whether supersession may cross map_id. The candidate's `git_source` enum and principal spelling clarification are not active until the §5 conditions are met.
 
 ## 4. map_manifest.json and hash boundary
 
@@ -140,6 +142,8 @@ Angle-bracket values and zero sizes are schema placeholders, not artifact values
 
 The complete map_manifest.json serialization uses RFC 8785 JCS, UTF-8 without BOM and no trailing newline. This rule determines full-manifest bytes only; map_content_hash is never calculated over the full manifest. The manifest embeds no digest or signature of its own bytes.
 
+For this candidate only, the Owner-approved canonicalization of the selected source YAML permits exactly one textual field change: `image: warehouse_map2.pgm` becomes `image: map.pgm`. The source YAML SHA-256, resulting canonical YAML SHA-256, changed field/value, and proof that replacing the new value with the source value reconstructs the source bytes exactly are recorded in the decision record. No other YAML bytes may change. This candidate-only clarification does not authorize general YAML rewriting and is not active before the §5 conditions are met.
+
 Architecture §48 and the active RFC 8785 clarification govern map_content_hash: SHA-256 of RFC 8785 JCS UTF-8 bytes for the exact mecanum_map_hash/v1 projection containing only map.yaml and map.pgm, in §48 order: map_yaml/map.yaml, then occupancy_image/map.pgm. Each entry has exactly role, name, size_bytes, and raw-file sha256, all verified against source bytes. metadata.yaml, optional pose graph, manifest result fields, and resulting map_content_hash are outside the payload. Raw-file SHA-256 values are distinct from map_content_hash.
 
 Reject absolute paths, .., backslashes, symlinks, duplicate paths, paths outside the map directory, duplicate/missing/unknown roles, and paths beyond map.yaml, map.pgm, and metadata.yaml. Reject malformed JSON, invalid UTF-8/BOM, duplicate object keys, trailing data, non-finite numbers, unknown fields, and hash/size mismatch. size_bytes is a non-negative integer, not a boolean or fractional value. Every SHA-256 is exactly 64 lowercase hexadecimal characters and must match raw bytes. The metadata descriptor and metadata.yaml are validated under this ACR. No pose graph is included in the first canonical static-map artifact; a later pose graph needs its own schema, manifest, audit, and work package and remains outside map_content_hash.
@@ -148,4 +152,4 @@ Reject absolute paths, .., backslashes, symlinks, duplicate paths, paths outside
 
 The candidate-only status wording in the integrated d33b93d source commit is retained as historical pre-activation state. The audit verdict and authorization are USER_SUPPLIED_EVIDENCE; fast-forward and remote-ref verification are Git-verifiable facts. The metadata schema is ACTIVE_ON_INTEGRATION effective from d33b93d. This activation is separate from selection or approval of any concrete map instance. Source candidate `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04` is historical source/provenance only; the refresh based on `572da885d31d98929a1f8b8af4420012f1786fd6` has its own pending focused audit and separate exact-commit authorization and changes no active schema semantics.
 
-RFC 8785 map-hash clarification remains active independently. No PEP, WP-04 file, WP status/dependency, code authorization, runtime approval, HIL, hardware, motor-enable, or deployment state changes. No map artifact is created.
+RFC 8785 map-hash clarification remains active independently. The already-integrated metadata schema remains active; the additions in this candidate become active only after focused independent audit, separate User authorization of this exact commit, fast-forward integration, and remote-ref verification. No PEP, WP-04 file, WP status/dependency, code authorization, runtime approval, HIL, hardware, motor-enable, or deployment state changes. The `warehouse_map2` files on this review branch are draft candidate evidence only and are not approved or active for navigation.
