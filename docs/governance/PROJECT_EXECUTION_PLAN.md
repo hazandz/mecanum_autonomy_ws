@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.7.0` |
+| Revision | `0.8.0` (replacement candidate; pending audit and integration) |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -360,7 +360,65 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
+### WP-04 Gate B exact-data-contract completion refresh — PEP-001 rev.0.8.0 candidate
+
+This replacement governance candidate carries forward the correction from
+`wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`
+without modifying or repushing that source branch. The prior review candidate
+`wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812`
+is superseded review provenance only; it was never integrated and is not
+active authority. The source correction is also source/provenance only, not
+the replacement candidate or active source selection. This replacement is
+candidate-only until its exact final commit passes consolidated independent
+audit, receives separate explicit User authorization, is fast-forwarded to
+`integration/implementation`, and has its remote ref verified.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.7.0` -> `0.8.0` |
+| Work package | `WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH` |
+| Replacement branch | `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644` |
+| Integration base | `1e14644a7d778a0c5ad32512430d775fd0e8ecd3` |
+| Superseded review provenance | `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812`; candidate-only, not integrated or active |
+| Correction source provenance | `wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`, parent `68174e714cbe8aab61880113496cd7ccd7f97f5d`; source-only, unchanged, not integrated as this candidate |
+| Source correction artifact hashes | Specification `06157a2d5c980d90677e37de7e120c97c98111a8a18a92897746738a691de2a2`; decision `9a2979c15dfc5ce0649ab45e30adeb840862c98065a33eafc6ac41418f673f29`; Registry `538a0f85559f061295bea824a31bf4fdaf64d44afaeab57f7a220ff70a96b51e`; PEP `ac1ab8f437154857381108e51b992f7203533dcc68f95b38c37c86a9c9ea7a70`; Ledger `6fa6fa7a55b20b57c34068fbbe6af06936db1d68e8f5e24f100e1a6a2783db3b` |
+| Replacement artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 2, SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`; `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`, SHA-256 `9a683c12939c4f092341f8632507f8bc0ec45280ecd5e9a4b56a04a6f9828048`; both candidate-only. Registry, PEP and Ledger exact bytes are identified by the reviewed branch tip to avoid self-reference. |
+| Deferred blockers | `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` and `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE`; independent, to be resolved together in one consolidated resolved-config Owner decision before any code-authorization candidate is considered |
+| Candidate state | Replacement documentation only; `GATE_B: NOT_STARTED`; boundary closure remains active on the integration base; no resolved-record shape is active |
+| Dependency/status impact | No transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN` |
+| Architecture/contract impact | Carries forward the flat binding, strict types/ranges/value semantics, selected lifecycle tuple and ACR8 mappings, adapter/core boundary, raw-ROS prohibition, and `PENDING_MEASUREMENT`. Does not select `ResolvedGateBRecordV3` member/type/value semantics or use OIC rev.6 as field/default/schema authority. WP-05 draft map artifact/status at base are untouched. |
+| Ledger entry | One append-only refresh entry; all Ledger bytes at base are preserved byte-for-byte |
+| Activation/authorization boundary | Candidate-only pending audit, separate exact-commit User authorization, fast-forward and remote-ref verification. No `CODE_AUTHORIZATION`, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
+
+This candidate does not claim that `ResolvedGateBRecordV3` has an exact
+member set, exact input-profile shape, or resolved non-pending values. OIC
+revision 6 remains `REVISED_DRAFT` provenance-only and cannot define
+fields/defaults/schema. `ResolvedConfigV3.gate_b` is a required
+compiler-owned slot only; it does not establish the slot's value shape. The
+two deferred blockers must be resolved together before any code-authorization
+candidate is considered. No Gate B pass, WP-04 closure, or runtime evidence is
+recorded.
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED
+GATE_B: NOT_STARTED
+GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
+CONFIG_HASH_PROJECTION: DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION
+RESOLVED_INPUT_PROFILE_SHAPE: DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+WP-05: OPEN
+```
+
 ### WP-04 Gate B consolidated boundary-closure candidate — PEP-001 rev.0.7.0
+
+The candidate-pending wording in this historical rev.0.7.0 section records
+the pre-integration state. The boundary-closure bundle was later integrated
+at `68174e714cbe8aab61880113496cd7ccd7f97f5d`; at this base, revision 1 is
+active only as the controlled Gate B boundary/specification selection, as
+recorded in the Canonical Source Registry. This activation does not select a
+`ResolvedGateBRecordV3` shape, pass Gate B, or authorize implementation.
 
 This section records a documentation-only candidate based on the User-supplied
 decision basis `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`.

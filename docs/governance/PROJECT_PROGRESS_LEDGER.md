@@ -408,3 +408,21 @@
 | WP status/dependency impact | No status or dependency transition. WP-05 remains `OPEN`; WP-04 remains unchanged. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No navigation approval, world/frame validation, runtime compatibility, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority. |
 | Notes | The candidate ACR clarifications and draft artifact remain review evidence until this exact candidate is independently audited and separately authorized for integration. RFC 8785 hashing remains independently active; `map_content_hash` covers only `map.yaml` and `map.pgm`. |
+
+### WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH` |
+| Integration base | `1e14644a7d778a0c5ad32512430d775fd0e8ecd3` |
+| Superseded review provenance | `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812`; review candidate only, not integrated or active source selection |
+| Correction source provenance | `wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`, parent `68174e714cbe8aab61880113496cd7ccd7f97f5d`; unchanged source content, not integrated as this replacement |
+| Replacement candidate branch | `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644` |
+| Scope and artifact hashes | Five-path documentation/governance replacement only. Specification rev.2 `docs/OBSERVATION_V3_SPECIFICATION.md`: `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`; decision `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`: `9a683c12939c4f092341f8632507f8bc0ec45280ecd5e9a4b56a04a6f9828048`; remaining exact candidate file bytes are identified by the reviewed branch tip |
+| Candidate state | Candidate-only pending one consolidated independent audit, separate exact-commit User integration authorization, fast-forward, and remote-ref verification; no replacement record shape is active |
+| Deferred blockers | `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` and `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE`; resolve both together in one consolidated resolved-config Owner decision before any code-authorization candidate is considered |
+| Evidence and boundary | Carries forward selected flat binding, strict types/ranges/value semantics, lifecycle tuple and ACR8 mappings, adapter/core boundary, raw-ROS prohibition, fail-closed behavior, and `PENDING_MEASUREMENT`. OIC revision 6 remains provenance-only and cannot define fields/defaults/schema. No Gate B implementation or runtime evidence is claimed |
+| WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; Gate B boundary closure remains active on the base; WP-05 remains `OPEN` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
+| Notes | One append-only replacement-candidate entry. All Ledger bytes present at base are preserved; the WP-05 draft artifact and map-status state are unchanged. Neither `687469f…` nor `73a1f73…` is described as integrated by this work package. |

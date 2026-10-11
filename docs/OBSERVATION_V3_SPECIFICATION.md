@@ -1,12 +1,13 @@
 # Observation V3 Specification
 
-**Revision:** `1`
+**Revision:** `2` (replacement candidate; prior review candidate `687469f…` is superseded provenance only)
 **Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`
-**Work package:** `WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE`
-**Candidate base:** `origin/integration/implementation@50476170bb545483905308e5887990ab6220c566`
+**Work package:** `WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH`
+**Candidate branch:** `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644`
+**Candidate base:** `origin/integration/implementation@1e14644a7d778a0c5ad32512430d775fd0e8ecd3`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-This controlled specification candidate records the Owner decisions supplied for Gate B boundary closure. It is not active authority before focused independent audit, separate User authorization for the exact final commit, fast-forward to `integration/implementation`, and remote-ref verification. It does not pass Gate B, close WP-04, or authorize implementation or runtime.
+This replacement specification candidate carries forward the Owner decisions for Gate B and corrects the resolved-record scope. The prior review candidate `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812` is superseded review provenance only; it was not integrated and is not active authority. This replacement remains inactive until focused independent audit, separate User authorization for its exact final commit, fast-forward to `integration/implementation`, and remote-ref verification. It does not pass Gate B, close WP-04, or authorize implementation or runtime.
 
 ## 1. Authority and exact pins
 
@@ -39,7 +40,7 @@ The pure-Python core accepts typed, already-validated values. A ROS adapter is r
 
 ## 3. Gate B resolved record and receipt binding
 
-The approved receipt v2 bytes remain unchanged. The Gate B binding is carried outside the ROS message by an immutable `ReceiptIngressBindingV3`, included in the resolved Gate B record owned and constructed only by the `ResolvedConfigV3` compiler. No caller-created or partially resolved record is accepted as a resolved Gate B record. There are no defaults, aliases, fallback, lookup, normalization, or unresolved tokens in a real resolved profile.
+The approved receipt v2 bytes remain unchanged. The Gate B binding is carried outside the ROS message by an immutable `ReceiptIngressBindingV3`. The binding decision below remains a selected candidate contract; the resolved record's public shape is a separate unresolved decision. `ResolvedConfigV3.gate_b` is a required compiler-owned slot, but this statement does not select the slot value's exact member set or type semantics.
 
 The candidate record pins these values:
 
@@ -49,25 +50,23 @@ receipt_interface_sha256             = 0c6446674bf17373ec646519043f506a9a7a15f95
 dependency_closure_manifest_sha256   = 0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73
 qos_contract_id                      = mecanum.final-issued-receipt-topic-qos/v2
 transport_manifest_sha256            = 338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620
-resolved_config_hash                 = compiler-produced hash of the exact resolved configuration
 observation_spec_revision            = 1
+profile_id                           = required selected profile identity
+lifecycle_identity                   = exact active SafetyLifecycle identity
+expected_episode_generation          = 0..2^64-1
+expected_reset_epoch                 = 0..2^32-1
+expected_runtime_generation          = 0..2^32-1
 ```
 
-These names describe the candidate record boundary, not fields in the receipt
-message. Contract IDs, hashes, and `resolved_config_hash` are opaque exact
-strings; `observation_spec_revision` is an integer revision. The expected
-lifecycle facts are carried outside the message as exact identity/epoch/
-generation values. Their public field names and exact cross-record comparison
-mapping remain pending as stated below. The compiler, not an adapter or
-caller, creates the resolved record after validating all pins.
+These are the selected binding members, not fields in the receipt message. Every member is required, keyword-only, exact built-in `str` or `int`, with no default or coercion; subclasses and `bool` as an integer are rejected. Hash strings use lowercase 64-hex syntax and must exactly equal the applicable canonical pin or compiler-produced value. `observation_spec_revision >= 1`; `expected_episode_generation` is `0..2^64-1`; `expected_reset_epoch` and `expected_runtime_generation` are each `0..2^32-1`. Values compare exactly. The binding carries only the specification revision; its full-document SHA remains pinned externally by the Registry and decision record.
 
-`resolved_config_hash` is bound in the wrapper/config record and resolved configuration, never added to `FinalIssuedCommandReceipt.msg`. The exact public Python field names/types for `ReceiptIngressBindingV3`, the resolved Gate B record, and the binding of the specification's own final full-document SHA are `PENDING_OWNER_DECISION` until fixed by a focused implementation packet/change-control. The compiler must reject unresolved profile-dependent values rather than instantiate a real resolved profile from them.
+`resolved_config_hash` is not a binding member and is not added to `FinalIssuedCommandReceipt.msg`; its projection remains one of the two deferred blockers stated in §5. The exact public member set, types, and value semantics of `ResolvedGateBRecordV3`, including its resolved observation-input/profile composition, remain undecided. Observation Input Contract V3 revision 6 is `REVISED_DRAFT` provenance-only and is not field/default/schema authority for that record or for an `ObservationInputContractV3` implementation.
 
 ### Lifecycle tuple
 
 Receipt eligibility requires exact compatibility with the active lifecycle and strict temporal ordering. The receipt must be strictly after both the action and reset barriers, and at or before the observation cutoff. A receipt before/equal to either barrier, after cutoff, or associated with a mismatching or invalidated lifecycle is not eligible.
 
-The receipt schema exposes `episode_generation`, `reset_epoch`, and `runtime_generation`; `ObservationCutoffV3` exposes `lifecycle_identity`, `epoch`, and `generation`. The exact comparison mapping for `lifecycle_identity` and the receipt's three generation/epoch members, including whether `episode_generation` is part of the Gate B compatibility tuple, is `PENDING_OWNER_DECISION`. Until that mapping is explicitly fixed, Gate B implementation is blocked; implementations must not guess, alias fields, or infer identity.
+The selected lifecycle tuple is `(episode_generation, reset_epoch, runtime_generation)` with atomic exact comparison. `ObservationCutoffV3.epoch == reset_epoch`; `ObservationCutoffV3.generation == runtime_generation`. `episode_generation` participates in the exact tuple comparison. `lifecycle_identity` is the exact string from active `SafetyLifecycle` context; the adapter verifies it against the configured ingress binding and does not infer it from a receipt. No partial match, reuse, alias, or fallback is allowed. Missing, ambiguous, or mismatching correspondence fails closed using the decision record's existing mapping; an ambiguous/unverifiable identity with no authorized mapping is `AUTHORITY_CHANGE_REQUIRED`.
 
 ### Fail-closed state behavior
 
@@ -86,12 +85,15 @@ Unmeasured timing, receipt-after-barrier timeout, skew, buffer limits, sensor fr
 
 ACR8 requires all six Gate B conditions before a connected/profile-resolving implementation packet may be issued: (1) record approved ACR and update the controlled V3 specification; (2) bind approved QoS identity/manifest, delivery/coalescing/action-bound readiness and `TopicQosContractV3`; (3) define `ObservationInputContractV3` canonical source and compiler/composition validation with no unresolved resolved-config values; (4) add/register receipt message/topic and version/hash checks plus canonical QoS record; (5) define pure-Python typed-snapshot/receipt ingress seams; and (6) independently audit preservation of the 81D layout and process/safety isolation.
 
-This candidate documents the boundary for those conditions but does not itself satisfy them, install/generate the ROSIDL interface, define runtime profiles, implement adapters, produce a resolved profile, or pass Gate B. Any code work requires a separate exact-scope implementation packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` require their own staged authority/evidence and are not authorized here.
+This replacement candidate documents the decisions and unresolved shape/projection blockers; it does not itself satisfy the six ACR8 conditions, install/generate the ROSIDL interface, define runtime profiles, implement adapters, produce a resolved profile, or pass Gate B. The two independent blockers are `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` and `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE`. Both must be resolved together in one consolidated resolved-config decision, audited, and integrated before any code-authorization candidate may be considered. Any later code work still requires a separate exact-scope packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` remain outside this candidate.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
+GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
+CONFIG_HASH_PROJECTION: DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION
+RESOLVED_INPUT_PROFILE_SHAPE: DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
