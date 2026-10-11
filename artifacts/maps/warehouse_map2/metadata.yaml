@@ -38,8 +38,13 @@ custody_approval:
   approval_status: "draft"
   approval_evidence: null
 world_frame:
-  state: "NOT_DECLARED"
-  evidence_ref: null
+  state: "DECLARED_UNVERIFIED"
+  evidence_ref:
+    kind: "git_file"
+    repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+    commit: "e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0"
+    path: "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf"
+    sha256: "a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d"
 runtime_compatibility:
   state: "NOT_VALIDATED"
   evidence_ref: null

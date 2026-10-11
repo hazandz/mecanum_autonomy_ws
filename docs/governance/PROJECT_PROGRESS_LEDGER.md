@@ -426,3 +426,20 @@
 | WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; Gate B boundary closure remains active on the base; WP-05 remains `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
 | Notes | One append-only replacement-candidate entry. All Ledger bytes present at base are preserved; the WP-05 draft artifact and map-status state are unchanged. Neither `687469f…` nor `73a1f73…` is described as integrated by this work package. |
+
+
+### WP-05-WAREHOUSE-MAP2-WORLD-DECLARATION-AND-NAVIGATION-PROFILE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-05-WAREHOUSE-MAP2-WORLD-DECLARATION-AND-NAVIGATION-PROFILE` |
+| Integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Candidate branch | `wp-05-warehouse-map2-world-profile-decision-e89aeda5` |
+| User-supplied decisions | `warehouse_map2` was created by SLAM using `tugbot_depot.sdf`; world state `DECLARED_UNVERIFIED`; map/global frame name `map`; Navigation V1 target Map Server plus `nav2_amcl::OmniMotionModel`; SLAM Toolbox is mapping-only; stated target TF ownership and `/scan`/`lidar_frame` contract |
+| Git-pinned source-world bytes | Repository `https://github.com/hazandz/mecanum_autonomy_ws.git`; commit `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`; path `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf`; SHA-256 `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d`. This pin verifies the file bytes only; the SLAM association is User-supplied and no transform or equivalence is asserted. |
+| Candidate state | Pending consolidated independent audit, separate User authorization for this exact commit, fast-forward, and remote-ref verification |
+| Artifact boundary | The integrated `warehouse_map2` artifact remains `approval_status: draft`; candidate world state is `DECLARED_UNVERIFIED`; runtime compatibility remains `NOT_VALIDATED`; `map_content_hash` is unchanged and covers only `map.yaml` and `map.pgm`. |
+| WP status/dependency impact | No status or dependency transition. WP-05 remains OPEN; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain PASSED; Gate B remains NOT_STARTED. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/Nav2/Gazebo, runtime, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority. |
+| Notes | No map approval, world-to-map transform, world/frame equivalence, runtime compatibility, scenario, or supersession event/index is created or claimed. |
