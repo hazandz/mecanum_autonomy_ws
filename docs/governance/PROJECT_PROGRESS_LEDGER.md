@@ -426,3 +426,19 @@
 | WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; Gate B boundary closure remains active on the base; WP-05 remains `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
 | Notes | One append-only replacement-candidate entry. All Ledger bytes present at base are preserved; the WP-05 draft artifact and map-status state are unchanged. Neither `687469f…` nor `73a1f73…` is described as integrated by this work package. |
+
+
+### WP-05-WORLD-FRAME-EVIDENCE-REGISTRY-RECONCILIATION
+
+| Field | Value |
+|---|---|
+| Work package | `WP-05-WORLD-FRAME-EVIDENCE-REGISTRY-RECONCILIATION` |
+| Integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Source-only provenance | `wp-05-world-frame-evidence-schema-record-e89aeda5@ca0432366da500ed549f71f96b51434b706772ef`, sole parent `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`; local/unpushed content source only, not integrated authority and no audit PASS is claimed |
+| Replacement candidate branch | `wp-05-world-frame-evidence-registry-reconciliation-e89aeda5` |
+| Scope | Five allowlisted governance/evidence paths. Reconciles stale Registry statements with the integrated `warehouse_map2` draft artifact and proposes a `DECLARED_UNVERIFIED` evidence schema/record only; map metadata and manifest remain unchanged |
+| Candidate state | Local replacement candidate pending independent audit; no push, integration, evidence activation, or metadata state transition is recorded |
+| Map state | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, and `runtime_compatibility: NOT_VALIDATED`; it is not approved or navigation-ready |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains `OPEN`; WP-04 remains `BLOCKED_BY_CONTRACT` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/runtime, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority |
+| Notes | Append-only replacement entry. All Ledger bytes at the exact base are retained as an unchanged prefix. The evidence record does not prove `map == world`, a transform, runtime validation, or map approval. |

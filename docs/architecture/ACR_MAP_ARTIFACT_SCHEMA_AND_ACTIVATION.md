@@ -2,9 +2,9 @@
 
 **ACR ID:** ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION
 **Status:** ACTIVE_ON_INTEGRATION; this candidate's narrow clarifications remain pending integration
-**Work package:** WP-05-WAREHOUSE-MAP2-CANONICAL-DRAFT-ARTIFACT
-**Integration base:** 68174e714cbe8aab61880113496cd7ccd7f97f5d
-**Candidate branch:** wp-05-warehouse-map2-canonical-draft-68174e
+**Work package:** WP-05-WORLD-FRAME-EVIDENCE-REGISTRY-RECONCILIATION
+**Integration base:** e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0
+**Candidate branch:** wp-05-world-frame-evidence-registry-reconciliation-e89aeda5
 
 ## 1. Decision, provenance, and scope
 
@@ -66,7 +66,22 @@ raw_sha256 is optional, lowercase 64-hex SHA-256 of source raw bytes. Omit befor
 
 A Git evidence reference has exactly kind=git_file, repository:string, commit:full commit object ID, path:repository-relative string, sha256:lowercase 64-hex. Immutability is checked by resolving the exact commit/path and recomputing the digest. Branch/tag-only references are invalid. A Git pin or USER_ATTESTED label does not prove an approval, world/frame validation, or runtime compatibility.
 
-Referenced approval, delegation, world/frame, and runtime evidence must identify its subject and decision in immutable bytes. Exact evidence-document schemas, timestamp format, principal-authentication method, and external evidence policy are PENDING_OWNER_DECISION.
+Referenced approval, delegation, world/frame, and runtime evidence must identify its subject and decision in immutable bytes. Exact evidence-document schemas, timestamp format, principal-authentication method, and external evidence policy are PENDING_OWNER_DECISION, except for the narrow `DECLARED_UNVERIFIED` declaration record specified below. This narrow record does not resolve the other pending evidence schemas or authentication requirements.
+
+### 3.4.1 `DECLARED_UNVERIFIED` source-world declaration evidence
+
+For a map whose `world_frame.state` is `DECLARED_UNVERIFIED`, the `metadata.yaml` `world_frame.evidence_ref` SHALL be an immutable Git reference to a `mecanum_map_world_frame_declaration_evidence/v1` JSON record. The record MUST be UTF-8 without BOM, serialized as RFC 8785 JCS bytes with no trailing newline, and MUST NOT contain a self-digest or signature. Reject malformed JSON, duplicate object keys, non-finite values, unknown or missing keys, wrong types, invalid UTF-8/BOM, and any byte sequence that is not exactly the RFC 8785 serialization of the parsed value.
+
+The top-level object has exactly these required keys: `schema`, `subject`, `declaration`, `source_world`, `decision_provenance`, `limitations`. `schema` is exactly the string `mecanum_map_world_frame_declaration_evidence/v1`.
+
+- `subject` is an object with exactly `map_id`, `artifact_identity`, `map_content_hash`, all strings. They MUST exactly match the referenced map artifact's directory/map ID, top-level immutable UUID identity, and `map_content_hash`. The hash is 64 lowercase hexadecimal characters.
+- `declaration` is an object with exactly `world_frame_state`, `map_frame`, `assertion_kind`, `transform_claim`, all strings. Their exact values are respectively `DECLARED_UNVERIFIED`, `map`, `USER_SUPPLIED_SLAM_SOURCE_WORLD`, and `NONE`.
+- `source_world` is an object with exactly `kind`, `repository`, `commit`, `path`, `sha256`. `kind` is `git_file`; `repository` is the canonical repository URI; `commit` is the full Git commit object ID; `path` is a repository-relative path without absolute form, `..`, backslash, empty components, or symlink traversal; `sha256` is 64 lowercase hexadecimal characters. Resolve the exact commit/path and recompute the digest over the source bytes. This source-world locator is distinct from the metadata `evidence_ref`, which pins the declaration record itself.
+- `decision_provenance` is an object with exactly `association` and `git_pin_scope`, both strings with exact values `USER_SUPPLIED_DECISION` and `SOURCE_WORLD_BYTES_ONLY`. This explicitly means the association between the map and source world is User-supplied; the Git pin identifies source-world bytes only and does not independently prove the association.
+- `limitations` is an object with exactly `map_world_equivalence_claimed`, `transform_claimed`, `runtime_validation_claimed`, and `map_approval_claimed`, all JSON booleans and all exactly `false`.
+
+This record shape is sufficient only to identify the subject and the User-supplied declaration decision for `DECLARED_UNVERIFIED`. It does not satisfy `EVIDENCE_RECORDED` or `VALIDATED`; it contains no world/map equivalence evidence, transform, measurement, runtime validation, or map approval. Its Git pin is immutable and verified under §3.4. The record itself MUST remain byte-immutable after integration.
+
 
 ### 3.5 Custody and approval
 
