@@ -65,8 +65,9 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | CANDIDATE_ONLY_PENDING_AUDIT_AND_INTEGRATION | Observation V3 Specification revision 1 candidate in `WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE`; not active or implementation authority until this exact bundle is independently audited, separately authorized, and integrated |
-| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | CANDIDATE_ONLY_PENDING_AUDIT_AND_INTEGRATION | User-supplied Gate B boundary decisions recorded for review; source proposal is not Git-pinned authority; no code/runtime authorization |
+| docs/OBSERVATION_V3_SPECIFICATION.md | ACTIVE_REVISION_1; REVISION_2_CANDIDATE_ONLY | Revision 1 is the active controlled Gate B boundary specification from integration commit `68174e714cbe8aab61880113496cd7ccd7f97f5d`; revision 2 exact-data-contract candidate full-document SHA-256 `3a90e7bfddbe52be0011a77c8f1d2c24190222770174486414ddd2ca6d450cb3` is not active until its exact five-path bundle passes independent audit, receives separate exact-commit User authorization, is fast-forwarded, and the remote ref is verified |
+| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | ACTIVE_GATE_B_BOUNDARY_DECISION | Boundary decision is active from integration commit `68174e714cbe8aab61880113496cd7ccd7f97f5d`; it defines the Gate B boundary and existing status matrix, not Gate B pass or implementation authorization |
+| docs/governance/decisions/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION.md | CANDIDATE_ONLY_PENDING_AUDIT_AND_INTEGRATION | Exact data-contract decision candidate; source packet `wp-04-gate-b-exact-data-contract-decision-68174e@0ce46d8751dd3f82fbbfc8b50b0f776e525d924b`, path `docs/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION_PACKET_DRAFT.md`, SHA-256 `262a6ac47129172a6cc9ab49ffacb0891cdfcf35fd94bd34185aff9b0a284c42`; decision-record candidate SHA-256 `1f3df712a0dea617ab3a4a9c2aaf238fef0489ef47b597edf96ee61fc249a316`; no code/runtime authorization |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
@@ -97,18 +98,11 @@ fast-forwarded with the remote ref verified.
 - Missing canonical locations must be created only through an approved work package with provenance/hash rules; never by copying arbitrary legacy files.
 - Changes to this registry require an explicit governance prompt and must include architecture/ACR impact analysis.
 
-## WP-04 Gate B boundary-closure candidate — not active
+## WP-04 Gate B boundary-closure activation and exact-contract candidate
 
-The exact integration base for this candidate is
-`50476170bb545483905308e5887990ab6220c566`. The Observation V3 Specification
-revision 1 and consolidated decision record named above are proposed controlled
-sources only. They become active source selection only after the exact
-five-path candidate passes focused independent audit, receives separate
-explicit User authorization for its exact final commit, is fast-forwarded to
-`integration/implementation`, and that remote ref is verified. Until then, the
-existing approved QoS6/ACR8 and Gate A authorities remain controlling. This
-candidate does not satisfy the six ACR8 Gate B conditions, pass Gate B, change
-WP status/dependencies, or grant implementation/runtime authorization.
+The boundary-closure bundle from `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d` is present at the current integration base. The Project Owner/User's separate integration authorization and remote-ref verification are recorded by the work-package delivery history; no audit-report hash is asserted here. Its pre-integration `candidate/not active` wording in the earlier PEP/Registry snapshot is historical. At this base, Observation V3 Specification revision 1 and `WP-04_GATE_B_CONSOLIDATED_DECISION.md` are active only as the controlled Gate B boundary/specification source selection. This does not pass Gate B, satisfy all six ACR8 Gate B implementation conditions, change WP status/dependencies, or grant implementation/runtime authorization.
+
+The exact-data-contract extension is a separate candidate based on this active boundary. Specification revision 2 has full-document SHA-256 `3a90e7bfddbe52be0011a77c8f1d2c24190222770174486414ddd2ca6d450cb3`; its decision record has SHA-256 `1f3df712a0dea617ab3a4a9c2aaf238fef0489ef47b597edf96ee61fc249a316`. Both remain candidate-only until the exact five-path candidate passes focused independent audit, receives separate explicit User authorization for its exact final commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. The exact non-circular `config_hash` projection remains deferred and blocks consideration of code authorization.
 
 - New canonical/offline implementation that consumes configuration must use the V3 config family through an approved V3 composition/loader surface; it must not directly select the V1 loader, `config/base.yaml` or pre-V3 `config/profiles/**`.
 - `APPROVED_FOR_CORE` for the V3 config family is not approval of any runtime profile, PPO training, Gazebo execution, HIL, deploy_sim or deploy_real.

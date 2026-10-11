@@ -392,3 +392,20 @@
 | WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
 | Notes | Candidate-only governance evidence. It does not assert Gate B readiness, Gate A semantic expansion, WP-04 closure, or map artifact/schema changes. |
+
+### WP-04-GATE-B-EXACT-DATA-CONTRACT-CHANGE-CONTROL
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-GATE-B-EXACT-DATA-CONTRACT-CHANGE-CONTROL` |
+| Integration base | `68174e714cbe8aab61880113496cd7ccd7f97f5d` |
+| Candidate branch | `wp-04-gate-b-exact-data-contract-change-control-68174e` |
+| Source decision packet | `wp-04-gate-b-exact-data-contract-decision-68174e@0ce46d8751dd3f82fbbfc8b50b0f776e525d924b`; path `docs/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION_PACKET_DRAFT.md`; SHA-256 `262a6ac47129172a6cc9ab49ffacb0891cdfcf35fd94bd34185aff9b0a284c42` |
+| Candidate artifacts and SHA-256 | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 2: `3a90e7bfddbe52be0011a77c8f1d2c24190222770174486414ddd2ca6d450cb3`; `docs/governance/decisions/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION.md`: `1f3df712a0dea617ab3a4a9c2aaf238fef0489ef47b597edf96ee61fc249a316`; `docs/governance/CANONICAL_SOURCE_REGISTRY.md`: `9ab245ee17fc160d060372ccffc2a217b25fe40629722f979553953bf8f83f41`; `docs/governance/PROJECT_EXECUTION_PLAN.md` revision 0.8.0 candidate: `48508d58ec0bc3a50dcfd2577a901f5ec40f017090225aaa286b283ff7ac9a05` |
+| Scope | Five-path governance/specification candidate recording the User-selected Gate B exact data contract. No code, ROSIDL interface, adapter, test, profile measurement, or runtime evidence. |
+| Deferred blocker | `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_PROJECTION` for the sole canonical `ResolvedConfigV3.provenance.config_hash`; exact covered fields/bytes and self-reference exclusions remain undecided and require separate audited change-control before a code-authorization candidate may be considered. Required timing/profile measurements remain `PENDING_MEASUREMENT` and prevent real-profile resolution until approved evidence exists. |
+| Candidate state | `PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_AUTHORIZATION_FOR_EXACT_FINAL_COMMIT`; no candidate authority is active before fast-forward and remote-ref verification. |
+| WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; Gate B boundary closure remains active on the base; WP-05 remains `OPEN`. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
+| Notes | Exactly one append-only entry. All prior Ledger bytes are preserved. Candidate audit, separate exact-commit User integration authorization, fast-forward, and remote-ref verification are required before its governance content becomes active. |

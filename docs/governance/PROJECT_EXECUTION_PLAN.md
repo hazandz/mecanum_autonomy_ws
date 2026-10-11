@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.7.0` |
+| Revision | `0.8.0` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -360,17 +360,18 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-### WP-04 Gate B consolidated boundary-closure candidate — PEP-001 rev.0.7.0
+### WP-04 Gate B boundary-closure activation — PEP-001 rev.0.7.0
 
-This section records a documentation-only candidate based on the User-supplied
-decision basis `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`.
-That proposal is provenance supplied in the work-package context, not a
-Git-pinned authority; no report hash is asserted. The controlled Observation
-V3 Specification revision 1 and accompanying decision record remain
-candidate-only until this exact bundle passes focused independent audit,
-receives separate explicit User authorization for its exact final commit,
-is fast-forwarded to `integration/implementation`, and the remote ref is
-verified.
+This section preserves the rev.0.7.0 change-control record. Its candidate-state
+fields below describe the pre-integration point in time. The exact bundle
+`wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`
+is present at the current integration base, and the separate User integration
+authorization/remote verification were recorded by delivery. The boundary
+closure is therefore active on integration as of that base; its earlier
+candidate/pending wording remains historical. This activation selects the
+controlled boundary/specification source only; Gate B remains `NOT_STARTED`.
+The User-supplied proposal provenance remains unpinned and no audit-report hash
+is asserted.
 
 | Change-control field | Recorded value |
 |---|---|
@@ -381,7 +382,7 @@ verified.
 | Decision provenance | User-supplied `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`; not represented as Git-pinned authority; audit/report hash not asserted |
 | Candidate artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 1 and `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`; both candidate-only |
 | Candidate content commit | Resolved from the final reviewed branch tip; not embedded here to avoid self-reference |
-| Candidate state | `GATE_B_BOUNDARY_CLOSURE: PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; `GATE_B: NOT_STARTED` |
+| Candidate state at time of rev.0.7.0 authoring | `GATE_B_BOUNDARY_CLOSURE: PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; `GATE_B: NOT_STARTED` (historical pre-integration state) |
 | Dependency/status impact | No WP status or dependency transition. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; WP-05 remains `OPEN`. |
 | Architecture/contract impact | Records boundary decisions without changing Architecture, ACR8, QoS6, receipt v2 bytes, Gate A schema, or Gate A error-carrier decision. Exact receipt/lifecycle comparison member mapping and selected public wrapper field/type details remain pending as stated in the specification; no implementation may infer them. |
 | Ledger entry | One append-only candidate entry at the end of the Ledger; no historical entry is modified and no active Gate B status is recorded. |
@@ -398,6 +399,49 @@ and a separate explicit implementation authorization.
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+WP-05: OPEN
+```
+
+### WP-04 Gate B exact data-contract change-control candidate — PEP-001 rev.0.8.0
+
+This documentation-only change-control records the Owner's exact Gate B data
+contract decisions against the active boundary closure. The underlying
+candidate specification and decision record remain inactive until this exact
+five-path bundle passes focused independent audit, receives separate explicit
+User authorization for its exact final commit, is fast-forwarded to
+`integration/implementation`, and the remote ref is verified.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.7.0` -> `0.8.0` |
+| Work package | `WP-04-GATE-B-EXACT-DATA-CONTRACT-CHANGE-CONTROL` |
+| Work branch | `wp-04-gate-b-exact-data-contract-change-control-68174e` |
+| Integration base | `68174e714cbe8aab61880113496cd7ccd7f97f5d` |
+| Source packet provenance | `wp-04-gate-b-exact-data-contract-decision-68174e@0ce46d8751dd3f82fbbfc8b50b0f776e525d924b`; `docs/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION_PACKET_DRAFT.md`; SHA-256 `262a6ac47129172a6cc9ab49ffacb0891cdfcf35fd94bd34185aff9b0a284c42` |
+| Candidate artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 2, SHA-256 `3a90e7bfddbe52be0011a77c8f1d2c24190222770174486414ddd2ca6d450cb3`; `docs/governance/decisions/WP-04_GATE_B_EXACT_DATA_CONTRACT_DECISION.md`, SHA-256 `1f3df712a0dea617ab3a4a9c2aaf238fef0489ef47b597edf96ee61fc249a316`; Registry, this plan revision, and one append-only Ledger entry |
+| Candidate content commit | Resolved from the final reviewed branch tip; not embedded here to avoid self-reference |
+| Candidate state | Exact data-contract decisions recorded as candidate-only; `GATE_B: NOT_STARTED`; `CODE_AUTHORIZATION: NOT_GRANTED` |
+| Deferred blocker | `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_PROJECTION` for `ResolvedConfigV3.provenance.config_hash`; exact covered fields/bytes and self-reference exclusions require a separate decision and audit before code authorization can be considered |
+| Dependency/status impact | No WP status or dependency transition. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
+| Architecture/contract impact | Records the flat binding and lifecycle mapping decisions without changing Architecture, ACR8, QoS6, receipt v2 bytes, Gate A schema, or Gate A error-carrier decision. No numeric timing/profile measurement is selected. |
+| Ledger entry | One append-only candidate entry; no historical bytes are changed and no active Gate B implementation/status is recorded. |
+| Activation condition | Exact five-path candidate audit, separate explicit User authorization for exact final commit, fast-forward, and remote-ref verification. |
+| Authorization boundary | No `CODE_AUTHORIZATION`, ROS/ROSIDL generation, adapter implementation, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. Runtime remains `RUNTIME_NOT_APPROVED`. |
+
+The only remaining Gate B data-contract change-control blocker before a
+code-authorization candidate may be considered is the exact non-circular
+`config_hash` projection. Required measurements remain separately pending for
+real-profile resolution and later runtime evidence; no measurement is claimed
+or invented here.
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED
+GATE_B: NOT_STARTED
+GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
+CONFIG_HASH_PROJECTION: DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_PROJECTION
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
