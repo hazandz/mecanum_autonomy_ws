@@ -360,3 +360,18 @@
 | WP status/dependency impact | No dependency change. WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. The proposed transition is limited to Gate A structural primitives. |
 | Authorization boundary | No new code authorization. No Gate B, connected behavior, 81D observation, ROS adapter, runtime, HIL, hardware, `deploy_sim` or `deploy_real` authority is granted. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Notes | Append-only candidate evidence. It does not claim Gate A's transition is active/canonical, WP-04 is closed, or runtime evidence exists. |
+
+### WP-05-MAP-METADATA-ACTIVATION-STATUS-BASE-REFRESH-572DA88
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | WP-05-MAP-METADATA-ACTIVATION-STATUS-BASE-REFRESH |
+| Integration base | `572da885d31d98929a1f8b8af4420012f1786fd6` |
+| Source candidate | `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04`; parent `d33b93d3c6389872450f1a001e3073c61f355824`; source/provenance only, not current candidate or base |
+| Historical activation fact | Map metadata schema is `ACTIVE_ON_INTEGRATION` effective from `d33b93d3c6389872450f1a001e3073c61f355824`. Audit verdict and User authorization are `USER_SUPPLIED_EVIDENCE`; Git history verifies the integrated commit ancestry/ref facts. No audit-report hash is asserted. |
+| Candidate state | This refresh records the already-occurring activation status and provenance on the current base. It is pending focused independent audit and separate User authorization for the exact refresh commit before that correction is fast-forwarded and its remote ref verified. |
+| Scope | Status/provenance reconciliation only. No schema semantics change; RFC 8785 hash rule remains independently active; only `map.yaml` and `map.pgm` enter `map_content_hash`. `PENDING_OWNER_DECISION` items remain pending and the Option A supersession event/index remains `PROPOSAL_ONLY` and unapplied. |
+| WP status/dependency impact | No status transition or dependency change. WP-05 remains `OPEN`; WP-04 is unchanged. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No map artifact/approval, runtime, HIL, hardware, motor-enable, or deployment authorization is created. |
+| Notes | Append-only refresh after the Gate A WP-04 transition candidate entered the integration base. Existing WP-04 plan and Ledger entries at the base are preserved unchanged. |

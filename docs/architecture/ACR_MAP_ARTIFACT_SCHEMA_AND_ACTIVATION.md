@@ -1,7 +1,7 @@
 # ACR: Canonical Static-Map Artifact Schema and Activation
 
 **ACR ID:** ACR_MAP_ARTIFACT_SCHEMA_AND_ACTIVATION
-**Status:** CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION
+**Status:** ACTIVE_ON_INTEGRATION
 **Work package:** WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL
 **Integration base:** 793514f8ff3c20c13bfe84bf0529295de4d4d0b4
 **Candidate branch:** wp-05-unified-map-metadata-schema-change-control-793514f
@@ -14,7 +14,9 @@ Source decision packet: branch wp-05-map-metadata-source-traceability-correction
 
 Source content provenance: prior candidate `wp-05-unified-map-metadata-schema-change-control-7f9ed36@3892edf37ab5388fd38d3cf4a41d28ae2401782e` (parent `7f9ed36a10b5f4ab68eb437833f04d4842eff986`), now stale on this base. Its content is carried forward only; no audit or authorization is transferred. Exact source-file digests are recorded in the decision record.
 
-This documentation candidate is inactive until this exact candidate passes focused independent audit, receives separate Project Owner/User authorization for integration, is fast-forwarded to integration/implementation, and the remote ref is verified. It selects no map source, map_id, actor identity, world/frame equivalence, runtime-compatibility evidence, or map instance. It does not authorize code, ROS/runtime, HIL, hardware, motor operation, deploy_sim, or deploy_real. WP-05 remains open.
+The candidate-only wording in the integrated source commit described the pre-activation state. USER_SUPPLIED_EVIDENCE: the Project Owner/User supplied a focused consolidated audit verdict of READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS and authorized the fast-forward of this exact commit. Git-verifiable evidence confirms commit d33b93d3c6389872450f1a001e3073c61f355824, with sole parent 793514f8ff3c20c13bfe84bf0529295de4d4d0b4, is present at the verified remote integration ref. Accordingly, this schema is ACTIVE_ON_INTEGRATION effective from d33b93d3c6389872450f1a001e3073c61f355824. No audit-report hash is asserted. This activation selects no map source, map_id, actor identity, world/frame equivalence, runtime-compatibility evidence, or map instance, and does not authorize code, ROS/runtime, HIL, hardware, motor operation, deploy_sim, or deploy_real. WP-05 remains open.
+
+The later status-refresh candidate uses `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04` only as historical source/provenance; its parent is `d33b93d3c6389872450f1a001e3073c61f355824`. The current refresh is based on `572da885d31d98929a1f8b8af4420012f1786fd6` and remains pending its own focused audit and separate authorization. It does not change the schema's activation at d33b93d or any schema semantics.
 
 ## 2. Identity and immutability
 
@@ -144,6 +146,6 @@ Reject absolute paths, .., backslashes, symlinks, duplicate paths, paths outside
 
 ## 5. Activation and governance
 
-This exact candidate remains candidate-only until focused independent audit passes, the Project Owner/User separately authorizes this exact commit, it is fast-forwarded to integration/implementation, and the remote ref is verified. Schema activation is separate from approval of a concrete map instance.
+The candidate-only status wording in the integrated d33b93d source commit is retained as historical pre-activation state. The audit verdict and authorization are USER_SUPPLIED_EVIDENCE; fast-forward and remote-ref verification are Git-verifiable facts. The metadata schema is ACTIVE_ON_INTEGRATION effective from d33b93d. This activation is separate from selection or approval of any concrete map instance. Source candidate `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04` is historical source/provenance only; the refresh based on `572da885d31d98929a1f8b8af4420012f1786fd6` has its own pending focused audit and separate exact-commit authorization and changes no active schema semantics.
 
 RFC 8785 map-hash clarification remains active independently. No PEP, WP-04 file, WP status/dependency, code authorization, runtime approval, HIL, hardware, motor-enable, or deployment state changes. No map artifact is created.
