@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.5.0` |
+| Revision | `0.6.0` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -302,4 +302,60 @@ WP-03: CLOSED
 WP-04: BLOCKED_BY_CONTRACT
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
+```
+
+### WP-04 Gate A structural-primitives status transition — PEP-001 rev.0.6.0
+
+This section records the proposed transition for the Gate A structural
+primitives only. It is pending on this review candidate and becomes effective
+only after this exact candidate passes focused independent audit, the Project
+Owner/User separately authorizes integration of its exact commit, that commit
+is fast-forwarded to `integration/implementation`, and the remote integration
+ref is verified at that commit.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.5.0` -> `0.6.0` |
+| Work package | `WP-04-GATE-A-STATUS-TRANSITION-CANDIDATE` |
+| Work branch | `wp-04-gate-a-status-transition-d33b93d` |
+| Integration base | `d33b93d3c6389872450f1a001e3073c61f355824` |
+| Prior candidate provenance | `wp-04-gate-a-status-transition-793514f@481047c055cf7f7bdfb9e91cd6443cf0022518e3`; stale-base content provenance only, not modified, rebased, or delivered by this work package |
+| Proposed transition | `GATE_A: NOT_PASSED` -> `PASSED`, limited to Gate A structural-primitives acceptance, and pending the activation conditions above |
+| Candidate content commit | Resolved from the final reviewed branch tip; not embedded here to avoid a self-referential commit SHA |
+| Dependency/evidence impact | WP-03 is `CLOSED` at the base and its recorded dependency is satisfied for this constrained Gate A structural scope. No dependency changes. WP-04 remains `BLOCKED_BY_CONTRACT`. |
+| Architecture/contract impact | None. No change to Architecture, ACR8, QoS6, the canonical structural schema, error-carrier decision, or technical semantics. The intervening integration delta from `793514f…` to `d33b93d…` is limited to four WP-05 governance documents and does not change the Gate A authority/evidence pins. |
+| Ledger entry | One new append-only candidate entry records the pending transition; no historical Ledger entry is changed and no active/canonical transition is recorded. |
+| Approval before canonical integration | Focused independent audit and separate explicit Project Owner/User authorization for this exact final commit are required before integration. |
+
+#### Pinned implementation evidence
+
+The evidence scope is limited to the structural-primitives implementation and
+its focused pure-Python tests, integrated at commit
+`793514f8ff3c20c13bfe84bf0529295de4d4d0b4` and unchanged by the intervening
+WP-05 governance integration:
+
+| Evidence | Exact reference | SHA-256 / result |
+|---|---|---|
+| Structural primitive module | `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/core/v3_observation_contracts.py` | `2d2013b3d584b1e42e71dcce85417e1402c4667dba41d95c820dd4499f7e7b3` |
+| Focused test file | `ros2_ws/src/mecanum_nav_rl/test/test_v3_observation_contract_primitives.py` | `8eacfca6e70bd987df9b4e00c769b9fe154e3c6632e2cb6245249f77b2fdd853` |
+| Focused test result | `PYTHONPATH=ros2_ws/src/mecanum_nav_rl PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider ros2_ws/src/mecanum_nav_rl/test/test_v3_observation_contract_primitives.py` | `69 passed in 0.21s`; directly reviewed evidence supplied for the prior integration review |
+| Audit and decision provenance | Focused audit verdict and current User decision | Supplied by the User in the work-package context; no audit-report SHA-256 is asserted because no report hash is pinned here |
+
+The proposed `PASSED` transition is limited to the Gate A structural-primitives
+acceptance scope represented by those exact source and test bytes. It excludes
+Gate B, connected behavior, the 81D observation vector, ROS adapters, runtime,
+HIL, hardware, and deployment. It does not close WP-04 or grant any new code,
+ROS, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authorization. No
+code authorization beyond the prior exact two-path grant is created here.
+
+Until this exact candidate passes focused audit, receives separate User
+integration authorization, is fast-forwarded, and has its remote ref verified,
+the recorded candidate state is:
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION
+GATE_B: NOT_STARTED
+RUNTIME_APPROVED: NOT_APPROVED
+WP-05: OPEN
 ```

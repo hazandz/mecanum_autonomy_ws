@@ -342,3 +342,21 @@
 | WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
 | Authorization boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No code, runtime, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority. |
 | Notes | Append-only refresh entry. Neither the source candidate nor this candidate is recorded as active or canonicalized. |
+
+### WP-04-GATE-A-STATUS-TRANSITION-BASE-REFRESH
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-GATE-A-STATUS-TRANSITION-CANDIDATE` |
+| Integration base | `d33b93d3c6389872450f1a001e3073c61f355824` |
+| Candidate branch | `wp-04-gate-a-status-transition-d33b93d` |
+| Prior local candidate provenance | `wp-04-gate-a-status-transition-793514f@481047c055cf7f7bdfb9e91cd6443cf0022518e3`, parent `793514f8ff3c20c13bfe84bf0529295de4d4d0b4`; its source contents were verified by their pinned SHA-256 values and are used only as provenance. The source candidate was not modified, rebased, committed again, or pushed by this work package. |
+| User decision | `USER_DECISION: APPROVED_FOR_WP04_GATE_A_STRUCTURAL_PRIMITIVES_STATUS_TRANSITION`; preparation of the Gate A structural-primitives transition only |
+| Candidate state | `GATE_A_STRUCTURAL_PRIMITIVES: PASSED_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; no active/canonical transition is recorded here |
+| Evidence scope | Implementation evidence commit `793514f8ff3c20c13bfe84bf0529295de4d4d0b4`; module `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/core/v3_observation_contracts.py`, SHA-256 `2d2013b3d584b1e42e71dcce85417e1402c4667dba41d95c820dd4499f7e7b3`; test `ros2_ws/src/mecanum_nav_rl/test/test_v3_observation_contract_primitives.py`, SHA-256 `8eacfca6e70bd987df9b4e00c769b9fe154e3c6632e2cb6245249f77b2fdd853`; focused pytest evidence reviewed: `69 passed in 0.21s` |
+| Audit/decision provenance | Focused audit verdict and User decision supplied in the work-package context; no audit-report SHA-256 is asserted because no report hash is pinned here |
+| Activation condition | The exact candidate must pass focused independent audit, receive separate explicit User authorization for its exact commit, be fast-forwarded to `integration/implementation`, and have the remote ref verified at that commit |
+| WP status/dependency impact | No dependency change. WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. The proposed transition is limited to Gate A structural primitives. |
+| Authorization boundary | No new code authorization. No Gate B, connected behavior, 81D observation, ROS adapter, runtime, HIL, hardware, `deploy_sim` or `deploy_real` authority is granted. `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Notes | Append-only candidate evidence. It does not claim Gate A's transition is active/canonical, WP-04 is closed, or runtime evidence exists. |
