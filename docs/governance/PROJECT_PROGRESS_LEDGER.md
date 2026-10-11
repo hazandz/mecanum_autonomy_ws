@@ -325,3 +325,20 @@
 | WP status/dependency impact | No status transition or dependency change. WP-02 remains `CLOSED`; WP-03 remains `CLOSED`; WP-04 remains `BLOCKED_BY_CONTRACT`; `GATE_A: NOT_PASSED`. |
 | Authorization/evidence boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No HIL, hardware, `deploy_sim`, or `deploy_real` authority is created. |
 | Notes | Append-only Registry consistency candidate. It resolves contradictory current-state wording without changing the underlying schema selection, technical semantics, or historical source/audit provenance. It does not pass Gate A or close WP-04. |
+
+### WP-05-UNIFIED-MAP-METADATA-SCHEMA-BASE-REFRESH-793514F
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | WP-05-UNIFIED-MAP-METADATA-SCHEMA-BASE-REFRESH-793514F |
+| Integration base | 793514f8ff3c20c13bfe84bf0529295de4d4d0b4 |
+| Candidate branch | wp-05-unified-map-metadata-schema-change-control-793514f |
+| Source candidate | wp-05-unified-map-metadata-schema-change-control-7f9ed36@3892edf37ab5388fd38d3cf4a41d28ae2401782e; parent 7f9ed36a10b5f4ab68eb437833f04d4842eff986; stale source provenance only; source-file hashes are recorded in the decision record |
+| User decisions | Nine metadata decision groups and Option A remain USER_SUPPLIED_DECISION; no audit/authorization is inferred from the source candidate or Git refs. |
+| Scope | Four-path governance refresh. No artifact instance, source, actor, measurement, or runtime evidence. |
+| Supersession | Metadata remains authority for the artifact's own approval decision; append-only event/index is a separate proposed authority for predecessor/successor and effective/current disposition. Unresolved details remain PENDING_OWNER_DECISION or PROPOSAL_ONLY. |
+| Candidate state | PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION; no activation before audit of this exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification. |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
+| Authorization boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No code, runtime, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority. |
+| Notes | Append-only refresh entry. Neither the source candidate nor this candidate is recorded as active or canonicalized. |
