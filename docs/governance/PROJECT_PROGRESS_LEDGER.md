@@ -426,3 +426,22 @@
 | WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; Gate B boundary closure remains active on the base; WP-05 remains `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
 | Notes | One append-only replacement-candidate entry. All Ledger bytes present at base are preserved; the WP-05 draft artifact and map-status state are unchanged. Neither `687469f…` nor `73a1f73…` is described as integrated by this work package. |
+
+### WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT` |
+| Integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Candidate branch | `wp-04-observation-input-profile-architecture-amendment-e89aeda5` |
+| User decision | Preserve the Architecture `ResolvedConfig` root; add no root `gate_b`; propose required nested `observation.input_profile: ObservationInputProfileV3` as a static immutable descriptor covered by the global config hash. |
+| Scope | Six-path documentation/Architecture-change candidate: one ACR, revised Observation V3 Specification and Gate B decision, candidate-only Registry/PEP records, and this append-only Ledger entry. No code, test, ROSIDL, runtime profile instance, or WP-05 artifact. |
+| Architecture provenance | `docs/MECANUM_NAV_DRL_Architecture.docx` at base `e89aeda5…`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, dated 2026-09-16. Architecture file is unchanged and remains highest authority until the amendment is effective. |
+| Proposed static schema | Required `ObservationInputProfileV3` has schema identity/revision, six snapshot/receipt/frame/topic-QoS/lifecycle-reset-barrier contract references, and immutable profile-source Git provenance. Each reference carries exact contract ID/digest and immutable source commit/path/file digest. No concrete pin is invented where active authority/evidence has not selected it. |
+| Hash and eligibility | Candidate specifies global RFC 8785 JCS UTF-8 SHA-256 over the fully resolved config, excluding output `config_hash` and prohibited runtime facts. Missing/unknown/defaulted/coerced/unresolved required input or required evidence, duplicate keys, non-finite JSON, or a required pending measurement rejects the whole resolution; no partial hash. |
+| Candidate state | `PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_AUTHORIZATION_FOR_EXACT_FINAL_COMMIT`; no active `input_profile` member, resolved profile, or Architecture amendment is recorded before audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. |
+| Evidence boundary | ACR8/QoS6/receipt v2/Gate A authorities remain unchanged. OIC rev.6 remains provenance-only. The candidate does not claim Gate B acceptance, runtime behavior, or a concrete resolved profile. |
+| WP status/dependency impact | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
+| Activation rule | This exact six-path candidate must pass focused independent audit, receive separate explicit User authorization for its exact final commit, be fast-forwarded to `integration/implementation`, and have its remote ref verified. Until then, Architecture and active Registry selections at the base remain controlling. |

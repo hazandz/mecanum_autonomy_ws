@@ -5,12 +5,12 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.8.0` (replacement candidate; pending audit and integration) |
+| Revision | `0.9.0` (Architecture-amendment candidate; pending audit and integration) |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
 | Initial integration commit | `99de9d1839b0d5b1a2da95fc0958b49bac2483a0` |
-| Activation rule | This plan is active only when its reviewed commit is present on `integration/implementation`. On a work branch it is a pending proposal. |
+| Activation rule | This plan is active only when its reviewed commit is present on `integration/implementation`. On a work branch it is a pending proposal. Architecture amendments additionally require focused audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. |
 | Runtime status | `RUNTIME_NOT_APPROVED` |
 
 ## Authority and scope
@@ -356,6 +356,47 @@ the recorded candidate state is:
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION
 GATE_B: NOT_STARTED
+RUNTIME_APPROVED: NOT_APPROVED
+WP-05: OPEN
+```
+
+### WP-04 ObservationInputProfileV3 Architecture-amendment candidate — PEP-001 rev.0.9.0
+
+This is a documentation-only Architecture Change Record candidate based on
+`origin/integration/implementation@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`.
+It records the User-approved choice to preserve the Architecture `ResolvedConfig`
+root envelope, add no root `gate_b`, and propose one required, versioned static
+member `ObservationConfig.input_profile: ObservationInputProfileV3`. The
+companion ACR and revision-3 Observation V3 Specification are candidate
+proposals, not active Architecture authority. The frozen Architecture DOCX
+remains controlling until this exact candidate passes focused independent
+audit, receives separate explicit User authorization for its exact commit, is
+fast-forwarded to `integration/implementation`, and its remote ref is verified.
+The earlier PEP-001 rev.0.8.0 candidate wording that called
+`ResolvedConfigV3.gate_b` a required compiler-owned slot is superseded review
+provenance only; it is not active authority and is not carried forward here.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.8.0` -> `0.9.0` candidate |
+| Work package / branch | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT` / `wp-04-observation-input-profile-architecture-amendment-e89aeda5` |
+| Integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0` |
+| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, dated 2026-09-16 |
+| Proposed amendment | Add `ObservationConfig.input_profile: ObservationInputProfileV3`; preserve all existing `ResolvedConfig` root members; no root `gate_b` |
+| Candidate documents | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` and `docs/OBSERVATION_V3_SPECIFICATION.md` revision 3; both pending audit and integration |
+| Hash and compiler boundary | Static profile is covered only by global `ResolvedConfig.config_hash`; no Gate-B-only hash. Missing/unknown/defaulted/coerced/unresolved members or required evidence cause rejection of the whole resolved config, without partial hash. Required unresolved `PENDING_MEASUREMENT` blocks resolution. |
+| Static/runtime boundary | The descriptor carries immutable contract and Git provenance references only. Lifecycle identity/counters, timestamps, sequence/barrier occurrences, freshness results, ROS messages, sensor samples, and receipt instances remain runtime facts outside config/hash. |
+| Compatibility | Candidate proposes resolved-config schema version `3.1` from Architecture `3.0`; legacy configurations without the required nested member are rejected, with no implicit migration. Any implementation or downstream migration requires its own approved exact scope. |
+| Candidate state | Candidate-only; no active `input_profile` slot or concrete resolved profile is claimed before this amendment's activation conditions. Existing selected Observation V3 Specification revision 1 remains the active source selection at the base. |
+| WP status/dependency impact | No status/dependency transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
+| Authorization boundary | No `CODE_AUTHORIZATION`, runtime, ROS/ROSIDL, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED
+GATE_B: NOT_STARTED
+OBSERVATION_INPUT_PROFILE: CANDIDATE_PENDING_AUDIT_AND_ARCHITECTURE_AMENDMENT_INTEGRATION
+CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```

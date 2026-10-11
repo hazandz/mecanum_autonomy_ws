@@ -1,9 +1,9 @@
 # WP-04 Gate B Consolidated Decision and Exact-Data-Contract Correction
 
 **Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
-**Work package:** `WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH`
-**Integration base:** `origin/integration/implementation@1e14644a7d778a0c5ad32512430d775fd0e8ecd3`
-**Replacement branch:** `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644`
+**Work package:** `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT`
+**Integration base:** `origin/integration/implementation@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`
+**Candidate branch:** `wp-04-observation-input-profile-architecture-amendment-e89aeda5`
 **Decision basis:** `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`, supplied by the User; not represented as a Git-pinned authority or hashed audit report.
 
 This record carries forward the eight Owner decisions supplied in the earlier work-package context and corrects the resolved-record scope. The cited proposal name is provenance supplied by the User only; this record does not assert that the proposal is present in Git, nor invent a report hash. Source review candidate `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812` is superseded review provenance only; it was not integrated and is not active authority. This replacement remains candidate governance content until this exact candidate is audited, separately authorized for integration, fast-forwarded, and remotely verified.
@@ -19,7 +19,7 @@ This record carries forward the eight Owner decisions supplied in the earlier wo
 7. Use the exact existing ACR8 status vocabulary/mapping recorded in §2. Malformed or unverifiable source/provenance for which no authorized mapping exists is `AUTHORITY_CHANGE_REQUIRED`; do not create a new status.
 8. Prepare governance only. Any later work is split into pure-core, ROSIDL, adapter/QoS, and runtime/HIL evidence phases.
 
-The selected binding member set and lifecycle correspondence are carried forward as specified in revision 2 of the accompanying replacement specification. The exact public member set, types, and value semantics of `ResolvedGateBRecordV3`, including its resolved observation-input/profile composition, remain unresolved. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. These are not implementation-ready shapes; no code authorization may rely on them before the two blockers below are resolved together.
+The prior review-candidate `ReceiptIngressBindingV3` shape and any proposal to store lifecycle values in a resolved static record are superseded provenance, not active authority. Lifecycle tuple and barrier checks remain runtime ingress semantics; the proposed `ObservationInputProfileV3` contains only static contract references and immutable source provenance. `ResolvedGateBRecordV3`, if used, is an internal compiler/type abstraction only and does not add a root member. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. This Architecture-amendment candidate defines no runtime implementation and is inactive until its exact amendment is audited, separately authorized, integrated, and remotely verified.
 
 ## 2. Gate B failure/status matrix
 
@@ -49,7 +49,7 @@ The status identifiers below are existing ACR8 vocabulary. QoS6 transport classi
 
 QoS6 specifies that `COALESCED_GAP` is accepted only when a prior receipt from the same publisher instance has been admitted; a late joiner's first retained sample is `ACCEPTED`. ACR8 status mapping does not override that transport rule. Any future mapping not explicitly present in this table or approved authority must be treated as `AUTHORITY_CHANGE_REQUIRED`, not improvised.
 
-## 3. Exact-data-contract replacement decision and deferred blockers
+## 3. Superseded exact-data-contract replacement review provenance
 
 The replacement specification is revision 2, candidate-only, at
 `docs/OBSERVATION_V3_SPECIFICATION.md`. Its full-document SHA-256 is recorded
@@ -59,7 +59,7 @@ revision number but was never integrated. Its artifacts and delivery hashes
 are retained only as superseded review provenance; they are not current source
 selection or authority.
 
-The following Owner decisions remain selected for this replacement candidate:
+The following prior Owner decisions remain part of the Gate-B contract boundary; their candidate-only source history does not itself activate a schema:
 
 - Flat `ReceiptIngressBindingV3`, with the required member set shown in §3 of
   the specification; keyword-only, required, exact built-in `str`/`int`, no
@@ -77,26 +77,12 @@ The following Owner decisions remain selected for this replacement candidate:
   raw-ROS prohibition, and `PENDING_MEASUREMENT` rule are unchanged. No numeric
   timing/profile value is selected.
 
-Two independent blockers remain:
+The following blocker labels describe the superseded revision-2 review candidate's state at that time; they are retained as historical provenance, not current active authority. This candidate proposes resolutions for those two concerns: the full-global hash rule is stated in §6, and the static input-profile schema is stated in §6 and the companion Architecture Change Record. Those proposals remain inactive pending focused audit, separate exact-commit User authorization, integration, and remote-ref verification. Concrete contract IDs/digests and source pins not selected by active authority, and measurement-dependent values, remain unresolved and make any profile instance ineligible for resolution.
 
-1. `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` — the
-   exact projection inputs/bytes, canonicalization, covered fields, and
-   self-reference exclusions for `ResolvedConfigV3.provenance.config_hash`
-   have not been selected and audited.
-2. `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` —
-   the exact public member set, types, and value semantics of
-   `ResolvedGateBRecordV3` and its resolved observation-input/profile
-   composition have not been selected. OIC revision 6 is provenance-only and
-   cannot supply field/default/schema authority.
+1. Historical label: `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` — this amendment candidate proposes RFC 8785 JCS UTF-8 hashing over the full resolved Architecture config, excluding the output `config_hash` and prohibited runtime facts; it is not active before amendment integration.
+2. Historical label: `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` — this amendment candidate proposes the exact static `ObservationInputProfileV3` shape in §6/ACR; it does not select concrete profile pins unsupported by active authority. OIC revision 6 remains provenance-only and cannot supply field/default/schema authority.
 
-Both blockers must be resolved together in one consolidated resolved-config
-decision, with exact authority/change-control and audit, before any
-code-authorization candidate may be considered. Resolving one without the
-other is insufficient. `ResolvedConfigV3.gate_b` is a required compiler-owned
-slot, but that fact does not select the slot value's shape. This candidate
-does not claim a record containing an exact `ObservationInputContractV3` or
-fully resolved non-pending values. No implementation authorization may rely
-on an unselected record shape.
+The former `ResolvedConfigV3.gate_b` required-slot wording was candidate-only and is superseded by this proposal; no root `gate_b` is added. Gate-B static bindings belong under `ResolvedConfig.observation.input_profile`. `ResolvedGateBRecordV3`, if used, is only an internal compiler/type abstraction and must serialize into that approved nested representation. The full Architecture root envelope and global `config_hash` remain controlling. No code authorization may rely on this candidate schema before the amendment is effective and required reference values/evidence are selected.
 
 ## 4. Controlled evidence layers
 
@@ -111,7 +97,7 @@ Passing an earlier layer is not evidence for a later one. Gate B remains `NOT_ST
 
 ## 5. Candidate authority and status boundary
 
-The accompanying `docs/OBSERVATION_V3_SPECIFICATION.md` revision 2, this decision record, Registry entry, PEP entry, and Ledger entry are candidate-only. If integrated after audit and separate exact-commit User authorization, they record the corrected contract boundary and candidate source selection; they do not themselves authorize implementation or runtime.
+The accompanying Specification revision 3, Architecture Change Record, this decision record, Registry entry, PEP entry, and Ledger entry are candidate-only. If integrated after audit and separate exact-commit User authorization, they record the proposed architecture amendment; they do not themselves authorize implementation or runtime.
 
 No changes are made to ACR8, QoS6, the receipt v2 `.msg`, ROSIDL package metadata, Gate A schema, error-carrier decision, code, or tests. WP-05 map metadata schema and its status remain unchanged.
 
@@ -120,9 +106,17 @@ WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
 GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
-CONFIG_HASH_PROJECTION: DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION
-RESOLVED_INPUT_PROFILE_SHAPE: DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE
+OBSERVATION_INPUT_PROFILE: CANDIDATE_PENDING_ARCHITECTURE_AMENDMENT_INTEGRATION
+CONCRETE_PROFILE_REFERENCE_PINS: PENDING_ACTIVE_AUTHORITY_AND_EVIDENCE
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
+
+## 6. ObservationConfig input-profile amendment candidate
+
+The proposed schema is `ResolvedConfig.observation.input_profile: ObservationInputProfileV3`, required and nested under the existing Architecture root member `observation`. No root `gate_b` member exists or is proposed. The exact candidate member set and reference types are in Specification revision 3 and the companion Architecture Change Record. Concrete reference values not supported by active canonical source pins remain unresolved; OIC rev.6 remains provenance-only.
+
+The profile descriptor is static and participates in the global resolved-config hash. RFC 8785 JCS UTF-8 bytes cover the fully resolved config; the output `config_hash` and prohibited runtime facts are excluded. Missing, unknown, defaulted, coerced, unresolved, or evidence-deficient required data rejects the entire config without partial hash. Runtime lifecycle facts, timestamps, freshness observations, receipt instances/payloads, ROS objects, and sensor samples are outside the config/hash.
+
+This amendment candidate is not active Architecture authority until audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. It grants no `CODE_AUTHORIZATION`, does not pass Gate B or close WP-04, and grants no runtime/HIL/hardware/deployment authority.
