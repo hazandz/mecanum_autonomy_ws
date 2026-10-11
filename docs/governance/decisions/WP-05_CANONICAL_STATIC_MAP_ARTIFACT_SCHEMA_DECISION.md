@@ -1,6 +1,6 @@
 # WP-05 Canonical Static-Map Artifact Schema — Decision Record
 
-**Record state:** CANDIDATE_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION
+**Record state:** ACTIVE_ON_INTEGRATION_EFFECTIVE_FROM_d33b93d3c6389872450f1a001e3073c61f355824
 **Work package:** WP-05-UNIFIED-MAP-METADATA-SCHEMA-CHANGE-CONTROL
 **Integration base:** 793514f8ff3c20c13bfe84bf0529295de4d4d0b4
 **Candidate branch:** wp-05-unified-map-metadata-schema-change-control-793514f
@@ -29,6 +29,6 @@ The ACR includes a deterministic PROPOSAL_ONLY event/index design and labels unr
 
 ## 4. Candidate and activation boundary
 
-This four-path documentation candidate is not active until this exact candidate passes focused independent audit, receives separate Project Owner/User authorization for integration, is fast-forwarded to integration/implementation, and the remote ref is verified. Schema activation remains separate from approval of an individual map instance.
+The candidate-only wording in this record describes the pre-activation state when the exact candidate was under review. USER_SUPPLIED_EVIDENCE: the Project Owner/User supplied READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS and authorized integration of exact commit d33b93d3c6389872450f1a001e3073c61f355824. Git history confirms its sole parent is 793514f8ff3c20c13bfe84bf0529295de4d4d0b4, and the remote integration ref was verified at d33b93d3c6389872450f1a001e3073c61f355824. Therefore the map metadata schema status is ACTIVE_ON_INTEGRATION effective from d33b93d3c6389872450f1a001e3073c61f355824. No audit-report hash is asserted. Schema activation remains separate from approval of an individual map instance. This status correction changes no schema semantics; the correction candidate itself remains subject to its own focused audit and separate exact-commit User authorization before integration.
 
 No map artifact or source is selected. No scenario, measurement, code, runtime, ROS, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority is created. No WP status/dependency changes; WP-05 remains open and WP-04 is unchanged. CODE_AUTHORIZATION: NOT_GRANTED. RUNTIME_APPROVED: NOT_APPROVED.

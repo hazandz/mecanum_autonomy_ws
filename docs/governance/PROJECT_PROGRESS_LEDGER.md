@@ -342,3 +342,20 @@
 | WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 remains BLOCKED_BY_CONTRACT. |
 | Authorization boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No code, runtime, HIL, hardware, motor-enable, deploy_sim, or deploy_real authority. |
 | Notes | Append-only refresh entry. Neither the source candidate nor this candidate is recorded as active or canonicalized. |
+
+### WP-05-MAP-METADATA-SCHEMA-ACTIVATION-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | WP-05-MAP-METADATA-SCHEMA-ACTIVATION-STATUS-CORRECTION |
+| Integrated schema candidate | wp-05-unified-map-metadata-schema-change-control-793514f@d33b93d3c6389872450f1a001e3073c61f355824 |
+| Candidate parent/base | 793514f8ff3c20c13bfe84bf0529295de4d4d0b4 |
+| Activation evidence | USER_SUPPLIED_EVIDENCE: consolidated audit verdict READINESS_FOR_USER_DECISION_TO_INTEGRATE: PASS and User authorization for exact fast-forward. Git-verifiable: exact commit d33b93d3c6389872450f1a001e3073c61f355824 is at the verified remote integration ref. No report hash is asserted. |
+| Status correction | Records map metadata schema ACTIVE_ON_INTEGRATION effective from d33b93d3c6389872450f1a001e3073c61f355824; candidate-only wording in that commit is retained as historical pre-activation state. |
+| Scope | Status/provenance correction in ACR, decision record and Registry, plus this append-only entry. No schema semantic changes or concrete artifact. |
+| Remaining boundaries | No map instance exists or is approved. RFC 8785 hash rule remains independently active. Supersession event/index remains PROPOSAL_ONLY and is not applied. Existing PENDING_OWNER_DECISION items remain. |
+| Correction candidate state | PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_USER_INTEGRATION_AUTHORIZATION for the exact correction commit; this entry does not pre-activate the correction candidate. |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains OPEN; WP-04 is unchanged. |
+| Authorization boundary | CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED. No HIL, hardware, motor-enable, deploy_sim or deploy_real authority. |
+| Notes | Append-only status reconciliation. It records activation of the integrated metadata schema at d33b93d and does not apply the supersession proposal or approve an artifact instance. |
