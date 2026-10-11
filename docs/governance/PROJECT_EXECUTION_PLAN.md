@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.6.0` |
+| Revision | `0.7.0` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -356,6 +356,49 @@ the recorded candidate state is:
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION
 GATE_B: NOT_STARTED
+RUNTIME_APPROVED: NOT_APPROVED
+WP-05: OPEN
+```
+
+### WP-04 Gate B consolidated boundary-closure candidate — PEP-001 rev.0.7.0
+
+This section records a documentation-only candidate based on the User-supplied
+decision basis `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`.
+That proposal is provenance supplied in the work-package context, not a
+Git-pinned authority; no report hash is asserted. The controlled Observation
+V3 Specification revision 1 and accompanying decision record remain
+candidate-only until this exact bundle passes focused independent audit,
+receives separate explicit User authorization for its exact final commit,
+is fast-forwarded to `integration/implementation`, and the remote ref is
+verified.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.6.0` -> `0.7.0` |
+| Work package | `WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE` |
+| Work branch | `wp-04-gate-b-boundary-closure-decision-50476170` |
+| Integration base | `50476170bb545483905308e5887990ab6220c566` |
+| Decision provenance | User-supplied `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`; not represented as Git-pinned authority; audit/report hash not asserted |
+| Candidate artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 1 and `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`; both candidate-only |
+| Candidate content commit | Resolved from the final reviewed branch tip; not embedded here to avoid self-reference |
+| Candidate state | `GATE_B_BOUNDARY_CLOSURE: PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; `GATE_B: NOT_STARTED` |
+| Dependency/status impact | No WP status or dependency transition. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; WP-05 remains `OPEN`. |
+| Architecture/contract impact | Records boundary decisions without changing Architecture, ACR8, QoS6, receipt v2 bytes, Gate A schema, or Gate A error-carrier decision. Exact receipt/lifecycle comparison member mapping and selected public wrapper field/type details remain pending as stated in the specification; no implementation may infer them. |
+| Ledger entry | One append-only candidate entry at the end of the Ledger; no historical entry is modified and no active Gate B status is recorded. |
+| Authorization boundary | No `CODE_AUTHORIZATION`, ROS/ROSIDL generation, adapter, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. Runtime remains `RUNTIME_NOT_APPROVED`. |
+
+The candidate records the eight User-supplied boundary decisions, pins the
+approved QoS6/ACR8 bundle, and specifies fail-closed outcomes using the
+existing ACR8 vocabulary. It does not claim that ACR8's six Gate B conditions
+are satisfied, does not start Gate B, and does not close WP-04. Any exact
+implementation allowlist requires later contract closure, independent review,
+and a separate explicit implementation authorization.
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED
+GATE_B: NOT_STARTED
+CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```

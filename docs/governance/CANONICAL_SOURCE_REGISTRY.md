@@ -65,6 +65,8 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
+| docs/OBSERVATION_V3_SPECIFICATION.md | CANDIDATE_ONLY_PENDING_AUDIT_AND_INTEGRATION | Observation V3 Specification revision 1 candidate in `WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE`; not active or implementation authority until this exact bundle is independently audited, separately authorized, and integrated |
+| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | CANDIDATE_ONLY_PENDING_AUDIT_AND_INTEGRATION | User-supplied Gate B boundary decisions recorded for review; source proposal is not Git-pinned authority; no code/runtime authorization |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
@@ -94,6 +96,19 @@ fast-forwarded with the remote ref verified.
 - If a source is DRAFT, HISTORICAL, LEGACY, NONCANONICAL, PENDING or MISSING, Codex must not treat it as runtime-ready or silently promote it.
 - Missing canonical locations must be created only through an approved work package with provenance/hash rules; never by copying arbitrary legacy files.
 - Changes to this registry require an explicit governance prompt and must include architecture/ACR impact analysis.
+
+## WP-04 Gate B boundary-closure candidate — not active
+
+The exact integration base for this candidate is
+`50476170bb545483905308e5887990ab6220c566`. The Observation V3 Specification
+revision 1 and consolidated decision record named above are proposed controlled
+sources only. They become active source selection only after the exact
+five-path candidate passes focused independent audit, receives separate
+explicit User authorization for its exact final commit, is fast-forwarded to
+`integration/implementation`, and that remote ref is verified. Until then, the
+existing approved QoS6/ACR8 and Gate A authorities remain controlling. This
+candidate does not satisfy the six ACR8 Gate B conditions, pass Gate B, change
+WP status/dependencies, or grant implementation/runtime authorization.
 
 - New canonical/offline implementation that consumes configuration must use the V3 config family through an approved V3 composition/loader surface; it must not directly select the V1 loader, `config/base.yaml` or pre-V3 `config/profiles/**`.
 - `APPROVED_FOR_CORE` for the V3 config family is not approval of any runtime profile, PPO training, Gazebo execution, HIL, deploy_sim or deploy_real.

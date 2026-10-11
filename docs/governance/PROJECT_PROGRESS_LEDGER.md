@@ -375,3 +375,20 @@
 | WP status/dependency impact | No status transition or dependency change. WP-05 remains `OPEN`; WP-04 is unchanged. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No map artifact/approval, runtime, HIL, hardware, motor-enable, or deployment authorization is created. |
 | Notes | Append-only refresh after the Gate A WP-04 transition candidate entered the integration base. Existing WP-04 plan and Ledger entries at the base are preserved unchanged. |
+
+### WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-11 |
+| Work package | `WP-04-GATE-B-CONSOLIDATED-BOUNDARY-CLOSURE` |
+| Integration base | `50476170bb545483905308e5887990ab6220c566` |
+| Candidate branch | `wp-04-gate-b-boundary-closure-decision-50476170` |
+| User decision provenance | Eight Owner decisions supplied under `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`; supplied decision basis only, not represented as Git-pinned authority; no report hash asserted |
+| Scope | Five-path documentation/governance candidate: Observation V3 Specification revision 1; consolidated Gate B decision record; candidate-only Registry source-selection entries; PEP-001 rev.0.7.0 boundary-closure record; this append-only Ledger entry. No code, interface, ROSIDL, profile, or runtime evidence. |
+| Candidate state | `GATE_B_BOUNDARY_CLOSURE: PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; `GATE_B: NOT_STARTED` |
+| Evidence and boundary | Pins approved QoS6/ACR8, receipt v2, transport manifest, dependency closure, and Gate A authorities. Exact wrapper public shape and receipt-to-cutoff lifecycle-member comparison remain `PENDING_OWNER_DECISION`; timing/profile values remain `PENDING_MEASUREMENT`. No Gate B implementation or runtime evidence is claimed. |
+| Activation condition | This exact five-path candidate must pass focused independent audit, receive separate explicit User authorization for its exact final commit, be fast-forwarded to `integration/implementation`, and have the remote ref verified. No active/canonical Gate B boundary transition is recorded before those events. |
+| WP status/dependency impact | No status transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS/ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
+| Notes | Candidate-only governance evidence. It does not assert Gate B readiness, Gate A semantic expansion, WP-04 closure, or map artifact/schema changes. |
