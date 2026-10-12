@@ -495,3 +495,21 @@
 | WP status/dependency impact | No transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No implementation, ROS/runtime, HIL, hardware, deployment, or map approval authority. |
 | Candidate state | This reconciliation is a review candidate pending its own focused audit, separate exact-commit User authorization, fast-forward and remote-ref verification. |
+
+
+### PROJECT-GOVERNANCE-RECONCILIATION-WP04-WP05-ACR-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `PROJECT-GOVERNANCE-RECONCILIATION-WP04-WP05-ACR-STATUS-CORRECTION` |
+| Source candidate | `project-governance-reconciliation-wp04-wp05-410d9cb@93e548d1bec80f33cd89e26080a61f59b53712cf`, sole parent `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
+| Supersedes | The source-candidate status wording that described WP-04 revision 3 and its amendment as integrated/effective/active; prior Ledger entries remain unchanged historical records |
+| Finding evidence | F-01 is `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`; no audit-report hash is asserted |
+| Git-verifiable fact | Source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry at base `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
+| Authority reconciliation | The companion ACR remains `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`; ancestry alone does not prove audit or exact User authorization and does not activate the amendment |
+| Correction scope | Restores downstream WP-04 status wording to integration-resident candidate/provenance pending the ACR activation conditions; no schema semantics, pins, blockers, map artifact, or metadata were changed |
+| WP status/dependency impact | No transition: WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 remains `OPEN` |
+| WP-05 no-regression | Draft `warehouse_map2` artifact, integration-resident world-frame evidence record, and metadata states are unchanged; no approval or metadata transition is inferred |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, runtime, HIL, hardware, or deployment authority |
+| Candidate state | Pending focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; this entry records no audit PASS, authorization, or activation |

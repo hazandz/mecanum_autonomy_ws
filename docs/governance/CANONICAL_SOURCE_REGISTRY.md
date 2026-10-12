@@ -65,8 +65,8 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | CANONICAL_INTEGRATED_GATE_B_GOVERNANCE_SPECIFICATION | Revision 3; integrated governance amendment source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, present at current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; Architecture DOCX remains higher authority. Revision 2 is superseded historical review provenance. No Gate B pass, implementation, or runtime authority |
-| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | CANONICAL_GOVERNANCE_BOUNDARY_DECISION | Integrated boundary decision at base; full-document SHA-256 `49c96beb9c317a930a2af33c94e172f3c8b5beb9e797378820e77b60dc959992`; revision-2 correction is superseded historical review provenance, not the current candidate or active decision |
+| docs/OBSERVATION_V3_SPECIFICATION.md | WP04_GATE_B_INTEGRATION_RESIDENT_CANDIDATE_PENDING_ACR_ACTIVATION | Revision 3/source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; this Git fact does not satisfy the ACR focused-audit, exact User-authorization, canonical-integration, or remote-verification conditions. Revision 1 is historical source-selection provenance; revision 2 is superseded historical review provenance. The ACR remains controlling and candidate-only. No Gate B pass, implementation, or runtime authority |
+| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | WP04_GATE_B_CANDIDATE_PENDING_ACR_ACTIVATION | Source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry, but this downstream decision cannot activate the amendment; ACR remains candidate-only. Revision-2 correction is superseded historical review provenance. Gate B remains `NOT_STARTED`; no code/runtime authority |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
@@ -102,10 +102,13 @@ fast-forwarded with the remote ref verified.
 The boundary-closure bundle from
 `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`
 established the controlled Gate B boundary and selected specification
-revision 1 at that historical integration point. Revision 3 was later
-integrated as the current governance specification. This does not pass Gate B,
-satisfy all six ACR8 Gate B implementation conditions, change WP
-status/dependencies, or grant implementation/runtime authorization.
+revision 1 at that historical integration point. Source commit revision 3
+`d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry,
+but the ACR still marks the amendment candidate-only pending its activation
+conditions. The ancestry fact does not make revision 3 effective or the current
+active source selection. This does not pass Gate B, satisfy all six ACR8 Gate B
+implementation conditions, change WP status/dependencies, or grant
+implementation/runtime authorization.
 
 The earlier exact-data-contract review candidate
 `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812`
@@ -123,9 +126,11 @@ path `docs/OBSERVATION_V3_SPECIFICATION.md`, SHA-256
 At historical base `68174e714cbe8aab61880113496cd7ccd7f97f5d`, revision 1 was
 the active boundary source selection. Revision 3 from source commit
 `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry
-at current base `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as the integrated
-governance amendment described below. It does not modify the Architecture DOCX,
-pass Gate B, or authorize implementation/runtime.
+at base `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as candidate/provenance.
+The ACR activation conditions remain unsatisfied in the available authority;
+ancestry alone does not make revision 3 effective or active source selection.
+It does not modify the Architecture DOCX, pass Gate B, or authorize
+implementation/runtime.
 
 The correction source candidate
 `wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`,
@@ -136,9 +141,9 @@ repushed. The historical replacement branch
 `1e14644a7d778a0c5ad32512430d775fd0e8ecd3`, proposed the following five-path
 documentation/governance bundle. These hashes are historical delivery
 provenance and do not identify current artifacts. That review was superseded.
-The revision-3 integrated governance amendment is tracked separately below.
-Candidate-only wording in historical snapshots describes their state before
-integration and is not the current source-selection status:
+The revision-3 integration-resident candidate/provenance is tracked separately
+below. Candidate-only wording in historical snapshots is consistent with the
+controlling ACR status and its pending activation conditions:
 
 | Superseded revision-2 historical artifact | Path | Historical delivery SHA-256 |
 |---|---|---|
@@ -213,18 +218,18 @@ Historical artifact provenance: at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, n
 
 **Current activation status:** The exact schema source-selection activation is recorded in the preceding Registry reconciliation section and the active Registry row. The focused audit, explicit user authorization, exact integration ancestry, and byte-identity evidence stated there satisfy the former activation conditions as of integration base `3b357afdec00d7fb769c9d4978372772a91bc307`. The prior candidate-only disposition is superseded only as to schema source-selection/activation status. This does not change schema content or semantics, pass Gate A, close WP-04, change WP status/dependencies, or grant code/runtime authorization.
 
-## WP-04 ObservationInputProfileV3 integrated governance amendment
+## WP-04 ObservationInputProfileV3 integration-resident candidate and ACR activation boundary
 
-At historical base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the active source selection was Observation V3 Specification revision 1, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`; it did not define `ObservationConfig.input_profile`. Revision 2 is superseded historical review provenance, pinned as `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`; it is not current content or active source selection. Revision 3 from source branch `wp-04-observation-input-profile-architecture-amendment-e89aeda5` at commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, together with its traceability corrections, is present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as the current integrated governance amendment. The Architecture DOCX is unchanged and retains precedence.
+At historical base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the then-selected source was Observation V3 Specification revision 1; revision 2 is superseded historical review provenance. Revision 3 and its source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` are present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`. This is a Git-verifiable history fact only. The companion ACR still states `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION` and controls whether the amendment becomes effective. Ancestry alone does not prove focused audit or exact User authorization and does not activate the amendment. The Architecture DOCX retains precedence.
 
-| Integrated governance artifact | Path | Status at this Registry base |
+| Integration-resident candidate/provenance | Path | Status under the controlling ACR |
 |---|---|---|
-| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | Integrated governance amendment; subordinate to and does not modify the Architecture DOCX |
-| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | Integrated governance specification; revision 2 is superseded historical provenance |
-| Gate B consolidated decision amendment | `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md` | Integrated governance decision; Gate B remains `NOT_STARTED` |
-| PEP-001 revision 0.9.0 | `docs/governance/PROJECT_EXECUTION_PLAN.md` | Integration-resident plan record; no WP status/dependency transition |
-| Progress Ledger entry | `docs/governance/PROJECT_PROGRESS_LEDGER.md` | Append-only integration history |
+| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | Candidate-only; focused independent audit, exact-commit User authorization, canonical fast-forward, and remote-ref verification remain activation conditions |
+| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | Integration-resident candidate/provenance; not effective or active source selection before ACR conditions |
+| Gate B consolidated decision amendment | `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md` | Downstream candidate/provenance record; cannot override or activate the ACR |
+| PEP-001 revision 0.9.0 source content | `docs/governance/PROJECT_EXECUTION_PLAN.md` | Candidate/provenance in the source branch; does not activate the ACR or change WP status/dependency |
+| Progress Ledger entry | `docs/governance/PROJECT_PROGRESS_LEDGER.md` | Append-only candidate history; does not establish audit/authorization or activation |
 
-The integrated amendment keeps the Architecture root envelope unchanged, adds no root `gate_b`, and places static Gate-B references under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction. The global resolved-config hash boundary is recorded; no Gate-B-only hash is added. Concrete contract IDs/digests and source pins not established by canonical authority remain unresolved; no profile instance is claimed resolved. OIC rev.6 remains provenance-only. These Git facts do not establish an independent audit or User approval beyond separately identified evidence, pass Gate B, alter the Architecture DOCX, or authorize implementation/runtime.
+The proposed amendment keeps the Architecture root envelope unchanged, adds no root `gate_b`, and proposes static Gate-B references under `observation.input_profile`. `ResolvedGateBRecordV3` is only a proposed internal compiler/type abstraction. The candidate records a proposed global resolved-config hash boundary; exact non-circular implementation projection and concrete contract IDs/digests/source pins remain unresolved. OIC rev.6 remains provenance-only. None of these candidate facts passes Gate B, alters the Architecture DOCX, or authorizes implementation/runtime.
 
-This entry changes no active source selection, WP status/dependency, or authorization. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `PASSED`; code/runtime authority remains not granted/approved; WP-05 remains `OPEN`.
+This Registry entry changes no active source selection, WP status/dependency, or authorization. The ACR activation conditions remain pending; Gate B is `NOT_STARTED`, WP-04 is `BLOCKED_BY_CONTRACT`, Gate A is `PASSED`, and WP-05 is `OPEN`.

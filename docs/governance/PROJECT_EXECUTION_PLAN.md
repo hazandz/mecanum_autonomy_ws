@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.9.0` (integrated governance amendment; Gate B remains `NOT_STARTED`) |
+| Revision | `0.9.0` candidate/provenance reconciliation; WP-04 ACR activation conditions remain pending; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -377,43 +377,30 @@ does not represent approval, activation, authorization, or Gate B pass.
 | Correction successor | `wp-04-observation-input-profile-architecture-amendment-correction-e89aeda5`; correction commit identity is resolved from Git history and is not embedded in its own evidence record |
 | Candidate state | Pending focused audit, separate User authorization for exact correction tip, fast-forward, and remote-ref verification |
 
-### WP-04 ObservationInputProfileV3 integrated governance amendment — PEP-001 rev.0.9.0
+### WP-04 ObservationInputProfileV3 integration-resident candidate/provenance — PEP-001 rev.0.9.0 source content
 
-The governance amendment was integrated from source commit
-`d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, which is in the ancestry of the
-current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`. It records
-the User-approved choice to preserve the Architecture `ResolvedConfig` root
-envelope, add no root `gate_b`, and define one required, versioned static
-member `ObservationConfig.input_profile: ObservationInputProfileV3`. The
-companion ACR and revision-3 Observation V3 Specification are integrated
-governance sources subordinate to the frozen Architecture DOCX; they do not
-modify or override it. This integration does not pass Gate B, instantiate a
-resolved profile, or authorize implementation/runtime.
-The earlier PEP-001 rev.0.8.0 candidate wording that called
-`ResolvedConfigV3.gate_b` a required compiler-owned slot is superseded review
-provenance only; it is not active authority and is not carried forward here.
+The source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` and revision-3 downstream materials are present in the stated integration ancestry as Git facts. The controlling ACR remains `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`. Ancestry does not prove that the exact candidate passed focused audit or received separate exact-commit User authorization and does not make the amendment effective. The ACR's canonical-integration and remote-ref verification conditions remain controlling. This PEP content is itself part of a review candidate and is not active until its reviewed commit is integrated under the plan's activation rule.
 
 | Change-control field | Recorded value |
 |---|---|
-| Plan ID; old/new revision | `PEP-001`; `0.8.0` -> `0.9.0`, integrated governance revision |
-| Work package / branch | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT` / `wp-04-observation-input-profile-architecture-amendment-e89aeda5` |
-| Source integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`; integrated amendment source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is in current integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
-| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, dated 2026-09-16 |
-| Integrated governance amendment | Define `ObservationConfig.input_profile: ObservationInputProfileV3`; preserve all existing `ResolvedConfig` root members; no root `gate_b` |
-| Integrated governance documents | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` and `docs/OBSERVATION_V3_SPECIFICATION.md` revision 3; subordinate to unchanged Architecture DOCX |
-| Hash and compiler boundary | Static profile is covered only by global `ResolvedConfig.config_hash`; no Gate-B-only hash. Missing/unknown/defaulted/coerced/unresolved members or required evidence cause rejection of the whole resolved config, without partial hash. Required unresolved `PENDING_MEASUREMENT` blocks resolution. |
-| Static/runtime boundary | The descriptor carries immutable contract and Git provenance references only. Lifecycle identity/counters, timestamps, sequence/barrier occurrences, freshness results, ROS messages, sensor samples, and receipt instances remain runtime facts outside config/hash. |
-| Compatibility | The integrated governance amendment records resolved-config schema version `3.1` from Architecture `3.0`; legacy configurations without the required nested member are rejected, with no implicit migration. Any implementation or downstream migration requires its own approved exact scope. |
-| Current governance/evidence state | Amendment and revision-3 profile shape are integration-resident. Exact non-circular global `ResolvedConfig.config_hash` implementation projection and concrete resolved observation-profile pins/evidence remain Gate B blockers; no resolved profile exists or is claimed. |
-| WP status/dependency impact | No status/dependency transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
-| Authorization boundary | No `CODE_AUTHORIZATION`, runtime, ROS/ROSIDL, HIL, hardware, `deploy_sim`, or `deploy_real` authority. |
+| Plan ID; source revision | `PEP-001`; `0.9.0` candidate source content |
+| Work package | `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT` and status reconciliation |
+| Source integration base | `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`; source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is in ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
+| ACR authority/status | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`; candidate-only pending its stated focused-audit, exact User-authorization, canonical-integration, and remote-ref conditions |
+| Downstream proposal | `ObservationConfig.input_profile: ObservationInputProfileV3`; no root `gate_b`; proposed shape does not become effective by Git ancestry |
+| Candidate hash/compiler proposal | Global `ResolvedConfig.config_hash` over the resolved config; exact non-circular implementation projection remains unresolved and is a Gate B blocker |
+| Static/runtime boundary | Proposed static descriptor uses contract and immutable-source references only; runtime ingress facts remain separate. No adapter, ROSIDL or runtime implementation is claimed |
+| Concrete pins | Required exact contract IDs/digests and source pins remain unresolved; no profile instance is claimed resolved |
+| Status/dependency impact | No transition: WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, runtime, HIL, hardware, `deploy_sim`, or `deploy_real` authority |
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
-OBSERVATION_INPUT_PROFILE_SCHEMA: INTEGRATED_GOVERNANCE_AMENDMENT
-GLOBAL_CONFIG_HASH_PROJECTION_IMPLEMENTATION: PENDING_EXACT_NON_CIRCULAR_RESOLUTION
+GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
+OBSERVATION_INPUT_PROFILE_SCHEMA: INTEGRATION_RESIDENT_CANDIDATE_PENDING_ACR_ACTIVATION_CONDITIONS
+GLOBAL_CONFIG_HASH_PROJECTION: PROPOSAL_PENDING_ACR_ACTIVATION_AND_EXACT_NON_CIRCULAR_RESOLUTION
 CONCRETE_PROFILE_REFERENCE_PINS: PENDING_ACTIVE_AUTHORITY_AND_EVIDENCE
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
@@ -423,10 +410,11 @@ WP-05: OPEN
 ### WP-04 Gate B exact-data-contract completion refresh — PEP-001 rev.0.8.0 historical pre-integration snapshot
 
 This section records the candidate and pending state at its historical
-revision-0.8.0 refresh point. Its candidate-only labels are not the current
-activation state; the revision-0.9.0 governance amendment above is integrated
-at the stated current base. Gate B and implementation authorization remain
-unchanged.
+revision-0.8.0 refresh point. Its labels are retained as history. The later
+revision-0.9.0 source content above records an integration-resident candidate
+and provenance fact, while amendment activation remains controlled by the ACR
+and its conditions. Neither that ancestry fact nor this PEP candidate activates
+the amendment. Gate B and implementation authorization remain unchanged.
 
 This replacement governance candidate carries forward the correction from
 `wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`

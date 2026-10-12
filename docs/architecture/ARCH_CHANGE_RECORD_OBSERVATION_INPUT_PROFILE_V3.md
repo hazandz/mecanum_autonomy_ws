@@ -7,7 +7,7 @@
 **Base:** `origin/integration/implementation@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
 
-This record proposes a narrowly nested, versioned addition to `ObservationConfig`. It does not edit or supersede the frozen Architecture. It becomes an effective architecture amendment only after this exact candidate passes focused independent audit, receives separate explicit Project Owner/User authorization for its exact commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. Until then the existing Architecture and active source selections remain controlling.
+This record proposes a narrowly nested, versioned addition to `ObservationConfig`. It does not edit or supersede the frozen Architecture. It becomes an effective architecture amendment only after this exact candidate passes focused independent audit, receives separate explicit Project Owner/User authorization for its exact commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. Until then the existing Architecture and active source selections remain controlling. Presence of the source commit in integration ancestry is only a Git-history fact; it does not prove that the exact candidate passed focused independent audit or received separate exact-commit User authorization, satisfy the ACR activation conditions, or make this amendment effective.
 
 ## 1. Reason for change
 
