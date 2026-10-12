@@ -598,3 +598,19 @@
 | Remaining blockers | Required contract/source pins and evidence remain `PENDING_OWNER_DECISION`; required measurements remain `PENDING_MEASUREMENT`. No resolved profile exists, and Gate B remains `NOT_STARTED`. |
 | WP-05 boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`. User-supplied SLAM-source attribution is provenance only and does not establish map/world equality, transform, metric alignment, runtime validation, or map approval. |
 | Status/authorization | No status or dependency transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+### WP05-WAREHOUSE-MAP2-NAVIGATION-PROFILE-RESOLUTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP05-WAREHOUSE-MAP2-NAVIGATION-PROFILE-RESOLUTION` |
+| Exact integration base | `29080644f3020f7ecd208dc45433c7d36ecc5e2e` |
+| User-supplied decisions | Navigation V1 target is Map Server + AMCL `nav2_amcl::OmniMotionModel`; SLAM Toolbox is MAPPING-only; intended global frame is `map`; the map/SDF SLAM association is User-supplied provenance, not independently Git-proved. |
+| Git-verifiable artifact facts | `warehouse_map2` exists as draft with artifact identity `4a8a23d0-7e27-4a50-8201-dd1abf1a3db4`, `map_content_hash` `2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90`, `world_frame: NOT_DECLARED`, and `runtime_compatibility: NOT_VALIDATED`. |
+| Static source inventory | Architecture §43/§49 sets target provider and startup order. The V3 inputs are skeletons; current legacy Nav2/launch/robot-description sources have inconsistent scan/frame/topic assumptions and are not selected as canonical profile pins. No tracked canonical `mecanum_nav_bringup` Nav2/Map Server/EKF profile config or exact package-version lock exists at the base. |
+| Decision record | `docs/governance/decisions/WP-05_NAVIGATION_PROFILE_RESOLUTION_DECISION.md` records target decisions, exact-base source hashes, unresolved fields and offline/runtime evidence boundary. It is a review candidate only and does not resolve a profile or select a map for navigation. |
+| Remaining decisions/evidence | Runtime profile/use scope; exact immutable Nav2/Map Server/AMCL/EKF/config/launch/package pins; concrete AMCL parameters; exact scan `header.frame_id`/TF child frame and geometry; remaps/namespaces; lifecycle implementation pins; complete static source closure and `config_hash`; later runtime TF/publisher/map/localization/lifecycle evidence. No alias is assumed. |
+| Map/world/runtime boundary | SDF pin identifies source bytes only; no `map == world`, transform, metric alignment, runtime compatibility, navigation readiness or map approval is inferred. Artifact remains draft; profile, map approval and world-frame validation are independent. |
+| Status/authorization | No transition/dependency change: WP-05 `OPEN`; WP-04 unchanged; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Candidate state | `wp-05-warehouse-map2-navigation-profile-resolution-29080644`, based on the exact integration base above; pending focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification. This entry asserts no audit PASS or integration. |
