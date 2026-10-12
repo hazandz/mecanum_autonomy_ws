@@ -678,3 +678,20 @@
 | Correction-candidate snapshot | At this entry's source-parent base, the correction successor based directly on `3eb4cde…` was pending its own focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; this entry does not claim those events occurred |
 | Supersedes | The unqualified present-tense pending-integration wording for source candidate `3eb4cde…` in the prior `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` entry only; prior Ledger bytes and technical decisions remain unchanged |
 | Remaining boundary | Required source pins/evidence remain pending; applicable measurements remain `PENDING_MEASUREMENT`; no resolved profile or partial profile/hash; Gate B `NOT_STARTED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED` |
+
+
+### WP04-GATE-B-SOURCE-DISPOSITION-CLOSURE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base | `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c` |
+| Owner decision provenance | User-supplied Owner decision in this work package. Only the supplied source classifications are recorded; no audit-report hash is asserted. |
+| Change class and scope | L1 source-provenance/selection-boundary candidate: `docs/governance/decisions/WP-04_GATE_B_SOURCE_DISPOSITION_CLOSURE.md`, `docs/governance/CANONICAL_SOURCE_REGISTRY.md`, and this append-only Ledger entry. No technical contract semantics or public/runtime interface is created. |
+| Source-byte evidence | The ten exact source paths and SHA-256 values are recorded in the decision record and verified at immutable base `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`. These are source-file provenance only, not contract IDs, semantic digests, profile pins, or runtime evidence. |
+| Established pins retained | Final-issued receipt v2, its dependency-closure pin, and QoS6/transport-manifest pins remain established under active Registry/approval; they are not reclassified or changed. Active ACR revision 3 and Observation V3 Specification revision 5 remain technical authority. |
+| Disposition and unresolved groups | LiDAR algorithm only; simulation/provenance-only; structural primitive/non-canonical policy; and Architecture-intent-only sources are not canonical runtime contracts. Six required profile-reference groups remain unresolved: LiDAR snapshot, LocalReference, measured twist, frame/TF, lifecycle/reset/action-barrier, and concrete profile source. |
+| Pending evidence | LiDAR timing/range/extrinsic, scan–twist skew, freshness, buffer/timeout, measured-twist validity/covariance/provenance, receipt-after-barrier timeout, TF alignment and runtime publisher evidence remain `PENDING_MEASUREMENT`; no values are added. |
+| L1/L2 boundary | This candidate records L1 source disposition only. Any later creation/change of contract semantics or a public/runtime interface requires an L2 Architecture Change Record before use. Missing required pin/evidence/measurement continues to reject the whole resolved config without a partial profile/hash. |
+| Candidate lifecycle | Before integration, this is a review candidate pending independent audit, separate User authorization for the exact commit, fast-forward and remote-ref verification. After those conditions, it may be described only as an integrated source-disposition governance record, not active technical semantics or resolved profile. |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware or deployment authorization. |

@@ -38,6 +38,43 @@ under active ACR3, a missing required pin/evidence/measurement rejects the
 whole resolved config with no partial hash. The candidate does not start/pass
 Gate B, change WP status/dependencies, or grant code/runtime authorization.
 
+## WP04-GATE-B-SOURCE-DISPOSITION-CLOSURE — L1 candidate
+
+At source base `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`, the decision record
+`docs/governance/decisions/WP-04_GATE_B_SOURCE_DISPOSITION_CLOSURE.md` is a
+review candidate, not active technical semantics. Its source-file SHA-256
+inventory pins bytes at that immutable base solely for provenance and permitted
+evidence classification. It does not select a canonical runtime source or
+resolve any profile reference.
+
+The Owner-specified disposition is: `observations/lidar.py` is only a pure
+72-sector algorithm source; `goal_features.py`, `measured_twist.py`, and
+`simulated_odometry.py` are simulation/provenance only; `synchronizer.py`,
+`previous_command.py`, `lifecycle_types.py`, and `episode_lifecycle.py` are
+structural primitives/non-canonical policy sources; `config/v3/frames.yaml`
+and `config/v3/topics.yaml` are Architecture-intent inputs only. The exact
+paths, source base and file digests are recorded in the decision record. None
+is canonical runtime-contract authority.
+
+Final-issued receipt v2, its dependency-closure pin, and QoS6 transport pins
+remain established under the existing Registry and integrated approval; they
+are not reclassified as pending. Six profile-reference groups remain
+unresolved: LiDAR snapshot, LocalReference, measured twist, frame/TF,
+lifecycle/reset/action-barrier, and concrete profile source. Required
+measurement items remain `PENDING_MEASUREMENT`. Active ACR3/Specification rev.5
+remain unchanged. If later source selection requires new contract semantics or
+a public/runtime interface, an L2 Architecture Change Record is required
+before implementation. Missing required pins/evidence/measurements still
+reject the whole resolved config without a partial hash.
+
+The decision, this Registry entry and the Ledger append are candidate-only
+pending independent audit, separate exact-commit User authorization,
+fast-forward, and remote-ref verification. If those conditions are later
+satisfied, they are an integrated source-disposition governance record only;
+they do not activate technical semantics, resolve a profile, start/pass Gate B,
+or grant code/runtime authorization. WP-04, Gate A, Gate B, WP-05 and
+authorization statuses are unchanged.
+
 ### Historical source-selection candidate snapshot at integration base 13bfa066
 
 The following source-selection candidate record describes only its historical
