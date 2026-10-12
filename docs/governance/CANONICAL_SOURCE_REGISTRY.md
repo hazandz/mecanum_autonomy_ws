@@ -65,7 +65,7 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | CANONICAL_APPROVED_GATE_B_BOUNDARY_SPECIFICATION | Revision 1; full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`; controlled Gate B boundary source selection active at integration base `68174e714cbe8aab61880113496cd7ccd7f97f5d` only; no Gate B pass or implementation/runtime authority. Revision 2 is superseded historical review provenance; revision 3 is the current candidate-only Architecture amendment, detailed below |
+| docs/OBSERVATION_V3_SPECIFICATION.md | CANONICAL_INTEGRATED_GATE_B_GOVERNANCE_SPECIFICATION | Revision 3; integrated governance amendment source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, present at current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; Architecture DOCX remains higher authority. Revision 2 is superseded historical review provenance. No Gate B pass, implementation, or runtime authority |
 | docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | CANONICAL_GOVERNANCE_BOUNDARY_DECISION | Integrated boundary decision at base; full-document SHA-256 `49c96beb9c317a930a2af33c94e172f3c8b5beb9e797378820e77b60dc959992`; revision-2 correction is superseded historical review provenance, not the current candidate or active decision |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
@@ -82,7 +82,7 @@ fast-forwarded with the remote ref verified.
 | ros2_ws/src/ROBOT_URDF_final_description/urdf/**, meshes/**, models/** | ROBOT_GEOMETRY_SIMULATION_SOURCE | Geometry/simulation source; not proof of official runtime control profile |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/mecanum_env.py | LEGACY_NONCANONICAL | Excluded from official runtime/architecture evidence |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/train_ai.py | UNCLASSIFIED_LEGACY_DEPENDENT | Not allowed as canonical training/runtime entrypoint pending explicit decision |
-| artifacts/maps/<map_id> | REQUIRED_CANONICAL_MAP_LOCATION_MISSING | Project Owner/User is the approved MapCustodian/map approver unless a delegate is named in the immutable map record; no map ID, map, values, or evidence selected/created. Do not use ROS-package map copies as canonical |
+| artifacts/maps/<map_id> | CANONICAL_MAP_ARTIFACT_PRESENT_DRAFT_NOT_APPROVED | `artifacts/maps/warehouse_map2/` is integration-resident as a draft artifact. It is not approved, navigation-ready, or selected for navigation/localization. Do not use ROS-package map copies as canonical |
 | artifacts/scenarios/<scenario_id>/scenario.json | APPROVED_SCENARIO_CONVENTION_NO_ARTIFACT_SELECTED | Authorized disposition selects immutable `scenario.json` serialized as `RFC8785_JCS_UTF8` under this root; Project Owner/User is ScenarioCustodian unless delegated. No scenario ID/values/artifact selected. `GT_ODOM_2D` is evaluator-only; raw GT is excluded from policy/observation core. WP-03 closure activation is governed by PEP-001 rev.0.4.0 |
 | docs/governance/decisions/WP-03_CONTRACT_CLOSURE_DECISIONS.md | WP03_AUTHORIZED_DISPOSITION_AND_CLOSURE_RECORD | Project Owner/User-authorized D2, D3, map, scenario, hardware and routing dispositions; WP-03 closure activation follows PEP-001 rev.0.4.0 and requires the exact reviewed final candidate on integration/implementation |
 | artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml | CANONICAL_LOCATION_PRESENT_VALIDITY_PENDING | Hardware source location exists; records Project Owner/User as Hardware Measurement Owner and Technical Approver unless a delegate is named; values/approval require separate evidence |
@@ -101,8 +101,9 @@ fast-forwarded with the remote ref verified.
 
 The boundary-closure bundle from
 `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`
-is active at the current integration base as the controlled Gate B boundary
-and specification revision 1 source selection only. This does not pass Gate B,
+established the controlled Gate B boundary and selected specification
+revision 1 at that historical integration point. Revision 3 was later
+integrated as the current governance specification. This does not pass Gate B,
 satisfy all six ACR8 Gate B implementation conditions, change WP
 status/dependencies, or grant implementation/runtime authorization.
 
@@ -114,14 +115,17 @@ replacement change-control record for traceability; they do not identify
 current canonical artifacts.
 
 Observation V3 Specification revision 2 is superseded historical review
-provenance, not the current review candidate and not active source selection.
+provenance, not current content or active source selection.
 Its exact source is
 `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`,
 path `docs/OBSERVATION_V3_SPECIFICATION.md`, SHA-256
 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`.
-At this Registry base, revision 1 remains the active source selection; the
-revision-3 Architecture amendment from source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`
-is the current candidate-only amendment described below.
+At historical base `68174e714cbe8aab61880113496cd7ccd7f97f5d`, revision 1 was
+the active boundary source selection. Revision 3 from source commit
+`d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry
+at current base `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as the integrated
+governance amendment described below. It does not modify the Architecture DOCX,
+pass Gate B, or authorize implementation/runtime.
 
 The correction source candidate
 `wp-04-gate-b-exact-data-contract-completion-correction-68174e@73a1f73c39eb742e79f53f50d5b5d73b41be0822`,
@@ -132,10 +136,9 @@ repushed. The historical replacement branch
 `1e14644a7d778a0c5ad32512430d775fd0e8ecd3`, proposed the following five-path
 documentation/governance bundle. These hashes are historical delivery
 provenance and do not identify current artifacts. That review was superseded.
-The later revision-3 Architecture-amendment candidate is tracked separately
-below and remains candidate-only pending consolidated independent audit,
-separate explicit User authorization for its exact final commit, fast-forward
-to `integration/implementation`, and remote-ref verification:
+The revision-3 integrated governance amendment is tracked separately below.
+Candidate-only wording in historical snapshots describes their state before
+integration and is not the current source-selection status:
 
 | Superseded revision-2 historical artifact | Path | Historical delivery SHA-256 |
 |---|---|---|
@@ -178,7 +181,7 @@ base are preserved without edits by this candidate.
 
 **Activation state:** foundation candidate `wp-05-canonical-artifact-foundation-integration-34dbb9d@d89f5187c792932e6e77f7ff8db5045f9cce70ed`, based on `34dbb9d17bb5863880838b0c49acac81b8b6dc48`, received a focused independent audit PASS, was authorized by the Project Owner/User, and was fast-forwarded to `integration/implementation`; the remote ref was verified at the exact candidate commit. These foundation references are active on the integration line. The previous candidate `wp-05-canonical-artifact-foundation-integration@28e84ea2758ef8a2f252b3da3e94114bb2705003` also passed the audit categories recorded in `docs/governance/decisions/WP-05_CANONICAL_ARTIFACT_FOUNDATION_APPROVAL.md`, but is stale after the integration base advanced and is not the integrated candidate. Approved packet source: `wp-05-artifact-foundation-decision-packet-56815516` at `72e47bd1c0a80188abc96f8575d5b345e3767e4d`, SHA-256 `b6a3cc428b82d92c437c9b0809f50268d3f409f82d7715c4494c3d27f07bf8d5`.
 
-- **Map foundation:** preserve `artifacts/maps/<map_id>/`. `map_content_hash` follows Architecture §48 and pins only `map.yaml` and `map.pgm` by role, relative name, byte size, and raw-file SHA-256 in the `mecanum_map_hash/v1` canonical JSON manifest. The manifest result field is excluded from its own digest input; `metadata.yaml` and optional `slam_pose_graph.posegraph` are outside the content-hash boundary. No map ID or instance is selected.
+- **Map foundation (historical activation state):** at foundation activation, preserve `artifacts/maps/<map_id>/`; no map ID or instance had then been selected. The later `warehouse_map2` draft integration is recorded below. `map_content_hash` follows Architecture §48 and pins only `map.yaml` and `map.pgm` by role, relative name, byte size, and raw-file SHA-256 in the `mecanum_map_hash/v1` canonical JSON manifest. The manifest result field is excluded from its own digest input; `metadata.yaml` and optional `slam_pose_graph.posegraph` are outside the content-hash boundary.
 - **Scenario foundation:** preserve `artifacts/scenarios/<scenario_id>/scenario.json`; `RFC8785_JCS_UTF8` is the serialization convention only. `GT_ODOM_2D` is evaluator/oracle-only; raw Ground Truth is excluded from PPO, policy input, and the observation core. No scenario ID or concrete value is selected.
 - **Hardware foundation:** preserve `artifacts/hardware/<hardware_profile_id>/hardware_manifest.yaml` and the distinct approval record. `TBD_MEASURED`/null remain unavailable and fail-closed; `approval_status: DRAFT`; `motor_enable_allowed: false`. No measurement, hash approval, or hardware approval is recorded.
 
@@ -186,9 +189,9 @@ No world/frame equivalence, goal, start, bounds, zones, seed, randomization valu
 
 ## WP-05 map hash serialization RFC 8785 decision — active on integration
 
-**Activation state:** the RFC 8785 clarification was integrated by `wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff@988a74b529fdb4bcf77f341db5c6d115e8511a9b`, based on `c37a5bff9dd6cc32fc503cdd796b31720a58a616`; it remains active at current integration base `793514f8ff3c20c13bfe84bf0529295de4d4d0b4`. Earlier candidate-pending wording in its decision record describes the pre-integration state and is superseded as to activation state here. This reconciliation does not activate a map schema or any concrete instance.
+**Activation state:** the RFC 8785 clarification was integrated by `wp-05-map-hash-serialization-rfc8785-change-control-c37a5bff@988a74b529fdb4bcf77f341db5c6d115e8511a9b`, based on `c37a5bff9dd6cc32fc503cdd796b31720a58a616`; it remains active at current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`. Earlier candidate-pending wording in its decision record describes the pre-integration state and is superseded as to activation state here. This reconciliation does not activate a map schema or any concrete instance.
 
-The active hash projection remains schema `mecanum_map_hash/v1` and exactly two ordered entries: `map_yaml`/`map.yaml`, then `occupancy_image`/`map.pgm`, each with role, `name`, `size_bytes`, and raw-file SHA-256. Hash only RFC 8785 JCS bytes encoded UTF-8 without BOM or trailing newline. `metadata.yaml`, optional pose graph, full-manifest result fields, and resulting `map_content_hash` are outside the digest. This rule is independently active at integration base `572da885d31d98929a1f8b8af4420012f1786fd6` and is unchanged by the WP-05 status refresh.
+The active hash projection remains schema `mecanum_map_hash/v1` and exactly two ordered entries: `map_yaml`/`map.yaml`, then `occupancy_image`/`map.pgm`, each with role, `name`, `size_bytes`, and raw-file SHA-256. Hash only RFC 8785 JCS bytes encoded UTF-8 without BOM or trailing newline. `metadata.yaml`, optional pose graph, full-manifest result fields, and resulting `map_content_hash` are outside the digest. This rule is independently active at the current integration base and is unchanged by later WP-05 status reconciliation.
 
 ## WP-05 canonical static-map metadata schema — active on integration
 
@@ -200,9 +203,9 @@ The RFC 8785 map-hash rule remains independently active. Only map.yaml and map.p
 
 Historical status-correction provenance: `wp-05-map-metadata-schema-activation-status-correction-d33b93d@e4add07d10eb4a616569d0f9a83f97493851ef04`, parent `d33b93d3c6389872450f1a001e3073c61f355824`. Historical refresh provenance: `wp-05-map-metadata-schema-activation-status-refresh-572da88`, based on `572da885d31d98929a1f8b8af4420012f1786fd6`; that base is not the current integration baseline or current WP-05 candidate. Candidate `wp-05-world-frame-evidence-registry-reconciliation-e89aeda5@0f42f1c9da00725c36500ff4ec1d2f75a0c8709a` is a remote review candidate with User-supplied verdict `CORRECTION_REQUIRED`, not integrated. The current replacement branch `wp-05-world-frame-evidence-governance-correction-0b2fcd1` is based on `0b2fcd1d010bc30f54d7621e6192dd76339df6b2` and is pending consolidated independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. None of these historical review states suspends or alters the map metadata schema active since d33b93d.
 
-## WP-05 `warehouse_map2` integrated draft and world-frame evidence replacement candidate
+## WP-05 `warehouse_map2` integrated draft and world-frame evidence record
 
-Historical artifact provenance: at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, no canonical map instance was selected or present. The draft candidate was later integrated at `1e14644a7d778a0c5ad32512430d775fd0e8ecd3`; at current integration base `0b2fcd1d010bc30f54d7621e6192dd76339df6b2`, `artifacts/maps/warehouse_map2/` is present with map_id `warehouse_map2`, artifact_identity `4a8a23d0-7e27-4a50-8201-dd1abf1a3db4`, and map_content_hash `2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90`. Its approval_status remains `draft`, world_frame remains `NOT_DECLARED`, and runtime_compatibility remains `NOT_VALIDATED`; it is not approved, navigation-ready, or selected for navigation/localization. Candidate `ca0432366da500ed549f71f96b51434b706772ef` remains local/unpushed source provenance only. Candidate `0f42f1c9da00725c36500ff4ec1d2f75a0c8709a` was pushed to its remote review branch but received the User-supplied audit verdict `CORRECTION_REQUIRED`; it was not integrated and activated neither its evidence record nor a metadata transition. The present replacement branch `wp-05-world-frame-evidence-governance-correction-0b2fcd1`, based on `0b2fcd1d010bc30f54d7621e6192dd76339df6b2`, proposes the narrow declaration-evidence schema and record, reconciles the PEP/Registry/Ledger status wording, and is pending its own consolidated audit and separate exact-commit authorization/integration. The historical `572da885d31d98929a1f8b8af4420012f1786fd6` refresh is not the current base or candidate. The RFC 8785 map-hash rule and metadata schema remain independently active. No source-world equivalence, runtime compatibility, map approval, code, or runtime authority is recorded. WP-05 remains OPEN; CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED.
+Historical artifact provenance: at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, no canonical map instance was selected or present. The draft candidate was later integrated at `1e14644a7d778a0c5ad32512430d775fd0e8ecd3`; at current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`, `artifacts/maps/warehouse_map2/` is present with map_id `warehouse_map2`, artifact_identity `4a8a23d0-7e27-4a50-8201-dd1abf1a3db4`, and map_content_hash `2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90`. Its approval_status remains `draft`, world_frame remains `NOT_DECLARED`, and runtime_compatibility remains `NOT_VALIDATED`; it is not approved, navigation-ready, or selected for navigation/localization. Candidate `ca0432366da500ed549f71f96b51434b706772ef` remains local/unpushed source provenance only. Candidate `0f42f1c9da00725c36500ff4ec1d2f75a0c8709a` was pushed to its remote review branch and received the User-supplied audit verdict `CORRECTION_REQUIRED`; it was not integrated and activated neither its evidence record nor a metadata transition. Evidence-schema/record source commit `410d9cb70518b64d3c76c2ef99b11b69d1da6701` is integration-resident Git history. That fact does not itself prove an independent audit or User approval, nor does it activate a metadata declaration. The historical `572da885d31d98929a1f8b8af4420012f1786fd6` refresh is provenance only, not the current integration base or current WP-05 candidate. The RFC 8785 map-hash rule and metadata schema remain independently active. No source-world equivalence, transform, metric alignment, runtime compatibility, map approval, or navigation readiness is recorded. WP-05 remains OPEN; CODE_AUTHORIZATION: NOT_GRANTED; RUNTIME_APPROVED: NOT_APPROVED.
 
 ## WP-04 Gate A exact structural schema decision — historical pre-activation record
 
@@ -210,18 +213,18 @@ Historical artifact provenance: at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, n
 
 **Current activation status:** The exact schema source-selection activation is recorded in the preceding Registry reconciliation section and the active Registry row. The focused audit, explicit user authorization, exact integration ancestry, and byte-identity evidence stated there satisfy the former activation conditions as of integration base `3b357afdec00d7fb769c9d4978372772a91bc307`. The prior candidate-only disposition is superseded only as to schema source-selection/activation status. This does not change schema content or semantics, pass Gate A, close WP-04, change WP status/dependencies, or grant code/runtime authorization.
 
-## WP-04 ObservationInputProfileV3 Architecture-amendment candidate
+## WP-04 ObservationInputProfileV3 integrated governance amendment
 
-At base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the active source selection remains Observation V3 Specification revision 1, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`; it does not define `ObservationConfig.input_profile`. Revision 2 is superseded historical review provenance, pinned as `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`; it is not active authority or the current candidate. The current correction successor carries the revision-3 candidate-only Architecture amendment from source branch `wp-04-observation-input-profile-architecture-amendment-e89aeda5@d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, together with its traceability corrections, to add the versioned nested `observation.input_profile: ObservationInputProfileV3` member. The Architecture DOCX itself is unchanged.
+At historical base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the active source selection was Observation V3 Specification revision 1, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`; it did not define `ObservationConfig.input_profile`. Revision 2 is superseded historical review provenance, pinned as `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`; it is not current content or active source selection. Revision 3 from source branch `wp-04-observation-input-profile-architecture-amendment-e89aeda5` at commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, together with its traceability corrections, is present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as the current integrated governance amendment. The Architecture DOCX is unchanged and retains precedence.
 
-| Candidate artifact | Path | Status at this Registry base |
+| Integrated governance artifact | Path | Status at this Registry base |
 |---|---|---|
-| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | Candidate only; not effective Architecture authority |
-| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | Candidate only; revision 1 remains the active boundary source |
-| Gate B consolidated decision amendment | `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md` | Candidate only; active revision-1 boundary decision unchanged |
-| PEP-001 revision 0.9.0 proposal | `docs/governance/PROJECT_EXECUTION_PLAN.md` | Candidate only; no active plan/status transition |
-| Progress Ledger entry | `docs/governance/PROJECT_PROGRESS_LEDGER.md` | Candidate evidence only; appended after exact base bytes |
+| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | Integrated governance amendment; subordinate to and does not modify the Architecture DOCX |
+| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | Integrated governance specification; revision 2 is superseded historical provenance |
+| Gate B consolidated decision amendment | `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md` | Integrated governance decision; Gate B remains `NOT_STARTED` |
+| PEP-001 revision 0.9.0 | `docs/governance/PROJECT_EXECUTION_PLAN.md` | Integration-resident plan record; no WP status/dependency transition |
+| Progress Ledger entry | `docs/governance/PROJECT_PROGRESS_LEDGER.md` | Append-only integration history |
 
-The proposal keeps the Architecture root envelope unchanged, adds no root `gate_b`, and places static Gate-B references under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction. A profile descriptor is covered by the global resolved-config hash; no Gate-B-only hash is selected. Concrete contract IDs/digests and source pins not established by active authority remain unresolved; no profile instance is claimed resolved. OIC rev.6 remains provenance-only. The candidate becomes effective only after focused independent audit, separate explicit User authorization for this exact final commit, fast-forward to integration, and remote-ref verification.
+The integrated amendment keeps the Architecture root envelope unchanged, adds no root `gate_b`, and places static Gate-B references under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction. The global resolved-config hash boundary is recorded; no Gate-B-only hash is added. Concrete contract IDs/digests and source pins not established by canonical authority remain unresolved; no profile instance is claimed resolved. OIC rev.6 remains provenance-only. These Git facts do not establish an independent audit or User approval beyond separately identified evidence, pass Gate B, alter the Architecture DOCX, or authorize implementation/runtime.
 
 This entry changes no active source selection, WP status/dependency, or authorization. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `PASSED`; code/runtime authority remains not granted/approved; WP-05 remains `OPEN`.

@@ -478,3 +478,20 @@
 | Map/world/runtime state | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; the declaration evidence proposal does not establish equivalence, transform, metric alignment, runtime validation, navigation readiness, or map approval |
 | WP status/dependency impact | No transition or dependency change. WP-05 remains `OPEN`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/runtime, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority |
+
+### PROJECT-GOVERNANCE-RECONCILIATION-WP04-WP05
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `PROJECT-GOVERNANCE-RECONCILIATION-WP04-WP05` |
+| Work branch | `project-governance-reconciliation-wp04-wp05-410d9cb` |
+| Integration base | `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
+| Scope | Six-path documentation reconciliation for WP-04 amendment activation wording and WP-05 map/evidence status wording; no technical semantics or status transition |
+| Git-verifiable integration facts | At the stated base, Observation V3 Specification revision 3/source amendment commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` and the WP-05 world-frame declaration evidence record are integration-resident. `artifacts/maps/warehouse_map2/` is present with `approval_status: draft`, `world_frame: NOT_DECLARED`, and `runtime_compatibility: NOT_VALIDATED`. These facts do not prove audit, User approval, map-world equivalence, transform, runtime validation, navigation readiness, or map approval. |
+| `USER_SUPPLIED_AUDIT_EVIDENCE` | Baseline audit findings F-01 (WP-04), F-03 and F-04 (WP-05) were supplied by the User; no audit-report hash is asserted. |
+| Correction basis | Historical candidate/pending wording is retained only as historical state. The integrated WP-04 governance amendment is distinguished from Gate B implementation/pass; the WP-05 draft artifact and integration-resident evidence record are distinguished from approval or metadata transition. |
+| Supersedes | Stale current-state descriptions for these findings in the allowed Specification, WP-04/WP-05 decision, Registry and PEP paths. Prior Ledger entries remain unchanged as history. |
+| WP status/dependency impact | No transition or dependency change. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No implementation, ROS/runtime, HIL, hardware, deployment, or map approval authority. |
+| Candidate state | This reconciliation is a review candidate pending its own focused audit, separate exact-commit User authorization, fast-forward and remote-ref verification. |

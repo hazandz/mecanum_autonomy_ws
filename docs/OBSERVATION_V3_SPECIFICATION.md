@@ -1,13 +1,12 @@
 # Observation V3 Specification
 
-**Revision:** `3` (Architecture-amendment candidate; prior revision 2 remains superseded review provenance)
-**Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`
+**Revision:** `3` (integrated governance amendment; prior revision 2 remains superseded review provenance)
+**Status:** `INTEGRATED_GOVERNANCE_AMENDMENT_ON_INTEGRATION`
 **Work package:** `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT`
-**Candidate branch:** `wp-04-observation-input-profile-architecture-amendment-e89aeda5`
-**Candidate base:** `origin/integration/implementation@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`
+**Integrated source commit:** `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`; present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-This candidate proposes the nested `ObservationConfig.input_profile` Architecture amendment described in `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`. The Architecture DOCX is not modified and remains the highest authority until the amendment's exact candidate has focused independent audit, separate User authorization, fast-forward to `integration/implementation`, and remote-ref verification. This document is inactive before those conditions. It does not pass Gate B, close WP-04, or authorize implementation or runtime.
+This revision records the integrated governance amendment defining the nested `ObservationConfig.input_profile` in `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`. Git history places source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` in the integration ancestry at the stated base. The Architecture DOCX is unchanged and remains the highest authority; this amendment is subordinate and cannot override it. Integration of this governance definition does not pass Gate B, close WP-04, implement an adapter, or authorize code or runtime.
 
 ## 1. Authority and exact pins
 
@@ -40,7 +39,7 @@ The pure-Python core accepts typed, already-validated values. A ROS adapter is r
 
 ## 3. Gate B resolved record and receipt binding
 
-The approved receipt v2 bytes remain unchanged. The `ResolvedConfig` root remains exactly the Architecture root envelope: no root `gate_b` member is added. The candidate location for Gate-B static binding is the versioned nested member `observation.input_profile: ObservationInputProfileV3`. `ResolvedGateBRecordV3`, if used internally by a future compiler, is only an internal type abstraction; it is not a canonical root member and must serialize into the authority-approved `observation.input_profile` representation.
+The approved receipt v2 bytes remain unchanged. The `ResolvedConfig` root remains exactly the Architecture root envelope: no root `gate_b` member is added. The governance-defined location for Gate-B static binding is the versioned nested member `observation.input_profile: ObservationInputProfileV3`. `ResolvedGateBRecordV3`, if used internally by a future compiler, is only an internal type abstraction; it is not a canonical root member and must serialize into the authority-approved `observation.input_profile` representation.
 
 `ObservationInputProfileV3` contains only the static contract references listed
 in §3.1 and immutable Git source provenance. The receipt v2 ID/SHA and QoS6
@@ -56,11 +55,11 @@ active lifecycle tuple, lifecycle identity, barriers, timestamps, sequence
 values, freshness results, and receipt instances are runtime ingress facts and
 must remain outside `ObservationInputProfileV3` and the global config hash.
 
-Observation Input Contract V3 revision 6 remains provenance-only and is not field/default/schema authority. This candidate does not create or alter receipt fields, QoS policy, or ACR8 statuses.
+Observation Input Contract V3 revision 6 remains provenance-only and is not field/default/schema authority. This specification does not create or alter receipt fields, QoS policy, or ACR8 statuses.
 
-### 3.1 `ObservationInputProfileV3` static schema candidate
+### 3.1 `ObservationInputProfileV3` static schema
 
-The required nested member has candidate schema identity `observation-input-profile-v3`, revision `1`, and the exact required member set below. It is a static immutable descriptor, not runtime state.
+The required nested member has schema identity `observation-input-profile-v3`, revision `1`, and the exact required member set below. It is a static immutable descriptor, not runtime state.
 
 ```text
 ObservationInputProfileV3(
@@ -94,7 +93,7 @@ ImmutableGitSourceReferenceV3(
 
 All fields are required, keyword-only, exact built-in types, frozen/immutable, with no defaults or coercion. `schema_id` is exactly `observation-input-profile-v3`; `schema_revision` is exact `int` value `1`. Identifiers and paths are non-empty exact strings. Contract/file hashes are lowercase 64-hex; Git commit is a full lowercase 40-hex SHA. A Git source reference is verified against the exact tracked path bytes at that commit. No branch/tag, mutable URL, alias, lookup, or fallback is allowed. Contract identity SHA and source-file SHA are distinct pins.
 
-The required contract IDs, semantic contract digests and profile source for a concrete instance are not populated by this candidate unless already selected by active authority. At this base, some snapshot/policy contracts lack their own canonical IDs/digests. Those values remain unresolved; the type definition does not invent them or make a profile instance valid. A profile missing any pin/evidence is not resolved and is rejected as part of the whole config.
+The required contract IDs, semantic contract digests and profile source for a concrete instance are not populated unless selected by active authority. At this integration base, some snapshot/policy contracts lack their own canonical IDs/digests. Those values remain unresolved; the type definition does not invent them or make a profile instance valid. A profile missing any pin/evidence is not resolved and must be rejected as part of the whole config.
 
 This descriptor contains no ROS message, sensor sample, receipt payload/instance, timestamp, sequence, lifecycle identity/counter, barrier occurrence, freshness result, or runtime state. The adapter validates runtime facts before creating typed ingress data; those facts remain outside static config and its hash.
 
@@ -121,15 +120,16 @@ Unmeasured timing, receipt-after-barrier timeout, skew, buffer limits, sensor fr
 
 ACR8 requires all six Gate B conditions before a connected/profile-resolving implementation packet may be issued: (1) record approved ACR and update the controlled V3 specification; (2) bind approved QoS identity/manifest, delivery/coalescing/action-bound readiness and `TopicQosContractV3`; (3) define `ObservationInputContractV3` canonical source and compiler/composition validation with no unresolved resolved-config values; (4) add/register receipt message/topic and version/hash checks plus canonical QoS record; (5) define pure-Python typed-snapshot/receipt ingress seams; and (6) independently audit preservation of the 81D layout and process/safety isolation.
 
-This Architecture-amendment candidate does not itself satisfy all six ACR8 conditions, install/generate the ROSIDL interface, select profile-specific evidence, implement adapters, produce a resolved profile, or pass Gate B. Required contract IDs/digests and source pins not present in active authority remain unresolved; measurement-dependent values remain `PENDING_MEASUREMENT`, and a compiler must reject the entire resolved config whenever a required pin/evidence/value is unresolved. Global `ResolvedConfig.config_hash` covers the entire resolved config, including this descriptor, using RFC 8785 JCS UTF-8 bytes and excluding only the output hash and prohibited runtime facts. No Gate-B-only hash exists. Any later code work requires a separate exact-scope packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` remain outside this candidate.
+This integrated governance amendment does not itself satisfy all six ACR8 Gate B implementation conditions, install/generate the ROSIDL interface, select concrete profile evidence, implement adapters, produce a resolved profile, or pass Gate B. Required contract IDs/digests and source pins not selected by canonical authority remain unresolved; measurement-dependent values remain `PENDING_MEASUREMENT`, and a future compiler must reject the entire resolved config whenever a required pin/evidence/value is unresolved. Global `ResolvedConfig.config_hash` is defined over the entire resolved config, including this descriptor, using RFC 8785 JCS UTF-8 bytes and excluding the output hash and prohibited runtime facts. No Gate-B-only hash exists. Any later code work requires a separate exact-scope packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` remain outside this governance amendment.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
 GATE_B_BOUNDARY_CLOSURE: ACTIVE_ON_INTEGRATION
-GLOBAL_CONFIG_HASH: PROPOSED_RFC8785_JCS_FULL_RESOLVED_CONFIG_PENDING_AMENDMENT
-OBSERVATION_INPUT_PROFILE: PROPOSED_PENDING_AUDIT_AND_ARCHITECTURE_AMENDMENT_INTEGRATION
+GLOBAL_CONFIG_HASH_RULE: INTEGRATED_GOVERNANCE_AMENDMENT
+GLOBAL_CONFIG_HASH_IMPLEMENTATION: PENDING_EXACT_NON_CIRCULAR_RESOLUTION
+OBSERVATION_INPUT_PROFILE_SCHEMA: INTEGRATED_GOVERNANCE_AMENDMENT
 CONCRETE_PROFILE_REFERENCE_PINS: PENDING_ACTIVE_AUTHORITY_AND_EVIDENCE
 CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
