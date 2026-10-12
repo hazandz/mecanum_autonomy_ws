@@ -31,7 +31,7 @@
 | `mecanum_nav_bringup` | Missing | Not implemented |
 | SafetySupervisor / FinalTwistPublisher | Contract only | Not implemented runtime |
 | Gymnasium, PPO trainer, evaluator | Missing canonical implementation | Not implemented |
-| Canonical maps at `artifacts/maps/<map_id>` | Missing | ROS-package maps are not canonical map artifacts |
+| Canonical maps at `artifacts/maps/<map_id>` | Draft artifact present; not approved | `artifacts/maps/warehouse_map2/` is integrated as `approval_status: draft`; no approved/navigation-ready canonical map is selected. This is artifact-presence evidence only, not runtime or navigation evidence |
 | Gazebo legacy control profile | Historical/static source only | Not official frozen runtime profile |
 | Real robot | `RUNTIME_NOT_APPROVED` | No Gate 3/4, HIL or real-robot evidence |
 

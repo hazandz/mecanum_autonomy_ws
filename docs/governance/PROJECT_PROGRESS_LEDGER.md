@@ -462,3 +462,19 @@
 | Candidate state | Pending focused consolidated independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; no amendment activation is recorded. |
 | WP status/dependency impact | No change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No runtime, ROS/ROSIDL, HIL, hardware, or deployment authority. |
+
+### WP-05-WORLD-FRAME-EVIDENCE-GOVERNANCE-CORRECTION-REFRESH
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP-05-WORLD-FRAME-EVIDENCE-GOVERNANCE-CORRECTION-REFRESH` |
+| Current integration base | `0b2fcd1d010bc30f54d7621e6192dd76339df6b2` |
+| Historical source candidate | `wp-05-world-frame-evidence-registry-reconciliation-e89aeda5@0f42f1c9da00725c36500ff4ec1d2f75a0c8709a`, sole parent `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`; remote review ref verified, not integrated |
+| Supplied audit evidence | User supplied verdict `CORRECTION_REQUIRED`; no audit-report hash is asserted |
+| Historical refresh provenance | `572da885d31d98929a1f8b8af4420012f1786fd6` is the prior refresh base, not the current integration base or candidate |
+| Correction | PEP snapshot now distinguishes the integrated `warehouse_map2` draft from an approved/navigation-ready map. This Ledger preserves all prior entries and records that the later review-branch push of `0f42f1c…` succeeded; the supplied audit requires governance corrections. The source candidate remains unintegrated and activated neither the evidence record nor a metadata transition. |
+| Current replacement candidate | `wp-05-world-frame-evidence-governance-correction-0b2fcd1`, sole parent/current base `0b2fcd1d010bc30f54d7621e6192dd76339df6b2`; pending consolidated independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification |
+| Map/world/runtime state | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; the declaration evidence proposal does not establish equivalence, transform, metric alignment, runtime validation, navigation readiness, or map approval |
+| WP status/dependency impact | No transition or dependency change. WP-05 remains `OPEN`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/runtime, HIL, hardware, motor-enable, `deploy_sim`, or `deploy_real` authority |
