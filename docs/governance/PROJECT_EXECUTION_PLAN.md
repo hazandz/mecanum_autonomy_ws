@@ -5,12 +5,12 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.2` ACR revision-3 activation/status reconciliation candidate; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.3` post-integration ACR revision-3 status/provenance reconciliation; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
 | Initial integration commit | `99de9d1839b0d5b1a2da95fc0958b49bac2483a0` |
-| Activation rule | This plan is active only when its reviewed commit is present on `integration/implementation`. On a work branch it is a pending proposal. Architecture amendments additionally require focused audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. |
+| Activation rule | The copy on `integration/implementation` is the canonical plan. Work-branch copies are review material. Architecture amendments additionally require focused audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. |
 | Runtime status | `RUNTIME_NOT_APPROVED` |
 
 ## Authority and scope
@@ -465,7 +465,7 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-### WP-04 Gate B consolidated boundary-closure candidate — PEP-001 rev.0.7.0
+### Historical WP-04 Gate B boundary-closure review snapshot — PEP-001 rev.0.7.0
 
 The candidate-pending wording in this historical rev.0.7.0 section records
 the pre-integration state. The boundary-closure bundle was later integrated
@@ -569,7 +569,7 @@ provenance-only.
 | Status/dependency | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim` or `deploy_real` authority |
 
-### WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION — PEP-001 rev.0.10.2 candidate
+### Historical PEP-001 rev.0.10.2 snapshot — status before integration 3fc3e2e
 
 At integration base `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and remote-ref verification are Git-verifiable facts. This PEP revision records status/provenance only; it does not modify technical semantics or itself establish a further activation event.
 
@@ -582,4 +582,12 @@ Concrete contract/source pins and required evidence remain pending; measurements
 | WP-05 map boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; User-supplied SLAM-source attribution is provenance only, not map/world equivalence, transform, alignment, runtime validation, or map approval |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
 
-This status reconciliation is a review candidate pending focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. It does not change WP-05 or any map artifact/evidence.
+At that snapshot, the status-reconciliation content was review material. The event it described has since been recorded as integrated commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f`; no map artifact/evidence or WP-05 state changed.
+
+### WP04-ACR3-STATUS-RECONCILIATION — PEP-001 rev.0.10.3
+
+This revision reconciles the already-integrated status event at exact base `3fc3e2e583550b47195720f0de2fda8fbbd7490f`. Git verifies that commit is on `integration/implementation`. The exact ACR revision-3 audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. ACR revision 3 and Observation V3 Specification revision 5 remain the active technical authority from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The review candidate `4a938773cfd8f36cc81934951f4fa02dae99cb05` was reported by the User as audit PASS evidence but was not integrated after preflight found stale post-integration wording; no technical authority is inferred from that unintegrated review commit.
+
+Earlier PEP sections that say a status/activation event was candidate-only or awaiting integration are snapshots at their explicitly stated earlier base/commit, not the current state of the event at `3fc3e2e…`.
+
+Concrete required contract/source pins and evidence remain `PENDING_OWNER_DECISION`; measurements remain `PENDING_MEASUREMENT`. ACR activation creates no resolved profile and does not satisfy Gate B. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`. User-supplied SLAM-source attribution remains provenance only, not evidence of map/world equality, a transform, metric alignment, runtime validation, or map approval. `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no code, ROS, HIL, hardware, or deployment authority is granted.

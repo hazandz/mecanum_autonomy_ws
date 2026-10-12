@@ -132,7 +132,7 @@ WP-05: OPEN
 
 At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and post-fast-forward remote-ref verification are Git-verifiable facts. This reconciliation records that event and does not infer it from ancestry alone.
 
-The inherited candidate-only/activation-pending wording in the historical sections describes the state before activation at base `c1187de`; it is historical provenance, not current status. This document's present status correction is itself pending focused audit, separate User authorization, integration, and remote-ref verification. It makes no technical change to the activated ACR/specification.
+The inherited candidate-only/activation-pending wording in the historical sections describes states before the relevant integration events; it is historical provenance, not current status. Commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` is integrated and records the ACR revision-3/Specification revision-5 activation status consistently in the governance set. The separate review candidate `4a938773cfd8f36cc81934951f4fa02dae99cb05` was reported by the User as audit-PASS evidence but was not integrated after a delivery preflight found status wording that would become stale after integration. That audit verdict is `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. This correction records the already-integrated event and makes no technical change to the active ACR/specification.
 
 Concrete required contract/source pins and evidence remain pending; measurements remain `PENDING_MEASUREMENT`. Activation does not create a profile instance, resolve those items, satisfy all ACR8 implementation conditions, or pass Gate B.
 
@@ -153,7 +153,7 @@ The Owner-approved and activated change-control records `ResolvedConfig.observat
 
 The approved change-control decision records a static profile descriptor covered by the global resolved-config hash. The global payload is the full resolved and validated static config serialized as RFC 8785 JCS UTF-8, with no BOM or trailing newline; only output `config_hash` is omitted. Runtime lifecycle facts, timestamps, freshness observations, receipt instances/payloads, ROS objects, and sensor samples are invalid config inputs and cause rejection, not additional silently filtered exclusions. Missing, unknown, defaulted, coerced, unresolved or evidence-deficient required data rejects the whole config with no partial hash.
 
-This status/provenance candidate does not modify or supersede the Architecture DOCX. ACR revision 3 is already active at the stated integration; this successor itself requires focused independent audit, separate User authorization for its exact final commit, fast-forward and remote-ref verification. It grants no `CODE_AUTHORIZATION`, does not pass Gate B or close WP-04, and grants no runtime/HIL/hardware/deployment authority. Concrete resolved observation-profile pins/evidence and required measurements remain Gate B blockers.
+The integrated status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` does not modify or supersede the Architecture DOCX. ACR revision 3 and Specification revision 5 remain active technical authority from integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; status/provenance successors do not replace their technical semantics. Concrete resolved observation-profile pins/evidence and required measurements remain Gate B blockers. This record does not grant `CODE_AUTHORIZATION`, pass Gate B, close WP-04, or grant runtime/HIL/hardware/deployment authority.
 
 ## 7. F-01 exhaustive global hash-root correction — historical candidate provenance
 
@@ -169,13 +169,16 @@ Architecture §4: `schema_version`, `runtime_profile`, `navigation_mode`,
 no root can be omitted, added, renamed, replaced, or separately projected.
 `observation.input_profile` is nested within `observation`. Only the output
 `config_hash` is excluded; duplicate keys, non-finite values, and runtime-only
-facts are rejected rather than filtered. The correction changes no Owner
-decision or profile semantics and remains pending independent audit and
-separate exact-commit integration authorization.
+facts are rejected rather than filtered. At the historical pre-activation
+base `c1187de97c550b9968d88aa6043ed716df981b54`, these correction bytes were
+review provenance; the correction was later integrated at `8c3de…` as ACR
+revision 3 and Specification revision 5. This history changes no Owner
+decision or profile semantics.
 
 Candidate file pins: `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`
 revision 3, SHA-256
 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; and
 `docs/OBSERVATION_V3_SPECIFICATION.md` revision 5, SHA-256
 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. These
-pins identify candidate bytes only and do not activate them.
+pins identify the technical bytes activated at `8c3de…`; the historical
+pre-activation candidate wording is not current status.

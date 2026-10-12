@@ -582,3 +582,19 @@
 | Candidate state | This reconciliation candidate awaits focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; it does not alter the activated ACR/spec semantics |
 | WP/status impact | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
+
+### WP04-ACR3-STATUS-RECONCILIATION-POST-INTEGRATION-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-ACR3-STATUS-RECONCILIATION-POST-INTEGRATION-CORRECTION` |
+| Exact integration base | `3fc3e2e583550b47195720f0de2fda8fbbd7490f` |
+| Integrated status event | Git history at the exact base verifies status-reconciliation commit `3fc3e2e…` is integrated. ACR revision 3 and Observation V3 Specification revision 5 remain the active technical authority from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. |
+| Evidence classification | Fast-forward/ref state and commit ancestry are Git-verifiable. The exact-candidate audit PASS and separate User authorization for ACR revision-3 activation are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. |
+| Prior review provenance | `4a938773cfd8f36cc81934951f4fa02dae99cb05` is an unintegrated review candidate. Its audit PASS is User-supplied evidence; delivery preflight found wording that would remain stale after integration, and no fast-forward of that commit occurred. It does not alter active technical authority. |
+| Correction scope | Status/provenance consistency across ACR, Observation V3 Specification, Gate-B decision, Registry, PEP-001 revision 0.10.3 and this append-only entry; no technical contract semantics changed. |
+| Historical wording | Earlier pending-audit/authorization/integration text remains untouched in prior Ledger entries and records the state at their respective earlier snapshots. It is not the current state of commit `3fc3e2e…`. |
+| Remaining blockers | Required contract/source pins and evidence remain `PENDING_OWNER_DECISION`; required measurements remain `PENDING_MEASUREMENT`. No resolved profile exists, and Gate B remains `NOT_STARTED`. |
+| WP-05 boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`. User-supplied SLAM-source attribution is provenance only and does not establish map/world equality, transform, metric alignment, runtime validation, or map approval. |
+| Status/authorization | No status or dependency transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |

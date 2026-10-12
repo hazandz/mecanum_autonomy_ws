@@ -1,12 +1,12 @@
 # Observation V3 Specification
 
-**Revision:** `6` (activation/status reconciliation successor; status/provenance only)
-**Status:** `REVISION_5_ACTIVATED_AT_INTEGRATION_8C3DE; REVISION_6_STATUS_RECONCILIATION_CANDIDATE_ONLY`
+**Revision:** `7` (post-integration status/provenance reconciliation only)
+**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_7_RECORDS_INTEGRATED_STATUS_HISTORY`
 **Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-Revision 6 records that the exact Specification revision 5 bytes (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`) were activated by ACR revision 3 at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The exact-candidate audit PASS and separate User authorization are `USER_SUPPLIED_EVIDENCE`; fast-forward and remote-ref verification are Git-verifiable facts. No audit-report hash is asserted. This successor changes status/provenance wording only and does not change technical contract semantics, pass Gate B, close WP-04, implement an adapter, or authorize code/runtime.
+Revision 7 records that status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` is integrated. The exact Specification revision 5 bytes (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`) remain the technical specification activated by ACR revision 3 at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The exact-candidate audit PASS and separate User authorization for that activation are `USER_SUPPLIED_EVIDENCE`; fast-forward and remote-ref verification are Git-verifiable facts. No audit-report hash is asserted. Revision 7 changes status/provenance wording only and does not change technical contract semantics, pass Gate B, close WP-04, implement an adapter, or authorize code/runtime. The prior revision-6 wording that described its review state as pending is historical pre-integration wording; revision 6 was not integrated.
 
 ## Historical source selection before ACR revision-3 activation
 
@@ -124,7 +124,7 @@ Unmeasured timing, receipt-after-barrier timeout, skew, buffer limits, sensor fr
 
 ACR8 requires all six Gate B conditions before a connected/profile-resolving implementation packet may be issued: (1) record approved ACR and update the controlled V3 specification; (2) bind approved QoS identity/manifest, delivery/coalescing/action-bound readiness and `TopicQosContractV3`; (3) define `ObservationInputContractV3` canonical source and compiler/composition validation with no unresolved resolved-config values; (4) add/register receipt message/topic and version/hash checks plus canonical QoS record; (5) define pure-Python typed-snapshot/receipt ingress seams; and (6) independently audit preservation of the 81D layout and process/safety isolation.
 
-This status/provenance successor does not satisfy all six ACR8 Gate B implementation conditions, install/generate the ROSIDL interface, select concrete profile evidence, implement adapters, produce a resolved profile, or pass Gate B. Required contract IDs/digests and source pins not selected by canonical authority remain `PENDING_OWNER_DECISION`; measurement-dependent values remain `PENDING_MEASUREMENT`. A future compiler must reject the entire resolved config and emit no partial hash whenever a required pin/evidence/value is unresolved. ACR revision 3 activation does not establish concrete profile pins. Any later code work requires a separate exact-scope packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` remain outside this governance status correction.
+This status/provenance record does not satisfy all six ACR8 Gate B implementation conditions, install/generate the ROSIDL interface, select concrete profile evidence, implement adapters, produce a resolved profile, or pass Gate B. Required contract IDs/digests and source pins not selected by canonical authority remain `PENDING_OWNER_DECISION`; measurement-dependent values remain `PENDING_MEASUREMENT`. A future compiler must reject the entire resolved config and emit no partial hash whenever a required pin/evidence/value is unresolved. ACR revision 3 activation does not establish concrete profile pins. Any later code work requires a separate exact-scope packet, focused audit, and explicit `CODE_AUTHORIZATION`. ROSIDL, adapter/QoS integration, runtime, HIL, hardware, `deploy_sim`, and `deploy_real` remain outside this governance status reconciliation.
 
 ### 5.1 Global `ResolvedConfig.config_hash` decision
 
