@@ -598,3 +598,19 @@
 | Remaining blockers | Required contract/source pins and evidence remain `PENDING_OWNER_DECISION`; required measurements remain `PENDING_MEASUREMENT`. No resolved profile exists, and Gate B remains `NOT_STARTED`. |
 | WP-05 boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`. User-supplied SLAM-source attribution is provenance only and does not establish map/world equality, transform, metric alignment, runtime validation, or map approval. |
 | Status/authorization | No status or dependency transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+### WP04-GATE-B-CANONICAL-INPUT-SOURCE-SELECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-GATE-B-CANONICAL-INPUT-SOURCE-SELECTION` |
+| Exact integration base | `29080644f3020f7ecd208dc45433c7d36ecc5e2e` |
+| Owner decision | User-supplied rule: select only sources explicitly established by current Registry/approval authority; ACR3 and Observation V3 Specification rev.5 continue to control technical schema/semantics; OIC rev.6, review candidates, and drafts remain provenance only; no aliases, inferred IDs/digests, measurements, or defaults. |
+| Verified existing pins | Receipt v2 schema ID/revision and SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`; dependency closure SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`; QoS6 transport ID and manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`; exact source paths/commit and separate full-document hashes are recorded in the candidate decision record. |
+| Remaining source pins | LiDAR snapshot, LocalReference, measured-twist, frame, lifecycle/reset/action-barrier contract identities/digests and immutable source pins, plus a concrete profile-source reference, remain `PENDING_OWNER_DECISION`; exact source-byte/provenance verification remains required after a source is approved. |
+| Measurement/evidence boundary | Applicable timing, freshness, skew, timeout, buffer and sensor values remain `PENDING_MEASUREMENT`; no implementation, ROS adapter/runtime, HIL or hardware evidence is asserted. |
+| Candidate scope | New Gate B canonical input-source decision record, Registry inventory entry, and this append-only entry; PEP unchanged because its current routing/status already records Gate B pending pins/evidence and measurements. |
+| Candidate state | Pending focused independent audit, separate User authorization for the exact candidate, fast-forward, and remote-ref verification. Existing receipt v2/QoS6 pins remain active at the integration base; this candidate activates no new technical source. |
+| Fail-closed boundary | Under active ACR3, any required unresolved pin/evidence/value keeps the profile unresolved; compiler rejects the whole resolved config and emits no partial `ResolvedConfig` or `config_hash`. |
+| WP/status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
