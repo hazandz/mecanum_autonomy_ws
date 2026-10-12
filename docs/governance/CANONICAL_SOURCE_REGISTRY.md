@@ -65,9 +65,9 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | REV3_BYTES_AT_REQUIRED_BASE; ACTIVE_GATE_B_BOUNDARY_SELECTION_REV1; REV4_SOURCE_REVIEW_CANDIDATE; REV5_ROOT-CORRECTION_CANDIDATE_ONLY | At required base `c1187de97c550b9968d88aa6043ed716df981b54`, current path bytes are revision 3. Source candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` contains revision 4; this correction proposes revision 5, SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. Both are review-only. The active Gate B boundary-source selection remains the exact revision-1 bytes at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, same path, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. No candidate bytes replace revision 1 or activate the ACR; no Gate B pass or implementation/runtime authority |
-| docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md | ARCHITECTURE_AMENDMENT_REV3_ROOT-CORRECTION_CANDIDATE_ONLY | Candidate revision 3, SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; records Owner-approved global hash/profile decisions and the exhaustive Architecture §4 projection root set; pending focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; Architecture DOCX remains controlling until activation |
-| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | WP04_GATE_B_OWNER_DECISIONS_RECORDED_AND_F01_ROOT_CORRECTION_CANDIDATE_ONLY | Records `APPROVE_BOTH_AS_WRITTEN` and user-supplied F-01 correction provenance; references ACR revision 3 / Specification revision 5 as candidate-only; does not activate ACR, make concrete profile pins resolved, pass Gate B, or authorize code/runtime |
+| docs/OBSERVATION_V3_SPECIFICATION.md | ACTIVE_GATE_B_BOUNDARY_SPECIFICATION_REV5; REV6_STATUS_RECONCILIATION_CANDIDATE | Exact revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2` were selected by activated ACR revision 3 at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; revision 1 was the historical source selection before activation and revisions 1–4 remain provenance. Revision 6 is status/provenance-only candidate. Concrete pins/measurements remain pending; no Gate B pass or implementation/runtime authority |
+| docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md | ACTIVE_ARCHITECTURE_CHANGE_RECORD_REV3; REV4_STATUS_RECONCILIATION_CANDIDATE | ACR revision 3, SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`, activated at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; its audit and exact User authorization are USER_SUPPLIED_EVIDENCE, with no report hash asserted. Revision 4 changes activation/status history only and is candidate-only |
+| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | ACTIVE_GATE_B_DECISION_WITH_ACR3_ACTIVATION_RECONCILIATION_CANDIDATE | Records ACR3 activation event and its provenance; required profile pins/evidence and measurements remain pending; Gate B remains NOT_STARTED and no code/runtime authorization is granted |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
@@ -107,12 +107,11 @@ revision 1 at that historical integration point. Its exact selected source
 bytes are path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256
 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec` at commit
 `68174e714cbe8aab61880113496cd7ccd7f97f5d`. This revision-1 boundary-source
-selection remains controlling while the companion ACR remains pending.
+selection was controlling at that historical integration point, before ACR revision-3 activation at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`.
 Source commit revision 3
 `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry,
-but the ACR still marks the amendment candidate-only pending its activation
-conditions. The ancestry fact does not make revision 3 effective or the current
-active source selection. This does not pass Gate B, satisfy all six ACR8 Gate B
+and the ACR still marked the amendment candidate-only pending its activation
+conditions at that historical point. This does not pass Gate B, satisfy all six ACR8 Gate B
 implementation conditions, change WP status/dependencies, or grant
 implementation/runtime authorization.
 
@@ -224,23 +223,23 @@ Historical artifact provenance: at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, n
 
 **Current activation status:** The exact schema source-selection activation is recorded in the preceding Registry reconciliation section and the active Registry row. The focused audit, explicit user authorization, exact integration ancestry, and byte-identity evidence stated there satisfy the former activation conditions as of integration base `3b357afdec00d7fb769c9d4978372772a91bc307`. The prior candidate-only disposition is superseded only as to schema source-selection/activation status. This does not change schema content or semantics, pass Gate A, close WP-04, change WP status/dependencies, or grant code/runtime authorization.
 
-## WP-04 ObservationInputProfileV3 integration-resident candidate and ACR activation boundary
+## Historical WP-04 ObservationInputProfileV3 pre-activation candidate status at 410d9cb
 
-At historical base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the then-selected source was Observation V3 Specification revision 1; revision 2 is superseded historical review provenance. Revision 3 and its source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` are present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`. This is a Git-verifiable history fact only. The companion ACR still states `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION` and controls whether the amendment becomes effective. Ancestry alone does not prove focused audit or exact User authorization and does not activate the amendment. The Architecture DOCX retains precedence.
+At historical base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`, the then-current selected source was Observation V3 Specification revision 1; revision 2 was superseded historical review provenance. Revision 3 and source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` were present in integration ancestry. This is a Git-verifiable history fact only. At that time the companion ACR stated `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`. The later activation is recorded in the current section below. Ancestry alone does not prove focused audit or exact User authorization. The Architecture DOCX retains precedence.
 
 | Integration-resident candidate/provenance | Path | Status under the controlling ACR |
 |---|---|---|
-| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | Candidate-only; focused independent audit, exact-commit User authorization, canonical fast-forward, and remote-ref verification remain activation conditions |
-| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | Integration-resident candidate/provenance; not effective or active source selection before ACR conditions |
+| Architecture Change Record | `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` | At historical base `410d9cb…`, candidate-only; current activation is recorded below |
+| Observation V3 Specification revision 3 | `docs/OBSERVATION_V3_SPECIFICATION.md` | At historical base `410d9cb…`, integration-resident candidate/provenance; later superseded by activated revision 5 |
 | Gate B consolidated decision amendment | `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md` | Downstream candidate/provenance record; cannot override or activate the ACR |
 | PEP-001 revision 0.9.0 source content | `docs/governance/PROJECT_EXECUTION_PLAN.md` | Candidate/provenance in the source branch; does not activate the ACR or change WP status/dependency |
 | Progress Ledger entry | `docs/governance/PROJECT_PROGRESS_LEDGER.md` | Append-only candidate history; does not establish audit/authorization or activation |
 
-The amendment candidate keeps the Architecture root envelope unchanged, adds no root `gate_b`, and records the Owner-approved static member under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction, not a root member or alternate hash. The Owner-approved global hash policy is RFC 8785 JCS UTF-8 SHA-256 over the complete resolved static Architecture config; only output `config_hash` is omitted. Runtime-only data is invalid input and must be rejected, not silently removed. The decision is candidate-only until the ACR activation conditions are met. Concrete contract IDs/digests/source pins and required measurements remain unresolved. OIC rev.6 remains provenance-only. None of these candidate facts passes Gate B or authorizes implementation/runtime.
+The amendment candidate kept the Architecture root envelope unchanged, added no root `gate_b`, and recorded the Owner-approved static member under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction, not a root member or alternate hash. The Owner-approved global hash policy is RFC 8785 JCS UTF-8 SHA-256 over the complete resolved static Architecture config; only output `config_hash` is omitted. Runtime-only data is invalid input and must be rejected, not silently removed. At the historical pre-activation base `c1187de97c550b9968d88aa6043ed716df981b54`, this was candidate-only. Concrete contract IDs/digests/source pins and required measurements remain unresolved. OIC rev.6 remains provenance-only. These decisions do not pass Gate B or authorize implementation/runtime.
 
-This Registry entry changes no active source selection, WP status/dependency, or authorization. It records the Owner decision in a review candidate only. The ACR activation conditions remain pending; Gate B is `NOT_STARTED`, WP-04 is `BLOCKED_BY_CONTRACT`, Gate A is `PASSED`, and WP-05 is `OPEN`.
+This historical entry records the pre-activation state only; current activation status is recorded below. It changes no technical semantics, WP status/dependency, or authorization.
 
-### WP04-GATE-B global hash-root correction candidate
+### Historical WP04-GATE-B global hash-root candidate at pre-activation base c1187de
 
 Source review candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` has sole parent
 `c1187de97c550b9968d88aa6043ed716df981b54`. Its user-supplied F-01 finding
@@ -250,13 +249,19 @@ correction proposes ACR revision 3 (SHA-256
 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and
 Specification revision 5 (SHA-256
 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Both
-remain candidate-only pending focused independent audit, separate explicit
+were candidate-only pending focused independent audit, separate explicit
 User authorization for the exact final commit, fast-forward, and remote-ref
-verification. Observation V3 Specification revision 1 remains the active
+verification at that time. Observation V3 Specification revision 1 was then the active
 Gate-B boundary-source selection. This correction changes no Owner decision,
 profile semantics, concrete pin, measurement, status, dependency, or
-authorization; Gate B remains `NOT_STARTED` and the ACR is not active.
-The correction review branch is
+authorization; Gate B remained `NOT_STARTED` and the ACR was not active at base `c1187de`.
+The historical correction review branch was
 `wp-04-gate-b-config-hash-root-correction-c1187de`, with direct parent
 `e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`; the cumulative integration base is
 `c1187de97c550b9968d88aa6043ed716df981b54`.
+
+## Current ACR revision-3 activation status at integration 8c3de26
+
+At exact integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 was activated for the ObservationInputProfileV3 Architecture change-control. The exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and remote-ref verification are Git-verifiable facts. ACR revision 3 SHA-256 is `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; the activated Observation V3 Specification revision 5 SHA-256 is `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. Revision 1 is historical pre-activation source selection; revisions 1–4 remain provenance.
+
+This registry status reconciliation is a candidate pending focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. It does not alter technical semantics or resolve concrete contract/source pins or measurements. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A is `PASSED`; WP-05 is `OPEN`; code/runtime authorization is not granted.

@@ -1,13 +1,13 @@
 # WP-04 Gate B Consolidated Decision and Exact-Data-Contract Correction
 
-**Status:** `OWNER_DECISIONS_RECORDED_IN_CHANGE_CONTROL_CANDIDATE; ACR_ACTIVATION_PENDING; GATE_B_NOT_STARTED`
-**Work package:** `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL`
-**Source commit (Git ancestry fact only):** `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`; present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; ACR activation conditions remain pending
+**Status:** `ACR_REVISION_3_ACTIVATED_AT_INTEGRATION_8C3DE; GATE_B_NOT_STARTED; THIS_STATUS_RECONCILIATION_IS_CANDIDATE_ONLY`
+**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
+**Activation integration:** `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; ACR revision 3 exact SHA `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; activated Specification revision 5 exact SHA `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Decision basis:** `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`, supplied by the User; not represented as a Git-pinned authority or hashed audit report.
 
-The Project Owner/User approved both the global configuration-hash policy and nested observation-input profile policy as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`). This is a governance decision record in a review candidate; it does not activate the companion ACR or grant code/runtime authorization. The earlier proposal name remains User-supplied provenance only; no report hash is asserted. Source review candidate `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812` is superseded review provenance only; it was not integrated and is not active authority. Git ancestry of source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` does not prove audit/User authorization or activate the amendment. The Architecture DOCX remains highest authority.
+The Project Owner/User approved both the global configuration-hash policy and nested observation-input profile policy as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`). The decision was recorded before activation. The exact-candidate audit PASS and separate exact-commit User authorization for `8c3de26521d7028a933f0a3ebe780fcb372f7a3a` are `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The fast-forward and remote-ref verification are Git-verifiable facts. Source review candidate `wp-04-gate-b-exact-data-contract-change-control-68174e@687469f4aa2f166566e31aa91c1b1d90648c3812` remains superseded review provenance only; it was not integrated or made active authority. The Architecture DOCX remains highest authority.
 
-At required integration base `c1187de97c550b9968d88aa6043ed716df981b54`, the active Gate B boundary-source selection continues to be Observation V3 Specification revision 1, selected at historical integration commit `68174e714cbe8aab61880113496cd7ccd7f97f5d`; its exact source path is `docs/OBSERVATION_V3_SPECIFICATION.md` and full-document SHA-256 is `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. Revision 3 at the current path is integration-resident candidate/provenance only; revision 4 is the source review candidate and revision 5 is this correction candidate. ACR revisions 2 and 3 are likewise candidate-only. None replaces revision 1 or activates the ACR. The revision-1 selection is boundary-source selection only and does not grant implementation/runtime authority.
+At the historical pre-activation integration base `c1187de97c550b9968d88aa6043ed716df981b54`, revision 1 was the active Gate B boundary-source selection, selected at `68174e714cbe8aab61880113496cd7ccd7f97f5d`, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revisions 1–4 remain preserved provenance. At current activation integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 activated Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Historical revisions are not rewritten.
 
 ## 1. Owner decisions recorded
 
@@ -20,7 +20,7 @@ At required integration base `c1187de97c550b9968d88aa6043ed716df981b54`, the act
 7. Use the exact existing ACR8 status vocabulary/mapping recorded in §2. Malformed or unverifiable source/provenance for which no authorized mapping exists is `AUTHORITY_CHANGE_REQUIRED`; do not create a new status.
 8. Prepare governance only. Any later work is split into pure-core, ROSIDL, adapter/QoS, and runtime/HIL evidence phases.
 
-Observation V3 Specification revision 2 and its `ReceiptIngressBindingV3` proposal are historical pinned review provenance only: source branch `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644`, commit `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`. They are superseded and are not described as the current content at that path. Specification revision 3 and its proposed `ObservationInputProfileV3` shape are present in integration ancestry from source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`. This ancestry fact does not activate the proposal: the companion ACR remains candidate-only and retains precedence for amendment activation; it does not alter the Architecture DOCX, which remains highest authority. Lifecycle tuple and barrier checks remain runtime ingress semantics; the proposed static profile contains only contract references and immutable source provenance. `ResolvedGateBRecordV3`, if used, is a proposed internal compiler/type abstraction only and does not add a root member. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. The proposal defines no runtime implementation and does not pass Gate B, close WP-04, or authorize implementation/runtime.
+Observation V3 Specification revision 2 and its `ReceiptIngressBindingV3` proposal are historical pinned review provenance only: source branch `wp-04-gate-b-exact-data-contract-completion-refresh-1e14644`, commit `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, revision-2 full-document SHA-256 `ed06bc5bd145e0eb9376df71ff42ee60069906d987c78531ba8b9e688746b1bc`. They are superseded and are not the current content at that path. Specification revision 3 and its proposed profile shape were present in integration ancestry from source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`; at that historical stage the ACR remained candidate-only. ACR revision 3 was later activated at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a` as recorded above. The Architecture DOCX remains highest authority. Lifecycle tuple and barrier checks remain runtime ingress semantics; the static profile contains only contract references and immutable source provenance. `ResolvedGateBRecordV3`, if used, is only an internal compiler/type abstraction and does not add a root member. Observation Input Contract V3 revision 6 remains `REVISED_DRAFT` provenance-only and cannot be used as field/default/schema authority. This record does not pass Gate B, close WP-04, or authorize implementation/runtime.
 
 ## 2. Gate B failure/status matrix
 
@@ -63,10 +63,10 @@ not active source selection or authority. At source baseline
 Revision 3 from source commit
 `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry
 at base `410d9cb70518b64d3c76c2ef99b11b69d1da6701` as candidate/provenance.
-The companion ACR remains candidate-only and controls activation; ancestry
-does not make the amendment effective. Its proposed `ObservationInputProfileV3`
-shape is described at §3.1 and in the companion ACR; this historical note does
-not alter that proposal or semantics.
+At the pre-activation base, the companion ACR was candidate-only and controlled
+activation. That historical status is superseded by the verified activation
+event recorded in the current activation section below. The `ObservationInputProfileV3` shape described at
+§3.1 is unchanged; this historical note does not alter its semantics.
 
 The following decisions remain relevant to the Gate-B boundary. The first two bullets record the historical revision-2 proposal only; they do not describe the current Specification path or add members to `ObservationInputProfileV3`:
 
@@ -87,12 +87,12 @@ The following decisions remain relevant to the Gate-B boundary. The first two bu
   raw-ROS prohibition, and `PENDING_MEASUREMENT` rule are unchanged. No numeric
   timing/profile value is selected.
 
-The following blocker labels describe the earlier unresolved Owner questions. The Owner decision of 2026-10-12 resolves both questions for change-control purposes as `APPROVE_BOTH_AS_WRITTEN`; it does not activate the ACR or make the profile implementable. Concrete contract IDs/digests and source pins not selected by active authority, and measurement-dependent values, remain unresolved and make any profile instance ineligible for resolution.
+The following blocker labels describe the earlier unresolved Owner questions. The Owner decision of 2026-10-12 resolves both questions as `APPROVE_BOTH_AS_WRITTEN`; ACR revision 3 activation is recorded at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. Concrete contract IDs/digests and source pins not selected by active authority, and measurement-dependent values, remain unresolved and make any profile instance ineligible for resolution.
 
-1. `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` — Owner decision recorded: global `ResolvedConfig.config_hash` is SHA-256 over RFC 8785 JCS canonical UTF-8 bytes of the complete, resolved, validated static Architecture `ResolvedConfig`; no BOM or trailing newline; omit only output `config_hash`. Runtime-only data, duplicate keys and non-finite numbers are rejected, not silently filtered. This decision is change-control candidate content until the companion ACR is audited, separately authorized for exact commit, integrated and remotely verified.
-2. `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` — Owner decision recorded: required nested `ObservationConfig.input_profile: ObservationInputProfileV3`, no root `gate_b`; static profile pins are included in the global hash. Exact proposed member set and strict semantics are recorded in the companion ACR. The ACR remains candidate-only; concrete contract pins/evidence and required measurements remain pending. OIC revision 6 remains provenance-only and cannot supply field/default/schema authority.
+1. `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` — Owner decision recorded and ACR revision 3 activated: global `ResolvedConfig.config_hash` is SHA-256 over RFC 8785 JCS canonical UTF-8 bytes of the complete, resolved, validated static Architecture `ResolvedConfig`; no BOM or trailing newline; omit only output `config_hash`. Runtime-only data, duplicate keys and non-finite numbers are rejected, not silently filtered.
+2. `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` — Owner decision recorded and ACR revision 3 activated: required nested `ObservationConfig.input_profile: ObservationInputProfileV3`, no root `gate_b`; static profile pins are included in the global hash. Exact member set and strict semantics are recorded in the activated companion ACR. Concrete contract pins/evidence and required measurements remain pending. OIC revision 6 remains provenance-only and cannot supply field/default/schema authority.
 
-The former `ResolvedConfigV3.gate_b` required-slot wording was candidate-only historical provenance and is superseded; no root `gate_b` is added. The proposal places Gate-B static bindings under `ResolvedConfig.observation.input_profile`. `ResolvedGateBRecordV3`, if used, is only an internal compiler/type abstraction and must serialize into that proposed nested representation. The full Architecture root envelope and global `config_hash` remain controlling. This governance status does not resolve required reference values/evidence or authorize code.
+The former `ResolvedConfigV3.gate_b` required-slot wording was candidate-only historical provenance and is superseded; no root `gate_b` is added. The activated schema places Gate-B static bindings under `ResolvedConfig.observation.input_profile`. `ResolvedGateBRecordV3`, if used, is only an internal compiler/type abstraction and must serialize into that nested representation. The full Architecture root envelope and global `config_hash` remain controlling. This governance status does not resolve required reference values/evidence or authorize code.
 
 ## 4. Controlled evidence layers
 
@@ -105,11 +105,13 @@ The evidence sequence is cumulative and separate:
 
 Passing an earlier layer is not evidence for a later one. Gate B remains `NOT_STARTED` until the required contract gates, implementation review, and evidence are satisfied and a separate governance transition is authorized.
 
-## 5. Integration-resident candidate/provenance and authority boundary
+## 5. Historical pre-activation candidate/provenance snapshot at c1187de
 
-The base contains Observation V3 Specification revision 3 and ACR revision 1 as integration-resident candidate/provenance. Source candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` records Specification revision 4 and ACR revision 2. This correction candidate records Specification revision 5 and ACR revision 3, plus this decision update, Registry, PEP and Ledger. The ACR remains candidate-only and controls amendment activation. Git ancestry does not prove focused audit or exact User authorization and does not make the amendment effective. These documents do not amend the Architecture DOCX, authorize implementation/runtime, or satisfy Gate B.
+At historical base `c1187de97c550b9968d88aa6043ed716df981b54`, the path contained Observation V3 Specification revision 3 and ACR revision 1 as integration-resident candidate/provenance. Source candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` recorded Specification revision 4 and ACR revision 2. The correction candidate recorded Specification revision 5 and ACR revision 3. Their then-candidate-only status was superseded at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a` after exact-candidate audit PASS and separate exact-commit User authorization (`USER_SUPPLIED_EVIDENCE`, no report hash asserted), fast-forward, and remote-ref verification. Git ancestry alone is not treated as audit or authorization evidence. No Architecture DOCX bytes were changed; this activation does not authorize implementation/runtime or satisfy Gate B.
 
 No changes are made to ACR8, QoS6, the receipt v2 `.msg`, ROSIDL package metadata, Gate A schema, error-carrier decision, code, or tests. WP-05 map metadata schema and its status remain unchanged.
+
+Historical status at integration base `c1187de97c550b9968d88aa6043ed716df981b54`, before the activation event:
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT
@@ -126,15 +128,34 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-## 6. Integration-resident ObservationConfig input-profile candidate
+## Current ACR revision-3 activation status and remaining blockers
 
-The Owner-approved change-control candidate records `ResolvedConfig.observation.input_profile: ObservationInputProfileV3` as required and nested under the existing Architecture root member `observation`. No root `gate_b` member is added. The proposed member set and reference types are in Specification revision 5 and companion ACR revision 3. Because the ACR remains candidate-only, this schema is not effective. Concrete reference values not supported by active canonical source pins remain unresolved; OIC rev.6 remains provenance-only.
+At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and post-fast-forward remote-ref verification are Git-verifiable facts. This reconciliation records that event and does not infer it from ancestry alone.
+
+The inherited candidate-only/activation-pending wording in the historical sections describes the state before activation at base `c1187de`; it is historical provenance, not current status. This document's present status correction is itself pending focused audit, separate User authorization, integration, and remote-ref verification. It makes no technical change to the activated ACR/specification.
+
+Concrete required contract/source pins and evidence remain pending; measurements remain `PENDING_MEASUREMENT`. Activation does not create a profile instance, resolve those items, satisfy all ACR8 implementation conditions, or pass Gate B.
+
+WP-05 boundary is unchanged: `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, and `runtime_compatibility: NOT_VALIDATED`. User-supplied attribution that the map was SLAM-generated from `tugbot_depot.sdf` remains provenance only; it is not evidence of map/world equality, a transform, metric alignment, runtime validation, or map approval.
+
+```text
+WP-04: BLOCKED_BY_CONTRACT
+GATE_A_STRUCTURAL_PRIMITIVES: PASSED
+GATE_B: NOT_STARTED
+WP-05: OPEN
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+```
+
+## 6. Activated ObservationConfig input-profile schema and remaining blockers
+
+The Owner-approved and activated change-control records `ResolvedConfig.observation.input_profile: ObservationInputProfileV3` as required and nested under the existing Architecture root member `observation`. No root `gate_b` member is added. The active member set and reference types are in Specification revision 5 and companion ACR revision 3. Concrete reference values not supported by active canonical source pins remain unresolved; OIC rev.6 remains provenance-only.
 
 The approved change-control decision records a static profile descriptor covered by the global resolved-config hash. The global payload is the full resolved and validated static config serialized as RFC 8785 JCS UTF-8, with no BOM or trailing newline; only output `config_hash` is omitted. Runtime lifecycle facts, timestamps, freshness observations, receipt instances/payloads, ROS objects, and sensor samples are invalid config inputs and cause rejection, not additional silently filtered exclusions. Missing, unknown, defaulted, coerced, unresolved or evidence-deficient required data rejects the whole config with no partial hash.
 
-This review candidate does not modify or supersede the Architecture DOCX. The two Owner decisions are recorded, but this change-control candidate requires focused independent audit, separate User authorization for the exact final commit, fast-forward and remote-ref verification before the amendment is effective. It grants no `CODE_AUTHORIZATION`, does not pass Gate B or close WP-04, and grants no runtime/HIL/hardware/deployment authority. Concrete resolved observation-profile pins/evidence and required measurements remain Gate B blockers.
+This status/provenance candidate does not modify or supersede the Architecture DOCX. ACR revision 3 is already active at the stated integration; this successor itself requires focused independent audit, separate User authorization for its exact final commit, fast-forward and remote-ref verification. It grants no `CODE_AUTHORIZATION`, does not pass Gate B or close WP-04, and grants no runtime/HIL/hardware/deployment authority. Concrete resolved observation-profile pins/evidence and required measurements remain Gate B blockers.
 
-## 7. F-01 exhaustive global hash-root correction — candidate only
+## 7. F-01 exhaustive global hash-root correction — historical candidate provenance
 
 The source review candidate `e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` was
 reported by the User's focused audit to lack an explicit exhaustive root list in

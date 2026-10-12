@@ -1,28 +1,27 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `3` (F-01 exhaustive-root correction; candidate; Owner decisions recorded, activation pending)
-**Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_EXACT_COMMIT_USER_AUTHORIZATION_AND_CANONICAL_INTEGRATION`
-**Work package:** `WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION`
-**Base:** `origin/integration/implementation@c1187de97c550b9968d88aa6043ed716df981b54`
-**Correction source/direct parent:** `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`
-**Correction review branch:** `wp-04-gate-b-config-hash-root-correction-c1187de` (candidate only)
+**Record revision:** `4` (activation/status reconciliation successor; status/provenance only)
+**Status:** `REVISION_3_ACTIVATED_AT_INTEGRATION_8C3DE; REVISION_4_STATUS_RECONCILIATION_CANDIDATE_ONLY`
+**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
+**Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
+**Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
 
-The Project Owner/User approved both the global configuration-hash policy and the nested observation-input profile policy as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`). This records that decision; it does not activate this amendment or grant implementation/runtime authorization. The amendment does not edit or supersede the frozen Architecture. It becomes effective only after this exact candidate passes focused independent audit, receives separate explicit Project Owner/User authorization for its exact commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. Until then the existing Architecture and active source selections remain controlling. Presence of any source commit in integration ancestry alone does not prove audit, exact-commit authorization, or activation.
+Revision 4 records activation/status history only; it does not change the technical semantics, hash policy, exhaustive root set, profile schema, pins, measurements, or authorization boundary of revision 3. At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, revision 3 was activated after an exact-candidate audit PASS and separate exact-commit User authorization (both `USER_SUPPLIED_EVIDENCE`), followed by the fast-forward and remote-ref verification (Git-verifiable facts). No audit-report hash is asserted. This record does not amend or supersede the frozen Architecture DOCX and does not grant implementation/runtime authorization. This successor is a status/provenance candidate; its own integration is not required to repeat or re-activate revision 3.
 
-The active Gate B boundary-source selection remains Observation V3 Specification revision 1, pinned at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`, until the amendment activation conditions above are met. The current path's later revision bytes and this ACR remain candidate-only.
+The activated specification is Observation V3 Specification revision 5 at `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`, as of integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. Revision 1 was the historical boundary-source selection before activation; revisions 1–4 remain preserved provenance and are not deleted or rewritten.
 
-Revision 3 supersedes revision 2 only to correct F-01 by explicitly enumerating
+Revision 3 superseded revision 2 only to correct F-01 by explicitly enumerating
 the exhaustive Architecture §4 hash-input root set in §4. It does not change
 the approved global hash policy, profile shape, pending pins/measurements,
 active-source selection, or any authorization/status boundary.
 
 ## 1. Reason for change
 
-Architecture §4 defines the `ResolvedConfig` root and includes `observation: ObservationConfig`; §20 defines the observation layout and says its schema hash covers ordering, LiDAR rules, limits, goal cap, control period, issued-command definition, and normalization. It does not define a static descriptor slot for the Gate-B input contracts. ACR8 §8 requires a canonical `ObservationInputContractV3` source and compiler/composition validation with no unresolved resolved-config values. This amendment proposes the missing static descriptor at `ResolvedConfig.observation.input_profile` without adding a root member or changing the 81D policy observation.
+Architecture §4 defines the `ResolvedConfig` root and includes `observation: ObservationConfig`; §20 defines the observation layout and says its schema hash covers ordering, LiDAR rules, limits, goal cap, control period, issued-command definition, and normalization. It does not define a static descriptor slot for the Gate-B input contracts. ACR8 §8 requires a canonical `ObservationInputContractV3` source and compiler/composition validation with no unresolved resolved-config values. This activated amendment adds the missing static descriptor at `ResolvedConfig.observation.input_profile` without adding a root member or changing the 81D policy observation.
 
-## 2. Proposed Architecture amendment
+## 2. Activated Architecture amendment (technical content from revision 3)
 
 The Architecture `ResolvedConfig` root-member set remains unchanged. In the existing `ObservationConfig`, add exactly one required nested member:
 
@@ -32,7 +31,7 @@ input_profile: ObservationInputProfileV3
 
 No root `gate_b` member is introduced. `ResolvedGateBRecordV3`, if used internally by a compiler or implementation, is not a root canonical member and cannot replace the Architecture `ResolvedConfig` envelope. Its approved content must be represented by `observation.input_profile` and other existing Architecture-owned domains; no second or Gate-B-only config hash is defined.
 
-The candidate nested schema is:
+The activated nested schema is:
 
 ```text
 ObservationInputProfileV3(
@@ -72,7 +71,7 @@ This member is a static configuration descriptor. It contains no ROS/generated m
 
 ## 3. Versioning, compatibility, and migration
 
-This candidate assigns `schema_id="observation-input-profile-v3"` and `schema_revision=1`. Because a required nested member changes the serialized resolved-config schema, the candidate proposes the next compatible resolved-config schema version `3.1` (from Architecture's `3.0`); the root member names and ownership remain unchanged. A missing `observation.input_profile`, an unknown member, an invalid version, or a legacy config without this required member is rejected; no implicit migration, default, alias, or partial resolved config is allowed.
+The activated schema assigns `schema_id="observation-input-profile-v3"` and `schema_revision=1`. Because a required nested member changes the serialized resolved-config schema, the amendment selects the next compatible resolved-config schema version `3.1` (from Architecture's `3.0`); the root member names and ownership remain unchanged. A missing `observation.input_profile`, an unknown member, an invalid version, or a legacy config without this required member is rejected; no implicit migration, default, alias, or partial resolved config is allowed.
 
 Before implementation, the controlled schema and compiler/config input family must be updated under their own exact authorization. Existing V3 config inputs, profiles, compiler output, validation, config-hash vectors, model/checkpoint/run-manifest bindings, and downstream consumers require compatibility analysis and regeneration/revalidation under the new schema. This record makes no claim that such migration has occurred. Historical configurations and hashes are not silently reinterpreted.
 
@@ -111,7 +110,7 @@ Acceptance evidence required before a later implementation candidate is consider
 
 The adapter remains responsible for verifying ROS message type, QoS, frame, freshness, provenance and lifecycle/barrier facts before producing typed ingress data. The pure core receives only immutable typed snapshots/profile values and does not import ROS, access I/O, read a clock, or inspect repositories. This record does not change receipt v2, QoS6, ACR8, the Gate A schema, or WP-05.
 
-This is an architecture-change candidate, not effective Architecture authority, code authorization, Gate B acceptance, runtime evidence, HIL/hardware authority, or deployment approval.
+Revision 3 is activated change-control at the stated integration, without editing the Architecture DOCX. This revision-4 status reconciliation remains a candidate governance successor and is not a new technical amendment. Neither activation nor this record constitutes code authorization, Gate B acceptance, runtime evidence, HIL/hardware authority, or deployment approval.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT

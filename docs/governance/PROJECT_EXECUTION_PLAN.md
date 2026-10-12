@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.1` correction review candidate; records the 2026-10-12 Owner decisions and exhaustive-root F-01 correction; ACR activation remains pending; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.2` ACR revision-3 activation/status reconciliation candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -377,9 +377,9 @@ does not represent approval, activation, authorization, or Gate B pass.
 | Correction successor | `wp-04-observation-input-profile-architecture-amendment-correction-e89aeda5`; correction commit identity is resolved from Git history and is not embedded in its own evidence record |
 | Candidate state | Pending focused audit, separate User authorization for exact correction tip, fast-forward, and remote-ref verification |
 
-### WP-04 ObservationInputProfileV3 integration-resident candidate/provenance — PEP-001 rev.0.9.0 source content
+### Historical WP-04 ObservationInputProfileV3 candidate/provenance snapshot — PEP-001 rev.0.9.0 source content
 
-The source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` and revision-3 downstream materials are present in the stated integration ancestry as Git facts. The controlling ACR remains `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`. Ancestry does not prove that the exact candidate passed focused audit or received separate exact-commit User authorization and does not make the amendment effective. The ACR's canonical-integration and remote-ref verification conditions remain controlling. This PEP content is itself part of a review candidate and is not active until its reviewed commit is integrated under the plan's activation rule.
+At the historical integration point recorded by this rev.0.9.0 source content, commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` and revision-3 downstream materials were present in ancestry as Git facts. At that point the controlling ACR remained `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`. Ancestry alone did not prove that the exact candidate passed focused audit or received separate exact-commit User authorization. The later activation at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a` is recorded in the current rev.0.10.2 section below. This PEP historical content is retained as provenance.
 
 | Change-control field | Recorded value |
 |---|---|
@@ -479,15 +479,15 @@ decision basis `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`.
 That proposal is provenance supplied in the work-package context, not a
 Git-pinned authority; no report hash is asserted. The candidate-pending state
 in the historical table below describes its pre-integration state only. At the
-current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`, revision 1
-remains the active Gate B boundary-source selection. Its exact immutable source
+then-current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`, revision 1
+remained the active Gate B boundary-source selection. Its exact immutable source
 is `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`,
 path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256
 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision
 2 is superseded historical review provenance. Revision 3 and its companion
-Architecture amendment remain candidate-only because the ACR activation
-conditions are pending; their presence in integration ancestry does not
-replace revision 1 or activate the amendment. This selection is only the
+Architecture amendment were candidate-only at that historical base; their
+presence in integration ancestry did not replace revision 1 or activate the
+amendment. This selection was only the
 existing Gate B boundary source; it does not pass Gate B, resolve its blockers,
 or authorize implementation/runtime.
 
@@ -522,12 +522,12 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-### WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION — PEP-001 rev.0.10.1 candidate
+### Historical WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION — PEP-001 rev.0.10.1 pre-activation snapshot
 
-At required base `c1187de97c550b9968d88aa6043ed716df981b54`, Observation V3
-Specification revision 1 remains the active Gate B boundary-source selection
+At historical base `c1187de97c550b9968d88aa6043ed716df981b54`, Observation V3
+Specification revision 1 was the active Gate B boundary-source selection
 at its pinned immutable bytes. The revision-3 file at the current path and its
-companion Architecture Change Record are candidate-only. Source candidate
+companion Architecture Change Record were candidate-only. Source candidate
 `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`
 records ACR revision 2 / Specification revision 4. Correction review branch
 `wp-04-gate-b-config-hash-root-correction-c1187de` has that source commit as
@@ -535,7 +535,7 @@ its direct parent. This correction candidate records ACR revision 3 (SHA-256
 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and
 Specification revision 5 (SHA-256
 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). These
-remain review-candidate records; Git ancestry does not activate the amendment.
+were review-candidate records at that historical base; Git ancestry did not activate the amendment.
 The Project Owner/User approved both policies as written on 2026-10-12
 (`APPROVE_BOTH_AS_WRITTEN`):
 
@@ -548,8 +548,7 @@ The Project Owner/User approved both policies as written on 2026-10-12
    `ObservationConfig.input_profile: ObservationInputProfileV3`; no root
    `gate_b` member is added. The profile is covered by the global hash.
 
-These are Owner decisions recorded for change-control, not effective
-Architecture authority. Runtime-only facts, raw ROS/receipt data and samples
+These were Owner decisions recorded for change-control at the historical base. Runtime-only facts, raw ROS/receipt data and samples
 are invalid config inputs and cause rejection rather than being silently
 filtered. Missing/unknown/defaulted/coerced/unresolved values, unavailable
 required pins/evidence, duplicate keys, non-finite numbers, or required
@@ -569,3 +568,18 @@ provenance-only.
 | Candidate state | Pending focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification; no ACR activation or active profile schema is claimed |
 | Status/dependency | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim` or `deploy_real` authority |
+
+### WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION — PEP-001 rev.0.10.2 candidate
+
+At integration base `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and remote-ref verification are Git-verifiable facts. This PEP revision records status/provenance only; it does not modify technical semantics or itself establish a further activation event.
+
+Concrete contract/source pins and required evidence remain pending; measurements remain `PENDING_MEASUREMENT`. ACR activation creates no profile instance and does not satisfy Gate B. Historical PEP rev.0.10.1 text records the pre-activation state at `c1187de`; it is not current status.
+
+| Field | Current disposition |
+|---|---|
+| Active specification | Observation V3 Specification rev.5, exact SHA above; rev.1 was the historical pre-activation source selection and revs.1–4 remain provenance |
+| WP/status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| WP-05 map boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; User-supplied SLAM-source attribution is provenance only, not map/world equivalence, transform, alignment, runtime validation, or map approval |
+| Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
+
+This status reconciliation is a review candidate pending focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. It does not change WP-05 or any map artifact/evidence.

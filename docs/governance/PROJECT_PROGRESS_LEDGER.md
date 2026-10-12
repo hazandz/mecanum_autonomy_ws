@@ -566,3 +566,19 @@
 | Supersedes | F-01 root-list omission in source candidate ACR revision 2 §4 and Specification revision 4 §5.1 only; no Owner decision or profile semantics superseded; all prior Ledger bytes remain unchanged |
 | WP/status impact | No transition or dependency change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no code, test, ROS/ROSIDL, adapter, runtime, HIL, hardware, or deployment authority |
+
+### WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION` |
+| Exact base | `8c3de26521d7028a933f0a3ebe780fcb372f7a3a` |
+| Activated event | ACR revision 3 exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE` (no audit-report hash asserted); fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and remote-ref verification at `8c3de…` are Git-verifiable facts |
+| Activated artifacts | ACR revision 3 SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; Observation V3 Specification revision 5 SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2` |
+| Candidate scope | Status/provenance reconciliation only across ACR, Observation V3 Specification, Gate-B decision, Registry, PEP-001 revision `0.10.2`, and this append-only Ledger entry; technical semantics unchanged |
+| Remaining blockers | Required contract/source pins and evidence remain pending; measurements remain `PENDING_MEASUREMENT`; no profile instance is resolved and Gate B remains `NOT_STARTED` |
+| WP-05 boundary | `warehouse_map2`: `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; User-supplied SLAM source attribution is provenance only, not map/world equivalence, transform, metric alignment, runtime validation, or map approval |
+| Candidate state | This reconciliation candidate awaits focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; it does not alter the activated ACR/spec semantics |
+| WP/status impact | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
