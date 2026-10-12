@@ -631,3 +631,18 @@
 | Candidate state | Pending focused independent audit, separate User authorization for this exact successor commit, fast-forward, and remote-ref verification. No new technical source is activated. |
 | Fail-closed boundary | Under active ACR3, any required unresolved pin/evidence/value keeps the profile unresolved; compiler rejects the whole resolved config and emits no partial ResolvedConfig or config_hash. |
 | WP/status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft/not approved, world frame not declared, runtime compatibility not validated; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP05-NAVIGATION-V1-CANONICAL-SOURCE-SELECTION-REFRESH
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base | `71f5db2b2bd1a04a1a3a087fed2ae6547f156fb1` |
+| Decision source | New `docs/governance/decisions/WP-05_NAVIGATION_V1_CANONICAL_SOURCE_SELECTION.md`; Owner source-selection boundary is recorded as `USER_SUPPLIED_DECISION`, while file hashes and artifact state are Git-verifiable at the base |
+| Source selection | No executable Navigation V1 profile is canonical. V3 files are contract/intention inputs only; legacy Nav2/AMCL/launch/SLAM/Gazebo sources are `REFERENCE_ONLY_LEGACY`; geometry/SDF are evidence only |
+| Pending closure | Map Server config; AMCL parameters; EKF config; launch ownership; scan header frame; `base_link → lidar` geometry; TF ownership realization; explicit remaps/namespaces; lifecycle/startup; package/version pins; complete resolved `config_hash` |
+| Map boundary | `warehouse_map2` is integration-resident draft, not approved/navigation-ready; profile binding by map ID/identity/hash would not itself approve it. World-frame validation and runtime compatibility remain separate |
+| Fail-closed boundary | Any missing/conflicting required selection, pin, or evidence means no resolved profile, no profile hash, and no Navigation V1 bring-up |
+| Candidate state | Review candidate pending independent audit, separate explicit User authorization for the exact commit, fast-forward, and remote-ref verification; this Ledger entry does not assert audit PASS or integration |
+| Status/authorization | No status/dependency transition: WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; world frame `NOT_DECLARED`; runtime compatibility `NOT_VALIDATED`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 unchanged |
