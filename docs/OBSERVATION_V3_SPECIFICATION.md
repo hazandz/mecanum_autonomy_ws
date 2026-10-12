@@ -1,12 +1,19 @@
 # Observation V3 Specification
 
-**Revision:** `6` (activation/status reconciliation successor; status/provenance only)
-**Status:** `REVISION_5_ACTIVATED_AT_INTEGRATION_8C3DE; REVISION_6_STATUS_RECONCILIATION_CANDIDATE_ONLY`
-**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
-**Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
+**Revision:** `7` (status-reconciliation successor; status/provenance only)
+**Status:** `REVISION_5_TECHNICAL_AUTHORITY_ACTIVE_AT_8C3DE; STATUS_RECONCILIATION_3FC3E2E_INTEGRATED; REVISION_7_CANDIDATE_ONLY`
+**Work package:** `WP04-ACR3-STATUS-RECONCILIATION-SUCCESSOR-CORRECTION`
+**Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; active revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
+**Integrated status-reconciliation commit:** `3fc3e2e583550b47195720f0de2fda8fbbd7490f` (direct parent `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; Git-verifiable)
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
-Revision 6 records that the exact Specification revision 5 bytes (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`) were activated by ACR revision 3 at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The exact-candidate audit PASS and separate User authorization are `USER_SUPPLIED_EVIDENCE`; fast-forward and remote-ref verification are Git-verifiable facts. No audit-report hash is asserted. This successor changes status/provenance wording only and does not change technical contract semantics, pass Gate B, close WP-04, implement an adapter, or authorize code/runtime.
+### Historical revision-6 status snapshot
+
+Revision 6 recorded that the exact Specification revision 5 bytes (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`) were activated by ACR revision 3 at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The exact-candidate audit PASS and separate User authorization were `USER_SUPPLIED_EVIDENCE`; fast-forward and remote-ref verification were Git-verifiable facts. No audit-report hash was asserted. Its revision-6 candidate-only wording described the state before status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` was integrated.
+
+### Current status recorded by revision 7
+
+ACR revision 3 and Observation V3 Specification revision 5 remain the active technical authority from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; their hashes and technical semantics are unchanged. Status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` was fast-forwarded from `8c3de…` and is present at the exact base of this successor. The audit verdict for that exact tip is `USER_SUPPLIED_AUDIT_EVIDENCE`; its separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE` (no audit-report hash asserted); fast-forward and remote-ref verification are Git-verifiable facts. Revision 7 itself is a status/provenance candidate pending its own focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. This status record changes no technical content, active pin, Gate B blocker, pending measurement, WP status, dependency, or authorization, and does not make Gate B pass or close WP-04.
 
 ## Historical source selection before ACR revision-3 activation
 
@@ -193,3 +200,5 @@ CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
+
+The status reconciliation recorded above does not activate this revision 7 candidate. ACR revision 3 and Specification revision 5 remain the active technical source selection until a separate authorized change-control transition says otherwise.

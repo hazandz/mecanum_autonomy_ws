@@ -1,14 +1,15 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `4` (activation/status reconciliation successor; status/provenance only)
-**Status:** `REVISION_3_ACTIVATED_AT_INTEGRATION_8C3DE; REVISION_4_STATUS_RECONCILIATION_CANDIDATE_ONLY`
-**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
+**Record revision:** `5` (status-reconciliation successor; status/provenance only)
+**Status:** `REVISION_3_TECHNICAL_AUTHORITY_ACTIVE_AT_8C3DE; STATUS_RECONCILIATION_3FC3E2E_INTEGRATED; REVISION_5_CANDIDATE_ONLY`
+**Work package:** `WP04-ACR3-STATUS-RECONCILIATION-SUCCESSOR-CORRECTION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
+**Integrated status-reconciliation commit:** `3fc3e2e583550b47195720f0de2fda8fbbd7490f` (direct parent `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; Git-verifiable)
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
 
-Revision 4 records activation/status history only; it does not change the technical semantics, hash policy, exhaustive root set, profile schema, pins, measurements, or authorization boundary of revision 3. At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, revision 3 was activated after an exact-candidate audit PASS and separate exact-commit User authorization (both `USER_SUPPLIED_EVIDENCE`), followed by the fast-forward and remote-ref verification (Git-verifiable facts). No audit-report hash is asserted. This record does not amend or supersede the frozen Architecture DOCX and does not grant implementation/runtime authorization. This successor is a status/provenance candidate; its own integration is not required to repeat or re-activate revision 3.
+Revision 5 records status/provenance only; it does not change the technical semantics, hash policy, exhaustive root set, profile schema, pins, measurements, or authorization boundary of revision 3. At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, revision 3 was activated after an exact-candidate audit PASS and separate exact-commit User authorization (both `USER_SUPPLIED_EVIDENCE`), followed by the fast-forward and remote-ref verification (Git-verifiable facts). No audit-report hash is asserted. The status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` was subsequently fast-forwarded from `8c3de…` and is present at the exact integration base for this successor; its exact-tip audit verdict is `USER_SUPPLIED_AUDIT_EVIDENCE`, its separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE`, and its fast-forward and remote-ref verification are Git-verifiable. No report hash is asserted. The pending wording in revision 4 described the pre-integration state and remains historical provenance. This record does not amend or supersede the frozen Architecture DOCX and does not grant implementation/runtime authorization. Revision 5 is itself a status/provenance candidate pending its own focused audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; its integration would not repeat or re-activate revision 3.
 
 The activated specification is Observation V3 Specification revision 5 at `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`, as of integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. Revision 1 was the historical boundary-source selection before activation; revisions 1–4 remain preserved provenance and are not deleted or rewritten.
 
@@ -110,7 +111,7 @@ Acceptance evidence required before a later implementation candidate is consider
 
 The adapter remains responsible for verifying ROS message type, QoS, frame, freshness, provenance and lifecycle/barrier facts before producing typed ingress data. The pure core receives only immutable typed snapshots/profile values and does not import ROS, access I/O, read a clock, or inspect repositories. This record does not change receipt v2, QoS6, ACR8, the Gate A schema, or WP-05.
 
-Revision 3 is activated change-control at the stated integration, without editing the Architecture DOCX. This revision-4 status reconciliation remains a candidate governance successor and is not a new technical amendment. Neither activation nor this record constitutes code authorization, Gate B acceptance, runtime evidence, HIL/hardware authority, or deployment approval.
+Revision 3 remains the active technical change-control at the stated integration, without editing the Architecture DOCX. Revision 4's pending status-reconciliation wording is retained as historical pre-integration provenance; commit `3fc3e2e…` records that reconciliation as integrated. Revision 5 is a status/provenance candidate successor, not a new technical amendment. Neither activation nor this record constitutes code authorization, Gate B acceptance, runtime evidence, HIL/hardware authority, or deployment approval.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT

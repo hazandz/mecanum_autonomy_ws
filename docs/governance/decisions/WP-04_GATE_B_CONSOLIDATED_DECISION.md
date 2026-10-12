@@ -1,6 +1,6 @@
 # WP-04 Gate B Consolidated Decision and Exact-Data-Contract Correction
 
-**Status:** `ACR_REVISION_3_ACTIVATED_AT_INTEGRATION_8C3DE; GATE_B_NOT_STARTED; THIS_STATUS_RECONCILIATION_IS_CANDIDATE_ONLY`
+**Status:** `ACR_REVISION_3_ACTIVE_AT_8C3DE; STATUS_RECONCILIATION_3FC3E2E_INTEGRATED; SUCCESSOR_CORRECTION_CANDIDATE_PENDING; GATE_B_NOT_STARTED`
 **Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
 **Activation integration:** `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; ACR revision 3 exact SHA `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; activated Specification revision 5 exact SHA `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Decision basis:** `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`, supplied by the User; not represented as a Git-pinned authority or hashed audit report.
@@ -132,7 +132,7 @@ WP-05: OPEN
 
 At integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and post-fast-forward remote-ref verification are Git-verifiable facts. This reconciliation records that event and does not infer it from ancestry alone.
 
-The inherited candidate-only/activation-pending wording in the historical sections describes the state before activation at base `c1187de`; it is historical provenance, not current status. This document's present status correction is itself pending focused audit, separate User authorization, integration, and remote-ref verification. It makes no technical change to the activated ACR/specification.
+The inherited candidate-only/activation-pending wording in the historical sections describes states before their respective integrations and remains historical provenance, not current status. ACR revision 3 and Specification revision 5 remain the active technical authority from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The status-reconciliation candidate based on `8c3de…` was integrated as commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f`, with direct parent `8c3de…`; the integration ref at this successor's base is Git-verifiable at `3fc3e2e…`. The audit verdict for that exact tip is `USER_SUPPLIED_AUDIT_EVIDENCE`; separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The fast-forward and remote-ref verification are Git-verifiable facts. ACR revision 4 and Specification revision 6 preserve the pre-integration candidate-pending wording as historical status snapshots. The present successor candidate updates only status/provenance and remains pending its own focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. It makes no technical change to the active ACR/specification.
 
 Concrete required contract/source pins and evidence remain pending; measurements remain `PENDING_MEASUREMENT`. Activation does not create a profile instance, resolve those items, satisfy all ACR8 implementation conditions, or pass Gate B.
 

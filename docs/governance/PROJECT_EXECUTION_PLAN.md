@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.2` ACR revision-3 activation/status reconciliation candidate; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.3` ACR3 status-reconciliation successor candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -569,7 +569,7 @@ provenance-only.
 | Status/dependency | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim` or `deploy_real` authority |
 
-### WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION — PEP-001 rev.0.10.2 candidate
+### WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION — PEP-001 rev.0.10.2 pre-integration snapshot
 
 At integration base `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, ACR revision 3 (SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) activated Observation V3 Specification revision 5 (SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Exact-candidate audit PASS and separate exact-commit User authorization are `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The fast-forward from `c1187de97c550b9968d88aa6043ed716df981b54` and remote-ref verification are Git-verifiable facts. This PEP revision records status/provenance only; it does not modify technical semantics or itself establish a further activation event.
 
@@ -582,4 +582,18 @@ Concrete contract/source pins and required evidence remain pending; measurements
 | WP-05 map boundary | `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`; User-supplied SLAM-source attribution is provenance only, not map/world equivalence, transform, alignment, runtime validation, or map approval |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
 
-This status reconciliation is a review candidate pending focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. It does not change WP-05 or any map artifact/evidence.
+The candidate-pending wording in this rev.0.10.2 snapshot described the state before its fast-forward. The status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f`, with direct parent `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, is integrated at the current remote integration tip (Git-verifiable). The audit verdict for that exact tip is `USER_SUPPLIED_AUDIT_EVIDENCE`; its separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted. This successor corrects status/provenance only and does not change WP-05 or any map artifact/evidence.
+
+### WP04-ACR3-STATUS-RECONCILIATION-SUCCESSOR-CORRECTION — PEP-001 rev.0.10.3 candidate
+
+This candidate records that status-reconciliation commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f` has been integrated, while preserving ACR revision 3 and Observation V3 Specification revision 5 as the active technical authority from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The audit PASS and separate User authorization for ACR3/Specification5 activation are `USER_SUPPLIED_EVIDENCE`; the corresponding fast-forward and remote-ref verification are Git-verifiable. The exact-tip audit verdict for `3fc3e2e…` is `USER_SUPPLIED_AUDIT_EVIDENCE`; its separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE`; no report hash is asserted. The audit/authorization provenance is not inferred from Git ancestry.
+
+ACR revision 4 and Specification revision 6 retain their candidate-pending wording as historical pre-integration status records. This candidate proposes ACR revision 5 and Specification revision 7 as status/provenance successors only; neither changes technical semantics or active pins. The candidate itself remains pending focused independent audit, separate User authorization for its exact final commit, fast-forward, and remote-ref verification. Required Gate B pins/evidence remain pending, and measurements remain `PENDING_MEASUREMENT`.
+
+| Field | Current disposition |
+|---|---|
+| Active technical authority | ACR revision 3 and Observation V3 Specification revision 5, activated at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; exact hashes remain `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8` and `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2` |
+| Integrated status record | `3fc3e2e583550b47195720f0de2fda8fbbd7490f`, directly descended from `8c3de…`; integration/ref facts Git-verifiable; audit and authorization evidence remain User-supplied |
+| Successor candidate | ACR revision 5, Specification revision 7 and PEP-001 revision 0.10.3; status/provenance only, pending audit and separate exact-commit integration authorization |
+| WP/status/dependency | No change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; dependencies unchanged |
+| Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, runtime, HIL, hardware, or deployment authority |

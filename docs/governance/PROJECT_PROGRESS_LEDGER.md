@@ -582,3 +582,19 @@
 | Candidate state | This reconciliation candidate awaits focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; it does not alter the activated ACR/spec semantics |
 | WP/status impact | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS, HIL, hardware, or deployment authority |
+
+### WP04-ACR3-STATUS-RECONCILIATION-SUCCESSOR-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-ACR3-STATUS-RECONCILIATION-SUCCESSOR-CORRECTION` |
+| Exact integration base | `3fc3e2e583550b47195720f0de2fda8fbbd7490f` |
+| Active technical authority | ACR revision 3 and Observation V3 Specification revision 5 remain active from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activation audit/User authorization are `USER_SUPPLIED_EVIDENCE` (no report hash asserted), and the fast-forward/ref facts are Git-verifiable |
+| Integrated status-reconciliation event | Commit `3fc3e2e583550b47195720f0de2fda8fbbd7490f`, direct parent `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, is present at the exact integration base (Git-verifiable); audit verdict is `USER_SUPPLIED_AUDIT_EVIDENCE`; separate exact-commit User authorization is `USER_SUPPLIED_EVIDENCE`; no audit-report hash is asserted |
+| Historical wording | The pending state in the earlier status-reconciliation Ledger entry described the pre-fast-forward period. That entry is preserved unchanged; this append records the subsequent integration without rewriting history. |
+| Successor revisions | ACR revision 5, Observation V3 Specification revision 7, and PEP-001 revision 0.10.3 are status/provenance-only candidate successors; ACR revision 3 and Specification revision 5 remain the active technical source selection. |
+| Candidate scope | Six governance paths: ACR status successor, Specification status successor, Gate-B decision, Canonical Source Registry, PEP-001, and this append-only Ledger; no technical semantics, active pins, blockers, or measurements changed |
+| Candidate state | This successor candidate is pending focused independent audit, separate User authorization for its exact final commit, fast-forward, and remote-ref verification; no integration of this successor is claimed. |
+| WP/status/dependency | No change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; dependencies unchanged |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, runtime, HIL, hardware, or deployment authority |
