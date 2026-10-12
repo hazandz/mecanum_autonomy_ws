@@ -1,16 +1,16 @@
 # Observation V3 Specification
 
-**Revision:** `4` (Owner decisions recorded; change-control candidate; revision 1 remains active boundary-source selection until ACR activation)
+**Revision:** `5` (F-01 exhaustive-root correction; Owner decisions recorded; change-control candidate; revision 1 remains active boundary-source selection until ACR activation)
 **Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_EXACT_COMMIT_USER_AUTHORIZATION_AND_CANONICAL_INTEGRATION`
-**Work package:** `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL`
-**Candidate base:** `origin/integration/implementation@c1187de97c550b9968d88aa6043ed716df981b54`
+**Work package:** `WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION`
+**Candidate base:** `origin/integration/implementation@c1187de97c550b9968d88aa6043ed716df981b54`; correction branch `wp-04-gate-b-config-hash-root-correction-c1187de`, direct parent/source candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
 The Project Owner/User approved both the global `ResolvedConfig.config_hash` policy and the nested observation-input profile policy as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`). This Specification revision records those decisions in a governance candidate; it does not activate the ACR amendment. The Architecture DOCX remains the highest authority until the exact ACR/change-control candidate passes focused audit, receives separate explicit User authorization for its exact commit, is fast-forwarded, and has its remote ref verified. This candidate does not pass Gate B, close WP-04, implement an adapter, or authorize code or runtime.
 
 ## Active Gate B boundary-source selection while the amendment is pending
 
-Until the companion ObservationInputProfileV3 ACR is activated, the Architecture and existing active source selections remain controlling. For the Gate B boundary/specification selection only, Observation V3 Specification revision 1 remains the active selected source. Its exact immutable bytes are pinned by `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revisions 2 and 3 are historical candidate/provenance only; revision 4 is this review candidate. None replaces the revision-1 selection or activates the ACR. This continuity statement selects no additional concrete profile pin, does not pass Gate B, and grants no implementation or runtime authority.
+Until the companion ObservationInputProfileV3 ACR is activated, the Architecture and existing active source selections remain controlling. For the Gate B boundary/specification selection only, Observation V3 Specification revision 1 remains the active selected source. Its exact immutable bytes are pinned by `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revisions 2–4 are historical candidate/provenance only; revision 5 is this correction review candidate. None replaces the revision-1 selection or activates the ACR. This continuity statement selects no additional concrete profile pin, does not pass Gate B, and grants no implementation or runtime authority.
 
 ## 1. Authority and exact pins
 
@@ -132,15 +132,46 @@ The Owner-approved global hash is SHA-256 of RFC 8785 JCS canonical UTF-8
 bytes for the complete resolved and validated static Architecture
 `ResolvedConfig`, with no BOM and no trailing newline. Exactly the output
 `config_hash` field is omitted from the serialized payload to avoid
-self-reference. Every static root domain, including `observation.input_profile`
-and immutable profile provenance, is covered. No Gate-B-only hash or subrecord
-hash is defined. Runtime timestamps, sensor samples, raw ROS/receipt objects
-and payloads, sequence values, lifecycle identity/counters, barrier occurrences
-or results, and freshness results are invalid in a static resolved config; if
-present as config input/domain, they cause rejection rather than being silently
-filtered. Duplicate object keys and non-finite numbers are rejected. RFC 8785
-is recorded as a change-controlled refinement of Architecture §4, not inferred
-from the map-manifest hash rule in §48.
+self-reference. The exact and exhaustive root-member set of the hash-input
+projection is:
+
+```text
+schema_version
+runtime_profile
+navigation_mode
+project
+topics
+frames
+state_estimation
+localization
+navigation
+observation
+action
+reward
+training
+evaluation
+safety
+acceptance
+```
+
+Each listed root must occur exactly once in the object being hashed. This list
+is exhaustive, not illustrative: no root may be omitted, added, renamed,
+replaced, or projected separately. `observation.input_profile` is nested
+inside `observation`, not a separate root. The only excluded field is the
+output `config_hash` itself, computed from the listed projection and then
+stored in the resolved object. The stored `ResolvedConfig` therefore contains
+the listed roots plus that output field, consistent with Architecture §4.
+
+The projection is fully resolved and validated before canonicalization.
+Duplicate JSON keys are rejected before projection creation; a parser must not
+silently retain one duplicate value. SHA-256 is computed over RFC 8785 JCS
+UTF-8 bytes, without BOM or trailing newline. Non-finite numbers and runtime-only
+facts—including timestamps, sensor samples, raw ROS/receipt objects and
+payloads, sequence values, lifecycle identity/counters, barrier occurrences
+or results, and freshness results—are invalid resolved-config inputs and cause
+rejection; they are not silently filtered. No Gate-B-only hash or subrecord
+hash is defined. RFC 8785 is recorded as a change-controlled refinement of
+Architecture §4, not inferred from the map-manifest hash rule in §48.
 
 Missing/unknown/defaulted/coerced/aliased/unresolved required fields, missing
 authority/evidence pins, or required `PENDING_OWNER_DECISION` /

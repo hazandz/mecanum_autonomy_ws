@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.0` review candidate; records the 2026-10-12 Owner decisions; ACR activation remains pending; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.1` correction review candidate; records the 2026-10-12 Owner decisions and exhaustive-root F-01 correction; ACR activation remains pending; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -522,15 +522,22 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-### WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL — PEP-001 rev.0.10.0 candidate
+### WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION — PEP-001 rev.0.10.1 candidate
 
 At required base `c1187de97c550b9968d88aa6043ed716df981b54`, Observation V3
 Specification revision 1 remains the active Gate B boundary-source selection
 at its pinned immutable bytes. The revision-3 file at the current path and its
-companion Architecture Change Record are candidate-only. This PEP revision and
-its companion ACR revision 2 / Specification revision 4 are review-candidate
-records; Git ancestry does not activate the amendment. The Project Owner/User
-approved both policies as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`):
+companion Architecture Change Record are candidate-only. Source candidate
+`wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`
+records ACR revision 2 / Specification revision 4. Correction review branch
+`wp-04-gate-b-config-hash-root-correction-c1187de` has that source commit as
+its direct parent. This correction candidate records ACR revision 3 (SHA-256
+`38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and
+Specification revision 5 (SHA-256
+`4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). These
+remain review-candidate records; Git ancestry does not activate the amendment.
+The Project Owner/User approved both policies as written on 2026-10-12
+(`APPROVE_BOTH_AS_WRITTEN`):
 
 1. `ResolvedConfig.config_hash` is SHA-256 of RFC 8785 JCS canonical UTF-8
    bytes for the complete resolved and validated static Architecture
@@ -553,10 +560,12 @@ provenance-only.
 
 | Change-control field | Recorded value |
 |---|---|
-| Work package / base | `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL`; `c1187de97c550b9968d88aa6043ed716df981b54` |
+| Work package / base | `WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION`; integration base `c1187de97c550b9968d88aa6043ed716df981b54`; direct parent `e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` |
 | Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; unchanged and highest authority until ACR activation |
 | Active boundary source | Observation V3 Specification revision 1 at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec` |
-| Candidate documents | ACR revision 2, Observation V3 Specification revision 4, Gate-B consolidated decision, Registry, this PEP revision and one append-only Ledger entry |
+| Candidate documents | Source review candidate `e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` (direct parent/integration base `c1187de97c550b9968d88aa6043ed716df981b54`); correction candidate ACR revision 3 (`38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and Observation V3 Specification revision 5 (`4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`), with this PEP revision, Gate-B decision, Registry and one append-only Ledger entry |
+| F-01 evidence | User-supplied focused independent audit finding that ACR §4 and Specification §5.1 lacked an explicit exhaustive global-hash root list; no audit-report hash is asserted |
+| Projection roots | Exhaustive Architecture §4 root set is listed in ACR revision 3 §4 and Specification revision 5 §5.1; only output `config_hash` is omitted, and forbidden runtime values are rejected rather than filtered |
 | Candidate state | Pending focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification; no ACR activation or active profile schema is claimed |
 | Status/dependency | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim` or `deploy_real` authority |

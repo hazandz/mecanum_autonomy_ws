@@ -65,9 +65,9 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | CURRENT_PATH_BYTES_REV3_CANDIDATE_AT_BASE; ACTIVE_GATE_B_BOUNDARY_SELECTION_REV1; REV4_REVIEW_CANDIDATE | At required base `c1187de97c550b9968d88aa6043ed716df981b54`, current path bytes are revision 3. This candidate proposes revision 4; it remains review-only. The active Gate B boundary-source selection remains the exact revision-1 bytes at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, same path, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. No candidate bytes replace revision 1 or activate the ACR; no Gate B pass or implementation/runtime authority |
-| docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md | ARCHITECTURE_AMENDMENT_REV2_CANDIDATE_ONLY | Records Owner-approved global hash/profile decisions; pending focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; Architecture DOCX remains controlling until activation |
-| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | WP04_GATE_B_OWNER_DECISIONS_RECORDED_CANDIDATE_ONLY | Records `APPROVE_BOTH_AS_WRITTEN`; does not activate ACR, make concrete profile pins resolved, pass Gate B, or authorize code/runtime |
+| docs/OBSERVATION_V3_SPECIFICATION.md | REV3_BYTES_AT_REQUIRED_BASE; ACTIVE_GATE_B_BOUNDARY_SELECTION_REV1; REV4_SOURCE_REVIEW_CANDIDATE; REV5_ROOT-CORRECTION_CANDIDATE_ONLY | At required base `c1187de97c550b9968d88aa6043ed716df981b54`, current path bytes are revision 3. Source candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` contains revision 4; this correction proposes revision 5, SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. Both are review-only. The active Gate B boundary-source selection remains the exact revision-1 bytes at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, same path, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. No candidate bytes replace revision 1 or activate the ACR; no Gate B pass or implementation/runtime authority |
+| docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md | ARCHITECTURE_AMENDMENT_REV3_ROOT-CORRECTION_CANDIDATE_ONLY | Candidate revision 3, SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; records Owner-approved global hash/profile decisions and the exhaustive Architecture §4 projection root set; pending focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; Architecture DOCX remains controlling until activation |
+| docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | WP04_GATE_B_OWNER_DECISIONS_RECORDED_AND_F01_ROOT_CORRECTION_CANDIDATE_ONLY | Records `APPROVE_BOTH_AS_WRITTEN` and user-supplied F-01 correction provenance; references ACR revision 3 / Specification revision 5 as candidate-only; does not activate ACR, make concrete profile pins resolved, pass Gate B, or authorize code/runtime |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
 | docs/MECANUM_NAV_DRL_Project_Tree.txt | PROJECT_STRUCTURE_AUTHORITY | Expected project layout; not architecture override |
@@ -239,3 +239,24 @@ At historical base `e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`, the then-selected
 The amendment candidate keeps the Architecture root envelope unchanged, adds no root `gate_b`, and records the Owner-approved static member under `observation.input_profile`. `ResolvedGateBRecordV3` is only an internal compiler/type abstraction, not a root member or alternate hash. The Owner-approved global hash policy is RFC 8785 JCS UTF-8 SHA-256 over the complete resolved static Architecture config; only output `config_hash` is omitted. Runtime-only data is invalid input and must be rejected, not silently removed. The decision is candidate-only until the ACR activation conditions are met. Concrete contract IDs/digests/source pins and required measurements remain unresolved. OIC rev.6 remains provenance-only. None of these candidate facts passes Gate B or authorizes implementation/runtime.
 
 This Registry entry changes no active source selection, WP status/dependency, or authorization. It records the Owner decision in a review candidate only. The ACR activation conditions remain pending; Gate B is `NOT_STARTED`, WP-04 is `BLOCKED_BY_CONTRACT`, Gate A is `PASSED`, and WP-05 is `OPEN`.
+
+### WP04-GATE-B global hash-root correction candidate
+
+Source review candidate `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab` has sole parent
+`c1187de97c550b9968d88aa6043ed716df981b54`. Its user-supplied F-01 finding
+identified that ACR §4 and Specification §5.1 did not enumerate the complete
+Architecture §4 root set explicitly; no audit-report hash is asserted. The
+correction proposes ACR revision 3 (SHA-256
+`38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and
+Specification revision 5 (SHA-256
+`4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`). Both
+remain candidate-only pending focused independent audit, separate explicit
+User authorization for the exact final commit, fast-forward, and remote-ref
+verification. Observation V3 Specification revision 1 remains the active
+Gate-B boundary-source selection. This correction changes no Owner decision,
+profile semantics, concrete pin, measurement, status, dependency, or
+authorization; Gate B remains `NOT_STARTED` and the ACR is not active.
+The correction review branch is
+`wp-04-gate-b-config-hash-root-correction-c1187de`, with direct parent
+`e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`; the cumulative integration base is
+`c1187de97c550b9968d88aa6043ed716df981b54`.

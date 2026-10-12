@@ -547,3 +547,22 @@
 | Candidate state | Pending focused consolidated independent audit; no ACR activation or canonical integration is claimed |
 | WP status/dependency impact | No transition or dependency change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, runtime, HIL, hardware, or deployment authority |
+
+### WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-GATE-B-CONFIG-HASH-EXHAUSTIVE-ROOT-CORRECTION` |
+| Integration base | `c1187de97c550b9968d88aa6043ed716df981b54` |
+| Source candidate / direct parent | `wp-04-gate-b-global-config-owner-decision-c1187de@e79a8f6fd6be7b50dbbfe28819a34116ecaec3ab`; parent `c1187de97c550b9968d88aa6043ed716df981b54` |
+| Correction review branch | `wp-04-gate-b-config-hash-root-correction-c1187de` |
+| Finding provenance | User-supplied focused independent audit finding F-01: ACR §4 and Observation V3 Specification §5.1 did not explicitly enumerate the complete Architecture §4 global hash projection roots; no audit-report hash is asserted |
+| Correction scope | Six documentation paths only: ACR revision 3, Observation V3 Specification revision 5, Gate-B decision, Registry, PEP-001 revision 0.10.1, and this append-only Ledger entry |
+| Candidate source pins | ACR revision 3 SHA-256 `38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`; Observation V3 Specification revision 5 SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2` |
+| Exhaustive hash-input root set | `schema_version`, `runtime_profile`, `navigation_mode`, `project`, `topics`, `frames`, `state_estimation`, `localization`, `navigation`, `observation`, `action`, `reward`, `training`, `evaluation`, `safety`, `acceptance`; each exactly once; only output `config_hash` omitted; `observation.input_profile` remains nested under `observation` |
+| Hash/failure semantics | SHA-256 over RFC 8785 JCS UTF-8 bytes after full resolution/validation, no BOM/trailing newline; duplicate keys, non-finite values, and runtime-only facts are rejected, not silently filtered; no partial config/hash |
+| Candidate state | Correction successor of `e79a8f6…`, pending focused independent audit, separate explicit User authorization for its exact final commit, fast-forward, and remote-ref verification; revision 1 remains the active Gate-B boundary-source selection; ACR revision 3 and Specification revision 5 remain candidate-only |
+| Supersedes | F-01 root-list omission in source candidate ACR revision 2 §4 and Specification revision 4 §5.1 only; no Owner decision or profile semantics superseded; all prior Ledger bytes remain unchanged |
+| WP/status impact | No transition or dependency change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no code, test, ROS/ROSIDL, adapter, runtime, HIL, hardware, or deployment authority |
