@@ -529,3 +529,21 @@
 | WP-05 no-regression | No WP-05 file or map artifact was changed. The integrated `warehouse_map2` remains draft; `world_frame: NOT_DECLARED`; runtime compatibility `NOT_VALIDATED`. |
 | Audit/authorization boundary | No audit PASS or User authorization is asserted by this entry. `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Candidate state | This source-selection continuity correction is pending its own focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification. |
+
+### WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL` |
+| Integration base | `c1187de97c550b9968d88aa6043ed716df981b54` |
+| Owner decision | User supplied `APPROVE_BOTH_AS_WRITTEN` for the global `ResolvedConfig.config_hash` policy and required nested `ObservationConfig.input_profile: ObservationInputProfileV3`; recorded here as decision provenance, not activation or authorization |
+| Global hash decision | Full resolved/validated static Architecture `ResolvedConfig`; RFC 8785 JCS canonical UTF-8, no BOM or trailing newline; SHA-256; omit only output `config_hash`; reject duplicate keys, non-finite numbers and runtime-only data rather than silently filtering it; no Gate-B-only/subrecord hash |
+| Input-profile decision | Required static nested `ObservationConfig.input_profile`; no root `gate_b`; profile participates in the global hash; runtime samples/state remain outside resolved configuration |
+| Candidate scope | Six documentation paths: Architecture Change Record, Observation V3 Specification, Gate-B consolidated decision, Canonical Source Registry, PEP-001 and this Ledger |
+| Supersedes | The unresolved Owner-decision state for `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` and `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` recorded in `WP-04-GATE-B-EXACT-DATA-CONTRACT-COMPLETION-REFRESH`; prior entries remain unchanged historical records |
+| Remaining blockers | ACR amendment is candidate-only pending focused audit, separate User authorization for exact final commit, fast-forward and remote-ref verification. Concrete profile contract/source pins and required measurements remain `PENDING_OWNER_DECISION` / `PENDING_MEASUREMENT`; compiler must reject whole config without partial hash while required inputs remain unresolved |
+| Active source continuity | Observation V3 Specification revision 1 remains the active Gate-B boundary-source selection until ACR activation; revision 3 at the base and this revision-4 candidate do not activate the amendment. OIC revision 6 remains provenance-only |
+| Candidate state | Pending focused consolidated independent audit; no ACR activation or canonical integration is claimed |
+| WP status/dependency impact | No transition or dependency change: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, runtime, HIL, hardware, or deployment authority |

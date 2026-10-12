@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.9.0` candidate/provenance reconciliation; WP-04 ACR activation conditions remain pending; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.0` review candidate; records the 2026-10-12 Owner decisions; ACR activation remains pending; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -521,3 +521,42 @@ CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
+
+### WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL — PEP-001 rev.0.10.0 candidate
+
+At required base `c1187de97c550b9968d88aa6043ed716df981b54`, Observation V3
+Specification revision 1 remains the active Gate B boundary-source selection
+at its pinned immutable bytes. The revision-3 file at the current path and its
+companion Architecture Change Record are candidate-only. This PEP revision and
+its companion ACR revision 2 / Specification revision 4 are review-candidate
+records; Git ancestry does not activate the amendment. The Project Owner/User
+approved both policies as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`):
+
+1. `ResolvedConfig.config_hash` is SHA-256 of RFC 8785 JCS canonical UTF-8
+   bytes for the complete resolved and validated static Architecture
+   `ResolvedConfig`; there is no BOM or trailing newline; only the output
+   `config_hash` is omitted from the payload. No Gate-B-only or subrecord hash
+   substitutes for the global hash.
+2. The required static Gate-B profile is nested at
+   `ObservationConfig.input_profile: ObservationInputProfileV3`; no root
+   `gate_b` member is added. The profile is covered by the global hash.
+
+These are Owner decisions recorded for change-control, not effective
+Architecture authority. Runtime-only facts, raw ROS/receipt data and samples
+are invalid config inputs and cause rejection rather than being silently
+filtered. Missing/unknown/defaulted/coerced/unresolved values, unavailable
+required pins/evidence, duplicate keys, non-finite numbers, or required
+`PENDING_MEASUREMENT` / `PENDING_OWNER_DECISION` data reject the whole resolved
+configuration; no partial config/hash is emitted. Concrete profile pins and
+required measurements remain unresolved. OIC revision 6 remains
+provenance-only.
+
+| Change-control field | Recorded value |
+|---|---|
+| Work package / base | `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL`; `c1187de97c550b9968d88aa6043ed716df981b54` |
+| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; unchanged and highest authority until ACR activation |
+| Active boundary source | Observation V3 Specification revision 1 at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec` |
+| Candidate documents | ACR revision 2, Observation V3 Specification revision 4, Gate-B consolidated decision, Registry, this PEP revision and one append-only Ledger entry |
+| Candidate state | Pending focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification; no ACR activation or active profile schema is claimed |
+| Status/dependency | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN` |
+| Authorization | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, adapter, HIL, hardware, `deploy_sim` or `deploy_real` authority |

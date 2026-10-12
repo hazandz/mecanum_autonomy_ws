@@ -1,13 +1,15 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `1` (candidate)
-**Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_CANONICAL_INTEGRATION`
-**Work package:** `WP-04-OBSERVATION-INPUT-PROFILE-ARCHITECTURE-AMENDMENT`
-**Base:** `origin/integration/implementation@e89aeda5ca78859bfeedac4e7b94bcd6c7dcc7f0`
+**Record revision:** `2` (candidate; Owner decisions recorded, activation pending)
+**Status:** `CANDIDATE_ONLY_PENDING_FOCUSED_INDEPENDENT_AUDIT_AND_SEPARATE_EXACT_COMMIT_USER_AUTHORIZATION_AND_CANONICAL_INTEGRATION`
+**Work package:** `WP04-GATE-B-GLOBAL-CONFIG-HASH-AND-INPUT-PROFILE-CHANGE-CONTROL`
+**Base:** `origin/integration/implementation@c1187de97c550b9968d88aa6043ed716df981b54`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
 
-This record proposes a narrowly nested, versioned addition to `ObservationConfig`. It does not edit or supersede the frozen Architecture. It becomes an effective architecture amendment only after this exact candidate passes focused independent audit, receives separate explicit Project Owner/User authorization for its exact commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. Until then the existing Architecture and active source selections remain controlling. Presence of the source commit in integration ancestry is only a Git-history fact; it does not prove that the exact candidate passed focused independent audit or received separate exact-commit User authorization, satisfy the ACR activation conditions, or make this amendment effective.
+The Project Owner/User approved both the global configuration-hash policy and the nested observation-input profile policy as written on 2026-10-12 (`APPROVE_BOTH_AS_WRITTEN`). This records that decision; it does not activate this amendment or grant implementation/runtime authorization. The amendment does not edit or supersede the frozen Architecture. It becomes effective only after this exact candidate passes focused independent audit, receives separate explicit Project Owner/User authorization for its exact commit, is fast-forwarded to `integration/implementation`, and the remote ref is verified. Until then the existing Architecture and active source selections remain controlling. Presence of any source commit in integration ancestry alone does not prove audit, exact-commit authorization, or activation.
+
+The active Gate B boundary-source selection remains Observation V3 Specification revision 1, pinned at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, path `docs/OBSERVATION_V3_SPECIFICATION.md`, SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`, until the amendment activation conditions above are met. The current path's later revision bytes and this ACR remain candidate-only.
 
 ## 1. Reason for change
 
@@ -69,9 +71,11 @@ Before implementation, the controlled schema and compiler/config input family mu
 
 ## 4. Global configuration hash
 
-`ObservationInputProfileV3` is included in the single global `ResolvedConfig.config_hash`; there is no Gate-B-only digest. The selected global rule is SHA-256 over RFC 8785 JCS UTF-8 bytes of the fully resolved Architecture `ResolvedConfig`. The serialized hash payload excludes the output `config_hash` itself to prevent self-reference, plus runtime timestamps, runtime samples, raw ROS objects, receipt instances/payloads, sequence/cutoff/barrier observations, and other runtime facts forbidden from config. All resolved static observation-input references, including their exact immutable source provenance, are covered.
+`ObservationInputProfileV3` is included in the single global `ResolvedConfig.config_hash`; there is no Gate-B-only digest. The Owner-approved global rule is SHA-256 over RFC 8785 JCS canonical UTF-8 bytes of the fully resolved, validated, static Architecture `ResolvedConfig`, with no BOM and no trailing newline. The only field omitted from the hash payload is the output `config_hash` itself, preventing self-reference. Every static root domain and the nested `observation.input_profile`, including exact immutable source provenance, is covered. Runtime timestamps, sensor samples, receipt instances/payloads/sequences, lifecycle identity/counters, barrier occurrences/results, freshness results, and raw ROS objects are not additional projection exclusions: they are invalid in the static resolved configuration and their presence as config input/domain causes fail-closed rejection. Duplicate JSON keys and non-finite numbers are rejected before canonicalization. No Gate-B-only hash or subrecord hash substitutes for the global hash.
 
-The compiler rejects the entire config if any required root domain or profile member is missing, unknown, defaulted, coerced, aliased, unresolved, unsupported by exact authority, or lacks required evidence. Duplicate JSON keys and non-finite values are rejected before canonicalization. It emits neither a partial `ResolvedConfig` nor a partial hash. A required `PENDING_MEASUREMENT` value makes the dependent profile and entire config ineligible for resolution; no sample value is substituted.
+The compiler rejects the entire config if any required root domain or profile member is missing, unknown, defaulted, coerced, aliased, unresolved, unsupported by exact authority, or lacks required evidence. It emits neither a partial `ResolvedConfig` nor a partial hash. A required `PENDING_OWNER_DECISION` pin or `PENDING_MEASUREMENT` value makes the dependent profile and entire config ineligible for resolution; no sample value is substituted. The Architecture §4 schema/version impact and migration from the currently specified resolved-config schema are part of this candidate change-control and require audit/activation; no existing config/hash is silently reinterpreted.
+
+Acceptance evidence required before a later implementation candidate is considered includes: (1) a field-by-field projection manifest proving every static Architecture root domain and nested profile reference is covered exactly once, with only the output `config_hash` omitted; (2) RFC 8785 JCS golden vectors pinning canonical UTF-8 bytes and SHA-256 results, including object-key ordering and array-order behavior; (3) rejection vectors for duplicate keys, non-finite values, self-reference, forbidden runtime facts, missing/unknown fields, and unresolved required pins/measurements; and (4) schema-version/migration analysis demonstrating that prior resolved configs and hashes are not silently reinterpreted. These are required future evidence, not evidence produced by this governance candidate.
 
 ## 5. Boundaries and status
 
