@@ -1,6 +1,6 @@
 # WP-04 Gate B target-contract closure decision
 
-**Status:** `CANDIDATE_ONLY_PENDING_INDEPENDENT_AUDIT_AND_SEPARATE_INTEGRATION_AUTHORIZATION`
+**Status:** `SOURCE_PARENT_REVIEW_SNAPSHOT; POST_INTEGRATION_TARGET_GOVERNANCE_RECORD_ONLY`
 **Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
 **Exact integration base:** `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`
 **Architecture:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`
@@ -9,15 +9,16 @@
 
 ## 1. Purpose and authority boundary
 
-This candidate records target semantics for Gate B inputs and keeps them
-separate from canonical source selection and immutable profile pins. The
-Architecture DOCX remains highest authority. ACR revision 3 and Specification
-revision 5 remain active at the stated base; the companion ACR record revision
-6 and Specification revision 8 in this diff are candidate-only successors.
-They do not become active before an independent audit of the exact candidate,
-separate User authorization for that exact commit, fast-forward to integration,
-and remote-ref verification. Git ancestry alone is not audit, approval, or
-activation evidence.
+This record captures target semantics for Gate B inputs and keeps them separate
+from canonical source selection and immutable profile pins. The Architecture
+DOCX remains highest authority. At the stated source parent, this record and
+the companion ACR record revision 6 / Specification revision 8 were review
+candidates awaiting audit and a separate User integration decision. After the
+exact successor is audited, separately authorized, fast-forwarded, and its
+remote ref verified, this record and those revisions are integration-resident
+target-governance records only. They are not active technical semantics and do
+not supersede ACR revision 3 or Specification revision 5. Git ancestry alone
+is not audit, approval, or activation evidence.
 
 The Owner-selected target semantics are:
 
@@ -116,15 +117,20 @@ required unresolved source, pin, evidence, or measurement rejects the entire
 resolved config; the compiler emits neither a partial profile nor a partial
 hash.
 
-## 5. Candidate status and authorization boundary
+## 5. Review-snapshot and post-integration target status; authorization boundary
 
-This decision record and the ACR/specification successors in this change are
-candidate-only, pending focused independent audit and a separate User decision
-to integrate the exact candidate. No new canonical source is selected here.
-Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A
-structural primitives remain `PASSED`; WP-05 remains `OPEN`. No code, test,
-ROSIDL, adapter, runtime, HIL, hardware, or deployment authorization is
-granted.
+At source parent `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`, this record and the
+ACR/specification successors were review candidates pending focused independent
+audit PASS and separate User authorization for the exact candidate. After those
+conditions plus fast-forward and remote-ref verification, the records are
+integration-resident target-governance records, not active technical semantics.
+At that same source-parent snapshot, this correction successor was still
+awaiting its own exact-candidate audit, User authorization, integration, and
+remote-ref verification; that is historical candidate state, not an indefinite
+post-integration status. No new canonical source is selected here. Gate B
+remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural
+primitives remain `PASSED`; WP-05 remains `OPEN`. No code, test, ROSIDL,
+adapter, runtime, HIL, hardware, or deployment authorization is granted.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT

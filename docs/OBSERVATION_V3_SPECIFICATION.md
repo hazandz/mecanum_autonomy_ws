@@ -1,7 +1,7 @@
 # Observation V3 Specification
 
-**Revision:** `8` (candidate target-contract closure; candidate-only)
-**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_8_CANDIDATE_ONLY`
+**Revision:** `8` (target-contract governance record; source-parent review snapshot)
+**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_8_TARGET_GOVERNANCE_RECORD_NOT_TECHNICAL_AUTHORITY`
 **Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
@@ -14,7 +14,7 @@ Before ACR revision-3 activation at integration `8c3de26521d7028a933f0a3ebe780fc
 
 ## 1. Authority and exact pins
 
-The governing architecture remains `docs/MECANUM_NAV_DRL_Architecture.docx`. Current approved Gate A/Gate B contract authority is ACR revision 8 and Receipt Topic QoS Contract revision 6, as selected by the Canonical Source Registry and the integrated bundled approval record. Their source files retain historical pre-integration `DRAFT` wording; that wording is superseded only for document authority/status by the approval record and Registry, not for technical content.
+The governing architecture remains `docs/MECANUM_NAV_DRL_Architecture.docx`. The active Observation V3 technical authority is ACR revision 3 and Observation V3 Specification revision 5, activated at the integration identified above. Receipt Topic QoS Contract revision 6 remains its separately approved receipt/QoS authority. Revision 8 in this document is a target-governance record only; it does not become active technical semantics or supersede revision 5 when integrated.
 
 | Artifact | Exact identity | Canonical path | SHA-256 |
 |---|---|---|---|
@@ -194,15 +194,18 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-## 6. Candidate revision 8 — target semantics and unresolved source pins
+## 6. Revision 8 — source-parent review snapshot and post-integration target-governance state
 
-This candidate records the Owner target-contract decisions supplied for
-`WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` at base
-`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. It does not replace the active
-technical specification: ACR revision 3 and Specification revision 5 remain
-active until this exact candidate passes independent audit, receives separate
-User authorization for its exact commit, is fast-forwarded, and the remote ref
-is verified. This section does not instantiate or resolve
+This section records the Owner target-contract decisions supplied for
+`WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` at source-parent base
+`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. At that snapshot, this successor
+was awaiting independent audit PASS, separate User authorization for its exact
+commit, fast-forward, and remote-ref verification; ACR revision 3 and
+Specification revision 5 remained active technical authority. After those
+conditions are satisfied for the exact successor and its remote ref is
+verified, revision 8 is an integration-resident target-governance record only.
+It is not active technical semantics and does not supersede Specification
+revision 5. This section does not instantiate or resolve
 `ObservationInputProfileV3`.
 
 The required static profile member set and strict value semantics remain exactly
@@ -263,7 +266,10 @@ commit/path, source-file digest, and distinct semantic contract digest must be
 verified; a missing or unverifiable required reference continues to reject
 the whole resolved configuration with no partial hash.
 
-This specification revision is candidate-only. It records no new technical
-authority as active, no resolved profile, no Gate B start/pass, no WP-04
-closure, and no code/runtime/HIL/hardware/deployment authorization. WP-05 and
-its artifact/status are unchanged.
+At the source-parent snapshot, this specification revision was a review
+candidate. After the exact successor is audited, separately authorized,
+fast-forwarded, and its remote ref verified, revision 8 is an integration-resident
+target-governance record only; it does not become active technical semantics.
+It records no resolved profile, no Gate B start/pass, no WP-04 closure, and no
+code/runtime/HIL/hardware/deployment authorization. WP-05 and its
+artifact/status are unchanged.

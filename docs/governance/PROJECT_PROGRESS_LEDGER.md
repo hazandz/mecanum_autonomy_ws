@@ -662,3 +662,19 @@
 | Fail-closed boundary | No resolved `ObservationInputProfileV3` or partial global config/hash while a required pin/evidence/measurement is unresolved. Runtime-only data remains invalid in static config and is rejected, not silently filtered. |
 | Candidate scope/state | Five allowlisted documentation paths only: ACR, Observation V3 Specification, new target-contract decision, Registry, and this append-only Ledger entry. Candidate branch `wp04-gate-b-target-contract-closure-decision-701bb0c`; pending focused independent audit, separate User authorization for the exact candidate, fast-forward, and remote-ref verification. No ACR revision 6 or Specification revision 8 activation is claimed. |
 | WP/status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority. |
+
+
+### WP04-GATE-B-TARGET-CONTRACT-POST-INTEGRATION-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Work package | `WP04-GATE-B-TARGET-CONTRACT-POST-INTEGRATION-STATUS-CORRECTION` |
+| Integration base / source candidate | `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee` / `3eb4cde6188082a21cd59b932e9423254367f86d`; source candidate parent is the integration base |
+| Finding provenance | User-supplied independent-audit finding: source candidate wording left revision 6 / revision 8 / decision in an unqualified pre-integration pending state; no audit-report hash is asserted |
+| Correction scope | Status/provenance wording only in the ACR record, Observation V3 Specification, target-contract decision, Registry, and this append-only Ledger entry; no technical semantics or source pins changed |
+| Source-parent snapshot | Before the source candidate's integration, it awaited focused audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; ACR revision 3 and Specification revision 5 remained the active technical authority |
+| Post-integration target state | After audit PASS and separate User authorization for the exact source successor, its fast-forward, and remote-ref verification, revision 6 / revision 8 / the decision are integration-resident target-governance records only. ACR revision 3 and Specification revision 5 remain active technical authority; the target records do not define active technical semantics or resolve a profile |
+| Correction-candidate snapshot | At this entry's source-parent base, the correction successor based directly on `3eb4cde…` was pending its own focused independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification; this entry does not claim those events occurred |
+| Supersedes | The unqualified present-tense pending-integration wording for source candidate `3eb4cde…` in the prior `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` entry only; prior Ledger bytes and technical decisions remain unchanged |
+| Remaining boundary | Required source pins/evidence remain pending; applicable measurements remain `PENDING_MEASUREMENT`; no resolved profile or partial profile/hash; Gate B `NOT_STARTED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED` |

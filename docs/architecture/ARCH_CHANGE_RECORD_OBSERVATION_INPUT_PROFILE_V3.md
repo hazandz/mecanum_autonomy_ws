@@ -1,8 +1,8 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `6` (candidate target-contract closure; candidate-only)
-**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_6_CANDIDATE_ONLY`
+**Record revision:** `6` (target-contract governance record; source-parent review snapshot)
+**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_6_TARGET_GOVERNANCE_RECORD_NOT_TECHNICAL_AUTHORITY`
 **Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
@@ -121,16 +121,20 @@ RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
 
-## 6. Candidate revision 6 — Gate B target-contract closure
+## 6. Revision 6 — source-parent review snapshot and post-integration target-governance state
 
 This section records the Owner decisions supplied for work package
 `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` at integration base
-`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. It is a proposed successor, not
-active authority. Until this exact candidate is independently audited, receives
-separate User authorization for its exact commit, is fast-forwarded, and the
-remote ref is verified, active ACR revision 3 and Observation V3 Specification
-revision 5 remain controlling. No audit verdict, source pin, or runtime evidence
-is inferred from Git ancestry.
+`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. At that source-parent snapshot,
+revision 6 was a proposed successor awaiting independent audit PASS, separate User
+authorization for its exact commit, fast-forward, and remote-ref verification;
+ACR revision 3 and Observation V3 Specification revision 5 remained the active
+technical authority. After those conditions are satisfied for the exact
+successor and its remote ref is verified, revision 6 is an integration-resident
+target-governance record only; it is not active technical semantics and does
+not supersede ACR revision 3 or Specification revision 5. This correction
+records the two temporal states without inferring audit or authorization from
+Git ancestry. No source pin or runtime evidence is inferred from ancestry.
 
 The target decisions refine how an eventual profile is to be interpreted; they
 do not populate a profile or select immutable source references:

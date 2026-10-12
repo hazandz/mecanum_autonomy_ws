@@ -4,7 +4,7 @@
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
-## WP-04 Gate B target-contract closure — current review candidate only
+## WP-04 Gate B target-contract closure — source-parent snapshot and post-integration target state
 
 At exact integration base `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`, active
 technical authority remains ACR revision 3 (SHA-256
@@ -12,17 +12,21 @@ technical authority remains ACR revision 3 (SHA-256
 Observation V3 Specification revision 5 (SHA-256
 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`), both
 activated at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The target-contract
-closure candidate records Owner decisions for the exact target frame,
+closure source candidate records Owner decisions for the exact target frame,
 LocalReference meaning, measured-twist source semantics, TF ownership, and
-lifecycle/barrier boundary. Its ACR record revision 6 and Specification
-revision 8 are candidate-only and do not supersede the active revisions until
-the exact candidate is independently audited, separately authorized for
-integration, fast-forwarded, and its remote ref verified.
+lifecycle/barrier boundary. At the source-parent snapshot, its ACR record
+revision 6, Specification revision 8, and decision record were review
+candidates awaiting exact-candidate audit PASS, separate User authorization,
+and integration/remote-ref verification.
+After those conditions and remote-ref verification for the exact successor,
+these are integration-resident target-governance records only; they do not
+supersede the active technical authority, ACR revision 3 and Specification
+revision 5.
 
 Receipt v2 and QoS6 remain established canonical pins under the integrated
 bundle and Registry; they are not pending. The exact receipt interface,
 dependency-closure, QoS transport-manifest and full-document hashes are
-recorded above in the Registry's canonical entries. This candidate changes no
+recorded above in the Registry's canonical entries. This source candidate changes no
 receipt/QoS bytes and claims no ROSIDL or runtime evidence.
 
 Six profile-reference groups remain `PENDING_OWNER_SOURCE_SELECTION`: LiDAR
@@ -82,8 +86,14 @@ rejection without a partial hash.
 This inventory does not change ACR3/Specification rev.5 semantics, active
 receipt/QoS pins, global config_hash, the exhaustive 16-root projection,
 nested ObservationConfig.input_profile, status/dependencies, or authorization.
-It awaits focused audit, separate User authorization for the exact successor
-commit, integration, and remote-ref verification.
+The preceding pending-review language is a snapshot at integration base
+`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`, not an indefinite post-integration
+status. At the source-parent snapshot, this correction successor itself
+remained pending its own focused audit, separate User authorization for its
+exact commit, fast-forward, and remote-ref verification. ACR revision 6 / Specification revision 8 are target
+governance, not active technical semantics; ACR revision 3 / Specification
+revision 5 remain active technical authority. No profile is resolved and Gate B
+remains `NOT_STARTED`.
 
 ## Canonical QoS6 / ACR8 bundle
 
