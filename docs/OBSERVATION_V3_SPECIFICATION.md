@@ -1,8 +1,8 @@
 # Observation V3 Specification
 
-**Revision:** `7` (post-integration status/provenance reconciliation only)
-**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_7_RECORDS_INTEGRATED_STATUS_HISTORY`
-**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
+**Revision:** `8` (candidate target-contract closure; candidate-only)
+**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_8_CANDIDATE_ONLY`
+**Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
@@ -193,3 +193,77 @@ CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
+
+## 6. Candidate revision 8 — target semantics and unresolved source pins
+
+This candidate records the Owner target-contract decisions supplied for
+`WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` at base
+`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. It does not replace the active
+technical specification: ACR revision 3 and Specification revision 5 remain
+active until this exact candidate passes independent audit, receives separate
+User authorization for its exact commit, is fast-forwarded, and the remote ref
+is verified. This section does not instantiate or resolve
+`ObservationInputProfileV3`.
+
+The required static profile member set and strict value semantics remain exactly
+those in active §3.1 and ACR revision 3. These target decisions do not add
+profile fields, change the exhaustive 16-root global hash projection, alter
+RFC 8785 JCS behavior, add a Gate-B-only hash, or permit runtime facts in static
+configuration. The entire resolved config continues to fail closed without a
+partial profile/hash when a required pin/evidence/value is unresolved; runtime
+facts are invalid config inputs, not values to silently filter.
+
+### 6.1 Owner-selected target contract semantics
+
+- **LiDAR frame target:** the canonical target/TF child is exactly
+  `lidar_frame`. `RPLiDAR_A1M8_1`, `base_scan`, and namespaced variants are not
+  aliases. The concrete sensor source, its exact input frame, and any explicit
+  transform relationship require an immutable selected frame/source contract.
+  No runtime `LaserScan.header.frame_id` is asserted by this document.
+- **LocalReference:** Gate B's LocalReference is the navigation/global-path
+  reference expressed in `base_link`, consistent with Architecture §45. The
+  simulation-only `observations/goal_features.py` is provenance/reference, not
+  the Gate B canonical source.
+- **Measured twist:** the target source is a single fused-odometry publisher
+  owned by the EKF, consistent with Architecture §§11 and 41. The operational
+  publisher/config/source has not been immutably selected. No new topic alias or
+  runtime publisher claim is made.
+- **TF ownership:** the selected localization provider owns `map -> odom`; the
+  EKF owns `odom -> base_link`; robot description/`robot_state_publisher` owns
+  `base_link -> lidar_frame`. This does not select a profile-specific source or
+  establish physical geometry. LiDAR geometry/extrinsic remains
+  `PENDING_MEASUREMENT`.
+- **Lifecycle/reset/action barrier:** the active lifecycle tuple, epoch/
+  generation compatibility, receipt-after-barrier ordering, and fail-closed
+  rules remain controlling. No immutable lifecycle/reset/action-barrier policy
+  source is selected here; observed lifecycle values and barrier occurrences
+  remain runtime facts.
+
+Receipt v2 and QoS6 canonical pins remain established as listed in §1 and are
+not pending. Their established IDs, revisions, bytes, dependency closure, and
+transport manifest are unchanged; this candidate does not claim ROSIDL
+generation or runtime QoS compatibility evidence.
+
+### 6.2 Source-selection and evidence boundary
+
+The six groups without a selected immutable profile-reference source remain
+`PENDING_OWNER_SOURCE_SELECTION`: LiDAR snapshot; navigation/global-path
+LocalReference; measured-twist snapshot; frame/geometry source;
+lifecycle/reset/action-barrier policy; and concrete profile source. The
+existence of a source file or its inclusion in the V3 input family does not
+make it a canonical profile pin. OIC revision 6, review candidates, and drafts
+remain provenance-only and cannot supply fields, defaults, IDs, or digests.
+
+All applicable but unmeasured LiDAR geometry/extrinsic and timing, freshness,
+skew, timeout, buffer, sensor, and measured-twist values remain
+`PENDING_MEASUREMENT`. No source SHA, contract ID/digest, topic/config pin,
+default, alias, package version, or measurement is invented here. Once a
+required source is selected by authority, its exact identity/revision, immutable
+commit/path, source-file digest, and distinct semantic contract digest must be
+verified; a missing or unverifiable required reference continues to reject
+the whole resolved configuration with no partial hash.
+
+This specification revision is candidate-only. It records no new technical
+authority as active, no resolved profile, no Gate B start/pass, no WP-04
+closure, and no code/runtime/HIL/hardware/deployment authorization. WP-05 and
+its artifact/status are unchanged.

@@ -1,9 +1,9 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `5` (post-integration status/provenance reconciliation only)
-**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_5_RECORDS_INTEGRATED_STATUS_HISTORY`
-**Work package:** `WP04-ACR-REV3-ACTIVATION-STATUS-RECONCILIATION`
+**Record revision:** `6` (candidate target-contract closure; candidate-only)
+**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_6_CANDIDATE_ONLY`
+**Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
@@ -120,3 +120,79 @@ CODE_AUTHORIZATION: NOT_GRANTED
 RUNTIME_APPROVED: NOT_APPROVED
 WP-05: OPEN
 ```
+
+## 6. Candidate revision 6 — Gate B target-contract closure
+
+This section records the Owner decisions supplied for work package
+`WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION` at integration base
+`701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`. It is a proposed successor, not
+active authority. Until this exact candidate is independently audited, receives
+separate User authorization for its exact commit, is fast-forwarded, and the
+remote ref is verified, active ACR revision 3 and Observation V3 Specification
+revision 5 remain controlling. No audit verdict, source pin, or runtime evidence
+is inferred from Git ancestry.
+
+The target decisions refine how an eventual profile is to be interpreted; they
+do not populate a profile or select immutable source references:
+
+1. **LiDAR target frame:** the canonical target/TF child is exactly
+   `lidar_frame`. The names `RPLiDAR_A1M8_1`, `base_scan`, and namespaced
+   variants are not aliases. The profile must pin the actual sensor/frame
+   contract and any explicitly authorized transform relationship. No claim is
+   made that a runtime `LaserScan.header.frame_id` has been observed or that it
+   equals `lidar_frame`.
+2. **LocalReference:** Gate B consumes the navigation/global-path reference
+   expressed in `base_link`, consistent with Architecture §45. The simulation
+   implementation `observations/goal_features.py` is provenance/reference only;
+   it is not selected as the Gate B canonical source.
+3. **Measured twist:** the semantic source is one fused-odometry publisher
+   owned by the EKF, consistent with Architecture §§11 and 41. No operational
+   node/config/source pin is selected by this record. The Architecture-defined
+   topic contract is not evidence that a concrete runtime publisher/config has
+   been immutably pinned or validated.
+4. **TF ownership:** the selected localization provider owns `map -> odom`;
+   the EKF owns `odom -> base_link`; and the robot description, published by
+   `robot_state_publisher`, owns `base_link -> lidar_frame`. The exact profile
+   source and physical transform/extrinsic remain unselected/unmeasured.
+5. **Lifecycle/reset/action barrier:** preserve the active ACR3/Specification
+   lifecycle and fail-closed rules, including epoch/generation compatibility
+   and receipt eligibility strictly after the applicable barriers. No new
+   immutable lifecycle/reset/barrier policy source is selected here. Runtime
+   lifecycle values and barrier occurrences remain runtime facts, not static
+   profile/config-hash values.
+
+Receipt v2 and QoS6 remain established canonical pins and are not reclassified
+as pending. The existing pins are receipt interface
+`mecanum.final-issued-receipt/v2`, schema revision 2, at
+`ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg`
+(SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`),
+dependency-closure manifest v1 (SHA-256
+`0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`), and
+QoS6 transport ID `mecanum.final-issued-receipt-topic-qos/v2` with manifest
+SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`
+and full-document SHA-256
+`4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`.
+These remain pins only; this candidate performs no ROSIDL or runtime check.
+
+The following six profile reference groups remain without a selected immutable
+source contract and therefore remain `PENDING_OWNER_SOURCE_SELECTION`: LiDAR
+snapshot; navigation/global-path LocalReference; measured-twist snapshot;
+frame/geometry source; lifecycle/reset/action-barrier policy; and the concrete
+profile source. Existing source files, including the approved V3 input family,
+are not canonical profile references solely because they exist. In particular,
+`ros2_ws/src/mecanum_nav_rl/config/v3/frames.yaml` does not by itself provide
+the required selected contract identity/digest and immutable profile reference.
+
+Physical LiDAR geometry/extrinsic and all applicable timing, freshness, skew,
+timeout, buffer, sensor, or measured-twist values that authority requires but
+which are not yet measured remain `PENDING_MEASUREMENT`. No ID, digest, source
+SHA, topic alias, default, package version, measurement, or profile value is
+created by this candidate. The active global configuration-hash policy remains
+unchanged: a required unresolved pin/evidence/measurement rejects the entire
+resolved config, with no partial profile or hash; runtime facts are invalid
+resolved-config inputs and are rejected rather than silently filtered.
+
+The source and measurement gaps above prevent a resolved
+`ObservationInputProfileV3` and keep Gate B `NOT_STARTED`. This candidate does
+not pass Gate B, close WP-04, change WP-05, grant `CODE_AUTHORIZATION`, or grant
+runtime/HIL/hardware/deployment approval.

@@ -646,3 +646,19 @@
 | Fail-closed boundary | Any missing/conflicting required selection, pin, or evidence means no resolved profile, no profile hash, and no Navigation V1 bring-up |
 | Candidate state | Review candidate pending independent audit, separate explicit User authorization for the exact commit, fast-forward, and remote-ref verification; this Ledger entry does not assert audit PASS or integration |
 | Status/authorization | No status/dependency transition: WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; world frame `NOT_DECLARED`; runtime compatibility `NOT_VALIDATED`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 unchanged |
+
+
+### WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base | `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee` |
+| Owner decision provenance | Owner decisions in the current work-package request: receipt v2/QoS6 pins remain established; exact LiDAR target `lidar_frame` with no implicit aliases; LocalReference is navigation/global path in `base_link`; measured twist source semantics are one EKF fused-odometry publisher; TF target ownership is localization/EKF/robot description; preserve lifecycle/barrier/fail-closed semantics. This is user-supplied decision provenance, not a Git-generated approval or audit report. |
+| Active authority at base | Architecture DOCX SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; ACR technical revision 3 and Observation V3 Specification technical revision 5 remain active from `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. Proposed ACR record revision 6 and Specification revision 8 are candidate-only in this change. |
+| Established pins retained | Receipt v2 interface SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`; dependency-closure v1 SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`; QoS6 transport manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`; QoS6 full-document SHA-256 `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`. These remain established and are not reclassified as pending. |
+| Remaining immutable source references | Six groups remain `PENDING_OWNER_SOURCE_SELECTION`: LiDAR snapshot, navigation/global-path LocalReference, measured-twist snapshot, frame/geometry source, lifecycle/reset/action-barrier policy, and concrete profile source. No source IDs, digests, paths, commits, aliases, defaults, topic/config pins, or package versions are invented. |
+| Remaining measurements | Physical LiDAR geometry/extrinsic and applicable timing, freshness, skew, timeout, buffer, sensor, and measured-twist values remain `PENDING_MEASUREMENT`; no measurement evidence is created here. |
+| Fail-closed boundary | No resolved `ObservationInputProfileV3` or partial global config/hash while a required pin/evidence/measurement is unresolved. Runtime-only data remains invalid in static config and is rejected, not silently filtered. |
+| Candidate scope/state | Five allowlisted documentation paths only: ACR, Observation V3 Specification, new target-contract decision, Registry, and this append-only Ledger entry. Candidate branch `wp04-gate-b-target-contract-closure-decision-701bb0c`; pending focused independent audit, separate User authorization for the exact candidate, fast-forward, and remote-ref verification. No ACR revision 6 or Specification revision 8 activation is claimed. |
+| WP/status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority. |

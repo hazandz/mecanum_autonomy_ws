@@ -4,7 +4,42 @@
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
-## WP-04 Gate B canonical input-source selection — successor review candidate only
+## WP-04 Gate B target-contract closure — current review candidate only
+
+At exact integration base `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`, active
+technical authority remains ACR revision 3 (SHA-256
+`38cb74c0b09cd9c3ecbbac30c6520e0d01f7711adb788414a0a46489e844d9f8`) and
+Observation V3 Specification revision 5 (SHA-256
+`4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`), both
+activated at `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`. The target-contract
+closure candidate records Owner decisions for the exact target frame,
+LocalReference meaning, measured-twist source semantics, TF ownership, and
+lifecycle/barrier boundary. Its ACR record revision 6 and Specification
+revision 8 are candidate-only and do not supersede the active revisions until
+the exact candidate is independently audited, separately authorized for
+integration, fast-forwarded, and its remote ref verified.
+
+Receipt v2 and QoS6 remain established canonical pins under the integrated
+bundle and Registry; they are not pending. The exact receipt interface,
+dependency-closure, QoS transport-manifest and full-document hashes are
+recorded above in the Registry's canonical entries. This candidate changes no
+receipt/QoS bytes and claims no ROSIDL or runtime evidence.
+
+Six profile-reference groups remain `PENDING_OWNER_SOURCE_SELECTION`: LiDAR
+snapshot, navigation/global-path LocalReference, measured-twist snapshot,
+frame/geometry source, lifecycle/reset/action-barrier policy, and concrete
+profile source. Physical geometry/extrinsic and applicable required sensor or
+timing values remain `PENDING_MEASUREMENT`. No profile instance is resolved;
+under active ACR3, a missing required pin/evidence/measurement rejects the
+whole resolved config with no partial hash. The candidate does not start/pass
+Gate B, change WP status/dependencies, or grant code/runtime authorization.
+
+### Historical source-selection candidate snapshot at integration base 13bfa066
+
+The following source-selection candidate record describes only its historical
+review state at integration base
+`13bfa06658e5d65cc16f97fbc3ff3ec4a72e1bf6`; it is not the current candidate
+for this work package and does not activate a source.
 
 At integration base 13bfa06658e5d65cc16f97fbc3ff3ec4a72e1bf6, ACR revision 3
 and Observation V3 Specification revision 5 remain the active technical
