@@ -4,6 +4,52 @@
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
+## WP-04 Gate B canonical input-source selection — successor review candidate only
+
+At integration base 13bfa06658e5d65cc16f97fbc3ff3ec4a72e1bf6, ACR revision 3
+and Observation V3 Specification revision 5 remain the active technical
+authority for profile schema and semantics. The source-selection decision
+record docs/governance/decisions/WP-04_GATE_B_CANONICAL_INPUT_SOURCE_SELECTION.md
+records the Project Owner/User rule that only sources explicitly established by
+current Registry/approval authority may be selected. This successor is
+candidate-only and does not activate a new source.
+
+The prior candidate d385ea98986f0d68d6f288da2efa5db3fcf66085 was based on
+29080644f3020f7ecd208dc45433c7d36ecc5e2e; it was not integrated and did not
+receive a content-audit verdict. It is cited only as wording provenance for
+this successor, which is based directly on 13bfa06658e5d65cc16f97fbc3ff3ec4a72e1bf6.
+
+Receipt v2 and QoS6 pins remain established by the active Registry/approval at
+the integrated bundle commit 2e7a2980cb75f0567182ea694c04328d7d8643e0:
+receipt identity mecanum.final-issued-receipt/v2, revision 2, canonical
+.msg path ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg,
+SHA-256 0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a;
+dependency-closure v1 path
+docs/RECEIPT_INTERFACE_DEPENDENCY_CLOSURE_MANIFEST.json, SHA-256
+0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73. QoS
+identity is mecanum.final-issued-receipt-topic-qos/v2; transport manifest
+path docs/RECEIPT_TOPIC_QOS_TRANSPORT_MANIFEST.json, SHA-256
+338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620; QoS6
+full-document SHA-256 is separately
+4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022.
+
+No unique active contract ID/digest and immutable source pin is selected for
+LiDAR snapshot, LocalReference, measured-twist, frame, or lifecycle/reset/
+action-barrier profile references; these remain PENDING_OWNER_DECISION, then
+require exact Git byte/provenance verification after an approved source is
+selected. The concrete profile-source reference is likewise
+PENDING_OWNER_DECISION. OIC revision 6 and other drafts/review candidates are
+provenance-only. Required measurements and implementation/ROS adapter/runtime/
+HIL evidence remain separately pending as applicable. Missing required
+pin/evidence keeps the profile unresolved; active ACR3 requires whole-config
+rejection without a partial hash.
+
+This inventory does not change ACR3/Specification rev.5 semantics, active
+receipt/QoS pins, global config_hash, the exhaustive 16-root projection,
+nested ObservationConfig.input_profile, status/dependencies, or authorization.
+It awaits focused audit, separate User authorization for the exact successor
+commit, integration, and remote-ref verification.
+
 ## Canonical QoS6 / ACR8 bundle
 
 The Project Owner/User-approved QoS revision 6 / ACR revision 8 bundle was

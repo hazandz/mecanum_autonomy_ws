@@ -614,3 +614,20 @@
 | Map/world/runtime boundary | SDF pin identifies source bytes only; no `map == world`, transform, metric alignment, runtime compatibility, navigation readiness or map approval is inferred. Artifact remains draft; profile, map approval and world-frame validation are independent. |
 | Status/authorization | No transition/dependency change: WP-05 `OPEN`; WP-04 unchanged; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Candidate state | `wp-05-warehouse-map2-navigation-profile-resolution-29080644`, based on the exact integration base above; pending focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification. This entry asserts no audit PASS or integration. |
+
+### WP04-GATE-B-CANONICAL-INPUT-SOURCE-SELECTION-REFRESH
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-GATE-B-CANONICAL-INPUT-SOURCE-SELECTION-REFRESH` |
+| Exact integration base | `13bfa06658e5d65cc16f97fbc3ff3ec4a72e1bf6` |
+| Source wording provenance | `wp-04-gate-b-canonical-input-source-selection-29080644@d385ea98986f0d68d6f288da2efa5db3fcf66085`, parent `29080644f3020f7ecd208dc45433c7d36ecc5e2e`; not integrated and no content-audit verdict. It is not authority. |
+| Owner source-selection rule | Select only sources established by current Registry/approval authority; ACR3 and Specification rev.5 remain technical authority; OIC rev.6/drafts/review candidates are provenance only; no alias, inferred ID/digest, default or measurement. |
+| Verified existing pins | At integrated bundle commit `2e7a2980cb75f0567182ea694c04328d7d8643e0`: receipt v2 SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`; dependency closure `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`; QoS6 transport manifest `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`; QoS6 full-document SHA-256 `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`. |
+| Remaining source pins | LiDAR snapshot, LocalReference, measured-twist, frame, lifecycle/reset/action-barrier contract identities/digests and immutable source pins, plus concrete profile-source reference, remain `PENDING_OWNER_DECISION`; exact bytes/provenance must be checked after approved source selection. |
+| Measurement/evidence boundary | Applicable timing, freshness, skew, timeout, buffer and sensor values remain `PENDING_MEASUREMENT`; no implementation, ROS adapter/runtime, HIL or hardware evidence is asserted. |
+| Candidate scope | Successor source-selection decision record, Registry inventory, and this append-only entry. PEP, ACR and Specification are unchanged. |
+| Candidate state | Pending focused independent audit, separate User authorization for this exact successor commit, fast-forward, and remote-ref verification. No new technical source is activated. |
+| Fail-closed boundary | Under active ACR3, any required unresolved pin/evidence/value keeps the profile unresolved; compiler rejects the whole resolved config and emits no partial ResolvedConfig or config_hash. |
+| WP/status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft/not approved, world frame not declared, runtime compatibility not validated; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
