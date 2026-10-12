@@ -513,3 +513,19 @@
 | WP-05 no-regression | Draft `warehouse_map2` artifact, integration-resident world-frame evidence record, and metadata states are unchanged; no approval or metadata transition is inferred |
 | Authorization boundary | `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no ROS/ROSIDL, runtime, HIL, hardware, or deployment authority |
 | Candidate state | Pending focused independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification; this entry records no audit PASS, authorization, or activation |
+
+### WP04-GATE-B-ACTIVE-SOURCE-SELECTION-CONTINUITY-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-12 |
+| Work package | `WP04-GATE-B-ACTIVE-SOURCE-SELECTION-RECONCILIATION` |
+| Integration base | `410d9cb70518b64d3c76c2ef99b11b69d1da6701` |
+| Correction source | `project-governance-reconciliation-wp04-wp05-acr-correction-410d9cb@d2345bd439e27421435a8b1730085fe2516d8da2`, direct parent `93e548d1bec80f33cd89e26080a61f59b53712cf`; source candidate only, not this successor's base |
+| Active-source trace evidence | Git-verifiable at the stated base: Registry and PEP identify Observation V3 Specification revision 1 as the active controlled Gate B boundary selection at `68174e714cbe8aab61880113496cd7ccd7f97f5d`; exact path `docs/OBSERVATION_V3_SPECIFICATION.md`; full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. |
+| Amendment boundary | Revision 3/source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is integration-resident Git history only. Its companion ACR remains candidate-only pending focused independent audit, separate explicit User authorization for the exact commit, canonical fast-forward, and remote-ref verification. No ACR activation or revision-1 replacement is claimed. |
+| Correction | Clarifies source-selection continuity across the Specification, Gate-B decision, Registry and PEP. Historical pre-integration candidate wording is retained as historical state; the current active boundary selection is distinguished from the revision-3 amendment candidate. |
+| Gate B blockers and status | No semantic or status change. `DECISION_DEFERRED_PENDING_EXACT_NON_CIRCULAR_CONFIG_HASH_PROJECTION` and `DECISION_DEFERRED_PENDING_EXACT_RESOLVED_OBSERVATION_INPUT_PROFILE_SHAPE` remain blockers. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `PASSED`; Gate B remains `NOT_STARTED`. |
+| WP-05 no-regression | No WP-05 file or map artifact was changed. The integrated `warehouse_map2` remains draft; `world_frame: NOT_DECLARED`; runtime compatibility `NOT_VALIDATED`. |
+| Audit/authorization boundary | No audit PASS or User authorization is asserted by this entry. `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Candidate state | This source-selection continuity correction is pending its own focused independent audit, separate exact-commit User authorization, fast-forward and remote-ref verification. |

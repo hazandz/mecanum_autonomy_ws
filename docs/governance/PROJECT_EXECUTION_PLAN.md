@@ -477,12 +477,19 @@ recorded in the Canonical Source Registry. This activation does not select a
 This section records a documentation-only candidate based on the User-supplied
 decision basis `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`.
 That proposal is provenance supplied in the work-package context, not a
-Git-pinned authority; no report hash is asserted. The controlled Observation
-V3 Specification revision 1 and accompanying decision record remain
-candidate-only until this exact bundle passes focused independent audit,
-receives separate explicit User authorization for its exact final commit,
-is fast-forwarded to `integration/implementation`, and the remote ref is
-verified.
+Git-pinned authority; no report hash is asserted. The candidate-pending state
+in the historical table below describes its pre-integration state only. At the
+current integration base `410d9cb70518b64d3c76c2ef99b11b69d1da6701`, revision 1
+remains the active Gate B boundary-source selection. Its exact immutable source
+is `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`,
+path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256
+`feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision
+2 is superseded historical review provenance. Revision 3 and its companion
+Architecture amendment remain candidate-only because the ACR activation
+conditions are pending; their presence in integration ancestry does not
+replace revision 1 or activate the amendment. This selection is only the
+existing Gate B boundary source; it does not pass Gate B, resolve its blockers,
+or authorize implementation/runtime.
 
 | Change-control field | Recorded value |
 |---|---|
@@ -491,7 +498,7 @@ verified.
 | Work branch | `wp-04-gate-b-boundary-closure-decision-50476170` |
 | Integration base | `50476170bb545483905308e5887990ab6220c566` |
 | Decision provenance | User-supplied `WP04_GATE_B_CONSOLIDATED_OWNER_DECISION_PROPOSAL_572DA885`; not represented as Git-pinned authority; audit/report hash not asserted |
-| Candidate artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 1 and `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`; both candidate-only |
+| Historical pre-integration candidate artifacts | `docs/OBSERVATION_V3_SPECIFICATION.md` revision 1 and `docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md`; candidate-pending status below records their state before integration |
 | Candidate content commit | Resolved from the final reviewed branch tip; not embedded here to avoid self-reference |
 | Candidate state | `GATE_B_BOUNDARY_CLOSURE: PENDING_FOCUSED_AUDIT_AND_CANONICAL_INTEGRATION`; `GATE_B: NOT_STARTED` |
 | Dependency/status impact | No WP status or dependency transition. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; WP-05 remains `OPEN`. |

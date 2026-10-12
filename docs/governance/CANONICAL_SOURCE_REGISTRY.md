@@ -65,7 +65,7 @@ fast-forwarded with the remote ref verified.
 | docs/ACR_V3_OBSERVATION_BOUNDARY_CLOSURE.md | CANONICAL_APPROVED_ACR | ACR revision 8; full-document SHA-256 `03fef021f6b9731f811f83a5e53aae1c430bdc2ea76815a8ada416f1a5bf772c`; approved Gate A/Gate B scope carried forward; no WP-03 closure or dependency/status changes |
 | docs/governance/decisions/QOS_REVISION_6_ACR_REVISION_8_BUNDLE_APPROVAL.md | CANONICAL_GOVERNANCE_APPROVAL_RECORD | Project Owner/User approval dated 2026-10-08; approval-record SHA-256 `4d740559f850f179387db802df845748068f75a21266fd1edb52402b2c72c529`; exact QoS6/ACR8, interface v2, dependency-closure and transport-v2 pins recorded; governs canonical document/status activation only after exact candidate integration; no code/runtime authorization or WP status/dependency change |
 | docs/OBSERVATION_GATE_A_STRUCTURAL_SCHEMA.md | CANONICAL_APPROVED_GATE_A_STRUCTURAL_SCHEMA | Full-document SHA-256 `43537b8f0edafbe809e6f70bda86808f87b12f146ed45509c4bfbacd26956ad3`; audited correction `wp-04-gate-a-receipt-selector-attribution-correction@f9987be4429349ef9110c45cf97a89728a5e4229`, user-authorized and integrated by the stated base; structural contract source only, no Gate A pass or code/runtime authorization |
-| docs/OBSERVATION_V3_SPECIFICATION.md | WP04_GATE_B_INTEGRATION_RESIDENT_CANDIDATE_PENDING_ACR_ACTIVATION | Revision 3/source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; this Git fact does not satisfy the ACR focused-audit, exact User-authorization, canonical-integration, or remote-verification conditions. Revision 1 is historical source-selection provenance; revision 2 is superseded historical review provenance. The ACR remains controlling and candidate-only. No Gate B pass, implementation, or runtime authority |
+| docs/OBSERVATION_V3_SPECIFICATION.md | CURRENT_PATH_BYTES_REV3_CANDIDATE; ACTIVE_GATE_B_BOUNDARY_SELECTION_REV1 | Current path bytes are revision 3/source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14`, present in integration ancestry at `410d9cb70518b64d3c76c2ef99b11b69d1da6701`; this Git fact does not satisfy the companion ACR activation conditions. The active Gate B boundary-source selection remains the exact revision-1 bytes at `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`, same path, full-document SHA-256 `feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec`. Revision 2 is superseded historical review provenance. Revision 3 and its ACR remain candidate-only; no Gate B pass, implementation, or runtime authority |
 | docs/governance/decisions/WP-04_GATE_B_CONSOLIDATED_DECISION.md | WP04_GATE_B_CANDIDATE_PENDING_ACR_ACTIVATION | Source commit `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry, but this downstream decision cannot activate the amendment; ACR remains candidate-only. Revision-2 correction is superseded historical review provenance. Gate B remains `NOT_STARTED`; no code/runtime authority |
 | docs/governance/decisions/QOS_REVISION_5_ACR_REVISION_7_BUNDLE_APPROVAL.md | HISTORICAL_GOVERNANCE_APPROVAL_RECORD | Prior user-approved bundle dated 2026-10-06; historical QoS5/ACR7 and receipt-interface/transport v1 pins retained; not current source selection after this candidate is integrated |
 | AGENTS.md | EXECUTION_GOVERNANCE | Codex work rules; not architecture authority |
@@ -102,7 +102,12 @@ fast-forwarded with the remote ref verified.
 The boundary-closure bundle from
 `wp-04-gate-b-boundary-closure-decision-50476170@68174e714cbe8aab61880113496cd7ccd7f97f5d`
 established the controlled Gate B boundary and selected specification
-revision 1 at that historical integration point. Source commit revision 3
+revision 1 at that historical integration point. Its exact selected source
+bytes are path `docs/OBSERVATION_V3_SPECIFICATION.md`, full-document SHA-256
+`feffb86e335d64a3a3fe0f3a1ce0866f868c8ed56ffa4412db14128c80b284ec` at commit
+`68174e714cbe8aab61880113496cd7ccd7f97f5d`. This revision-1 boundary-source
+selection remains controlling while the companion ACR remains pending.
+Source commit revision 3
 `d87b5a17ca0e9430d0b163aacf5b9cfcc4458d14` is present in integration ancestry,
 but the ACR still marks the amendment candidate-only pending its activation
 conditions. The ancestry fact does not make revision 3 effective or the current
