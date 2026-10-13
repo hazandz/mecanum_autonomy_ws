@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.10` WP-04 OIC V3 nonexecuting observation-ingress source-authorization review snapshot |
+| Revision | `0.10.11` WP-05 Navigation V1 dependency-lock schema and static bringup source-authorization review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -660,3 +660,14 @@ After the four conditions, source-level work may create nonexecuting observation
 **Critical path:** this L1 source authorization audit/decision/integration → exact path/source closure and separately scoped offline adapter implementation → code review and static/unit evidence → separately authorized runtime integration and evidence → later Gate B acceptance and HIL/hardware gates. This plan does not authorize or claim those downstream steps.
 
 No resolved profile or global `config_hash` is produced; no package/version pin, measurement, map approval, or runtime evidence is added. No Gate B start/pass or WP-04 closure is claimed. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `RUNTIME_APPROVED: NOT_APPROVED`. Before integration, the source-base code token remains the internal-seams-only token; after all four exact-candidate conditions it is the extended nonexecuting-source token above.
+
+
+### WP05-NAVIGATION-V1-DEPENDENCY-LOCK-AND-STATIC-BRINGUP-SOURCE-AUTHORIZATION — PEP-001 rev.0.10.11 review snapshot
+
+At exact integration base `2a537a9cfa9f9c5b0bec1f9c629fec8e2f98a225`, this five-path L1 governance candidate defines the future Navigation V1 dependency-lock schema and the bounded future source layout/ownership of `mecanum_nav_bringup`. It creates no package, source, launch, runtime YAML, package/version lock, resolved profile, profile hash, map approval, or runtime evidence. Candidate-only status applies to this exact source-base review snapshot and remains pending independent audit, separate explicit User authorization for the exact commit, fast-forward, and remote-ref verification.
+
+The current authorization before this candidate's integration is `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_AND_NONEXECUTING_OBSERVATION_INGRESS_ADAPTER_SOURCES_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. After all exact-candidate conditions, the conditional authorization is `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_NONEXECUTING_OBSERVATION_INGRESS_AND_STATIC_NAVIGATION_V1_BRINGUP_SOURCES_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. The extension permits static bringup source and static acceptance tests only in the decision's exact layout. It does not permit running launch/ROS/Nav2/AMCL/EKF/Gazebo, creating a runtime graph, resolving a profile/hash, approving a map, or HIL/hardware/deployment.
+
+Dependency roots are fixed by the schema. Concrete external package locks remain `PENDING_EXTERNAL_PACKAGE_LOCK`; workspace package/config/launch sources remain `PENDING_IMPLEMENTATION_SOURCE_PIN`. The static test list is an expectation for a later authorized code candidate, not test evidence from this candidate. Missing required lock/pin/measurement/evidence fails closed with no resolved profile, global `config_hash`, or Navigation bring-up.
+
+`mecanum_nav_bringup` is absent at the source base. WP-05 remains `OPEN`; `warehouse_map2` remains draft, not approved or navigation-ready; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`.
