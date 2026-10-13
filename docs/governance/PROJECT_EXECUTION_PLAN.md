@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.5` OIC V3 abstract technical-authority activation candidate; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.6` OIC V3 runtime target-binding candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -615,3 +615,15 @@ Activation is limited to abstract contract semantics. It does not select concret
 **Critical path after activation:** L1 canonical source-pin and profile-manifest closure → exact code-authorization packet → separately authorized pure-core/compiler implementation and offline acceptance → separately authorized ROS adapter/QoS integration → runtime evidence → later HIL/hardware gates. This ordering is planning only and grants no authority.
 
 WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No profile is resolved and no code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority is granted.
+
+### WP04-OIC-V3-RUNTIME-BINDING-ARCHITECTURE-DECISION — PEP-001 rev.0.10.6 source-base snapshot
+
+At exact source/integration base `7e72998c7bc8f9fb0a042672a9444879cd9baedd`, this is a seven-path documentation candidate. The target public bindings are recorded in `docs/OBSERVATION_RUNTIME_BINDING_V3.md` (source SHA-256 `ce2c979788658b45facbabdc3f7063f8663bf71380ab839531afcf7e204173b1`) and its semantic manifest (SHA-256 `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f`). The manifest digest is not the contract document's source-file digest.
+
+At the source base, OIC v3 remains active abstract contract authority and this L2 binding candidate is not yet active. After exact-candidate independent audit PASS, separate exact User authorization, fast-forward, and remote-ref verification, it becomes active L2 runtime-binding technical authority for target endpoints/ownership only; no separate activation candidate is required. The active OIC semantic-manifest/source fingerprints and established receipt v2/QoS6 pins remain unchanged.
+
+No executable source/package/launch pin, concrete profile, geometry, extrinsic, range, covariance, timeout, cadence, latency, freshness, skew, or runtime evidence is selected. Such pins remain `PENDING_IMPLEMENTATION_SOURCE_PIN`; required measurements remain `PENDING_MEASUREMENT`. Missing/unverifiable prerequisites fail closed: no profile resolution, no global `config_hash`, and no Gate B bring-up.
+
+**Critical path:** activate this exact L2 target-binding candidate only after its audit/authorization/integration conditions → L1 immutable implementation-source/profile pin closure and required measurements → separately reviewed exact code-authorization packet → separately authorized pure-core/compiler implementation and offline evidence → separately authorized ROS adapter/QoS and runtime evidence → later HIL/hardware gates. This candidate itself grants no code or runtime authority.
+
+WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
