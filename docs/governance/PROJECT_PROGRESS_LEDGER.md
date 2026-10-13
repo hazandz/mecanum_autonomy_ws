@@ -839,3 +839,17 @@
 - Pending: package/version and config/launch source pins; AMCL/EKF parameter/config pins; scan/TF adapter and geometry source; remap/namespace; lifecycle/startup pins; TF/publisher, scan, EKF, lifecycle, localization-quality, and map/runtime measurements. Fail closed: no resolved profile, global `config_hash`, or bring-up.
 - Status unchanged: WP-05 `OPEN`; map draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; WP-04 `BLOCKED_BY_CONTRACT`, Gate A `PASSED`, Gate B `NOT_STARTED`; current bounded internal-seam `CODE_AUTHORIZATION` remains unchanged; `RUNTIME_APPROVED: NOT_APPROVED`.
 - `supersedes`: none; this is a new review snapshot, not a correction of historical Ledger entries.
+
+### WP04-OIC-V3-NONEXECUTING-OBSERVATION-INGRESS-SOURCE-AUTHORIZATION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration/source base | `346138368a5a3599779f36d629c6fc0e0233338a` |
+| Change class and scope | L1 bounded implementation-source authorization candidate; exact four-path scope: new decision record, Registry, PEP-001, and this append-only entry. No source/test file is created. |
+| Dependency fingerprints | Architecture SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; OIC source SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; OIC semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; WP-04 runtime-binding semantic-manifest SHA-256 `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f`; WP-05 Navigation V1 runtime-binding ACR SHA-256 `3e74cdcb6136f60a6ad2822a853f2ae9926cf971059f3c2470c874802d6fae0d` and semantic-manifest SHA-256 `33855c9c95f9c0594ddd8805514658e4f5cb8255a219938a7913438470edbf31`; integrated pure-core candidate `16e4d81296f5db0fb322349bfe673cb5bd2c1534`; receipt v2/QoS6 established pins unchanged. |
+| Owner decision recorded | `mecanum_nav_rl` owns future nonexecuting observation-ingress adapter sources and related static/unit tests, limited to the two approved package directories. ROS message objects may be accepted as typed inputs, with no runtime graph or ROS operations. Target bindings and fail-closed boundaries are in the companion decision. |
+| Source-base/current status | Before integration of this exact candidate: `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. No audit or authorization is inferred from this candidate's Git ancestry or review push. |
+| Conditional post-integration status | Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification: `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_AND_NONEXECUTING_OBSERVATION_INGRESS_ADAPTER_SOURCES_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Boundary and non-goals | No code/test source, ROS graph, launch/runtime config, profile, global `config_hash`, package/version pin, measurement, map approval, runtime evidence, Gate B start/pass, WP-04 closure, WP-05 status change, runtime/HIL/hardware/deploy authority. |
+| Ledger semantics | Append-only; no prior history edited or removed. This record is a review snapshot before integration and, after the four conditions, an integrated L1 bounded implementation-source authorization only—not runtime approval, implementation completion, or runtime evidence. |

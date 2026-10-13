@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.9` WP-05 Navigation V1 L2 runtime-binding review snapshot; WP-04 bounded internal-seam authorization unchanged |
+| Revision | `0.10.10` WP-04 OIC V3 nonexecuting observation-ingress source-authorization review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -648,3 +648,15 @@ At exact integration base `16e4d81296f5db0fb322349bfe673cb5bd2c1534`, the refres
 This L2 decision records target bindings only. `warehouse_map2` remains draft/not approved/not navigation-ready; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; no profile is resolved, no global `config_hash` exists, and Navigation V1 bring-up is not authorized. Required implementation source/package/version pins and measurements remain pending and fail closed. WP-05 remains `OPEN`; Gate B remains `NOT_STARTED`.
 
 Current WP-04 status at this base is `BLOCKED_BY_CONTRACT`, Gate A `PASSED`, Gate B `NOT_STARTED`. `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY` remains limited to typed internal structures, fail-closed validators, pure-core assembler/synchronizer seams, and dependency-injected internal boundaries. It does not authorize public ROS/runtime interfaces, Navigation configuration or bring-up, profile resolution, runtime, HIL, hardware, or deployment. `RUNTIME_APPROVED: NOT_APPROVED`. This WP-05 candidate does not broaden that authorization.
+
+### WP04-OIC-V3-NONEXECUTING-OBSERVATION-INGRESS-SOURCE-AUTHORIZATION — PEP-001 rev.0.10.10
+
+At exact source-base/review snapshot `346138368a5a3599779f36d629c6fc0e0233338a`, this four-path L1 governance candidate records a conditional extension of the existing bounded internal-seam code authorization. The current source-base status remains `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification does the status extend to `GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_AND_NONEXECUTING_OBSERVATION_INGRESS_ADAPTER_SOURCES_ONLY`. Review push and Git ancestry alone do not grant it.
+
+The decision is bounded by the Architecture SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; OIC source SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc` and semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; WP-04 runtime-binding semantic-manifest SHA-256 `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f`; WP-05 Navigation V1 runtime-binding ACR SHA-256 `3e74cdcb6136f60a6ad2822a853f2ae9926cf971059f3c2470c874802d6fae0d` and semantic-manifest SHA-256 `33855c9c95f9c0594ddd8805514658e4f5cb8255a219938a7913438470edbf31`; integrated pure-core source candidate `16e4d81296f5db0fb322349bfe673cb5bd2c1534`; and established receipt v2/QoS6 pins, all unchanged.
+
+After the four conditions, source-level work may create nonexecuting observation-ingress adapter sources and related static/unit tests only under `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/` and `ros2_ws/src/mecanum_nav_rl/test/`; exact files still require a later code/source-closure candidate. `mecanum_nav_rl` remains the package owner. Typed ROS message objects may be accepted as inputs, but no node, executor, subscription, publisher, timer, service/action client, TF lookup/broadcast, launch, or runtime graph is allowed. The bounded targets and fail-closed rules are recorded in the companion decision; this governance candidate creates no source or test file.
+
+**Critical path:** this L1 source authorization audit/decision/integration → exact path/source closure and separately scoped offline adapter implementation → code review and static/unit evidence → separately authorized runtime integration and evidence → later Gate B acceptance and HIL/hardware gates. This plan does not authorize or claim those downstream steps.
+
+No resolved profile or global `config_hash` is produced; no package/version pin, measurement, map approval, or runtime evidence is added. No Gate B start/pass or WP-04 closure is claimed. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `RUNTIME_APPROVED: NOT_APPROVED`. Before integration, the source-base code token remains the internal-seams-only token; after all four exact-candidate conditions it is the extended nonexecuting-source token above.
