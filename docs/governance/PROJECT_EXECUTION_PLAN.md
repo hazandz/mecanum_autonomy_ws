@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.6` OIC V3 runtime target-binding candidate; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.7` bounded OIC V3 fail-closed implementation-authorization candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -627,3 +627,13 @@ No executable source/package/launch pin, concrete profile, geometry, extrinsic, 
 **Critical path:** activate this exact L2 target-binding candidate only after its audit/authorization/integration conditions → L1 immutable implementation-source/profile pin closure and required measurements → separately reviewed exact code-authorization packet → separately authorized pure-core/compiler implementation and offline evidence → separately authorized ROS adapter/QoS and runtime evidence → later HIL/hardware gates. This candidate itself grants no code or runtime authority.
 
 WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A remains `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+### WP04-OIC-V3-BOUNDED-FAIL-CLOSED-IMPLEMENTATION-AUTHORIZATION — PEP-001 rev.0.10.7 source-base snapshot
+
+At exact source/integration base `5e5075b5860034527350629c686c2d26651fbfeb`, OIC V3 and the L2 runtime-binding authority are integration-resident. This four-path governance candidate records a conditional, bounded decision: before independent audit PASS for this exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification, `CODE_AUTHORIZATION` remains `NOT_GRANTED`; after all conditions, only `BOUNDED_FAIL_CLOSED_IMPLEMENTATION_AUTHORIZATION` becomes effective for the internal code seams listed in `docs/governance/decisions/WP-04_OIC_V3_BOUNDED_IMPLEMENTATION_AUTHORIZATION.md`.
+
+The permitted future code candidate is limited to typed snapshot/context structures, strict fail-closed validation, a pure-core assembler/synchronizer over already-validated typed values, and dependency-injected internal boundaries for LiDAR, LocalReference, measured twist, and receipt/lifecycle context. It is not ROS ingress and does not include ROS endpoints, public interfaces, launch/runtime config, TF runtime, Nav2/localization/EKF setup, profile/config resolution, or runtime execution. Missing/mismatched inputs yield no vector; no partial vector/hash, default, alias, coercion, zero-fill, or legacy/simulation fallback is permitted. Code review and test/offline acceptance evidence remain required.
+
+Source/package/version pins, concrete profile inputs, and applicable measurements/evidence remain unresolved or `PENDING_MEASUREMENT`; they are prerequisites for later profile resolution and bring-up, not values this authorization supplies. The active global 16-root `ResolvedConfig.config_hash`, OIC/runtime-binding semantics, receipt v2, and QoS6 remain unchanged. The next permitted work after this governance candidate is integrated is a separately scoped bounded code candidate, not Gate B bring-up. ROS adapter/QoS integration, runtime, HIL, hardware, and deployment remain outside this authorization and require their own evidence/approval.
+
+Candidate lifecycle: at source base `5e5075b…`, this is review material pending the four exact-candidate conditions above. After them, it is an integrated bounded code-authorization governance record only. Integration does not assert that code has been written, pins/measurements resolved, the profile or global hash emitted, tests accepted, Gate B started/passed, or WP-04 closed. Current source-base status remains WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.

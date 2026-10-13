@@ -797,3 +797,18 @@
 | Candidate lifecycle | The correction candidate still requires its own independent audit and separate exact-commit User decision to integrate. Only after authorization, fast-forward, and remote-ref verification may it be integrated. This entry does not infer audit or authorization from Git ancestry. |
 | Supersedes | F-01 Registry ACR revision/identity traceability wording in source candidate `69b84c68324b0958140da203bccde46fb9f9f618`; no historical Ledger entry is edited or removed. |
 | Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP04-OIC-V3-BOUNDED-FAIL-CLOSED-IMPLEMENTATION-AUTHORIZATION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base | `5e5075b5860034527350629c686c2d26651fbfeb` |
+| Authority fingerprints | Architecture DOCX SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; active OIC source-file SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; OIC semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; runtime-binding contract SHA-256 `ce2c979788658b45facbabdc3f7063f8663bf71380ab839531afcf7e204173b1`; runtime-binding semantic-manifest SHA-256 `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f` |
+| Change class and scope | L1 bounded code-authorization governance candidate; exact four-path scope: new decision record, Registry, PEP-001, and this append-only entry. No code or implementation evidence is created. |
+| Conditional authorization | Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification: `BOUNDED_FAIL_CLOSED_IMPLEMENTATION_AUTHORIZATION` for typed internal snapshot/context structures, strict fail-closed validator, pure-core assembler/synchronizer, and dependency-injected internal input boundaries only. |
+| Evidence boundary | No audit verdict or authorization is inferred from Git ancestry. At the exact base/current review snapshot, `CODE_AUTHORIZATION: NOT_GRANTED`. The candidate records the four lifecycle conditions; post-integration scope is bounded governance authorization only. |
+| Fail-closed invariants | Missing/mismatched contract identity, lifecycle tuple, config binding, or invalid typed input => reject/no vector. No partial vector/hash, defaults, alias/coercion, zero-fill, legacy/simulation fallback, or fabricated source/version/measurement. Required source/package/version pins and measurements remain pending. |
+| Explicit non-goals | No ROS endpoints or runtime ingress; no launch/runtime YAML, TF runtime, Nav2/AMCL/EKF setup, public ROS interface, `ResolvedConfig`, global `config_hash`, resolved profile, Gate B start/pass, WP-04 closure, test acceptance claim, runtime/HIL/hardware/deployment authority, or WP-05/map change. `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Status/dependency | No transition at source base: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
