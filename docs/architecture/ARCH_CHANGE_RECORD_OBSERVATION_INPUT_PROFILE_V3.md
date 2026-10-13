@@ -1,8 +1,9 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `7` (L2 typed-boundary amendment candidate; not active before separate activation)
-**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_7_L2_REVIEW_CANDIDATE_AT_SOURCE_BASE`
+**Record revision:** `8` (L2 abstract OIC V3 technical-activation candidate)
+**Status at exact source base `23a7e21e320395091de4dd1b1700845355dc4391`:** `REVISION_3_ACTIVE_BASE_AUTHORITY; REVISION_7_L2_CONTRACT_CANDIDATE_INTEGRATED_NOT_ACTIVE; REVISION_8_ACTIVATION_CANDIDATE`
+**Target status after all activation conditions:** `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`
 **Work package:** `WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
@@ -203,7 +204,7 @@ runtime/HIL/hardware/deployment approval.
 
 ## 7. Revision 7 — L2 Observation Input Contract V3 typed-boundary amendment
 
-### 7.1 Lifecycle and authority boundary
+### 7.1 Revision-7 lifecycle snapshot at source base `5497b7e1938242422594f8150b06a32fe221ee70`
 
 At exact source base `5497b7e1938242422594f8150b06a32fe221ee70`, this revision-7 amendment and its companion contract, semantic manifest, decision, Registry, PEP, and Ledger updates are review-candidate snapshots. They do not alter active authority. If this exact candidate receives independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification, it becomes an integration-resident L2 target-governance record. Integration alone does not activate these technical semantics: ACR revision 3 and Observation V3 Specification revision 5 remain active technical authority until a separate activation/change-control explicitly supersedes them. This document does not assert audit or authorization from Git ancestry.
 
@@ -234,3 +235,19 @@ This is an abstract L2 contract record only. It does not select a ROS interface/
 The active global Architecture `ResolvedConfig` 16-root hash policy, RFC 8785 JCS semantics, nested `observation.input_profile` location, and full-config fail-closed rule are unchanged. There is no root `gate_b`, Gate-B-only hash, or partial profile/hash. Runtime timestamps, sensor samples, receipt instances/payloads/sequences, lifecycle values, barrier occurrences, freshness results, raw ROS objects, and runtime observations are invalid static-config/hash inputs. Missing or unverifiable required pins/evidence or required `PENDING_MEASUREMENT` values reject the entire resolved config.
 
 After a future separate activation/change-control, migration and acceptance work must assess existing configs, compiler/core/adapter boundaries, source bindings, rejection behavior, preservation of the 81D observation, and simulator/runtime separation. This candidate does not claim that migration, code, tests, ROSIDL, adapter/QoS integration, runtime, HIL, hardware, or deployment evidence exists. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; no code or runtime authorization is granted.
+
+## 8. Revision 8 — abstract OIC V3 technical-authority activation
+
+### 8.1 Source-base snapshot and activation lifecycle
+
+At exact source base `23a7e21e320395091de4dd1b1700845355dc4391`, this revision-8 ACR and the companion Specification revision 10 are an activation review candidate. At that source base, ACR revision 3 and Observation V3 Specification revision 5 remain the active base technical authority; revision 7 and revision 9 record the integrated L2 contract target but do not activate its semantics. This snapshot does not claim that audit, User authorization, integration, or remote verification has already occurred.
+
+After independent audit PASS for the exact activation candidate, separate User authorization for that exact commit, its fast-forward to `integration/implementation`, and remote-ref verification, the OIC V3 document and semantic manifest become `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`. The active authority is then the frozen Architecture plus the ACR revision-3 / Specification revision-5 base authority as extended by the activated abstract OIC V3 contract semantics. Revisions 3/5 are not the sole authority for that typed boundary after activation; their existing global-config, observation-layout, receipt/QoS, and other unchanged semantics remain in force.
+
+### 8.2 Exact activated semantic payload and unchanged boundaries
+
+The activated abstract contract payload is `docs/OBSERVATION_INPUT_CONTRACT_V3.md`, source-file SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`, paired with `docs/architecture/OBSERVATION_INPUT_CONTRACT_V3_SEMANTIC_MANIFEST.json`, semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. The two digests identify distinct evidence roles. This activation does not alter the five contract semantics, the global 16-root `ResolvedConfig.config_hash` policy, RFC 8785 JCS, nested `observation.input_profile`, or no-default/no-alias/no-coercion rules.
+
+### 8.3 Non-goals and remaining prerequisites
+
+Activation establishes only the abstract typed observation-input boundary. It selects no concrete source file, topic, publisher, package version, runtime profile, immutable source pin, measurement, or resolved profile. The six profile-reference groups and all required source evidence and `PENDING_MEASUREMENT` items remain unresolved. No profile is resolved, Gate B remains `NOT_STARTED`, WP-04 remains `BLOCKED_BY_CONTRACT`, and this activation grants no `CODE_AUTHORIZATION`, `RUNTIME_APPROVED`, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority. The next prerequisite work is L1 canonical source-pin/profile-manifest closure, not code implementation.

@@ -738,3 +738,17 @@
 | Candidate lifecycle | At source parent `af6ce9c…`, the source candidate contains the F-01 discrepancy. This exact correction candidate is a review candidate pending independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions it remains an integrated L2 target-governance record only; a separate activation/change-control is required for technical semantics. |
 | Authority and pending boundary | ACR revision 3 / Observation V3 Specification revision 5 remain active technical authority. Six concrete profile-reference groups and required source pins, evidence, and measurements remain pending; no profile is resolved and Gate B does not start/pass. |
 | Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authorization. |
+
+
+### WP04-OIC-V3-TECHNICAL-ACTIVATION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact source/integration base | `23a7e21e320395091de4dd1b1700845355dc4391` |
+| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`; SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; unchanged and highest authority |
+| Dependency fingerprints | Integrated abstract OIC source `af6ce9c2dc7388b0779315b306d178ded2338b51`; integrated digest correction `23a7e21e320395091de4dd1b1700845355dc4391`; OIC source-file SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. Source-file and semantic-manifest digests are distinct evidence roles. |
+| Change class and scope | L2 abstract technical-authority activation candidate: ACR revision 8, Observation Specification revision 10, decision record, Registry, PEP-001 revision 0.10.5, and this append-only entry. OIC document and manifest bytes are unchanged. |
+| Activation lifecycle | At source base `23a7e21…`, this exact work is an activation review candidate; no audit or authorization is inferred from Git. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification does OIC V3 and its manifest become `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`. The effective authority is the frozen Architecture and ACR revision-3 / Specification revision-5 base authority as extended by those abstract OIC semantics; revisions 3/5 are not the sole authority for that typed boundary. |
+| Activation boundary / next prerequisite | No concrete source, topic, publisher, package, runtime profile, immutable source pin, measurement, or profile instance is selected. Six profile-reference groups and required evidence/measurements remain unresolved. The next prerequisite is L1 canonical source-pin/profile-manifest closure, not code. The 16-root global config hash, nested `observation.input_profile`, receipt v2, QoS6, and contract semantics are unchanged. |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No profile resolution, code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority. |

@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.4` L2 Observation Input Contract V3 architecture-closure candidate; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.5` OIC V3 abstract technical-authority activation candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -603,3 +603,15 @@ The candidate defines five abstract revision-v3 contract identities in `docs/OBS
 No profile instance is resolved. Six concrete profile-reference groups remain unselected; applicable LiDAR geometry/range/extrinsic, timing, freshness, skew, timeout/buffer, twist validity/covariance/provenance, TF alignment, and runtime publisher evidence remain pending or `PENDING_MEASUREMENT`. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
 
 Candidate lifecycle: before integration, this exact work is a review-candidate snapshot pending independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions, it is an integration-resident L2 target-governance record only; the technical semantics still await separate activation/change-control.
+
+### WP04-OIC-V3-TECHNICAL-ACTIVATION — PEP-001 rev.0.10.5 source-base snapshot
+
+At exact source base `23a7e21e320395091de4dd1b1700845355dc4391`, this plan update and ACR revision 8 / Specification revision 10 are an activation review candidate. OIC V3 source-file SHA-256 is `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; its semantic-manifest SHA-256 is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. These are distinct digest roles. The manifest and OIC document bytes are unchanged by this activation candidate.
+
+After independent audit PASS for this exact activation candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification, OIC V3 and its manifest have status `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`. The frozen Architecture and ACR revision-3 / Specification revision-5 base authority are then extended by OIC V3 for the typed observation-input boundary; the base revisions are not the sole authority for that boundary. This candidate does not claim those conditions already occurred and does not infer them from ancestry.
+
+Activation is limited to abstract contract semantics. It does not select concrete source pins, profile instances, runtime topics/publishers, package versions, or measurements. Six profile-reference groups and applicable evidence remain unresolved; required measurements remain `PENDING_MEASUREMENT`. The next prerequisite is L1 canonical source-pin/profile-manifest closure, not code. The global 16-root `ResolvedConfig.config_hash`, nested `observation.input_profile`, receipt v2, QoS6, and existing fail-closed semantics are unchanged.
+
+**Critical path after activation:** L1 canonical source-pin and profile-manifest closure → exact code-authorization packet → separately authorized pure-core/compiler implementation and offline acceptance → separately authorized ROS adapter/QoS integration → runtime evidence → later HIL/hardware gates. This ordering is planning only and grants no authority.
+
+WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No profile is resolved and no code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority is granted.

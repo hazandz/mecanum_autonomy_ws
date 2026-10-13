@@ -5,13 +5,15 @@
 **Decision basis:** Owner-approved decisions in the work-package prompt
 **Exact source base:** `5497b7e1938242422594f8150b06a32fe221ee70`
 **Architecture:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`
-**State at source base:** review-candidate snapshot; ACR revision 3 and Observation V3 Specification revision 5 remain active technical authority.
+**State at OIC source base:** review-candidate snapshot; ACR revision 3 and Observation V3 Specification revision 5 remain active base technical authority.
+**Technical-activation candidate base:** `23a7e21e320395091de4dd1b1700845355dc4391`
+**Target state after all activation conditions:** `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`
 
-This decision records the Owner-approved abstract Gate B contract set. It does not infer authority from Git ancestry and is not active technical semantics at the source base. After independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification, it becomes an integration-resident L2 target-governance record; a separate activation/change-control is still required before its technical semantics become active. Until then, ACR revision 3 and Specification revision 5 remain active.
+This decision records the Owner-approved abstract Gate B contract set. The source-base statement above is a historical review snapshot; this technical-activation candidate supplies the separate change-control that can activate those abstract semantics. After independent audit PASS for the exact activation candidate, separate User authorization for that exact commit, fast-forward, and remote-ref verification, the OIC V3 contract and semantic manifest become active for abstract typed observation-input semantics only. At that point the frozen Architecture and ACR revision 3 / Specification revision 5 base authority are extended by OIC V3; revisions 3/5 are not the sole authority for this typed boundary. This decision does not infer audit, authorization, or activation from Git ancestry.
 
 ## 1. Authority and unchanged pins
 
-The frozen Architecture DOCX is highest authority. Active Observation V3 technical authority is ACR revision 3, activated at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, with active Specification revision 5 SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. The active global `ResolvedConfig.config_hash` covers the exhaustive 16-root Architecture envelope using RFC 8785 JCS; only output `config_hash` is excluded. `observation.input_profile` remains nested; no root `gate_b` or Gate-B-only hash exists.
+The frozen Architecture DOCX is highest authority. At the stated OIC source base, the active base Observation V3 authority is ACR revision 3, activated at integration `8c3de26521d7028a933f0a3ebe780fcb372f7a3a`, with Specification revision 5 SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`. After the separate activation candidate satisfies all four conditions, this base authority is extended by OIC V3 abstract semantics; revisions 3/5 are not the sole authority for that typed boundary. The global `ResolvedConfig.config_hash` covers the exhaustive 16-root Architecture envelope using RFC 8785 JCS; only output `config_hash` is excluded. `observation.input_profile` remains nested; no root `gate_b` or Gate-B-only hash exists.
 
 Receipt v2 and QoS6 are established pins and are unchanged: receipt interface ID `mecanum.final-issued-receipt/v2`, schema revision 2, source path `ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg`, SHA-256 `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`; dependency-closure v1 SHA-256 `0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73`; QoS6 transport ID `mecanum.final-issued-receipt-topic-qos/v2`, transport-manifest SHA-256 `338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620`, and QoS6 full-document SHA-256 `4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022`. These are distinct pin domains. No receipt field or transport bytes change.
 
@@ -57,3 +59,9 @@ RUNTIME_APPROVED: NOT_APPROVED
 ```
 
 This decision does not resolve `ObservationInputProfileV3`, start or pass Gate B, close WP-04, change WP-05, or grant code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authority.
+
+## 6. Technical-activation scope and next prerequisite
+
+The activation target binds OIC V3 source-file SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc` to semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; these digests identify distinct evidence roles. It activates only the abstract five-contract typed boundary already specified, without changing their semantics, the Architecture 16-root global config-hash policy, nested `observation.input_profile`, receipt v2/QoS6, or strict rejection rules.
+
+No concrete source file, topic, publisher, package version, runtime profile, immutable source pin, measurement, or resolved profile is selected. The six profile-reference groups and applicable evidence/measurements remain unresolved. The next prerequisite after activation is L1 canonical source-pin and profile-manifest closure, not code authorization or implementation. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; no code/runtime authority is granted.

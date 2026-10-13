@@ -1,7 +1,8 @@
 # Observation V3 Specification
 
-**Revision:** `9` (L2 typed-boundary review snapshot at source base; separate activation required)
-**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_9_L2_REVIEW_SNAPSHOT_AT_SOURCE_BASE_NOT_ACTIVE`
+**Revision:** `10` (abstract OIC V3 technical-activation candidate)
+**Status at exact source base `23a7e21e320395091de4dd1b1700845355dc4391`:** `REVISION_5_ACTIVE_BASE_SPECIFICATION; REVISION_9_L2_CONTRACT_CANDIDATE_INTEGRATED_NOT_ACTIVE; REVISION_10_ACTIVATION_CANDIDATE`
+**Target status after all activation conditions:** `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`
 **Work package:** `WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
@@ -14,7 +15,7 @@ Before ACR revision-3 activation at integration `8c3de26521d7028a933f0a3ebe780fc
 
 ## 1. Authority and exact pins
 
-The governing architecture remains `docs/MECANUM_NAV_DRL_Architecture.docx`. The active Observation V3 technical authority is ACR revision 3 and Observation V3 Specification revision 5, activated at the integration identified above. Receipt Topic QoS Contract revision 6 remains its separately approved receipt/QoS authority. Revision 8 in this document is a target-governance record only; it does not become active technical semantics or supersede revision 5 when integrated.
+The governing architecture remains `docs/MECANUM_NAV_DRL_Architecture.docx`. At source base `23a7e21e320395091de4dd1b1700845355dc4391`, the active base Observation V3 authority is ACR revision 3 and Observation V3 Specification revision 5, activated at the integration identified above. After the separate OIC V3 activation candidate in revision 10 satisfies all four stated conditions, this base authority is extended by OIC V3 for abstract typed observation-input semantics only; revisions 3/5 are not the sole authority for that boundary. Receipt Topic QoS Contract revision 6 remains its separately approved receipt/QoS authority. Revision 8 in this document is a historical target-governance record only; it does not itself activate technical semantics or supersede revision 5 when integrated.
 
 | Artifact | Exact identity | Canonical path | SHA-256 |
 |---|---|---|---|
@@ -274,9 +275,9 @@ It records no resolved profile, no Gate B start/pass, no WP-04 closure, and no
 code/runtime/HIL/hardware/deployment authorization. WP-05 and its
 artifact/status are unchanged.
 
-## 7. Revision 9 — proposed L2 Observation Input Contract V3 boundary
+## 7. Revision 9 — source-base snapshot of the integrated L2 contract target
 
-This section and companion `docs/OBSERVATION_INPUT_CONTRACT_V3.md` / semantic manifest are a review-candidate snapshot at exact source base `5497b7e1938242422594f8150b06a32fe221ee70`. After audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification, these records are integration-resident L2 target-governance records only. They do not activate new technical semantics. ACR revision 3 and Specification revision 5 remain active technical authority until a separate activation/change-control explicitly supersedes them. This lifecycle wording does not infer audit or authorization from ancestry.
+This section and companion `docs/OBSERVATION_INPUT_CONTRACT_V3.md` / semantic manifest are a review-candidate snapshot at exact source base `5497b7e1938242422594f8150b06a32fe221ee70`. At the current source base, the target has since been integrated as L2 governance but remains inactive technical semantics pending a separate activation/change-control. ACR revision 3 and Specification revision 5 remain active until that separate activation. This historical section does not infer audit or authorization from ancestry.
 
 The semantic-manifest SHA-256 is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; it hashes the complete RFC 8785 JCS semantic manifest, not the companion contract document's source-file bytes. The companion document source-file SHA-256 at this candidate content is `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`. The manifest source-file digest has the same value as its semantic digest because its exact file bytes are the canonical JCS payload; these remain distinct evidence roles. The five revision-`v3` contract identities are:
 
@@ -290,4 +291,14 @@ The companion contract defines the abstract typed boundary and fail-closed seman
 
 The six concrete profile-reference groups and applicable measurement/evidence remain unresolved. No `ObservationInputProfileV3` instance is resolved. Required missing or unverifiable pin/evidence or a required `PENDING_MEASUREMENT` continues to reject the entire resolved configuration without partial profile/hash. The active Architecture 16-root global `ResolvedConfig.config_hash` policy, RFC 8785 behavior, nested `observation.input_profile`, and no-root-`gate_b` boundary are unchanged. Runtime facts remain invalid static config/hash inputs and are rejected, not filtered.
 
-These target contracts require later migration and acceptance evidence before implementation is considered. This candidate does not implement core, compiler, adapter, ROSIDL, tests, runtime, HIL, hardware, or deployment. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; no code/runtime authorization is granted.
+These target contracts require later migration and acceptance evidence before implementation is considered. This source-base snapshot does not implement core, compiler, adapter, ROSIDL, tests, runtime, HIL, hardware, or deployment. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; no code/runtime authorization is granted.
+
+## 8. Revision 10 — abstract OIC V3 technical-authority activation
+
+At exact source base `23a7e21e320395091de4dd1b1700845355dc4391`, this revision-10 Specification is an activation review candidate. At that base, Specification revision 5 and ACR revision 3 remain the active base technical authority, extended by the frozen Architecture as previously recorded; the integrated revision-9 L2 target has not yet become active technical semantics. This statement is a source-base snapshot, not an indefinite post-integration status.
+
+After independent audit PASS for the exact activation candidate, separate User authorization for that exact commit, its fast-forward to `integration/implementation`, and remote-ref verification, `docs/OBSERVATION_INPUT_CONTRACT_V3.md` and its semantic manifest become `ACTIVE_TECHNICAL_AUTHORITY_FOR_ABSTRACT_OIC_V3_CONTRACT_SEMANTICS_ONLY`. The authority is the frozen Architecture plus the ACR revision-3 / Specification revision-5 base authority as extended by the activated abstract OIC V3 contract semantics. Revisions 3/5 are not the sole authority for this typed boundary after activation; unchanged global-config, observation-layout, receipt/QoS, and other base semantics remain in force.
+
+The activated OIC V3 and manifest pins are respectively source-file SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc` and semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; these are distinct digest roles. No five-contract semantics, 16-root `ResolvedConfig.config_hash`, RFC 8785 JCS, nested `observation.input_profile`, or strict no-default/no-alias/no-coercion behavior changes.
+
+Activation only establishes abstract contract semantics. It does not select source files, topics, publishers, package versions, runtime profile, concrete pins, measurements, or a resolved profile. Six profile-reference groups and required evidence/measurements remain pending. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; no code/runtime/ROS/ROSIDL/HIL/hardware/deployment authorization is granted. The next step is L1 canonical source-pin and profile-manifest closure, not code.
