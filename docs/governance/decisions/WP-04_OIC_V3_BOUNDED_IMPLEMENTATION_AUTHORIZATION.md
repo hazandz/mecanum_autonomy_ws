@@ -14,6 +14,24 @@
 
 Owner chấp thuận có điều kiện một code candidate riêng sau này, giới hạn đúng các seam nội bộ dưới đây. Candidate governance này chưa cấp quyền hiện hành; tại source base `CODE_AUTHORIZATION: NOT_GRANTED`. Khi và chỉ khi đủ bốn điều kiện lifecycle cho exact governance candidate, quyết định tích hợp sẽ cấp duy nhất `BOUNDED_FAIL_CLOSED_IMPLEMENTATION_AUTHORIZATION` cho phạm vi liệt kê. Quyền đó không thay thế code review, yêu cầu test/offline evidence, acceptance của Gate B hoặc các authorization riêng bị loại trừ bên dưới.
 
+### Trạng thái authorization theo lifecycle
+
+Tại source-base/review snapshot `a7c5811e15e3dd909b655b199372299c3cf2e5d9`, trước khi correction candidate được tích hợp, trạng thái hiện hành là:
+
+```text
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+```
+
+Chỉ sau khi đồng thời có independent audit PASS cho exact correction candidate, exact User authorization riêng, fast-forward và remote-ref verification, trạng thái sau integration là:
+
+```text
+CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY
+RUNTIME_APPROVED: NOT_APPROVED
+```
+
+`BOUNDED_FAIL_CLOSED_IMPLEMENTATION_AUTHORIZATION` là tên phạm vi Owner đã chấp thuận có điều kiện; `GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY` là status token chuẩn biểu diễn quyền đó sau khi đủ bốn điều kiện. Push review, Git ancestry hoặc candidate này trước các điều kiện đó không cấp quyền. Token chỉ bao phủ bốn seam nội bộ trong allowlist bên dưới; nó không cho phép ROS runtime graph/endpoints, launch/runtime YAML, TF listener/broadcaster, Nav2/AMCL/EKF runtime setup, `ResolvedConfig`, resolved profile/global `config_hash`, source/package/version pin tự suy diễn, public ROS/ROSIDL change, runtime/HIL/hardware/deploy, Gate B start/pass, hay WP-05/map changes.
+
 ## Allowlist triển khai được ủy quyền có điều kiện
 
 Code candidate sau đó chỉ được triển khai các seam không chạy độc lập:
@@ -48,10 +66,16 @@ Code candidate sau đó chỉ được triển khai các seam không chạy đ�
 Việc tích hợp candidate này không có nghĩa code đã được viết, profile/config hash đã resolve, runtime source đã pin, test đã pass, hoặc Gate B đã bắt đầu. Code review và test/acceptance evidence vẫn bắt buộc; quyền này không làm thay đổi Architecture, OIC v3, runtime-binding L2 semantics, receipt v2, QoS6, global 16-root `ResolvedConfig.config_hash`, hay `observation.input_profile`.
 
 ```text
-Tại source base: CODE_AUTHORIZATION: NOT_GRANTED
+Tại source-base/review snapshot trước integration:
+CODE_AUTHORIZATION: NOT_GRANTED
+RUNTIME_APPROVED: NOT_APPROVED
+
+Sau exact audit PASS + exact User authorization + fast-forward + remote-ref verification:
+CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY
+RUNTIME_APPROVED: NOT_APPROVED
+
 WP-04: BLOCKED_BY_CONTRACT
 GATE_A_STRUCTURAL_PRIMITIVES: PASSED
 GATE_B: NOT_STARTED
 WP-05: OPEN
-RUNTIME_APPROVED: NOT_APPROVED
 ```

@@ -812,3 +812,18 @@
 | Fail-closed invariants | Missing/mismatched contract identity, lifecycle tuple, config binding, or invalid typed input => reject/no vector. No partial vector/hash, defaults, alias/coercion, zero-fill, legacy/simulation fallback, or fabricated source/version/measurement. Required source/package/version pins and measurements remain pending. |
 | Explicit non-goals | No ROS endpoints or runtime ingress; no launch/runtime YAML, TF runtime, Nav2/AMCL/EKF setup, public ROS interface, `ResolvedConfig`, global `config_hash`, resolved profile, Gate B start/pass, WP-04 closure, test acceptance claim, runtime/HIL/hardware/deployment authority, or WP-05/map change. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Status/dependency | No transition at source base: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`. |
+
+
+### WP04-OIC-V3-BOUNDED-CODE-AUTHORIZATION-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Integration base / direct parent | `5e5075b5860034527350629c686c2d26651fbfeb` / `a7c5811e15e3dd909b655b199372299c3cf2e5d9` |
+| Finding | F-01, recorded as `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`: the source candidate did not express the canonical post-integration code-authorization status token consistently across the decision, Registry, PEP, and Ledger. No audit-report hash is asserted. |
+| Correction scope | Status-token and lifecycle traceability only across the four allowlisted governance paths. It does not change L1 authorization scope, fail-closed rules, technical authority, profile/source pins, measurements, Gate B, WP-05, or runtime authorization. |
+| Source-base/review status | Before integration of the exact correction candidate: `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Review push and Git ancestry do not grant authorization. |
+| Conditional post-integration status | Only after independent audit PASS for the exact correction candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification: `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. `BOUNDED_FAIL_CLOSED_IMPLEMENTATION_AUTHORIZATION` remains the scope name; the status token is its canonical post-integration representation. |
+| Boundary | The token retains only the previously recorded typed snapshot/context structures, fail-closed validators, pure-core assembler/synchronizer seams, and dependency-injected internal adapter boundaries. No ROS/runtime, profile/config resolution, inferred source/version pin, Gate B start/pass, or WP-05/map change is authorized. |
+| Supersedes | The ambiguous post-integration status routing in the source candidate `a7c5811e15e3dd909b655b199372299c3cf2e5d9`; prior Ledger history remains byte-for-byte unchanged. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; source-base `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
