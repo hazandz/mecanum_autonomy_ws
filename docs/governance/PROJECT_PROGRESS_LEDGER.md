@@ -725,3 +725,16 @@
 | Pending items | Six concrete profile-reference groups remain unselected; applicable sensor, timing, geometry, freshness, skew, timeout/buffer, twist, TF, lifecycle, and runtime publisher evidence remain pending / `PENDING_MEASUREMENT`; no resolved profile is created |
 | Evidence boundary | No source pin, code, ROSIDL, adapter, compiler, test, runtime, HIL, hardware, or deployment evidence is created. Manifest canonical-byte validation is mechanical candidate-file validation only |
 | Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED` |
+
+
+### WP04-OIC-V3-SEMANTIC-MANIFEST-DIGEST-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Integration base / source parent | `5497b7e1938242422594f8150b06a32fe221ee70` / `af6ce9c2dc7388b0779315b306d178ded2338b51`; source parent is a direct child of the integration base |
+| Finding | F-01: the OIC V3 header carried an incorrect semantic-manifest digest. The exact manifest at the source parent is unchanged and its canonical semantic digest is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. |
+| Correction scope | Documentation-only digest correction: update the OIC header to the established manifest digest, recompute its source-file SHA-256 as `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`, and update references to that OIC source-file digest. The semantic manifest bytes/digest and contract semantics are unchanged. |
+| Candidate lifecycle | At source parent `af6ce9c…`, the source candidate contains the F-01 discrepancy. This exact correction candidate is a review candidate pending independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions it remains an integrated L2 target-governance record only; a separate activation/change-control is required for technical semantics. |
+| Authority and pending boundary | ACR revision 3 / Observation V3 Specification revision 5 remain active technical authority. Six concrete profile-reference groups and required source pins, evidence, and measurements remain pending; no profile is resolved and Gate B does not start/pass. |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware, or deployment authorization. |

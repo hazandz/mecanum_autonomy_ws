@@ -4,7 +4,7 @@
 **Change class:** `L2_ARCHITECTURE_CONTRACT_AND_PUBLIC_TYPED_BOUNDARY`
 **Status at source base `5497b7e1938242422594f8150b06a32fe221ee70`:** review-candidate snapshot; not active technical authority
 **Manifest:** `docs/architecture/OBSERVATION_INPUT_CONTRACT_V3_SEMANTIC_MANIFEST.json`
-**Semantic-manifest SHA-256:** `769f96b929393239bc293af68d2418512b171dc5abf8e5135d796875847d8d77`
+**Semantic-manifest SHA-256:** `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`
 
 This document defines an abstract, typed and fail-closed contract boundary for future Gate B inputs. The semantic-manifest digest identifies the canonical JCS bytes for the complete five-contract set; it is not a source-file digest. The source-file digest of this document identifies only these document bytes and is recorded separately by Git/evidence after candidate creation. No contract instance, source pin, runtime observation, or resolved profile is created here.
 
