@@ -827,3 +827,17 @@
 | Boundary | The token retains only the previously recorded typed snapshot/context structures, fail-closed validators, pure-core assembler/synchronizer seams, and dependency-injected internal adapter boundaries. No ROS/runtime, profile/config resolution, inferred source/version pin, Gate B start/pass, or WP-05/map change is authorized. |
 | Supersedes | The ambiguous post-integration status routing in the source candidate `a7c5811e15e3dd909b655b199372299c3cf2e5d9`; prior Ledger history remains byte-for-byte unchanged. |
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; source-base `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+### WP05-NAVIGATION-V1-RUNTIME-BINDING-ARCHITECTURE-DECISION — review candidate
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base | `5249a11e69408abf845e8568258989a70edefb35` |
+| Change class / scope | `L2_PUBLIC_RUNTIME_INTERFACE_TF_LIFECYCLE_BINDING`; target-binding governance across ACR, companion contract, semantic manifest, WP-05 decision, Registry, PEP routing, and this append-only entry only. |
+| Owner decision recorded | Five target groups: canonical map-artifact root/identity/hash binding; AMCL Omni sole `map → odom` target owner in `NAV2_BASELINE`; `robot_localization` EKF sole `odom → base_link` target owner and `/wheel/odometry_raw`, `/imu/data` to `/odometry/filtered`; `/scan` exact `lidar_frame` and `robot_state_publisher` target ownership with no aliases/static workaround; Architecture lifecycle/startup health gates. |
+| Source/pin boundary | No executable profile source, package/version pin, launch/config, remap policy, lifecycle implementation, or measurement is selected. Pending pins: Nav2, AMCL, Map Server, `robot_localization`, bridge, config/launch, AMCL params, EKF, scan/TF adapter, remap/namespace, lifecycle/startup. |
+| Evidence boundary | Offline declarations/pins can be checked statically; actual TF graph/publisher uniqueness, scan header/cadence/freshness, EKF output/freshness/covariance, lifecycle health, localization quality, map loading/compatibility require separate runtime/measurement evidence. |
+| Fail-closed / non-goals | Missing/conflicting required input means no resolved profile, no profile `config_hash`, no Map Server/AMCL/EKF/Navigation bring-up, no map approval, and no runtime authorization. No map bytes/status, world frame, runtime compatibility, WP-04, or code is changed. |
+| Candidate lifecycle | Review candidate only at this base. Active L2 target-binding authority only after exact-candidate independent audit PASS, separate explicit exact-commit User authorization, fast-forward, and remote-ref verification. No separate activation candidate required. |
+| Status | WP-05 `OPEN`; `warehouse_map2` draft/not navigation-approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED`. |

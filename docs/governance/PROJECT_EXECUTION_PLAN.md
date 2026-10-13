@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.8` bounded OIC V3 fail-closed implementation-authorization status correction; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.9` WP-05 Navigation V1 L2 runtime-binding decision candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -639,3 +639,11 @@ The permitted future code candidate is limited to typed snapshot/context structu
 Source/package/version pins, concrete profile inputs, and applicable measurements/evidence remain unresolved or `PENDING_MEASUREMENT`; they are prerequisites for later profile resolution and bring-up, not values this authorization supplies. The active global 16-root `ResolvedConfig.config_hash`, OIC/runtime-binding semantics, receipt v2, and QoS6 remain unchanged. The next permitted work after this governance candidate is integrated is a separately scoped bounded code candidate, not Gate B bring-up. ROS adapter/QoS integration, runtime, HIL, hardware, and deployment remain outside this authorization and require their own evidence/approval.
 
 Candidate lifecycle: at source base `5e5075b…`, this exact correction is review material pending independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification. After all four conditions, it is an integrated bounded code-authorization governance record only, and the canonical post-integration code status is `GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED` remains. Integration does not assert that code has been written, pins/measurements resolved, the profile or global hash emitted, tests accepted, Gate B started/passed, or WP-04 closed. Current source-base statuses remain WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+### WP-05 Navigation V1 L2 runtime-binding decision candidate — PEP-001 rev.0.10.9
+
+At exact integration base `5249a11e69408abf845e8568258989a70edefb35`, the new ACR, target-binding contract, semantic manifest, decision, Registry routing, this PEP routing, and one Ledger entry are review-candidate content only. After independent audit PASS for the exact final commit, separate explicit User authorization for that exact commit, fast-forward, and remote-ref verification, that commit becomes `ACTIVE_L2_NAVIGATION_V1_RUNTIME_BINDING_TECHNICAL_AUTHORITY_FOR_TARGET_BINDINGS_ONLY`; no separate activation candidate is required.
+
+This L2 decision records five target-binding groups only: canonical map-artifact-root binding; AMCL Omni and sole `map → odom` target ownership in `NAV2_BASELINE`; EKF and sole `odom → base_link` target ownership with the target topics/type/frames; `/scan` exact `lidar_frame` and `robot_state_publisher` target ownership with no implicit aliases; and Architecture lifecycle/startup health gates. It does not select executable profile sources or pins. Required package/version/config/launch/adapter/remap/lifecycle source pins remain `PENDING_IMPLEMENTATION_SOURCE_PIN`; required observations remain `PENDING_MEASUREMENT`.
+
+Missing/conflicting/unverifiable required inputs fail closed: no resolved profile, no profile `config_hash`, and no Map Server/AMCL/EKF/Navigation bring-up. `warehouse_map2` remains a draft artifact, not approved or navigation-ready; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`. Runtime validation, map approval, world-frame validation, profile resolution, and WP-04 Gate B remain separate. The current bounded code status is `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; this candidate does not extend it to public ROS/runtime interfaces, Nav2/Map Server/AMCL/EKF setup, or bring-up. `RUNTIME_APPROVED: NOT_APPROVED`.
