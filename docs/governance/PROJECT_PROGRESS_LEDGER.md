@@ -783,3 +783,17 @@
 | Candidate lifecycle | At the exact source base this is a review-candidate snapshot. After independent audit PASS, separate exact User authorization, fast-forward, and remote-ref verification for the exact candidate, it becomes active L2 runtime-binding technical authority for target bindings only; no separate activation candidate is required. No audit or authorization is inferred from Git ancestry. |
 | Pending boundary | No executable source/package/launch/EKF pin, concrete profile, geometry/extrinsic, range, covariance, timeout, cadence, latency, freshness, skew, buffer, or runtime evidence is selected. Required implementation pins remain `PENDING_IMPLEMENTATION_SOURCE_PIN`; required measurements remain `PENDING_MEASUREMENT`. Missing required pins/evidence fail closed: no profile resolution, global `config_hash`, or Gate B bring-up. |
 | Non-goals/status | OIC semantics, OIC/static manifests, receipt v2/QoS6, global 16-root hash policy and `observation.input_profile` are unchanged. No profile resolution, Gate B start/pass, WP-04 closure, code/runtime/HIL/hardware/deployment authorization, or status transition. WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP04-OIC-V3-RUNTIME-BINDING-ACR-REVISION-TRACEABILITY-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration base / source parent | `7e72998c7bc8f9fb0a042672a9444879cd9baedd` / `69b84c68324b0958140da203bccde46fb9f9f618` |
+| Finding | `F-01`, recorded as `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`: the Registry called the new runtime-binding record “ACR revision 9” although its identity is `ACR-OBSERVATION-RUNTIME-BINDING-V3`, Record revision `1`. |
+| Correction scope | Registry authority/revision traceability wording only, plus this append-only Ledger entry. The base `ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md` is Record revision 8; Observation V3 Specification revision 9 is Specification provenance, not an ACR revision. |
+| Technical and status boundary | No change to five target runtime bindings, pins, pending measurements, fail-closed behavior, active authority, WP status, dependency, or authorization. No profile, `config_hash`, source pin, timeout, package version, runtime evidence, or measurement is created. |
+| Candidate lifecycle | The correction candidate still requires its own independent audit and separate exact-commit User decision to integrate. Only after authorization, fast-forward, and remote-ref verification may it be integrated. This entry does not infer audit or authorization from Git ancestry. |
+| Supersedes | F-01 Registry ACR revision/identity traceability wording in source candidate `69b84c68324b0958140da203bccde46fb9f9f618`; no historical Ledger entry is edited or removed. |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
