@@ -1,9 +1,9 @@
 # Architecture Change Record: ObservationInputProfileV3
 
 **Record ID:** `ACR-OBSERVATION-INPUT-PROFILE-V3`
-**Record revision:** `6` (target-contract governance record; source-parent review snapshot)
-**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_6_TARGET_GOVERNANCE_RECORD_NOT_TECHNICAL_AUTHORITY`
-**Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
+**Record revision:** `7` (L2 typed-boundary amendment candidate; not active before separate activation)
+**Status:** `REVISION_3_ACTIVE_TECHNICAL_AUTHORITY; REVISION_7_L2_REVIEW_CANDIDATE_AT_SOURCE_BASE`
+**Work package:** `WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Activated ACR revision 3:** `wp-04-gate-b-config-hash-root-correction-c1187de@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`
 **Architecture authority:** `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, release date 2026-09-16.
@@ -200,3 +200,37 @@ The source and measurement gaps above prevent a resolved
 `ObservationInputProfileV3` and keep Gate B `NOT_STARTED`. This candidate does
 not pass Gate B, close WP-04, change WP-05, grant `CODE_AUTHORIZATION`, or grant
 runtime/HIL/hardware/deployment approval.
+
+## 7. Revision 7 — L2 Observation Input Contract V3 typed-boundary amendment
+
+### 7.1 Lifecycle and authority boundary
+
+At exact source base `5497b7e1938242422594f8150b06a32fe221ee70`, this revision-7 amendment and its companion contract, semantic manifest, decision, Registry, PEP, and Ledger updates are review-candidate snapshots. They do not alter active authority. If this exact candidate receives independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification, it becomes an integration-resident L2 target-governance record. Integration alone does not activate these technical semantics: ACR revision 3 and Observation V3 Specification revision 5 remain active technical authority until a separate activation/change-control explicitly supersedes them. This document does not assert audit or authorization from Git ancestry.
+
+### 7.2 Owner-approved abstract contracts
+
+The Owner-approved L2 decision records five abstract contract identities, each at revision `v3`:
+
+| Contract ID | Scope |
+|---|---|
+| `mecanum.observation.lidar-snapshot/v3` | Raw angular LiDAR snapshot before sectorization; canonical target `lidar_frame`; exactly 72 finite sector outputs. |
+| `mecanum.observation.local-reference/v3` | Navigation/global-path LocalReference in `base_link`; exact features `distance`, `sin_bearing`, `cos_bearing`. |
+| `mecanum.observation.measured-twist/v3` | Base-frame measured twist `[vx, vy, wz]`; target semantic owner is one EKF fused-odometry publisher. |
+| `mecanum.observation.frame-tf-binding/v3` | Target TF ownership and separately evidenced runtime transform binding. |
+| `mecanum.observation.lifecycle-barrier/v3` | Exact lifecycle/config identity and receipt admission after action/reset barriers and before cutoff. |
+
+The canonical semantic manifest is `docs/architecture/OBSERVATION_INPUT_CONTRACT_V3_SEMANTIC_MANIFEST.json`; its semantic-manifest SHA-256 is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. That digest covers the complete canonical manifest bytes. It is distinct from the source-file SHA-256 of the manifest and from the source-file SHA-256 of `docs/OBSERVATION_INPUT_CONTRACT_V3.md`; no source-file hash is embedded in, or substituted for, the semantic digest. No per-contract digest is invented.
+
+The companion contract document's source-file SHA-256 at this candidate content is `d05fa5365d25116e061f39f58e3c159eb31cae31d417fb366ef172383c74aa65`. This is a source-byte digest, not a semantic-manifest digest or a Git commit pin. The canonical manifest file's source-byte SHA-256 is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; it equals its semantic-manifest digest here because the file bytes are exactly the canonical JCS payload, but the identifiers name distinct evidence roles.
+
+The abstract typed boundary, shared identity, requiredness, ownership, invariants, runtime evidence boundary, and fail-closed behavior are specified in the companion contract document. All four observation inputs and the final-issued receipt ingress context must match exactly on `episode_generation`, `reset_epoch`, `runtime_generation`, and the global `config_hash`. Receipt v2 remains unchanged and has no `config_hash` field; the companion contract does not add one or define a message wrapper. Any external ingress binding is future separately authorized implementation work. A missing, mismatched, stale, aliased, defaulted, coerced, partially matching, or unverifiable required input is rejected and produces no observation vector.
+
+This amendment records target ownership, not evidence of runtime ownership: localization owns `map -> odom`, EKF owns `odom -> base_link`, and robot description/`robot_state_publisher` owns `base_link -> lidar_frame`. `SafetyLifecycle` remains sole owner of action/reset barriers. Receipt v2 and QoS6 established pins remain unchanged.
+
+### 7.3 Compatibility and unresolved evidence
+
+This is an abstract L2 contract record only. It does not select a ROS interface/message type, topic, publisher node/config, package version, source file, concrete profile source, contract-source pin, geometry, timeout, default, alias, measurement, or runtime fact. LiDAR range/timing/extrinsic, cadence/latency/freshness/skew/timeout/buffer, LocalReference provider and transform, measured-twist topic/type/covariance/validity/freshness/provenance, TF alignment/publisher uniqueness, lifecycle policy source, receipt-after-barrier timeout, and all other applicable measurement evidence remain pending. The six profile-reference groups remain without concrete immutable source selection. No `ObservationInputProfileV3` instance is resolved.
+
+The active global Architecture `ResolvedConfig` 16-root hash policy, RFC 8785 JCS semantics, nested `observation.input_profile` location, and full-config fail-closed rule are unchanged. There is no root `gate_b`, Gate-B-only hash, or partial profile/hash. Runtime timestamps, sensor samples, receipt instances/payloads/sequences, lifecycle values, barrier occurrences, freshness results, raw ROS objects, and runtime observations are invalid static-config/hash inputs. Missing or unverifiable required pins/evidence or required `PENDING_MEASUREMENT` values reject the entire resolved config.
+
+After a future separate activation/change-control, migration and acceptance work must assess existing configs, compiler/core/adapter boundaries, source bindings, rejection behavior, preservation of the 81D observation, and simulator/runtime separation. This candidate does not claim that migration, code, tests, ROSIDL, adapter/QoS integration, runtime, HIL, hardware, or deployment evidence exists. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; no code or runtime authorization is granted.

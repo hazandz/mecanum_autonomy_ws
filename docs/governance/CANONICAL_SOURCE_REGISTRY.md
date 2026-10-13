@@ -4,6 +4,14 @@
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
+## WP04 Observation Input Contract V3 L2 candidate — source-base snapshot and post-integration lifecycle
+
+At exact source base `5497b7e1938242422594f8150b06a32fe221ee70`, ACR revision 3 and Observation V3 Specification revision 5 remain active technical authority. This work package proposes ACR revision 7, Specification revision 9, a new abstract contract document, semantic manifest, and decision record as one L2 review candidate. The contract document did not exist at the source base; it is newly created by this candidate, not a pre-existing authority.
+
+The five contract identities and the JCS semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb` are candidate target semantics only. The companion contract document source-file SHA-256 is `d05fa5365d25116e061f39f58e3c159eb31cae31d417fb366ef172383c74aa65`. The manifest source-file digest equals the semantic digest because the exact file bytes are the JCS payload; these labels represent distinct evidence roles. No source file, runtime topic/publisher, ROS message type, concrete profile reference, measurement, or profile instance is selected. Receipt v2/QoS6 established pins and the active 16-root global config-hash policy remain unchanged.
+
+Before integration, these documents are review-candidate snapshots pending independent audit PASS and separate exact-commit User authorization. After fast-forward and remote-ref verification, they are integration-resident L2 target-governance records only; they do not activate new technical semantics. A separate activation/change-control is required, and ACR revision 3 / Specification revision 5 remain active until that occurs. No status is inferred from ancestry. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; code/runtime authorization remains not granted.
+
 ## WP-04 Gate B target-contract closure — source-parent snapshot and post-integration target state
 
 At exact integration base `701bb0cc5ca17b71e083d3ce4fdebd2bf46fbcee`, active
@@ -215,6 +223,9 @@ not the current status of the ACR revision-3 activation recorded below.
 | firmware_STM32/** | FIRMWARE_SOURCE_PENDING_OFFLINE_AND_HIL_EVIDENCE | Firmware implementation work only under contract/hardware approval |
 | ros2_ws/src/ROBOT_URDF_final_description/urdf/**, meshes/**, models/** | ROBOT_GEOMETRY_SIMULATION_SOURCE | Geometry/simulation source; not proof of official runtime control profile |
 | `ros2_ws/src/ROBOT_URDF_final_description/config/nav2_params.yaml`, `launch/nav2_bringup.launch.py`, `config/mapper_params_online_async.yaml`, `launch/slam.launch.py`, `config/ros_gz_bridge_gazebo.yaml`, `launch/gazebo.launch.py` | REFERENCE_ONLY_LEGACY for Navigation V1 | Static legacy reference only; not canonical executable profile sources, pins, runtime graph, or implicit remap/frame-alias authority |
+| `docs/OBSERVATION_INPUT_CONTRACT_V3.md` | L2_REVIEW_CANDIDATE_AT_5497B7E; NOT_ACTIVE_TECHNICAL_AUTHORITY | New abstract contract document; source-file SHA-256 `d05fa5365d25116e061f39f58e3c159eb31cae31d417fb366ef172383c74aa65`; post-integration it is an L2 target-governance record pending separate activation; no source profile or runtime implementation is selected |
+| `docs/architecture/OBSERVATION_INPUT_CONTRACT_V3_SEMANTIC_MANIFEST.json` | L2_SEMANTIC_MANIFEST_REVIEW_CANDIDATE | JCS semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; digest is distinct from file source SHA; no concrete source pins or measurements |
+| `docs/governance/decisions/WP-04_OBSERVATION_INPUT_CONTRACT_V3_ARCHITECTURE_DECISION.md` | L2_OWNER_DECISION_REVIEW_CANDIDATE | Records five abstract revision-v3 contracts; does not activate semantics, resolve a profile, start/pass Gate B, or authorize code/runtime |
 | `ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro`, `launch/tugbot_depot.sdf` | GEOMETRY_OR_PROVENANCE_EVIDENCE_ONLY for Navigation V1 | Static geometry/source bytes only; do not establish selected profile, actual scan header, runtime TF, map/world equivalence, transform, metric alignment, or compatibility |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/mecanum_env.py | LEGACY_NONCANONICAL | Excluded from official runtime/architecture evidence |
 | ros2_ws/src/ROBOT_URDF_final_description/ROBOT_URDF_final_description/train_ai.py | UNCLASSIFIED_LEGACY_DEPENDENT | Not allowed as canonical training/runtime entrypoint pending explicit decision |

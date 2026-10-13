@@ -708,3 +708,20 @@
 | Candidate lifecycle | At source parent `513ef03…`, the record is a review snapshot. This exact correction candidate, before integration, requires its own independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. After those conditions, the record is an integrated source-disposition governance record only. |
 | Post-integration boundary | No source pin or profile is created/resolved; Gate B does not start/pass; no code/runtime transition or authorization is granted. ACR rev.3 and Specification rev.5 remain active technical authority; receipt v2/QoS6 remain established; six profile-reference groups and required measurements remain pending. |
 | Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Exact integration/source base | `5497b7e1938242422594f8150b06a32fe221ee70` |
+| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; unchanged and highest authority |
+| Owner decision | Owner-approved L2 abstract typed-boundary contract set for five revision-v3 identities; no concrete source/profile, runtime interface, or measurement selected |
+| Scope | Eight-path documentation candidate: ACR and Specification status/contract records; new `docs/OBSERVATION_INPUT_CONTRACT_V3.md`; new JCS semantic manifest; new decision record; Registry, PEP, and this append-only entry |
+| Semantic manifest | `docs/architecture/OBSERVATION_INPUT_CONTRACT_V3_SEMANTIC_MANIFEST.json`; semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; this identifies canonical semantic bytes and is distinct from source-file digests |
+| Authority and lifecycle | At source base, ACR revision 3 / Specification revision 5 remain active; this exact candidate awaits independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions, it is an integration-resident L2 target-governance record only; a separate activation/change-control is still required before new technical semantics are active |
+| Contract boundary | Shared exact `episode_generation`, `reset_epoch`, `runtime_generation`, and global `config_hash` binding; receipt v2 remains unchanged and has no `config_hash` field; no root `gate_b`, Gate-B-only hash, or partial profile/hash |
+| Pending items | Six concrete profile-reference groups remain unselected; applicable sensor, timing, geometry, freshness, skew, timeout/buffer, twist, TF, lifecycle, and runtime publisher evidence remain pending / `PENDING_MEASUREMENT`; no resolved profile is created |
+| Evidence boundary | No source pin, code, ROSIDL, adapter, compiler, test, runtime, HIL, hardware, or deployment evidence is created. Manifest canonical-byte validation is mechanical candidate-file validation only |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED` |

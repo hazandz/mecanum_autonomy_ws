@@ -1,8 +1,8 @@
 # Observation V3 Specification
 
-**Revision:** `8` (target-contract governance record; source-parent review snapshot)
-**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_8_TARGET_GOVERNANCE_RECORD_NOT_TECHNICAL_AUTHORITY`
-**Work package:** `WP04-GATE-B-TARGET-CONTRACT-CLOSURE-DECISION`
+**Revision:** `9` (L2 typed-boundary review snapshot at source base; separate activation required)
+**Status:** `REVISION_5_ACTIVE_TECHNICAL_SPECIFICATION; REVISION_9_L2_REVIEW_SNAPSHOT_AT_SOURCE_BASE_NOT_ACTIVE`
+**Work package:** `WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE`
 **Activation integration:** `origin/integration/implementation@8c3de26521d7028a933f0a3ebe780fcb372f7a3a`; activated revision-5 bytes SHA-256 `4092ee19d48a760b329ff49b9a79e39ab8389ff232aabd5dd06db83f8d83e5a2`
 **Runtime status:** `RUNTIME_NOT_APPROVED`
 
@@ -273,3 +273,21 @@ target-governance record only; it does not become active technical semantics.
 It records no resolved profile, no Gate B start/pass, no WP-04 closure, and no
 code/runtime/HIL/hardware/deployment authorization. WP-05 and its
 artifact/status are unchanged.
+
+## 7. Revision 9 — proposed L2 Observation Input Contract V3 boundary
+
+This section and companion `docs/OBSERVATION_INPUT_CONTRACT_V3.md` / semantic manifest are a review-candidate snapshot at exact source base `5497b7e1938242422594f8150b06a32fe221ee70`. After audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification, these records are integration-resident L2 target-governance records only. They do not activate new technical semantics. ACR revision 3 and Specification revision 5 remain active technical authority until a separate activation/change-control explicitly supersedes them. This lifecycle wording does not infer audit or authorization from ancestry.
+
+The semantic-manifest SHA-256 is `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; it hashes the complete RFC 8785 JCS semantic manifest, not the companion contract document's source-file bytes. The companion document source-file SHA-256 at this candidate content is `d05fa5365d25116e061f39f58e3c159eb31cae31d417fb366ef172383c74aa65`. The manifest source-file digest has the same value as its semantic digest because its exact file bytes are the canonical JCS payload; these remain distinct evidence roles. The five revision-`v3` contract identities are:
+
+- `mecanum.observation.lidar-snapshot/v3`
+- `mecanum.observation.local-reference/v3`
+- `mecanum.observation.measured-twist/v3`
+- `mecanum.observation.frame-tf-binding/v3`
+- `mecanum.observation.lifecycle-barrier/v3`
+
+The companion contract defines the abstract typed boundary and fail-closed semantics. All runtime snapshots and the final-issued receipt ingress context require exact atomic match on `episode_generation`, `reset_epoch`, `runtime_generation`, and the global `config_hash`. Receipt v2 is unchanged and has no `config_hash` message field; no receipt field or ROS interface is added here. The contract does not select concrete source files, ROS types/topics/publishers, package versions, profile pins, geometry, timing values, or measurements. `lidar_frame` is the exact target with no inferred alias; LiDAR is raw angular input before sectorization and yields 72 finite sectors. LocalReference is the navigation/global-path value in `base_link` with `distance`, `sin_bearing`, `cos_bearing`; measured twist is `[vx, vy, wz]` with EKF as target owner; TF ownership and SafetyLifecycle barrier ownership are as recorded in the companion contract. These are target semantics, not runtime evidence.
+
+The six concrete profile-reference groups and applicable measurement/evidence remain unresolved. No `ObservationInputProfileV3` instance is resolved. Required missing or unverifiable pin/evidence or a required `PENDING_MEASUREMENT` continues to reject the entire resolved configuration without partial profile/hash. The active Architecture 16-root global `ResolvedConfig.config_hash` policy, RFC 8785 behavior, nested `observation.input_profile`, and no-root-`gate_b` boundary are unchanged. Runtime facts remain invalid static config/hash inputs and are rejected, not filtered.
+
+These target contracts require later migration and acceptance evidence before implementation is considered. This candidate does not implement core, compiler, adapter, ROSIDL, tests, runtime, HIL, hardware, or deployment. Gate B remains `NOT_STARTED`; WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; no code/runtime authorization is granted.

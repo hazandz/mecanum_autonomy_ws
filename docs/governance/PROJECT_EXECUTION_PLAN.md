@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.3` post-integration ACR revision-3 status/provenance reconciliation; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.4` L2 Observation Input Contract V3 architecture-closure candidate; Gate B remains `NOT_STARTED` |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -591,3 +591,15 @@ This revision reconciles the already-integrated status event at exact base `3fc3
 Earlier PEP sections that say a status/activation event was candidate-only or awaiting integration are snapshots at their explicitly stated earlier base/commit, not the current state of the event at `3fc3e2e…`.
 
 Concrete required contract/source pins and evidence remain `PENDING_OWNER_DECISION`; measurements remain `PENDING_MEASUREMENT`. ACR activation creates no resolved profile and does not satisfy Gate B. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`. `warehouse_map2` remains `approval_status: draft`, `world_frame: NOT_DECLARED`, `runtime_compatibility: NOT_VALIDATED`. User-supplied SLAM-source attribution remains provenance only, not evidence of map/world equality, a transform, metric alignment, runtime validation, or map approval. `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`; no code, ROS, HIL, hardware, or deployment authority is granted.
+
+### WP04-OBSERVATION-INPUT-CONTRACT-V3-ARCHITECTURE-CLOSURE — PEP-001 rev.0.10.4 candidate snapshot
+
+At exact source base `5497b7e1938242422594f8150b06a32fe221ee70`, this plan update routes the Owner-approved L2 abstract typed-boundary candidate through independent audit and separate exact-commit User authorization. After fast-forward and remote-ref verification, its records are integration-resident L2 target-governance only; technical activation remains a separate change-control. ACR revision 3 and Observation V3 Specification revision 5 remain active technical authority until that activation. This PEP candidate does not itself activate technical semantics or infer audit/authorization from ancestry.
+
+The candidate defines five abstract revision-v3 contract identities in `docs/OBSERVATION_INPUT_CONTRACT_V3.md`, with canonical semantic manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`. It does not select concrete source/profile pins or measurement values and does not alter the active global 16-root `ResolvedConfig.config_hash`, nested `observation.input_profile`, receipt v2, or QoS6.
+
+**Critical path:** L2 contract candidate audit/authorization/integration → separate activation/change-control → L1 immutable source selection and profile-manifest closure → exact code-authorization packet → pure-core/compiler implementation and offline acceptance → separately authorized ROS adapter/QoS integration → runtime evidence → later HIL/hardware gates. This ordering is planning only and grants no authority.
+
+No profile instance is resolved. Six concrete profile-reference groups remain unselected; applicable LiDAR geometry/range/extrinsic, timing, freshness, skew, timeout/buffer, twist validity/covariance/provenance, TF alignment, and runtime publisher evidence remain pending or `PENDING_MEASUREMENT`. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A structural primitives remain `PASSED`; Gate B remains `NOT_STARTED`; WP-05 remains `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+Candidate lifecycle: before integration, this exact work is a review-candidate snapshot pending independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions, it is an integration-resident L2 target-governance record only; the technical semantics still await separate activation/change-control.
