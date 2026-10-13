@@ -38,14 +38,14 @@ under active ACR3, a missing required pin/evidence/measurement rejects the
 whole resolved config with no partial hash. The candidate does not start/pass
 Gate B, change WP status/dependencies, or grant code/runtime authorization.
 
-## WP04-GATE-B-SOURCE-DISPOSITION-CLOSURE — L1 candidate
+## WP04-GATE-B-SOURCE-DISPOSITION-CLOSURE — source-parent snapshot and post-integration target state
 
-At source base `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`, the decision record
+At integration/source base `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`, the decision record
 `docs/governance/decisions/WP-04_GATE_B_SOURCE_DISPOSITION_CLOSURE.md` is a
-review candidate, not active technical semantics. Its source-file SHA-256
-inventory pins bytes at that immutable base solely for provenance and permitted
-evidence classification. It does not select a canonical runtime source or
-resolve any profile reference.
+source-parent snapshot, not active technical semantics. Its source-file
+SHA-256 inventory pins bytes at that immutable base solely for provenance and
+permitted evidence classification. It does not select a canonical runtime
+source or resolve any profile reference.
 
 The Owner-specified disposition is: `observations/lidar.py` is only a pure
 72-sector algorithm source; `goal_features.py`, `measured_twist.py`, and
@@ -67,13 +67,18 @@ a public/runtime interface, an L2 Architecture Change Record is required
 before implementation. Missing required pins/evidence/measurements still
 reject the whole resolved config without a partial hash.
 
-The decision, this Registry entry and the Ledger append are candidate-only
-pending independent audit, separate exact-commit User authorization,
-fast-forward, and remote-ref verification. If those conditions are later
-satisfied, they are an integrated source-disposition governance record only;
-they do not activate technical semantics, resolve a profile, start/pass Gate B,
-or grant code/runtime authorization. WP-04, Gate A, Gate B, WP-05 and
-authorization statuses are unchanged.
+At source parent `513ef03cc3c8b6d2e4f2053308d8f10b4e24f56d`, the decision and
+Registry wording represented the pre-integration review state. This exact
+correction candidate, before its integration, is pending independent audit,
+separate User authorization for its exact commit, fast-forward, and
+remote-ref verification. After those conditions are satisfied, the decision,
+Registry entry, and Ledger correction are an integrated source-disposition
+governance record only. They do not activate technical semantics, make any
+source a canonical runtime contract, resolve a profile, start/pass Gate B, or
+grant code/runtime authorization. ACR revision 3 and Observation V3
+Specification revision 5 remain the active technical authority; receipt v2 and
+QoS6 remain established; the six profile-reference groups remain unresolved.
+WP-04, Gate A, Gate B, WP-05, and authorization statuses are unchanged.
 
 ### Historical source-selection candidate snapshot at integration base 13bfa066
 

@@ -1,6 +1,6 @@
 # WP-04 Gate B source-disposition closure
 
-**Status:** `CANDIDATE_ONLY_PENDING_INDEPENDENT_AUDIT_AND_SEPARATE_INTEGRATION_AUTHORIZATION`
+**Status:** `SOURCE_PARENT_REVIEW_SNAPSHOT; POST_INTEGRATION_SOURCE_DISPOSITION_GOVERNANCE_RECORD_ONLY`
 **Change class:** `L1_SOURCE_PROVENANCE_AND_SELECTION_BOUNDARY`
 **Work package:** `WP04-GATE-B-SOURCE-DISPOSITION-CLOSURE`
 **Exact integration base:** `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`
@@ -12,11 +12,14 @@
 This L1 record classifies the supplied source files by their permitted evidence
 boundary. It does not select any source as a canonical runtime contract, create
 or resolve an `ObservationInputProfileV3`, or change technical semantics. At
-the source base, this is a review candidate. Only after independent audit,
-separate User authorization for the exact candidate, fast-forward, and remote
-ref verification may it be described as an integrated source-disposition
-governance record. Even then it is not active technical semantics, a resolved
-profile, Gate B completion, or implementation/runtime authorization.
+source parent `513ef03cc3c8b6d2e4f2053308d8f10b4e24f56d`, the record is a review
+snapshot. This correction successor, before integration, is a review candidate
+pending independent audit, separate User authorization for its exact commit,
+fast-forward, and remote-ref verification. After all those conditions are
+satisfied, the record is an integrated source-disposition governance record
+only. It is not active technical semantics, a canonical runtime contract, a
+resolved profile, a Gate B start/pass, or new implementation/runtime
+authorization.
 
 Architecture remains the highest authority. ACR revision 3 and Observation V3
 Specification revision 5 remain the active ObservationInputProfile schema and
@@ -94,14 +97,15 @@ deployment authorization is granted.
 
 ## 5. Candidate lifecycle and status boundary
 
-At integration base `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c`, this record,
-the Registry update, and its appended Ledger entry form a review candidate
-pending independent audit, separate User authorization for the exact final
-commit, fast-forward, and remote-ref verification. After all those conditions
-are satisfied, the record may be described as an integrated
-source-disposition governance record only; it does not become active technical
-semantics, select a canonical runtime contract, resolve a profile, or pass
-Gate B.
+At source parent `513ef03cc3c8b6d2e4f2053308d8f10b4e24f56d`, the record and its
+Registry/Ledger provenance are a source-parent review snapshot. This exact
+correction successor, before integration, remains a review candidate pending
+its own independent audit, separate User authorization for the exact
+correction commit, fast-forward, and remote-ref verification. Once those exact
+conditions are satisfied, the record is an integrated source-disposition
+governance record only. It does not become active technical semantics, select
+a canonical runtime contract, resolve a profile, start/pass Gate B, or grant
+authorization.
 
 ```text
 WP-04: BLOCKED_BY_CONTRACT

@@ -695,3 +695,16 @@
 | L1/L2 boundary | This candidate records L1 source disposition only. Any later creation/change of contract semantics or a public/runtime interface requires an L2 Architecture Change Record before use. Missing required pin/evidence/measurement continues to reject the whole resolved config without a partial profile/hash. |
 | Candidate lifecycle | Before integration, this is a review candidate pending independent audit, separate User authorization for the exact commit, fast-forward and remote-ref verification. After those conditions, it may be described only as an integrated source-disposition governance record, not active technical semantics or resolved profile. |
 | Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No code, ROS/ROSIDL, runtime, HIL, hardware or deployment authorization. |
+
+
+### WP04-GATE-B-SOURCE-DISPOSITION-POST-INTEGRATION-STATUS-CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-13 |
+| Integration base / source candidate | `8b2f6d5c05ae8db8ce62285bd84afc401fb0d00c` / `513ef03cc3c8b6d2e4f2053308d8f10b4e24f56d`; source candidate parent is the integration base |
+| Finding provenance | Owner-accepted F-01 HIGH: the source candidate's lifecycle wording could read as perpetually pending after integration. This entry records the supplied finding; no audit-report hash is asserted. |
+| Correction scope | Status/provenance wording only in the source-disposition decision, Registry section, and this append-only Ledger entry. No source classification, source SHA, pin, pending group, measurement, technical target, active authority, or dependency fingerprint changes. |
+| Candidate lifecycle | At source parent `513ef03…`, the record is a review snapshot. This exact correction candidate, before integration, requires its own independent audit, separate User authorization for its exact commit, fast-forward, and remote-ref verification. After those conditions, the record is an integrated source-disposition governance record only. |
+| Post-integration boundary | No source pin or profile is created/resolved; Gate B does not start/pass; no code/runtime transition or authorization is granted. ACR rev.3 and Specification rev.5 remain active technical authority; receipt v2/QoS6 remain established; six profile-reference groups and required measurements remain pending. |
+| Status/authorization | No transition: WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
