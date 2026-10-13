@@ -827,3 +827,15 @@
 | Boundary | The token retains only the previously recorded typed snapshot/context structures, fail-closed validators, pure-core assembler/synchronizer seams, and dependency-injected internal adapter boundaries. No ROS/runtime, profile/config resolution, inferred source/version pin, Gate B start/pass, or WP-05/map change is authorized. |
 | Supersedes | The ambiguous post-integration status routing in the source candidate `a7c5811e15e3dd909b655b199372299c3cf2e5d9`; prior Ledger history remains byte-for-byte unchanged. |
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; source-base `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP05-NAVIGATION-V1-RUNTIME-BINDING-REFRESH-16E4D812 — review candidate preparation
+
+- Exact integration base: `16e4d81296f5db0fb322349bfe673cb5bd2c1534`.
+- Current review branch: `wp05-navigation-v1-runtime-binding-refresh-16e4d812`; candidate commit is created only after the checks recorded for this work package.
+- Source-content provenance only: prior review candidate `wp05-navigation-v1-runtime-binding-architecture-5249a11@4ff6b96783c940e7f4c523ed553d3ad75f8a5a55`, direct parent `5249a11e69408abf845e8568258989a70edefb35`. It was not cherry-picked/rebased, is not this candidate's parent/current base, and is not treated as integrated or audit-passed by this refresh.
+- Scope: refresh the seven allowlisted L2 governance/contract/manifest paths; no map artifact, code, runtime config, ROSIDL, or WP-04 code change.
+- Target authority is conditional on independent audit PASS for the exact successor commit, separate exact-commit User authorization, fast-forward, and remote-ref verification. After those conditions, status is `ACTIVE_L2_NAVIGATION_V1_RUNTIME_BINDING_TECHNICAL_AUTHORITY_FOR_TARGET_BINDINGS_ONLY`; no separate activation candidate is required.
+- Pending: package/version and config/launch source pins; AMCL/EKF parameter/config pins; scan/TF adapter and geometry source; remap/namespace; lifecycle/startup pins; TF/publisher, scan, EKF, lifecycle, localization-quality, and map/runtime measurements. Fail closed: no resolved profile, global `config_hash`, or bring-up.
+- Status unchanged: WP-05 `OPEN`; map draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; WP-04 `BLOCKED_BY_CONTRACT`, Gate A `PASSED`, Gate B `NOT_STARTED`; current bounded internal-seam `CODE_AUTHORIZATION` remains unchanged; `RUNTIME_APPROVED: NOT_APPROVED`.
+- `supersedes`: none; this is a new review snapshot, not a correction of historical Ledger entries.

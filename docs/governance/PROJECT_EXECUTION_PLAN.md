@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.8` bounded OIC V3 fail-closed implementation-authorization status correction; Gate B remains `NOT_STARTED` |
+| Revision | `0.10.9` WP-05 Navigation V1 L2 runtime-binding review snapshot; WP-04 bounded internal-seam authorization unchanged |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -639,3 +639,12 @@ The permitted future code candidate is limited to typed snapshot/context structu
 Source/package/version pins, concrete profile inputs, and applicable measurements/evidence remain unresolved or `PENDING_MEASUREMENT`; they are prerequisites for later profile resolution and bring-up, not values this authorization supplies. The active global 16-root `ResolvedConfig.config_hash`, OIC/runtime-binding semantics, receipt v2, and QoS6 remain unchanged. The next permitted work after this governance candidate is integrated is a separately scoped bounded code candidate, not Gate B bring-up. ROS adapter/QoS integration, runtime, HIL, hardware, and deployment remain outside this authorization and require their own evidence/approval.
 
 Candidate lifecycle: at source base `5e5075b…`, this exact correction is review material pending independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification. After all four conditions, it is an integrated bounded code-authorization governance record only, and the canonical post-integration code status is `GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY`; `RUNTIME_APPROVED: NOT_APPROVED` remains. Integration does not assert that code has been written, pins/measurements resolved, the profile or global hash emitted, tests accepted, Gate B started/passed, or WP-04 closed. Current source-base statuses remain WP-04 `BLOCKED_BY_CONTRACT`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `CODE_AUTHORIZATION: NOT_GRANTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+
+### WP05-NAVIGATION-V1-RUNTIME-BINDING-REFRESH — PEP-001 rev.0.10.9 review snapshot
+
+At exact integration base `16e4d81296f5db0fb322349bfe673cb5bd2c1534`, the refreshed WP-05 L2 target-binding candidate is being prepared on `wp05-navigation-v1-runtime-binding-refresh-16e4d812`. Source-content provenance is prior review commit `4ff6b96783c940e7f4c523ed553d3ad75f8a5a55` on `wp05-navigation-v1-runtime-binding-architecture-5249a11` (parent `5249a11e69408abf845e8568258989a70edefb35`) only; it is not current base/parent and is not considered integrated or audited here. Candidate-only/pending-audit status is tied to this refreshed source-base snapshot. The exact candidate becomes `ACTIVE_L2_NAVIGATION_V1_RUNTIME_BINDING_TECHNICAL_AUTHORITY_FOR_TARGET_BINDINGS_ONLY` only after independent audit PASS, separate explicit User authorization for its exact commit, fast-forward, and remote integration-ref verification; no separate activation candidate is required.
+
+This L2 decision records target bindings only. `warehouse_map2` remains draft/not approved/not navigation-ready; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; no profile is resolved, no global `config_hash` exists, and Navigation V1 bring-up is not authorized. Required implementation source/package/version pins and measurements remain pending and fail closed. WP-05 remains `OPEN`; Gate B remains `NOT_STARTED`.
+
+Current WP-04 status at this base is `BLOCKED_BY_CONTRACT`, Gate A `PASSED`, Gate B `NOT_STARTED`. `CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_ONLY` remains limited to typed internal structures, fail-closed validators, pure-core assembler/synchronizer seams, and dependency-injected internal boundaries. It does not authorize public ROS/runtime interfaces, Navigation configuration or bring-up, profile resolution, runtime, HIL, hardware, or deployment. `RUNTIME_APPROVED: NOT_APPROVED`. This WP-05 candidate does not broaden that authorization.
