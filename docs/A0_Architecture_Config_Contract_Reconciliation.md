@@ -1,5 +1,10 @@
 # A0 Architecture–Config Contract Reconciliation
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Increment:** Phase A0.1 — document and static-source only  
 **Status:** `RECONCILED_FOR_CORE_ONLY_A0.2_PLANNING — RUNTIME NOT APPROVED`  
 **Scope date:** 2026-10-01
@@ -9,7 +14,7 @@
 | Item | Evidence | Result |
 | --- | --- | --- |
 | Primary architecture authority | [`MECANUM_NAV_DRL_Architecture.docx`](MECANUM_NAV_DRL_Architecture.docx) | Present; DOCX internal release date **16/09/2026**; states `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED`. |
-| Architecture SHA-256 | `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860` | Recorded from the workspace DOCX. |
+| Architecture SHA-256 | `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204` | Recorded from the workspace DOCX. |
 | Internal configuration schema | Architecture §4, table “Model”, `ResolvedConfig.schema_version: Literal["3.0"]` | **3.0** is the required target schema. |
 | Project-tree authority | [`MECANUM_NAV_DRL_Project_Tree.txt`](MECANUM_NAV_DRL_Project_Tree.txt) | Present; SHA-256 `1ca7ea9473cf3e1be826c9c7aa40c4b24ffa9115577d04852eeaecbb2e46f098`. |
 | External/user-provided architecture DOCX | No additional DOCX was available in the audit scope | `MISSING_FROM_AUDIT_SCOPE`; no authority conflict was observable. |

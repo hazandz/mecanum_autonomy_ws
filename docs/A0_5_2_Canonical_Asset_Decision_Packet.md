@@ -1,5 +1,10 @@
 # A0.5.2 — Canonical Asset Decision Packet
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Status:** `D10-A/D11-A/D12-B/D15-B IMPLEMENTED_CORE_ONLY — D13–D14 PENDING_ARCHITECT_USER_APPROVAL`  
 **Phạm vi:** D11-A/D12-B khóa hai future source paths trong caller-owned immutable selection API; D10-A envelope và D15-B selection vẫn core-only. Không tạo/migrate YAML, grouping/extraction, package installation, loader, composition, compiler, hashing, resolved-config construction, runtime hay architecture authority change.
 
@@ -8,7 +13,7 @@
 The authoritative architecture DOCX was read and its SHA-256 is verified as:
 
 ```text
-f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860
+432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
 ```
 
 The current read-only inventory and the A0.5.2.0.1 readiness report establish:

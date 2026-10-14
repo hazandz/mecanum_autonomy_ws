@@ -1,5 +1,10 @@
 # S3 Simulation Scenario Artifact Contract
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Status:** `DRAFT — APPROVED CONVENTION DISPOSITION; VALUES AND RUNTIME NOT APPROVED; WP-03 CLOSURE ACTIVATION PER PEP-001 REV.0.4.0`
 
 ## 1. Purpose and authority
@@ -13,7 +18,7 @@ Authority and constraints:
 
 - [MECANUM_NAV_DRL_Architecture.docx](MECANUM_NAV_DRL_Architecture.docx),
   schema `3.0`, SHA-256
-  `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`;
+  `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`;
 - [S3 GT Odom 2D Coordinate Relation Decision Packet](S3_GT_2D_Coordinate_Relation_Decision_Packet_DRAFT.md), where Option A permits `GT_ODOM_2D` only for core-only oracle-interface design;
 - [S3 Training Task Oracle Core Design](S3_Training_Task_Oracle_Core_Design_DRAFT.md);
 - [S3 World Geometry And Entity Inventory](S3_World_Geometry_And_Entity_Inventory_DRAFT.md);

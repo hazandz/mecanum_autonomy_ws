@@ -1,5 +1,10 @@
 # A0.5.2 V3 Canonical YAML Migration Readiness
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Trạng thái:** `DOCUMENTATION_ONLY — FIELD_LEVEL_TRACEABILITY — RUNTIME NOT APPROVED`  
 **Phạm vi:** A0.5.2.0 chỉ đánh giá tĩnh; không migrate YAML, không gọi compiler, không construct `ResolvedConfigV3`, không hash và không resolve token.
 
@@ -7,7 +12,7 @@
 
 | Evidence | Kết luận | Lớp |
 | --- | --- | --- |
-| `docs/MECANUM_NAV_DRL_Architecture.docx` SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860` | Hash authority đã khớp; schema 3.0, D03, D05, TF/GT/safety, token và deploy-real constraints là yêu cầu khóa. | `ARCHITECTURE_TARGET` |
+| `docs/MECANUM_NAV_DRL_Architecture.docx` SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204` | Hash authority đã khớp; schema 3.0, D03, D05, TF/GT/safety, token và deploy-real constraints là yêu cầu khóa. | `ARCHITECTURE_TARGET` |
 | `docs/A0_5_V3_Canonical_Composable_Layer_ADR.md` | D01–D08 và D09-B khóa canonical boundaries; A0.5.2 cần prompt implementation riêng. | `ARCHITECTURE_TARGET` |
 | `v3_models.py`, `v3_composition.py`, `v3_loader.py`, `v3_validators.py` | Model có 7 ownership groups, primitive nhận đúng 7 mapping in-memory, loader chỉ parse/copy mapping; không có asset grouping/path API. | `SOURCE_IMPLEMENTATION` |
 | `test_config_v3_assets.py`, A0.4 record | 15 assets được kiểm parse/install trong evidence offline trước đây; evidence không chứng minh canonical composition. | `OFFLINE_EVIDENCE` |

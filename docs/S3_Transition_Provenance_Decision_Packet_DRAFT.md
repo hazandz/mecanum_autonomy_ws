@@ -1,12 +1,17 @@
 # S3 Transition Provenance Decision Packet
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 Status: **DRAFT — PENDING_USER_APPROVAL**
 
 Phạm vi: decision packet cho `sim_train` để ràng buộc facts của **một** transition trước khi triển khai reward, termination hoặc runtime. Đây không phải Architecture Change Record, user đã chọn D2-B/D3-B chỉ cho core-only implementation; chưa phê duyệt runtime D2/D3 hoặc chứng minh runtime producer đã tồn tại. `RESET_ABORT`/`STEP_ABORT` không phải Gym transition; command đã publish và va chạm vật lý không thể rollback.
 
 ## Authority và trạng thái evidence
 
-- [Architecture authoritative](MECANUM_NAV_DRL_Architecture.docx), schema `3.0`, reward `reward-v3-baseline`, SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`: §§16–23 khóa ContactLatch, exact/barrier synchronization, transactional reset, transition commit, previous-issued command, reward và terminal precedence.
+- [Architecture authoritative](MECANUM_NAV_DRL_Architecture.docx), schema `3.0`, reward `reward-v3-baseline`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`: §§16–23 khóa ContactLatch, exact/barrier synchronization, transactional reset, transition commit, previous-issued command, reward và terminal precedence.
 - [S3 design draft](S3_Episode_Reward_Termination_Design_DRAFT.md): registry D1–D10 và same-transition provenance. Tài liệu đó vẫn `DRAFT — PENDING_USER_APPROVAL`.
 - [ACR S1](ACR_S1_Simulated_Odometry_And_Ground_Truth_Isolation.md) `APPROVED`: quyền dùng hidden Ground Truth cho oracle/reward/termination, nhưng cấm raw GT và object reachable từ GT đi vào policy.
 - [ACR S2](ACR_S2_Snapshot_Synchronization_Temporal_Contract.md) `DRAFT — PENDING_USER_APPROVAL`: exact-only có approval **core-only** riêng; receive-age, ingress identity, buffers/overflow và runtime barrier owner chưa được duyệt.

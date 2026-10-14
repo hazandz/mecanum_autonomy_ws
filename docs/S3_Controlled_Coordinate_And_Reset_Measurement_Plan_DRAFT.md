@@ -1,5 +1,10 @@
 # S3 Controlled Coordinate And Reset Measurement Plan
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 Status: **APPROVED_FOR_ONE_CONTROLLED_SIMULATION_MEASUREMENT — EXECUTION_NOT_YET_STARTED**
 
 ## Purpose, scope, and authority
@@ -22,7 +27,7 @@ Authority and evidence:
 
 - [MECANUM_NAV_DRL_Architecture.docx](MECANUM_NAV_DRL_Architecture.docx),
   schema `3.0`, SHA-256
-  `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`.
+  `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 - [ACR S1: Simulated Odometry And Ground Truth Isolation](ACR_S1_Simulated_Odometry_And_Ground_Truth_Isolation.md).
 - [S3 Training Task, Reset And Collision Design Packet](S3_Training_Task_Reset_And_Collision_Design_Packet_DRAFT.md).
 - [S3 World Geometry And Entity Inventory](S3_World_Geometry_And_Entity_Inventory_DRAFT.md).

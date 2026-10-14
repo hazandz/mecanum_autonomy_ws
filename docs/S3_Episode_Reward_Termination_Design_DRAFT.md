@@ -1,5 +1,10 @@
 # S3 Episode Lifecycle Reward And Termination Design Draft
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 Status: `DRAFT — PENDING_USER_APPROVAL`
 
 Scope: thiết kế `sim_train` cho episode lifecycle, reward và termination. Tài
@@ -36,7 +41,7 @@ Authority và precedence:
 | System/config schema | `schema_version: "3.0"` |
 | Observation/action schema | `obs-v3-l72-g3-t3-c3-f32`; `action-v3-holonomic-f32` |
 | Reward schema | `reward-v3-baseline` |
-| SHA-256 | `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860` |
+| SHA-256 | `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204` |
 
 Workspace hiện hành không có authority thứ hai mang
 `reward-v2.3-baseline`. Vì vậy S3 đối chiếu `reward-v3-baseline`; bản

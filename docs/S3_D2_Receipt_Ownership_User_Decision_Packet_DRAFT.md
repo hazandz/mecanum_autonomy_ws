@@ -1,5 +1,10 @@
 # S3 D2 Receipt Ownership User Decision Packet
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 Status: DRAFT — APPROVED DISPOSITIONS RECORDED; WP-03 CLOSURE ACTIVATION GOVERNED BY PEP-001 REV.0.4.0
 
 ## Purpose and authority
@@ -17,7 +22,7 @@ effect follows the PEP-001 rev.0.4.0 activation rule.
 
 Authority is [MECANUM NAV DRL Architecture](MECANUM_NAV_DRL_Architecture.docx),
 schema `3.0`, SHA-256
-`f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`.
+`432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 It follows [S3 D2 Final Issued Command Receipt Design](S3_D2_Final_Issued_Command_Receipt_Design_DRAFT.md),
 [S3 Control Step And Simulation Time Contract](S3_Control_Step_And_Simulation_Time_Contract_DRAFT.md),
 and [S3 Reward v3 Core Scope And Input Contract](S3_Reward_v3_Core_Scope_And_Input_Contract_DRAFT.md).

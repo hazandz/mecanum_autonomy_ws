@@ -1,5 +1,10 @@
 # S3 Scenario Artifact Core Implementation Design
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Status: `DRAFT — CORE-ONLY IMPLEMENTATION DESIGN, RUNTIME NOT APPROVED`**
 
 ## 1. Purpose and authority
@@ -8,7 +13,7 @@ This document designs a later pure-Python increment that parses and validates an
 
 Authority and inputs:
 
-- [MECANUM_NAV_DRL_Architecture.docx](MECANUM_NAV_DRL_Architecture.docx), schema `3.0`, SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`.
+- [MECANUM_NAV_DRL_Architecture.docx](MECANUM_NAV_DRL_Architecture.docx), schema `3.0`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 - [Scenario v1 user decision packet](S3_Scenario_V1_User_Decision_Packet_DRAFT.md).
 - [Scenario artifact contract](S3_Simulation_Scenario_Artifact_Contract_DRAFT.md).
 - [Training task oracle core design](S3_Training_Task_Oracle_Core_Design_DRAFT.md).

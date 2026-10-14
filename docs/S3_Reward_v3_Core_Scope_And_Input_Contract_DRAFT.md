@@ -1,5 +1,10 @@
 # S3 Reward v3 Core Scope and Input Contract
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 Status: DRAFT — CORE-ONLY DESIGN, RUNTIME NOT APPROVED
 
 ## Purpose and authority
@@ -10,7 +15,7 @@ runtime producer, change a coefficient, or authorize simulation runtime.
 
 The authority is [MECANUM NAV DRL Architecture](MECANUM_NAV_DRL_Architecture.docx),
 schema `3.0`, SHA-256
-`f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`.
+`432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 The authority locks `reward-v3-baseline`; this packet does not create a new
 reward schema. It reconciles the S3 episode design with the implemented
 core-only Goal Oracle to lifecycle join and trusted scenario-session binding.

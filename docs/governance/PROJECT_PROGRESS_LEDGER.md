@@ -909,3 +909,18 @@
 | Lifecycle/evidence boundary | At this base this is a review-candidate snapshot. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification is it an integrated L1 implementation-source-pin governance record. No audit hash is asserted. Implementation-source provenance is not runtime evidence and does not activate authority. |
 | Non-goals/status | No runtime source selection, external package/ROS-distribution lock, resolved profile, global `config_hash`, Gate B bring-up, map approval, runtime evidence, or code/runtime authorization change. WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; new append-only entry. No historical Ledger content is edited or removed. |
+
+
+### ARCHITECTURE-AUTHORITY-PROVENANCE-RECONCILIATION-432EEAC — review snapshot
+
+| Field | Value |
+|---|---|
+| Work package | `ARCHITECTURE-AUTHORITY-PROVENANCE-RECONCILIATION-432EEAC` |
+| Exact integration base | `457926439220756f5dc18ed62c9d1143715668fc` |
+| Candidate branch | `architecture-authority-provenance-reconciliation-4579264` |
+| Finding provenance | `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`; no audit-report hash is asserted. |
+| Authority identities | Current Git-verifiable Architecture DOCX blob SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; historical provenance only is commit `86beff623dba3683f643c851a4a1374c635178b3`, SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; transition commit `988a74b529fdb4bcf77f341db5c6d115e8511a9b`. |
+| Scope | Reconcile provenance/status wording in the exact 26 listed legacy/draft documents; add one decision record and Registry routing; append this entry. Architecture DOCX and all technical content remain unchanged. |
+| Candidate lifecycle | Review candidate only at the exact source base. Independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification are required; none is inferred from Git ancestry or a review push. |
+| Evidence boundary | `GOVERNANCE_PROVENANCE_RECONCILIATION_ONLY`. No technical semantics or status/dependency transition is created. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; append-only entry. Earlier Ledger history is not changed. |

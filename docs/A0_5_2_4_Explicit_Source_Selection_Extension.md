@@ -1,5 +1,10 @@
 # A0.5.2.4 — D11-A/D12-B Explicit Source Selection Extension
 
+> **Architecture provenance classification:** `HISTORICAL_PROVENANCE_ONLY` — `NOT_A_CURRENT_ARCHITECTURE_AUTHORITY_CLAIM`. This document was prepared against `docs/MECANUM_NAV_DRL_Architecture.docx@86beff623dba3683f643c851a4a1374c635178b3` with SHA-256 `f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860`; this is historical provenance only, not current Architecture authority.
+>
+> The current Git-verifiable Architecture authority is `docs/MECANUM_NAV_DRL_Architecture.docx` at SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`. This reconciliation changes provenance/status wording only; it does not activate or change technical semantics in this document.
+
+
 **Trạng thái:** `D11-A/D12-B/D15-B IMPLEMENTED_CORE_ONLY — A0.5.2 YAML MIGRATION NOT STARTED — RUNTIME NOT APPROVED`
 
 ## Authority
@@ -7,7 +12,7 @@
 `docs/MECANUM_NAV_DRL_Architecture.docx` đã được xác minh SHA-256:
 
 ```text
-f0fb1ebede5f4fa18604610c04bb13587d456173b4fd942dba77e44d49777860
+432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
 ```
 
 D11-A khóa canonical source tương lai `config/v3/state_localization.yaml`. D12-B khóa canonical source chung tương lai `config/v3/system_contracts.yaml` cho `command_safety`, `reward` và `evaluation`. D06 được amend: giữ nguyên 15 asset hiện có và chỉ thêm đúng hai source này trong YAML migration riêng sau; target tree sẽ có 17 assets.
