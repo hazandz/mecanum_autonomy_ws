@@ -471,6 +471,14 @@ The recorded target input claims are `/scan` `sensor_msgs/msg/LaserScan` with ex
 
 The current record lifecycle is: source-base snapshot before integration; integrated L1 bounded implementation-source authorization only after all four conditions above. It is not runtime approval, implementation completion, or runtime evidence. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`.
 
+## WP04-WP05 runtime measurement plan and evidence schema — review snapshot at `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`
+
+At this exact source-base snapshot, `docs/governance/decisions/WP-04_WP-05_RUNTIME_MEASUREMENT_PLAN_AND_EVIDENCE_SCHEMA.md` and its companion JSON Schema are review-candidate governance records, not active runtime-binding technical authority. They define only measurement planning, ownership, fail-closed evidence admission, exploratory-versus-acceptance distinction, and packet shape. The schema is not a populated packet and provides no measurement result, runtime evidence, acceptance conclusion, map approval, Gate B pass, or authorization.
+
+After independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification, these records may be described only as `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`. Review push or Git ancestry alone does not activate them. No passive measurement harness is authorized; it requires a separate L1 authorization. No numerical threshold, source/package/version lock instance, profile, `config_hash`, measurement value, or runtime authorization is introduced. Required source/package pins and measurements remain pending. Status remains WP-04 `BLOCKED_BY_CONTRACT`, Gate B `NOT_STARTED`, WP-05 `OPEN`, map draft/not approved, `WORLD_FRAME: NOT_DECLARED`, `RUNTIME_COMPATIBILITY: NOT_VALIDATED`, and `RUNTIME_APPROVED: NOT_APPROVED`.
+
+Dependency fingerprints recorded by this candidate are Architecture SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; OIC source SHA-256 `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; OIC semantic-manifest SHA-256 `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; WP-04 runtime-binding manifest SHA-256 `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f`; WP-05 Navigation V1 runtime-binding ACR SHA-256 `3e74cdcb6136f60a6ad2822a853f2ae9926cf971059f3c2470c874802d6fae0d`; WP-05 runtime-binding manifest SHA-256 `33855c9c95f9c0594ddd8805514658e4f5cb8255a219938a7913438470edbf31`; and `warehouse_map2` map-content hash `2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90`. These are dependency fingerprints, not newly selected pins or acceptance evidence.
+
 
 ## WP-05 Navigation V1 dependency-lock schema and static bringup source authorization — review snapshot at `2a537a9cfa9f9c5b0bec1f9c629fec8e2f98a225`
 

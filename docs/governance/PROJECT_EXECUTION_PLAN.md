@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.11` WP-05 Navigation V1 dependency-lock schema and static bringup source-authorization review snapshot |
+| Revision | `0.10.12` WP04/WP05 runtime measurement plan and evidence schema review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -671,3 +671,9 @@ The current authorization before this candidate's integration is `CODE_AUTHORIZA
 Dependency roots are fixed by the schema. Concrete external package locks remain `PENDING_EXTERNAL_PACKAGE_LOCK`; workspace package/config/launch sources remain `PENDING_IMPLEMENTATION_SOURCE_PIN`. The static test list is an expectation for a later authorized code candidate, not test evidence from this candidate. Missing required lock/pin/measurement/evidence fails closed with no resolved profile, global `config_hash`, or Navigation bring-up.
 
 `mecanum_nav_bringup` is absent at the source base. WP-05 remains `OPEN`; `warehouse_map2` remains draft, not approved or navigation-ready; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`.
+
+### WP04-WP05 runtime measurement plan and evidence schema — PEP-001 rev.0.10.12 source-base snapshot
+
+At exact integration/source base `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`, the L1 measurement-governance decision and packet schema are review-candidate snapshots. They do not constitute runtime evidence or runtime-binding authority. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification may they be described as `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`.
+
+Planning route only: integrate the measurement plan/schema → obtain a separate L1 authorization for any passive collector → establish required immutable source/package pins and measurements → gather exploratory evidence where useful → obtain separately authorized acceptance-grade collection and gate-specific review. This plan does not authorize a harness, set thresholds, resolve a profile or global `config_hash`, approve a map, change WP status, or grant runtime authority. If a future harness changes TF ownership, lifecycle, safety, public interface, or `config_hash` semantics, stop for L2 change-control. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `warehouse_map2` remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; the current code-authorization token is unchanged; `RUNTIME_APPROVED: NOT_APPROVED`.

@@ -865,3 +865,18 @@
 - Pending vocabulary: `PENDING_EXTERNAL_PACKAGE_LOCK`; `PENDING_IMPLEMENTATION_SOURCE_PIN`. No actual package versions, `.deb` digests, source SHAs, parameter values, geometry, or launch composition are populated.
 - Fail-closed: no resolved Navigation V1 profile/global `config_hash`, bring-up, map approval, runtime/HIL/hardware/deployment authority. `warehouse_map2` remains draft; world frame `NOT_DECLARED`; runtime compatibility `NOT_VALIDATED`. WP-04 remains blocked, Gate A passed, Gate B not started; WP-05 remains open.
 - `supersedes`: none; this is a new append-only candidate entry.
+
+
+### WP04-WP05-RUNTIME-MEASUREMENT-PLAN-AND-EVIDENCE-SCHEMA — review candidate at `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-14 |
+| Exact integration/source base | `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a` |
+| Change class and scope | `L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`; exactly five governance paths: decision, evidence JSON Schema, Registry, PEP-001, and this append-only entry. No harness, runtime config, source pin, lock instance, measurement result, threshold, profile, `config_hash`, or approval artifact. |
+| Dependency fingerprints | Architecture `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; OIC source `d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc`; OIC semantic manifest `175a1af789b6641cfe455daeee8fedac80aaf80ad8c00792ba0a287c41acc0bb`; WP-04 runtime-binding manifest `e800f7169304624d81334c26a638c27c9cbaa11a6df0ba5531b1718ee914f76f`; WP-05 Navigation V1 runtime-binding ACR `3e74cdcb6136f60a6ad2822a853f2ae9926cf971059f3c2470c874802d6fae0d` and manifest `33855c9c95f9c0594ddd8805514658e4f5cb8255a219938a7913438470edbf31`; warehouse_map2 content hash `2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90`. These identify referenced dependencies and do not select new pins. |
+| Source-base lifecycle | At exact base above, the decision/schema are review-candidate snapshots. Independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification remain required. |
+| Conditional post-integration status | Only after all four exact-candidate conditions: `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`; not active L2 technical authority, runtime evidence, runtime authorization, map approval, or Gate B pass. |
+| Pending | Source/package/version pins, immutable lock instances, required measurements and any independently authorized collection/acceptance review. No threshold is set; measurement values remain `PENDING_MEASUREMENT`. |
+| Status and boundaries | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; current code authorization unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. Ledger remains append-only; this candidate is not current as integrated merely because it is pushed or has Git ancestry. |
+| `supersedes` | None; new entry. No historical Ledger entry is modified or removed. |
