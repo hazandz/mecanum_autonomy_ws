@@ -471,6 +471,14 @@ The recorded target input claims are `/scan` `sensor_msgs/msg/LaserScan` with ex
 
 The current record lifecycle is: source-base snapshot before integration; integrated L1 bounded implementation-source authorization only after all four conditions above. It is not runtime approval, implementation completion, or runtime evidence. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`.
 
+## WP04-OIC-V3 implementation-source pin closure — review snapshot at `8675047aa61835621f6d1e31aff567b75c87094c`
+
+`docs/governance/evidence/WP-04_OIC_V3_IMPLEMENTATION_SOURCE_PIN_MANIFEST.json` and `docs/governance/decisions/WP-04_OIC_V3_IMPLEMENTATION_SOURCE_PIN_CLOSURE.md` inventory 15 exact workspace implementation files at this source base. Every entry is classified `PINNED_IMPLEMENTATION_SOURCE_ONLY` and `NOT_A_RUNTIME_SOURCE_PIN`; it records immutable path/byte provenance only. The eight `mecanum_nav_rl` pure-core/nonexecuting-ingress sources and seven `mecanum_nav_bringup` scaffold/template/validator/launch sources are not runtime evidence. The latter are not external package or ROS-distribution locks.
+
+The manifest records authority fingerprints for Architecture, OIC V3, WP-04 runtime-binding/static-reference authorities and bounded authorization, and WP-05 Navigation V1 runtime-binding/static-bringup authorization. The routing does not alter those authorities. `PENDING_EXTERNAL_PACKAGE_LOCK`, `PENDING_RUNTIME_SOURCE_PIN`, and `PENDING_MEASUREMENT` remain distinct pending classes and fail closed. No resolved profile, global `config_hash`, Gate B bring-up, map approval, runtime evidence, or runtime authorization follows from these implementation pins.
+
+At this exact base the records are review-candidate snapshots. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification are they integrated L1 implementation-source-pin governance records. This does not change active L2 semantics, target TF ownership, status, or authorization. AMCL remains target owner of `map → odom`; EKF of `odom → base_link`; RSP of `base_link → lidar_frame`. `warehouse_map2` remains draft; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`.
+
 ## WP04-WP05 runtime measurement plan and evidence schema — review snapshot at `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`
 
 At this exact source-base snapshot, `docs/governance/decisions/WP-04_WP-05_RUNTIME_MEASUREMENT_PLAN_AND_EVIDENCE_SCHEMA.md` and its companion JSON Schema are review-candidate governance records, not active runtime-binding technical authority. They define only measurement planning, ownership, fail-closed evidence admission, exploratory-versus-acceptance distinction, and packet shape. The schema is not a populated packet and provides no measurement result, runtime evidence, acceptance conclusion, map approval, Gate B pass, or authorization.
