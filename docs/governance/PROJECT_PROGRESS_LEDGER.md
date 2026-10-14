@@ -880,3 +880,17 @@
 | Pending | Source/package/version pins, immutable lock instances, required measurements and any independently authorized collection/acceptance review. No threshold is set; measurement values remain `PENDING_MEASUREMENT`. |
 | Status and boundaries | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; current code authorization unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. Ledger remains append-only; this candidate is not current as integrated merely because it is pushed or has Git ancestry. |
 | `supersedes` | None; new entry. No historical Ledger entry is modified or removed. |
+
+
+### WP04-WP05-RUNTIME-MEASUREMENT-SCHEMA-MINITEMS-CORRECTION — review snapshot
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-14 |
+| Exact integration base | `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a` |
+| Direct parent/source candidate | `5b8ac68f51814f9520e1e72a28da5ad35fcfacea`; sole parent `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a` |
+| Finding | `F-01`; `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`; no audit-report hash asserted. |
+| Correction scope | Exactly five allowlisted governance paths. Move `minItems: 1` to the acceptance-conditional `metrics_inventory` array level; preserve schema ID and revision `1`. No other schema or plan semantics change. |
+| Lifecycle | This correction is a review snapshot. Independent audit PASS for the exact correction, separate exact-commit User authorization, fast-forward, and remote-ref verification remain required. Only after all conditions may records be described as `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`. |
+| Boundary/status | No source/package pin or lock instance, threshold, harness, measurement result, profile, `config_hash`, map approval, runtime authorization, or acceptance conclusion. WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; code authorization unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; append-only correction entry. Earlier Ledger history remains byte-for-byte unchanged. |

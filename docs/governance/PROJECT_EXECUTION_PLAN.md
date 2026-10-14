@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.12` WP04/WP05 runtime measurement plan and evidence schema review snapshot |
+| Revision | `0.10.13` WP04/WP05 runtime measurement evidence schema F-01 correction review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -677,3 +677,7 @@ Dependency roots are fixed by the schema. Concrete external package locks remain
 At exact integration/source base `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`, the L1 measurement-governance decision and packet schema are review-candidate snapshots. They do not constitute runtime evidence or runtime-binding authority. Only after independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification may they be described as `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`.
 
 Planning route only: integrate the measurement plan/schema → obtain a separate L1 authorization for any passive collector → establish required immutable source/package pins and measurements → gather exploratory evidence where useful → obtain separately authorized acceptance-grade collection and gate-specific review. This plan does not authorize a harness, set thresholds, resolve a profile or global `config_hash`, approve a map, change WP status, or grant runtime authority. If a future harness changes TF ownership, lifecycle, safety, public interface, or `config_hash` semantics, stop for L2 change-control. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `warehouse_map2` remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; the current code-authorization token is unchanged; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+### WP04-WP05 measurement evidence schema F-01 correction — PEP-001 rev.0.10.13 review snapshot
+
+The source-parent review candidate is `5b8ac68f51814f9520e1e72a28da5ad35fcfacea` at integration base `cc0018560b20a52fa6d3c9cf26abbe0ef4c6227a`. `F-01` is `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`; no report hash is claimed. The correction places `minItems: 1` on the acceptance-conditional `metrics_inventory` array; schema ID/revision remain unchanged. This is a review snapshot, not active L2 authority. After audit PASS for the exact correction, separate exact User authorization, fast-forward, and remote-ref verification only, the records are `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`. No plan, ownership, pin, threshold, harness, measurement, profile, `config_hash`, status, or authorization changes; `RUNTIME_APPROVED: NOT_APPROVED` remains.

@@ -90,3 +90,11 @@ RUNTIME_COMPATIBILITY: NOT_VALIDATED
 CODE_AUTHORIZATION: GRANTED_BOUNDED_FAIL_CLOSED_INTERNAL_SEAMS_NONEXECUTING_OBSERVATION_INGRESS_AND_STATIC_NAVIGATION_V1_BRINGUP_SOURCES_ONLY
 RUNTIME_APPROVED: NOT_APPROVED
 ```
+
+## 6. F-01 schema correction and status provenance
+
+Finding `F-01` is recorded as `USER_SUPPLIED_INDEPENDENT_AUDIT_EVIDENCE`; no audit-report hash is asserted. The source-parent review candidate `5b8ac68f51814f9520e1e72a28da5ad35fcfacea` had an acceptance-conditional schema rule that placed `minItems: 1` under the schema for each metric item. This correction moves `minItems: 1` to the `metrics_inventory` array schema inside the `session_mode: acceptance` conditional, so an empty acceptance inventory is rejected. `schema_id` and revision `1` remain unchanged; this corrects the same intended schema revision, not a new schema revision.
+
+At source parent `5b8ac68…`, the records represent the prior review-candidate snapshot. This correction is itself a review snapshot and does not become effective from ancestry or review push. Only after independent audit PASS for this exact correction candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification may the records be described as `INTEGRATED_L1_RUNTIME_MEASUREMENT_GOVERNANCE_PLAN_ONLY`.
+
+The correction changes no measurement plan, ownership, L1/L2 boundary, source/package pin, lock instance, threshold, harness, profile, `config_hash`, map approval, runtime authorization, or acceptance conclusion. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; code authorization is unchanged; `RUNTIME_APPROVED: NOT_APPROVED`.
