@@ -1,0 +1,36 @@
+schema: mecanum_nav_v1_static_bringup_template/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+map_server:
+  artifact_root: artifacts/maps/<map_id>/
+  map_binding_status: PENDING_IMPLEMENTATION_SOURCE_PIN
+localization:
+  provider: AMCL
+  mode: NAV2_BASELINE
+  tf_edge: map -> odom
+  owner: AMCL
+ekf:
+  provider: robot_localization
+  tf_edge: odom -> base_link
+  owner: robot_localization
+robot_description:
+  tf_edge: base_link -> lidar_frame
+  owner: robot_state_publisher
+scan:
+  topic: /scan
+  type: sensor_msgs/msg/LaserScan
+  header_frame_id: lidar_frame
+  alias_policy: FORBIDDEN
+lifecycle:
+  health_gated: true
+  startup_order:
+    - robot_description
+    - drivers_bridge
+    - EKF
+    - Map_Server
+    - AMCL
+    - healthy_LocalizationMonitor
+    - Planner_global_costmap
+    - Safety
+    - selected_controller_or_manager
+    - mission_acceptance

@@ -1,0 +1,31 @@
+schema: mecanum_nav_v1_source_lock_template/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+required_direct_dependency_roots:
+  - nav2_bringup
+  - nav2_amcl
+  - nav2_map_server
+  - nav2_lifecycle_manager
+  - nav2_planner
+  - nav2_controller
+  - nav2_bt_navigator
+  - nav2_costmap_2d
+  - robot_localization
+  - tf2_ros
+  - robot_state_publisher
+  - sensor_msgs
+  - nav_msgs
+  - geometry_msgs
+external_package_locks:
+  status: PENDING_EXTERNAL_PACKAGE_LOCK
+workspace_source_locks:
+  nav2_lifecycle_bringup: PENDING_IMPLEMENTATION_SOURCE_PIN
+  map_server: PENDING_IMPLEMENTATION_SOURCE_PIN
+  amcl_omni: PENDING_IMPLEMENTATION_SOURCE_PIN
+  robot_localization_ekf: PENDING_IMPLEMENTATION_SOURCE_PIN
+  robot_state_publisher: PENDING_IMPLEMENTATION_SOURCE_PIN
+  tf_ownership: PENDING_IMPLEMENTATION_SOURCE_PIN
+  scan_adapter: PENDING_IMPLEMENTATION_SOURCE_PIN
+  map_artifact_binding: PENDING_IMPLEMENTATION_SOURCE_PIN
+  remap_namespace_policy: PENDING_IMPLEMENTATION_SOURCE_PIN
+  lifecycle_startup_policy: PENDING_IMPLEMENTATION_SOURCE_PIN
