@@ -1,0 +1,27 @@
+schema: mecanum_navigation_v1_static_startup/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+autostart: false
+stages:
+  - stage: robot_description
+    requires_previous_stage_healthy: true
+  - stage: drivers_bridge
+    requires_previous_stage_healthy: true
+  - stage: EKF
+    requires_previous_stage_healthy: true
+  - stage: Map_Server
+    requires_previous_stage_healthy: true
+  - stage: AMCL
+    requires_previous_stage_healthy: true
+  - stage: healthy_LocalizationMonitor
+    requires_previous_stage_healthy: true
+  - stage: Planner_global_costmap
+    requires_previous_stage_healthy: true
+  - stage: Safety
+    requires_previous_stage_healthy: true
+  - stage: selected_controller_or_manager
+    requires_previous_stage_healthy: true
+  - stage: mission_acceptance
+    requires_previous_stage_healthy: true
+activation_policy: DECLARATION_ONLY
+fail_closed: true

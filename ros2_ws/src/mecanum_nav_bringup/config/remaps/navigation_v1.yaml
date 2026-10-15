@@ -1,0 +1,12 @@
+schema: mecanum_navigation_v1_static_remaps/v1
+profile: sim_eval
+mode: NAV2_BASELINE
+namespace: /
+remaps:
+  scan: /scan
+  map: /map
+  odom: /odometry/filtered
+  amcl_pose: /amcl_pose
+  nav2_command_output: /cmd_vel_nav2_raw
+  tf: /tf
+  tf_static: /tf_static
