@@ -964,3 +964,15 @@
 | Pending/non-goals | All ten workspace-source roles remain `PENDING_IMPLEMENTATION_SOURCE_PIN`; no `workspace_source_locks` update, Nav2 activation, lifecycle transition, runtime graph, profile resolution, `config_hash`, map approval, runtime evidence, or runtime authorization. WP-05 remains `OPEN`; map remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
 | Candidate lifecycle | Review candidate only. No audit PASS, integration of this candidate, or authorization is asserted. |
 | `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
+### WP04-WP05-SHARED-LIDAR-FRAME-TF-RSP-OWNERSHIP-DECISION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `de71ae4d4ecb86724b1a02bdccad6f70315de7bc` |
+| Provenance | `USER_SUPPLIED_ARCHITECT_OWNER_DECISION`; no audit-report hash or Git-derived Owner decision is asserted. |
+| Scope | L2 public frame identity/TF ownership governance only. Literal `lidar_frame` is the shared public frame; `robot_state_publisher` is sole target owner of direct edge `base_link → lidar_frame`. `RPLiDAR_A1M8_1` is `LEGACY_GEOMETRY_PROVENANCE_ONLY`; legacy transform remains `PENDING_MEASUREMENT_AND_CANONICAL_SOURCE_SELECTION`. |
+| Candidate lifecycle | Review-only at this exact source-base snapshot. Independent audit PASS for the exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification are required before the conditional status `ACTIVE_L2_SHARED_TF_RSP_GOVERNANCE_FOR_FRAME_ID_AND_OWNERSHIP_ONLY`. |
+| Evidence boundary | Governance decision only. No robot-description source, geometry pin/verification, measurement, runtime graph/evidence, source pin, profile, `config_hash`, map approval, world-frame declaration, or runtime authorization is created. Legacy Xacro values are not copied or selected. |
+| Fail-closed/pending | Canonical RSP source design and pin plus measurement-backed extrinsic selection remain pending; frame mismatch, alias/bridge/static transform, missing evidence/pin, or owner conflict blocks profile resolution, Nav2 baseline, Observation V3 runtime vector, and Gate B start/pass. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; new append-only entry. Existing Ledger history is unchanged. |
