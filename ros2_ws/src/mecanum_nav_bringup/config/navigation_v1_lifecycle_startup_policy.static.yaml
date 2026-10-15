@@ -1,0 +1,24 @@
+schema: mecanum_navigation_v1_lifecycle_startup_policy/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+runtime_graph_creation: FORBIDDEN
+policy_state: PENDING_IMPLEMENTATION_SOURCE_PIN
+source_roles:
+  nav2_lifecycle_bringup: PENDING_IMPLEMENTATION_SOURCE_PIN
+  map_server: PENDING_IMPLEMENTATION_SOURCE_PIN
+  amcl_omni: PENDING_IMPLEMENTATION_SOURCE_PIN
+  robot_localization_ekf: PENDING_IMPLEMENTATION_SOURCE_PIN
+  robot_state_publisher: PENDING_IMPLEMENTATION_SOURCE_PIN
+  tf_ownership: PENDING_IMPLEMENTATION_SOURCE_PIN
+  scan_adapter: PENDING_IMPLEMENTATION_SOURCE_PIN
+  map_artifact_binding: PENDING_IMPLEMENTATION_SOURCE_PIN
+  remap_namespace_policy: PENDING_IMPLEMENTATION_SOURCE_PIN
+  lifecycle_startup_policy: PENDING_IMPLEMENTATION_SOURCE_PIN
+startup_policy_source_identity: PENDING_IMPLEMENTATION_SOURCE_PIN
+lifecycle_transition_policy_source_identity: PENDING_IMPLEMENTATION_SOURCE_PIN
+lifecycle_evidence: PENDING_IMPLEMENTATION_SOURCE_PIN
+startup_order_and_transition_values: PENDING_IMPLEMENTATION_SOURCE_PIN
+fail_closed:
+  missing_or_unverified_source_pin: NAV2_ACTIVATION_FORBIDDEN
+  missing_lifecycle_evidence: NAV2_ACTIVATION_FORBIDDEN
+  pending_marker_present: NAV2_ACTIVATION_FORBIDDEN
