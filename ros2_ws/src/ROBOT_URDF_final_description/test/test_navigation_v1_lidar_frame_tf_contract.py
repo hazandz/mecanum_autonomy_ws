@@ -1,4 +1,5 @@
 import ast
+import hashlib
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -68,16 +69,57 @@ def test_target_sources_use_only_literal_lidar_frame_without_alias_or_bridge():
     assert lidar_links == ["lidar_frame"]
 
 
-def test_gazebo_source_has_no_inferred_lidar_sensor_or_profile():
+def test_gazebo_source_has_exact_static_ydlidar_x3_pro_sensor():
     root = _xml_root(GAZEBO_PATH)
-    for sensor in root.findall(".//sensor"):
-        identity = " ".join(sensor.attrib.values()).lower()
-        assert "lidar" not in identity
-        assert "rplidar" not in identity
-    text = GAZEBO_PATH.read_text(encoding="utf-8").lower()
-    assert "rplidar" not in text
-    assert "gpu_lidar" not in text
-    assert "lidar_frame" not in text
+    references = [element for element in root.findall("gazebo") if element.get("reference") == "lidar_frame"]
+    assert len(references) == 1
+    assert len([sensor for sensor in root.findall(".//sensor") if sensor.get("name") == "YDLIDAR_X3_PRO"]) == 1
+    sensors = references[0].findall("sensor")
+    assert len(sensors) == 1
+    sensor = sensors[0]
+    assert sensor.attrib == {"name": "YDLIDAR_X3_PRO", "type": "gpu_lidar"}
+
+    assert [child.tag for child in sensor] == ["topic", "update_rate", "scan", "range"]
+    assert sensor.findtext("topic") == "scan"
+    assert sensor.findtext("update_rate") == "6.0"
+
+    scan = sensor.find("scan")
+    assert scan is not None
+    assert [child.tag for child in scan] == ["horizontal"]
+    horizontal = scan.find("horizontal")
+    assert horizontal is not None
+    assert [child.tag for child in horizontal] == ["samples", "resolution", "min_angle", "max_angle"]
+    assert horizontal.findtext("samples") == "500"
+    assert horizontal.findtext("resolution") == "1"
+    assert horizontal.findtext("min_angle") == "-3.141592653589793"
+    assert horizontal.findtext("max_angle") == "3.141592653589793"
+
+    range_element = sensor.find("range")
+    assert range_element is not None
+    assert [child.tag for child in range_element] == ["min", "max"]
+    assert range_element.findtext("min") == "0.10"
+    assert range_element.findtext("max") == "8.00"
+    assert range_element.find("resolution") is None
+    assert sensor.find("scan/vertical") is None
+
+    subtree = ET.tostring(sensor, encoding="unicode").lower()
+    for forbidden in (
+        "pose", "plugin", "frame_id", "tf", "noise", "always_on", "visualize",
+        "vertical", "rplidar_a1m8_1", "base_scan", "rplidar_link",
+        "static_transform_publisher", "tf_bridge", "frame_alias",
+        "ros_gz_bridge", "ros_gz", "sensor_msgs", "laserscan", "nav2",
+        "amcl", "robot_localization", "config_hash", "resolvedconfig",
+    ):
+        assert forbidden not in subtree
+
+
+def test_xacro_and_robot_state_publisher_launch_are_read_only_dependencies():
+    assert hashlib.sha256(XACRO_PATH.read_bytes()).hexdigest() == (
+        "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d"
+    )
+    assert hashlib.sha256(LAUNCH_PATH.read_bytes()).hexdigest() == (
+        "b5c939ed662b5f789d008dd34777363ffeb5bbc373b596e97b75c1e097dcb511"
+    )
 
 
 def test_launch_source_prepares_only_robot_state_publisher_from_canonical_xacro():
