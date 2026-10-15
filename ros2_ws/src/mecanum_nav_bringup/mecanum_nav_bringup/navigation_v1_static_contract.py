@@ -13,6 +13,48 @@ class StaticContractError(ValueError):
 
 
 DEPENDENCY_LOCK_SCHEMA = "mecanum_navigation_v1_dependency_lock/v2"
+# Exact `const` values copied from the active schema v2. Keep these in sync
+# with WP-05_NAVIGATION_V1_DEPENDENCY_LOCK_SCHEMA.json; the validator remains
+# pure and performs no schema-file or filesystem reads.
+DEPENDENCY_LOCK_SCHEMA_CONSTANTS = {
+    "immutable_evidence_rules": {
+        "artifact_baseline_provenance_does_not_replace_package_pins": True,
+        "artifact_baseline_provenance_required": True,
+        "digest_algorithm": "SHA-256",
+        "mutable_branch_or_tag_is_immutable_pin": False,
+        "repository_source_requires_full_commit": True,
+        "repository_source_requires_relative_path": True,
+        "required_external_evidence_fields": [
+            "apt_repository_origin",
+            "deb_sha256",
+            "dependency_closure_sha256",
+            "evidence_capture_method",
+        ],
+    },
+    "legacy_exclusion_rules": {
+        "classification": "REFERENCE_ONLY_LEGACY",
+        "legacy_sources_are_runtime_lock_roots": False,
+        "ros_gz_bridge_and_ros_gz_sim": "PROFILE_SPECIFIC_NOT_COMMON_LOCK",
+        "slam_toolbox": "MAPPING_ONLY_NOT_IN_COMMON_NAVIGATION_V1_RUNTIME_LOCK",
+    },
+    "pending_state_vocabulary": [
+        "PENDING_EXTERNAL_PACKAGE_LOCK",
+        "PENDING_IMPLEMENTATION_SOURCE_PIN",
+    ],
+    "workspace_source_lock_rules": {
+        "repository_commit_format": "40 lowercase hexadecimal characters",
+        "required_fields": [
+            "repository_commit",
+            "repository_relative_path",
+            "source_file_sha256",
+            "owner_package",
+            "role",
+            "status",
+        ],
+        "source_file_digest_format": "64 lowercase hexadecimal characters",
+        "unresolved_state": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+    },
+}
 EXPECTED_DIRECT_DEPENDENCY_ROOTS = (
     "nav2_bringup",
     "nav2_amcl",
@@ -103,15 +145,19 @@ def reject_pending_markers(*texts: str) -> None:
             )
 
 
-def _reject_pending_values(value: object, path: str = "input") -> None:
+def _reject_pending_values(
+    value: object, path: str = "input", *, ignored_paths: frozenset = frozenset()
+) -> None:
+    if path in ignored_paths:
+        return
     if isinstance(value, str) and _PENDING.search(value):
         raise StaticContractError(f"unresolved marker at {path}")
     if isinstance(value, Mapping):
         for key, child in value.items():
-            _reject_pending_values(child, f"{path}.{key}")
+            _reject_pending_values(child, f"{path}.{key}", ignored_paths=ignored_paths)
     elif isinstance(value, (list, tuple)):
         for index, child in enumerate(value):
-            _reject_pending_values(child, f"{path}[{index}]")
+            _reject_pending_values(child, f"{path}[{index}]", ignored_paths=ignored_paths)
 
 
 def _require_mapping(value: object, label: str) -> Mapping:
@@ -136,6 +182,29 @@ def _require_digest(value: object, label: str) -> str:
     if not _HEX_64.fullmatch(digest):
         raise StaticContractError(f"{label} must be a lowercase SHA-256 digest")
     return digest
+
+
+def _matches_exact_json_value(value: object, expected: object) -> bool:
+    """Compare JSON-like constants without Python bool/int equality leakage."""
+    if isinstance(expected, Mapping):
+        return (
+            isinstance(value, Mapping)
+            and set(value) == set(expected)
+            and all(_matches_exact_json_value(value[key], child) for key, child in expected.items())
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(value, list)
+            and len(value) == len(expected)
+            and all(_matches_exact_json_value(actual, wanted) for actual, wanted in zip(value, expected))
+        )
+    return type(value) is type(expected) and value == expected
+
+
+def _validate_dependency_lock_schema_constants(lock: Mapping) -> None:
+    for field, expected in DEPENDENCY_LOCK_SCHEMA_CONSTANTS.items():
+        if not _matches_exact_json_value(lock.get(field), expected):
+            raise StaticContractError(f"source lock {field} does not match active schema v2 const")
 
 
 def _validate_external_package_locks(value: object) -> None:
@@ -352,7 +421,16 @@ def validate_navigation_v1_runtime_inputs(
     """
     lock = _require_mapping(source_lock, "source_lock")
     config = _require_mapping(bringup, "bringup")
-    _reject_pending_values(lock, "source_lock")
+    _reject_pending_values(
+        lock,
+        "source_lock",
+        ignored_paths=frozenset(
+            {
+                "source_lock.pending_state_vocabulary",
+                "source_lock.workspace_source_lock_rules",
+            }
+        ),
+    )
     _reject_pending_values(config, "bringup")
 
     if lock.get("schema") != DEPENDENCY_LOCK_SCHEMA:
@@ -365,9 +443,14 @@ def validate_navigation_v1_runtime_inputs(
             "external_package_locks",
             "workspace_source_locks",
             "artifact_baseline_provenance",
+            "immutable_evidence_rules",
+            "legacy_exclusion_rules",
+            "pending_state_vocabulary",
+            "workspace_source_lock_rules",
         },
         "source_lock",
     )
+    _validate_dependency_lock_schema_constants(lock)
     roots = lock.get("direct_dependency_roots")
     if not isinstance(roots, list) or tuple(roots) != EXPECTED_DIRECT_DEPENDENCY_ROOTS:
         raise StaticContractError("direct dependency roots do not match the active lock schema")

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from mecanum_nav_bringup.navigation_v1_static_contract import (
+    DEPENDENCY_LOCK_SCHEMA_CONSTANTS,
     EXPECTED_DIRECT_DEPENDENCY_ROOTS,
     REQUIRED_WORKSPACE_SOURCE_ROLES,
     StaticContractError,
@@ -75,6 +76,7 @@ def _valid_source_lock():
             }
             for role in REQUIRED_WORKSPACE_SOURCE_ROLES
         ],
+        **deepcopy(DEPENDENCY_LOCK_SCHEMA_CONSTANTS),
     }
 
 
@@ -131,6 +133,57 @@ def test_missing_artifact_baseline_provenance_is_rejected():
     lock = _valid_source_lock()
     del lock["artifact_baseline_provenance"]
     with pytest.raises(StaticContractError, match="fields are incomplete or unexpected"):
+        _validate(source_lock=lock)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "immutable_evidence_rules",
+        "legacy_exclusion_rules",
+        "pending_state_vocabulary",
+        "workspace_source_lock_rules",
+    ],
+)
+def test_each_schema_v2_constant_field_is_required(field):
+    lock = _valid_source_lock()
+    del lock[field]
+    with pytest.raises(StaticContractError, match="fields are incomplete or unexpected"):
+        _validate(source_lock=lock)
+
+
+def test_unknown_top_level_lock_field_is_rejected():
+    lock = _valid_source_lock()
+    lock["unknown_extension"] = "unexpected"
+    with pytest.raises(StaticContractError, match="fields are incomplete or unexpected"):
+        _validate(source_lock=lock)
+
+
+@pytest.mark.parametrize(
+    "field,mutate",
+    [
+        (
+            "immutable_evidence_rules",
+            lambda value: value.__setitem__("digest_algorithm", "MD5"),
+        ),
+        (
+            "legacy_exclusion_rules",
+            lambda value: value.__setitem__("classification", "CANONICAL"),
+        ),
+        (
+            "pending_state_vocabulary",
+            lambda value: value.__setitem__(0, "PENDING_DIFFERENT_STATE"),
+        ),
+        (
+            "workspace_source_lock_rules",
+            lambda value: value.__setitem__("unresolved_state", "RESOLVED"),
+        ),
+    ],
+)
+def test_tampered_schema_v2_constant_is_rejected(field, mutate):
+    lock = _valid_source_lock()
+    mutate(lock[field])
+    with pytest.raises(StaticContractError, match=f"{field} does not match active schema v2 const"):
         _validate(source_lock=lock)
 
 

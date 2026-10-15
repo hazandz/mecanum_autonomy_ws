@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from mecanum_nav_bringup.navigation_v1_static_contract import (
+    DEPENDENCY_LOCK_SCHEMA_CONSTANTS,
     EXPECTED_DIRECT_DEPENDENCY_ROOTS,
     StaticContractError,
     _validate_artifact_baseline_provenance,
@@ -191,6 +192,12 @@ def test_schema_is_draft_2020_12_and_requires_strict_nested_envelope():
     for group in envelope["properties"].values():
         if group.get("type") == "object":
             assert group["additionalProperties"] is False
+
+
+def test_validator_constants_are_exact_copies_of_active_schema_v2():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    for field, expected in DEPENDENCY_LOCK_SCHEMA_CONSTANTS.items():
+        assert schema["properties"][field]["const"] == expected
 
 
 def test_validator_module_has_no_ros_runtime_imports():
