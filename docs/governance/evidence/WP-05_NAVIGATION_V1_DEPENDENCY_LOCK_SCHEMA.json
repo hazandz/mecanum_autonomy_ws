@@ -1,1 +1,582 @@
-{"$defs":{"external_package_lock_entry":{"additionalProperties":false,"properties":{"apt_repository_origin":{"minLength":1,"type":"string"},"architecture":{"minLength":1,"type":"string"},"deb_sha256":{"pattern":"^[0-9a-f]{64}$","type":"string"},"debian_package_name":{"minLength":1,"type":"string"},"dependency_closure_sha256":{"pattern":"^[0-9a-f]{64}$","type":"string"},"evidence_capture_method":{"minLength":1,"type":"string"},"installed_version":{"minLength":1,"type":"string"},"ros_distribution":{"minLength":1,"type":"string"},"ros_package_name":{"enum":["nav2_bringup","nav2_amcl","nav2_map_server","nav2_lifecycle_manager","nav2_planner","nav2_controller","nav2_bt_navigator","nav2_costmap_2d","robot_localization","tf2_ros","robot_state_publisher","sensor_msgs","nav_msgs","geometry_msgs"],"type":"string"},"ubuntu_release":{"minLength":1,"type":"string"}},"required":["ros_distribution","ubuntu_release","ros_package_name","debian_package_name","installed_version","architecture","apt_repository_origin","deb_sha256","dependency_closure_sha256","evidence_capture_method"],"type":"object"},"workspace_source_lock_entry":{"additionalProperties":false,"properties":{"owner_package":{"minLength":1,"type":"string"},"repository_commit":{"pattern":"^[0-9a-f]{40}$","type":"string"},"repository_relative_path":{"minLength":1,"type":"string"},"role":{"minLength":1,"type":"string"},"source_file_sha256":{"pattern":"^[0-9a-f]{64}$","type":"string"},"status":{"description":"Unresolved source selection uses PENDING_IMPLEMENTATION_SOURCE_PIN. A resolved-state token is not introduced by this schema and requires later Owner governance.","type":"string"}},"required":["repository_commit","repository_relative_path","source_file_sha256","owner_package","role","status"],"type":"object"}},"$id":"urn:mecanum:wp05:navigation-v1-dependency-lock-schema:v1","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"allOf":[{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_bringup"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_amcl"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_map_server"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_lifecycle_manager"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_planner"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_controller"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_bt_navigator"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav2_costmap_2d"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"robot_localization"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"tf2_ros"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"robot_state_publisher"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"sensor_msgs"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"nav_msgs"}},"required":["ros_package_name"]}}}},{"properties":{"external_package_locks":{"contains":{"properties":{"ros_package_name":{"const":"geometry_msgs"}},"required":["ros_package_name"]}}}}],"description":"Schema only; it contains no installed package versions, source pins, lock instance, resolved profile, or runtime evidence.","properties":{"direct_dependency_roots":{"const":["nav2_bringup","nav2_amcl","nav2_map_server","nav2_lifecycle_manager","nav2_planner","nav2_controller","nav2_bt_navigator","nav2_costmap_2d","robot_localization","tf2_ros","robot_state_publisher","sensor_msgs","nav_msgs","geometry_msgs"]},"external_package_locks":{"items":{"$ref":"#/$defs/external_package_lock_entry"},"maxItems":14,"minItems":14,"type":"array","uniqueItems":true},"immutable_evidence_rules":{"const":{"digest_algorithm":"SHA-256","mutable_branch_or_tag_is_immutable_pin":false,"repository_source_requires_full_commit":true,"repository_source_requires_relative_path":true,"required_external_evidence_fields":["apt_repository_origin","deb_sha256","dependency_closure_sha256","evidence_capture_method"]}},"legacy_exclusion_rules":{"const":{"classification":"REFERENCE_ONLY_LEGACY","legacy_sources_are_runtime_lock_roots":false,"ros_gz_bridge_and_ros_gz_sim":"PROFILE_SPECIFIC_NOT_COMMON_LOCK","slam_toolbox":"MAPPING_ONLY_NOT_IN_COMMON_NAVIGATION_V1_RUNTIME_LOCK"}},"pending_state_vocabulary":{"const":["PENDING_EXTERNAL_PACKAGE_LOCK","PENDING_IMPLEMENTATION_SOURCE_PIN"]},"schema":{"const":"mecanum_navigation_v1_dependency_lock/v1"},"workspace_source_lock_rules":{"const":{"repository_commit_format":"40 lowercase hexadecimal characters","required_fields":["repository_commit","repository_relative_path","source_file_sha256","owner_package","role","status"],"source_file_digest_format":"64 lowercase hexadecimal characters","unresolved_state":"PENDING_IMPLEMENTATION_SOURCE_PIN"}},"workspace_source_locks":{"items":{"$ref":"#/$defs/workspace_source_lock_entry"},"type":"array"}},"required":["schema","direct_dependency_roots","external_package_locks","workspace_source_locks","pending_state_vocabulary","immutable_evidence_rules","workspace_source_lock_rules","legacy_exclusion_rules"],"title":"WP-05 Navigation V1 dependency-lock document schema","type":"object"}
+{
+  "$defs": {
+    "external_package_lock_entry": {
+      "additionalProperties": false,
+      "properties": {
+        "apt_repository_origin": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "architecture": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deb_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "debian_package_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "dependency_closure_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence_capture_method": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "installed_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ros_distribution": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ros_package_name": {
+          "enum": [
+            "nav2_bringup",
+            "nav2_amcl",
+            "nav2_map_server",
+            "nav2_lifecycle_manager",
+            "nav2_planner",
+            "nav2_controller",
+            "nav2_bt_navigator",
+            "nav2_costmap_2d",
+            "robot_localization",
+            "tf2_ros",
+            "robot_state_publisher",
+            "sensor_msgs",
+            "nav_msgs",
+            "geometry_msgs"
+          ],
+          "type": "string"
+        },
+        "ubuntu_release": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "ros_distribution",
+        "ubuntu_release",
+        "ros_package_name",
+        "debian_package_name",
+        "installed_version",
+        "architecture",
+        "apt_repository_origin",
+        "deb_sha256",
+        "dependency_closure_sha256",
+        "evidence_capture_method"
+      ],
+      "type": "object"
+    },
+    "relative_path": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "workspace_source_lock_entry": {
+      "additionalProperties": false,
+      "properties": {
+        "owner_package": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "repository_relative_path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "role": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "description": "Unresolved source selection uses PENDING_IMPLEMENTATION_SOURCE_PIN. A resolved-state token is not introduced by this schema and requires later Owner governance.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_commit",
+        "repository_relative_path",
+        "source_file_sha256",
+        "owner_package",
+        "role",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:mecanum:wp05:navigation-v1-dependency-lock:v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_bringup"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_amcl"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_map_server"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_lifecycle_manager"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_planner"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_controller"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_bt_navigator"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav2_costmap_2d"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "robot_localization"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "tf2_ros"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "robot_state_publisher"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "sensor_msgs"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "nav_msgs"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "external_package_locks": {
+          "contains": {
+            "properties": {
+              "ros_package_name": {
+                "const": "geometry_msgs"
+              }
+            },
+            "required": [
+              "ros_package_name"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "description": "Strict static dependency-lock schema with a typed immutable artifact-baseline provenance envelope. This schema does not prove external artifact existence or authorize runtime.",
+  "properties": {
+    "artifact_baseline_provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_closure": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_locator": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "closure_artifact_count": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "closure_manifest_relative_path": {
+              "$ref": "#/$defs/relative_path"
+            },
+            "closure_manifest_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "closure_total_bytes": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_locator",
+            "closure_manifest_relative_path",
+            "closure_manifest_sha256",
+            "closure_artifact_count",
+            "closure_total_bytes"
+          ],
+          "type": "object"
+        },
+        "baseline_identity": {
+          "additionalProperties": false,
+          "properties": {
+            "base_image_digest": {
+              "minLength": 1,
+              "pattern": "^.+@sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "platform": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "purpose": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_commit": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            "source_repository": {
+              "format": "uri",
+              "pattern": "^https://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "base_image_digest",
+            "platform",
+            "source_repository",
+            "source_commit",
+            "purpose"
+          ],
+          "type": "object"
+        },
+        "correction_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "quarantined_non_closure_artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "classification": {
+              "const": "QUARANTINED_NON_CLOSURE_ARTIFACT_NOT_PART_OF_NAVIGATION_V1_LOCK"
+            },
+            "manifest_relative_path": {
+              "$ref": "#/$defs/relative_path"
+            },
+            "manifest_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "manifest_relative_path",
+            "manifest_sha256",
+            "artifact_count",
+            "classification"
+          ],
+          "type": "object"
+        },
+        "ros_signing_key": {
+          "additionalProperties": false,
+          "properties": {
+            "fingerprint_record_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "keyring_relative_path": {
+              "$ref": "#/$defs/relative_path"
+            },
+            "keyring_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "primary_fingerprint": {
+              "pattern": "^[0-9A-F]{40}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "keyring_relative_path",
+            "keyring_sha256",
+            "primary_fingerprint",
+            "fingerprint_record_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "baseline_identity",
+        "artifact_closure",
+        "ros_signing_key",
+        "correction_report_sha256",
+        "quarantined_non_closure_artifacts"
+      ],
+      "type": "object"
+    },
+    "direct_dependency_roots": {
+      "const": [
+        "nav2_bringup",
+        "nav2_amcl",
+        "nav2_map_server",
+        "nav2_lifecycle_manager",
+        "nav2_planner",
+        "nav2_controller",
+        "nav2_bt_navigator",
+        "nav2_costmap_2d",
+        "robot_localization",
+        "tf2_ros",
+        "robot_state_publisher",
+        "sensor_msgs",
+        "nav_msgs",
+        "geometry_msgs"
+      ]
+    },
+    "external_package_locks": {
+      "items": {
+        "$ref": "#/$defs/external_package_lock_entry"
+      },
+      "maxItems": 14,
+      "minItems": 14,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "immutable_evidence_rules": {
+      "const": {
+        "artifact_baseline_provenance_does_not_replace_package_pins": true,
+        "artifact_baseline_provenance_required": true,
+        "digest_algorithm": "SHA-256",
+        "mutable_branch_or_tag_is_immutable_pin": false,
+        "repository_source_requires_full_commit": true,
+        "repository_source_requires_relative_path": true,
+        "required_external_evidence_fields": [
+          "apt_repository_origin",
+          "deb_sha256",
+          "dependency_closure_sha256",
+          "evidence_capture_method"
+        ]
+      }
+    },
+    "legacy_exclusion_rules": {
+      "const": {
+        "classification": "REFERENCE_ONLY_LEGACY",
+        "legacy_sources_are_runtime_lock_roots": false,
+        "ros_gz_bridge_and_ros_gz_sim": "PROFILE_SPECIFIC_NOT_COMMON_LOCK",
+        "slam_toolbox": "MAPPING_ONLY_NOT_IN_COMMON_NAVIGATION_V1_RUNTIME_LOCK"
+      }
+    },
+    "pending_state_vocabulary": {
+      "const": [
+        "PENDING_EXTERNAL_PACKAGE_LOCK",
+        "PENDING_IMPLEMENTATION_SOURCE_PIN"
+      ]
+    },
+    "schema": {
+      "const": "mecanum_navigation_v1_dependency_lock/v2"
+    },
+    "workspace_source_lock_rules": {
+      "const": {
+        "repository_commit_format": "40 lowercase hexadecimal characters",
+        "required_fields": [
+          "repository_commit",
+          "repository_relative_path",
+          "source_file_sha256",
+          "owner_package",
+          "role",
+          "status"
+        ],
+        "source_file_digest_format": "64 lowercase hexadecimal characters",
+        "unresolved_state": "PENDING_IMPLEMENTATION_SOURCE_PIN"
+      }
+    },
+    "workspace_source_locks": {
+      "items": {
+        "$ref": "#/$defs/workspace_source_lock_entry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "direct_dependency_roots",
+    "external_package_locks",
+    "workspace_source_locks",
+    "pending_state_vocabulary",
+    "immutable_evidence_rules",
+    "workspace_source_lock_rules",
+    "legacy_exclusion_rules",
+    "artifact_baseline_provenance"
+  ],
+  "title": "Navigation V1 Dependency Lock Schema v2",
+  "type": "object"
+}

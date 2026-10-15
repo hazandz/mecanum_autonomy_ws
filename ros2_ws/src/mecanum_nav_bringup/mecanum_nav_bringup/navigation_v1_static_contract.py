@@ -12,7 +12,7 @@ class StaticContractError(ValueError):
     """Raised when a static Navigation V1 input is incomplete or inconsistent."""
 
 
-DEPENDENCY_LOCK_SCHEMA = "mecanum_navigation_v1_dependency_lock/v1"
+DEPENDENCY_LOCK_SCHEMA = "mecanum_navigation_v1_dependency_lock/v2"
 EXPECTED_DIRECT_DEPENDENCY_ROOTS = (
     "nav2_bringup",
     "nav2_amcl",
@@ -82,7 +82,13 @@ _EXTERNAL_LOCK_FIELDS = (
 )
 _HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+_FINGERPRINT_40_UPPER = re.compile(r"^[0-9A-F]{40}$")
+_OCI_DIGEST = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
+_HTTPS_URL = re.compile(r"^https://[^\s]+$")
 _PENDING = re.compile(r"\bPENDING_[A-Z0-9_]+\b")
+_QUARANTINE_CLASSIFICATION = (
+    "QUARANTINED_NON_CLOSURE_ARTIFACT_NOT_PART_OF_NAVIGATION_V1_LOCK"
+)
 
 
 def reject_pending_markers(*texts: str) -> None:
@@ -151,6 +157,119 @@ def _validate_external_package_locks(value: object) -> None:
         raise StaticContractError("external package locks contain duplicate roots")
     if set(names) != set(EXPECTED_DIRECT_DEPENDENCY_ROOTS):
         raise StaticContractError("external package lock roots are incomplete or unexpected")
+
+
+def _require_relative_path(value: object, label: str) -> str:
+    path = _require_nonempty_string(value, label)
+    if path.startswith("/") or ".." in path.split("/") or "\\" in path:
+        raise StaticContractError(f"{label} must be a safe relative path")
+    return path
+
+
+def _validate_artifact_baseline_provenance(value: object) -> None:
+    envelope = _require_mapping(value, "artifact_baseline_provenance")
+    _require_exact_keys(
+        envelope,
+        {
+            "baseline_identity",
+            "artifact_closure",
+            "ros_signing_key",
+            "correction_report_sha256",
+            "quarantined_non_closure_artifacts",
+        },
+        "artifact_baseline_provenance",
+    )
+
+    identity = _require_mapping(envelope["baseline_identity"], "baseline_identity")
+    _require_exact_keys(
+        identity,
+        {"base_image_digest", "platform", "source_repository", "source_commit", "purpose"},
+        "baseline_identity",
+    )
+    image_digest = _require_nonempty_string(
+        identity["base_image_digest"], "baseline_identity.base_image_digest"
+    )
+    if not _OCI_DIGEST.fullmatch(image_digest):
+        raise StaticContractError("base_image_digest must be an immutable OCI SHA-256 digest")
+    _require_nonempty_string(identity["platform"], "baseline_identity.platform")
+    repository = _require_nonempty_string(
+        identity["source_repository"], "baseline_identity.source_repository"
+    )
+    if not _HTTPS_URL.fullmatch(repository):
+        raise StaticContractError("source_repository must be an HTTPS URL")
+    commit = _require_nonempty_string(
+        identity["source_commit"], "baseline_identity.source_commit"
+    )
+    if not _HEX_40.fullmatch(commit):
+        raise StaticContractError("source_commit must be a full lowercase Git SHA")
+    _require_nonempty_string(identity["purpose"], "baseline_identity.purpose")
+
+    closure = _require_mapping(envelope["artifact_closure"], "artifact_closure")
+    _require_exact_keys(
+        closure,
+        {
+            "artifact_locator",
+            "closure_manifest_relative_path",
+            "closure_manifest_sha256",
+            "closure_artifact_count",
+            "closure_total_bytes",
+        },
+        "artifact_closure",
+    )
+    _require_nonempty_string(closure["artifact_locator"], "artifact_closure.artifact_locator")
+    _require_relative_path(
+        closure["closure_manifest_relative_path"],
+        "artifact_closure.closure_manifest_relative_path",
+    )
+    _require_digest(closure["closure_manifest_sha256"], "artifact_closure.closure_manifest_sha256")
+    for field in ("closure_artifact_count", "closure_total_bytes"):
+        number = closure[field]
+        if type(number) is not int or number < 1:
+            raise StaticContractError(f"artifact_closure.{field} must be an integer >= 1")
+
+    signing = _require_mapping(envelope["ros_signing_key"], "ros_signing_key")
+    _require_exact_keys(
+        signing,
+        {
+            "keyring_relative_path",
+            "keyring_sha256",
+            "primary_fingerprint",
+            "fingerprint_record_sha256",
+        },
+        "ros_signing_key",
+    )
+    _require_relative_path(signing["keyring_relative_path"], "ros_signing_key.keyring_relative_path")
+    _require_digest(signing["keyring_sha256"], "ros_signing_key.keyring_sha256")
+    fingerprint = _require_nonempty_string(
+        signing["primary_fingerprint"], "ros_signing_key.primary_fingerprint"
+    )
+    if not _FINGERPRINT_40_UPPER.fullmatch(fingerprint):
+        raise StaticContractError("primary_fingerprint must be 40 uppercase hexadecimal characters")
+    _require_digest(
+        signing["fingerprint_record_sha256"], "ros_signing_key.fingerprint_record_sha256"
+    )
+
+    _require_digest(envelope["correction_report_sha256"], "correction_report_sha256")
+    quarantine = _require_mapping(
+        envelope["quarantined_non_closure_artifacts"], "quarantined_non_closure_artifacts"
+    )
+    _require_exact_keys(
+        quarantine,
+        {"manifest_relative_path", "manifest_sha256", "artifact_count", "classification"},
+        "quarantined_non_closure_artifacts",
+    )
+    _require_relative_path(
+        quarantine["manifest_relative_path"],
+        "quarantined_non_closure_artifacts.manifest_relative_path",
+    )
+    _require_digest(
+        quarantine["manifest_sha256"], "quarantined_non_closure_artifacts.manifest_sha256"
+    )
+    count = quarantine["artifact_count"]
+    if type(count) is not int or count < 0:
+        raise StaticContractError("quarantined artifact_count must be an integer >= 0")
+    if quarantine["classification"] != _QUARANTINE_CLASSIFICATION:
+        raise StaticContractError("quarantine classification is not the required constant")
 
 
 def _validate_workspace_source_locks(value: object) -> None:
@@ -240,7 +359,13 @@ def validate_navigation_v1_runtime_inputs(
         raise StaticContractError("source lock schema is missing or unsupported")
     _require_exact_keys(
         lock,
-        {"schema", "direct_dependency_roots", "external_package_locks", "workspace_source_locks"},
+        {
+            "schema",
+            "direct_dependency_roots",
+            "external_package_locks",
+            "workspace_source_locks",
+            "artifact_baseline_provenance",
+        },
         "source_lock",
     )
     roots = lock.get("direct_dependency_roots")
@@ -248,6 +373,7 @@ def validate_navigation_v1_runtime_inputs(
         raise StaticContractError("direct dependency roots do not match the active lock schema")
     _validate_external_package_locks(lock.get("external_package_locks"))
     _validate_workspace_source_locks(lock.get("workspace_source_locks"))
+    _validate_artifact_baseline_provenance(lock.get("artifact_baseline_provenance"))
 
     map_server = _require_mapping(config.get("map_server"), "map_server")
     _validate_map_binding(map_server, expected_map_id, expected_map_content_hash)

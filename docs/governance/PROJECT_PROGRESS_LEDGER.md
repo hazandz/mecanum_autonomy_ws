@@ -924,3 +924,15 @@
 | Candidate lifecycle | Review candidate only at the exact source base. Independent audit, separate exact-commit User authorization, fast-forward, and remote-ref verification are required; none is inferred from Git ancestry or a review push. |
 | Evidence boundary | `GOVERNANCE_PROVENANCE_RECONCILIATION_ONLY`. No technical semantics or status/dependency transition is created. WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; append-only entry. Earlier Ledger history is not changed. |
+
+### WP05-NAVIGATION-V1-DEPENDENCY-LOCK-PROVENANCE-ENVELOPE-L2-AMENDMENT-CORRECTED — review snapshot
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-15 |
+| Exact integration/source base | `f23af59d7a9458175928c2647532339ff933158b` |
+| Scope | L2 governance-schema interface amendment: require a closed typed `artifact_baseline_provenance` envelope; update static validator and synthetic test fixture/tests. The 14 logical roots and package-lock semantics remain unchanged; `launch_ros` is not a logical root. |
+| Lifecycle | Review candidate only at the exact source-base snapshot. Independent audit PASS, separate explicit User authorization for the exact commit, fast-forward, and remote-ref verification are required before this amendment is described as active authority for dependency-lock provenance schema semantics only. |
+| Evidence boundary | Offline structural validation of caller-supplied values only. No filesystem, artifact bundle, Docker, network, or runtime inspection; no assertion that external artifacts exist. No concrete lock instance, profile source, package pin, profile resolution, or `config_hash`. |
+| Non-goals/status | No Navigation runtime semantics, TF/lifecycle ownership, map approval, runtime authorization, or WP-04 change. WP-05 `OPEN`; map remains draft; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
+| `supersedes` | None; append-only entry. |

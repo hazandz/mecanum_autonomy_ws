@@ -18,7 +18,7 @@ TEST_MAP_HASH = "a" * 64
 
 def _valid_source_lock():
     return {
-        "schema": "mecanum_navigation_v1_dependency_lock/v1",
+        "schema": "mecanum_navigation_v1_dependency_lock/v2",
         "direct_dependency_roots": list(EXPECTED_DIRECT_DEPENDENCY_ROOTS),
         "external_package_locks": [
             {
@@ -35,6 +35,35 @@ def _valid_source_lock():
             }
             for package in EXPECTED_DIRECT_DEPENDENCY_ROOTS
         ],
+        "artifact_baseline_provenance": {
+            "baseline_identity": {
+                "base_image_digest": "ubuntu@sha256:" + "e" * 64,
+                "platform": "linux/amd64",
+                "source_repository": "https://example.invalid/repo.git",
+                "source_commit": "1" * 40,
+                "purpose": "synthetic-test-only",
+            },
+            "artifact_closure": {
+                "artifact_locator": "synthetic-test-only",
+                "closure_manifest_relative_path": "metadata/closure.sha256",
+                "closure_manifest_sha256": "2" * 64,
+                "closure_artifact_count": 1,
+                "closure_total_bytes": 1,
+            },
+            "ros_signing_key": {
+                "keyring_relative_path": "apt_sources/keyring.gpg",
+                "keyring_sha256": "3" * 64,
+                "primary_fingerprint": "A" * 40,
+                "fingerprint_record_sha256": "4" * 64,
+            },
+            "correction_report_sha256": "5" * 64,
+            "quarantined_non_closure_artifacts": {
+                "manifest_relative_path": "metadata/quarantine.sha256",
+                "manifest_sha256": "6" * 64,
+                "artifact_count": 0,
+                "classification": "QUARANTINED_NON_CLOSURE_ARTIFACT_NOT_PART_OF_NAVIGATION_V1_LOCK",
+            },
+        },
         "workspace_source_locks": [
             {
                 "repository_commit": "1" * 40,
@@ -96,6 +125,13 @@ def _validate(source_lock=None, bringup=None, *, map_id=TEST_MAP_ID, map_hash=TE
 
 def test_valid_complete_injected_fixture_is_accepted_without_resolved_output():
     assert _validate() is None
+
+
+def test_missing_artifact_baseline_provenance_is_rejected():
+    lock = _valid_source_lock()
+    del lock["artifact_baseline_provenance"]
+    with pytest.raises(StaticContractError, match="fields are incomplete or unexpected"):
+        _validate(source_lock=lock)
 
 
 def test_checked_in_templates_are_rejected_as_unresolved_runtime_inputs():
