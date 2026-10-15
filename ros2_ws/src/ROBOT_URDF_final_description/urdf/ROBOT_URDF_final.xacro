@@ -145,29 +145,10 @@
   </collision>
 </link>
 
-<!-- LIDAR LINK (RPLidar màu đen) -->
-<link name="RPLiDAR_A1M8_1">
-  <inertial>
-    <origin xyz="-0.05153713704514566 8.887643777943633e-05 0.027012153068496997" rpy="0 0 0"/>
-    <mass value="0.7"/>
-    <inertia ixx="0.000423" iyy="0.000745" izz="0.000767" ixy="-6e-06" iyz="5e-06" ixz="4.5e-05"/>
-  </inertial>
-  <visual>
-    <origin xyz="-0.0432 0.0 -0.107565" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find ROBOT_URDF_final_description)/meshes/RPLiDAR_A1M8_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="black"/>
-  </visual>
-  
-  <!-- ĐÃ SỬA: Dùng hình trụ va chạm nằm bên dưới mặt quét để tránh cản tia laser -->
-  <collision>
-    <origin xyz="0 0 -0.02" rpy="0 0 0"/>
-    <geometry>
-      <cylinder radius="0.035" length="0.03"/>
-    </geometry>
-  </collision>
-</link>
+<!-- Owner-accepted CAD-nominal packet WP04-WP05-YDLIDAR-X3PRO-CAD-EXTRINSIC-V1. -->
+<!-- Packet SHA-256: 40fe44cb3647376b3b1f793761091e101051d7e141e4687e67e2f03632e430de. -->
+<!-- Hardware-as-built verification remains pending. -->
+<link name="lidar_frame"/>
 
 <!-- JOINTS -->
 <joint name="Wheel_LF_Joint" type="continuous">
@@ -204,10 +185,10 @@
   <child link="IntelRealsense_D435_Multibody_1"/>
 </joint>
 
-<joint name="Lidar_Joint" type="fixed">
-  <origin xyz="0.0432 0.0 0.107565" rpy="0 0 0"/>
+<joint name="base_link_to_lidar_frame" type="fixed">
+  <origin xyz="-0.031765 0 0.140" rpy="0 0 0"/>
   <parent link="base_link"/>
-  <child link="RPLiDAR_A1M8_1"/>
+  <child link="lidar_frame"/>
 </joint>
 
 </robot>
