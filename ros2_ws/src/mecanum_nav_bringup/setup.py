@@ -22,19 +22,40 @@ setup(
         ),
         (
             "share/" + package_name + "/config/localization",
-            ["config/localization/navigation_v1_amcl_omni.static.template.yaml"],
+            [
+                "config/localization/navigation_v1_amcl_omni.static.template.yaml",
+                "config/localization/amcl_omni.yaml",
+            ],
         ),
         (
             "share/" + package_name + "/config/state_estimation",
-            ["config/state_estimation/navigation_v1_ekf.static.template.yaml"],
+            [
+                "config/state_estimation/navigation_v1_ekf.static.template.yaml",
+                "config/state_estimation/ekf_sim.yaml",
+            ],
         ),
         (
             "share/" + package_name + "/config/lifecycle",
-            ["config/lifecycle/navigation_v1_localization_lifecycle.static.template.yaml"],
+            [
+                "config/lifecycle/navigation_v1_localization_lifecycle.static.template.yaml",
+                "config/lifecycle/navigation_v1_startup.yaml",
+            ],
+        ),
+        (
+            "share/" + package_name + "/config/navigation",
+            ["config/navigation/nav2_baseline.yaml"],
+        ),
+        (
+            "share/" + package_name + "/config/remaps",
+            ["config/remaps/navigation_v1.yaml"],
         ),
         (
             "share/" + package_name + "/launch",
-            ["launch/navigation_v1_static_bringup.launch.py"],
+            [
+                "launch/navigation_v1_static_bringup.launch.py",
+                "launch/navigation_v1.launch.py",
+                "launch/navigation_v1_lifecycle.launch.py",
+            ],
         ),
     ],
     install_requires=["setuptools"],
