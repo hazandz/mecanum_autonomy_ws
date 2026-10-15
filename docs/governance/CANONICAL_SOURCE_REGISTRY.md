@@ -549,3 +549,10 @@ Only after independent audit PASS for this exact candidate, separate exact-commi
 The provenance pin does not create a runtime source pin for the LiDAR driver, `/scan`, AMCL, EKF, map, or runtime package. The source's CAD nominal extrinsic is linked to Owner packet fingerprint `40fe44cb3647376b3b1f793761091e101051d7e141e4687e67e2f03632e430de`; hardware-as-built verification remains pending. `robot_state_publisher` remains the sole target owner of direct edge `base_link → lidar_frame`, with literal public frame `lidar_frame`. The current Gazebo source contains no active LiDAR sensor/profile; `RPLiDAR_A1M8_1` is not canonical and is neither an alias nor a bridge.
 
 This is a review-candidate provenance closure at this exact source-base snapshot. It grants no runtime authorization, map approval, profile resolution, global `config_hash`, Gate B start/pass, or runtime evidence. WP-04/WP-05 statuses and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+
+
+## WP-04 YDLIDAR X3 Pro static simulation scan source-creation authorization — review snapshot at `53d56e1787487fd90c6d92e8f4f51a3eca23773f`
+
+The manifest and decision are `L1_STATIC_SOURCE_CREATION_AUTHORIZATION_ONLY` review-candidate records. They pin vendor documentation to YDLidar-SDK commit `42a82ed10d2304094c111fc63dee8e4a229b79b7`, path `doc/Dataset.md`, SHA-256 `ec5e27ab30b1e4d13a4b25bc4770a106d05f54ba5b191f21374af11a6d2b4897`, and authorize only a later static-source candidate editing the Gazebo description and focused static contract test. Vendor facts and the derived 6.0 Hz / 500-sample simulation nominal are not runtime evidence.
+
+The future source must retain `lidar_frame` and `robot_state_publisher` sole ownership of `base_link → lidar_frame`; `RPLiDAR_A1M8_1` remains legacy provenance only. Gazebo transport `scan` is not ROS `/scan` or `sensor_msgs/msg/LaserScan`. All listed runtime source pins and measurements remain pending. The candidate does not create source, bridge, profile, `config_hash`, runtime evidence, map approval, Gate B transition, or runtime authorization.

@@ -707,3 +707,8 @@ At exact base `fa862f26eed6cfa30a553ccf6f1befcad532a1f9`, this candidate records
 Required next-step order after integration: (1) collect and obtain explicit Owner acceptance of the complete extrinsic evidence packet; (2) create a source candidate in the exact four allowed paths; (3) independently audit and separately authorize/integrate that source candidate; (4) close its exact source pin; (5) perform runtime TF measurement only under separate runtime authorization. Missing packet fields or acceptance means no source edits and fail-closed behavior. Legacy `RPLiDAR_A1M8_1` geometry is not reusable as canonical extrinsic.
 
 No status changes: WP-04 remains `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+
+## WP-04 YDLIDAR X3 Pro static simulation scan authorization — review snapshot
+
+After the existing canonical RSP source-pin closure, the next eligible step is review of this bounded L1 authorization candidate, followed (only after its independent audit PASS, separate exact-commit User authorization, fast-forward, and remote-ref verification) by a separate static-source candidate limited to the Gazebo description and its focused static contract test. That future candidate may use the pinned vendor row and stated static 6.0 Hz / 500-sample derivation. It must not create a ROS bridge or runtime graph. Keep driver/bridge/profile pins and cadence, latency/freshness, no-return, and hardware-as-built measurements pending.

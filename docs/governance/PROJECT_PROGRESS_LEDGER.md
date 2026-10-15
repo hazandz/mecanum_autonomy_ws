@@ -1001,3 +1001,19 @@
 | Pending/non-goals | `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`; `HARDWARE_AS_BUILT_EXTRINSIC_VERIFICATION: PENDING`. No runtime source pin, resolved profile, `config_hash`, map approval, Gate B start/pass, runtime evidence, or runtime authorization. WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Candidate lifecycle | Review-only at this exact source-base snapshot. No independent audit PASS, integration, or authorization for this candidate is asserted. |
 | `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
+
+
+### WP04-YDLIDAR-X3-PRO-STATIC-SIMULATION-SCAN-SOURCE-CREATION-AUTHORIZATION — review snapshot
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `53d56e1787487fd90c6d92e8f4f51a3eca23773f` |
+| Classification | `L1_STATIC_SOURCE_CREATION_AUTHORIZATION_ONLY`; candidate review only. |
+| Vendor provenance | YDLidar-SDK commit `42a82ed10d2304094c111fc63dee8e4a229b79b7`, `doc/Dataset.md`, SHA-256 `ec5e27ab30b1e4d13a4b25bc4770a106d05f54ba5b191f21374af11a6d2b4897`; X3/X3 Pro row: 115200 baud, 3 K samples/s, 0.10–8.0 m, 4–8 Hz (PWM), single-channel. |
+| Future allowlist | Exactly the Gazebo description and `test_navigation_v1_lidar_frame_tf_contract.py`; no source file is changed by this governance candidate. |
+| Static derivation | 6.0 Hz nominal simulation rate; 500 samples from `3000 samples/s ÷ 6.0 Hz = 500 samples/scan`; transport topic `scan` only. |
+| Evidence boundary | Vendor documentation and a bounded static-source authorization only; not a runtime source pin, ROS `/scan`, `sensor_msgs/msg/LaserScan`, runtime evidence, or hardware measurement. |
+| Pending | `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`; `LIDAR_CADENCE_MEASUREMENT: PENDING_MEASUREMENT`; `LIDAR_LATENCY_FRESHNESS_MEASUREMENT: PENDING_MEASUREMENT`; `NO_RETURN_BEHAVIOR_MEASUREMENT: PENDING_MEASUREMENT`; `HARDWARE_AS_BUILT_EXTRINSIC_VERIFICATION: PENDING`. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Candidate lifecycle | Review candidate only; no audit PASS, integration, or authorization is asserted. |
+| `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
