@@ -124,7 +124,26 @@
   </sensor>
 </gazebo>
 
-<!-- No LiDAR sensor/plugin is selected by this CAD-nominal source change. -->
+<gazebo reference="lidar_frame">
+  <sensor name="YDLIDAR_X3_PRO" type="gpu_lidar">
+    <topic>scan</topic>
+    <update_rate>6.0</update_rate>
+    <ray>
+      <scan>
+        <horizontal>
+          <samples>500</samples>
+          <resolution>1</resolution>
+          <min_angle>-3.141592653589793</min_angle>
+          <max_angle>3.141592653589793</max_angle>
+        </horizontal>
+      </scan>
+      <range>
+        <min>0.10</min>
+        <max>8.00</max>
+      </range>
+    </ray>
+  </sensor>
+</gazebo>
 <gazebo reference="Camera_Joint">
   <preserveFixedJoint>true</preserveFixedJoint>
 </gazebo>
