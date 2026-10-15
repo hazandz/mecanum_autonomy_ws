@@ -976,3 +976,15 @@
 | Fail-closed/pending | Canonical RSP source design and pin plus measurement-backed extrinsic selection remain pending; frame mismatch, alias/bridge/static transform, missing evidence/pin, or owner conflict blocks profile resolution, Nav2 baseline, Observation V3 runtime vector, and Gate B start/pass. |
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; new append-only entry. Existing Ledger history is unchanged. |
+### WP04-WP05-CANONICAL-RSP-DESCRIPTION-SOURCE-CREATION-AUTHORIZATION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `fa862f26eed6cfa30a553ccf6f1befcad532a1f9` |
+| Provenance | `USER_SUPPLIED_ARCHITECT_OWNER_DECISION`; no audit result or report hash is asserted. |
+| Scope | L1 conditional authorization for a later canonical RSP description-source candidate within integrated L2 `base_link → lidar_frame` semantics; future allowlist is exactly four paths under `ROBOT_URDF_final_description`. This candidate creates no source. |
+| Lifecycle | Review-only. Audit PASS for this exact candidate, separate exact-commit User authorization, fast-forward, and remote-ref verification are required before `INTEGRATED_L1_CANONICAL_RSP_DESCRIPTION_SOURCE_CREATION_AUTHORIZATION_ONLY`. A later source candidate additionally requires the complete extrinsic packet and explicit Owner acceptance. |
+| Evidence boundary | No source pin, geometry verification, measurement, runtime graph/evidence, profile, `config_hash`, map approval, world-frame declaration, Gate B authorization, or runtime authorization. Legacy `RPLiDAR_A1M8_1` geometry remains provenance only and is not copied or pinned. |
+| Pending prerequisite | Extrinsic evidence packet: robot/LiDAR identity; `base_link` coordinate convention; six finite `x/y/z/roll/pitch/yaw` values; method, instrument, date, operator; repeated observations; uncertainty; raw evidence digest; explicit Owner acceptance. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; new append-only entry. Existing Ledger history is unchanged. |
