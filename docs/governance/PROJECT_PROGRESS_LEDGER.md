@@ -951,3 +951,16 @@
 | Evidence boundary | `EXTERNAL_PACKAGE_LOCK_PROVENANCE_ONLY`. Local `.deb` identity/version/architecture/hash were checked against the closure manifest. The record is not a complete runtime-validator input because ten workspace-source roles are absent; no workspace source pin or profile is created. |
 | Pending/non-goals | No static profile source, `config_hash`, map approval, world-frame validation, runtime compatibility evidence, Gate B pass, runtime evidence, or runtime authorization. `warehouse_map2` remains draft/not approved; WP-05 `OPEN`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
 | `supersedes` | None; append-only entry. Earlier Ledger history is not changed. |
+
+### WP05-NAVIGATION-V1-STATIC-POLICY-SOURCE-PIN-CLOSURE — review snapshot
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-15 |
+| Exact integration/source base | `c1d37b3d7ec349c0942790063d57887e5d201484` |
+| Scope | L1 provenance closure for the three existing static policy sources, recorded as `PINNED_STATIC_POLICY_SOURCE_ONLY`; exactly four allowlisted paths. |
+| Source identity | The manifest pins commit `c1d37b3d7ec349c0942790063d57887e5d201484` and exact path/SHA-256 pairs for namespace/remap, lifecycle/startup, and health-gate policy sources. |
+| Evidence boundary | `STATIC_POLICY_SOURCE_PROVENANCE_ONLY`. This records Git source identity only; policy content remains `STATIC_TEMPLATE_ONLY`, with `runtime_eligible: false`. |
+| Pending/non-goals | All ten workspace-source roles remain `PENDING_IMPLEMENTATION_SOURCE_PIN`; no `workspace_source_locks` update, Nav2 activation, lifecycle transition, runtime graph, profile resolution, `config_hash`, map approval, runtime evidence, or runtime authorization. WP-05 remains `OPEN`; map remains draft/not approved; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
+| Candidate lifecycle | Review candidate only. No audit PASS, integration of this candidate, or authorization is asserted. |
+| `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
