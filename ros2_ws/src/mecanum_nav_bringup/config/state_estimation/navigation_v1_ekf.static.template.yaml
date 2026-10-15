@@ -1,0 +1,29 @@
+schema: mecanum_navigation_v1_ekf_static_template/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+runtime_graph_creation: FORBIDDEN
+provider: robot_localization
+tf_edge: "odom -> base_link"
+tf_edge_owner: robot_localization
+required_inputs:
+  - /wheel/odometry_raw
+  - /imu/data
+target_output:
+  topic: /odometry/filtered
+  type: nav_msgs/msg/Odometry
+  header_frame_id: odom
+  child_frame_id: base_link
+runtime_source_pin: PENDING_IMPLEMENTATION_SOURCE_PIN
+runtime_parameters: PENDING_IMPLEMENTATION_SOURCE_PIN
+boundary_status:
+  MAP_ARTIFACT: DRAFT_ON_INTEGRATION_NOT_APPROVED
+  WORLD_FRAME: NOT_DECLARED
+  RUNTIME_COMPATIBILITY: NOT_VALIDATED
+  RUNTIME_APPROVED: NOT_APPROVED
+  YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING
+  ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING
+  SCAN_RUNTIME_PROFILE: PENDING
+fail_closed:
+  missing_or_unverified_source_pin: NAVIGATION_ACTIVATION_FORBIDDEN
+  missing_required_evidence: NAVIGATION_ACTIVATION_FORBIDDEN
+  unresolved_template: NAVIGATION_ACTIVATION_FORBIDDEN
