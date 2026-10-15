@@ -1,0 +1,277 @@
+{
+  "schema_id": "mecanum_navigation_v1_workspace_source_role_inventory/v1",
+  "source_base_commit": "c59d9ea65010ff80eb0202bfaa5220c5f18f25ac",
+  "created_at_utc": "2026-10-15T13:21:48Z",
+  "classification": "L1_WORKSPACE_SOURCE_ROLE_INVENTORY_AND_DECISION_PACKET_ONLY",
+  "evidence_boundary": "GOVERNANCE_EVIDENCE_REFERENCES_ONLY_NOT_SOURCE_SELECTION",
+  "authority_fingerprints": [
+    {
+      "path": "docs/MECANUM_NAV_DRL_Architecture.docx",
+      "sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
+    },
+    {
+      "path": "docs/architecture/ACR_NAVIGATION_V1_RUNTIME_BINDING.md",
+      "sha256": "3e74cdcb6136f60a6ad2822a853f2ae9926cf971059f3c2470c874802d6fae0d"
+    },
+    {
+      "path": "docs/architecture/NAVIGATION_V1_RUNTIME_BINDING_SEMANTIC_MANIFEST.json",
+      "sha256": "33855c9c95f9c0594ddd8805514658e4f5cb8255a219938a7913438470edbf31"
+    },
+    {
+      "path": "docs/governance/decisions/WP-05_NAVIGATION_V1_DEPENDENCY_LOCK_AND_STATIC_BRINGUP_SOURCE_AUTHORIZATION.md",
+      "sha256": "3d8eb0f3d03519001dc30e32356a96da97592769025f5063246e4d8dd2212279"
+    },
+    {
+      "path": "docs/governance/evidence/WP-05_NAVIGATION_V1_EXTERNAL_14_ROOT_DEPENDENCY_LOCK.json",
+      "sha256": "a603933a9e14668f35b88b77221270b5dc5a597d9b9bfba2447c8e297d44587e"
+    },
+    {
+      "path": "docs/governance/evidence/WP-05_NAVIGATION_V1_STATIC_POLICY_SOURCE_PIN_MANIFEST.json",
+      "sha256": "217e7431033ca428e454c4cac3b41b955522f2c5ee420448317d2c5acb5a69a5"
+    }
+  ],
+  "roles": [
+    {
+      "role": "nav2_lifecycle_bringup",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/launch/navigation_v1_static_bringup.launch.py",
+          "source_file_sha256": "b78f807db109224439c6823e7ce50ce25a5e81ac79e6ba16666d32f9ff94a714",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_lifecycle_startup_policy.static.yaml",
+          "source_file_sha256": "99675065b0e2781c9317e3497aa275915d6ec1372dae56e1f3b6737d1232ab1b",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_health_gate_policy.static.yaml",
+          "source_file_sha256": "e453b335242069a699225602b955e1d5b7338c6bae13086b422c8ce0b09c7965",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "These are static declarations and policy evidence; they do not identify a complete immutable runtime implementation or external package closure.",
+      "missing_prerequisites": ["immutable bringup implementation source", "external package lock applicability", "runtime lifecycle evidence"],
+      "fail_closed_effect": "Keep this role pending; reject profile resolution and Navigation V1 bring-up."
+    },
+    {
+      "role": "map_server",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_static_bringup.template.yaml",
+          "source_file_sha256": "512b0e12c4c68d281eccdd4923944ea34eba51fd0bd6035905b4a2f2b319bef7",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/navigation_v1_static_contract.py",
+          "source_file_sha256": "322211d467dcaa07353700b29f77264af4392fdc23d7274454a05c1b7f41546a",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "The template and validator describe static constraints, not the selected Map Server implementation, map binding, or an immutable runtime source closure.",
+      "missing_prerequisites": ["Map Server implementation source pin", "approved map artifact binding", "runtime lifecycle and load evidence"],
+      "fail_closed_effect": "Reject map-server role use until source identity and required map evidence are separately established."
+    },
+    {
+      "role": "amcl_omni",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/localization/navigation_v1_amcl_omni.static.template.yaml",
+          "source_file_sha256": "d12d0f237fd8874f8677e93fe7e834541e7b927c988d712f19da2d7fc7d70d9f",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "A static template does not select an AMCL implementation source, concrete configuration, package closure, or runtime behavior.",
+      "missing_prerequisites": ["AMCL implementation source and configuration pins", "external package lock applicability", "runtime localization evidence"],
+      "fail_closed_effect": "Keep AMCL role pending and do not resolve the Navigation V1 profile."
+    },
+    {
+      "role": "robot_localization_ekf",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/navigation_v1_ekf.static.template.yaml",
+          "source_file_sha256": "fa6d433514db7a47a8137b42abb4944a74d66e5afbd80b19942af9e1eea3920f",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "A static template is not an immutable selected EKF source/configuration or evidence of a running publisher.",
+      "missing_prerequisites": ["EKF implementation and concrete configuration pins", "external package lock applicability", "runtime publisher and measurement evidence"],
+      "fail_closed_effect": "Keep EKF role pending and do not resolve the Navigation V1 profile."
+    },
+    {
+      "role": "robot_state_publisher",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro",
+          "source_file_sha256": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
+          "owner_package": "ROBOT_URDF_final_description",
+          "evidence_disposition": "CANONICAL_DESCRIPTION_SOURCE_PROVENANCE_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/ROBOT_URDF_final_description/launch/navigation_v1_robot_state_publisher.launch.py",
+          "source_file_sha256": "b5c939ed662b5f789d008dd34777363ffeb5bbc373b596e97b75c1e097dcb511",
+          "owner_package": "ROBOT_URDF_final_description",
+          "evidence_disposition": "CANONICAL_DESCRIPTION_SOURCE_PROVENANCE_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "Robot-description provenance does not select or pin the runtime publisher binary/version or prove runtime publication, geometry, or TF behavior.",
+      "missing_prerequisites": ["external RSP package lock applicability", "runtime publisher evidence", "required geometry and TF measurements"],
+      "fail_closed_effect": "Do not infer runtime source identity or TF evidence from these description-source references."
+    },
+    {
+      "role": "tf_ownership",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/navigation_v1_static_contract.py",
+          "source_file_sha256": "322211d467dcaa07353700b29f77264af4392fdc23d7274454a05c1b7f41546a",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro",
+          "source_file_sha256": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
+          "owner_package": "ROBOT_URDF_final_description",
+          "evidence_disposition": "CANONICAL_DESCRIPTION_SOURCE_PROVENANCE_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/ROBOT_URDF_final_description/launch/navigation_v1_robot_state_publisher.launch.py",
+          "source_file_sha256": "b5c939ed662b5f789d008dd34777363ffeb5bbc373b596e97b75c1e097dcb511",
+          "owner_package": "ROBOT_URDF_final_description",
+          "evidence_disposition": "CANONICAL_DESCRIPTION_SOURCE_PROVENANCE_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "Static ownership assertions and description provenance do not demonstrate unique runtime publishers or a measured live TF graph.",
+      "missing_prerequisites": ["runtime graph evidence", "publisher uniqueness evidence", "measured transform provenance"],
+      "fail_closed_effect": "Reject profile resolution when runtime TF ownership or required measurements are absent or conflicting."
+    },
+    {
+      "role": "scan_adapter",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo",
+          "source_file_sha256": "a97b092f7343d04679ed1417539e47d217b20d18afc3364a27cf14110d9dece8",
+          "owner_package": "ROBOT_URDF_final_description",
+          "evidence_disposition": "GAZEBO_TRANSPORT_SOURCE_ONLY_NOT_ROS_SCAN_ADAPTER"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/navigation_v1_static_contract.py",
+          "source_file_sha256": "322211d467dcaa07353700b29f77264af4392fdc23d7274454a05c1b7f41546a",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "Gazebo transport source is explicitly not a ROS scan adapter; static contract checks do not identify a selected runtime scan adapter.",
+      "missing_prerequisites": ["ROS-Gazebo scan bridge source pin", "LiDAR runtime source pin", "scan runtime profile and measurements"],
+      "fail_closed_effect": "Never infer ROS /scan or LaserScan delivery from Gazebo transport topic evidence; keep this role pending."
+    },
+    {
+      "role": "map_artifact_binding",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/navigation_v1_static_contract.py",
+          "source_file_sha256": "322211d467dcaa07353700b29f77264af4392fdc23d7274454a05c1b7f41546a",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/launch/navigation_v1_static_bringup.launch.py",
+          "source_file_sha256": "b78f807db109224439c6823e7ce50ce25a5e81ac79e6ba16666d32f9ff94a714",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "These files enforce static artifact-root constraints but do not select or approve a map artifact or establish world-frame validity.",
+      "missing_prerequisites": ["selected and approved map artifact binding", "world-frame validation", "runtime Map Server load evidence"],
+      "fail_closed_effect": "No map approval or profile resolution; reject map use until independent map evidence and approval exist."
+    },
+    {
+      "role": "remap_namespace_policy",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_namespace_remap_policy.static.yaml",
+          "source_file_sha256": "335892093ae181fdfcdd4560080648e36aa20b349aa47049b16e813d96e50379",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "The policy is a static source reference and does not establish the effective runtime namespace or remap graph.",
+      "missing_prerequisites": ["runtime namespace/remap source pin", "runtime graph identity and remap evidence"],
+      "fail_closed_effect": "Reject runtime profile use while the effective namespace/remap identity is not established."
+    },
+    {
+      "role": "lifecycle_startup_policy",
+      "required_status": "PENDING_IMPLEMENTATION_SOURCE_PIN",
+      "selection_status": "NOT_SELECTED",
+      "runtime_eligibility": false,
+      "evidence_references": [
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_lifecycle_startup_policy.static.yaml",
+          "source_file_sha256": "99675065b0e2781c9317e3497aa275915d6ec1372dae56e1f3b6737d1232ab1b",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/navigation_v1_health_gate_policy.static.yaml",
+          "source_file_sha256": "e453b335242069a699225602b955e1d5b7338c6bae13086b422c8ce0b09c7965",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        },
+        {
+          "repository_relative_path": "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/navigation_v1_localization_lifecycle.static.template.yaml",
+          "source_file_sha256": "32bc14f524d72c75ec7af30dfcea1350c2beeb3ecaa332a55af878d75be2bc63",
+          "owner_package": "mecanum_nav_bringup",
+          "evidence_disposition": "STATIC_TEMPLATE_OR_GUARD_ONLY"
+        }
+      ],
+      "why_not_a_workspace_source_lock": "Static lifecycle policy and templates do not establish an immutable selected runtime startup source or observed lifecycle health.",
+      "missing_prerequisites": ["concrete lifecycle/startup implementation source pin", "runtime lifecycle health and transition evidence"],
+      "fail_closed_effect": "Do not start Navigation V1 bring-up or resolve its profile without required lifecycle source and evidence."
+    }
+  ],
+  "pending_runtime_groups": [
+    "PENDING_IMPLEMENTATION_SOURCE_PIN",
+    "PENDING_EXTERNAL_PACKAGE_LOCK",
+    "PENDING_MEASUREMENT"
+  ],
+  "explicit_non_goals": [
+    "No source selection or workspace source lock is created.",
+    "No runtime source, profile, package version, external lock instance, or config_hash is selected or created.",
+    "No map approval or world-frame declaration is created.",
+    "No runtime evidence, Gate B transition, code authorization extension, or runtime authorization is created.",
+    "Gazebo transport topic scan is not inferred to be ROS /scan."
+  ]
+}

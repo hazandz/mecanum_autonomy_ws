@@ -1032,3 +1032,16 @@
 | Historical correction | Supersedes only stale present-tense next-step wording that canonical RSP source creation remained outstanding; prior review snapshots and all earlier Ledger bytes remain unchanged. No audit, runtime evidence, or authorization is inferred from ancestry. |
 | Status | `WP-04: BLOCKED_BY_CONTRACT`; `GATE_A_STRUCTURAL_PRIMITIVES: PASSED`; `GATE_B: NOT_STARTED`; `WP-05: OPEN`; `MAP_ARTIFACT: DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`. |
 | `supersedes` | Only stale current-routing wording about the canonical RSP source being absent; historical review snapshots remain immutable. New append-only entry. |
+
+
+### WP05-NAVIGATION-V1-WORKSPACE-SOURCE-ROLE-INVENTORY-AND-DECISION-PACKET — source-base review snapshot
+
+| Field | Value |
+|---|---|
+| Date / source base | 2026-10-15; exact `origin/integration/implementation` base `c59d9ea65010ff80eb0202bfaa5220c5f18f25ac`. |
+| Scope | L1 governance inventory/triage and routing only; exactly five paths: new JSON inventory, new decision packet, Registry routing, PEP routing, and this appended entry. No source, test, launch, policy/template, package metadata, map, schema, external lock, or Architecture file is changed. |
+| Inventory disposition | Exactly ten workspace source roles are listed in required order. Every role is `PENDING_IMPLEMENTATION_SOURCE_PIN`, `NOT_SELECTED`, and `runtime_eligibility: false`. Existing files are evidence references only with explicit dispositions; no `workspace_source_locks` are created and the external lock is unchanged. |
+| Candidate lifecycle | This is the review-candidate snapshot at the exact source base. Independent audit PASS for the exact candidate, separate User authorization for the exact commit, fast-forward, and remote-ref verification are required before it may be described as an integrated inventory governance record. No audit hash or verdict is inferred or fabricated. |
+| Fail-closed boundary | Missing pins/evidence means no resolved Navigation V1 profile, no global `config_hash`, no Nav2 baseline bring-up, and no runtime authorization. Pending items remain runtime LiDAR source pin; ROS–Gazebo scan bridge source pin; scan runtime profile; map approval/world-frame validation; concrete AMCL/EKF/Nav2 source/config pins; namespace/remap and lifecycle/startup runtime evidence; package/version lock applicability; and required measurements. Gazebo transport `scan` is not ROS `/scan`. |
+| Preserved state | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. No `CODE_AUTHORIZATION` extension or other status transition. |
+| `supersedes` | None; append-only routing entry. All bytes at base are retained as an exact prefix. |
