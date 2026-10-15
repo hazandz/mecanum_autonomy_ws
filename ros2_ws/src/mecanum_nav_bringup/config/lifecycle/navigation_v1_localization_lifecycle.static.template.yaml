@@ -1,0 +1,32 @@
+schema: mecanum_navigation_v1_localization_lifecycle_static_template/v1
+classification: STATIC_TEMPLATE_ONLY
+runtime_eligible: false
+runtime_graph_creation: FORBIDDEN
+health_gated: true
+startup_order:
+  - robot_description
+  - drivers_bridge
+  - EKF
+  - Map_Server
+  - AMCL
+  - healthy_LocalizationMonitor
+  - Planner_global_costmap
+  - Safety
+  - selected_controller_or_manager
+  - mission_acceptance
+pending_source_roles: PENDING_IMPLEMENTATION_SOURCE_PIN
+runtime_transition_policy: PENDING_IMPLEMENTATION_SOURCE_PIN
+health_evidence: PENDING_IMPLEMENTATION_SOURCE_PIN
+boundary_status:
+  MAP_ARTIFACT: DRAFT_ON_INTEGRATION_NOT_APPROVED
+  WORLD_FRAME: NOT_DECLARED
+  RUNTIME_COMPATIBILITY: NOT_VALIDATED
+  RUNTIME_APPROVED: NOT_APPROVED
+  YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING
+  ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING
+  SCAN_RUNTIME_PROFILE: PENDING
+fail_closed:
+  upstream_component_not_healthy: NAVIGATION_BASELINE_TRANSITION_FORBIDDEN
+  source_pin_missing_or_unverified: NAVIGATION_BASELINE_TRANSITION_FORBIDDEN
+  activation: FORBIDDEN
+  command_or_motion_enable: FORBIDDEN
