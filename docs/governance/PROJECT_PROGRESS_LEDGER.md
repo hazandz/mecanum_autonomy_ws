@@ -936,3 +936,18 @@
 | Evidence boundary | Offline structural validation of caller-supplied values only. No filesystem, artifact bundle, Docker, network, or runtime inspection; no assertion that external artifacts exist. No concrete lock instance, profile source, package pin, profile resolution, or `config_hash`. |
 | Non-goals/status | No Navigation runtime semantics, TF/lifecycle ownership, map approval, runtime authorization, or WP-04 change. WP-05 `OPEN`; map remains draft; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
 | `supersedes` | None; append-only entry. |
+
+
+### WP05-CONCRETE-14-ROOT-EXTERNAL-DEPENDENCY-LOCK-RECORD — review snapshot
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-15 |
+| Exact integration/source base | `ab5c62f866985b72cbaff370fae38cdd6192dbcc` |
+| Candidate branch | `wp05-concrete-14-root-external-dependency-lock-ab5c62f` |
+| Scope | L1 external dependency-lock record and focused static test; exactly six allowlisted paths. The JSON lock conforms to schema v2 with exactly 14 ordered logical roots and an empty `workspace_source_locks` array. |
+| External artifact provenance | Collection source commit `f23af59d7a9458175928c2647532339ff933158b`, separate from the candidate base; closure manifest SHA-256 `54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e`; closure 1,280 artifacts/700,260,532 bytes; base image `ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55`. The artifact locator is not runtime authority. |
+| Lifecycle | Review candidate only. Independent audit PASS for the exact candidate, separate explicit User authorization for that exact commit, fast-forward, and remote-ref verification remain required. |
+| Evidence boundary | `EXTERNAL_PACKAGE_LOCK_PROVENANCE_ONLY`. Local `.deb` identity/version/architecture/hash were checked against the closure manifest. The record is not a complete runtime-validator input because ten workspace-source roles are absent; no workspace source pin or profile is created. |
+| Pending/non-goals | No static profile source, `config_hash`, map approval, world-frame validation, runtime compatibility evidence, Gate B pass, runtime evidence, or runtime authorization. `warehouse_map2` remains draft/not approved; WP-05 `OPEN`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; Gate B `NOT_STARTED`. |
+| `supersedes` | None; append-only entry. Earlier Ledger history is not changed. |

@@ -1,0 +1,256 @@
+{
+  "schema": "mecanum_navigation_v1_dependency_lock/v2",
+  "direct_dependency_roots": [
+    "nav2_bringup",
+    "nav2_amcl",
+    "nav2_map_server",
+    "nav2_lifecycle_manager",
+    "nav2_planner",
+    "nav2_controller",
+    "nav2_bt_navigator",
+    "nav2_costmap_2d",
+    "robot_localization",
+    "tf2_ros",
+    "robot_state_publisher",
+    "sensor_msgs",
+    "nav_msgs",
+    "geometry_msgs"
+  ],
+  "external_package_locks": [
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_bringup",
+      "debian_package_name": "ros-jazzy-nav2-bringup",
+      "installed_version": "1.3.13-1noble.20261006.042503",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "d77a96dfc41580687724a7658844197670556f3eefcb1360b586bbc6a4f11424",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_amcl",
+      "debian_package_name": "ros-jazzy-nav2-amcl",
+      "installed_version": "1.3.13-1noble.20260921.024928",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "89a479268021f72f0e82d4b6d2ba7c509e3d7e5ed7bb195dcb5026d38f0f141c",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_map_server",
+      "debian_package_name": "ros-jazzy-nav2-map-server",
+      "installed_version": "1.3.13-1noble.20260921.024942",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "11b3c38c69ada7c4ded3454ba354fd4d3026405857c9a1fc0ee08204807d4b59",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_lifecycle_manager",
+      "debian_package_name": "ros-jazzy-nav2-lifecycle-manager",
+      "installed_version": "1.3.13-1noble.20260921.025008",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "48ab4bf7c92647d2fdff231fc300d25583b2c4550316cbd6357697482d4d6e7f",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_planner",
+      "debian_package_name": "ros-jazzy-nav2-planner",
+      "installed_version": "1.3.13-1noble.20260921.031801",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "82275521c98816a41f5704c7a2e6ea895c24b10d8a18cb522393b7e4a99a8170",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_controller",
+      "debian_package_name": "ros-jazzy-nav2-controller",
+      "installed_version": "1.3.13-1noble.20260921.031754",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "50f5f73c58b1918b1b379a47d0f760da43e6b094d46a533257b6bf7b7e36973c",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_bt_navigator",
+      "debian_package_name": "ros-jazzy-nav2-bt-navigator",
+      "installed_version": "1.3.13-1noble.20260921.031756",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "eb624c2b29d42a5ff2cf66b89b50f922d6d7f9e414a57e4a59732a3ed3a02f95",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav2_costmap_2d",
+      "debian_package_name": "ros-jazzy-nav2-costmap-2d",
+      "installed_version": "1.3.13-1noble.20260921.024946",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "e5dd68805a8291db972f321ce11e2686bf8d84cf3ddb212f7a8935f13f626b06",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "robot_localization",
+      "debian_package_name": "ros-jazzy-robot-localization",
+      "installed_version": "3.8.3-1noble.20260915.182602",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "89fd6fb16d0444551da8d66fa21a1268b1027f2c04e42226b74d0a48e9edc03f",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "tf2_ros",
+      "debian_package_name": "ros-jazzy-tf2-ros",
+      "installed_version": "0.36.23-1noble.20260915.173839",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "7117be832411fa224c4d7adbb77e2e12169f0635ff242e7d95e7364ba89114e9",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "robot_state_publisher",
+      "debian_package_name": "ros-jazzy-robot-state-publisher",
+      "installed_version": "3.3.4-1noble.20260915.184559",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "c7a524af27fcaa99fd6d0a68ad0d773e16f7da4ccb93f0af777ef8aa0bf47ac4",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "sensor_msgs",
+      "debian_package_name": "ros-jazzy-sensor-msgs",
+      "installed_version": "5.3.8-1noble.20260911.140426",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "f7a0449be002348d0545d9570acb23050504189ffbfdc68bfce8ff040c0f1157",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "nav_msgs",
+      "debian_package_name": "ros-jazzy-nav-msgs",
+      "installed_version": "5.3.8-1noble.20260911.110342",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "4d63abbc8a0ec669593d371fb92986597eb97e9d7dc9d7c4c4b1e987ca635222",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    },
+    {
+      "ros_distribution": "jazzy",
+      "ubuntu_release": "noble",
+      "ros_package_name": "geometry_msgs",
+      "debian_package_name": "ros-jazzy-geometry-msgs",
+      "installed_version": "5.3.8-1noble.20260911.102920",
+      "architecture": "amd64",
+      "apt_repository_origin": "http://packages.ros.org/ros2/ubuntu noble/main",
+      "deb_sha256": "4afdbccd2cb9f3d17949a12051489400a4c193573a66d5e616e45bc14d10f2d4",
+      "dependency_closure_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "evidence_capture_method": "LOCAL_DEB_SHA256_VERIFIED_AGAINST_OWNER_ACCEPTED_CLOSURE_MANIFEST"
+    }
+  ],
+  "workspace_source_locks": [],
+  "pending_state_vocabulary": [
+    "PENDING_EXTERNAL_PACKAGE_LOCK",
+    "PENDING_IMPLEMENTATION_SOURCE_PIN"
+  ],
+  "immutable_evidence_rules": {
+    "artifact_baseline_provenance_does_not_replace_package_pins": true,
+    "artifact_baseline_provenance_required": true,
+    "digest_algorithm": "SHA-256",
+    "mutable_branch_or_tag_is_immutable_pin": false,
+    "repository_source_requires_full_commit": true,
+    "repository_source_requires_relative_path": true,
+    "required_external_evidence_fields": [
+      "apt_repository_origin",
+      "deb_sha256",
+      "dependency_closure_sha256",
+      "evidence_capture_method"
+    ]
+  },
+  "legacy_exclusion_rules": {
+    "classification": "REFERENCE_ONLY_LEGACY",
+    "legacy_sources_are_runtime_lock_roots": false,
+    "ros_gz_bridge_and_ros_gz_sim": "PROFILE_SPECIFIC_NOT_COMMON_LOCK",
+    "slam_toolbox": "MAPPING_ONLY_NOT_IN_COMMON_NAVIGATION_V1_RUNTIME_LOCK"
+  },
+  "workspace_source_lock_rules": {
+    "repository_commit_format": "40 lowercase hexadecimal characters",
+    "required_fields": [
+      "repository_commit",
+      "repository_relative_path",
+      "source_file_sha256",
+      "owner_package",
+      "role",
+      "status"
+    ],
+    "source_file_digest_format": "64 lowercase hexadecimal characters",
+    "unresolved_state": "PENDING_IMPLEMENTATION_SOURCE_PIN"
+  },
+  "artifact_baseline_provenance": {
+    "baseline_identity": {
+      "base_image_digest": "ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55",
+      "platform": "linux/amd64",
+      "source_repository": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+      "source_commit": "f23af59d7a9458175928c2647532339ff933158b",
+      "purpose": "NAVIGATION_V1_SIM_BASELINE_BOOTSTRAP_ONLY"
+    },
+    "artifact_closure": {
+      "artifact_locator": "/home/hazan/mecanum_nav_sim_baseline/artifacts/ros_jazzy_nav_amd64",
+      "closure_manifest_relative_path": "metadata/navigation_v1_closure_deb_sha256sums.txt",
+      "closure_manifest_sha256": "54077ab6ee43af793ec266f92e6ea74fc21ee5af9606b1939ca83fc49714600e",
+      "closure_artifact_count": 1280,
+      "closure_total_bytes": 700260532
+    },
+    "ros_signing_key": {
+      "keyring_relative_path": "apt_sources/ros-archive-keyring.gpg",
+      "keyring_sha256": "4a91c49af0d6f0016108b93698782b596c27ccd836937e18e0e36c3347dc602f",
+      "primary_fingerprint": "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654",
+      "fingerprint_record_sha256": "5b1eee4d0b26fa8788abfcfb5bb628641eb0ba635e02b40e00ae00c68f33e31d"
+    },
+    "correction_report_sha256": "95c055de96037a1402911dcaf3e952fedfe98d6eede1986b71cd6c6b1d8315fe",
+    "quarantined_non_closure_artifacts": {
+      "manifest_relative_path": "metadata/quarantined_non_closure_artifacts.sha256",
+      "manifest_sha256": "44a9831b1686dc334a198f16630a31d5adee1f1a3e6d789e43289bdd378d96b8",
+      "artifact_count": 6,
+      "classification": "QUARANTINED_NON_CLOSURE_ARTIFACT_NOT_PART_OF_NAVIGATION_V1_LOCK"
+    }
+  }
+}
