@@ -988,3 +988,16 @@
 | Pending prerequisite | Extrinsic evidence packet: robot/LiDAR identity; `base_link` coordinate convention; six finite `x/y/z/roll/pitch/yaw` values; method, instrument, date, operator; repeated observations; uncertainty; raw evidence digest; explicit Owner acceptance. |
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; new append-only entry. Existing Ledger history is unchanged. |
+### WP04-WP05-CANONICAL-RSP-SOURCE-PIN-CLOSURE — review snapshot
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-15 |
+| Exact integration/source base | `d4ae75e34a62730da0576f51c1a49dd67b9d8d3b` |
+| Scope | L1 provenance closure for exactly four already-integrated robot-description/RSP source and static-test files. Manifest and decision are review candidates; no source file is modified by this candidate. |
+| Source identity | Each exact commit/path/SHA-256 entry is `PINNED_CANONICAL_DESCRIPTION_SOURCE_ONLY`, owned by `ROBOT_URDF_final_description`, with boundary `NOT_A_RUNTIME_SOURCE_PIN`; consumer scope is WP-04 Observation V3 and WP-05 Navigation V1 source provenance only. |
+| CAD packet provenance | `USER_SUPPLIED` Owner-accepted CAD nominal packet `WP04-WP05-YDLIDAR-X3PRO-CAD-EXTRINSIC-V1`, fingerprint `40fe44cb3647376b3b1f793761091e101051d7e141e4687e67e2f03632e430de`. This does not establish hardware-as-built measurement; that verification remains pending. |
+| Evidence level | `INTEGRATED_SOURCE_PROVENANCE_AND_STATIC_TEST_EVIDENCE_ONLY` for the source inputs; static pytest evidence is not runtime evidence. |
+| Pending/non-goals | `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`; `HARDWARE_AS_BUILT_EXTRINSIC_VERIFICATION: PENDING`. No runtime source pin, resolved profile, `config_hash`, map approval, Gate B start/pass, runtime evidence, or runtime authorization. WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Candidate lifecycle | Review-only at this exact source-base snapshot. No independent audit PASS, integration, or authorization for this candidate is asserted. |
+| `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
