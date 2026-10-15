@@ -1017,3 +1017,18 @@
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Candidate lifecycle | Review candidate only; no audit PASS, integration, or authorization is asserted. |
 | `supersedes` | None; append-only entry. Earlier Ledger history remains byte-for-byte unchanged. |
+
+
+### WP00-POST-INTEGRATION-STATUS-RECONCILIATION — review snapshot at `9f2762d875024df927aa581580e746bc35436e80`
+
+| Field | Value |
+|---|---|
+| Integration snapshot | `origin/integration/implementation` = `9f2762d875024df927aa581580e746bc35436e80` |
+| Git sequence | WP-04 `e9695d21fb2d9c76fe7e35f0081f648bc401fe51` is the direct parent of WP-05 integration `9f2762d875024df927aa581580e746bc35436e80`. |
+| WP-04 disposition | `INTEGRATED_L1_STATIC_SIMULATION_SCAN_SOURCE_CREATION_AUTHORIZATION_ONLY`; authorizes only a future static Gazebo LiDAR source candidate in the exact two-path allowlist. It is not a runtime source pin, ROS bridge, runtime profile, runtime evidence, or runtime authorization. |
+| WP-05 disposition | `INTEGRATED_STATIC_TEMPLATE_SOURCES_ONLY`; exactly the AMCL, EKF, lifecycle static templates, static-source test, and `setup.py` package-data registration at the five paths listed in the corresponding Registry entry. |
+| WP-05 boundary | Not `WORKSPACE_SOURCE_ROLE_PIN`, `RUNTIME_SOURCE_PIN`, `RESOLVED_PROFILE_INPUT`, `MAP_APPROVAL`, `RUNTIME_EVIDENCE`, or `RUNTIME_AUTHORIZATION`; no resolved profile or `config_hash`. This post-integration static reconciliation does not assert WP-05 pre-integration independent audit. |
+| Next-step routing | L1 post-integration reconciliation → WP-04 static Gazebo LiDAR source candidate within the authorized allowlist → WP-05 source-role/profile closure preparation → each later candidate starts from exact current integration. Prospective only; later steps are not complete. |
+| Historical correction | Supersedes only stale present-tense next-step wording that canonical RSP source creation remained outstanding; prior review snapshots and all earlier Ledger bytes remain unchanged. No audit, runtime evidence, or authorization is inferred from ancestry. |
+| Status | `WP-04: BLOCKED_BY_CONTRACT`; `GATE_A_STRUCTURAL_PRIMITIVES: PASSED`; `GATE_B: NOT_STARTED`; `WP-05: OPEN`; `MAP_ARTIFACT: DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`. |
+| `supersedes` | Only stale current-routing wording about the canonical RSP source being absent; historical review snapshots remain immutable. New append-only entry. |

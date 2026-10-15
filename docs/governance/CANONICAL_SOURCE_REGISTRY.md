@@ -556,3 +556,22 @@ This is a review-candidate provenance closure at this exact source-base snapshot
 The manifest and decision are `L1_STATIC_SOURCE_CREATION_AUTHORIZATION_ONLY` review-candidate records. They pin vendor documentation to YDLidar-SDK commit `42a82ed10d2304094c111fc63dee8e4a229b79b7`, path `doc/Dataset.md`, SHA-256 `ec5e27ab30b1e4d13a4b25bc4770a106d05f54ba5b191f21374af11a6d2b4897`, and authorize only a later static-source candidate editing the Gazebo description and focused static contract test. Vendor facts and the derived 6.0 Hz / 500-sample simulation nominal are not runtime evidence.
 
 The future source must retain `lidar_frame` and `robot_state_publisher` sole ownership of `base_link → lidar_frame`; `RPLiDAR_A1M8_1` remains legacy provenance only. Gazebo transport `scan` is not ROS `/scan` or `sensor_msgs/msg/LaserScan`. All listed runtime source pins and measurements remain pending. The candidate does not create source, bridge, profile, `config_hash`, runtime evidence, map approval, Gate B transition, or runtime authorization.
+
+
+## WP00 post-integration status reconciliation — base `9f2762d875024df927aa581580e746bc35436e80`
+
+At this integration snapshot, `origin/integration/implementation` is `9f2762d875024df927aa581580e746bc35436e80`. WP-04 commit `e9695d21fb2d9c76fe7e35f0081f648bc401fe51` is the direct parent of WP-05 integration commit `9f2762d875024df927aa581580e746bc35436e80`. The WP-04 record is `INTEGRATED_L1_STATIC_SIMULATION_SCAN_SOURCE_CREATION_AUTHORIZATION_ONLY`: it conditionally permits only a later static Gazebo LiDAR source candidate under `ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo` and its focused contract test at `ros2_ws/src/ROBOT_URDF_final_description/test/test_navigation_v1_lidar_frame_tf_contract.py`. It is not a runtime source pin, ROS bridge, runtime profile, runtime evidence, or runtime authorization.
+
+WP-05 at `9f2762d875024df927aa581580e746bc35436e80` integrates exactly these five static-source paths:
+
+- `ros2_ws/src/mecanum_nav_bringup/config/localization/navigation_v1_amcl_omni.static.template.yaml`
+- `ros2_ws/src/mecanum_nav_bringup/config/state_estimation/navigation_v1_ekf.static.template.yaml`
+- `ros2_ws/src/mecanum_nav_bringup/config/lifecycle/navigation_v1_localization_lifecycle.static.template.yaml`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_navigation_v1_static_localization_lifecycle_sources.py`
+- `ros2_ws/src/mecanum_nav_bringup/setup.py`
+
+Its disposition is `INTEGRATED_STATIC_TEMPLATE_SOURCES_ONLY`. These templates are not `WORKSPACE_SOURCE_ROLE_PIN`, `RUNTIME_SOURCE_PIN`, `RESOLVED_PROFILE_INPUT`, `MAP_APPROVAL`, `RUNTIME_EVIDENCE`, or `RUNTIME_AUTHORIZATION`; they do not resolve a profile or create `config_hash`. This post-integration static reconciliation does not assert a WP-05 independent pre-integration audit or infer audit, runtime evidence, or authorization from ancestry.
+
+The next-step route is: L1 post-integration reconciliation → a WP-04 static Gazebo LiDAR source candidate within its authorized two-path allowlist → WP-05 source-role/profile closure preparation → each later candidate based on and integrated from the exact current integration tip. This route is prospective; those later steps are not asserted as completed. Earlier review snapshots remain historical snapshots. This reconciliation supersedes only their stale present-tense next-step wording that canonical RSP description source creation was still the next action; the integrated canonical RSP source and its provenance closure are already present at this base.
+
+Current status remains: `WP-04: BLOCKED_BY_CONTRACT`; `GATE_A_STRUCTURAL_PRIMITIVES: PASSED`; `GATE_B: NOT_STARTED`; `WP-05: OPEN`; `MAP_ARTIFACT: DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `YDLIDAR_X3_PRO_RUNTIME_SOURCE_PIN: PENDING`; `ROS_GAZEBO_SCAN_BRIDGE_SOURCE_PIN: PENDING`; `SCAN_RUNTIME_PROFILE: PENDING`.
