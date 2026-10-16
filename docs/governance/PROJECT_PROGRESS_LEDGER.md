@@ -1045,3 +1045,17 @@
 | Fail-closed boundary | Missing pins/evidence means no resolved Navigation V1 profile, no global `config_hash`, no Nav2 baseline bring-up, and no runtime authorization. Pending items remain runtime LiDAR source pin; ROS–Gazebo scan bridge source pin; scan runtime profile; map approval/world-frame validation; concrete AMCL/EKF/Nav2 source/config pins; namespace/remap and lifecycle/startup runtime evidence; package/version lock applicability; and required measurements. Gazebo transport `scan` is not ROS `/scan`. |
 | Preserved state | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map `DRAFT_ON_INTEGRATION_NOT_APPROVED`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. No `CODE_AUTHORIZATION` extension or other status transition. |
 | `supersedes` | None; append-only routing entry. All bytes at base are retained as an exact prefix. |
+
+
+### WP05_SIM_EVAL_WAREHOUSE_MAP2_STATIC_APPROVAL_EVIDENCE_PACKET — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `7fe8b24758636dcac540b33a73bf5e3b7febbe6b` |
+| Review branch | `wp05-sim-eval-map-approval-evidence-7fe8b24` |
+| Candidate commit | The exact commit resolved by the review branch tip after commit creation; the delivery report supplies its SHA-1. The Ledger does not embed its own commit identifier. |
+| Scope | L2 map-approval evidence schema and static selection decision for `warehouse_map2` for `sim_eval + NAV2_BASELINE`; approval-evidence scope only is `SIM_EVAL_NAV2_BASELINE_STATIC_MAP_ARTIFACT_SELECTION`. |
+| Evidence level | `STATIC_ARTIFACT_PROVENANCE_AND_APPROVAL_EVIDENCE_SCHEMA_ONLY` |
+| Lifecycle | Review candidate only. Independent audit PASS, separate exact-candidate User authorization, fast-forward integration, and remote-ref verification are required before the evidence record becomes integration-resident. |
+| Preserved state | Map metadata remains `draft`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; no profile resolution, `config_hash`, Map Server load evidence, runtime authority, or WP-05 closure. WP-04/WP-05 and Gate A/Gate B statuses are unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; this is one append-only entry. |
