@@ -1089,3 +1089,17 @@
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map approved only for static selection; `WORLD_FRAME: DECLARED_UNVERIFIED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Boundary | No `workspace_source_locks`, resolved profile, `ResolvedConfigV3`, `config_hash`, runtime bridge/endpoint pin, Map Server load, launch graph, runtime evidence, runtime authorization, or WP-05 closure. WP06 and runtime assembly remain prerequisites for any later campaign. |
 | `supersedes` | None; append-only entry. Historical Ledger snapshots are unchanged. |
+
+
+### WP06_RECEIPT_V2_ROSIDL_ENABLEMENT_ATOMIC_REPLACEMENT — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `c8b178a2f1feee115a3a01553afaec616cabf737` |
+| Review branch | `wp06-receipt-rosidl-enablement-atomic-c8b178a` |
+| Classification | `L2_PUBLIC_INTERFACE_BUILD_ENABLEMENT_AND_HISTORICAL_STATUS_SUPERSESSION` |
+| Candidate scope | Atomic L2 disposition for receipt v2 historical annotations plus ROSIDL generation declaration; no receipt `.msg` byte changes. |
+| Candidate lifecycle | Review only. After exact-candidate independent audit PASS, separate exact-commit User authorization, integration, and remote-ref verification: `WP06_RECEIPT_V2_ROSIDL_GENERATION: IMPLEMENTED_OFFLINE_BUILD_INTERFACE_ONLY`. |
+| Evidence boundary | Receipt ID/schema revision, schema SHA, QoS6 and dependency-closure pins remain unchanged. No runtime node/topic/publisher/subscriber/QoS/evidence, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Status | WP-04/WP-05 and Gate A/Gate B statuses unchanged. |
+| `supersedes` | None; append-only entry. Earlier Ledger bytes remain an exact prefix. |

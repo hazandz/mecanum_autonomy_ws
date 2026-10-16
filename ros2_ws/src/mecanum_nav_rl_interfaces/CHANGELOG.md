@@ -2,6 +2,24 @@
 
 All notable changes to `mecanum_nav_rl_interfaces` are documented in this file.
 
+## [2.5.0] - Unreleased
+
+### Added
+
+- Added the existing `FinalIssuedCommandReceipt.msg` to ROSIDL generation at
+  the build/interface layer. The schema source SHA-256 remains
+  `0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a`.
+
+### Scope
+
+- This does not implement a runtime node or create
+  `/mecanum/final_issued_command`, runtime QoS, or receipt runtime evidence.
+- The historical `DRAFT` and “Not installed in a ROSIDL package” annotations
+  are addressed only by the separate atomic L2 decision for ROSIDL generation
+  status after its exact audit, User authorization, and integration conditions.
+- The annotation “no implementation or runtime authorization” remains in
+  effect for runtime producers/consumers and runtime behavior.
+
 ## [Unreleased] - 2.4.0
 
 ### Added
