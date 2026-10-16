@@ -1,5 +1,6 @@
 from mecanum_nav_rl_interfaces.msg import (
     CommandEnvelope,
+    FinalIssuedCommandReceipt,
     Heartbeat,
     NavigationState,
     SafetyState,
@@ -59,6 +60,13 @@ EXPECTED_CONSTANTS = {
         "ERROR_INTERNAL": 8,
     },
     CommandEnvelope: {
+        "SOURCE_UNKNOWN": 0,
+        "SOURCE_POLICY": 1,
+        "SOURCE_NAV2": 2,
+        "SOURCE_TELEOP": 3,
+        "SOURCE_SAFE_STOP": 4,
+    },
+    FinalIssuedCommandReceipt: {
         "SOURCE_UNKNOWN": 0,
         "SOURCE_POLICY": 1,
         "SOURCE_NAV2": 2,
@@ -131,6 +139,20 @@ EXPECTED_FIELDS = {
         ("source_instance_id", "uint64"),
         ("twist", "geometry_msgs/Twist"),
     ],
+    FinalIssuedCommandReceipt: [
+        ("header", "std_msgs/Header"),
+        ("episode_generation", "uint64"),
+        ("reset_epoch", "uint32"),
+        ("runtime_generation", "uint32"),
+        ("step_index", "uint64"),
+        ("transition_id", "string<=36"),
+        ("source", "uint8"),
+        ("sequence", "uint64"),
+        ("source_instance_id", "uint64"),
+        ("final_publisher_instance_id", "uint64"),
+        ("final_publish_sequence", "uint64"),
+        ("final_command", "geometry_msgs/Twist"),
+    ],
 }
 
 
@@ -140,6 +162,7 @@ def test_all_messages_import() -> None:
         SafetyState,
         NavigationState,
         CommandEnvelope,
+        FinalIssuedCommandReceipt,
     ):
         assert isinstance(message_type, type)
 
@@ -155,4 +178,11 @@ def test_field_names_types_and_order_match_contract() -> None:
         actual_fields = list(
             message_type.get_fields_and_field_types().items()
         )
+        # ROSIDL introspection renders the bounded .msg spelling
+        # `string<=36` as `string<36`; compare against the canonical source
+        # spelling while preserving the bound and field order.
+        actual_fields = [
+            (name, "string<=36" if field_type == "string<36>" else field_type)
+            for name, field_type in actual_fields
+        ]
         assert actual_fields == expected_fields

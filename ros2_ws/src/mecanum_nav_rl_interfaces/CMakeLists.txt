@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SafetyState.msg"
   "msg/NavigationState.msg"
   "msg/CommandEnvelope.msg"
+  "msg/FinalIssuedCommandReceipt.msg"
   DEPENDENCIES
     std_msgs
     geometry_msgs
@@ -24,6 +25,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_interface_contracts
     test/test_interface_contracts.py
+  )
+  ament_add_pytest_test(test_final_issued_command_receipt_rosidl_enablement
+    test/test_final_issued_command_receipt_rosidl_enablement.py
   )
 endif()
 
