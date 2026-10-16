@@ -1181,3 +1181,18 @@
 | Status/boundary | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No endpoint pin, bridge, ROS `/scan` publisher, TF, profile resolution, runtime evidence or authorization. |
 | Lifecycle | Review candidate only; independent audit and separate exact-commit User authorization remain required before integration. |
 | `supersedes` | None; append-only entry. |
+
+
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUNTIME_GUARD_CORRECTED — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `bfc1ef3cfe4ba98beefbe7f18607b97a41e52d15` |
+| Review branch | `wp06-sim-eval-scan-probe-runtime-guard-fix-bfc1ef3` |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUNTIME_BOOTSTRAP_AND_CAPACITY_ONE_GUARD` |
+| Authority packet | `docs/governance/decisions/WP-06_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUNTIME_BOOTSTRAP_AND_GUARD.md`, SHA-256 `d053fb4e6623cd753d63d4e1c646c476124579946671d389a16aba333d1b69e6` |
+| Guard seed | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; capacity one; exact run ID `WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_001`. |
+| F-01/F-02/F-03 correction | Bootstrap explicitly sets `GZ_PARTITION=wp06_scan_probe_run_001` before Gazebo include; authority packet is byte-SHA-bound; exact integrated ref plus future User authorization is required before pending-to-consumed transition. |
+| Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; guard not consumed and no runtime execution. |
+| Status/boundary | After audit, integration, remote-ref verification and separate exact User authorization only: `RUNTIME_GUARD_IMPLEMENTED_AWAITING_EXACT_USER_AUTHORIZATION`. No endpoint pin, bridge, runtime evidence/authorization or Gate B transition. WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | Rejected review commit `2b5fa296b2bf9cdfa732bdb8e7b435b96b8fdda4`; no source or commit was used. |
