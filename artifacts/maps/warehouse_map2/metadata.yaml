@@ -34,12 +34,25 @@ custody_approval:
     role: "MAP_CUSTODIAN"
     principal: "github:hazandz"
     delegation_evidence: null
-  approver: null
-  approval_status: "draft"
-  approval_evidence: null
+  approver:
+    role: "MAP_APPROVER"
+    principal: "github:hazandz"
+    delegation_evidence: null
+  approval_status: "approved"
+  approval_evidence:
+    kind: "git_file"
+    repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+    commit: "a8eed8712ad7e20ae4d9e7665a4d07dacbde9047"
+    path: "docs/governance/evidence/WP-05_WAREHOUSE_MAP2_SIM_EVAL_STATIC_APPROVAL.json"
+    sha256: "25f16fb3f7e1a668b73fc3d1e14ba51d851a55a2046a1560c44cf5f5aaaa5f7d"
 world_frame:
-  state: "NOT_DECLARED"
-  evidence_ref: null
+  state: "DECLARED_UNVERIFIED"
+  evidence_ref:
+    kind: "git_file"
+    repository: "https://github.com/hazandz/mecanum_autonomy_ws.git"
+    commit: "410d9cb70518b64d3c76c2ef99b11b69d1da6701"
+    path: "docs/governance/evidence/WP-05_WAREHOUSE_MAP2_WORLD_FRAME_DECLARATION.json"
+    sha256: "4002e9cd93363f488eb92149d51ca60598922ac11bf252720b8b01a245407294"
 runtime_compatibility:
   state: "NOT_VALIDATED"
   evidence_ref: null

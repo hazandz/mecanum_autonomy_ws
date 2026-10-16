@@ -1059,3 +1059,18 @@
 | Lifecycle | Review candidate only. Independent audit PASS, separate exact-candidate User authorization, fast-forward integration, and remote-ref verification are required before the evidence record becomes integration-resident. |
 | Preserved state | Map metadata remains `draft`; `WORLD_FRAME: NOT_DECLARED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; no profile resolution, `config_hash`, Map Server load evidence, runtime authority, or WP-05 closure. WP-04/WP-05 and Gate A/Gate B statuses are unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; this is one append-only entry. |
+
+
+### WP05_WAREHOUSE_MAP2_STATIC_APPROVAL_METADATA_ACTIVATION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `a8eed8712ad7e20ae4d9e7665a4d07dacbde9047` |
+| Review branch | `wp05-warehouse-map2-approval-activation-a8eed87` |
+| Candidate commit | The commit containing this append-only entry at the review-branch tip; its exact SHA is in the delivery report. |
+| Scope | L1 activation candidate for the exact `warehouse_map2` subject: approval scope `SIM_EVAL_NAV2_BASELINE_STATIC_MAP_ARTIFACT_SELECTION`; world state `DECLARED_UNVERIFIED`. |
+| Lifecycle | Review only. Independent audit PASS, separate exact-candidate User authorization, fast-forward integration, and remote-ref verification remain required. |
+| Proposed metadata after activation | `approval_status: approved`; `WORLD_FRAME: DECLARED_UNVERIFIED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`. Static profile input eligible for Step 5 only; not a resolved profile and not navigation-ready. Prior draft/`NOT_DECLARED` entries are historical source-base snapshots. |
+| Preserved state and limits | WP-04/WP-05 and Gate A/Gate B statuses unchanged. No map bytes/content hash change, map/world equivalence, transform, metric alignment, Map Server load, AMCL/TF evidence, runtime authority, `ResolvedConfigV3`, `config_hash`, or WP-05 closure. |
+| Evidence level | `STATIC_ARTIFACT_PROVENANCE_AND_APPROVAL_EVIDENCE_SCHEMA_ONLY` |
+| `supersedes` | None; append-only entry. |

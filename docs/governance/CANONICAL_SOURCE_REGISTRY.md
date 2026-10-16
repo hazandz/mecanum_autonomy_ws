@@ -588,3 +588,12 @@ At this exact source-base snapshot these records are review candidates. Only aft
 At exact source base `7fe8b24758636dcac540b33a73bf5e3b7febbe6b`, Candidate 4A records the Owner-selected static artifact `warehouse_map2` for `sim_eval + NAV2_BASELINE`, under the sole scope `SIM_EVAL_NAV2_BASELINE_STATIC_MAP_ARTIFACT_SELECTION`. The evidence JSON is `docs/governance/evidence/WP-05_WAREHOUSE_MAP2_SIM_EVAL_STATIC_APPROVAL.json`; it pins the exact map subject and file fingerprints. The future Map Server binding is limited to `artifacts/maps/warehouse_map2/map.yaml`; no ROS-package copy is selected.
 
 This is an approval-evidence decision candidate only. It has not activated map metadata, which remains `draft`; it has not resolved or selected a runtime profile. It makes no navigation-readiness, Map Server load, AMCL, TF, map/world equivalence, world-frame validation, or runtime-compatibility claim. Candidate 4B depends on the exact integrated commit of Candidate 4A and is a separate metadata-change candidate. No runtime authority, profile resolution, `config_hash`, or WP-05 closure is created.
+
+
+## WP05 warehouse_map2 static approval metadata activation — review candidate
+
+At exact base `a8eed8712ad7e20ae4d9e7665a4d07dacbde9047`, metadata is `draft`, `WORLD_FRAME: NOT_DECLARED`, and runtime compatibility is `NOT_VALIDATED`. This candidate proposes to pin the integrated static approval evidence and existing world-frame declaration evidence in the exact map metadata. Before integration, the proposed activation is review-only.
+
+After independent audit PASS, separate exact-candidate User authorization, fast-forward integration, and remote-ref verification, current metadata will be `approval_status: approved` solely for `SIM_EVAL_NAV2_BASELINE_STATIC_MAP_ARTIFACT_SELECTION`, with `world_frame.state: DECLARED_UNVERIFIED` and `runtime_compatibility.state: NOT_VALIDATED`. It is then eligible as a static profile input for Step 5, not a resolved profile or navigation-ready artifact. A future Map Server may bind only to `artifacts/maps/warehouse_map2/map.yaml`.
+
+Earlier Registry/PEP/Ledger statements describing `warehouse_map2` as draft or world frame `NOT_DECLARED` are historical source-base snapshots; after activation this entry supersedes them only for current metadata status. No map/world equivalence, transform, metric alignment, Map Server load, AMCL, TF, runtime validation, runtime authority, `ResolvedConfigV3`, `config_hash`, or WP-05 closure is claimed. WP-04/WP-05 and Gate A/Gate B statuses remain unchanged.
