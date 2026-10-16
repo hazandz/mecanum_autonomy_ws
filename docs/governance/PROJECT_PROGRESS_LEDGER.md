@@ -1103,3 +1103,19 @@
 | Evidence boundary | Receipt ID/schema revision, schema SHA, QoS6 and dependency-closure pins remain unchanged. No runtime node/topic/publisher/subscriber/QoS/evidence, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Status | WP-04/WP-05 and Gate A/Gate B statuses unchanged. |
 | `supersedes` | None; append-only entry. Earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06_COMMAND_SAFETY_CORE_JERK_ENVELOPE_CORRECTED_ATOMIC_L2 — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `d0b1234f1c23961c5dd7c04a35c9ec39d6077629` |
+| Review branch | `wp06-command-safety-core-jerk-envelope-fix-d0b1234` |
+| Candidate commit | The commit containing this append-only entry; its exact SHA is reported at delivery and is not self-embedded here. |
+| Classification | `L2_COMMAND_SAFETY_CORE_JERK_ENVELOPE_CORRECTED_PURE_LOGIC_IMPLEMENTATION` |
+| Scope | Independently created pure Python deterministic fail-closed decision core and focused offline tests; exact eight-path allowlist. Neither rejected candidate `a3c9f7074f96a2d5632bb1cddd3ecffb18e1c58a` nor `89f064af2af1afbc86cf9e10eb43c974709ae1e0` is reused. |
+| Corrections | F-01 exact `uint32` reset epoch/runtime generation and `uint64` sequence/source-instance domains; F-02 latched E-stop/critical fault, explicit manual reset and changed epoch, zero release cycle/no auto-resume; F-03 zero/cache barriers for reset, identity changes and handovers; F-04 per-axis intersection of hard-velocity-derived, acceleration, and prior-acceleration-centered jerk intervals, empty intersection `FAULT` + zero + cache clear, with no post-limit velocity clipping. |
+| Candidate lifecycle | Review only. Independent audit PASS, separate User authorization for this exact commit, integration, and remote-ref verification are required before an integrated status update. |
+| Evidence level | `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY` |
+| Boundary | Unpublished `SafetyCommandDecision`; no runtime SafetySupervisor, ROS node/graph, `/cmd_vel` publisher, FinalTwistPublisher, receipt runtime, collision/TTC, physical E-stop integration, profile/config hash, runtime evidence, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B remain unchanged. |
+| `supersedes` | Rejected candidates are not reused; this candidate starts from the exact integration base. Earlier Ledger bytes remain unchanged. |
