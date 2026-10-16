@@ -1074,3 +1074,18 @@
 | Preserved state and limits | WP-04/WP-05 and Gate A/Gate B statuses unchanged. No map bytes/content hash change, map/world equivalence, transform, metric alignment, Map Server load, AMCL/TF evidence, runtime authority, `ResolvedConfigV3`, `config_hash`, or WP-05 closure. |
 | Evidence level | `STATIC_ARTIFACT_PROVENANCE_AND_APPROVAL_EVIDENCE_SCHEMA_ONLY` |
 | `supersedes` | None; append-only entry. |
+
+
+### WP05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_INPUT_CLOSURE_5A — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `2864a215782cc1901aa259a49d885fa0c132cf7a` |
+| Review branch | `wp05-sim-eval-static-profile-closure-2864a21` |
+| Candidate commit | The commit containing this append-only entry at the review-branch tip; exact SHA is reported in delivery. |
+| Scope | Step 5A static profile input closure for `sim_eval + NAV2_BASELINE`; `STATIC_PROFILE_INPUT_CLOSURE_ONLY`, `runtime_eligible: false`. |
+| Evidence level | `STATIC_PROFILE_INPUT_CLOSURE_ONLY_NOT_RUNTIME_PROFILE_RESOLUTION` |
+| Candidate lifecycle | Review candidate only. Exact-candidate independent audit PASS, separate User authorization, fast-forward integration, and remote-ref verification remain required. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; WP-05 `OPEN`; map approved only for static selection; `WORLD_FRAME: DECLARED_UNVERIFIED`; `RUNTIME_COMPATIBILITY: NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Boundary | No `workspace_source_locks`, resolved profile, `ResolvedConfigV3`, `config_hash`, runtime bridge/endpoint pin, Map Server load, launch graph, runtime evidence, runtime authorization, or WP-05 closure. WP06 and runtime assembly remain prerequisites for any later campaign. |
+| `supersedes` | None; append-only entry. Historical Ledger snapshots are unchanged. |
