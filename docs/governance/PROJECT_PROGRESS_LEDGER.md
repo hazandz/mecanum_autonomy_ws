@@ -1119,3 +1119,19 @@
 | Evidence level | `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY` |
 | Boundary | Unpublished `SafetyCommandDecision`; no runtime SafetySupervisor, ROS node/graph, `/cmd_vel` publisher, FinalTwistPublisher, receipt runtime, collision/TTC, physical E-stop integration, profile/config hash, runtime evidence, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B remain unchanged. |
 | `supersedes` | Rejected candidates are not reused; this candidate starts from the exact integration base. Earlier Ledger bytes remain unchanged. |
+
+
+### WP06_SIM_EVAL_WHEEL_IMU_RUNTIME_INGRESS — L2 review candidate
+
+| Field | Value |
+|---|---|
+| Exact source/integration base | `43c94789f628b4211189fc391326e0b119cbb6d3` |
+| Review branch | `wp06-sim-eval-wheel-imu-runtime-ingress-43c9478` |
+| Candidate commit | The commit containing this append-only entry; its SHA is reported at delivery and is not self-embedded. |
+| Classification | `L2_SIM_EVAL_WHEEL_IMU_RUNTIME_SOURCE_BINDING_AND_INGRESS_IMPLEMENTATION` |
+| Scope | Exact 19-path allowlist; sim_eval wheel JointState-to-Odometry ingress and base_link IMU normalization, source-binding validation, node source, and offline tests. The SDF already has the single required world IMU system plugin and is byte-preserved. |
+| Evidence level | `IMPLEMENTATION_SOURCE_AND_OFFLINE_BUILD_UNIT_TEST_ONLY` |
+| Source boundary | Exactly two staging subscriptions and two canonical publishers are declared in the node source. No TF is published. `/odom` and `/ground_truth/odom` are excluded from EKF input. Candidate 6E remains sole owner of ROS–Gazebo bridge implementation. IMU frame evidence is not established by the static source attachment. |
+| Lifecycle | Review only. Independent audit PASS for the exact candidate, separate User authorization, fast-forward integration, and remote-ref verification are required before any integrated status wording. |
+| Non-goals/status | No ROS–Gazebo bridge implementation, ROS/Gazebo runtime execution, runtime evidence, Gate B, profile resolution, `ResolvedConfigV3`, `config_hash`, map/runtime compatibility, TF runtime evidence, HIL, hardware, or deploy authorization. Source-binding `runtime_eligible: false`; bridge status `PENDING_WP06_6E`; runtime evidence `NOT_CREATED`; WP-04/WP-05/Gate A/Gate B unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; one append-only candidate entry. All base Ledger bytes remain an exact prefix. |
