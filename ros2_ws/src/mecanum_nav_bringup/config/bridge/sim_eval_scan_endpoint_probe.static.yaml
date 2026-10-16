@@ -1,0 +1,32 @@
+schema: mecanum_sim_eval_scan_endpoint_probe/v1
+profile: sim_eval
+classification: PROBE_SOURCE_ONLY
+runtime_eligible: false
+sensor_provenance:
+  source_file: ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo
+  reference_link: lidar_frame
+  sensor_name: YDLIDAR_X3_PRO
+  sensor_type: gpu_lidar
+  declared_relative_topic: scan
+  expected_gz_message_type: gz.msgs.LaserScan
+future_ros_boundary:
+  topic: /scan
+  message_type: sensor_msgs/msg/LaserScan
+  direction: GZ_TO_ROS
+command_contract:
+  executable: gz
+  discovery_arguments: [topic, -l]
+  inspect_prefix: [topic, -i, -t]
+  timeout_seconds: 5.0
+  maximum_topics: 512
+  selection_rule: EXACTLY_ONE_EXPECTED_GZ_MESSAGE_TYPE
+prohibitions:
+  no_ros2: true
+  no_ros_gz_bridge: true
+  no_gz_topic_echo: true
+  no_bridge_launch: true
+  no_endpoint_pin: true
+  no_bridge_config_mutation: true
+  no_ros_publisher_or_subscriber: true
+  no_tf: true
+  no_map_server_amcl_ekf_or_nav2: true

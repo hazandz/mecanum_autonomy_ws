@@ -1163,3 +1163,21 @@
 | Lifecycle | Review candidate only; independent audit PASS, separate exact-candidate User authorization, integration and remote-ref verification remain required. |
 | Status and boundary | Step 5A remains static-only; WP-05 `OPEN`; WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No endpoint/bridge/runtime pin, resolved profile, `ResolvedConfigV3`, `config_hash`, runtime evidence or runtime authorization. |
 | `supersedes` | None; append-only candidate entry. |
+
+
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `46be7a2bde222475fbaaaac8a6749211edfd2ba0` |
+| Review branch | `wp06-sim-eval-scan-endpoint-probe-46be7a2` |
+| Candidate commit | Exact review-branch tip; not embedded in this append-only entry. |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_SOURCE_IMPLEMENTATION` |
+| Scope | Import-inert probe source, static descriptor, offline fake-runner tests and governance; no probe execution. |
+| Endpoint boundary | `<topic>scan</topic>` is relative and not a full Gazebo Transport endpoint; future observations are `OBSERVED_NOT_PINNED` and need separate Owner decision before WP06-6E. |
+| Future runtime gate | Separate capacity-one `APPROVED_RUNTIME` packet with exact command, pass/fail, stop conditions and explicit User approval. |
+| Bridge ownership | WP06-6E remains sole owner of canonical ROS–Gazebo bridge implementation. |
+| Evidence level | `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; no runtime evidence. |
+| Status/boundary | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No endpoint pin, bridge, ROS `/scan` publisher, TF, profile resolution, runtime evidence or authorization. |
+| Lifecycle | Review candidate only; independent audit and separate exact-commit User authorization remain required before integration. |
+| `supersedes` | None; append-only entry. |
