@@ -1103,3 +1103,19 @@
 | Evidence boundary | Receipt ID/schema revision, schema SHA, QoS6 and dependency-closure pins remain unchanged. No runtime node/topic/publisher/subscriber/QoS/evidence, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Status | WP-04/WP-05 and Gate A/Gate B statuses unchanged. |
 | `supersedes` | None; append-only entry. Earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06_COMMAND_SAFETY_CORE_CORRECTED_ATOMIC_L2 — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `d0b1234f1c23961c5dd7c04a35c9ec39d6077629` |
+| Review branch | `wp06-command-safety-core-corrected-d0b1234` |
+| Candidate commit | The exact commit containing this append-only entry; reported by the executor and not self-embedded in this Ledger entry. |
+| Classification | `L2_COMMAND_SAFETY_CORE_CORRECTED_PURE_LOGIC_IMPLEMENTATION` |
+| Scope | Pure Python deterministic fail-closed safety decision core and focused offline tests; exact eight-path allowlist. Replacement is built directly from base and does not derive from rejected candidate `a3c9f7074f96a2d5632bb1cddd3ecffb18e1c58a`. |
+| Corrections | F-01 distinct `uint32` reset epoch/runtime generation and `uint64` sequence/source-instance ranges; F-02 latched E-stop/critical fault requiring explicit manual reset, completed reset and changed epoch, with zero release cycle and no auto-resume; F-03 zero/cache invalidation barriers for reset, epoch/generation changes, source handover and source-instance handover, with fresh command deferred to a subsequent cycle. |
+| Candidate lifecycle | Review candidate only. Independent audit PASS for the exact candidate, separate User authorization for that exact commit, integration, and remote-ref verification are required before any integrated status update. |
+| Evidence level | `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY` |
+| Boundary | Unpublished `SafetyCommandDecision` only; no runtime SafetySupervisor, ROS node/topic/publisher/subscriber, `/cmd_vel` publisher, receipt runtime, collision/TTC, physical E-stop integration, resolved profile, `ResolvedConfigV3`, `config_hash`, runtime evidence, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B remain unchanged. |
+| `supersedes` | Rejected candidate is not reused; this replacement is independently based on the exact integration base. Historical Ledger entries are unchanged. |
