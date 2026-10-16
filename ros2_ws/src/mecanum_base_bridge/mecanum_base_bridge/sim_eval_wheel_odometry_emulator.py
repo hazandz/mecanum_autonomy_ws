@@ -99,6 +99,17 @@ class SimEvalWheelOdometryEmulator:
 
     def process(self, message):
         """Return an odometry-shaped pure value, or None for an untrusted sample."""
+        # A valid rollback timestamp is an authoritative reset boundary even when
+        # the payload that arrived with it is malformed.
+        stamp_ns = self._stamp_ns(message)
+        if stamp_ns is None:
+            return self._invalid()
+        if self._last_stamp_ns is not None and stamp_ns < self._last_stamp_ns:
+            self.reset_pose_and_baseline()
+            return None
+        if self._last_stamp_ns is not None and stamp_ns == self._last_stamp_ns:
+            return self._invalid()
+
         try:
             names = message.name
             velocities = message.velocity
@@ -120,17 +131,9 @@ class SimEvalWheelOdometryEmulator:
         rates = tuple(rates_by_name[JOINT_NAMES[key]] * sign
                       for key, sign in zip(LOGICAL_WHEEL_ORDER, WHEEL_SIGNS))
 
-        stamp_ns = self._stamp_ns(message)
-        if stamp_ns is None:
-            return self._invalid()
-        if self._last_stamp_ns is not None and stamp_ns < self._last_stamp_ns:
-            self.reset_pose_and_baseline()
-            return None
         if self._last_stamp_ns is None:
             self._last_stamp_ns = stamp_ns
             return None
-        if stamp_ns == self._last_stamp_ns:
-            return self._invalid()
         dt = (stamp_ns - self._last_stamp_ns) / 1_000_000_000.0
         if not _finite_real(dt) or dt <= 0.0 or dt > MAX_SOURCE_GAP_S:
             return self._invalid()

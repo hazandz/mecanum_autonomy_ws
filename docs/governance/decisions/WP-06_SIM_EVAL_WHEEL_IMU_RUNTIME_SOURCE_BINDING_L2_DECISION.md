@@ -27,3 +27,10 @@ WP06-6E remains the sole owner of ROS–Gazebo bridge implementation. No bridge 
 ## Non-goals and retained statuses
 
 This candidate does not create a TF publisher, bridge, runtime graph, launch execution, `/cmd_vel` publisher, runtime evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. No Gazebo, ROS graph/node, launch, Nav2, AMCL, EKF runtime, Map Server, HIL, hardware or deployment execution is claimed. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05 and Gate A/Gate B statuses are unchanged. Future post-integration status wording may say `IMPLEMENTED_OFFLINE_ONLY` only after independent audit PASS, explicit User authorization, integration and remote-ref verification.
+
+
+## Corrective review commit — F-04 rollback timestamp precedence
+
+Corrective commit parent `4ccb0491408c8b8bfbf0c34f5cb33329ec9979c6` is applied to the existing review candidate branch; this is not a new candidate from the integration base. The exact integration base remains `43c94789f628b4211189fc391326e0b119cbb6d3`. F-04 is `ROLLBACK_TIMESTAMP_PRECEDENCE`: the emulator extracts and validates the timestamp before accessing wheel payload fields, and a valid timestamp lower than the current baseline resets the trusted pose and baseline immediately, even if that same message has a malformed wheel payload. The next valid sample only establishes a baseline; a later valid sample is required before integration.
+
+F-01 invalid-interval barriers, F-02 forced and effective `use_sim_time=true` before endpoint creation, and F-03 `Sequence` acceptance including `array.array('d')` are retained. The final review head remains supported only by offline source/test/build evidence; `runtime_eligible: false`. WP06-6E remains the sole bridge owner. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05, Gate A and Gate B are unchanged. No ROS/Gazebo runtime, bridge implementation, TF publisher, runtime evidence, or runtime authorization is claimed.

@@ -1132,3 +1132,18 @@
 | Ownership and boundary | WP06-6E remains the sole ROS–Gazebo bridge owner. No TF publisher, bridge implementation, ROS graph execution, runtime evidence or runtime authorization. `/odom` and `/ground_truth/odom` are not accepted ingress/EKF inputs. |
 | Candidate lifecycle | Review candidate only; independent audit and separate exact-candidate User authorization remain pending. No status change to WP-04/WP-05, Gate A/Gate B, or `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; append-only candidate record. Earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06_SIM_EVAL_WHEEL_IMU_RUNTIME_INGRESS_ROLLBACK_PRECEDENCE_CORRECTION — corrective review commit
+
+| Field | Value |
+|---|---|
+| Integration base | `43c94789f628b4211189fc391326e0b119cbb6d3` |
+| Existing review branch | `wp06-sim-eval-wheel-imu-ingress-rosidl-sequence-fix-43c9478` |
+| Corrective commit parent | `4ccb0491408c8b8bfbf0c34f5cb33329ec9979c6` |
+| Corrective commit | Recorded by Git; not self-embedded in this append-only entry. |
+| Correction | F-04 `ROLLBACK_TIMESTAMP_PRECEDENCE`: extract/validate timestamp before reading wheel payload; a valid backward timestamp resets pose and baseline before payload validation, even if that payload is malformed. The next valid sample is baseline-only; a subsequent valid sample is required for integration. |
+| Retained corrections | F-01 invalid-interval barrier; F-02 forced/effective sim time before endpoint creation; F-03 indexed `Sequence` and `array.array('d')` acceptance. |
+| Candidate lifecycle | Corrective commit on the existing review candidate, not a new base candidate. Review only; no integration or PR. |
+| Evidence level | `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; no runtime evidence. `runtime_eligible: false`. |
+| Ownership and status | WP06-6E remains sole bridge owner. No TF publisher, bridge implementation, ROS/Gazebo execution, runtime authorization, or WP-04/WP-05/Gate A/Gate B status change. `RUNTIME_APPROVED: NOT_APPROVED`. |

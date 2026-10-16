@@ -1,5 +1,7 @@
 from array import array
 from copy import deepcopy
+import ast
+from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
@@ -118,6 +120,65 @@ def test_timestamp_rollback_resets_pose_and_requires_new_baseline():
     assert core.last_stamp_ns is None
     assert core.process(message(950_000_000, [1.0] * 4)) is None
     assert core.process(message(1_000_000_000, [1.0] * 4)) is not None
+
+
+@pytest.mark.parametrize(
+    "malformed_names,malformed_velocity",
+    [
+        (NAMES, [1.0, float("nan"), 1.0, 1.0]),
+        (NAMES[:-1], [1.0, 1.0, 1.0]),
+        (NAMES + [NAMES[0]], [1.0] * 5),
+    ],
+    ids=("nan-rate", "missing-joint", "duplicate-joint"),
+)
+def test_backward_timestamp_takes_precedence_over_malformed_wheel_payload(
+    malformed_names, malformed_velocity
+):
+    core = new_integrator()
+    assert core.process(message(1_100_000_000, [1.0] * 4)) is not None
+    assert core.trusted_pose != (0.0, 0.0, 0.0)
+
+    assert core.process(message(0, malformed_velocity, malformed_names)) is None
+    assert core.trusted_pose == (0.0, 0.0, 0.0)
+    assert core.last_stamp_ns is None
+
+    assert core.process(message(100_000_000, [1.0] * 4)) is None
+    assert core.last_stamp_ns == 100_000_000
+    assert core.trusted_pose == (0.0, 0.0, 0.0)
+    resumed = core.process(message(200_000_000, [1.0] * 4))
+    assert resumed is not None
+    assert resumed.stamp_ns == 200_000_000
+    assert resumed.x > 0.0
+
+
+def test_source_orders_timestamp_rollback_before_payload_validation_and_keeps_sequence_support():
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "mecanum_base_bridge"
+        / "sim_eval_wheel_odometry_emulator.py"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    process = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "process"
+    )
+    process_text = ast.get_source_segment(source, process)
+    stamp_call = process_text.index("stamp_ns = self._stamp_ns(message)")
+    rollback_check = process_text.index("stamp_ns < self._last_stamp_ns")
+    rollback_reset = process_text.index("self.reset_pose_and_baseline()", rollback_check)
+    payload_access = min(process_text.index("message.name"), process_text.index("message.velocity"))
+    assert stamp_call < rollback_check < rollback_reset < payload_access
+    assert "from collections.abc import Sequence" in source
+    assert "isinstance(value, Sequence)" in source
+    assert "array(" not in source  # array.array is accepted through Sequence, without source coercion.
+    assert "type(names) in (list, tuple)" not in source
+
+    # Keep direct behavioral evidence that ROSIDL's array('d') survives both stages.
+    core = SimEvalWheelOdometryEmulator()
+    values = array("d", [1.0] * 4)
+    assert core.process(message(1_000_000_000, values)) is None
+    assert core.process(message(1_100_000_000, array("d", values))) is not None
 
 
 def test_nonfinite_kinematics_does_not_mutate_trusted_pose():
