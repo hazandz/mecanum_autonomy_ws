@@ -10,6 +10,12 @@
   <mu2>0.2</mu2>
   <self_collide>false</self_collide>
   <gravity>true</gravity>
+  <sensor name="sim_eval_base_imu" type="imu">
+    <pose>0 0 0 0 0 0</pose>
+    <always_on>true</always_on>
+    <update_rate>50.0</update_rate>
+    <topic>/sim_eval/imu/raw</topic>
+  </sensor>
   <sensor type="contact" name="s3_d3_base_contact_sensor">
     <contact>
       <collision>s3_d3_base_contact_collision</collision>

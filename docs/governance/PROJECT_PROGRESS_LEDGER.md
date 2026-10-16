@@ -1119,3 +1119,16 @@
 | Evidence level | `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY` |
 | Boundary | Unpublished `SafetyCommandDecision`; no runtime SafetySupervisor, ROS node/graph, `/cmd_vel` publisher, FinalTwistPublisher, receipt runtime, collision/TTC, physical E-stop integration, profile/config hash, runtime evidence, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B remain unchanged. |
 | `supersedes` | Rejected candidates are not reused; this candidate starts from the exact integration base. Earlier Ledger bytes remain unchanged. |
+
+### WP06_SIM_EVAL_WHEEL_IMU_RUNTIME_INGRESS_ROSIDL_SEQUENCE_CORRECTED — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `43c94789f628b4211189fc391326e0b119cbb6d3` |
+| Review branch | `wp06-sim-eval-wheel-imu-ingress-rosidl-sequence-fix-43c9478` |
+| Scope | Fresh replacement from the exact base for the bounded sim_eval wheel/IMU ingress. Neither rejected candidate `38d52b19b8cacecbe49961f77df47eaacfd8c3c4` nor `3f40b6dcf34e07f9f9df33889df2c9379163d3fd` is an ancestor or source. |
+| Corrections | F-01 wheel invalid-interval barrier and trusted-pose retention; F-02 atomic forced and effective `use_sim_time=true` verification before endpoints; F-03 indexed numeric `Sequence` acceptance including direct `array('d')` baseline and valid integration tests, while iterators/generators and text/bytes are rejected. Prior list-only fixtures did not demonstrate ROSIDL sequence representation acceptance. |
+| Evidence level | Source plus offline parser/unit/build checks only; not runtime evidence. `runtime_eligible: false`. |
+| Ownership and boundary | WP06-6E remains the sole ROS–Gazebo bridge owner. No TF publisher, bridge implementation, ROS graph execution, runtime evidence or runtime authorization. `/odom` and `/ground_truth/odom` are not accepted ingress/EKF inputs. |
+| Candidate lifecycle | Review candidate only; independent audit and separate exact-candidate User authorization remain pending. No status change to WP-04/WP-05, Gate A/Gate B, or `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; append-only candidate record. Earlier Ledger bytes remain an exact prefix. |
