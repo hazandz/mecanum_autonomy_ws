@@ -1103,3 +1103,19 @@
 | Evidence boundary | Receipt ID/schema revision, schema SHA, QoS6 and dependency-closure pins remain unchanged. No runtime node/topic/publisher/subscriber/QoS/evidence, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Status | WP-04/WP-05 and Gate A/Gate B statuses unchanged. |
 | `supersedes` | None; append-only entry. Earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06_COMMAND_SAFETY_CORE_ATOMIC_L2 — review candidate
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-16 |
+| Exact integration/source base | `d0b1234f1c23961c5dd7c04a35c9ec39d6077629` |
+| Review branch | `wp06-command-safety-core-atomic-d0b1234` |
+| Candidate commit | Exact SHA to be supplied in delivery report; this entry does not self-reference its commit. |
+| Classification | `L2_COMMAND_SAFETY_CORE_PURE_LOGIC_IMPLEMENTATION` |
+| Scope/evidence | Pure deterministic fail-closed command decision logic, immutable internal representations, and focused offline unit tests; evidence level `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY`. |
+| Boundary | Unpublished `SafetyCommandDecision` only. No ROS node/topic/publisher/subscriber, receipt, `FinalIssuedCommandReceipt` call, `FinalTwistPublisher`, collision/TTC calculation, hardware E-stop integration, runtime profile, `ResolvedConfigV3`, `config_hash`, runtime evidence, Gate B transition, or runtime authorization. Motion limits remain injected and unpinned. |
+| Candidate lifecycle | Review-only. Independent audit PASS, separate exact-commit User authorization, fast-forward integration, and remote-ref verification remain required. |
+| Preserved status | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A structural primitives `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; one append-only entry. All Ledger bytes at base remain an exact prefix. |
