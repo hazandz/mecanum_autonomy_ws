@@ -19,7 +19,11 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PACKAGE_ROOT.parents[2]
 PROFILE_PATH = PACKAGE_ROOT / "config/profiles/sim_eval_nav2_baseline.static.yaml"
 MANIFEST_PATH = REPO_ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
-BASE_COMMIT = "2864a215782cc1901aa259a49d885fa0c132cf7a"
+BASE_COMMIT = "4f491edca1d46dee259d57350ad520a0334e4049"
+PREVIOUS_SOURCE_COMMIT = "2864a215782cc1901aa259a49d885fa0c132cf7a"
+PREVIOUS_GAZEBO_SHA256 = "a97b092f7343d04679ed1417539e47d217b20d18afc3364a27cf14110d9dece8"
+CURRENT_GAZEBO_SHA256 = "1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e"
+HISTORICAL_INVENTORY_SHA256 = "8b81c656b004201fc8a4be1139aa60652039dd834b957d5c2a96726e161a424e"
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -140,6 +144,48 @@ def test_all_pinned_files_and_map_evidence_match_base_bytes():
     assert world["declaration"]["world_frame_state"] == "DECLARED_UNVERIFIED"
     assert world["declaration"]["transform_claim"] == "NONE"
     assert all(value is False for value in world["limitations"].values())
+
+
+def test_current_gazebo_pin_reconciliation_preserves_historical_inventory():
+    profile_raw, profile = _load_profile()
+    manifest_raw, manifest = _load_manifest()
+    python_raw = (PACKAGE_ROOT / "mecanum_nav_bringup/sim_eval_static_profile_contract.py").read_bytes()
+    gazebo_path = "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo"
+    current_yaml_pin = next(
+        entry for entry in profile["static_ingress_contracts"]
+        if entry["role"] == "gazebo_lidar_source"
+    )
+    current_python_pin = next(
+        entry for entry in STATIC_PROFILE_DESCRIPTOR["static_ingress_contracts"]
+        if entry["role"] == "gazebo_lidar_source"
+    )
+    current_manifest_pin = next(
+        entry for entry in manifest["static_ingress_contracts"]
+        if entry["role"] == "gazebo_lidar_source"
+    )
+    assert BASE_COMMIT == "4f491edca1d46dee259d57350ad520a0334e4049"
+    assert profile["source_commit"] == BASE_COMMIT
+    assert current_yaml_pin["path"] == current_python_pin["path"] == current_manifest_pin["path"] == gazebo_path
+    assert current_yaml_pin["classification"] == current_python_pin["classification"] == current_manifest_pin["classification"] == "GAZEBO_TRANSPORT_PROVENANCE_ONLY"
+    assert current_yaml_pin["sha256"] == current_python_pin["sha256"] == current_manifest_pin["sha256"] == CURRENT_GAZEBO_SHA256
+    assert _sha256(REPO_ROOT / gazebo_path) == CURRENT_GAZEBO_SHA256
+    assert PREVIOUS_SOURCE_COMMIT not in profile_raw.decode("utf-8")
+    assert PREVIOUS_GAZEBO_SHA256 not in profile_raw.decode("utf-8")
+    assert PREVIOUS_SOURCE_COMMIT.encode() not in python_raw + manifest_raw
+    assert PREVIOUS_GAZEBO_SHA256.encode() not in python_raw + manifest_raw
+
+    # The inventory is a historical snapshot and intentionally retains the old provenance pin.
+    inventory_path = REPO_ROOT / "docs/governance/evidence/WP-05_NAVIGATION_V1_WORKSPACE_SOURCE_ROLE_INVENTORY.json"
+    inventory_raw = inventory_path.read_bytes()
+    inventory = json.loads(inventory_raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    historical_entry = next(
+        reference
+        for role in inventory["roles"]
+        for reference in role.get("evidence_references", [])
+        if reference["repository_relative_path"] == gazebo_path
+    )
+    assert historical_entry["source_file_sha256"] == PREVIOUS_GAZEBO_SHA256
+    assert _sha256(inventory_path) == HISTORICAL_INVENTORY_SHA256
 
 
 def test_validator_fails_closed_on_profile_map_source_and_runtime_mutations():

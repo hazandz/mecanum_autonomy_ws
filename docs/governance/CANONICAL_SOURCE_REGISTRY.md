@@ -631,3 +631,10 @@ The node is constrained to the two staging subscriptions and two canonical outpu
 ### WP06 sim_eval wheel/IMU ingress — corrective review commit (F-04)
 
 The corrective commit is applied to the existing review candidate, not created as a new candidate from integration. Integration base remains `43c94789f628b4211189fc391326e0b119cbb6d3`; direct parent is `4ccb0491408c8b8bfbf0c34f5cb33329ec9979c6`. F-04 `ROLLBACK_TIMESTAMP_PRECEDENCE` requires a valid backward timestamp to reset pose and baseline before payload validation, including when the accompanying wheel rates are NaN or required joints are missing/duplicated. F-01/F-02/F-03 remain unchanged. Evidence is offline only, `runtime_eligible: false`; WP06-6E remains sole bridge owner. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05/Gate A/Gate B are unchanged.
+
+
+## WP05 sim_eval + NAV2_BASELINE current Gazebo source-pin reconciliation — review candidate
+
+At exact base `4f491edca1d46dee259d57350ad520a0334e4049`, the current Gazebo LiDAR source bytes have SHA-256 `1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e`, while the current Step 5A YAML, Python descriptor and manifest retained prior source-base provenance and the old Gazebo hash `a97b092f7343d04679ed1417539e47d217b20d18afc3364a27cf14110d9dece8`. This candidate reconciles only those two values in the three current descriptors. The source remains classified `GAZEBO_TRANSPORT_PROVENANCE_ONLY`; its content and all LiDAR, map, TF, bridge and runtime semantics remain unchanged. The historical workspace source-role inventory is preserved with its old hash as a source-base snapshot.
+
+Before independent audit and separate exact-candidate User authorization/integration, this is review-only. After those conditions, Step 5A is self-consistent only as `STATIC_PROFILE_INPUT_CLOSURE_ONLY`, not a resolved runtime profile. No endpoint pin, bridge, runtime source pin, `ResolvedConfigV3`, `config_hash`, runtime evidence or runtime authorization is created. Current status remains WP-05 `OPEN`, WP-04 `BLOCKED_BY_CONTRACT`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`.

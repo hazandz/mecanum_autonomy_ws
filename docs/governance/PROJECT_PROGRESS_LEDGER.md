@@ -1147,3 +1147,19 @@
 | Candidate lifecycle | Corrective commit on the existing review candidate, not a new base candidate. Review only; no integration or PR. |
 | Evidence level | `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; no runtime evidence. `runtime_eligible: false`. |
 | Ownership and status | WP06-6E remains sole bridge owner. No TF publisher, bridge implementation, ROS/Gazebo execution, runtime authorization, or WP-04/WP-05/Gate A/Gate B status change. `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+
+### WP05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_GAZEBO_SOURCE_PIN_RECONCILIATION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `4f491edca1d46dee259d57350ad520a0334e4049` |
+| Review branch | `wp05-sim-eval-static-profile-gazebo-pin-reconcile-4f491ed` |
+| Candidate commit | Exact branch tip; not embedded in this append-only record. |
+| Classification | `L1_STATIC_PROFILE_CURRENT_SOURCE_PIN_RECONCILIATION_ONLY` |
+| Scope | Reconcile only `source_commit` and current `gazebo_lidar_source` SHA across the Step 5A YAML, Python descriptor and manifest. The Gazebo source and historical inventory are unchanged. |
+| Drift | Current Gazebo source `1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e`; prior current-profile pin `a97b092f7343d04679ed1417539e47d217b20d18afc3364a27cf14110d9dece8`. |
+| Evidence level | `STATIC_PROFILE_INPUT_CLOSURE_ONLY_NOT_RUNTIME_PROFILE_RESOLUTION` |
+| Lifecycle | Review candidate only; independent audit PASS, separate exact-candidate User authorization, integration and remote-ref verification remain required. |
+| Status and boundary | Step 5A remains static-only; WP-05 `OPEN`; WP-04 `BLOCKED_BY_CONTRACT`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No endpoint/bridge/runtime pin, resolved profile, `ResolvedConfigV3`, `config_hash`, runtime evidence or runtime authorization. |
+| `supersedes` | None; append-only candidate entry. |

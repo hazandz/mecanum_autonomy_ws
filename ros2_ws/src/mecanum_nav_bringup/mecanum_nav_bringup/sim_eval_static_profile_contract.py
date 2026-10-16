@@ -7,7 +7,7 @@ STATIC_PROFILE_DESCRIPTOR = {
     "schema": "mecanum_sim_eval_nav2_baseline_static_profile/v1",
     "classification": "STATIC_PROFILE_INPUT_CLOSURE_ONLY",
     "runtime_eligible": False,
-    "source_commit": "2864a215782cc1901aa259a49d885fa0c132cf7a",
+    "source_commit": "4f491edca1d46dee259d57350ad520a0334e4049",
     "profile": {
         "runtime_profile": "sim_eval",
         "navigation_mode": "NAV2_BASELINE",
@@ -39,7 +39,7 @@ STATIC_PROFILE_DESCRIPTOR = {
         {"role": "typed_lidar_binding", "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/v3_sim_eval_lidar_bridge_binding.py", "sha256": "b4d2f12ac85e0a103c37ea914481c6ef278587a3960f931448455239b094ba2a", "classification": "STATIC_TYPED_BINDING_ONLY"},
         {"role": "robot_description", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro", "sha256": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d", "classification": "STATIC_TF_PROVENANCE_ONLY"},
         {"role": "robot_state_publisher_launch", "path": "ros2_ws/src/ROBOT_URDF_final_description/launch/navigation_v1_robot_state_publisher.launch.py", "sha256": "b5c939ed662b5f789d008dd34777363ffeb5bbc373b596e97b75c1e097dcb511", "classification": "STATIC_TF_PROVENANCE_ONLY"},
-        {"role": "gazebo_lidar_source", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo", "sha256": "a97b092f7343d04679ed1417539e47d217b20d18afc3364a27cf14110d9dece8", "classification": "GAZEBO_TRANSPORT_PROVENANCE_ONLY"},
+        {"role": "gazebo_lidar_source", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo", "sha256": "1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e", "classification": "GAZEBO_TRANSPORT_PROVENANCE_ONLY"},
     ],
     "external_dependency_lock": {
         "path": "docs/governance/evidence/WP-05_NAVIGATION_V1_EXTERNAL_14_ROOT_DEPENDENCY_LOCK.json",
