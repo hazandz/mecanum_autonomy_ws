@@ -21,6 +21,10 @@ setup(
             ],
         ),
         (
+            "share/" + package_name + "/config/bridge",
+            ["config/bridge/sim_eval_lidar_scan_bridge.static.yaml"],
+        ),
+        (
             "share/" + package_name + "/config/localization",
             [
                 "config/localization/navigation_v1_amcl_omni.static.template.yaml",

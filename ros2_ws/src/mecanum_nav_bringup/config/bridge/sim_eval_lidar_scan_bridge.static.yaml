@@ -1,0 +1,46 @@
+schema: mecanum_sim_eval_lidar_scan_bridge_static/v1
+profile: sim_eval
+classification: STATIC_CONTRACT_ONLY
+runtime_eligible: false
+use_sim_time: true
+
+gazebo_sensor:
+  source_file: ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo
+  reference_link: lidar_frame
+  sensor_name: YDLIDAR_X3_PRO
+  sensor_type: gpu_lidar
+  declared_sensor_topic: scan
+  declared_update_rate_hz: 6.0
+  declared_horizontal_samples: 500
+  declared_range_min_m: 0.10
+  declared_range_max_m: 8.00
+
+transport_binding:
+  direction: GZ_TO_ROS
+  gz_transport_endpoint: PENDING_GZ_LIDAR_TRANSPORT_ENDPOINT_PIN
+  gz_message_type: gz.msgs.LaserScan
+  bridge_implementation: PENDING_PROFILE_SPECIFIC_ROS_GZ_BRIDGE_SOURCE_PIN
+  observed_scan_timing: PENDING_S2_SENSOR_TIMING_DECISION
+
+ros_output:
+  topic: /scan
+  ros_message_type: sensor_msgs/msg/LaserScan
+  required_header_frame_id: lidar_frame
+  publishes_tf: false
+
+tf_contract:
+  base_to_lidar_owner: robot_state_publisher
+  required_static_edge: base_link -> lidar_frame
+  bridge_publishes_tf: false
+
+prohibitions:
+  no_runtime_bridge_activation: true
+  forbidden_ros_topics:
+    - /odom
+    - /ground_truth/odom
+  forbidden_frame_aliases:
+    - base_scan
+    - rplidar_link
+  forbidden_inferences:
+    - gazebo_transport_is_not_ros_scan
+    - relative_sensor_topic_is_not_full_transport_endpoint
