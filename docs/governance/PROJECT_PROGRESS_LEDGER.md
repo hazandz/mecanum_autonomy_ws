@@ -1147,3 +1147,15 @@
 | Candidate lifecycle | Corrective commit on the existing review candidate, not a new base candidate. Review only; no integration or PR. |
 | Evidence level | `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; no runtime evidence. `runtime_eligible: false`. |
 | Ownership and status | WP06-6E remains sole bridge owner. No TF publisher, bridge implementation, ROS/Gazebo execution, runtime authorization, or WP-04/WP-05/Gate A/Gate B status change. `RUNTIME_APPROVED: NOT_APPROVED`. |
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE — L2 review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration base | `4f491edca1d46dee259d57350ad520a0334e4049` |
+| Review branch | `wp06-sim-eval-scan-endpoint-probe-4f491ed` |
+| Candidate commit | Resolved from Git history after commit; not self-embedded. |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_SOURCE_IMPLEMENTATION` |
+| Scope/evidence | Static descriptor, future endpoint probe CLI source, offline fake-runner tests, and package registration. Evidence ceiling `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; the probe is not executed. |
+| Endpoint boundary | Relative SDF topic `scan` is not a full Gazebo endpoint. Only exact `gz.msgs.LaserScan` type inspection can produce an observed endpoint, explicitly not a pin. No inference from endpoint names/suffixes/world/model/sensor names. |
+| Runtime boundary | Future probe execution requires a separate capacity-one `APPROVED_RUNTIME` packet, exact command, criteria, and explicit User approval. Any observation requires Owner review before WP06-6E, the sole bridge owner. No bridge, endpoint pin, `/scan` ROS publisher, TF, runtime evidence, profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. |
+| Preserved state | WP04/WP05, Gate A and Gate B unchanged; `RUNTIME_APPROVED: NOT_APPROVED`. |

@@ -767,3 +767,8 @@ This is source plus offline test/build evidence only; `runtime_eligible: false`.
 ### WP06 sim_eval wheel/IMU ingress — corrective review commit (F-04)
 
 Corrective commit parent `4ccb0491408c8b8bfbf0c34f5cb33329ec9979c6` addresses F-04 `ROLLBACK_TIMESTAMP_PRECEDENCE` on the existing review candidate branch; this is not a new candidate from integration. A valid backward timestamp is extracted and handled before wheel payload access and immediately resets pose/baseline, even when the payload is malformed. F-01/F-02/F-03 are retained. Final review HEAD remains offline evidence only, `runtime_eligible: false`; WP06-6E remains sole bridge owner. No runtime evidence or authorization is implied, `RUNTIME_APPROVED: NOT_APPROVED`, and WP-04/WP-05/Gate A/Gate B remain unchanged.
+### WP06 sim_eval Scan endpoint probe — L2 source routing
+
+Candidate `wp06-sim-eval-scan-endpoint-probe-4f491ed` is based on exact integration `4f491edca1d46dee259d57350ad520a0334e4049`. It supplies only offline-tested probe source. `<topic>scan</topic>` is not interpreted as a full Gazebo endpoint; only exact `gz.msgs.LaserScan` inspection results may be reported as observed and unpinned. The probe itself was not executed.
+
+Any future execution requires a separate capacity-one `APPROVED_RUNTIME` packet, exact command, pass/fail and stop criteria, and explicit User approval. Endpoint observations require Owner review/decision before WP06-6E (sole bridge owner) implements any bridge. This candidate creates no endpoint/source pin, bridge, ROS publisher, TF or runtime evidence/authorization. WP04/WP05, Gate A/Gate B and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
