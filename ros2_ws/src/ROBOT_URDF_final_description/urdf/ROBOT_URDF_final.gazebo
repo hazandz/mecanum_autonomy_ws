@@ -17,6 +17,12 @@
     </contact>
     <always_on>true</always_on>
   </sensor>
+  <sensor name="sim_eval_base_imu" type="imu">
+    <pose>0 0 0 0 0 0</pose>
+    <always_on>true</always_on>
+    <update_rate>50.0</update_rate>
+    <topic>/sim_eval/imu/raw</topic>
+  </sensor>
 </gazebo>
 
 <!-- ==================== BÁNH XE (MA SÁT BẰNG 0 ĐỂ TRƯỢT) ==================== -->

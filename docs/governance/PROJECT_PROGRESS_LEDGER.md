@@ -1119,3 +1119,21 @@
 | Evidence level | `PURE_CORE_SOURCE_AND_OFFLINE_UNIT_TEST_ONLY` |
 | Boundary | Unpublished `SafetyCommandDecision`; no runtime SafetySupervisor, ROS node/graph, `/cmd_vel` publisher, FinalTwistPublisher, receipt runtime, collision/TTC, physical E-stop integration, profile/config hash, runtime evidence, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B remain unchanged. |
 | `supersedes` | Rejected candidates are not reused; this candidate starts from the exact integration base. Earlier Ledger bytes remain unchanged. |
+
+
+### WP06_SIM_EVAL_WHEEL_IMU_RUNTIME_INGRESS_BARRIER_AND_CLOCK_CORRECTED — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `43c94789f628b4211189fc391326e0b119cbb6d3` |
+| Review branch | `wp06-sim-eval-wheel-imu-ingress-barrier-clock-fix-43c9478` |
+| Candidate commit | The single candidate commit is identified at delivery; it is not self-embedded in this append-only entry. |
+| Classification | `L2_SIM_EVAL_WHEEL_IMU_INGRESS_SOURCE_AND_BARRIER_CLOCK_CORRECTION` |
+| Scope | Fresh 18-path replacement candidate; no source or commit reuse from rejected candidate `38d52b19b8cacecbe49961f77df47eaacfd8c3c4`. |
+| F-01 | Invalid/duplicate/invalid-time/over-gap forward samples clear the integration interval and preserve trusted pose; a subsequent valid sample establishes a baseline; a later valid sample alone integrates. Stamp rollback resets pose and baseline. Candidate state is committed only after finite checks. |
+| F-02 | The node atomically sets `use_sim_time=true` and verifies the effective value immediately after initialization and before all endpoint creation; failure raises `RuntimeError`. |
+| Evidence level | `IMPLEMENTED_OFFLINE_BUILD_AND_TEST_ONLY`; source/parser/unit/build evidence only, not runtime evidence. |
+| Colcon test-result observation | `colcon test` runner output records `Ran 1 test`; `colcon test-result --verbose` reports `0 tests`. The discrepancy is explicit; colcon test success is not claimed. |
+| Ownership and boundary | Candidate 6C owns the static model-level IMU source and ingress source. WP06-6E remains the sole ROS–Gazebo bridge owner. Odometry derives only from staging wheel `JointState` velocity; no TF is published. `/odom` and `/ground_truth/odom` are prohibited EKF inputs. |
+| Runtime boundary | `runtime_eligible: false`; bridge implementation `PENDING_WP06_6E`; runtime evidence `NOT_CREATED`. No bridge implementation, ROS graph/runtime evidence, TF publisher, `/cmd_vel` publisher, EKF/Map Server execution, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`. WP-04/WP-05 and Gate A/Gate B are unchanged. |
+| `supersedes` | The rejected candidate is a historical reference only; no earlier Ledger entry is rewritten. |
