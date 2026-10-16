@@ -1181,3 +1181,19 @@
 | Status/boundary | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No endpoint pin, bridge, ROS `/scan` publisher, TF, profile resolution, runtime evidence or authorization. |
 | Lifecycle | Review candidate only; independent audit and separate exact-commit User authorization remain required before integration. |
 | `supersedes` | None; append-only entry. |
+
+
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUNTIME_BOOTSTRAP_AND_CAPACITY_ONE_GUARD — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration base | `bfc1ef3cfe4ba98beefbe7f18607b97a41e52d15` |
+| Review branch | `wp06-sim-eval-scan-probe-runtime-guard-bfc1ef3` |
+| Candidate commit | Exact candidate tip; reported in delivery and not self-embedded. |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUNTIME_BOOTSTRAP_AND_CAPACITY_ONE_GUARD` |
+| Scope | Isolated bootstrap source, capacity-one guard seed, one-shot supervisor source, offline tests and governance; exact 13-path allowlist. |
+| Guard state | Initial `AUTHORIZED_NOT_CONSUMED` is guard-local capacity state only, not runtime approval. After exact candidate integration: `RUNTIME_GUARD_IMPLEMENTED_NOT_CONSUMED`. |
+| Lifecycle | Review candidate only. Future runtime execution requires independent audit, integration of this exact candidate, and explicit User authorization for the exact integration ref. No guard consume or runtime execution occurred. |
+| Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY` |
+| Boundary | No endpoint pin, bridge, ROS `/scan` publisher, TF measurement, runtime evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization. WP-04/WP-05/Gate A/Gate B and `RUNTIME_APPROVED: NOT_APPROVED` are unchanged; WP06-6E remains sole canonical bridge owner. |
+| `supersedes` | None; append-only entry. Earlier Ledger bytes remain an exact prefix. |
