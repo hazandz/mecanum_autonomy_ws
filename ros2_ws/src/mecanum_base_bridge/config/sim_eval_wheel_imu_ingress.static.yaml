@@ -1,0 +1,32 @@
+schema: mecanum_sim_eval_wheel_imu_ingress_static/v1
+profile: sim_eval
+classification: STATIC_CONTRACT_ONLY
+runtime_eligible: false
+use_sim_time: true
+wheel_odometry:
+  topic: /wheel/odometry_raw
+  ros_message_type: nav_msgs/msg/Odometry
+  header_frame_id: odom
+  child_frame_id: base_link
+  publishes_tf: false
+imu:
+  topic: /imu/data
+  ros_message_type: sensor_msgs/msg/Imu
+  header_frame_id: __PENDING_IMU_GEOMETRY_SOURCE_PIN__
+  publishes_tf: false
+source_bindings:
+  sim_wheel_endpoint: PENDING_SIM_WHEEL_ENDPOINT_PIN
+  sim_imu_endpoint: PENDING_SIM_IMU_ENDPOINT_PIN
+  sensor_timing: PENDING_S2_SENSOR_TIMING_DECISION
+  runtime_eligibility: false
+prohibitions:
+  no_tf_publication: true
+  forbidden_input_topics:
+    - /odom
+    - /ground_truth/odom
+  forbidden_tf_edges:
+    - map -> odom
+    - odom -> base_link
+  forbidden_frame_aliases:
+    - base_scan
+    - rplidar_link
