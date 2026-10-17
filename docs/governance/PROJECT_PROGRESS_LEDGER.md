@@ -1271,3 +1271,16 @@
 | Guard / evidence | Run 004 seed `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; evidence ceiling `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime execution or guard consumption. |
 | Future boundary | Requires independent audit, exact candidate integration/ref verification and separate Owner authorization for the exact integrated commit. A future match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. |
 | Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS `/scan`, bridge, TF evidence, runtime authorization, profile resolution, `ResolvedConfigV3`, `config_hash`, or Gate B transition. |
+
+
+### WP06_6D_SCAN_PROBE_PERSISTENT_TRANSPORT_DISCOVERY_FIX — review candidate
+
+| Field | Status / evidence |
+|---|---|
+| Integration base / branch | `83f13d67ab212fec03b18cd2ed830349b7013ab3` / `wp06-scan-probe-persistent-transport-run005-83f13d` |
+| Scope | Independent Run 005 launch, pending capacity-one guard, delayed binding check, one persistent partition-bound transport node, service-list snapshots, create/probe session source and offline tests. |
+| Run 004 disposition | Historical service-discovery false-negative is not evidence of LiDAR failure; Run 004 artifacts are not modified or reinterpreted. Run 002/003/004 source and guard paths are outside this candidate diff. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime or guard consumption. |
+| Future boundary | Requires independent audit, exact integration and separate Owner authorization. Future match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. |
+| Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS `/scan`, bridge, TF, endpoint pin, `ResolvedConfigV3`, `config_hash`, runtime evidence or Gate B transition. |
+| `supersedes` | None; this is a new Run 005 candidate. Prior Ledger bytes remain an exact prefix. |

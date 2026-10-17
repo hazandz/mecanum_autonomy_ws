@@ -684,3 +684,22 @@ The corrective commit on `wp06-scan-probe-observation-teardown-b15e0fd` narrows 
 The review candidate `wp06-scan-probe-readiness-teardown-run004-db464f7` is based on `db464f741e24a81b3f9587f827fc145c533d8d6c`. It introduces a distinct Run 004 pending guard, a server-only launch, service-gated robot creation, and a session runner with direct-file transcripts and Linux `/proc` process-group accounting. Run 002 and Run 003 historical paths remain outside the candidate diff and are not changed or reinterpreted.
 
 The Run 004 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; candidate evidence is `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. Runtime use requires independent audit, exact candidate integration/ref verification, a clean integrated worktree, and separate Owner authorization for the exact integrated commit. A future result can be no stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. No endpoint pin, ROS `/scan`, bridge, TF evidence, runtime authorization, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is established. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+
+
+## WP06 scan-probe Run 005 persistent transport discovery — review candidate
+
+At exact base `83f13d67ab212fec03b18cd2ed830349b7013ab3`, this independent
+candidate prepares a Run 005 server launch and an offline-tested one-shot
+session source. Its delayed `gz.transport` binding check occurs before guard
+consumption; the future session creates one partition-bound `Node` and polls
+that same node for the exact world create service. It does not use the
+short-lived `gz service --list` CLI. Run 004's historical runtime report is
+not modified or reinterpreted; Run 002/003/004 source and guard paths remain
+outside this candidate diff.
+
+Run 005's guard seed remains
+`PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity one. Evidence
+ceiling is `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. A future
+exact match is no stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`;
+there is no ROS `/scan`, bridge, TF, runtime compatibility, Gate B, or
+`RUNTIME_APPROVED` claim. WP-04/WP-05 and Gate A/Gate B remain unchanged.

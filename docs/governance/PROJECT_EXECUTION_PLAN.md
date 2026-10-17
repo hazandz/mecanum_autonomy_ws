@@ -814,3 +814,22 @@ The corrective review commit updates the probe parser to accept only the unbrack
 At exact base `db464f741e24a81b3f9587f827fc145c533d8d6c`, this candidate prepares source and offline checks for Run 004. The server-only launch sets `GZ_PARTITION=wp06_scan_probe_run_004`, uses the existing local probe world, starts `robot_state_publisher`, and does not spawn. The future runner gates spawn on the exact Gazebo create service, then requires create exit code zero plus the exact `Entity creation successful.` transcript bytes before probing once. Bootstrap and create output are written directly to files; readiness is not parsed from buffered bootstrap pipes. Teardown reaps the direct child and records exact process-group live/zombie members from `/proc`.
 
 Run 002 and Run 003 remain immutable historical evidence and are untouched. The Run 004 capacity-one guard is pending and unconsumed. This review candidate did not run ROS/Gazebo/`gz`, launch, probe, or supervisor and creates no runtime evidence. Any future runtime requires independent audit, exact candidate integration and remote-ref verification, then separate Owner authorization for the exact integrated commit. Even a future exact probe match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`; it does not establish ROS `/scan`, a bridge, TF, runtime compatibility, `ResolvedConfigV3`, `config_hash`, Gate B, or runtime approval. WP-04 remains `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`.
+
+
+## WP06 6D scan probe Run 005 — persistent transport readiness (review candidate)
+
+At exact base `83f13d67ab212fec03b18cd2ed830349b7013ab3`, the Run 005
+candidate replaces transient service-list CLI readiness with one persistent
+partition-bound `gz.transport.Node`, while retaining bounded service
+discovery, exact create readiness, one future probe and process-group
+accounting. The binding import is delayed and must succeed before its pending
+capacity-one guard can be consumed. This is source, offline test and build
+evidence only; no runtime was executed. Run 004's reported CLI discovery
+false-negative is not a LiDAR failure claim, and its historical evidence is
+unchanged.
+
+The Run 005 guard remains pending and unconsumed. Future runtime requires
+independent audit, exact integration and separate Owner authorization. A
+future exact probe match means only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`.
+WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B
+`NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
