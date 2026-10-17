@@ -165,12 +165,44 @@ def test_harmonic_unbracketed_publisher_exact_type_passes(tmp_path):
     assert all(call[1]["shell"] is False for call in runner.calls)
 
 
+def test_run005_observed_111_byte_harmonic_transcript_replays_as_exact_match(tmp_path):
+    topic = "/scan"
+    raw_info = (
+        b"Publishers [Address, Message Type]:\n"
+        b"  tcp://127.0.0.1:44619, gz.msgs.LaserScan\n"
+        b"No subscribers on topic [/scan]\n"
+    )
+    assert len(raw_info) == 111
+    result, _ = _result_for(tmp_path, [topic], {topic: raw_info})
+    assert result["outcome"] == "EXACTLY_ONE_MATCH"
+    assert result["observed_endpoints"] == [
+        {
+            "message_type": "gz.msgs.LaserScan",
+            "status": "OBSERVED_NOT_PINNED",
+            "topic": "/scan",
+        }
+    ]
+    assert (tmp_path / "transcripts/command-0002.stdout.bin").read_bytes() == raw_info
+
+
 def test_non_scan_publisher_has_distinct_fail_closed_outcome(tmp_path):
     topic = "/robot/scan"
     result, _ = _result_for(tmp_path, [topic], {
         topic: b"Publishers [Address, Message Type]:\ntcp://127.0.0.1:1234, gz.msgs.PointCloudPacked\n"
     })
     assert result["outcome"] == "NO_EXPECTED_PUBLISHER_TYPE"
+    assert result["observed_endpoints"] == []
+
+
+def test_multiple_publishers_for_one_candidate_fail_closed(tmp_path):
+    topic = "/scan"
+    info = (
+        b"Publishers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:1234, gz.msgs.LaserScan\n"
+        b"tcp://127.0.0.1:2345, gz.msgs.LaserScan\n"
+    )
+    result, _ = _result_for(tmp_path, [topic], {topic: info})
+    assert result["outcome"] == "AMBIGUOUS_PUBLISHERS"
     assert result["observed_endpoints"] == []
 
 

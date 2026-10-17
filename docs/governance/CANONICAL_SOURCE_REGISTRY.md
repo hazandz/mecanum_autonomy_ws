@@ -686,31 +686,28 @@ The review candidate `wp06-scan-probe-readiness-teardown-run004-db464f7` is base
 The Run 004 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; candidate evidence is `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. Runtime use requires independent audit, exact candidate integration/ref verification, a clean integrated worktree, and separate Owner authorization for the exact integrated commit. A future result can be no stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. No endpoint pin, ROS `/scan`, bridge, TF evidence, runtime authorization, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is established. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
 
 
-## WP06 scan-probe Run 005 persistent transport discovery — corrective review candidate
+## WP06 scan-probe Run 005 persistent transport discovery — parser corrective review candidate
 
-Run 005 remains a source, offline-test and build-only candidate based on
-`83f13d67ab212fec03b18cd2ed830349b7013ab3`. The corrective review commit
-uses Gazebo Harmonic's Gazebo Transport 13 Python binding, supplied on a
-runtime host by `python3-gz-transport13`: `from gz.transport13 import Node,
-NodeOptions`. The runner imports the binding, constructs `NodeOptions`, sets
-`wp06_scan_probe_run_005`, creates exactly one Node, and verifies callable
-`service_list` before creating the run directory or acquiring the pending
-capacity-one guard. The same Node is reused for bounded persistent service
-polling; no second Node or `gz service --list` is used.
+The existing Run 005 review line retains its exact review/integration topology,
+Transport 13 pre-acquire check, one-node service discovery, world, LiDAR,
+create command, and teardown behavior. The source parser now recognizes the
+Gazebo Harmonic publisher record followed by the exact `No subscribers on
+topic [/scan]` footer. It accepts one publisher of exact type
+`gz.msgs.LaserScan`; missing, malformed, wrong-type, subscriber-only, or
+ambiguous publisher information fails closed.
 
-Any binding, options, partition assignment, Node construction or capability
-failure stops before guard consumption, run-directory creation, or process
-startup. The Run 005 guard remains
-`PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity one. This
-candidate did not run `apt`, `sudo`, ROS, Gazebo, launch, the session runner,
-or runtime. Run 004 historical evidence and Run 002/003/004 source and guard
-paths remain unchanged. The review-commit/integration-base topology, create
-command, world, LiDAR source, probe, and process-group teardown are preserved.
+Run 005 runtime was invoked once on parent
+`20814c9009cee588f6b330ee227f69d886949593`. The historical record remains
+`PROBE_NOT_EXACTLY_ONE_MATCH`, and the runtime-host authorization is consumed.
+Independent review of the preserved 111-byte inspection transcript confirmed
+one Gazebo `gz.msgs.LaserScan` publisher; offline replay of those bytes yields
+`GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. The historical run record is
+unchanged. Although the Git guard file remains a pending source seed, it is
+not authorization to rerun Run 005; no retry is allowed.
 
-Evidence remains `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no
-runtime was executed, and no bridge, ROS `/scan`, TF, endpoint pin, runtime
-evidence, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime
-approval is established. Runtime still needs independent audit and separate
-Owner authorization for an exact review commit. WP-04 `BLOCKED_BY_CONTRACT`,
-WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and
-`RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+This parser correction is source plus offline-test evidence only; it did not
+run ROS, Gazebo, `gz`, launch, probe, or the session runner. It creates no ROS
+`/scan`, bridge, TF evidence, endpoint pin, runtime approval, `ResolvedConfigV3`,
+`config_hash`, or Gate B transition. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`,
+Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`
+remain unchanged.

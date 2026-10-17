@@ -68,6 +68,7 @@ OUTCOMES = frozenset(
         "NO_CANDIDATE_TOPIC",
         "NO_PUBLISHER_MATCH",
         "NO_EXPECTED_PUBLISHER_TYPE",
+        "AMBIGUOUS_PUBLISHERS",
         "AMBIGUOUS_PUBLISHER_MATCHES",
         "TOPIC_INFO_UNRECOGNIZED",
         "GZ_COMMAND_NOT_FOUND",
@@ -87,6 +88,9 @@ _PUBLISHERS_HEADER = re.compile(
 )
 _SUBSCRIBERS_HEADER = re.compile(
     r"^\s*Subscribers\s+\[Address,\s*Message Type\]:\s*$"
+)
+_NO_SUBSCRIBERS = re.compile(
+    r"^\s*No subscribers on topic \[(?P<topic>[^\[\]\r\n]+)\]\s*$"
 )
 _SECTION_HEADER = re.compile(r"^\s*[A-Za-z][A-Za-z ]*\s+\[.*\]:\s*$")
 _ENDPOINT_LINE = re.compile(
@@ -137,8 +141,8 @@ def _parse_topic_listing(raw):
     return topics
 
 
-def _parse_topic_info(raw):
-    """Return structured publisher types; subscriber and legacy lines never match."""
+def _parse_topic_info(raw, expected_topic=None):
+    """Parse publisher records and the exact Harmonic no-subscribers footer."""
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
@@ -158,6 +162,16 @@ def _parse_topic_info(raw):
         end = min(later_headers) if later_headers else len(lines)
         for line in lines[start:end]:
             if not line.strip():
+                continue
+            no_subscribers = _NO_SUBSCRIBERS.fullmatch(line)
+            if no_subscribers:
+                footer_topic = no_subscribers.group("topic")
+                if (
+                    not _valid_absolute_topic(footer_topic)
+                    or expected_topic is None
+                    or footer_topic != expected_topic
+                ):
+                    return False, ()
                 continue
             entry = _ENDPOINT_LINE.fullmatch(line)
             if not entry:
@@ -314,9 +328,11 @@ def probe_scan_endpoint(
         observations.append(observation)
         if error:
             return _result(error, observations)
-        recognized, publisher_types = _parse_topic_info(info)
+        recognized, publisher_types = _parse_topic_info(info, expected_topic=topic)
         if not recognized:
             return _result("TOPIC_INFO_UNRECOGNIZED", observations, detail=f"malformed info for {topic}")
+        if len(publisher_types) > 1:
+            return _result("AMBIGUOUS_PUBLISHERS", observations, detail=f"multiple publishers for {topic}")
         has_any_publisher = has_any_publisher or bool(publisher_types)
         if SENSOR_PROVENANCE["expected_gz_message_type"] in publisher_types:
             matches.append(topic)

@@ -1309,3 +1309,17 @@
 | Guard | Run 005 remains PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION; capacity 1; not consumed. |
 | Supersedes | The Run 005 binding/pre-acquisition defect recorded by the preceding candidate state; prior ledger entries remain unchanged. |
 | Notes | Offline candidate only. No apt/sudo, ROS, Gazebo, launch, runner, runtime, bridge, ROS /scan, endpoint pin, or runtime authorization. |
+
+
+### WP06-RUN005-HARMONIC-TOPIC-INFO-RAW-TRANSCRIPT-PARSER-CORRECTION
+
+| Field | Value |
+|---|---|
+| Work item | WP06_6D_SCAN_PROBE_PERSISTENT_TRANSPORT_DISCOVERY_FIX |
+| Parent / integration base | 20814c9009cee588f6b330ee227f69d886949593 / 83f13d67ab212fec03b18cd2ed830349b7013ab3 |
+| Scope | Parser-only correction for the exact Harmonic publisher record plus no-subscribers footer; exact raw transcript replayed offline. |
+| Historical Run005 | Runtime invoked once; historical terminal outcome remains PROBE_NOT_EXACTLY_ONE_MATCH; host authorization is consumed. No retry. |
+| Offline replay | EXACTLY_ONE_MATCH; GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED; not a ROS endpoint pin or bridge claim. |
+| Guard source seed | PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION; capacity 1. This Git seed does not authorize another Run005 runtime. |
+| Evidence status | Parser source and offline test only; historical run record is unmodified. |
+| `supersedes` | Corrects the Run005 parser outcome interpretation without rewriting historical runtime outcome or earlier ledger bytes. |

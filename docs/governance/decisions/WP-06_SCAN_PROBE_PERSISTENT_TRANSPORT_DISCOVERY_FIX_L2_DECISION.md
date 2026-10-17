@@ -84,3 +84,29 @@ review commit, while the integration ref remains the exact base and must be
 an ancestor. No bridge, ROS `/scan`, TF, endpoint pin, runtime evidence,
 `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is
 created. `RUNTIME_APPROVED: NOT_APPROVED` and WP/Gate statuses are unchanged.
+
+
+## Corrective candidate: Harmonic topic-info footer parser replay
+
+This is a parser-only correction on the existing Run 005 review line. The
+historical Run 005 session was invoked exactly once on review commit
+`20814c9009cee588f6b330ee227f69d886949593`; its immutable run record remains
+`PROBE_NOT_EXACTLY_ONE_MATCH`, and its runtime-host authorization was consumed.
+The Git source guard remains the pending seed snapshot; it does not permit a
+second Run 005 runtime session. No Run 005 retry is authorized or performed.
+
+Independent review of the preserved 111-byte `gz topic -i -t /scan` raw
+transcript confirmed one unbracketed Harmonic publisher entry:
+`tcp://127.0.0.1:44619, gz.msgs.LaserScan`, followed by
+`No subscribers on topic [/scan]`. Offline replay of those exact bytes with
+the corrected parser returns `EXACTLY_ONE_MATCH` and
+`GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. The historical run-record
+terminal outcome is not rewritten. The correction accepts that exact
+no-subscribers footer, requires one publisher record with exact
+`gz.msgs.LaserScan`, and fails closed for missing, malformed, wrong-type or
+ambiguous publishers.
+
+This replay does not establish a ROS `/scan` publisher, ROS–Gazebo bridge, TF,
+runtime compatibility, endpoint pin, runtime approval, or Gate B. No runtime
+was rerun for this correction; Run 005 remains consumed and must not be run
+again.

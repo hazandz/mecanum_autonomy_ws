@@ -816,25 +816,23 @@ At exact base `db464f741e24a81b3f9587f827fc145c533d8d6c`, this candidate prepare
 Run 002 and Run 003 remain immutable historical evidence and are untouched. The Run 004 capacity-one guard is pending and unconsumed. This review candidate did not run ROS/Gazebo/`gz`, launch, probe, or supervisor and creates no runtime evidence. Any future runtime requires independent audit, exact candidate integration and remote-ref verification, then separate Owner authorization for the exact integrated commit. Even a future exact probe match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`; it does not establish ROS `/scan`, a bridge, TF, runtime compatibility, `ResolvedConfigV3`, `config_hash`, Gate B, or runtime approval. WP-04 remains `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`.
 
 
-## WP06 6D scan probe Run 005 — Transport 13 pre-acquire correction (review candidate)
+## WP06 6D scan probe Run 005 — Harmonic topic-info parser correction (review candidate)
 
-The corrective review candidate retains Run 005's persistent transport
-readiness design and review-commit/integration-base topology. Gazebo Harmonic
-uses Gazebo Transport 13; a runtime host requires `python3-gz-transport13`
-and `from gz.transport13 import Node, NodeOptions`. Before creating the run
-directory or consuming the pending guard, the future runner imports that
-binding, constructs `NodeOptions`, sets the exact Run 005 partition, creates
-one Node, and confirms callable `service_list`. A pre-acquire failure leaves
-the guard pending and creates no run directory or process. The exact same Node
-is reused for service discovery; no `gz service --list` or second Node is
-used.
+The existing Run 005 review candidate receives a parser-only correction for
+the observed Gazebo Harmonic topic-info output. The parser accepts one exact
+`gz.msgs.LaserScan` publisher record and the `No subscribers on topic [/scan]`
+footer, and fails closed for missing, malformed, wrong-type, subscriber-only,
+or ambiguous publishers. The recorded raw 111-byte transcript is replayed
+offline; the corrected result is `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`.
 
-This candidate is source/offline-test/build only; it does not install host
-packages or execute ROS, Gazebo, launch, the runner, or runtime. The capacity-
-one Run 005 guard remains pending. Run 002/003/004 history, world, LiDAR,
-probe, create command, bridge boundaries, and teardown policy are unchanged.
-Runtime requires independent audit and separate Owner authorization for the
-exact review commit. No ROS `/scan`, bridge, TF, endpoint pin, runtime
-approval, `ResolvedConfigV3`, `config_hash`, or Gate B transition is created.
-WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B
+Run 005 itself was already invoked once on parent
+`20814c9009cee588f6b330ee227f69d886949593`. Its immutable historical terminal
+outcome remains `PROBE_NOT_EXACTLY_ONE_MATCH`; the host runtime authorization
+was consumed. The source guard's pending state is only its Git seed and does
+not permit rerunning Run 005. No runtime retry is performed or authorized.
+
+This correction is parser source and offline-test evidence only. The run record
+is not edited; no ROS `/scan`, bridge, TF, endpoint pin, profile resolution,
+`ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is
+created. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B
 `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
