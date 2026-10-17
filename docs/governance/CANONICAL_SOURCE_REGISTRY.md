@@ -747,3 +747,16 @@ Status: `IMPLEMENTED_OFFLINE_BRIDGE_AND_INGRESS_SOURCE_ONLY`; `runtime_eligible:
 Read-only recalculation of the external Run 001 artifact set found all 35 files and SHA256SUMS entries consistent with `artifact_manifest.json`. The immutable run remains `WP06_6C_RUNTIME_FAIL_NO_RETRY`: the ROS staging `/sim_eval/imu_raw` payload was not captured and the `/imu/data` echo timed out with empty stdout/stderr. Topic info shows publisher/subscriber endpoints but is not payload proof. Therefore A (Gazebo source emission), B (bridge transfer), and C (normalizer rejection) are all `NOT_PROVEN`; finding: `RUN001_RAW_IMU_STAGING_SAMPLE_NOT_CAPTURED_ROOT_CAUSE_NOT_PROVABLE`.
 
 The correction is observability-only: one structured first-accept record and first record per normalizer rejection gate, plus an offline YAML multi-document transcript parser using `yaml.safe_load_all`. It changes no sensor, bridge, IMU acceptance semantics, wheel behavior, or public ROS topic. A future runtime packet must also capture a Gazebo-side `/sim_eval/imu/raw` payload to distinguish A from B, as well as ROS staging payload, verbose staging topic info, canonical `/imu/data`, and gate diagnostics. Current evidence is source/offline tests only; `runtime_eligible: false`; corrective runtime evidence not created; `RUNTIME_APPROVED: NOT_APPROVED`; Gate B `NOT_STARTED`.
+
+
+### WP06-6C Run 002 world IMU-system correction — existing review branch
+
+The proven Run 002 finding is `GAZEBO_IMU_SYSTEM_PLUGIN_ABSENT`: no Gazebo
+publisher was observed on `/sim_eval/imu/raw`, while wheel and scan paths
+operated; the local probe world had `gz-sim-sensors-system` but lacked
+`gz-sim-imu-system`. The corrective source adds exactly one world-level
+`gz-sim-imu-system` plugin and an offline XML regression test for exactly one
+world-level Sensors and IMU system. This does not establish runtime sensor,
+bridge, or normalizer success. Run 002 remains immutable and is not replayed.
+Evidence remains offline source/test/build only; `runtime_eligible: false`,
+runtime evidence not created, and `RUNTIME_APPROVED: NOT_APPROVED`.

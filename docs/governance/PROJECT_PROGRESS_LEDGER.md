@@ -1427,3 +1427,16 @@
 | Reconciliation | Registry, WP06-6C decision, and WP06-6C evidence already contain the authoritative SHA; this entry reconciles governance provenance only. |
 | Boundary | No source, bridge, normalizer, wheel behavior, Run 001 runtime result, or authorization state changed. Historical bytes remain intact; this Ledger entry is append-only. |
 | `supersedes` | Corrects only the current Gazebo SHA transcription in the immediately preceding WP06-6C candidate entry. |
+
+
+### WP06_6C_IMU_WORLD_SYSTEM_ROOT_CAUSE_FIX — corrective review candidate
+
+| Field | Value |
+|---|---|
+| Branch / parent | `wp06-6c-wheel-imu-ingress-activation-bd74956` / `660008e590518b454973b3c71190198c1830f215` |
+| Classification | `L2_CORRECTIVE_SOURCE_ACTIVATION` |
+| Proven root cause | `GAZEBO_IMU_SYSTEM_PLUGIN_ABSENT`; Run 002 raw evidence showed no Gazebo publisher on `/sim_eval/imu/raw`, while scan and wheel paths operated; the world had the Sensors system but lacked the IMU system. |
+| Correction | Added exactly one direct world-level `gz-sim-imu-system` plugin; offline XML regression requires exactly one world-level Sensors and IMU system and rejects removal or renaming. |
+| Historical boundary | Run 002 remains immutable historical failure; no runtime retry occurred. This correction does not establish sensor, bridge, or normalizer runtime PASS. |
+| Evidence status | Offline source/test/build evidence only; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; Gate B `NOT_STARTED`. |
+| `supersedes` | Supersedes only the current Run 002 root-cause remediation routing; historical runtime artifacts and prior Ledger bytes remain unchanged. |

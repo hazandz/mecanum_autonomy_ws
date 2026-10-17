@@ -82,3 +82,22 @@ The new source and tests are offline-only; they are not runtime evidence and
 do not prove or claim a repaired sensor, bridge, or normalizer semantic cause.
 `runtime_eligible: false`; no runtime retry or authorization is created.
 `RUNTIME_APPROVED: NOT_APPROVED`; Gate B remains `NOT_STARTED`.
+
+
+## Corrective world-system activation — Run 002 root cause
+
+This L2 corrective source activation addresses the proven Run 002 finding
+`GAZEBO_IMU_SYSTEM_PLUGIN_ABSENT`. The historical raw runtime evidence showed
+no Gazebo publisher on `/sim_eval/imu/raw`, while the wheel and scan paths
+operated; the probe world contained one world-level
+`gz-sim-sensors-system` and no `gz-sim-imu-system`. The only semantic source
+change adds one direct child of `<world>`:
+`<plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>`.
+
+An offline XML test requires exactly one world-level Sensors system and one
+world-level IMU system, and rejects a removed or renamed IMU plugin. This
+candidate supplies offline source/test/build evidence only. It does not show
+that the Gazebo IMU sensor, bridge, or normalizer now passes at runtime.
+Run 002 remains an immutable historical failure; no runtime was retried.
+`runtime_eligible: false`; `RUNTIME_APPROVED: NOT_APPROVED`; Gate B remains
+`NOT_STARTED`.

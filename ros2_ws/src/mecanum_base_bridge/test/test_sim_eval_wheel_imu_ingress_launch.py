@@ -1,9 +1,27 @@
 import ast
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH = ROOT / "launch/sim_eval_wheel_imu_ingress.launch.py"
+WORLD = ROOT.parent / "ROBOT_URDF_final_description/launch/sim_eval_scan_probe.world.sdf"
+
+
+def _assert_world_sensor_system_contract(root):
+    world = root.find("world")
+    assert world is not None
+    plugins = root.findall(".//plugin")
+    sensors = [plugin for plugin in plugins if plugin.get("filename") == "gz-sim-sensors-system"]
+    imu = [plugin for plugin in plugins if plugin.get("filename") == "gz-sim-imu-system"]
+    assert len(sensors) == 1
+    assert len(imu) == 1
+    assert sensors[0] in list(world)
+    assert imu[0] in list(world)
+    assert sensors[0].get("name") == "gz::sim::systems::Sensors"
+    assert imu[0].get("name") == "gz::sim::systems::Imu"
 
 
 def _calls(tree, name):
@@ -55,3 +73,20 @@ def test_launch_starts_only_bridge_and_ingress_and_uses_installed_config_file():
     forbidden = ("robot_localization", "nav2", "amcl", "map_server", "static_transform_publisher", "tf2_ros", "ros_gz_sim", "spawn_entity", "/odom", "/ground_truth/odom", "/tf", "/cmd_vel")
     assert all(token not in source.lower() for token in forbidden)
     assert "create_publisher" not in source and "create_subscription" not in source
+
+
+def test_probe_world_has_exact_world_level_sensors_and_imu_systems():
+    root = ET.parse(WORLD).getroot()
+    _assert_world_sensor_system_contract(root)
+
+
+@pytest.mark.parametrize("mutation", ["remove", "rename"])
+def test_probe_world_contract_rejects_missing_or_renamed_imu_system(mutation):
+    root = ET.parse(WORLD).getroot()
+    imu = next(plugin for plugin in root.findall(".//plugin") if plugin.get("filename") == "gz-sim-imu-system")
+    if mutation == "remove":
+        root.find("world").remove(imu)
+    else:
+        imu.set("filename", "gz-sim-imu-system-renamed")
+    with pytest.raises(AssertionError):
+        _assert_world_sensor_system_contract(root)

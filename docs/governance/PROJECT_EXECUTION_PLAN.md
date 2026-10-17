@@ -870,3 +870,17 @@ Evidence status is `IMPLEMENTED_OFFLINE_BRIDGE_AND_INGRESS_SOURCE_ONLY`; `runtim
 Run 001 remains the immutable historical failure `WP06_6C_RUNTIME_FAIL_NO_RETRY`. Recalculated raw artifact hashes agree with its manifest, but no `/sim_eval/imu_raw` payload was captured and the `/imu/data` echo transcript is empty after timeout. Endpoint counts do not establish payload delivery. The source, bridge, and normalizer branches A/B/C are therefore not provable from Run 001.
 
 This existing-branch correction adds bounded structured first-accept/first-rejection diagnostics for the existing normalizer gates and an offline multi-document YAML transcript parser; wheel and sensor/bridge semantics stay unchanged. Before any future capacity-one runtime, evidence must include a Gazebo-side `/sim_eval/imu/raw` sample, ROS staging `/sim_eval/imu_raw` payload plus verbose topic info, canonical `/imu/data`, and structured rejection details for stamp, frame, finite values, quaternion norm, and monotonic timestamp. Use `yaml.safe_load_all`; publisher counts alone are insufficient. The correction is source/offline-test evidence only, `runtime_eligible: false`; Run 001 is not replayed and no runtime authorization is issued. `RUNTIME_APPROVED: NOT_APPROVED`; Gate B remains `NOT_STARTED`.
+
+
+### WP06-6C Run 002 world IMU-system corrective source activation
+
+Run 002 raw evidence identifies `GAZEBO_IMU_SYSTEM_PLUGIN_ABSENT`: the world
+had the Sensors system but no IMU system, and no Gazebo publisher was
+observed on `/sim_eval/imu/raw`; scan and wheel paths remained operational.
+The corrective source adds exactly one direct world-level
+`gz-sim-imu-system` plugin and an offline XML regression test that rejects
+absence or renaming. Run 002 remains an immutable historical failure and is
+not retried. This candidate provides offline source/test/build evidence only;
+`runtime_eligible: false`, runtime evidence `NOT_CREATED`, and
+`RUNTIME_APPROVED: NOT_APPROVED`. It makes no runtime-pass claim for the sensor,
+bridge, or normalizer.
