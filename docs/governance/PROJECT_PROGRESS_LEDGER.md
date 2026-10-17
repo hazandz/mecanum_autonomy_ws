@@ -1415,3 +1415,15 @@
 | Future evidence | Capture Gazebo `/sim_eval/imu/raw`, ROS staging `/sim_eval/imu_raw` payload and verbose topic info, canonical `/imu/data`, and the structured gate diagnostics. |
 | Evidence status | `IMPLEMENTED_OFFLINE_OBSERVABILITY_SOURCE_AND_TESTS_ONLY`; `runtime_eligible: false`; no corrective runtime evidence or authorization. `RUNTIME_APPROVED: NOT_APPROVED`; Gate B `NOT_STARTED`. |
 | Supersedes | Clarifies Run 001 observability and future evidence needs only; historical record and all preceding Ledger bytes remain unchanged. |
+
+
+### WP06_6C_GAZEBO_SHA_PROVENANCE_TRANSCRIPTION_CORRECTION
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-17 |
+| Scope | Governance provenance correction only for the current WP06-6C Gazebo source pin. |
+| Correction | A malformed 61-character historical transcription in the preceding WP06-6C entry is a transcription error. The authoritative Gazebo source SHA-256 is `7bbaa475578600d8e18e437fa83720483b90b4af2bf4212151257152429576a2`. |
+| Reconciliation | Registry, WP06-6C decision, and WP06-6C evidence already contain the authoritative SHA; this entry reconciles governance provenance only. |
+| Boundary | No source, bridge, normalizer, wheel behavior, Run 001 runtime result, or authorization state changed. Historical bytes remain intact; this Ledger entry is append-only. |
+| `supersedes` | Corrects only the current Gazebo SHA transcription in the immediately preceding WP06-6C candidate entry. |
