@@ -1196,3 +1196,20 @@
 | Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; guard not consumed and no runtime execution. |
 | Status/boundary | After audit, integration, remote-ref verification and separate exact User authorization only: `RUNTIME_GUARD_IMPLEMENTED_AWAITING_EXACT_USER_AUTHORIZATION`. No endpoint pin, bridge, runtime evidence/authorization or Gate B transition. WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | Rejected review commit `2b5fa296b2bf9cdfa732bdb8e7b435b96b8fdda4`; no source or commit was used. |
+
+
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE_DETERMINISTIC_BOOTSTRAP_REMEDIATION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `be5f63e7a01be0bca0b838e1ae5265bbb7145be8` |
+| Review branch | `wp06-scan-probe-deterministic-bootstrap-be5f63e` |
+| Candidate commit | Exact review-branch tip; not embedded in this append-only entry. |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_DETERMINISTIC_BOOTSTRAP_REMEDIATION` |
+| Scope | Local Fuel-free scan-probe world and explicit server-only Run 002 bootstrap; no runtime execution. |
+| Run 001 | Guard remains byte-identical and pending at base; if this candidate is integrated, Run 001 is `NOT_CONSUMED_AND_INVALIDATED_BY_EXACT_INTEGRATION_MISMATCH`. |
+| Run 002 | Capacity one, future-only, state `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; not runtime authorization. |
+| Readiness gate | Future bootstrap requires `ros_gz_sim create` to print exactly `Entity creation successful.`; no fixed delay substitutes for readiness. |
+| Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; no runtime evidence. |
+| Preserved boundary | No endpoint pin, ROS `/scan`, bridge, TF, runtime evidence/authorization, resolved profile, `ResolvedConfigV3`, `config_hash` or Gate B transition. WP06-6E remains sole bridge owner. WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; earlier Ledger bytes remain an exact prefix. |

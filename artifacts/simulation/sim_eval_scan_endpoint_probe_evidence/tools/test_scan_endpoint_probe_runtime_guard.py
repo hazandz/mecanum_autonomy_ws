@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +19,14 @@ if str(TOOLS) not in sys.path:
 
 import scan_endpoint_probe_runtime_guard as guard
 import run_scan_endpoint_probe_once as supervisor
+
+
+RUN001_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_001.json"
+RUN002_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_002.json"
+RUN002_AUTHORITY = {
+    "path": "docs/governance/decisions/WP-06_SIM_EVAL_SCAN_ENDPOINT_PROBE_DETERMINISTIC_BOOTSTRAP_REMEDIATION_L2_DECISION.md",
+    "sha256": "580773194d810da301474632038db15f1a1720aafa040450bcf2974677e34f1d",
+}
 
 
 def _write(root: Path, relative: str, content: bytes) -> None:
@@ -164,3 +173,50 @@ def test_static_scope_never_imports_or_reuses_contact_guard_or_runtime_processes
     for forbidden in ("contact_producer_evidence", "Popen", "shell=True", "ros2 ", "gz topic -e", "ros_gz_bridge", "rclpy"):
         assert forbidden not in combined
     assert "subprocess.run" in (ROOT / supervisor.SUPERVISOR_SOURCE_PATH).read_text(encoding="utf-8")
+
+
+def test_run001_guard_is_unchanged_from_exact_base():
+    base = "be5f63e7a01be0bca0b838e1ae5265bbb7145be8"
+    expected = subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{base}:{RUN001_PATH}"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert (ROOT / RUN001_PATH).read_bytes() == expected
+
+
+def test_run002_seed_is_canonical_pending_capacity_one_and_not_authorization():
+    path = ROOT / RUN002_PATH
+    raw = path.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf")
+    assert not raw.endswith(b"\n")
+    record = guard.read_canonical_record(path)
+    assert set(record) == {"capacity", "context", "state", "version"}
+    assert record["capacity"] == 1 and type(record["capacity"]) is int
+    assert record["version"] == 1 and type(record["version"]) is int
+    assert record["state"] == "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
+    context = record["context"]
+    assert context["run_id"] == "WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_002"
+    assert context["gz_partition"] == "wp06_scan_probe_run_002"
+    assert context["world_name"] == "wp06_scan_probe_world"
+    assert context["candidate_runtime_authorization"] is False
+    assert context["owner_only_runtime_authorization_required_after_integration"] is True
+    assert context["expected_integration_commit_status"] == "MUST_BE_SUPPLIED_AS_EXACT_40_HEX_AFTER_INTEGRATION_AND_OWNER_AUTHORIZATION"
+    assert context["mismatch_policy"] == "FAIL_CLOSED"
+    assert context["retry_after_consumption"] is False
+    assert context["bootstrap_readiness_evidence"] == "ros_gz_sim create must log exact line: Entity creation successful."
+    assert context["authority_packet"] == RUN002_AUTHORITY
+    assert context["expected_gz_type"] == "gz.msgs.LaserScan"
+    assert context["future_ros_boundary"] == "GZ_TO_ROS /scan sensor_msgs/msg/LaserScan"
+    assert context["command_literal"] == (
+        "env GZ_PARTITION=wp06_scan_probe_run_002 "
+        "PYTHONPATH={repo_root}/ros2_ws/src/mecanum_nav_bringup "
+        "python3 -m mecanum_nav_bringup.sim_eval_scan_endpoint_probe"
+    )
+    source_pins = context["source_pins"]
+    assert set(source_pins) == {
+        "bootstrap_launch", "gazebo_source", "probe_descriptor", "probe_module", "probe_world"
+    }
+    for source in source_pins.values():
+        assert hashlib.sha256((ROOT / source["path"]).read_bytes()).hexdigest() == source["sha256"]
+    assert not (ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/runs/WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_002").exists()

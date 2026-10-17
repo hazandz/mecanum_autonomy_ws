@@ -1,4 +1,4 @@
-"""Bridge-free, future-only bootstrap source for the scan endpoint probe."""
+"""Bridge-free, future-only bootstrap for the bounded scan endpoint probe."""
 
 import os
 
@@ -10,12 +10,13 @@ from launch_ros.actions import Node
 import xacro
 
 
-GZ_PARTITION = "wp06_scan_probe_run_001"
+GZ_PARTITION = "wp06_scan_probe_run_002"
+WORLD_NAME = "wp06_scan_probe_world"
 ENTITY_NAME = "ROBOT_URDF_final"
 
 
 def generate_launch_description():
-    """Create only Gazebo, one RSP, and one robot creation action."""
+    """Declare one server, one RSP, and one exact-name robot creation action."""
     ros_gz_sim_share = get_package_share_directory("ros_gz_sim")
     robot_share = get_package_share_directory("ROBOT_URDF_final_description")
     resource_parent = os.path.dirname(robot_share)
@@ -24,31 +25,34 @@ def generate_launch_description():
         item for item in (resource_parent, existing_resources) if item
     )
     robot_xacro = os.path.join(robot_share, "urdf", "ROBOT_URDF_final.xacro")
-    world_sdf = os.path.join(robot_share, "launch", "tugbot_depot.sdf")
+    world_sdf = os.path.join(robot_share, "launch", "sim_eval_scan_probe.world.sdf")
     robot_description = {"robot_description": xacro.process_file(robot_xacro).toxml()}
 
     set_resource_path = SetEnvironmentVariable(
         name="GZ_SIM_RESOURCE_PATH", value=resource_path
     )
-    # This is deliberately unconditional: no inherited partition is permitted.
+    # Always override any inherited partition for this isolated future probe.
     set_partition = SetEnvironmentVariable(name="GZ_PARTITION", value=GZ_PARTITION)
     robot_state_publisher = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
         name="robot_state_publisher",
-        parameters=[robot_description, {"use_sim_time": False}],
+        parameters=[robot_description, {"use_sim_time": True}],
         output="screen",
     )
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(ros_gz_sim_share, "launch", "gz_sim.launch.py")
         ),
-        launch_arguments={"gz_args": f"-r -v 4 {world_sdf}"}.items(),
+        launch_arguments={"gz_args": f"-r -s -v 4 {world_sdf}"}.items(),
     )
+    # A future runtime gate requires the create process to log exactly
+    # "Entity creation successful." before any supervisor invocation.
     spawn_robot = Node(
         package="ros_gz_sim",
         executable="create",
         arguments=[
+            "-world", WORLD_NAME,
             "-topic", "/robot_description",
             "-name", ENTITY_NAME,
             "-allow_renaming", "false",
