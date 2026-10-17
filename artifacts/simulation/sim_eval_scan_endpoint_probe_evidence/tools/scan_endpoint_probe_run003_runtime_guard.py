@@ -15,7 +15,7 @@ CONSUMED = "CONSUMED"
 
 # Filled from the finalized decision/source pins during candidate preparation.
 EXPECTED_CONTEXT = {'authority_packet': {'path': 'docs/governance/decisions/WP-06_SCAN_PROBE_OBSERVATION_AND_TEARDOWN_REMEDIATION_L2_DECISION.md',
-                      'sha256': 'ffef8345556eef997476e042a0e433e7c138fe5537cfbb7cf30caedc620867f5'},
+                      'sha256': 'd0d443f7cfb1b4044031490d1f62d0195f44d6ac557714239f26f51b9145bf73'},
  'bootstrap_command_literal': 'ros2 launch ROBOT_URDF_final_description '
                               'sim_eval_scan_probe_run003_bootstrap.launch.py',
  'capacity': 1,
@@ -34,7 +34,7 @@ EXPECTED_CONTEXT = {'authority_packet': {'path': 'docs/governance/decisions/WP-0
                  'ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_scan_probe_run003_bootstrap.launch.py': 'a488601483a3fcf558db946063fe13d35b6dc89d20a86ae5218ced14b54f0db7',
                  'ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo': '1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e',
                  'ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_scan_endpoint_probe.static.yaml': '7e61c620fa03643b4b834ac4a804b252126cde4b224f59bd56c4a431abf20343',
-                 'ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_scan_endpoint_probe.py': 'b1f67a0e67fb543e102ea91fd5d6cab7582f3066ecca5bbd95f898642d0dd52e'},
+                 'ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_scan_endpoint_probe.py': '6584ac43ec68080c5915c934b01b52a08a9c48d4d2fb5c3b279bf238326000b2'},
  'teardown_policy': {'signals': ['SIGINT', 'SIGTERM', 'SIGKILL'], 'wait_seconds_each': 10},
  'timeouts': {'bootstrap_readiness_seconds': 90,
               'gz_command_seconds': 5.0,

@@ -1246,3 +1246,16 @@
 | Boundary | Future unique publisher observation is `OBSERVED_NOT_PINNED`. No bridge, ROS `/scan`, TF evidence, runtime profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. |
 | Status | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; review candidate only. Previous Ledger bytes remain an exact prefix. |
+
+
+### WP06_SCAN_PROBE_RUN003_HARMONIC_PUBLISHER_GRAMMAR_CORRECTION — corrective review candidate
+
+| Field | Value |
+|---|---|
+| Integration base | `b15e0fd6e83f840822b8ba11f68dbdf31de0978e` |
+| Existing review tip corrected | `e9ccee03123c3ec2baf82a66ce5a60bcbf1f9dfb`; not integrated and not runtime-authorized. |
+| Scope | Structured publisher-section parsing with canonical unbracketed address/type grammar; exact `gz.msgs.LaserScan` only; subscriber-only entries excluded. |
+| Evidence level | Source, offline tests and build only; no runtime evidence. |
+| Run 003 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; not consumed. |
+| Boundary/status | No endpoint pin, bridge, ROS `/scan`, TF evidence, runtime profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. Existing WP/Gate statuses unchanged. |
+| `supersedes` | Corrects the Run 003 publisher grammar statement and parser behavior recorded for review tip `e9ccee03123c3ec2baf82a66ce5a60bcbf1f9dfb`; previous Ledger bytes remain an exact prefix. |

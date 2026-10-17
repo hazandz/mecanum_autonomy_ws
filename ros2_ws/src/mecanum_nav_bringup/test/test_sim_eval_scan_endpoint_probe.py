@@ -146,11 +146,15 @@ def test_validator_rejects_descriptor_mutations(mutate):
         probe.validate_probe_descriptor(candidate)
 
 
-def test_exact_legacy_type_grammar_and_scan_candidate_only(tmp_path):
-    topic = "/world/w/model/r/sensor/lidar/link/lidar_frame/scan"
-    result, runner = _result_for(tmp_path, ["/clock", "/world/w/model/r/sensor/lidar/link/lidar_frame/other", topic], {
-        topic: b"Topic: /world/w/model/r/sensor/lidar/link/lidar_frame/scan\nType: gz.msgs.LaserScan\n",
-    })
+def test_harmonic_unbracketed_publisher_exact_type_passes(tmp_path):
+    topic = "/robot/scan"
+    info = (
+        b"Publishers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:1234, gz.msgs.LaserScan\n"
+        b"Subscribers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:2345, gz.msgs.PointCloudPacked\n"
+    )
+    result, runner = _result_for(tmp_path, ["/clock", topic], {topic: info})
     assert result["outcome"] == "EXACTLY_ONE_MATCH"
     assert result["observed_endpoints"] == [
         {"message_type": "gz.msgs.LaserScan", "status": "OBSERVED_NOT_PINNED", "topic": topic}
@@ -161,32 +165,54 @@ def test_exact_legacy_type_grammar_and_scan_candidate_only(tmp_path):
     assert all(call[1]["shell"] is False for call in runner.calls)
 
 
-def test_harmonic_publisher_section_and_subscriber_only(tmp_path):
+def test_non_scan_publisher_has_distinct_fail_closed_outcome(tmp_path):
     topic = "/robot/scan"
-    publisher_info = (
-        b"Publishers [Address, Message Type]:\n"
-        b"  <tcp://127.0.0.1:1234>, gz.msgs.LaserScan\n"
-        b"Subscribers [Address, Message Type]:\n"
-    )
-    result, _ = _result_for(tmp_path, [topic], {topic: publisher_info})
-    assert result["outcome"] == "EXACTLY_ONE_MATCH"
-
     result, _ = _result_for(tmp_path, [topic], {
-        topic: b"Subscribers [Address, Message Type]:\n  <tcp://127.0.0.1:1234>, gz.msgs.LaserScan\n"
+        topic: b"Publishers [Address, Message Type]:\ntcp://127.0.0.1:1234, gz.msgs.PointCloudPacked\n"
     })
-    assert result["outcome"] == "NO_PUBLISHER_MATCH"
+    assert result["outcome"] == "NO_EXPECTED_PUBLISHER_TYPE"
     assert result["observed_endpoints"] == []
 
 
-def test_zero_one_and_multiple_publisher_matches(tmp_path):
+def test_subscriber_only_and_mixed_sections_count_publishers_only(tmp_path):
+    topic = "/robot/scan"
+    subscriber_only = (
+        b"Subscribers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:2345, gz.msgs.LaserScan\n"
+    )
+    result, _ = _result_for(tmp_path, [topic], {topic: subscriber_only})
+    assert result["outcome"] == "NO_PUBLISHER_MATCH"
+    assert result["observed_endpoints"] == []
+
+    mixed = (
+        b"Publishers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:1234, gz.msgs.PointCloudPacked\n"
+        b"Subscribers [Address, Message Type]:\n"
+        b"tcp://127.0.0.1:2345, gz.msgs.LaserScan\n"
+    )
+    result, _ = _result_for(tmp_path, [topic], {topic: mixed})
+    assert result["outcome"] == "NO_EXPECTED_PUBLISHER_TYPE"
+    assert result["observed_endpoints"] == []
+
+
+def test_bracketed_address_and_malformed_publisher_are_rejected(tmp_path):
+    topic = "/robot/scan"
+    bracketed = b"Publishers [Address, Message Type]:\n<tcp://127.0.0.1:1234>, gz.msgs.LaserScan\n"
+    result, _ = _result_for(tmp_path, [topic], {topic: bracketed})
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
+    assert result["observed_endpoints"] == []
+    malformed = b"Publishers [Address, Message Type]:\ntcp://, gz.msgs.LaserScan\n"
+    result, _ = _result_for(tmp_path, [topic], {topic: malformed})
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
+    result, _ = _result_for(tmp_path, [topic], {topic: b"Type: gz.msgs.LaserScan\n"})
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
+
+
+def test_zero_one_and_multiple_scan_publisher_matches(tmp_path):
     a, b = "/a/scan", "/b/scan"
-    info = lambda topic: f"Type: gz.msgs.LaserScan\n".encode()
+    info = lambda _topic: b"Publishers [Address, Message Type]:\ntcp://127.0.0.1:1234, gz.msgs.LaserScan\n"
     result, _ = _result_for(tmp_path, ["/clock", "/not_scan"], {})
     assert result["outcome"] == "NO_CANDIDATE_TOPIC"
-    result, _ = _result_for(tmp_path, [a], {a: b"Type: gz.msgs.PointCloudPacked\n"})
-    assert result["outcome"] == "NO_PUBLISHER_MATCH"
-    result, _ = _result_for(tmp_path, [a], {a: info(a)})
-    assert result["outcome"] == "EXACTLY_ONE_MATCH"
     result, _ = _result_for(tmp_path, [a, b], {a: info(a), b: info(b)})
     assert result["outcome"] == "AMBIGUOUS_PUBLISHER_MATCHES"
     assert [item["topic"] for item in result["observed_endpoints"]] == [a, b]
@@ -222,7 +248,7 @@ def test_discovery_candidate_and_transcript_limits_fail_closed(tmp_path):
 
 def test_transcript_hash_size_and_relative_path_are_exact(tmp_path):
     topic = "/robot/scan"
-    raw_out = b"Type: gz.msgs.LaserScan\n"
+    raw_out = b"Publishers [Address, Message Type]:\ntcp://127.0.0.1:1234, gz.msgs.LaserScan\n"
     result, _ = _result_for(tmp_path, [topic], {topic: raw_out})
     observations = result["command_observations"]
     assert len(observations) == 2

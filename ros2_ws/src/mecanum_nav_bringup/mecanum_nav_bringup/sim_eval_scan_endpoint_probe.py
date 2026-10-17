@@ -67,6 +67,7 @@ OUTCOMES = frozenset(
         "EXACTLY_ONE_MATCH",
         "NO_CANDIDATE_TOPIC",
         "NO_PUBLISHER_MATCH",
+        "NO_EXPECTED_PUBLISHER_TYPE",
         "AMBIGUOUS_PUBLISHER_MATCHES",
         "TOPIC_INFO_UNRECOGNIZED",
         "GZ_COMMAND_NOT_FOUND",
@@ -81,15 +82,17 @@ OUTCOMES = frozenset(
 _ABSOLUTE_TOPIC = re.compile(
     r"^/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*)(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$"
 )
-_TYPE_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9_.]*$")
-_LEGACY_TYPE = re.compile(r"^\s*Type:\s*([A-Za-z][A-Za-z0-9_.]*)\s*$")
 _PUBLISHERS_HEADER = re.compile(
     r"^\s*Publishers\s+\[Address,\s*Message Type\]:\s*$"
 )
 _SUBSCRIBERS_HEADER = re.compile(
     r"^\s*Subscribers\s+\[Address,\s*Message Type\]:\s*$"
 )
-_ENDPOINT_LINE = re.compile(r"^\s*<([^<>]+)>\s*,\s*([A-Za-z][A-Za-z0-9_.]*)\s*$")
+_SECTION_HEADER = re.compile(r"^\s*[A-Za-z][A-Za-z ]*\s+\[.*\]:\s*$")
+_ENDPOINT_LINE = re.compile(
+    r"^\s*(?P<address>[A-Za-z][A-Za-z0-9+.-]*://[^\s,<>]+)\s*,\s*"
+    r"(?P<message_type>gz\.msgs\.[A-Za-z][A-Za-z0-9_.]*)\s*$"
+)
 
 
 class ProbeConfigurationError(ValueError):
@@ -135,50 +138,32 @@ def _parse_topic_listing(raw):
 
 
 def _parse_topic_info(raw):
-    """Return (recognized, publisher message types) for two exact grammars."""
+    """Return structured publisher types; subscriber and legacy lines never match."""
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         return False, ()
     lines = text.splitlines()
-    legacy = []
-    for line in lines:
-        match = _LEGACY_TYPE.fullmatch(line)
-        if match:
-            legacy.append(match.group(1))
     publisher_headers = [i for i, line in enumerate(lines) if _PUBLISHERS_HEADER.fullmatch(line)]
     subscriber_headers = [i for i, line in enumerate(lines) if _SUBSCRIBERS_HEADER.fullmatch(line)]
-    if len(legacy) > 1 or len(publisher_headers) > 1 or len(subscriber_headers) > 1:
+    if len(publisher_headers) > 1 or len(subscriber_headers) > 1:
         return False, ()
-    if legacy and publisher_headers:
-        return False, ()
-    if legacy:
-        return True, tuple(legacy)
     if not publisher_headers and not subscriber_headers:
         return False, ()
 
     publisher_types = []
     if publisher_headers:
         start = publisher_headers[0] + 1
-        later_headers = [i for i in range(start, len(lines)) if re.fullmatch(r"\s*[A-Za-z][A-Za-z ]*\s+\[.*\]:\s*", lines[i])]
+        later_headers = [i for i in range(start, len(lines)) if _SECTION_HEADER.fullmatch(lines[i])]
         end = min(later_headers) if later_headers else len(lines)
         for line in lines[start:end]:
             if not line.strip():
                 continue
             entry = _ENDPOINT_LINE.fullmatch(line)
-            if not entry or not entry.group(1).strip() or not _TYPE_TOKEN.fullmatch(entry.group(2)):
+            if not entry:
                 return False, ()
-            publisher_types.append(entry.group(2))
+            publisher_types.append(entry.group("message_type"))
     # A subscribers-only section is recognized but never contributes matches.
-    if subscriber_headers and not publisher_headers:
-        start = subscriber_headers[0] + 1
-        for line in lines[start:]:
-            if not line.strip():
-                continue
-            if re.fullmatch(r"\s*[A-Za-z][A-Za-z ]*\s+\[.*\]:\s*", line):
-                break
-            if not _ENDPOINT_LINE.fullmatch(line):
-                return False, ()
     return True, tuple(publisher_types)
 
 
@@ -319,6 +304,7 @@ def probe_scan_endpoint(
         return _result("TOO_MANY_CANDIDATE_TOPICS", observations)
 
     matches = []
+    has_any_publisher = False
     for topic in candidates:
         command_index += 1
         argv = [executable, *COMMAND_CONTRACT["inspect_prefix"], topic]
@@ -331,9 +317,12 @@ def probe_scan_endpoint(
         recognized, publisher_types = _parse_topic_info(info)
         if not recognized:
             return _result("TOPIC_INFO_UNRECOGNIZED", observations, detail=f"malformed info for {topic}")
+        has_any_publisher = has_any_publisher or bool(publisher_types)
         if SENSOR_PROVENANCE["expected_gz_message_type"] in publisher_types:
             matches.append(topic)
     if not matches:
+        if has_any_publisher:
+            return _result("NO_EXPECTED_PUBLISHER_TYPE", observations)
         return _result("NO_PUBLISHER_MATCH", observations)
     if len(matches) > 1:
         return _result("AMBIGUOUS_PUBLISHER_MATCHES", observations, matches)

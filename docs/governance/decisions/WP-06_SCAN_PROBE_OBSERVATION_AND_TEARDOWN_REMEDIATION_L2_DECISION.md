@@ -11,7 +11,7 @@
 
 ## Decision
 
-The probe source shall discover topics with `gz topic -l`, validate every listed name as an absolute Gazebo topic, and inspect only topics whose exact leaf is `scan` using `gz topic -i -t <topic>`. It shall accept only either the legacy `Type: gz.msgs.LaserScan` line or a valid `Publishers [Address, Message Type]:` section containing that exact publisher type. Subscriber-only type listings do not count. Arbitrary substring search is prohibited.
+The probe source shall discover topics with `gz topic -l`, validate every listed name as an absolute Gazebo topic, and inspect only topics whose exact leaf is `scan` using `gz topic -i -t <topic>`. The corrected parser accepts only a valid `Publishers [Address, Message Type]:` section with canonical unbracketed `<scheme>://<non-empty-address>, <message-type>` publisher entries. Only the exact publisher type `gz.msgs.LaserScan` is a match. Subscriber-only type listings and legacy `Type:` lines do not count. Arbitrary substring search is prohibited.
 
 The static descriptor fixes the maximum candidate count at 16 and the maximum raw stdout or stderr stream at 1,048,576 bytes. Exceeding the transcript cap returns `TRANSCRIPT_LIMIT_EXCEEDED`; complete raw bytes remain in the transcript and their full size and SHA-256 are recorded. The transcript is written only inside the future run directory. Candidate creation does not create a run directory or transcript.
 
@@ -40,3 +40,10 @@ RUNTIME_APPROVED: NOT_APPROVED
 ## Runtime authorization boundary
 
 Any future Run 003 requires independent audit, integration of the exact candidate, remote-ref verification, and a separate User authorization naming the exact integrated commit. Runtime readiness must then be established by the exact create log before the one-shot session runner is invoked. This review candidate itself performs no runtime operation.
+
+
+## Corrective review commit — Harmonic publisher grammar F-01
+
+The existing review candidate `e9ccee03123c3ec2baf82a66ce5a60bcbf1f9dfb` is not integrated and carries no runtime authorization. This corrective commit changes only the Run 003 scan-information parser/tests and the dependent guard/source-pin/evidence records. The supported Harmonic publisher entry is unbracketed: `<scheme>://<non-empty-address>, <message-type>`, and it is parsed only inside the `Publishers [Address, Message Type]:` section. The message type must equal exactly `gz.msgs.LaserScan`; subscriber-only entries never count. Bracketed addresses and malformed candidate sections fail closed as `TOPIC_INFO_UNRECOGNIZED`; a structurally valid publisher with another type returns `NO_EXPECTED_PUBLISHER_TYPE`.
+
+The cumulative candidate remains source, offline test and build evidence only. Run 003 remains pending and may be considered for one run only after independent audit PASS, integration of the exact corrected commit, remote-ref verification, and a new capacity-one User authorization. No runtime evidence, endpoint pin, bridge, ROS `/scan`, TF evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime authorization is created by this correction.
