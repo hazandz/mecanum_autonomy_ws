@@ -1,6 +1,7 @@
 """ROS ingress node for the explicitly bounded sim_eval wheel/IMU path."""
 
 import rclpy
+import json
 import math
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -34,6 +35,7 @@ class SimEvalWheelImuIngressNode(Node):
 
         self._wheel_core = SimEvalWheelOdometryEmulator()
         self._imu_core = SimEvalImuNormalizer()
+        self._imu_diagnostics_reported = set()
         self._wheel_publisher = self.create_publisher(Odometry, "/wheel/odometry_raw", _qos(ReliabilityPolicy.RELIABLE))
         self._imu_publisher = self.create_publisher(Imu, "/imu/data", _qos(ReliabilityPolicy.RELIABLE))
         self._wheel_subscription = self.create_subscription(
@@ -70,9 +72,22 @@ class SimEvalWheelImuIngressNode(Node):
         self._wheel_publisher.publish(output)
 
     def _on_imu(self, message):
-        sample = self._imu_core.process(message)
+        sample, diagnostics = self._imu_core.process_with_diagnostics(message)
         if sample is None:
+            gate = diagnostics["rejection_gate"]
+            if gate not in self._imu_diagnostics_reported:
+                self._imu_diagnostics_reported.add(gate)
+                self.get_logger().warning(
+                    "SIM_EVAL_IMU_NORMALIZER_REJECT "
+                    + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+                )
             return
+        if "accepted" not in self._imu_diagnostics_reported:
+            self._imu_diagnostics_reported.add("accepted")
+            self.get_logger().info(
+                "SIM_EVAL_IMU_NORMALIZER_ACCEPT "
+                + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+            )
         output = Imu()
         self._stamp_from_ns(sample.stamp_ns, output.header.stamp)
         output.header.frame_id = sample.frame_id

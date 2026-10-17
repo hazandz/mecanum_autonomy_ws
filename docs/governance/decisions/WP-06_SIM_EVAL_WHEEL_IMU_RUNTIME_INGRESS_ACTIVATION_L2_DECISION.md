@@ -51,3 +51,34 @@ and `GATE_B: NOT_STARTED`. No navigation-ready, EKF-validated, TF-validated,
 endpoint-address pin, `ResolvedConfigV3`, `config_hash`, runtime
 authorization, or Gate B transition is created. This candidate does not run
 ROS, Gazebo, `gz`, launch, or runtime.
+
+## Corrective observability disposition — Run 001
+
+The historical Run 001 remains `WP06_6C_RUNTIME_FAIL_NO_RETRY` and is
+immutable. Its recalculated artifact hashes match the external artifact
+manifest and `SHA256SUMS.txt`. The run captured one ROS publisher and one
+subscriber endpoint for `/sim_eval/imu_raw`, but captured no staging payload:
+the only `/imu/data` echo transcript is empty, timed out with exit code 124,
+and no `/sim_eval/imu_raw` sample transcript exists. These facts do not prove
+whether (A) the Gazebo sensor emitted no IMU message, (B) the bridge did not
+transfer a message, or (C) the ingress normalizer rejected input. Finding:
+`RUN001_RAW_IMU_STAGING_SAMPLE_NOT_CAPTURED_ROOT_CAUSE_NOT_PROVABLE`.
+
+This correction adds bounded, structured first-accept/first-rejection
+normalizer diagnostics and a pure offline parser for ROS CLI YAML
+multi-document transcripts. It does not change IMU acceptance semantics,
+sensor declaration, bridge mapping, wheel behavior, or public topics. A future
+capacity-one runtime packet must preserve a Gazebo-side source sample from
+`/sim_eval/imu/raw` to distinguish source emission from bridge transfer, and
+must capture the ROS staging sample `/sim_eval/imu_raw`, its
+`ros2 topic info --verbose` output, `/imu/data`, and ingress diagnostic logs.
+The raw and canonical ROS samples must be parsed with `yaml.safe_load_all`.
+If staging data exists but canonical output does not, the record must identify
+the concrete normalizer gate and its stamp, frame, finite-value status,
+quaternion norm, prior accepted timestamp, and monotonic comparison. Publisher
+counts alone are not payload evidence.
+
+The new source and tests are offline-only; they are not runtime evidence and
+do not prove or claim a repaired sensor, bridge, or normalizer semantic cause.
+`runtime_eligible: false`; no runtime retry or authorization is created.
+`RUNTIME_APPROVED: NOT_APPROVED`; Gate B remains `NOT_STARTED`.

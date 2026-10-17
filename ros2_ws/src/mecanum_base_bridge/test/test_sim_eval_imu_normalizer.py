@@ -1,5 +1,11 @@
 from types import SimpleNamespace as NS
 
+import pytest
+
+from mecanum_base_bridge.sim_eval_imu_runtime_evidence import (
+    ImuEvidenceParseError,
+    parse_single_imu_message,
+)
 from mecanum_base_bridge.sim_eval_imu_normalizer import SimEvalImuNormalizer
 
 
@@ -41,3 +47,48 @@ def test_duplicate_or_rollback_stamp_is_dropped_without_rewinding_accepted_stamp
     assert core.process(imu(1_100_000_000)) is not None
     assert core.process(imu(1_050_000_000)) is None
     assert core.process(imu(1_200_000_000)) is not None
+
+
+def test_diagnostic_api_reports_exact_first_rejection_gate_without_changing_process_contract():
+    cases = (
+        (imu(-1), "stamp"),
+        (imu(1_000_000_000, frame="imu_link"), "frame_id"),
+        (imu(1_000_000_000, w=(float("nan"), 0.0, 0.0)), "finite_values"),
+        (imu(1_000_000_000, q=(0.0, 0.0, 0.0, 0.5)), "quaternion_norm"),
+    )
+    for message, expected_gate in cases:
+        sample, details = SimEvalImuNormalizer().process_with_diagnostics(message)
+        assert sample is None
+        assert details["accepted"] is False
+        assert details["rejection_gate"] == expected_gate
+        assert "stamp" in details
+        assert "frame_id" in details
+        assert "finite_values" in details
+        assert "values" in details
+        assert "quaternion_norm" in details
+        assert "monotonic_timestamp" in details
+
+    core = SimEvalImuNormalizer()
+    accepted, accepted_details = core.process_with_diagnostics(imu(1_000_000_000))
+    assert accepted is not None
+    assert accepted_details["accepted"] is True
+    assert accepted_details["rejection_gate"] is None
+    rejected, repeated = core.process_with_diagnostics(imu(1_000_000_000))
+    assert rejected is None
+    assert repeated["rejection_gate"] == "monotonic_timestamp"
+    assert repeated["monotonic_timestamp"] == {
+        "last_accepted_stamp_ns": 1_000_000_000,
+        "strictly_increasing": False,
+    }
+
+
+def test_runtime_imu_transcript_parser_uses_multi_document_yaml_and_requires_one_mapping():
+    raw = b"header:\n  frame_id: base_link\norientation:\n  w: 1.0\n---\n"
+    assert parse_single_imu_message(raw) == {
+        "header": {"frame_id": "base_link"},
+        "orientation": {"w": 1.0},
+    }
+    with pytest.raises(ImuEvidenceParseError, match="found 2"):
+        parse_single_imu_message("header: {}\n---\nheader: {}\n")
+    with pytest.raises(ImuEvidenceParseError, match="malformed YAML"):
+        parse_single_imu_message("header: [\n")

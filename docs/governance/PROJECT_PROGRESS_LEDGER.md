@@ -1403,3 +1403,15 @@
 | Evidence/status | `IMPLEMENTED_OFFLINE_BRIDGE_AND_INGRESS_SOURCE_ONLY`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | Boundary | No bridge for `/odom`, `/ground_truth/odom`, `/tf`, or `/tf_static`; no EKF, Nav2, AMCL, Map Server, command publisher, profile resolution, `ResolvedConfigV3`, `config_hash`, runtime authorization or navigation-ready claim. |
 | `supersedes` | None; new WP06-6C candidate. Prior Ledger bytes are retained as exact prefix. |
+
+### WP06_6C_RUN001_IMU_OBSERVABILITY_CORRECTION
+
+| Field | Value |
+|---|---|
+| Branch / parent | `wp06-6c-wheel-imu-ingress-activation-bd74956` / `577b2b1223a8136d91753a7ea1f72fc0e6c73d93` |
+| Historical result | Run 001 remains immutable `WP06_6C_RUNTIME_FAIL_NO_RETRY`; all 35 artifact hashes match the external manifest and checksum file. No `/sim_eval/imu_raw` payload was captured; the `/imu/data` echo timed out with empty stdout/stderr. |
+| Root-cause finding | `RUN001_RAW_IMU_STAGING_SAMPLE_NOT_CAPTURED_ROOT_CAUSE_NOT_PROVABLE`; source emission (A), bridge transfer (B), and normalizer rejection (C) are all `NOT_PROVEN`. Publisher/subscriber counts are not payload proof. |
+| Correction | Bounded structured first-accept/first-rejection diagnostics and an offline `yaml.safe_load_all` transcript parser. No sensor/bridge/normalizer acceptance semantics, wheel behavior, or public ROS topics changed. |
+| Future evidence | Capture Gazebo `/sim_eval/imu/raw`, ROS staging `/sim_eval/imu_raw` payload and verbose topic info, canonical `/imu/data`, and the structured gate diagnostics. |
+| Evidence status | `IMPLEMENTED_OFFLINE_OBSERVABILITY_SOURCE_AND_TESTS_ONLY`; `runtime_eligible: false`; no corrective runtime evidence or authorization. `RUNTIME_APPROVED: NOT_APPROVED`; Gate B `NOT_STARTED`. |
+| Supersedes | Clarifies Run 001 observability and future evidence needs only; historical record and all preceding Ledger bytes remain unchanged. |
