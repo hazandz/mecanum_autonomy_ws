@@ -18,6 +18,7 @@ except ImportError:
     import scan_endpoint_probe_run005_runtime_guard as guard
 
 ORIGIN = "https://github.com/hazandz/mecanum_autonomy_ws.git"
+INTEGRATION_BASE = "83f13d67ab212fec03b18cd2ed830349b7013ab3"
 RUN_ID = "WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_005"
 PARTITION = "wp06_scan_probe_run_005"
 WORLD_NAME = "wp06_scan_probe_world"
@@ -26,6 +27,8 @@ DECISION_PATH = guard.DECISION_PATH
 MANIFEST_PATH = guard.MANIFEST_PATH
 EVIDENCE_PATH = "docs/governance/evidence/WP-06_SCAN_PROBE_PERSISTENT_TRANSPORT_DISCOVERY_FIX_L2_EVIDENCE.json"
 GUARD_PATH = guard.GUARD_PATH
+GUARD_MODULE_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/scan_endpoint_probe_run005_runtime_guard.py"
+RUNNER_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_scan_endpoint_probe_run005_session.py"
 RUN_DIRECTORY = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/runs/" + RUN_ID
 ARCHITECTURE_PATH = "docs/MECANUM_NAV_DRL_Architecture.docx"
 ARCHITECTURE_SHA256 = "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
@@ -106,12 +109,18 @@ def _expected_context(manifest, manifest_sha):
             "manifest_path": MANIFEST_PATH, "manifest_sha256": manifest_sha,
             "source_pins": manifest["source_pins"], "commands": manifest["commands"],
             "timeouts": manifest["timeouts"], "transport_discovery": manifest["transport_discovery"],
+            "review_runtime_topology": manifest["review_runtime_topology"],
             "runtime_authorization_required": True}
 
-def preflight(root, guard_path, run_dir, run_id, partition, expected_commit, *, git_runner=subprocess.run):
+def preflight(root, guard_path, run_dir, run_id, partition, expected_review_commit,
+              expected_integration_base, *, git_runner=subprocess.run):
     root = Path(root).resolve(); guard_path = Path(guard_path).resolve(); run_dir = Path(run_dir).resolve()
-    if re.fullmatch(r"[0-9a-f]{40}", expected_commit or "") is None:
-        raise SessionError("expected integration commit must be exact 40 lowercase hex")
+    if re.fullmatch(r"[0-9a-f]{40}", expected_review_commit or "") is None:
+        raise SessionError("expected review commit must be exact 40 lowercase hex")
+    if re.fullmatch(r"[0-9a-f]{40}", expected_integration_base or "") is None:
+        raise SessionError("expected integration base must be exact 40 lowercase hex")
+    if expected_integration_base != INTEGRATION_BASE:
+        raise SessionError("expected integration base does not match the Run 005 source base")
     if run_id != RUN_ID or partition != PARTITION:
         raise SessionError("run identity/partition mismatch")
     if guard_path != (root / GUARD_PATH).resolve() or run_dir != (root / RUN_DIRECTORY).resolve():
@@ -120,20 +129,23 @@ def preflight(root, guard_path, run_dir, run_id, partition, expected_commit, *, 
         raise SessionError("run directory already exists")
     if _git(root, ["remote", "get-url", "origin"], git_runner) != ORIGIN:
         raise SessionError("origin mismatch")
-    if _git(root, ["rev-parse", "HEAD"], git_runner) != expected_commit:
-        raise SessionError("HEAD mismatch")
-    if _git(root, ["rev-parse", "origin/integration/implementation"], git_runner) != expected_commit:
-        raise SessionError("integration ref mismatch")
+    if _git(root, ["rev-parse", "HEAD"], git_runner) != expected_review_commit:
+        raise SessionError("HEAD does not equal expected review commit")
+    if _git(root, ["rev-parse", "origin/integration/implementation"], git_runner) != expected_integration_base:
+        raise SessionError("integration ref does not equal expected integration base")
+    # git merge-base --is-ancestor emits no stdout; _git raises on nonzero.
+    _git(root, ["merge-base", "--is-ancestor", expected_integration_base,
+                expected_review_commit], git_runner)
     if _git(root, ["status", "--porcelain"], git_runner):
         raise SessionError("worktree is dirty")
     arch = (root / ARCHITECTURE_PATH).read_bytes()
-    if _sha(arch) != ARCHITECTURE_SHA256 or _git_blob(root, expected_commit, ARCHITECTURE_PATH, git_runner) != arch:
+    if _sha(arch) != ARCHITECTURE_SHA256 or _git_blob(root, expected_review_commit, ARCHITECTURE_PATH, git_runner) != arch:
         raise SessionError("Architecture authority mismatch")
     manifest, manifest_raw = _canonical_file(root / MANIFEST_PATH)
-    if set(manifest) != {"schema", "classification", "evidence_level", "run_id", "gz_partition", "authority_packet", "evidence_packet", "source_pins", "guard_contract", "commands", "timeouts", "transport_discovery", "teardown_policy", "probe_contract"}:
+    if set(manifest) != {"schema", "classification", "evidence_level", "run_id", "gz_partition", "authority_packet", "evidence_packet", "source_pins", "guard_contract", "commands", "timeouts", "transport_discovery", "teardown_policy", "probe_contract", "review_runtime_topology"}:
         raise SessionError("manifest keys mismatch")
     if (manifest["schema"] != "mecanum_scan_endpoint_probe_run005_guard_manifest/v1"
-        or manifest["classification"] != "L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_PERSISTENT_TRANSPORT_DISCOVERY_FIX"
+        or manifest["classification"] != "L2_SIM_EVAL_SCAN_PROBE_PERSISTENT_TRANSPORT_DISCOVERY_FIX"
         or manifest["evidence_level"] != "IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY"
         or manifest["run_id"] != RUN_ID or manifest["gz_partition"] != PARTITION):
         raise SessionError("manifest identity mismatch")
@@ -145,9 +157,15 @@ def preflight(root, guard_path, run_dir, run_id, partition, expected_commit, *, 
         raise SessionError("evidence packet SHA/path mismatch")
     if evidence.get("source_pins") != manifest["source_pins"]:
         raise SessionError("evidence source pins differ")
-    for p, raw in ((MANIFEST_PATH, manifest_raw), (EVIDENCE_PATH, evidence_raw), (DECISION_PATH, (root / DECISION_PATH).read_bytes())):
-        if _git_blob(root, expected_commit, p, git_runner) != raw:
-            raise SessionError(f"local bytes differ from integrated {p}")
+    review_bound_paths = (
+        (ARCHITECTURE_PATH, arch), (MANIFEST_PATH, manifest_raw),
+        (EVIDENCE_PATH, evidence_raw), (DECISION_PATH, (root / DECISION_PATH).read_bytes()),
+        (GUARD_PATH, guard_path.read_bytes()), (GUARD_MODULE_PATH, (root / GUARD_MODULE_PATH).read_bytes()),
+        (RUNNER_PATH, (root / RUNNER_PATH).read_bytes()),
+    )
+    for p, raw in review_bound_paths:
+        if _git_blob(root, expected_review_commit, p, git_runner) != raw:
+            raise SessionError(f"local bytes differ from expected review commit: {p}")
     if _sha((root / DECISION_PATH).read_bytes()) != authority["sha256"]:
         raise SessionError("decision SHA mismatch")
     pins = manifest["source_pins"]
@@ -156,7 +174,7 @@ def preflight(root, guard_path, run_dir, run_id, partition, expected_commit, *, 
         raise SessionError("source pin path set mismatch")
     for p, expected in pins.items():
         raw = (root / p).read_bytes()
-        if _sha(raw) != expected or _git_blob(root, expected_commit, p, git_runner) != raw:
+        if _sha(raw) != expected or _git_blob(root, expected_review_commit, p, git_runner) != raw:
             raise SessionError(f"source pin mismatch: {p}")
     expected_commands = {"bootstrap": ["ros2", "launch", "ROBOT_URDF_final_description", "sim_eval_scan_probe_run005_server.launch.py"],
         "create": CREATE_ARGV, "probe": PROBE_ARGV, "transport": ["gz.transport.Node.service_list"]}
@@ -180,15 +198,25 @@ def preflight(root, guard_path, run_dir, run_id, partition, expected_commit, *, 
     if manifest["probe_contract"] != {"expected_gz_type": "gz.msgs.LaserScan", "publisher_only": True,
         "pass_status": "OBSERVED_NOT_PINNED", "maximum_transcript_bytes_per_stream": 1048576}:
         raise SessionError("probe contract mismatch")
+    if manifest["review_runtime_topology"] != {
+        "head_must_equal": "expected_review_commit",
+        "integration_ref_must_equal": "expected_integration_base",
+        "exact_integration_base": INTEGRATION_BASE,
+        "integration_base_must_be_ancestor_of_review": True,
+        "source_blobs_from": "expected_review_commit",
+        "review_commit_argument": "--expected-review-commit",
+        "integration_base_argument": "--expected-integration-base",
+    }:
+        raise SessionError("review/integration topology contract mismatch")
     manifest_sha = _sha(manifest_raw)
     guard_record, guard_raw = _canonical_file(guard_path)
-    if _git_blob(root, expected_commit, GUARD_PATH, git_runner) != guard_raw:
-        raise SessionError("guard differs from integrated seed")
+    if _git_blob(root, expected_review_commit, GUARD_PATH, git_runner) != guard_raw:
+        raise SessionError("guard differs from expected review commit seed")
     context = _expected_context(manifest, manifest_sha)
     guard.validate_guard(guard_record, context)
     return {"root": root, "run_dir": run_dir, "guard_path": guard_path, "manifest": manifest,
             "manifest_sha256": manifest_sha, "guard_context": context, "guard_state_before": guard_record["state"],
-            "integration_commit": expected_commit}
+            "review_commit": expected_review_commit, "integration_base": expected_integration_base}
 
 def _service_snapshot(node):
     services = node.service_list()
@@ -298,11 +326,13 @@ def _transcript(run_dir, name, raw):
 
 def _utc(): return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-def run_session(root, guard_path, run_dir, run_id, partition, expected_commit, *, git_runner=subprocess.run,
+def run_session(root, guard_path, run_dir, run_id, partition, expected_review_commit,
+                expected_integration_base, *, git_runner=subprocess.run,
                 import_binding=_load_transport_binding, popen=subprocess.Popen, command_runner=subprocess.run,
                 pgid_getter=os.getpgid, signal_group=os.killpg, proc_root=Path("/proc"), clock=time.monotonic,
                 sleeper=time.sleep):
-    checked = preflight(root, guard_path, run_dir, run_id, partition, expected_commit, git_runner=git_runner)
+    checked = preflight(root, guard_path, run_dir, run_id, partition,
+                        expected_review_commit, expected_integration_base, git_runner=git_runner)
     # Binding failure must occur before directory creation or guard acquisition.
     try:
         Node, NodeOptions = import_binding()
@@ -313,7 +343,8 @@ def run_session(root, guard_path, run_dir, run_id, partition, expected_commit, *
     except Exception:
         checked["run_dir"].rmdir(); raise
     record = {"schema": "mecanum_scan_endpoint_probe_run005_record/v1", "run_id": RUN_ID,
-        "integration_commit": expected_commit, "guard_state_before": checked["guard_state_before"],
+        "review_commit": expected_review_commit, "integration_base": expected_integration_base,
+        "guard_state_before": checked["guard_state_before"],
         "guard_state_after_acquire": guard.CONSUMED, "authority_packet": checked["manifest"]["authority_packet"],
         "source_pins": checked["manifest"]["source_pins"], "started_utc": _utc(),
         "service_readiness": {"ready": False, "attempts": []}, "create": None, "probe": None,
@@ -395,12 +426,13 @@ def run_session(root, guard_path, run_dir, run_id, partition, expected_commit, *
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("repository-root", "guard-path", "run-directory", "run-id", "gz-partition", "expected-integration-commit"):
+    for name in ("repository-root", "guard-path", "run-directory", "run-id", "gz-partition",
+                 "expected-review-commit", "expected-integration-base"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
     try:
         record = run_session(args.repository_root, args.guard_path, args.run_directory, args.run_id,
-            args.gz_partition, args.expected_integration_commit)
+            args.gz_partition, args.expected_review_commit, args.expected_integration_base)
     except TransportBindingUnavailable as exc:
         print(json.dumps({"outcome": "GZ_TRANSPORT_PYTHON_BINDING_UNAVAILABLE", "error": str(exc)}, sort_keys=True, separators=(",", ":")))
         return 2

@@ -828,8 +828,15 @@ evidence only; no runtime was executed. Run 004's reported CLI discovery
 false-negative is not a LiDAR failure claim, and its historical evidence is
 unchanged.
 
-The Run 005 guard remains pending and unconsumed. Future runtime requires
-independent audit, exact integration and separate Owner authorization. A
-future exact probe match means only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`.
-WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B
-`NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+The corrective review commit separates runtime refs. The future runner must
+require `HEAD` to equal the exact Owner-authorized review commit while
+`origin/integration/implementation` remains the exact base
+`83f13d67ab212fec03b18cd2ed830349b7013ab3`; that base must be an ancestor.
+Candidate bytes are verified from the review commit only. The pending capacity-
+one guard remains unconsumed. Runtime requires independent audit and separate
+Owner authorization for the exact review commit; runtime PASS alone does not
+approve or integrate it. Only after PASS may the Owner decide whether to
+integrate that exact review commit. A future exact probe match means only
+`GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. WP-04 `BLOCKED_BY_CONTRACT`,
+WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and
+`RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.

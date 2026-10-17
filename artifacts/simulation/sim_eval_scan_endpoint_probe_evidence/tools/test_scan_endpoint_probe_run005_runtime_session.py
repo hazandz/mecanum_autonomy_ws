@@ -13,26 +13,27 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[4]
 RUNNER_PATH = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_scan_endpoint_probe_run005_session.py"
 GUARD_PATH = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/scan_endpoint_probe_run005_runtime_guard.py"
+INTEGRATION_BASE = "83f13d67ab212fec03b18cd2ed830349b7013ab3"
 sys.path.insert(0, str(RUNNER_PATH.parent))
 spec = importlib.util.spec_from_file_location("run005_session_tested", RUNNER_PATH)
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
-def test_binding_import_is_delayed_and_before_guard_consumption():
+def test_binding_import_is_delayed_and_before_guard_consumption(monkeypatch):
     assert "from gz.transport import Node, NodeOptions" in RUNNER_PATH.read_text(encoding="utf-8")
     events = []
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp); run = root / runner.RUN_DIRECTORY
         checked = {"run_dir": run, "guard_path": root / "guard", "guard_context": {},
             "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
-            "integration_commit": "a" * 40}
-        runner.preflight = lambda *args, **kwargs: checked
+            "review_commit": "a" * 40, "integration_base": INTEGRATION_BASE}
+        monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
         def unavailable():
             events.append("import")
             raise ImportError("binding unavailable")
-        runner.guard.consume_guard = lambda *args: events.append("consume")
+        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: events.append("consume"))
         try:
-            runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "a" * 40,
+            runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "a" * 40, INTEGRATION_BASE,
                 import_binding=unavailable)
         except runner.TransportBindingUnavailable as exc:
             assert str(exc) == "GZ_TRANSPORT_PYTHON_BINDING_UNAVAILABLE"
@@ -41,7 +42,7 @@ def test_binding_import_is_delayed_and_before_guard_consumption():
         assert events == ["import"]
         assert not run.exists()
 
-def test_single_persistent_node_delayed_service_and_exact_create_probe_order():
+def test_single_persistent_node_delayed_service_and_exact_create_probe_order(monkeypatch):
     events = []
     class Options:
         partition = None
@@ -70,20 +71,23 @@ def test_single_persistent_node_delayed_service_and_exact_create_probe_order():
         root = Path(temp); run = root / runner.RUN_DIRECTORY; guard_file = root / "guard"
         checked = {"root": root, "run_dir": run, "guard_path": guard_file, "guard_context": {},
             "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
-            "integration_commit": "b" * 40}
-        runner.preflight = lambda *args, **kwargs: checked
+            "review_commit": "b" * 40, "integration_base": INTEGRATION_BASE}
+        monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
         consumed = []
-        runner.guard.consume_guard = lambda *args: consumed.append(True)
+        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: consumed.append(True))
         class FakeClock:
             now = 0.0
             def __call__(self): return self.now
         clk = FakeClock()
         def sleep(seconds): clk.now += seconds
-        record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "b" * 40,
+        record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "b" * 40, INTEGRATION_BASE,
             import_binding=lambda: (Node, Options), popen=fake_popen, command_runner=fake_command,
             pgid_getter=fake_pgid, signal_group=lambda *args: None, proc_root=root / "proc",
             clock=clk, sleeper=sleep)
         assert consumed == [True]
+        assert record["review_commit"] == "b" * 40
+        assert record["integration_base"] == INTEGRATION_BASE
+        assert "integration_commit" not in record
         assert events.count(("node", runner.PARTITION)) == 1
         assert record["service_readiness"]["ready"] is True
         assert len(record["service_readiness"]["attempts"]) == 2
@@ -91,7 +95,7 @@ def test_single_persistent_node_delayed_service_and_exact_create_probe_order():
         assert record["terminal_outcome"] == "GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED"
         assert sum(event[0] == "probe" for event in events) == 1
 
-def test_missing_exact_service_prevents_create_and_probe_but_tears_server_down():
+def test_missing_exact_service_prevents_create_and_probe_but_tears_server_down(monkeypatch):
     calls = []
     class Options: partition = None
     class FakeNode:
@@ -106,13 +110,13 @@ def test_missing_exact_service_prevents_create_and_probe_but_tears_server_down()
         root = Path(temp); run = root / runner.RUN_DIRECTORY
         checked = {"root": root, "run_dir": run, "guard_path": root / "guard", "guard_context": {},
             "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
-            "integration_commit": "c" * 40}
-        runner.preflight = lambda *args, **kwargs: checked
-        runner.guard.consume_guard = lambda *args: None
+            "review_commit": "c" * 40, "integration_base": INTEGRATION_BASE}
+        monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
+        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: None)
         clk = [0.0]
         def clock(): return clk[0]
         def sleep(seconds): clk[0] += seconds
-        rec = runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "c" * 40,
+        rec = runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "c" * 40, INTEGRATION_BASE,
             import_binding=lambda: (FakeNode, Options), popen=lambda argv, **kw: Proc(argv, **kw),
             pgid_getter=lambda pid: pid, signal_group=lambda *a: None, proc_root=root / "proc",
             clock=clock, sleeper=sleep)
@@ -236,7 +240,7 @@ def test_candidate_manifest_source_pins_are_exact_and_historical_files_not_chang
     assert guard["context"]["source_pins"] == manifest["source_pins"]
     assert runner._sha(manifest_path.read_bytes()) == guard["context"]["manifest_sha256"]
 
-def test_create_failure_is_accounted_in_finally_and_never_probes():
+def test_create_failure_is_accounted_in_finally_and_never_probes(monkeypatch):
     calls = []
     class Options: partition = None
     class FakeNode:
@@ -257,12 +261,12 @@ def test_create_failure_is_accounted_in_finally_and_never_probes():
         empty_proc = root / "empty_proc"; empty_proc.mkdir()
         checked = {"root": root, "run_dir": run, "guard_path": guard_file, "guard_context": {},
             "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
-            "integration_commit": "d" * 40}
-        runner.preflight = lambda *args, **kwargs: checked
-        runner.guard.consume_guard = lambda *args: None
+            "review_commit": "d" * 40, "integration_base": INTEGRATION_BASE}
+        monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
+        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: None)
         now = [0.0]
         def sleep(seconds): now[0] += seconds
-        record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "d" * 40,
+        record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "d" * 40, INTEGRATION_BASE,
             import_binding=lambda: (FakeNode, Options),
             popen=lambda argv, **kw: Proc(argv, **kw), command_runner=lambda *a, **kw: calls.append("probe"),
             pgid_getter=lambda pid: pid, signal_group=lambda *a: None, proc_root=empty_proc,
@@ -276,3 +280,103 @@ def test_existing_run002_003_004_paths_are_not_in_candidate_diff_allowlist():
     # Direct structural boundary: Run005 tests/source never point at prior run artifacts.
     for text in (RUNNER_PATH.read_text(encoding="utf-8"), GUARD_PATH.read_text(encoding="utf-8")):
         assert "RUN_002" not in text and "RUN_003" not in text and "RUN_004" not in text
+
+REVIEW_COMMIT = "a" * 40
+
+def _fake_git_runner(root, *, head=REVIEW_COMMIT, integration=INTEGRATION_BASE,
+                     ancestor=True, blob_overrides=None):
+    blob_overrides = blob_overrides or {}
+    calls = []
+    def run(argv, **kwargs):
+        args = argv[3:]
+        calls.append(args)
+        if args == ["remote", "get-url", "origin"]:
+            return SimpleNamespace(returncode=0, stdout=b"https://github.com/hazandz/mecanum_autonomy_ws.git\n", stderr=b"")
+        if args == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(returncode=0, stdout=(head + "\n").encode(), stderr=b"")
+        if args == ["rev-parse", "origin/integration/implementation"]:
+            return SimpleNamespace(returncode=0, stdout=(integration + "\n").encode(), stderr=b"")
+        if args[:2] == ["merge-base", "--is-ancestor"]:
+            code = 0 if ancestor and args[2:] == [INTEGRATION_BASE, REVIEW_COMMIT] else 1
+            return SimpleNamespace(returncode=code, stdout=b"", stderr=b"")
+        if args == ["status", "--porcelain"]:
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        if len(args) == 2 and args[0] == "show":
+            revision, path = args[1].split(":", 1)
+            if revision != REVIEW_COMMIT:
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"wrong revision")
+            raw = blob_overrides.get(path, (Path(root) / path).read_bytes())
+            return SimpleNamespace(returncode=0, stdout=raw, stderr=b"")
+        raise AssertionError(f"unexpected fake git argv: {args}")
+    return run, calls
+
+def test_review_commit_runtime_topology_uses_candidate_blobs_and_leaves_guard_pending():
+    original_guard = (ROOT / runner.GUARD_PATH).read_bytes()
+    git_runner, calls = _fake_git_runner(ROOT)
+    checked = runner.preflight(ROOT, ROOT / runner.GUARD_PATH, ROOT / runner.RUN_DIRECTORY,
+        runner.RUN_ID, runner.PARTITION, REVIEW_COMMIT, INTEGRATION_BASE, git_runner=git_runner)
+    assert checked["review_commit"] == REVIEW_COMMIT
+    assert checked["integration_base"] == INTEGRATION_BASE
+    assert checked["guard_state_before"] == runner.guard.PENDING
+    assert (ROOT / runner.GUARD_PATH).read_bytes() == original_guard
+    blob_revisions = [args[1].split(":", 1)[0] for args in calls if args and args[0] == "show"]
+    assert blob_revisions and set(blob_revisions) == {REVIEW_COMMIT}
+    # The integration SHA is only the ancestry/ref baseline, never a source-blob selector.
+    assert ["merge-base", "--is-ancestor", INTEGRATION_BASE, REVIEW_COMMIT] in calls
+
+def test_review_preflight_rejects_topology_and_candidate_blob_mismatches_before_acquire():
+    guard_file = ROOT / runner.GUARD_PATH
+    guard_before = guard_file.read_bytes()
+    run_dir = ROOT / runner.RUN_DIRECTORY
+    variants = [
+        {"name": "integration-equals-review", "integration": REVIEW_COMMIT},
+        {"name": "integration-ref-mismatch", "integration": "b" * 40},
+        {"name": "unexpected-expected-base", "expected_base": "b" * 40},
+        {"name": "head-mismatch", "head": "c" * 40},
+        {"name": "review-not-descended-from-base", "ancestor": False},
+        {"name": "source-blob-mismatch", "blob_overrides": {runner.WORLD_PATH: b"different world bytes"}},
+        {"name": "manifest-blob-mismatch", "blob_overrides": {runner.MANIFEST_PATH: b"different manifest bytes"}},
+    ]
+    for variant in variants:
+        kwargs = {k: v for k, v in variant.items() if k not in {"name", "expected_base"}}
+        git_runner, _ = _fake_git_runner(ROOT, **kwargs)
+        try:
+            runner.preflight(ROOT, guard_file, run_dir, runner.RUN_ID, runner.PARTITION,
+                REVIEW_COMMIT, variant.get("expected_base", INTEGRATION_BASE), git_runner=git_runner)
+        except runner.SessionError:
+            pass
+        else:
+            raise AssertionError(f"preflight accepted {variant['name']}")
+        assert guard_file.read_bytes() == guard_before
+        assert json.loads(guard_before.decode("utf-8"))["state"] == runner.guard.PENDING
+
+def test_binding_failure_after_valid_review_preflight_keeps_guard_pending_and_creates_no_run_dir():
+    guard_file = ROOT / runner.GUARD_PATH
+    guard_before = guard_file.read_bytes()
+    events = []
+    git_runner, _ = _fake_git_runner(ROOT)
+    try:
+        runner.run_session(ROOT, guard_file, ROOT / runner.RUN_DIRECTORY, runner.RUN_ID,
+            runner.PARTITION, REVIEW_COMMIT, INTEGRATION_BASE, git_runner=git_runner,
+            import_binding=lambda: (events.append("import"), (_ for _ in ()).throw(ImportError("missing binding")))[1],
+            popen=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("process must not start")))
+    except runner.TransportBindingUnavailable:
+        pass
+    else:
+        raise AssertionError("binding failure must fail before acquisition")
+    assert events == ["import"]
+    assert guard_file.read_bytes() == guard_before
+    assert json.loads(guard_before.decode("utf-8"))["state"] == runner.guard.PENDING
+    assert not (ROOT / runner.RUN_DIRECTORY).exists()
+
+def test_cli_and_run_record_distinguish_review_commit_from_integration_base():
+    tree = ast.parse(RUNNER_PATH.read_text(encoding="utf-8"))
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    assert '"expected-review-commit"' in source
+    assert '"expected-integration-base"' in source
+    assert "expected-integration-commit" not in source
+    assert '"review_commit": expected_review_commit' in source
+    assert '"integration_base": expected_integration_base' in source
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"Popen", "run"}
+                   and any(isinstance(arg, ast.Constant) and arg.value == "gz service --list" for arg in node.args)
+                   for node in ast.walk(tree))

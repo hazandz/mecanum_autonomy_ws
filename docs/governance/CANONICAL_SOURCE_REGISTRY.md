@@ -697,9 +697,16 @@ short-lived `gz service --list` CLI. Run 004's historical runtime report is
 not modified or reinterpreted; Run 002/003/004 source and guard paths remain
 outside this candidate diff.
 
-Run 005's guard seed remains
-`PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity one. Evidence
-ceiling is `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. A future
-exact match is no stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`;
-there is no ROS `/scan`, bridge, TF, runtime compatibility, Gate B, or
-`RUNTIME_APPROVED` claim. WP-04/WP-05 and Gate A/Gate B remain unchanged.
+The corrective candidate splits the future runner refs: `HEAD` and every
+source/authority/manifest/evidence/guard blob must match the exact
+`--expected-review-commit`; `origin/integration/implementation` must remain
+`--expected-integration-base` (`83f13d67ab212fec03b18cd2ed830349b7013ab3`),
+which must be an ancestor. The base is not a source-byte selector. The updated
+Run 005 guard is still `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`,
+capacity one, and unconsumed. Runtime remains source/offline-test/build only
+until independent audit and separate Owner authorization of the exact review
+commit. Runtime PASS alone creates no approval; only then may the Owner decide
+whether to integrate that exact review commit. A future exact match is no
+stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`; there is no ROS
+`/scan`, bridge, TF, runtime compatibility, Gate B, or `RUNTIME_APPROVED`
+claim. WP-04/WP-05 and Gate A/Gate B remain unchanged.

@@ -1284,3 +1284,15 @@
 | Future boundary | Requires independent audit, exact integration and separate Owner authorization. Future match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. |
 | Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS `/scan`, bridge, TF, endpoint pin, `ResolvedConfigV3`, `config_hash`, runtime evidence or Gate B transition. |
 | `supersedes` | None; this is a new Run 005 candidate. Prior Ledger bytes remain an exact prefix. |
+
+
+### WP06_RUN005_REVIEW_COMMIT_RUNTIME_AUTHORIZATION_TOPOLOGY_FIX — corrective review commit
+
+| Field | Status / evidence |
+|---|---|
+| Parent / integration base | Parent `00911030081c821d1159f4b48941c0c1cd000638`; integration base remains `83f13d67ab212fec03b18cd2ed830349b7013ab3`. |
+| Preflight topology | Future runtime requires `HEAD == --expected-review-commit`; integration ref equals `--expected-integration-base`; base is an ancestor. Candidate authority/source/manifest/evidence/guard blobs are compared with the exact review commit, never the integration base. |
+| Guard | Run005 context rebound to corrected decision/manifest/source pins; capacity one and `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; not consumed. Binding import still must succeed before acquisition. |
+| Runtime routing | Runtime requires independent audit and separate Owner authorization naming the exact review commit. Runtime PASS does not authorize integration; only afterward may Owner decide integration of that exact commit. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime executed, no endpoint pin, ROS `/scan`, bridge, TF evidence, runtime approval, `ResolvedConfigV3`, `config_hash` or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05/Gate A/Gate B unchanged. |
+| `supersedes` | Corrects the Run005 review/integration preflight topology recorded at review parent `00911030081c821d1159f4b48941c0c1cd000638`; all earlier Ledger bytes remain an exact prefix. |
