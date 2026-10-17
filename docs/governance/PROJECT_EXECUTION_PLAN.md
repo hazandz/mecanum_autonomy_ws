@@ -836,3 +836,15 @@ is not edited; no ROS `/scan`, bridge, TF, endpoint pin, profile resolution,
 `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is
 created. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B
 `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+
+
+## WP06 profile-specific ROS–Gazebo scan bridge — review candidate
+
+The review candidate based on `abcdffb4d1683c6b337b7c8a8916d0c9317d111e` implements one `GZ_TO_ROS` `/scan` mapping (`gz.msgs.LaserScan` → `sensor_msgs/msg/LaserScan`) through `ros_gz_bridge/parameter_bridge`. Its YAML and launch are installed by the bringup package; launch defaults `GZ_PARTITION` to `sim_eval` and enforces `use_sim_time: true`.
+
+Evidence ceiling is `IMPLEMENTED_OFFLINE_BUILD_ONLY`. Runtime compatibility remains `NOT_VALIDATED`; no runtime bridge connection/publication or endpoint-address pin is established. Future runtime verification requires exactly one ROS `/scan` publisher, correct message type and `header.frame_id == lidar_frame`, valid non-empty ranges, and absence of unexpected TF/odom/command publishers. This does not resolve a profile, create `ResolvedConfigV3`/`config_hash`, transition Gate B, or approve runtime. WP-04/WP-05/Gate A/Gate B and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+
+
+### WP06-6E dependency-lock scope correction
+
+The external WP-05 lock remains exactly the 14 common Navigation V1 roots. The `sim_eval` bridge's `ros_gz_bridge`, `launch`, and `launch_ros` entries are profile-specific runtime dependencies and remain outside both WP-05 lock files. The package declares all 17 exec dependencies in the required order, while the offline dependency-lock test validates common and profile-specific lists independently. No lock expansion, runtime validation, or runtime approval occurs.

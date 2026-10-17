@@ -1323,3 +1323,29 @@
 | Guard source seed | PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION; capacity 1. This Git seed does not authorize another Run005 runtime. |
 | Evidence status | Parser source and offline test only; historical run record is unmodified. |
 | `supersedes` | Corrects the Run005 parser outcome interpretation without rewriting historical runtime outcome or earlier ledger bytes. |
+
+
+### WP06_SIM_EVAL_ROS_GAZEBO_SCAN_BRIDGE — review candidate
+
+| Field | Value |
+|---|---|
+| Base / branch | `abcdffb4d1683c6b337b7c8a8916d0c9317d111e` / `wp06-sim-eval-ros-gz-scan-bridge-abcdffb` |
+| Classification | `L2_PROFILE_SPECIFIC_ROS_GAZEBO_SCAN_BRIDGE_IMPLEMENTATION` |
+| Mapping | One `/scan` `gz.msgs.LaserScan` to `/scan` `sensor_msgs/msg/LaserScan`, `GZ_TO_ROS`; lazy false; queues 10/10; `use_sim_time: true`; partition default `sim_eval`. |
+| Evidence | Source/config/launch plus offline tests/build only; no runtime bridge connection or ROS publication evidence. |
+| Runtime boundary | No ephemeral TCP endpoint pin, ROS `/scan` observation, TF/odom/command bridge, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. Runtime compatibility `NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`. |
+| `supersedes` | None; new review candidate. All earlier ledger bytes are preserved as a prefix. |
+
+
+### WP06_6E_PROFILE_SPECIFIC_DEPENDENCY_LOCK_TEST_CORRECTION — corrective review candidate
+
+| Field | Value |
+|---|---|
+| Candidate base / branch | `abcdffb4d1683c6b337b7c8a8916d0c9317d111e` / `wp06-sim-eval-ros-gz-scan-bridge-abcdffb` |
+| Correction | The dependency-lock test distinguishes the exact 14 common Navigation V1 roots from `ros_gz_bridge`, `launch`, and `launch_ros`, which are profile-specific `sim_eval` runtime dependencies. |
+| WP-05 lock files | External 14-root JSON lock and source-lock YAML template are unchanged; profile-specific dependencies are absent from both. |
+| Package manifest | All 14 common roots followed by the 3 profile-specific `exec_depend` entries. |
+| Evidence ceiling | Offline source/test/build only; runtime compatibility remains `NOT_VALIDATED`, no runtime authorization or Gate B transition. |
+| Status | `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05/Gate A/Gate B statuses unchanged. |
+| `supersedes` | None; appends this correction without changing prior ledger bytes. |

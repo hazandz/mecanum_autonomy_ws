@@ -711,3 +711,17 @@ run ROS, Gazebo, `gz`, launch, probe, or the session runner. It creates no ROS
 `config_hash`, or Gate B transition. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`,
 Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`
 remain unchanged.
+
+
+## WP06 sim_eval ROS–Gazebo scan bridge — review candidate
+
+At exact integration base `abcdffb4d1683c6b337b7c8a8916d0c9317d111e`, this candidate adds one profile-specific `GZ_TO_ROS` mapping from Gazebo `/scan` (`gz.msgs.LaserScan`) to ROS `/scan` (`sensor_msgs/msg/LaserScan`) using `ros_gz_bridge/parameter_bridge` and an installed YAML `config_file`. The launch defaults to `GZ_PARTITION=sim_eval`, requires `use_sim_time: true`, and starts only the bridge node. The prior static bridge contract remains unchanged provenance evidence.
+
+Status: bridge source is `IMPLEMENTED_OFFLINE_BUILD_ONLY`; runtime compatibility is `NOT_VALIDATED` and `RUNTIME_APPROVED: NOT_APPROVED`. The Run005 Gazebo-side observation does not pin an ephemeral TCP address or prove ROS publication. No runtime evidence, endpoint-address pin, TF, odometry, command bridge, profile resolution, `ResolvedConfigV3`, `config_hash`, or Gate B transition is established. WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`.
+
+
+### WP06-6E dependency lock scope correction — review candidate
+
+The WP-05 external dependency lock and Navigation V1 source-lock template remain byte-identical to the base and continue to contain exactly the 14 common Navigation V1 roots. The package adds `ros_gz_bridge`, `launch`, and `launch_ros` as profile-specific `exec_depend` entries for the `sim_eval` bridge, after those 14 common roots. The corrected dependency-lock test checks the two scopes separately and rejects adding the profile-specific dependencies to the WP-05 common lock.
+
+These declarations are source-level only. Runtime compatibility remains `NOT_VALIDATED`; no ROS `/scan` evidence, endpoint-address pin, TF/odom/command bridge, runtime authorization, or Gate B transition is created. `RUNTIME_APPROVED: NOT_APPROVED`.
