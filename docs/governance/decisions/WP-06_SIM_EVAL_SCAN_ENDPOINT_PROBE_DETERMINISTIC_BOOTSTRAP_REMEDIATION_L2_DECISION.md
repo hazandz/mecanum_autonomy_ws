@@ -24,3 +24,9 @@ A future Run 002 requires all of the following before its compatible one-shot su
 ## Non-claims
 
 This candidate creates no endpoint pin, ROS `/scan`, ROS–Gazebo bridge, TF publisher or measurement, runtime evidence, runtime authorization, runtime profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or general runtime approval. WP06-6E remains the sole owner of canonical ROS–Gazebo bridge implementation. Run 002 is future-only and not runtime-authorized. WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; Gate A remains `PASSED`; Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+## Corrective review commit — Run 002 completion and SDF gravity
+
+This is a corrective commit on the existing review branch, with direct parent `97aeecdff640187ac0b3ad152a22befe442a1a2f`; it is not a new candidate from integration. Run 002 receives its own offline guard/supervisor pair, bound to this decision packet's actual SHA-256, the Run 002 manifest, exact source pins, command literal, partition, and run ID. The guard remains pending and no runtime authorization is granted. The Run 001 guard, tools, and manifest remain byte-identical to the direct parent.
+
+Run 002 readiness still requires the exact `Entity creation successful.` line. The new world places `<gravity>` directly under `<world>`, outside `<physics>`, while retaining the local Fuel-free probe-only world. No runtime was executed. No endpoint pin, bridge, ROS `/scan`, TF evidence, runtime evidence, runtime approval, `ResolvedConfigV3`, `config_hash`, or Gate B transition is created. `RUNTIME_APPROVED: NOT_APPROVED` remains unchanged.

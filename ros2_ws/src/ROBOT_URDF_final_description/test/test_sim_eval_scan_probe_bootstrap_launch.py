@@ -30,7 +30,9 @@ def test_local_probe_world_is_fuel_free_and_has_only_required_systems():
     assert len(worlds) == 1
     world = worlds[0]
     assert world.attrib == {"name": WORLD_NAME}
+    assert world.findtext("gravity") == "0 0 -9.8"
     assert world.find("physics") is not None
+    assert world.find("physics/gravity") is None
     plugins = world.findall("plugin")
     assert [plugin.attrib["name"] for plugin in plugins] == [
         "gz::sim::systems::Physics",

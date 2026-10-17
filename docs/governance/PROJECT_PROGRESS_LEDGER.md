@@ -1213,3 +1213,20 @@
 | Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; no runtime evidence. |
 | Preserved boundary | No endpoint pin, ROS `/scan`, bridge, TF, runtime evidence/authorization, resolved profile, `ResolvedConfigV3`, `config_hash` or Gate B transition. WP06-6E remains sole bridge owner. WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | None; earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06_SIM_EVAL_SCAN_ENDPOINT_PROBE_DETERMINISTIC_BOOTSTRAP_RUN002_COMPLETION_FIX — corrective review commit
+
+| Field | Value |
+|---|---|
+| Integration base | `be5f63e7a01be0bca0b838e1ae5265bbb7145be8` |
+| Review branch | `wp06-scan-probe-deterministic-bootstrap-be5f63e` |
+| Direct parent | `97aeecdff640187ac0b3ad152a22befe442a1a2f` |
+| Classification | `L2_SIM_EVAL_SCAN_ENDPOINT_PROBE_DETERMINISTIC_BOOTSTRAP_REMEDIATION` corrective review commit |
+| Run 002 | Independent guard/supervisor/manifest source implemented offline; guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; no runtime authorization. Exact integrated refs, clean worktree, corrected authority packet, manifest, source pins, command, partition and run ID are checked before consumption. |
+| Bootstrap readiness | Future run requires exact `Entity creation successful.` log before the one-shot supervisor. |
+| Run 001 | Guard, tools and manifest are byte-identical to the direct parent; not modified or consumed. |
+| World correction | `<gravity>` is a direct child of the local world and is outside `<physics>`; no remote assets or navigation-fidelity claim. |
+| Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; this corrective candidate did not execute runtime. |
+| Boundary/status | No endpoint pin, bridge, ROS `/scan`, TF evidence, runtime evidence/approval, `ResolvedConfigV3`, `config_hash` or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`. |
+| `supersedes` | Corrects Run 002 supervisor compatibility and SDF gravity semantics on the existing review branch; prior Ledger bytes are an exact prefix. |
