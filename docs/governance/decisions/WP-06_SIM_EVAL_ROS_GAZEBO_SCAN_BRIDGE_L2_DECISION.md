@@ -90,11 +90,28 @@ the source-owned `LaserScan.header.frame_id`: the observed value was
 `lidar_frame`. The historical Run 001 evidence is not modified or promoted
 to a full pass.
 
-This corrective candidate adds exactly `<frame_id>lidar_frame</frame_id>` to
-the existing `YDLIDAR_X3_PRO` Gazebo sensor and reconciles the current static
-profile Gazebo source SHA-256. The bridge does not rewrite the message header;
-no bridge-side adapter, remap, TF publisher, or ROS node is added. The WP-05
-historical workspace inventory and external 14-root lock are unchanged.
+The earlier source correction added `<frame_id>lidar_frame</frame_id>` to the
+existing `YDLIDAR_X3_PRO` Gazebo sensor. This corrective candidate retains
+that field and adds `<gz_frame_id>lidar_frame</gz_frame_id>` as a second direct
+sensor child, as required by the Gazebo Harmonic URDF/Gazebo path. Both fields
+must occur exactly once with the exact value `lidar_frame`; the test rejects a
+missing, duplicate, misplaced, or incorrect field/sensor/reference. The
+current static-profile Gazebo source SHA-256 is reconciled across the YAML,
+Python descriptor, WP-05 manifest, and WP06 evidence. The bridge does not
+rewrite the message header; no bridge-side adapter, remap, TF publisher, or
+ROS node is added. The WP-05 historical workspace inventory and external
+14-root lock are unchanged.
+
+Runtime Run 002 remains the immutable historical outcome
+`WP06_6E_RUNTIME_FRAME_CONTRACT_FAIL_NO_RETRY`: the observed header frame was
+`ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO`, not `lidar_frame`. The run did
+observe the GZ `/scan` to ROS `/scan` bridge, the expected
+`sensor_msgs/msg/LaserScan` type, one data publisher, non-empty ranges, and
+clean teardown; the frame mismatch remains the sole acceptance failure. The
+source and offline checks in this candidate do not change that record and do
+not promote the run to a pass. No runtime retry is performed. Only a separate
+capacity-one runtime authorization after independent audit of the exact
+corrective commit may assess the new dual-frame source contract.
 
 This candidate provides source, offline-test, and build evidence only. A new
 capacity-one runtime attempt requires independent audit and separate Owner

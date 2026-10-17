@@ -390,3 +390,18 @@ def test_clock_bridge_and_wp05_static_profile_provenance_remain_consistent():
         if item.get("role") == "gazebo_lidar_source"
     ]
     assert python_entries == [expected]
+
+    wp06_evidence = json.loads(
+        (REPO_ROOT / "docs/governance/evidence/WP-06_SIM_EVAL_ROS_GAZEBO_SCAN_BRIDGE_L2_EVIDENCE.json").read_text(encoding="utf-8")
+    )
+    run002 = wp06_evidence["historical_run_002"]
+    assert run002["terminal_outcome"] == "WP06_6E_RUNTIME_FRAME_CONTRACT_FAIL_NO_RETRY"
+    assert run002["frame_id_expected"] == "lidar_frame"
+    assert run002["frame_id_observed"] == "ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO"
+    assert run002["historical_evidence_modified"] is False
+    assert run002["runtime_retry_performed"] is False
+    assert run002["observed_ros_topic"] == "/scan"
+    assert run002["observed_ros_type"] == "sensor_msgs/msg/LaserScan"
+    assert run002["observed_ros_data_publisher_count"] == 1
+    assert run002["ranges_non_empty"] is True
+    assert run002["bridge_and_bootstrap_teardown"] == "CLEAN"

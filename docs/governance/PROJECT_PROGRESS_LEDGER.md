@@ -1361,3 +1361,16 @@
 | WP-05 preservation | `source_commit`, map bindings, other pins, external 14-root lock, static policy manifest, historical inventory and WP-04/WP-05/Gate A/Gate B states remain unchanged. |
 | Evidence status | Source, offline tests and build only. Run 001 remains historical evidence; no retry. A new capacity-one runtime requires independent audit and separate Owner authorization for the exact corrective commit. No endpoint pin or Gate B transition; `RUNTIME_APPROVED: NOT_APPROVED`. |
 | `supersedes` | Clarifies the WP06-6E Run 001 frame-contract finding while preserving all preceding Ledger bytes. |
+
+
+### WP06_6E_HARMONIC_GZ_FRAME_ID_CORRECTIVE_CANDIDATE — review candidate
+
+| Field | Value |
+|---|---|
+| Branch / base / parent | `wp06-sim-eval-ros-gz-scan-bridge-abcdffb` / `abcdffb4d1683c6b337b7c8a8916d0c9317d111e` / `61c7f886ce7ebb09c77dc6ac1f6befb5420ae08e` |
+| Source correction | Preserve the existing direct sensor child `<frame_id>lidar_frame</frame_id>` and add exactly one direct child `<gz_frame_id>lidar_frame</gz_frame_id>` to the `YDLIDAR_X3_PRO` `gpu_lidar` under `gazebo reference="lidar_frame"`. Current Gazebo source SHA-256: `9ff2dd9578b069cc492c9ff05e7f7f0d952c8bad0c5ecd9710ccea63d9fb1bbd`. |
+| Provenance | Reconcile only the current static-profile YAML, Python descriptor, and WP-05 static-profile manifest pin. WP-05 dependency lock, map bytes/hash, static policy manifest, and historical inventory remain unchanged. |
+| Historical runtime | Run 002 remains `WP06_6E_RUNTIME_FRAME_CONTRACT_FAIL_NO_RETRY`; its runtime record is unchanged and no retry is performed. No historical runtime result is promoted to a full pass. |
+| Evidence status | Source/offline-test/build only. The bridge does not rewrite the header; no adapter, ROS node, TF publisher, endpoint pin, new runtime evidence, runtime authorization, or Gate B transition is created. A new capacity-one runtime requires independent audit and separate Owner authorization for the exact corrective commit. `RUNTIME_APPROVED: NOT_APPROVED`. |
+| Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; unchanged. |
+| `supersedes` | Clarifies the source frame contract while preserving all historical Run 001/Run 002 evidence and prior Ledger bytes. |

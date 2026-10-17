@@ -31,8 +31,25 @@ def _tamper(path, value):
     return result
 
 
-def _has_expected_lidar_frame(sensor):
-    return sensor.findtext("frame_id") == "lidar_frame"
+def _has_expected_lidar_source(root):
+    gazebo_blocks = [
+        node for node in root.findall("gazebo")
+        if node.get("reference") == "lidar_frame"
+    ]
+    if len(gazebo_blocks) != 1:
+        return False
+    sensors = gazebo_blocks[0].findall("sensor")
+    if len(sensors) != 1:
+        return False
+    sensor = sensors[0]
+    return (
+        sensor.get("name") == "YDLIDAR_X3_PRO"
+        and sensor.get("type") == "gpu_lidar"
+        and len(sensor.findall("frame_id")) == 1
+        and sensor.findtext("frame_id") == "lidar_frame"
+        and len(sensor.findall("gz_frame_id")) == 1
+        and sensor.findtext("gz_frame_id") == "lidar_frame"
+    )
 
 
 def test_yaml_has_exact_static_contract_and_validator_accepts_it():
@@ -91,20 +108,57 @@ def test_sdf_static_source_matches_declared_sensor_provenance():
     assert sensor.get("type") == "gpu_lidar"
     assert sensor.findtext("topic") == "scan"
     assert len(sensor.findall("frame_id")) == 1
-    assert _has_expected_lidar_frame(sensor)
+    assert sensor.findtext("frame_id") == "lidar_frame"
+    assert len(sensor.findall("gz_frame_id")) == 1
+    assert sensor.findtext("gz_frame_id") == "lidar_frame"
+    assert _has_expected_lidar_source(root)
     assert float(sensor.findtext("update_rate")) == 6.0
     assert int(sensor.findtext("ray/scan/horizontal/samples")) == 500
     assert float(sensor.findtext("ray/range/min")) == 0.10
     assert float(sensor.findtext("ray/range/max")) == 8.00
 
 
-def test_sdf_lidar_source_rejects_mutated_frame_id():
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "remove_frame_id",
+        "remove_gz_frame_id",
+        "wrong_frame_id",
+        "wrong_gz_frame_id",
+        "duplicate_frame_id",
+        "duplicate_gz_frame_id",
+        "wrong_sensor_name",
+        "wrong_gazebo_reference",
+        "frame_tags_on_different_sensor",
+    ],
+)
+def test_sdf_lidar_source_rejects_invalid_dual_frame_contract(mutation):
     root = ET.parse(GAZEBO_PATH).getroot()
     gazebo = [node for node in root.findall("gazebo") if node.get("reference") == "lidar_frame"]
     sensor = gazebo[0].findall("sensor")[0]
-    mutated = ET.fromstring(ET.tostring(sensor))
-    mutated.find("frame_id").text = "ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO"
-    assert not _has_expected_lidar_frame(mutated)
+    if mutation == "remove_frame_id":
+        sensor.remove(sensor.find("frame_id"))
+    elif mutation == "remove_gz_frame_id":
+        sensor.remove(sensor.find("gz_frame_id"))
+    elif mutation == "wrong_frame_id":
+        sensor.find("frame_id").text = "ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO"
+    elif mutation == "wrong_gz_frame_id":
+        sensor.find("gz_frame_id").text = "sensor_frame"
+    elif mutation == "duplicate_frame_id":
+        ET.SubElement(sensor, "frame_id").text = "lidar_frame"
+    elif mutation == "duplicate_gz_frame_id":
+        ET.SubElement(sensor, "gz_frame_id").text = "lidar_frame"
+    elif mutation == "wrong_sensor_name":
+        sensor.set("name", "other_lidar")
+    elif mutation == "wrong_gazebo_reference":
+        gazebo[0].set("reference", "base_link")
+    elif mutation == "frame_tags_on_different_sensor":
+        sensor.remove(sensor.find("frame_id"))
+        sensor.remove(sensor.find("gz_frame_id"))
+        other_sensor = ET.SubElement(gazebo[0], "sensor", name="other_lidar", type="gpu_lidar")
+        ET.SubElement(other_sensor, "frame_id").text = "lidar_frame"
+        ET.SubElement(other_sensor, "gz_frame_id").text = "lidar_frame"
+    assert not _has_expected_lidar_source(root)
 
 
 def test_xacro_keeps_direct_fixed_base_to_lidar_edge():

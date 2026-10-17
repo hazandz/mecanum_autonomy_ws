@@ -39,7 +39,7 @@ STATIC_PROFILE_DESCRIPTOR = {
         {"role": "typed_lidar_binding", "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/v3_sim_eval_lidar_bridge_binding.py", "sha256": "b4d2f12ac85e0a103c37ea914481c6ef278587a3960f931448455239b094ba2a", "classification": "STATIC_TYPED_BINDING_ONLY"},
         {"role": "robot_description", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro", "sha256": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d", "classification": "STATIC_TF_PROVENANCE_ONLY"},
         {"role": "robot_state_publisher_launch", "path": "ros2_ws/src/ROBOT_URDF_final_description/launch/navigation_v1_robot_state_publisher.launch.py", "sha256": "b5c939ed662b5f789d008dd34777363ffeb5bbc373b596e97b75c1e097dcb511", "classification": "STATIC_TF_PROVENANCE_ONLY"},
-        {"role": "gazebo_lidar_source", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo", "sha256": "ae115ad050be662e91bbcf4794d956fc86557eb6748f1dc781c0e5653a56b56c", "classification": "GAZEBO_TRANSPORT_PROVENANCE_ONLY"},
+        {"role": "gazebo_lidar_source", "path": "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo", "sha256": "9ff2dd9578b069cc492c9ff05e7f7f0d952c8bad0c5ecd9710ccea63d9fb1bbd", "classification": "GAZEBO_TRANSPORT_PROVENANCE_ONLY"},
     ],
     "external_dependency_lock": {
         "path": "docs/governance/evidence/WP-05_NAVIGATION_V1_EXTERNAL_14_ROOT_DEPENDENCY_LOCK.json",
