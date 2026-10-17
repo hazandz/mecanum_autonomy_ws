@@ -31,6 +31,10 @@ def _tamper(path, value):
     return result
 
 
+def _has_expected_lidar_frame(sensor):
+    return sensor.findtext("frame_id") == "lidar_frame"
+
+
 def test_yaml_has_exact_static_contract_and_validator_accepts_it():
     descriptor = _descriptor()
     assert descriptor == contract.STATIC_DESCRIPTOR
@@ -86,10 +90,21 @@ def test_sdf_static_source_matches_declared_sensor_provenance():
     assert sensor.get("name") == "YDLIDAR_X3_PRO"
     assert sensor.get("type") == "gpu_lidar"
     assert sensor.findtext("topic") == "scan"
+    assert len(sensor.findall("frame_id")) == 1
+    assert _has_expected_lidar_frame(sensor)
     assert float(sensor.findtext("update_rate")) == 6.0
     assert int(sensor.findtext("ray/scan/horizontal/samples")) == 500
     assert float(sensor.findtext("ray/range/min")) == 0.10
     assert float(sensor.findtext("ray/range/max")) == 8.00
+
+
+def test_sdf_lidar_source_rejects_mutated_frame_id():
+    root = ET.parse(GAZEBO_PATH).getroot()
+    gazebo = [node for node in root.findall("gazebo") if node.get("reference") == "lidar_frame"]
+    sensor = gazebo[0].findall("sensor")[0]
+    mutated = ET.fromstring(ET.tostring(sensor))
+    mutated.find("frame_id").text = "ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO"
+    assert not _has_expected_lidar_frame(mutated)
 
 
 def test_xacro_keeps_direct_fixed_base_to_lidar_edge():

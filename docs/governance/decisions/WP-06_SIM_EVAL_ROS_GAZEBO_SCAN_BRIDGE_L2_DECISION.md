@@ -76,3 +76,30 @@ validated. This correction changes only the offline dependency-lock test's
 classification of common versus profile-specific dependencies and records
 that distinction here. It does not change WP-05 lock content, runtime
 compatibility status, runtime authorization, Gate B, or `RUNTIME_APPROVED`.
+
+
+## Corrective source-owned LaserScan frame contract
+
+The historical WP06-6E Runtime Run 001 is not a full acceptance pass. It
+passed ROS `/scan` existence, `sensor_msgs/msg/LaserScan` type, one data
+publisher, non-empty ranges, and clean bootstrap/bridge teardown. The
+`/parameter_events` and `/rosout` publications are standard ROS node
+endpoints and are not bridge-scope violations. The sole audited failure was
+the source-owned `LaserScan.header.frame_id`: the observed value was
+`ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO`, while the required value is
+`lidar_frame`. The historical Run 001 evidence is not modified or promoted
+to a full pass.
+
+This corrective candidate adds exactly `<frame_id>lidar_frame</frame_id>` to
+the existing `YDLIDAR_X3_PRO` Gazebo sensor and reconciles the current static
+profile Gazebo source SHA-256. The bridge does not rewrite the message header;
+no bridge-side adapter, remap, TF publisher, or ROS node is added. The WP-05
+historical workspace inventory and external 14-root lock are unchanged.
+
+This candidate provides source, offline-test, and build evidence only. A new
+capacity-one runtime attempt requires independent audit and separate Owner
+authorization for the exact corrective commit. No runtime approval, endpoint
+pin, Gate B transition, or full runtime acceptance is created. Runtime
+compatibility remains `NOT_VALIDATED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+WP-04 remains `BLOCKED_BY_CONTRACT`; WP-05 remains `OPEN`; Gate A remains
+`PASSED`; Gate B remains `NOT_STARTED`.

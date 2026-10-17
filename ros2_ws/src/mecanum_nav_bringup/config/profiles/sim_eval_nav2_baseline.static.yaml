@@ -63,7 +63,7 @@ static_ingress_contracts:
     classification: STATIC_TF_PROVENANCE_ONLY
   - role: gazebo_lidar_source
     path: ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo
-    sha256: 1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e
+    sha256: ae115ad050be662e91bbcf4794d956fc86557eb6748f1dc781c0e5653a56b56c
     classification: GAZEBO_TRANSPORT_PROVENANCE_ONLY
 external_dependency_lock:
   path: docs/governance/evidence/WP-05_NAVIGATION_V1_EXTERNAL_14_ROOT_DEPENDENCY_LOCK.json

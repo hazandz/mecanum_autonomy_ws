@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from mecanum_nav_bringup import sim_eval_scan_endpoint_probe as probe
+from mecanum_nav_bringup.sim_eval_static_profile_contract import STATIC_PROFILE_DESCRIPTOR
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -347,7 +348,7 @@ def test_import_is_inert_and_source_has_no_runtime_bridge_or_shell_escape_hatch(
     assert source.count("subprocess.run") == 1
 
 
-def test_clock_bridge_and_wp05_sources_are_unchanged():
+def test_clock_bridge_and_wp05_static_profile_provenance_remain_consistent():
     clock_path = REPO_ROOT / "ros2_ws/src/ROBOT_URDF_final_description/config/ros_gz_bridge_gazebo.yaml"
     clock = yaml.safe_load(clock_path.read_text(encoding="utf-8"))
     assert clock == [{
@@ -355,8 +356,37 @@ def test_clock_bridge_and_wp05_sources_are_unchanged():
         "ros_type_name": "rosgraph_msgs/msg/Clock", "gz_type_name": "gz.msgs.Clock",
         "direction": "GZ_TO_ROS",
     }]
-    assert _sha256(REPO_ROOT / "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo") == "1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e"
     assert _sha256(PACKAGE_ROOT / "config/bridge/sim_eval_lidar_scan_bridge.static.yaml") == "60a012fd2fd8f743658cdfb4fc3e910d728b17b2bea5d7dece3316bd4f12ff7e"
-    assert _sha256(PACKAGE_ROOT / "config/profiles/sim_eval_nav2_baseline.static.yaml") == "55da76d604e8c4464ccf32d6475d62f2b928c2aabeee9c1ffcb6aaf26dd4eb0b"
-    assert _sha256(PACKAGE_ROOT / "mecanum_nav_bringup/sim_eval_static_profile_contract.py") == "d557c1a1d1ff7b7a7131145f680c6e537dc2fa5ade5cd6b40fcfc17c2d34e039"
-    assert _sha256(REPO_ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json") == "1a9c0504cdb4c18aa4620174f52d9cdf53a6203b8b189452db50bb3c8cfe2a90"
+
+    gazebo_source_path = "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo"
+    gazebo_source = REPO_ROOT / gazebo_source_path
+    source_sha256 = _sha256(gazebo_source)
+    expected = {
+        "role": "gazebo_lidar_source",
+        "path": gazebo_source_path,
+        "classification": "GAZEBO_TRANSPORT_PROVENANCE_ONLY",
+        "sha256": source_sha256,
+    }
+
+    profile = yaml.safe_load(
+        (PACKAGE_ROOT / "config/profiles/sim_eval_nav2_baseline.static.yaml").read_text(encoding="utf-8")
+    )
+    profile_entries = [
+        item for item in profile["static_ingress_contracts"]
+        if item.get("role") == "gazebo_lidar_source"
+    ]
+    assert profile_entries == [expected]
+
+    manifest_path = REPO_ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_entries = [
+        item for item in manifest["static_ingress_contracts"]
+        if item.get("role") == "gazebo_lidar_source"
+    ]
+    assert manifest_entries == [expected]
+
+    python_entries = [
+        item for item in STATIC_PROFILE_DESCRIPTOR["static_ingress_contracts"]
+        if item.get("role") == "gazebo_lidar_source"
+    ]
+    assert python_entries == [expected]

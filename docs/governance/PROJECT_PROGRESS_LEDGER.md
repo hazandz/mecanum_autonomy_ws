@@ -1349,3 +1349,15 @@
 | Evidence ceiling | Offline source/test/build only; runtime compatibility remains `NOT_VALIDATED`, no runtime authorization or Gate B transition. |
 | Status | `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05/Gate A/Gate B statuses unchanged. |
 | `supersedes` | None; appends this correction without changing prior ledger bytes. |
+
+
+### WP06_6E_LIDAR_FRAME_SOURCE_CONTRACT_CORRECTION — corrective review candidate
+
+| Field | Value |
+|---|---|
+| Branch / base / parent | `wp06-sim-eval-ros-gz-scan-bridge-abcdffb` / `abcdffb4d1683c6b337b7c8a8916d0c9317d111e` / `7b6d3354130bcb82062e1a8fec0648dffa042a64` |
+| Finding | Historical Run 001 passed ROS `/scan` type, one data publisher, non-empty ranges and teardown. `/parameter_events` and `/rosout` are standard endpoints. Its sole audited failure was observed `header.frame_id=ROBOT_URDF_final/base_link/YDLIDAR_X3_PRO` instead of `lidar_frame`. Historical runtime evidence is unchanged and not a full pass. |
+| Correction | Add source-owned `<frame_id>lidar_frame</frame_id>` to the existing Gazebo LiDAR sensor and update the `gazebo_lidar_source` SHA-256 in the three current static descriptors. No bridge header rewrite, TF publisher, adapter, remap or ROS node. |
+| WP-05 preservation | `source_commit`, map bindings, other pins, external 14-root lock, static policy manifest, historical inventory and WP-04/WP-05/Gate A/Gate B states remain unchanged. |
+| Evidence status | Source, offline tests and build only. Run 001 remains historical evidence; no retry. A new capacity-one runtime requires independent audit and separate Owner authorization for the exact corrective commit. No endpoint pin or Gate B transition; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | Clarifies the WP06-6E Run 001 frame-contract finding while preserving all preceding Ledger bytes. |

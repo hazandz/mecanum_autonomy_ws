@@ -132,6 +132,7 @@
 
 <gazebo reference="lidar_frame">
   <sensor name="YDLIDAR_X3_PRO" type="gpu_lidar">
+    <frame_id>lidar_frame</frame_id>
     <topic>scan</topic>
     <update_rate>6.0</update_rate>
     <ray>
