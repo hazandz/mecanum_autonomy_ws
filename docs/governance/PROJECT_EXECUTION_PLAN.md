@@ -884,3 +884,7 @@ not retried. This candidate provides offline source/test/build evidence only;
 `runtime_eligible: false`, runtime evidence `NOT_CREATED`, and
 `RUNTIME_APPROVED: NOT_APPROVED`. It makes no runtime-pass claim for the sensor,
 bridge, or normalizer.
+
+## WP06-6C Run 003 runtime evidence disposition — bounded ingress status
+
+WP06-6C implementation and runtime evidence are complete only within the wheel/IMU ingress scope. Independent audit passed the external Run 003 evidence for Gazebo IMU → ROS staging → normalizer → `/imu/data`, wheel ingress, effective `use_sim_time`, and teardown; see the canonical disposition manifest `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`. Run 001 and Run 002 remain immutable historical failures. This is not whole ROS graph, global TF, EKF, Nav2, AMCL, Map Server, or navigation-profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization is issued. Integration is eligible only after final independent audit of the exact L1 disposition commit and Owner decision.

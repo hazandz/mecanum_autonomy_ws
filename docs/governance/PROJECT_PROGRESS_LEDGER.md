@@ -1440,3 +1440,16 @@
 | Historical boundary | Run 002 remains immutable historical failure; no runtime retry occurred. This correction does not establish sensor, bridge, or normalizer runtime PASS. |
 | Evidence status | Offline source/test/build evidence only; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; Gate B `NOT_STARTED`. |
 | `supersedes` | Supersedes only the current Run 002 root-cause remediation routing; historical runtime artifacts and prior Ledger bytes remain unchanged. |
+
+### WP06_6C_RUNTIME_RUN003_EVIDENCE_DISPOSITION — L1 candidate
+
+| Field | Value |
+|---|---|
+| Branch / parent | `wp06-6c-wheel-imu-ingress-activation-bd74956` / `9c945a4d52058e3f3cb3b8285e5cb017582fd8af` |
+| Runtime identity | `WP06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003`; review source `9c945a4d52058e3f3cb3b8285e5cb017582fd8af`; integration base `bd749560e50e11963873c33a51f806e420c38392`. |
+| Audit | `WP06_6C_RUNTIME_RUN003_INDEPENDENT_EVIDENCE_AUDIT_PASS`; external `SHA256SUMS.txt` verifies 24/24 entries and manifest-pinned raw artifacts are recalculated. |
+| Bounded result | Gazebo IMU → ROS staging → normalizer → `/imu/data`; wheel ingress; effective `use_sim_time`; clean teardown. This does not validate the whole ROS graph, global TF, EKF, Nav2, AMCL, Map Server, or navigation profile. |
+| Historical boundary | Run 001 and Run 002 remain immutable historical failures; their evidence is not modified or reinterpreted. |
+| Status | `WP06_6C_RUN003_RUNTIME_EVIDENCE_AUDITED_PASS_BOUNDED_INGRESS_SCOPE`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization. |
+| Integration routing | Eligible only pending final independent audit of the exact L1 disposition commit and Owner decision. |
+| `supersedes` | Supersedes only current WP06-6C runtime-evidence status wording; all prior Ledger bytes remain an exact prefix. |

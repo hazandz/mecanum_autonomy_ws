@@ -760,3 +760,7 @@ world-level Sensors and IMU system. This does not establish runtime sensor,
 bridge, or normalizer success. Run 002 remains immutable and is not replayed.
 Evidence remains offline source/test/build only; `runtime_eligible: false`,
 runtime evidence not created, and `RUNTIME_APPROVED: NOT_APPROVED`.
+
+## WP06-6C Run 003 runtime evidence disposition — current bounded status
+
+Canonical runtime evidence disposition: `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`. Independent audit passed for the exact review source commit `9c945a4d52058e3f3cb3b8285e5cb017582fd8af`, limited to Gazebo IMU → ROS staging → normalizer → `/imu/data`, wheel ingress, effective `use_sim_time`, and teardown. Run 001 and Run 002 remain immutable historical failures. The disposition does not assert whole-graph, EKF, Nav2, AMCL, Map Server, global TF, or navigation-profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization is issued. Integration is eligible only pending final independent audit of the exact L1 disposition commit and Owner decision.

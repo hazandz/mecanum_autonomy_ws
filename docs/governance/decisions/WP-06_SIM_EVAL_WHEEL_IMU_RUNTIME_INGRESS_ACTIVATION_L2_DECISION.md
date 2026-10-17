@@ -101,3 +101,9 @@ that the Gazebo IMU sensor, bridge, or normalizer now passes at runtime.
 Run 002 remains an immutable historical failure; no runtime was retried.
 `runtime_eligible: false`; `RUNTIME_APPROVED: NOT_APPROVED`; Gate B remains
 `NOT_STARTED`.
+
+## WP06-6C Run 003 runtime evidence disposition — L1
+
+The exact review source commit is `9c945a4d52058e3f3cb3b8285e5cb017582fd8af`, based on integration `bd749560e50e11963873c33a51f806e420c38392`. Independent evidence audit marker: `WP06_6C_RUNTIME_RUN003_INDEPENDENT_EVIDENCE_AUDIT_PASS`. The external Run 003 evidence directory is recorded in `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`; its 24 checksum entries pass `sha256sum -c`, and selected artifact hashes/sizes are recalculated in that manifest.
+
+The audited result is bounded to Gazebo IMU payload transfer through ROS staging and the existing normalizer to `/imu/data`, the existing wheel ingress output, effective `use_sim_time`, and clean ingress-before-bootstrap teardown. It does not establish the complete ROS graph, global TF, EKF, Nav2, AMCL, Map Server, or navigation-profile validation. Run 001 and Run 002 remain immutable historical failures. No source semantics changed and this disposition creates no runtime authorization. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. Integration is only eligible after a final independent audit of this exact L1 disposition commit and a separate Owner decision.
