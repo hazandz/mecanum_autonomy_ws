@@ -10,6 +10,27 @@ gazebo_sources:
   imu:
     endpoint: /sim_eval/imu/raw
     message_type: gz.msgs.IMU
+    frame_id: base_link
+    gz_frame_id: base_link
+bridge_mappings:
+  - ros_topic_name: /sim_eval/wheel_joint_states
+    gz_topic_name: /joint_states
+    ros_type_name: sensor_msgs/msg/JointState
+    gz_type_name: gz.msgs.Model
+    direction: GZ_TO_ROS
+    lazy: false
+    subscriber_queue: 10
+    publisher_queue: 10
+    qos_profile: SENSOR_DATA
+  - ros_topic_name: /sim_eval/imu_raw
+    gz_topic_name: /sim_eval/imu/raw
+    ros_type_name: sensor_msgs/msg/Imu
+    gz_type_name: gz.msgs.IMU
+    direction: GZ_TO_ROS
+    lazy: false
+    subscriber_queue: 10
+    publisher_queue: 10
+    qos_profile: SENSOR_DATA
 staging_inputs:
   wheel:
     topic: /sim_eval/wheel_joint_states
@@ -68,6 +89,5 @@ covariance:
 prohibitions:
   forbidden_inputs: [/odom, /ground_truth/odom]
   tf_publication: false
-  no_ros_gazebo_bridge_implementation: true
-bridge_implementation_status: PENDING_WP06_6E
+bridge_implementation_status: IMPLEMENTED_OFFLINE_ONLY_PENDING_RUNTIME_AUDIT
 runtime_evidence_status: NOT_CREATED

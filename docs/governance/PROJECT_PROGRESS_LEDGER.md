@@ -1388,3 +1388,18 @@
 | Historical boundary | Run 001 and Run 002 remain unchanged historical failures. |
 | Status | `WP06_6E_SCAN_BRIDGE_RUNTIME_OBSERVED_AND_AUDITED_PASS` for scan-bridge scope only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No whole-navigation-profile validation, endpoint pin, TF evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, or runtime authorization. |
 | `supersedes` | Supersedes only the current WP06-6E scan-bridge runtime-evidence status wording; does not alter historical records or broader WP/Gate statuses. All base Ledger bytes remain an exact prefix. |
+
+
+### WP06_6C_SIM_EVAL_WHEEL_IMU_RUNTIME_INGRESS_ACTIVATION — L2 review candidate
+
+| Field | Value |
+|---|---|
+| Base / branch | `bd749560e50e11963873c33a51f806e420c38392` / `wp06-6c-wheel-imu-ingress-activation-bd74956` |
+| Classification | `L2_PROFILE_SPECIFIC_WHEEL_IMU_RUNTIME_INGRESS_IMPLEMENTATION` |
+| Data path | GZ `/joint_states` (`gz.msgs.Model`) → staging `/sim_eval/wheel_joint_states` (`sensor_msgs/msg/JointState`) → existing wheel emulator → `/wheel/odometry_raw`; GZ `/sim_eval/imu/raw` (`gz.msgs.IMU`) → staging `/sim_eval/imu_raw` (`sensor_msgs/msg/Imu`) → existing normalizer → `/imu/data`. Both mappings are `GZ_TO_ROS`. |
+| IMU source frame | Existing `sim_eval_base_imu` has exact direct `frame_id=base_link` and `gz_frame_id=base_link`. |
+| Gazebo source pin | Old `9ff2dd9578b069cc492c9ff05e7f7f0d952c8bad0c5ecd9710ccea63d9fb1bbd`; candidate `7bbaa475578600d8e18e437fa83720483b90b4af2bf4212157152429576a2`. Current WP-05 profile provenance only is reconciled. |
+| Preservation | WP-05 14-root lock, historical inventory, static-policy manifest, WP06-6E Run 003 disposition manifest and raw evidence are unchanged. Run 003 remains historical scan-bridge-scope evidence at the prior source hash. |
+| Evidence/status | `IMPLEMENTED_OFFLINE_BRIDGE_AND_INGRESS_SOURCE_ONLY`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| Boundary | No bridge for `/odom`, `/ground_truth/odom`, `/tf`, or `/tf_static`; no EKF, Nav2, AMCL, Map Server, command publisher, profile resolution, `ResolvedConfigV3`, `config_hash`, runtime authorization or navigation-ready claim. |
+| `supersedes` | None; new WP06-6C candidate. Prior Ledger bytes are retained as exact prefix. |

@@ -2,14 +2,17 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>mecanum_base_bridge</name>
-  <version>0.2.0</version>
-  <description>Phase A pure-Python UART v1 codec and golden-vector tests; no UART runtime transport.</description>
+  <version>0.3.0</version>
+  <description>Mecanum base transport components and offline-only sim_eval wheel/IMU ingress source.</description>
   <maintainer email="hazard@example.com">Hazan</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <export>
     <build_type>ament_python</build_type>

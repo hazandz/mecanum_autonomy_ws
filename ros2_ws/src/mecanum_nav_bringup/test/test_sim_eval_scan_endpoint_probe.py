@@ -394,6 +394,9 @@ def test_clock_bridge_and_wp05_static_profile_provenance_remain_consistent():
     wp06_evidence = json.loads(
         (REPO_ROOT / "docs/governance/evidence/WP-06_SIM_EVAL_ROS_GAZEBO_SCAN_BRIDGE_L2_EVIDENCE.json").read_text(encoding="utf-8")
     )
+    # WP06-6E evidence is historical to the integrated 8bd source and is not
+    # rewritten when the current IMU sensor provenance pin changes.
+    assert wp06_evidence["source_pins"][gazebo_source_path] == "9ff2dd9578b069cc492c9ff05e7f7f0d952c8bad0c5ecd9710ccea63d9fb1bbd"
     run002 = wp06_evidence["historical_run_002"]
     assert run002["terminal_outcome"] == "WP06_6E_RUNTIME_FRAME_CONTRACT_FAIL_NO_RETRY"
     assert run002["frame_id_expected"] == "lidar_frame"

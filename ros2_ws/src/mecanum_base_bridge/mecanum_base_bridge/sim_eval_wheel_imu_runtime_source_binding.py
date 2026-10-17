@@ -12,7 +12,8 @@ EXPECTED_DESCRIPTOR = {
     "use_sim_time": True,
     "gazebo_sources": {
         "wheel": {"endpoint": "/joint_states", "message_type": "gz.msgs.Model"},
-        "imu": {"endpoint": "/sim_eval/imu/raw", "message_type": "gz.msgs.IMU"},
+        "imu": {"endpoint": "/sim_eval/imu/raw", "message_type": "gz.msgs.IMU",
+                "frame_id": "base_link", "gz_frame_id": "base_link"},
     },
     "staging_inputs": {
         "wheel": {"topic": "/sim_eval/wheel_joint_states", "message_type": "sensor_msgs/msg/JointState",
@@ -20,6 +21,16 @@ EXPECTED_DESCRIPTOR = {
         "imu": {"topic": "/sim_eval/imu_raw", "message_type": "sensor_msgs/msg/Imu",
                 "reliability": "BEST_EFFORT", "durability": "VOLATILE", "history": "KEEP_LAST", "depth": 10},
     },
+    "bridge_mappings": [
+        {"ros_topic_name": "/sim_eval/wheel_joint_states", "gz_topic_name": "/joint_states",
+         "ros_type_name": "sensor_msgs/msg/JointState", "gz_type_name": "gz.msgs.Model",
+         "direction": "GZ_TO_ROS", "lazy": False, "subscriber_queue": 10,
+         "publisher_queue": 10, "qos_profile": "SENSOR_DATA"},
+        {"ros_topic_name": "/sim_eval/imu_raw", "gz_topic_name": "/sim_eval/imu/raw",
+         "ros_type_name": "sensor_msgs/msg/Imu", "gz_type_name": "gz.msgs.IMU",
+         "direction": "GZ_TO_ROS", "lazy": False, "subscriber_queue": 10,
+         "publisher_queue": 10, "qos_profile": "SENSOR_DATA"},
+    ],
     "canonical_outputs": {
         "wheel": {"topic": "/wheel/odometry_raw", "message_type": "nav_msgs/msg/Odometry",
                   "header_frame_id": "odom", "child_frame_id": "base_link", "publishes_tf": False,
@@ -44,9 +55,8 @@ EXPECTED_DESCRIPTOR = {
     "prohibitions": {
         "forbidden_inputs": ["/odom", "/ground_truth/odom"],
         "tf_publication": False,
-        "no_ros_gazebo_bridge_implementation": True,
     },
-    "bridge_implementation_status": "PENDING_WP06_6E",
+    "bridge_implementation_status": "IMPLEMENTED_OFFLINE_ONLY_PENDING_RUNTIME_AUDIT",
     "runtime_evidence_status": "NOT_CREATED",
 }
 

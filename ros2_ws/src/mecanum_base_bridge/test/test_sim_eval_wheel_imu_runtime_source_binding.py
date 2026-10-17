@@ -46,8 +46,12 @@ def test_binding_yaml_is_exact_and_validator_accepts_it():
     assert descriptor == EXPECTED_DESCRIPTOR
     assert descriptor["runtime_eligible"] is False
     assert descriptor["use_sim_time"] is True
-    assert descriptor["bridge_implementation_status"] == "PENDING_WP06_6E"
+    assert descriptor["bridge_implementation_status"] == "IMPLEMENTED_OFFLINE_ONLY_PENDING_RUNTIME_AUDIT"
     assert descriptor["runtime_evidence_status"] == "NOT_CREATED"
+    assert descriptor["gazebo_sources"]["imu"]["frame_id"] == "base_link"
+    assert descriptor["gazebo_sources"]["imu"]["gz_frame_id"] == "base_link"
+    assert len(descriptor["bridge_mappings"]) == 2
+    assert all(mapping["direction"] == "GZ_TO_ROS" for mapping in descriptor["bridge_mappings"])
     assert validate_sim_eval_wheel_imu_runtime_source_binding(descriptor) is None
 
 
@@ -57,10 +61,21 @@ def test_binding_yaml_is_exact_and_validator_accepts_it():
     lambda d: d["wheel_geometry"].update(wheel_radius_m=0.05),
     lambda d: d.update(runtime_eligible=True),
     lambda d: d["canonical_outputs"]["wheel"].update(publishes_tf=True),
-    lambda d: d["gazebo_sources"]["wheel"].update(endpoint="/pinned/bridge/source"),
-    lambda d: d.update(extra_runtime_endpoint="/new"),
+    lambda d: d["gazebo_sources"]["wheel"].update(endpoint="/pinned/wheel/source"),
+    lambda d: d["gazebo_sources"]["imu"].update(frame_id="other_frame"),
+    lambda d: d["gazebo_sources"]["imu"].update(gz_frame_id="other_frame"),
+    lambda d: d["bridge_mappings"][0].update(direction="BIDIRECTIONAL"),
+    lambda d: d["bridge_mappings"][1].update(gz_type_name="gz.msgs.Other"),
+    lambda d: d["bridge_mappings"][0].update(ros_topic_name="/odom"),
+    lambda d: d["bridge_mappings"][1].update(qos_profile="DEFAULT"),
+    lambda d: d["bridge_mappings"][0].update(publisher_queue=9),
+    lambda d: d["covariance"].update(imu_orientation_diagonal=[0.0, 0.0, 0.0]),
+    lambda d: d.update(bridge_implementation_status="RUNTIME_VALIDATED"),
+    lambda d: d.update(runtime_evidence_status="CREATED"),
+    lambda d: d["prohibitions"].update(no_ros_gazebo_bridge_implementation=True),
+    lambda d: d.update(extra_runtime_endpoint="/unexpected"),
 ])
-def test_validator_fails_closed_for_tampering(mutate):
+def test_validator_fails_closed_for_endpoint_type_direction_frame_qos_and_status_mutations(mutate):
     descriptor = deepcopy(load_descriptor())
     mutate(descriptor)
     with pytest.raises(RuntimeSourceBindingError):

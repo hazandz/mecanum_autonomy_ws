@@ -6,7 +6,7 @@ package_name = 'mecanum_base_bridge'
 
 setup(
     name=package_name,
-    version='0.2.0',
+    version='0.3.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -15,12 +15,18 @@ setup(
             'config/sim_eval_wheel_imu_ingress.static.yaml',
             'config/sim_eval_wheel_imu_runtime_source.yaml',
         ]),
+        ('share/' + package_name + '/config/bridge', [
+            'config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml',
+        ]),
+        ('share/' + package_name + '/launch', [
+            'launch/sim_eval_wheel_imu_ingress.launch.py',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Hazan',
     maintainer_email='hazard@example.com',
-    description='Phase A pure-Python UART v1 codec and golden-vector tests; no UART runtime transport.',
+    description='Mecanum base transport components and offline-only sim_eval wheel/IMU ingress source.',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
