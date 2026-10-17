@@ -1296,3 +1296,16 @@
 | Runtime routing | Runtime requires independent audit and separate Owner authorization naming the exact review commit. Runtime PASS does not authorize integration; only afterward may Owner decide integration of that exact commit. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime executed, no endpoint pin, ROS `/scan`, bridge, TF evidence, runtime approval, `ResolvedConfigV3`, `config_hash` or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05/Gate A/Gate B unchanged. |
 | `supersedes` | Corrects the Run005 review/integration preflight topology recorded at review parent `00911030081c821d1159f4b48941c0c1cd000638`; all earlier Ledger bytes remain an exact prefix. |
+
+
+### WP06-RUN005-TRANSPORT13-PREACQUIRE-NODE-CORRECTION
+
+| Field | Value |
+|---|---|
+| Work item | WP06_RUN005_TRANSPORT13_BINDING_AND_PREACQUIRE_NODE_FIX |
+| Base / parent | 83f13d67ab212fec03b18cd2ed830349b7013ab3 / bcad2cb61cc15fb09b521f082dab9250c77cd5d3 |
+| Scope | Require python3-gz-transport13 and construct/capability-check one partition-bound Node before run directory creation and guard consumption; reuse it for service discovery. |
+| Evidence status | IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY |
+| Guard | Run 005 remains PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION; capacity 1; not consumed. |
+| Supersedes | The Run 005 binding/pre-acquisition defect recorded by the preceding candidate state; prior ledger entries remain unchanged. |
+| Notes | Offline candidate only. No apt/sudo, ROS, Gazebo, launch, runner, runtime, bridge, ROS /scan, endpoint pin, or runtime authorization. |

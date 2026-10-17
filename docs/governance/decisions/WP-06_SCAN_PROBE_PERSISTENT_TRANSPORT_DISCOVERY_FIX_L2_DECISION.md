@@ -28,7 +28,7 @@ source of candidate bytes. The run record distinguishes `review_commit` from
 
 ## Preserved Run 005 contract
 
-The persistent `gz.transport.Node` discovery, Run 005 partition, exact service,
+The persistent Gazebo Transport Node discovery, Run 005 partition, exact service,
 create command and success bytes, probe command, source pins, process-group
 ownership and teardown policy remain unchanged. The delayed binding import
 must succeed before guard acquisition. Any failed ref, ancestry, clean-tree,
@@ -54,3 +54,33 @@ pin, runtime evidence or runtime approval is created here.
 
 `WP-04: BLOCKED_BY_CONTRACT`; `WP-05: OPEN`; `Gate A: PASSED`;
 `Gate B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
+
+
+## Corrective candidate: Gazebo Transport 13 binding and pre-acquire Node
+
+This corrective candidate fixes the host binding contract without changing
+Run 005 topology, partition, world, LiDAR source, probe, create command, or
+process-group teardown. Gazebo Harmonic uses Gazebo Transport 13; the host
+prerequisite is package `python3-gz-transport13`, providing the runtime import
+`from gz.transport13 import Node, NodeOptions`. The candidate does not run
+`apt`, `sudo`, ROS, Gazebo, launch, the session runner, or any runtime.
+
+After exact review-commit source/ref preflight and before creating the run
+directory or acquiring the pending guard, the future runner imports the
+Transport 13 binding, constructs one `NodeOptions`, assigns the exact Run 005
+partition, constructs exactly one `Node`, and verifies `service_list` is
+callable. Any failure returns
+`GZ_TRANSPORT13_BINDING_OR_NODE_PREACQUIRE_UNAVAILABLE` before guard
+consumption and before run-directory creation. After acquisition, persistent
+discovery reuses that same Node. No second Node or `gz service --list` is
+used.
+
+The Run 005 guard remains capacity one and
+`PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; this offline candidate
+does not consume it or grant runtime authorization. Evidence remains
+`IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. Existing review/integration
+topology is preserved: candidate source bytes are verified against the exact
+review commit, while the integration ref remains the exact base and must be
+an ancestor. No bridge, ROS `/scan`, TF, endpoint pin, runtime evidence,
+`ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is
+created. `RUNTIME_APPROVED: NOT_APPROVED` and WP/Gate statuses are unchanged.

@@ -99,9 +99,26 @@ def _canonical_file(path):
     return value, raw
 
 def _load_transport_binding():
-    # Delayed, explicit import. run_session calls this before creating/acquiring guard.
-    from gz.transport import Node, NodeOptions
+    # Gazebo Harmonic ships the Python binding through python3-gz-transport13.
+    from gz.transport13 import Node, NodeOptions
     return Node, NodeOptions
+
+PREACQUIRE_UNAVAILABLE = "GZ_TRANSPORT13_BINDING_OR_NODE_PREACQUIRE_UNAVAILABLE"
+
+def _create_preacquire_transport_node(binding_loader=_load_transport_binding):
+    """Load and validate the sole persistent transport node before guard acquire."""
+    try:
+        Node, NodeOptions = binding_loader()
+        options = NodeOptions()
+        options.partition = PARTITION
+        if options.partition != PARTITION:
+            raise ValueError("NodeOptions partition did not retain the required value")
+        node = Node(options)
+        if not callable(getattr(node, "service_list", None)):
+            raise TypeError("service_list is not callable")
+        return node
+    except Exception as exc:
+        raise TransportBindingUnavailable(PREACQUIRE_UNAVAILABLE) from exc
 
 def _expected_context(manifest, manifest_sha):
     return {"run_id": RUN_ID, "gz_partition": PARTITION, "capacity": 1,
@@ -177,16 +194,17 @@ def preflight(root, guard_path, run_dir, run_id, partition, expected_review_comm
         if _sha(raw) != expected or _git_blob(root, expected_review_commit, p, git_runner) != raw:
             raise SessionError(f"source pin mismatch: {p}")
     expected_commands = {"bootstrap": ["ros2", "launch", "ROBOT_URDF_final_description", "sim_eval_scan_probe_run005_server.launch.py"],
-        "create": CREATE_ARGV, "probe": PROBE_ARGV, "transport": ["gz.transport.Node.service_list"]}
+        "create": CREATE_ARGV, "probe": PROBE_ARGV, "transport": ["gz.transport13.Node.service_list"]}
     if manifest["commands"] != expected_commands:
         raise SessionError("command contract mismatch")
     if manifest["guard_contract"] != {"path": GUARD_PATH, "schema": guard.SCHEMA, "capacity": 1, "seed_state": guard.PENDING}:
         raise SessionError("guard contract mismatch")
-    if manifest["transport_discovery"] != {"import": "from gz.transport import Node, NodeOptions", "partition": PARTITION,
+    if manifest["transport_discovery"] != {"import": "from gz.transport13 import Node, NodeOptions",
+        "host_prerequisite_package": "python3-gz-transport13", "partition": PARTITION,
         "node_count": 1, "method": "service_list", "exact_service": CREATE_SERVICE,
         "timeout_seconds": 30.0, "poll_interval_seconds": 0.25,
         "maximum_attempts": MAX_SERVICE_ATTEMPTS, "maximum_services_per_snapshot": MAX_SERVICES_PER_SNAPSHOT,
-        "maximum_snapshot_bytes": MAX_SERVICE_SNAPSHOT_BYTES, "import_before_guard_acquire": True}:
+        "maximum_snapshot_bytes": MAX_SERVICE_SNAPSHOT_BYTES, "binding_and_node_capability_before_guard_acquire": True}:
         raise SessionError("transport discovery contract mismatch")
     if manifest["timeouts"] != {"service_readiness_total_seconds": 30.0, "service_poll_interval_seconds": 0.25,
         "create_seconds": 30.0, "stabilization_seconds": 20.0, "probe_seconds": 90.0, "teardown_signal_wait_seconds": 10.0}:
@@ -328,16 +346,22 @@ def _utc(): return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 def run_session(root, guard_path, run_dir, run_id, partition, expected_review_commit,
                 expected_integration_base, *, git_runner=subprocess.run,
-                import_binding=_load_transport_binding, popen=subprocess.Popen, command_runner=subprocess.run,
+                transport_node_factory=_create_preacquire_transport_node,
+                popen=subprocess.Popen, command_runner=subprocess.run,
                 pgid_getter=os.getpgid, signal_group=os.killpg, proc_root=Path("/proc"), clock=time.monotonic,
                 sleeper=time.sleep):
     checked = preflight(root, guard_path, run_dir, run_id, partition,
                         expected_review_commit, expected_integration_base, git_runner=git_runner)
-    # Binding failure must occur before directory creation or guard acquisition.
+    # Import, NodeOptions/partition, Node construction and service_list capability
+    # must all pass before creating the run directory or acquiring the guard.
     try:
-        Node, NodeOptions = import_binding()
-    except (ImportError, ModuleNotFoundError) as exc:
-        raise TransportBindingUnavailable("GZ_TRANSPORT_PYTHON_BINDING_UNAVAILABLE") from exc
+        node = transport_node_factory()
+        if not callable(getattr(node, "service_list", None)):
+            raise TypeError("service_list is not callable")
+    except TransportBindingUnavailable:
+        raise
+    except Exception as exc:
+        raise TransportBindingUnavailable(PREACQUIRE_UNAVAILABLE) from exc
     checked["run_dir"].mkdir(parents=True, exist_ok=False)
     try: guard.consume_guard(checked["guard_path"], checked["guard_context"])
     except Exception:
@@ -354,8 +378,6 @@ def run_session(root, guard_path, run_dir, run_id, partition, expected_review_co
     server = create = None; server_pgid = create_pgid = None; server_owned = create_owned = False
     create_torn_down = False
     try:
-        options = NodeOptions(); options.partition = PARTITION
-        node = Node(options)
         server_log = (run_dir / "bootstrap.log").open("wb")
         server = popen(["ros2", "launch", "ROBOT_URDF_final_description", "sim_eval_scan_probe_run005_server.launch.py"],
             cwd=str(root), env=env, shell=False, start_new_session=True, stdout=server_log, stderr=subprocess.STDOUT)
@@ -434,7 +456,7 @@ def main(argv=None):
         record = run_session(args.repository_root, args.guard_path, args.run_directory, args.run_id,
             args.gz_partition, args.expected_review_commit, args.expected_integration_base)
     except TransportBindingUnavailable as exc:
-        print(json.dumps({"outcome": "GZ_TRANSPORT_PYTHON_BINDING_UNAVAILABLE", "error": str(exc)}, sort_keys=True, separators=(",", ":")))
+        print(json.dumps({"outcome": str(exc), "error": str(exc)}, sort_keys=True, separators=(",", ":")))
         return 2
     except Exception as exc:
         print(json.dumps({"outcome": "PREFLIGHT_FAILED_GUARD_PENDING", "error": str(exc)}, sort_keys=True, separators=(",", ":")))

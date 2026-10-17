@@ -19,37 +19,106 @@ spec = importlib.util.spec_from_file_location("run005_session_tested", RUNNER_PA
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
-def test_binding_import_is_delayed_and_before_guard_consumption(monkeypatch):
-    assert "from gz.transport import Node, NodeOptions" in RUNNER_PATH.read_text(encoding="utf-8")
-    events = []
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp); run = root / runner.RUN_DIRECTORY
-        checked = {"run_dir": run, "guard_path": root / "guard", "guard_context": {},
-            "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
-            "review_commit": "a" * 40, "integration_base": INTEGRATION_BASE}
-        monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
-        def unavailable():
-            events.append("import")
-            raise ImportError("binding unavailable")
-        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: events.append("consume"))
-        try:
-            runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "a" * 40, INTEGRATION_BASE,
-                import_binding=unavailable)
-        except runner.TransportBindingUnavailable as exc:
-            assert str(exc) == "GZ_TRANSPORT_PYTHON_BINDING_UNAVAILABLE"
-        else:
-            raise AssertionError("missing binding must fail")
-        assert events == ["import"]
-        assert not run.exists()
+def test_transport13_import_and_node_capability_are_preacquire_only():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = [(node.module, tuple(alias.name for alias in node.names))
+                for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    assert ("gz.transport13", ("Node", "NodeOptions")) in imports
+    assert not any(module == "gz.transport" or (module or "").startswith("gz.transport.")
+                   for module, _ in imports)
+    helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "_create_preacquire_transport_node")
+    session = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                   and node.name == "run_session")
+    helper_text = ast.get_source_segment(source, helper)
+    assert helper_text.index("NodeOptions()") < helper_text.index("options.partition = PARTITION")
+    assert helper_text.index("options.partition = PARTITION") < helper_text.index("Node(options)")
+    assert helper_text.index("Node(options)") < helper_text.index('getattr(node, "service_list", None)')
+    session_text = ast.get_source_segment(source, session)
+    assert session_text.index("transport_node_factory()") < session_text.index('checked["run_dir"].mkdir')
+    assert session_text.index('checked["run_dir"].mkdir') < session_text.index("guard.consume_guard")
+    assert session_text.index("guard.consume_guard") < session_text.index('server_log =')
+    assert session_text.count("transport_node_factory()") == 1
+    assert "GZ_TRANSPORT13_BINDING_OR_NODE_PREACQUIRE_UNAVAILABLE" in source
+
+
+def test_every_preacquire_failure_keeps_guard_pending_and_starts_nothing(monkeypatch):
+    class Options:
+        def __init__(self): self._partition = None
+        @property
+        def partition(self): return self._partition
+        @partition.setter
+        def partition(self, value): self._partition = value
+    class BadPartitionOptions:
+        @property
+        def partition(self): return None
+        @partition.setter
+        def partition(self, value): raise RuntimeError("partition rejected")
+    class WrongPartitionOptions:
+        def __init__(self): self.partition = None
+        def __setattr__(self, name, value):
+            object.__setattr__(self, name, "wrong-partition" if name == "partition" else value)
+    class GoodNode:
+        def __init__(self, options): self.options = options
+        def service_list(self): return []
+    class NoServiceListNode:
+        def __init__(self, options): pass
+    class FailingNode:
+        def __init__(self, options): raise RuntimeError("node construction failed")
+    class FailingOptions:
+        def __init__(self): raise RuntimeError("options construction failed")
+
+    cases = [
+        ("import", lambda: (_ for _ in ()).throw(ImportError("binding unavailable"))),
+        ("options", lambda: (FailingNode, FailingOptions)),
+        ("partition", lambda: (GoodNode, BadPartitionOptions)),
+        ("partition_value", lambda: (GoodNode, WrongPartitionOptions)),
+        ("node", lambda: (FailingNode, Options)),
+        ("service_list", lambda: (NoServiceListNode, Options)),
+    ]
+    for name, binding_loader in cases:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); run = root / runner.RUN_DIRECTORY; guard_file = root / "guard.json"
+            guard_before = runner.guard.canonical_json_bytes({
+                "schema": runner.guard.SCHEMA, "capacity": 1,
+                "state": runner.guard.PENDING, "context": {"run_id": runner.RUN_ID}})
+            guard_file.write_bytes(guard_before)
+            checked = {"root": root, "run_dir": run, "guard_path": guard_file, "guard_context": {},
+                "guard_state_before": runner.guard.PENDING, "manifest": {"authority_packet": {}, "source_pins": {}},
+                "review_commit": "a" * 40, "integration_base": INTEGRATION_BASE}
+            monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
+            consumed = []; started = []
+            monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: consumed.append(True))
+            def no_process(*args, **kwargs):
+                started.append(args[0] if args else None)
+                raise AssertionError("process must not start before guard acquisition")
+            try:
+                runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION,
+                    "a" * 40, INTEGRATION_BASE,
+                    transport_node_factory=lambda: runner._create_preacquire_transport_node(binding_loader),
+                    popen=no_process, command_runner=no_process)
+            except runner.TransportBindingUnavailable as exc:
+                assert str(exc) == runner.PREACQUIRE_UNAVAILABLE
+            else:
+                raise AssertionError(f"preacquire {name} failure must stop")
+            assert not consumed
+            assert not started
+            assert guard_file.read_bytes() == guard_before
+            assert runner.guard.load_guard_bytes(guard_before)["state"] == runner.guard.PENDING
+            assert not run.exists()
 
 def test_single_persistent_node_delayed_service_and_exact_create_probe_order(monkeypatch):
     events = []
+    nodes = []
     class Options:
         partition = None
     class Node:
         def __init__(self, options):
-            events.append(("node", options.partition)); self.calls = 0
+            events.append(("node", options.partition)); self.options = options
+            self.calls = 0; nodes.append(self)
         def service_list(self):
+            events.append(("service_list", self))
             self.calls += 1
             return [] if self.calls == 1 else [runner.CREATE_SERVICE]
     class Proc:
@@ -74,14 +143,24 @@ def test_single_persistent_node_delayed_service_and_exact_create_probe_order(mon
             "review_commit": "b" * 40, "integration_base": INTEGRATION_BASE}
         monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: checked)
         consumed = []
-        monkeypatch.setattr(runner.guard, "consume_guard", lambda *args: consumed.append(True))
+        def consume(*args):
+            assert len(nodes) == 1
+            assert nodes[0].options.partition == runner.PARTITION
+            assert run.exists()
+            events.append("consume")
+            consumed.append(True)
+        monkeypatch.setattr(runner.guard, "consume_guard", consume)
         class FakeClock:
             now = 0.0
             def __call__(self): return self.now
         clk = FakeClock()
         def sleep(seconds): clk.now += seconds
+        def make_node():
+            assert not run.exists()
+            return runner._create_preacquire_transport_node(lambda: (Node, Options))
         record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "b" * 40, INTEGRATION_BASE,
-            import_binding=lambda: (Node, Options), popen=fake_popen, command_runner=fake_command,
+            transport_node_factory=make_node,
+            popen=fake_popen, command_runner=fake_command,
             pgid_getter=fake_pgid, signal_group=lambda *args: None, proc_root=root / "proc",
             clock=clk, sleeper=sleep)
         assert consumed == [True]
@@ -89,6 +168,12 @@ def test_single_persistent_node_delayed_service_and_exact_create_probe_order(mon
         assert record["integration_base"] == INTEGRATION_BASE
         assert "integration_commit" not in record
         assert events.count(("node", runner.PARTITION)) == 1
+        assert len(nodes) == 1
+        assert all(event[1] is nodes[0] for event in events
+                   if isinstance(event, tuple) and event[0] == "service_list")
+        assert events.index(("node", runner.PARTITION)) < events.index("consume")
+        assert events.index("consume") < next(i for i, event in enumerate(events)
+                                                if isinstance(event, tuple) and event[0] == "popen")
         assert record["service_readiness"]["ready"] is True
         assert len(record["service_readiness"]["attempts"]) == 2
         assert record["create"]["readiness"] is True
@@ -117,7 +202,8 @@ def test_missing_exact_service_prevents_create_and_probe_but_tears_server_down(m
         def clock(): return clk[0]
         def sleep(seconds): clk[0] += seconds
         rec = runner.run_session(root, root / "guard", run, runner.RUN_ID, runner.PARTITION, "c" * 40, INTEGRATION_BASE,
-            import_binding=lambda: (FakeNode, Options), popen=lambda argv, **kw: Proc(argv, **kw),
+            transport_node_factory=lambda: runner._create_preacquire_transport_node(lambda: (FakeNode, Options)),
+            popen=lambda argv, **kw: Proc(argv, **kw),
             pgid_getter=lambda pid: pid, signal_group=lambda *a: None, proc_root=root / "proc",
             clock=clock, sleeper=sleep)
         assert calls == ["node", "server"]
@@ -237,8 +323,14 @@ def test_candidate_manifest_source_pins_are_exact_and_historical_files_not_chang
     assert (ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6D_SIM_EVAL_SCAN_ENDPOINT_PROBE_RUN_005.json").exists()
     guard = json.loads((ROOT / runner.GUARD_PATH).read_text(encoding="utf-8"))
     assert guard["state"] == "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
+    assert guard["capacity"] == 1
     assert guard["context"]["source_pins"] == manifest["source_pins"]
     assert runner._sha(manifest_path.read_bytes()) == guard["context"]["manifest_sha256"]
+    transport = manifest["transport_discovery"]
+    assert transport["import"] == "from gz.transport13 import Node, NodeOptions"
+    assert transport["host_prerequisite_package"] == "python3-gz-transport13"
+    assert transport["binding_and_node_capability_before_guard_acquire"] is True
+    assert manifest["authority_packet"]["sha256"] == manifest["source_pins"][runner.DECISION_PATH]
 
 def test_create_failure_is_accounted_in_finally_and_never_probes(monkeypatch):
     calls = []
@@ -267,7 +359,7 @@ def test_create_failure_is_accounted_in_finally_and_never_probes(monkeypatch):
         now = [0.0]
         def sleep(seconds): now[0] += seconds
         record = runner.run_session(root, guard_file, run, runner.RUN_ID, runner.PARTITION, "d" * 40, INTEGRATION_BASE,
-            import_binding=lambda: (FakeNode, Options),
+            transport_node_factory=lambda: runner._create_preacquire_transport_node(lambda: (FakeNode, Options)),
             popen=lambda argv, **kw: Proc(argv, **kw), command_runner=lambda *a, **kw: calls.append("probe"),
             pgid_getter=lambda pid: pid, signal_group=lambda *a: None, proc_root=empty_proc,
             clock=lambda: now[0], sleeper=sleep)
@@ -358,7 +450,8 @@ def test_binding_failure_after_valid_review_preflight_keeps_guard_pending_and_cr
     try:
         runner.run_session(ROOT, guard_file, ROOT / runner.RUN_DIRECTORY, runner.RUN_ID,
             runner.PARTITION, REVIEW_COMMIT, INTEGRATION_BASE, git_runner=git_runner,
-            import_binding=lambda: (events.append("import"), (_ for _ in ()).throw(ImportError("missing binding")))[1],
+            transport_node_factory=lambda: runner._create_preacquire_transport_node(
+                lambda: (events.append("import"), (_ for _ in ()).throw(ImportError("missing binding")))[1]),
             popen=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("process must not start")))
     except runner.TransportBindingUnavailable:
         pass
