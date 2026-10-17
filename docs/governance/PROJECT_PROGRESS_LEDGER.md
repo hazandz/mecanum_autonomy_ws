@@ -1230,3 +1230,19 @@
 | Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_BOOTSTRAP_SOURCE_ONLY`; this corrective candidate did not execute runtime. |
 | Boundary/status | No endpoint pin, bridge, ROS `/scan`, TF evidence, runtime evidence/approval, `ResolvedConfigV3`, `config_hash` or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`. |
 | `supersedes` | Corrects Run 002 supervisor compatibility and SDF gravity semantics on the existing review branch; prior Ledger bytes are an exact prefix. |
+
+
+### WP06_6D_SCAN_PROBE_OBSERVATION_AND_TEARDOWN_REMEDIATION — review candidate
+
+| Field | Value |
+|---|---|
+| Exact integration/source base | `b15e0fd6e83f840822b8ba11f68dbdf31de0978e` |
+| Review branch | `wp06-scan-probe-observation-teardown-b15e0fd` |
+| Candidate commit | Exact candidate tip reported at delivery; not self-embedded in this append-only entry. |
+| Classification | `L2_RUNTIME_OBSERVABILITY_AND_PROCESS_OWNERSHIP_REMEDIATION` |
+| Scope | Probe v2 parser/transcripts, Run 003 bootstrap, capacity-one guard and one-shot process-session source; Run 002 paths/evidence untouched. |
+| Guard state | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; not consumed. |
+| Evidence level | `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime execution/evidence. |
+| Boundary | Future unique publisher observation is `OBSERVED_NOT_PINNED`. No bridge, ROS `/scan`, TF evidence, runtime profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. |
+| Status | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+| `supersedes` | None; review candidate only. Previous Ledger bytes remain an exact prefix. |

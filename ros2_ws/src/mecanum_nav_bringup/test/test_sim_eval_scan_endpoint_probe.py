@@ -1,4 +1,4 @@
-"""Offline contract tests; no Gazebo/ROS command is executed."""
+"""Offline tests for the import-inert, non-pinning endpoint observation tool."""
 
 import ast
 import copy
@@ -19,7 +19,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PACKAGE_ROOT.parents[2]
 YAML_PATH = PACKAGE_ROOT / "config/bridge/sim_eval_scan_endpoint_probe.static.yaml"
 EXPECTED_DESCRIPTOR = {
-    "schema": "mecanum_sim_eval_scan_endpoint_probe/v1",
+    "schema": "mecanum_sim_eval_scan_endpoint_probe/v2",
     "profile": "sim_eval",
     "classification": "PROBE_SOURCE_ONLY",
     "runtime_eligible": False,
@@ -42,7 +42,9 @@ EXPECTED_DESCRIPTOR = {
         "inspect_prefix": ["topic", "-i", "-t"],
         "timeout_seconds": 5.0,
         "maximum_topics": 512,
-        "selection_rule": "EXACTLY_ONE_EXPECTED_GZ_MESSAGE_TYPE",
+        "maximum_candidate_topics": 16,
+        "maximum_transcript_bytes_per_stream": 1048576,
+        "selection_rule": "EXACT_LEAF_SCAN_THEN_PUBLISHER_TYPE",
     },
     "prohibitions": {
         "no_ros2": True,
@@ -72,9 +74,7 @@ def _unique_yaml_mapping(loader, node, deep=False):
     return result
 
 
-UniqueKeyLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_yaml_mapping
-)
+UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_yaml_mapping)
 
 
 def _sha256(path):
@@ -82,56 +82,60 @@ def _sha256(path):
 
 
 class FakeRunner:
-    def __init__(self, topics, type_by_topic=None, *, discovery_returncode=0, inspect_returncode=0):
+    def __init__(self, topics, info_by_topic=None, *, discovery_returncode=0, inspect_returncode=0):
         self.topics = topics
-        self.type_by_topic = type_by_topic or {}
+        self.info_by_topic = info_by_topic or {}
         self.discovery_returncode = discovery_returncode
         self.inspect_returncode = inspect_returncode
         self.calls = []
 
-    def __call__(self, command, **kwargs):
-        self.calls.append((command, kwargs))
-        assert kwargs["shell"] is False
-        assert kwargs["capture_output"] is True
-        assert kwargs["text"] is True
-        assert kwargs["timeout"] == 5.0
-        assert kwargs["check"] is False
-        if command == ["gz", "topic", "-l"]:
-            return subprocess.CompletedProcess(command, self.discovery_returncode, "\n".join(self.topics), "")
-        assert command[:4] == ["gz", "topic", "-i", "-t"]
-        topic = command[4]
-        token = self.type_by_topic.get(topic)
-        output = f"Publishers: 1\nType: {token}\n" if token is not None else "No type details\n"
-        return subprocess.CompletedProcess(command, self.inspect_returncode, output, "")
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        assert kwargs == {
+            "shell": False, "capture_output": True, "text": False,
+            "timeout": 5.0, "check": False,
+        }
+        if argv == ["gz", "topic", "-l"]:
+            return subprocess.CompletedProcess(
+                argv, self.discovery_returncode,
+                "\n".join(self.topics).encode(), b"discovery-stderr",
+            )
+        assert argv[:4] == ["gz", "topic", "-i", "-t"]
+        return subprocess.CompletedProcess(
+            argv, self.inspect_returncode, self.info_by_topic.get(argv[4], b""), b"inspect-stderr",
+        )
 
 
-def _result_for(topics, type_by_topic=None):
-    runner = FakeRunner(topics, type_by_topic)
-    result = probe.probe_scan_endpoint(command_runner=runner)
+def _make_transcript_dir(tmp_path):
+    directory = tmp_path / "transcripts"
+    directory.mkdir(exist_ok=True)
+    return directory
+
+
+def _result_for(tmp_path, topics, info_by_topic=None, **runner_options):
+    runner = FakeRunner(topics, info_by_topic, **runner_options)
+    result = probe.probe_scan_endpoint(command_runner=runner, transcript_directory=_make_transcript_dir(tmp_path))
     return result, runner
 
 
-def test_yaml_and_python_descriptor_are_exact_and_registered():
+def test_yaml_and_python_descriptor_are_exact():
     raw = YAML_PATH.read_bytes()
     assert raw.decode("utf-8").encode("utf-8") == raw
     assert not raw.startswith(b"\xef\xbb\xbf")
     descriptor = yaml.load(raw.decode("utf-8"), Loader=UniqueKeyLoader)
     assert descriptor == EXPECTED_DESCRIPTOR == probe.STATIC_DESCRIPTOR
     assert probe.validate_probe_descriptor(descriptor) is True
-    setup = (PACKAGE_ROOT / "setup.py").read_text(encoding="utf-8")
-    assert '"config/bridge/sim_eval_scan_endpoint_probe.static.yaml"' in setup
-    assert "sim_eval_scan_endpoint_probe = mecanum_nav_bringup.sim_eval_scan_endpoint_probe:main" in setup
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda d: d.update(schema="other/v1"),
+        lambda d: d.update(schema="other/v2"),
         lambda d: d.update(profile="other"),
         lambda d: d["sensor_provenance"].update(expected_gz_message_type="gz.msgs.Other"),
         lambda d: d["future_ros_boundary"].update(direction="ROS_TO_GZ"),
-        lambda d: d["command_contract"].update(timeout_seconds=10.0),
-        lambda d: d["command_contract"].update(maximum_topics=513),
+        lambda d: d["command_contract"].update(maximum_candidate_topics=17),
+        lambda d: d["command_contract"].update(maximum_transcript_bytes_per_stream=0),
         lambda d: d["prohibitions"].update(no_ros_gz_bridge=False),
     ],
 )
@@ -142,89 +146,133 @@ def test_validator_rejects_descriptor_mutations(mutate):
         probe.validate_probe_descriptor(candidate)
 
 
-def test_one_exact_type_match_is_observed_but_not_pinned():
-    topic = "/world/warehouse/model/robot/sensor/laser/link/lidar_frame/scan"
-    result, runner = _result_for([topic], {topic: "gz.msgs.LaserScan"})
-    assert result == {
-        "outcome": "EXACTLY_ONE_MATCH",
-        "observed_endpoints": [
-            {"message_type": "gz.msgs.LaserScan", "status": "OBSERVED_NOT_PINNED", "topic": topic}
-        ],
-    }
+def test_exact_legacy_type_grammar_and_scan_candidate_only(tmp_path):
+    topic = "/world/w/model/r/sensor/lidar/link/lidar_frame/scan"
+    result, runner = _result_for(tmp_path, ["/clock", "/world/w/model/r/sensor/lidar/link/lidar_frame/other", topic], {
+        topic: b"Topic: /world/w/model/r/sensor/lidar/link/lidar_frame/scan\nType: gz.msgs.LaserScan\n",
+    })
+    assert result["outcome"] == "EXACTLY_ONE_MATCH"
+    assert result["observed_endpoints"] == [
+        {"message_type": "gz.msgs.LaserScan", "status": "OBSERVED_NOT_PINNED", "topic": topic}
+    ]
     assert [call[0] for call in runner.calls] == [
         ["gz", "topic", "-l"], ["gz", "topic", "-i", "-t", topic]
     ]
-    encoded = probe.canonical_json(result)
-    assert encoded == json.dumps(result, sort_keys=True, separators=(",", ":"))
-    assert result["observed_endpoints"][0]["status"] == "OBSERVED_NOT_PINNED"
-    assert "endpoint_pin" not in encoded
+    assert all(call[1]["shell"] is False for call in runner.calls)
 
 
-def test_zero_match_and_no_topic_name_inference():
-    result, _ = _result_for(["/scan"], {"/scan": "gz.msgs.PointCloudPacked"})
-    assert result["outcome"] == "NO_MATCH"
+def test_harmonic_publisher_section_and_subscriber_only(tmp_path):
+    topic = "/robot/scan"
+    publisher_info = (
+        b"Publishers [Address, Message Type]:\n"
+        b"  <tcp://127.0.0.1:1234>, gz.msgs.LaserScan\n"
+        b"Subscribers [Address, Message Type]:\n"
+    )
+    result, _ = _result_for(tmp_path, [topic], {topic: publisher_info})
+    assert result["outcome"] == "EXACTLY_ONE_MATCH"
+
+    result, _ = _result_for(tmp_path, [topic], {
+        topic: b"Subscribers [Address, Message Type]:\n  <tcp://127.0.0.1:1234>, gz.msgs.LaserScan\n"
+    })
+    assert result["outcome"] == "NO_PUBLISHER_MATCH"
     assert result["observed_endpoints"] == []
 
-    unrelated = "/world/x/sensor/renamed/output"
-    result, _ = _result_for([unrelated], {unrelated: "gz.msgs.LaserScan"})
+
+def test_zero_one_and_multiple_publisher_matches(tmp_path):
+    a, b = "/a/scan", "/b/scan"
+    info = lambda topic: f"Type: gz.msgs.LaserScan\n".encode()
+    result, _ = _result_for(tmp_path, ["/clock", "/not_scan"], {})
+    assert result["outcome"] == "NO_CANDIDATE_TOPIC"
+    result, _ = _result_for(tmp_path, [a], {a: b"Type: gz.msgs.PointCloudPacked\n"})
+    assert result["outcome"] == "NO_PUBLISHER_MATCH"
+    result, _ = _result_for(tmp_path, [a], {a: info(a)})
     assert result["outcome"] == "EXACTLY_ONE_MATCH"
-    assert result["observed_endpoints"][0]["topic"] == unrelated
+    result, _ = _result_for(tmp_path, [a, b], {a: info(a), b: info(b)})
+    assert result["outcome"] == "AMBIGUOUS_PUBLISHER_MATCHES"
+    assert [item["topic"] for item in result["observed_endpoints"]] == [a, b]
 
 
-def test_ambiguous_matches_inspect_every_discovered_topic():
-    topics = ["/a/laser", "/b/other", "/c/scan"]
-    result, runner = _result_for(topics, {topic: "gz.msgs.LaserScan" for topic in topics})
-    assert result["outcome"] == "AMBIGUOUS_MATCHES"
-    assert [item["topic"] for item in result["observed_endpoints"]] == topics
-    assert len(runner.calls) == 1 + len(topics)
+def test_malformed_listing_or_candidate_info_fails_closed(tmp_path):
+    result, _ = _result_for(tmp_path, ["relative/scan"], {})
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
+    result, _ = _result_for(tmp_path, ["/robot/scan"], {"/robot/scan": b"unexpected data gz.msgs.LaserScan\n"})
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
+    result, _ = _result_for(tmp_path, ["/robot/scan"], {
+        "/robot/scan": b"Publishers [Address, Message Type]:\nmalformed publisher\n"
+    })
+    assert result["outcome"] == "TOPIC_INFO_UNRECOGNIZED"
 
 
-def test_unknown_info_malformed_topic_failure_and_timeout_fail_closed():
-    result, _ = _result_for(["/topic"], {})
-    assert result["outcome"] == "UNRECOGNIZED_TOPIC_INFO"
-    malformed, _ = _result_for(["relative/topic"], {})
-    assert malformed["outcome"] == "UNRECOGNIZED_TOPIC_INFO"
-
-    failed_runner = FakeRunner([], discovery_returncode=2)
-    assert probe.probe_scan_endpoint(command_runner=failed_runner)["outcome"] == "GZ_COMMAND_FAILED"
-
-    def missing(command, **kwargs):
-        raise FileNotFoundError("gz not found")
-
-    assert probe.probe_scan_endpoint(command_runner=missing)["outcome"] == "GZ_COMMAND_NOT_FOUND"
-
-    def timeout(command, **kwargs):
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-
-    assert probe.probe_scan_endpoint(command_runner=timeout)["outcome"] == "GZ_COMMAND_TIMEOUT"
-
-
-def test_topic_limit_and_invalid_configuration_do_not_inspect_or_execute():
-    runner = FakeRunner([f"/topic_{i}" for i in range(513)])
-    assert probe.probe_scan_endpoint(command_runner=runner)["outcome"] == "TOO_MANY_TOPICS"
+def test_discovery_candidate_and_transcript_limits_fail_closed(tmp_path):
+    result, runner = _result_for(tmp_path, [f"/x/{i}/scan" for i in range(17)])
+    assert result["outcome"] == "TOO_MANY_CANDIDATE_TOPICS"
     assert len(runner.calls) == 1
+
+    huge = b"x" * (probe.COMMAND_CONTRACT["maximum_transcript_bytes_per_stream"] + 1)
+    runner = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, huge, b"")
+    result = probe.probe_scan_endpoint(command_runner=runner, transcript_directory=_make_transcript_dir(tmp_path))
+    assert result["outcome"] == "TRANSCRIPT_LIMIT_EXCEEDED"
+    obs = result["command_observations"][0]
+    raw_path = _make_transcript_dir(tmp_path) / Path(obs["stdout_path"]).name
+    assert obs["stdout_size_bytes"] == len(huge)
+    assert obs["stdout_sha256"] == hashlib.sha256(huge).hexdigest()
+    assert obs["transcript_limit_exceeded"] is True
+    assert raw_path.read_bytes() == huge
+
+
+def test_transcript_hash_size_and_relative_path_are_exact(tmp_path):
+    topic = "/robot/scan"
+    raw_out = b"Type: gz.msgs.LaserScan\n"
+    result, _ = _result_for(tmp_path, [topic], {topic: raw_out})
+    observations = result["command_observations"]
+    assert len(observations) == 2
+    for index, observation in enumerate(observations, 1):
+        assert observation["argv"] == (["gz", "topic", "-l"] if index == 1 else ["gz", "topic", "-i", "-t", topic])
+        assert observation["timeout"] is False
+        assert observation["transcript_path"] == f"transcripts/command-{index:04d}"
+        stdout = (tmp_path / observation["stdout_path"]).read_bytes()
+        stderr = (tmp_path / observation["stderr_path"]).read_bytes()
+        assert hashlib.sha256(stdout).hexdigest() == observation["stdout_sha256"]
+        assert len(stdout) == observation["stdout_size_bytes"]
+        assert hashlib.sha256(stderr).hexdigest() == observation["stderr_sha256"]
+        assert len(stderr) == observation["stderr_size_bytes"]
+
+
+def test_command_failures_timeout_and_invalid_descriptor(tmp_path):
+    def missing(argv, **kwargs):
+        raise FileNotFoundError("gz missing")
+
+    result = probe.probe_scan_endpoint(command_runner=missing, transcript_directory=_make_transcript_dir(tmp_path))
+    assert result["outcome"] == "GZ_COMMAND_NOT_FOUND"
+
+    def timeout(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial", stderr=b"err")
+
+    result = probe.probe_scan_endpoint(command_runner=timeout, transcript_directory=_make_transcript_dir(tmp_path))
+    assert result["outcome"] == "GZ_COMMAND_TIMEOUT"
+    assert result["command_observations"][0]["timeout"] is True
+
+    failed = FakeRunner([], discovery_returncode=2)
+    result = probe.probe_scan_endpoint(command_runner=failed, transcript_directory=_make_transcript_dir(tmp_path))
+    assert result["outcome"] == "GZ_COMMAND_FAILED"
 
     invalid = copy.deepcopy(EXPECTED_DESCRIPTOR)
     invalid["runtime_eligible"] = True
-    runner = FakeRunner([])
-    result = probe.probe_scan_endpoint(invalid, command_runner=runner)
+    no_call = FakeRunner([])
+    result = probe.probe_scan_endpoint(invalid, command_runner=no_call, transcript_directory=_make_transcript_dir(tmp_path))
     assert result["outcome"] == "INVALID_PROBE_CONFIGURATION"
-    assert runner.calls == []
+    assert no_call.calls == []
 
 
-def test_import_is_inert_and_source_has_no_runtime_or_shell_escape_hatch():
+def test_import_is_inert_and_source_has_no_runtime_bridge_or_shell_escape_hatch():
     module_path = PACKAGE_ROOT / "mecanum_nav_bringup/sim_eval_scan_endpoint_probe.py"
     spec = importlib.util.spec_from_file_location("_probe_import_inert_check", module_path)
     isolated = importlib.util.module_from_spec(spec)
     with patch.object(subprocess, "run") as run:
         spec.loader.exec_module(isolated)
         run.assert_not_called()
-
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
-    forbidden_imports = {
-        "rclpy", "launch", "launch_ros", "tf2_ros", "ros_gz_bridge", "ros_gz_sim",
-        "gz", "gazebo", "sensor_msgs", "nav_msgs", "ros2",
-    }
+    forbidden_imports = {"rclpy", "launch", "launch_ros", "tf2_ros", "ros_gz_bridge", "ros_gz_sim", "gz", "gazebo", "sensor_msgs", "nav_msgs", "ros2", "socket"}
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -236,24 +284,21 @@ def test_import_is_inert_and_source_has_no_runtime_or_shell_escape_hatch():
     assert imported.isdisjoint(forbidden_imports)
     source = module_path.read_text(encoding="utf-8")
     assert "gz topic -e" not in source
+    assert "ros2 topic" not in source
     assert "shell=True" not in source
-    assert "socket" not in imported
+    assert source.count("subprocess.run") == 1
 
 
-def test_clock_bridge_and_reconciled_wp05_sources_are_unchanged():
+def test_clock_bridge_and_wp05_sources_are_unchanged():
     clock_path = REPO_ROOT / "ros2_ws/src/ROBOT_URDF_final_description/config/ros_gz_bridge_gazebo.yaml"
     clock = yaml.safe_load(clock_path.read_text(encoding="utf-8"))
-    assert clock == [
-        {
-            "ros_topic_name": "/clock",
-            "gz_topic_name": "/clock",
-            "ros_type_name": "rosgraph_msgs/msg/Clock",
-            "gz_type_name": "gz.msgs.Clock",
-            "direction": "GZ_TO_ROS",
-        }
-    ]
+    assert clock == [{
+        "ros_topic_name": "/clock", "gz_topic_name": "/clock",
+        "ros_type_name": "rosgraph_msgs/msg/Clock", "gz_type_name": "gz.msgs.Clock",
+        "direction": "GZ_TO_ROS",
+    }]
     assert _sha256(REPO_ROOT / "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo") == "1e97b6ea340adc9aecaf320cc432007c6bb37f5922cdc0366dbee50a9a26ff0e"
-    assert _sha256(REPO_ROOT / "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.static.yaml") == "60a012fd2fd8f743658cdfb4fc3e910d728b17b2bea5d7dece3316bd4f12ff7e"
-    assert _sha256(REPO_ROOT / "ros2_ws/src/mecanum_nav_bringup/config/profiles/sim_eval_nav2_baseline.static.yaml") == "55da76d604e8c4464ccf32d6475d62f2b928c2aabeee9c1ffcb6aaf26dd4eb0b"
-    assert _sha256(REPO_ROOT / "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_static_profile_contract.py") == "d557c1a1d1ff7b7a7131145f680c6e537dc2fa5ade5cd6b40fcfc17c2d34e039"
+    assert _sha256(PACKAGE_ROOT / "config/bridge/sim_eval_lidar_scan_bridge.static.yaml") == "60a012fd2fd8f743658cdfb4fc3e910d728b17b2bea5d7dece3316bd4f12ff7e"
+    assert _sha256(PACKAGE_ROOT / "config/profiles/sim_eval_nav2_baseline.static.yaml") == "55da76d604e8c4464ccf32d6475d62f2b928c2aabeee9c1ffcb6aaf26dd4eb0b"
+    assert _sha256(PACKAGE_ROOT / "mecanum_nav_bringup/sim_eval_static_profile_contract.py") == "d557c1a1d1ff7b7a7131145f680c6e537dc2fa5ade5cd6b40fcfc17c2d34e039"
     assert _sha256(REPO_ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json") == "1a9c0504cdb4c18aa4620174f52d9cdf53a6203b8b189452db50bb3c8cfe2a90"

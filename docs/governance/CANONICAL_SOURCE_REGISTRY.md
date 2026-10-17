@@ -663,3 +663,12 @@ No endpoint pin, ROS `/scan`, bridge, TF evidence, runtime evidence/authorizatio
 ### Corrective review commit — Run 002 guard/supervisor and world gravity
 
 The corrective commit is on the same review branch, parented by `97aeecdff640187ac0b3ad152a22befe442a1a2f`. Run 002 now has a separate pending-only guard, one-shot supervisor and canonical manifest bound to the corrected decision SHA and exact source pins. The Run 001 guard, tools and manifest are byte-identical to the parent. World gravity is a direct child of the probe world, not physics. Evidence remains offline source/tests/build only; the Run 002 guard is not consumed or runtime-authorized. `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-05, Gate A/Gate B unchanged.
+
+
+## WP06 Run 003 scan-probe observation and teardown remediation — review candidate
+
+The candidate `wp06-scan-probe-observation-teardown-b15e0fd` starts at exact integration base `b15e0fd6e83f840822b8ba11f68dbdf31de0978e`. It revises the offline probe to select only exact `/.../scan` leaf candidates and recognize the legacy `Type:` or Gazebo Harmonic publisher-section message-type grammar. Subscriber-only types do not match. Raw stdout/stderr is retained under a future run directory with exact transcript hashes and byte counts; candidate count (16) and per-stream transcript hard limit (1,048,576 bytes) are explicit and overflow fails closed.
+
+Run 003 has a separate server-only bridge-free bootstrap and a pending capacity-one session guard. The runner verifies exact integrated refs, clean worktree, authority decision, manifest, guard, command and source blobs before consumption; it waits for the exact create-success log, invokes the probe once, and tears down only its own process group using the fixed escalation policy. The guard is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; no runtime run is authorized or executed by this candidate. Run 002 remains outside scope and is untouched.
+
+A future `EXACTLY_ONE_MATCH` remains `OBSERVED_NOT_PINNED` and requires a separate Owner decision before WP06-6E, the sole canonical ROS–Gazebo bridge owner. No endpoint pin, ROS `/scan`, bridge, TF evidence, runtime profile/resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, runtime evidence/authorization, or `RUNTIME_APPROVED` status is established. WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`.

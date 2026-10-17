@@ -1,4 +1,4 @@
-schema: mecanum_sim_eval_scan_endpoint_probe/v1
+schema: mecanum_sim_eval_scan_endpoint_probe/v2
 profile: sim_eval
 classification: PROBE_SOURCE_ONLY
 runtime_eligible: false
@@ -19,7 +19,9 @@ command_contract:
   inspect_prefix: [topic, -i, -t]
   timeout_seconds: 5.0
   maximum_topics: 512
-  selection_rule: EXACTLY_ONE_EXPECTED_GZ_MESSAGE_TYPE
+  maximum_candidate_topics: 16
+  maximum_transcript_bytes_per_stream: 1048576
+  selection_rule: EXACT_LEAF_SCAN_THEN_PUBLISHER_TYPE
 prohibitions:
   no_ros2: true
   no_ros_gz_bridge: true
