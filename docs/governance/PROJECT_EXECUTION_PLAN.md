@@ -848,3 +848,10 @@ Evidence ceiling for this correction is source, offline tests and build only. Hi
 ### WP06-6E dependency-lock scope correction
 
 The external WP-05 lock remains exactly the 14 common Navigation V1 roots. The `sim_eval` bridge's `ros_gz_bridge`, `launch`, and `launch_ros` entries are profile-specific runtime dependencies and remain outside both WP-05 lock files. The package declares all 17 exec dependencies in the required order, while the offline dependency-lock test validates common and profile-specific lists independently. No lock expansion, runtime validation, or runtime approval occurs.
+
+
+## WP06-6E Run 003 runtime evidence disposition — L1 candidate
+
+The integrated source is `8bd998d6c118239d70f1d4a7b73e145795e8f921`. Independent read-only audit of external Run 003 raw evidence passed for the scan-bridge scope: ROS `/scan` type `sensor_msgs/msg/LaserScan`, one data publisher, bridge-node publishers `/scan`, `/parameter_events`, `/rosout`, no forbidden odometry/command/TF/map publishers, `header.frame_id=lidar_frame`, 129 non-empty ranges, and clean teardown with no live/zombie process members. The original run record remains immutable with historical terminal `WP06_6E_RUNTIME_DUAL_FRAME_CONTRACT_FAIL_NO_RETRY`; its YAML multi-document and node-info indentation parsing defects explain the mismatch. Raw files were independently hashed and parsed; the reconciliation addendum does not replace them, and Run 003 was not replayed. Run 001/002 remain historical failures.
+
+Current WP06-6E status: `WP06_6E_SCAN_BRIDGE_RUNTIME_OBSERVED_AND_AUDITED_PASS`, restricted to scan-bridge runtime scope. This is not whole navigation profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No endpoint pin, TF evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, runtime approval, or Gate B transition is created.

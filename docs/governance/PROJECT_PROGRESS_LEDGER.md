@@ -1374,3 +1374,17 @@
 | Evidence status | Source/offline-test/build only. The bridge does not rewrite the header; no adapter, ROS node, TF publisher, endpoint pin, new runtime evidence, runtime authorization, or Gate B transition is created. A new capacity-one runtime requires independent audit and separate Owner authorization for the exact corrective commit. `RUNTIME_APPROVED: NOT_APPROVED`. |
 | Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; unchanged. |
 | `supersedes` | Clarifies the source frame contract while preserving all historical Run 001/Run 002 evidence and prior Ledger bytes. |
+
+
+### WP06_6E_RUNTIME_DUAL_FRAME_EVIDENCE_DISPOSITION — L1 governance/evidence disposition
+
+| Field | Value |
+|---|---|
+| Integrated source / base | `8bd998d6c118239d70f1d4a7b73e145795e8f921` |
+| Runtime evidence provenance | `/home/hazan/wp06_runtime_evidence/WP06_6E_ROS_GAZEBO_SCAN_BRIDGE_RUNTIME_RUN_003`; raw files remain outside Git and unchanged. |
+| Independent disposition | `WP06_6E_RUNTIME_DUAL_FRAME_CONTRACT_EVIDENCE_AUDIT_PASS`, based on recalculated raw hashes and independent transcript parsing. |
+| Bounded acceptance | ROS `/scan` type `sensor_msgs/msg/LaserScan`; one data publisher; bridge publishers `/scan`, `/parameter_events`, `/rosout`; no forbidden odom/command/TF/map publishers; frame `lidar_frame`; 129 non-empty ranges; teardown clean with no live/zombie members. |
+| Record discrepancy | Historical `run_record.json` remains `WP06_6E_RUNTIME_DUAL_FRAME_CONTRACT_FAIL_NO_RETRY`; parser mishandled YAML multi-document output and node-info indentation. Embedded self-hash is not a trust anchor. Addendum does not replace raw transcripts. Run 003 was not replayed. |
+| Historical boundary | Run 001 and Run 002 remain unchanged historical failures. |
+| Status | `WP06_6E_SCAN_BRIDGE_RUNTIME_OBSERVED_AND_AUDITED_PASS` for scan-bridge scope only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No whole-navigation-profile validation, endpoint pin, TF evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, or runtime authorization. |
+| `supersedes` | Supersedes only the current WP06-6E scan-bridge runtime-evidence status wording; does not alter historical records or broader WP/Gate statuses. All base Ledger bytes remain an exact prefix. |
