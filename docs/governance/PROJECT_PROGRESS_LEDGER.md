@@ -1259,3 +1259,15 @@
 | Run 003 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; not consumed. |
 | Boundary/status | No endpoint pin, bridge, ROS `/scan`, TF evidence, runtime profile, `ResolvedConfigV3`, `config_hash`, Gate B transition or runtime authorization. Existing WP/Gate statuses unchanged. |
 | `supersedes` | Corrects the Run 003 publisher grammar statement and parser behavior recorded for review tip `e9ccee03123c3ec2baf82a66ce5a60bcbf1f9dfb`; previous Ledger bytes remain an exact prefix. |
+
+
+### WP06_6D_SCAN_PROBE_READINESS_AND_TEARDOWN_ACCOUNTING_REMEDIATION — review candidate
+
+| Field | Status / evidence |
+|---|---|
+| Base / branch | `db464f741e24a81b3f9587f827fc145c533d8d6c` / `wp06-scan-probe-readiness-teardown-run004-db464f7` |
+| Scope | New independent Run 004 server-only launch, service-gated spawn/session runner, capacity-one pending guard, governance and offline tests. Run 002/003 historical paths are outside the candidate and untouched. |
+| Run 003 disposition | Historical failure remains unchanged: no probe result/endpoint. Its readiness and teardown fields are not rewritten or reinterpreted. |
+| Guard / evidence | Run 004 seed `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; evidence ceiling `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`; no runtime execution or guard consumption. |
+| Future boundary | Requires independent audit, exact candidate integration/ref verification and separate Owner authorization for the exact integrated commit. A future match is only `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. |
+| Statuses | WP-04 `BLOCKED_BY_CONTRACT`; WP-05 `OPEN`; Gate A `PASSED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. No ROS `/scan`, bridge, TF evidence, runtime authorization, profile resolution, `ResolvedConfigV3`, `config_hash`, or Gate B transition. |

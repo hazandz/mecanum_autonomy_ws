@@ -677,3 +677,10 @@ A future `EXACTLY_ONE_MATCH` remains `OBSERVED_NOT_PINNED` and requires a separa
 ### Run 003 corrective review — Harmonic publisher grammar
 
 The corrective commit on `wp06-scan-probe-observation-teardown-b15e0fd` narrows scan inspection to the structured `Publishers` section and canonical unbracketed `<scheme>://<address>, <message-type>` entries. Only exact `gz.msgs.LaserScan` publisher entries produce an observed candidate; subscriber-only data does not. The previous candidate `e9ccee03123c3ec2baf82a66ce5a60bcbf1f9dfb` was not integrated and was not runtime-authorized. Run 003 remains pending; another capacity-one authorization is required after audit and integration of the exact corrected commit. Evidence remains offline source/tests/build only; no endpoint pin, bridge, ROS `/scan`, TF or runtime evidence.
+
+
+## WP06 scan-probe Run 004 readiness and teardown remediation — review candidate
+
+The review candidate `wp06-scan-probe-readiness-teardown-run004-db464f7` is based on `db464f741e24a81b3f9587f827fc145c533d8d6c`. It introduces a distinct Run 004 pending guard, a server-only launch, service-gated robot creation, and a session runner with direct-file transcripts and Linux `/proc` process-group accounting. Run 002 and Run 003 historical paths remain outside the candidate diff and are not changed or reinterpreted.
+
+The Run 004 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`; candidate evidence is `IMPLEMENTED_OFFLINE_GUARD_AND_SESSION_SOURCE_ONLY`. Runtime use requires independent audit, exact candidate integration/ref verification, a clean integrated worktree, and separate Owner authorization for the exact integrated commit. A future result can be no stronger than `GZ_LASERSCAN_ENDPOINT_OBSERVED_NOT_PINNED`. No endpoint pin, ROS `/scan`, bridge, TF evidence, runtime authorization, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is established. WP-04 `BLOCKED_BY_CONTRACT`, WP-05 `OPEN`, Gate A `PASSED`, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED` remain unchanged.
