@@ -43,3 +43,11 @@ Run007 là guard riêng với seed `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZA
 ### Run007 Owner authorization binding corrective
 
 Đây là corrective offline-only trên base `a1348313dab704964e67572fd18dcdcecf1f66d7`. Runner nhận `--owner-authorization`, `--owner-authorization-scope`, `--owner-authorization-run-id`, `--owner-authorization-review-commit` và `--owner-authorization-integration-base`. Không có authorization được cấp hoặc guard được acquire trong candidate. Seed Git vẫn `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Các test kiểm tra input sai không tạo lock/evidence và giữ guard byte-identical; kiểm thử acquisition giả lập xác nhận metadata exact chỉ được ghi khi acquire được gọi. Run001–Run006 và artifact Run007 tại base được bảo toàn ngoài các tệp Run007 được phép cập nhật.
+
+## WP06-6F Run007 audited runtime evidence disposition
+
+This disposition records the independent read-only audit result `WP06_6F_RUN007_INDEPENDENT_EVIDENCE_AUDIT_PASS` for Run ID `WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007`, executed against runtime source commit `93468611748e3966cd6fa7fa280e840651d2c895` with integration base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`. The immutable external evidence is at `/home/hazan/wp06_runtime_evidence/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007`; its disposition manifest is `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_MANIFEST.json`.
+
+The audited boundary is limited to WP06-6F wheel/IMU ingress, `/clock`, EKF filtered odometry, the dynamic `odom -> base_link` and static `base_link -> lidar_frame` TF edges, their recorded QoS/ownership evidence, `/set_pose` boundary, and process teardown. The audit does not establish Nav2, AMCL, Map Server, whole ROS graph, global navigation readiness, Gate B, or runtime approval. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no additional authorization is issued.
+
+Run001–Run006 remain immutable historical runs. This L1 governance/evidence disposition supersedes only prior current-status statements that Run007 runtime evidence was pending audit; it does not alter source semantics, the consumed Run007 guard, or any external runtime artifact.

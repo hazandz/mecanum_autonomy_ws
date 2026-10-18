@@ -1610,3 +1610,15 @@
 | Authorization scope | `WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY`; five required non-empty values must bind to the exact Run007 ID, review commit, and integration base before acquisition. |
 | Guard/record contract | Seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Only atomic acquire after preflight may record exact Owner metadata, acquired refs, `GRANTED_FOR_THIS_EXACT_RUN_ONLY`, and count 1. Run record schema v2 preserves all five authorization fields and guard state before/after. Invalid/missing values stop before guard lock and evidence-directory creation. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING`; source/test/governance only. No runtime authorization, acquisition, runtime evidence, `RUNTIME_APPROVED`, or Gate B transition. |
+
+### WP06-6F Run007 independent runtime evidence disposition
+
+| Field | Record |
+|---|---|
+| Disposition | `WP06_6F_RUN007_INDEPENDENT_EVIDENCE_AUDIT_PASS`; L1 governance/evidence disposition candidate. |
+| Runtime source / integration base | `93468611748e3966cd6fa7fa280e840651d2c895` / `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`. |
+| External evidence | `/home/hazan/wp06_runtime_evidence/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007`; 34 manifest entries; `sha256sum -c SHA256SUMS.txt` PASS. Canonical disposition manifest: `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_MANIFEST.json`. |
+| Scope | WP06-6F ingress, clock, EKF filtered odometry, bounded TF edges/ownership/QoS, `/set_pose` boundary, and teardown only. No whole ROS graph or navigation-profile claim. |
+| Run001–Run006 | Immutable historical; no records, guards, manifests, transcripts, raw evidence, or terminal outcomes rewritten. |
+| Authorization/Gate | Run007 guard is consumed, acquisition count 1, exact-run authorization recorded. This disposition issues no new authorization; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Supersedes only prior current-status statements that Run007 evidence was pending independent audit; historical entries are retained byte-for-byte. |
