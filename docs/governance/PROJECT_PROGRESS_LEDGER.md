@@ -1478,3 +1478,14 @@
 | Guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; unchanged and unconsumed. |
 | Acceptance closure | Decision, evidence JSON, and guard manifest carry a collector/artifact/parser/pass/failure/test matrix for every runtime acceptance. |
 | `supersedes` | Supersedes only the prior WP06-6F evidence ceiling and single-sample observer design statement; no runtime result or architecture status. |
+
+
+### WP06_6F_CPP_GID_OBSERVER_CORRECTIVE_CANDIDATE
+
+| Field | Value |
+|---|---|
+| Historical Run 001 | Immutable observer API mismatch failure: Python rclpy Jazzy rejected `create_subscription(..., with_info=True)`. This is not evidence of a TF/EKF failure; no retry or historical artifact mutation. |
+| Corrective design | New `ament_cmake` C++ observer consumes `rclcpp::MessageInfo` and underlying RMW publisher GID, maps each dynamic `odom -> base_link` edge GID to exactly one graph endpoint owned by the configured EKF endpoint, and fails closed with `TF_EDGE_PUBLISHER_GID_UNMAPPABLE` when mapping is unavailable. No node-name fallback or global `/tf` publisher count. Python is offline JSON parsing/validation only. |
+| Run 002 | Separate capacity-one guard is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; not authorized or consumed. |
+| Evidence ceiling | Offline/source/test/build only. No runtime execution, retry, integration, runtime approval, or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Corrects only the WP06-6F observer implementation and future Run 002 guard routing; Run 001 records and artifacts remain unchanged. |

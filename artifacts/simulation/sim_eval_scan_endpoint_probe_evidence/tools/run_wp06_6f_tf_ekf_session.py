@@ -40,6 +40,7 @@ COMPOSITE_COMMAND = [
     "sim_eval_tf_ekf_state_estimation.launch.py",
     f"gz_partition:={PARTITION}", "use_sim_time:=true",
 ]
+OBSERVER_EXECUTABLE = ["ros2", "run", "wp06_6f_tf_ekf_runtime_observer", "wp06_6f_tf_ekf_runtime_observer"]
 FORBIDDEN_TOPICS = {
     "/odom", "/ground_truth/odom", "/tf", "/tf_static", "/cmd_vel", "/map"
 }
@@ -88,18 +89,27 @@ def _host_preflight(repository_root):
     for executable in ("ros2", "gz"):
         if shutil.which(executable) is None:
             raise GuardError(f"EXECUTABLE_UNAVAILABLE:{executable}")
-    for package in ("ros_gz_sim", "ros_gz_bridge", "mecanum_base_bridge", "mecanum_nav_bringup", "robot_localization"):
+    for package in ("ros_gz_sim", "ros_gz_bridge", "mecanum_base_bridge", "mecanum_nav_bringup", "robot_localization", "wp06_6f_tf_ekf_runtime_observer"):
         result = subprocess.run(
             ["ros2", "pkg", "prefix", package], capture_output=True, text=True, timeout=5, check=False
         )
         if result.returncode != 0 or not result.stdout.strip():
             raise GuardError(f"PACKAGE_PREFIX_UNAVAILABLE:{package}")
+        if package == "wp06_6f_tf_ekf_runtime_observer":
+            executable = Path(result.stdout.strip()) / "lib" / package / "wp06_6f_tf_ekf_runtime_observer"
+            if not executable.is_file() or not os.access(executable, os.X_OK):
+                raise GuardError("CPP_OBSERVER_EXECUTABLE_UNAVAILABLE")
     for module_name in (
         "rclpy", "tf2_ros", "tf2_msgs.msg", "rosgraph_msgs.msg", "nav_msgs.msg", "yaml",
         "mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer",
     ):
         try:
-            importlib.import_module(module_name)
+            module = importlib.import_module(module_name)
+            if module_name == "mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer":
+                prefix = Path(subprocess.run(["ros2", "pkg", "prefix", "mecanum_nav_bringup"],
+                    capture_output=True, text=True, timeout=5, check=True).stdout.strip()).resolve()
+                if prefix not in Path(module.__file__).resolve().parents:
+                    raise GuardError("OBSERVER_PARSER_NOT_FROM_INSTALLED_OVERLAY")
         except Exception as exc:
             raise GuardError(f"RUNTIME_IMPORT_UNAVAILABLE:{module_name}:{exc}") from exc
 
@@ -214,7 +224,10 @@ def _teardown(session, label):
     session["stream"].close()
     stopped = process.returncode is not None and final["observable"] and not final["live_members"] and not final["zombie_members"]
     return {"name": label, "pid": process.pid, "pgid": pgid, "leader_returncode": process.returncode,
-            "timeline": timeline, "final_snapshot": final, "outcome": "STOPPED" if stopped else "TEARDOWN_FAILED"}
+            "timeline": timeline, "final_snapshot": final,
+            "live_member_pids": [item["pid"] for item in final["live_members"]],
+            "zombie_member_pids": [item["pid"] for item in final["zombie_members"]],
+            "outcome": "STOPPED" if stopped else "TEARDOWN_FAILED"}
 
 
 def _run_transcript(command, env, directory, name, timeout=8):
@@ -313,12 +326,36 @@ def _composite_liveness(process_alive, observer_completed):
 
 
 def _teardown_is_clean(teardown):
-    return (len(teardown) == 2
-            and [row.get("name") for row in teardown] == ["composite", "bootstrap"]
-            and all(row.get("outcome") == "STOPPED"
-                    and not row.get("final_snapshot", {}).get("live_members")
-                    and not row.get("final_snapshot", {}).get("zombie_members")
-                    for row in teardown))
+    return all(_teardown_predicate(row) for row in teardown)
+
+
+def _teardown_order_and_count_correct(teardown):
+    return len(teardown) == 2 and [row.get("name") for row in teardown] == ["composite", "bootstrap"]
+
+
+def _teardown_predicate(row):
+    return (row.get("leader_returncode") == 0
+            and row.get("live_member_pids") == []
+            and row.get("zombie_member_pids") == []
+            and row.get("outcome") == "STOPPED")
+
+
+def _teardown_verdict(teardown, reported_aggregate=None):
+    predicate = _teardown_is_clean(teardown)
+    if reported_aggregate is not None and reported_aggregate is not predicate:
+        return "INTERNAL_EVIDENCE_INCONSISTENCY"
+    return predicate
+
+
+def _run_cpp_observer(output_path, env, transcripts):
+    command = OBSERVER_EXECUTABLE + ["--output", str(output_path), "--duration-seconds", "30",
+                                    "--expected-ekf-node-name", "ekf_filter_node"]
+    result = subprocess.run(command, cwd=env["WP06_REPOSITORY_ROOT"], env=env,
+                            capture_output=True, timeout=40, check=False)
+    (transcripts / "runtime_observer.stdout.bin").write_bytes(result.stdout)
+    (transcripts / "runtime_observer.stderr.bin").write_bytes(result.stderr)
+    return {"command": command, "exit_code": result.returncode, "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(), "timestamp": _now()}
 
 
 def _wheel_imu_sample_contract(wheel, imu, wheel_info_ok, imu_info_ok):
@@ -382,11 +419,18 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         "schema": RECORD_SCHEMA, "run_id": RUN_ID, "review_commit": expected_review_commit,
         "integration_base": expected_integration_base, "guard_state_before": guard_state_before,
         "guard_state_after_acquire": consumed["state"], "gz_partition": PARTITION, "started_at": start,
-        "preflight": {"guard_manifest_sha256": _sha256(root / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001_GUARD_MANIFEST.json"),
+        "preflight": {"guard_manifest_sha256": _sha256(root / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json"),
                       "decision_sha256": _sha256(root / "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md"),
                       "source_pins": verified["source_pins"], "authorization_acquisition_count": consumed["acquisition_count"]},
         "processes": {}, "transcripts": {},
-        "acceptance": {item["record_key"]: False for item in observer_module.RUNTIME_ACCEPTANCE_MATRIX},
+        "acceptance": {key: False for key in (
+            "bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_live_through_evidence",
+            "composite_stability_5_seconds",
+            "clock_minimum_five_nonzero_strictly_increasing", "wheel_sample_contract", "imu_sample_contract",
+            "filtered_odometry_minimum_five_contract_and_monotonicity",
+            "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf",
+            "static_base_link_to_lidar_frame_exact", "map_to_odom_absent_during_full_window",
+            "observer_errors_absent", "process_group_teardown_clean", "teardown_order_and_count_correct")},
         "terminal_outcome": "FAIL_NO_RETRY",
     }
     sessions = {}
@@ -409,11 +453,14 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         sessions["composite"] = _spawn(COMPOSITE_COMMAND, composite_log, env)
         sessions["composite"]["log_path"] = str(composite_log)
         record["processes"]["composite"] = {k: sessions["composite"][k] for k in ("pid", "pgid", "command")}
+        time.sleep(5)
         if sessions["composite"]["process"].poll() is not None:
             record["acceptance"]["composite_live_through_evidence"] = False
             raise GuardError("COMPOSITE_EXITED_BEFORE_OBSERVER")
+        record["acceptance"]["composite_stability_5_seconds"] = True
         observer_path = run_dir / "transcripts/runtime_observer.json"
-        observer_document = observer_module.collect_and_write(observer_path, timeout_seconds=30.0)
+        record["transcripts"]["runtime_observer"] = _run_cpp_observer(observer_path, env, run_dir / "transcripts")
+        observer_document = observer_module.load_observer_json(observer_path)
         record["observer"] = {
             "path": "transcripts/runtime_observer.json",
             "schema": observer_document.get("schema"),
@@ -445,7 +492,7 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         record["acceptance"]["composite_live_through_evidence"] = sessions["composite"]["process"].poll() is None
         if not all(value is True for value in record["acceptance"].values() if isinstance(value, bool)):
             raise GuardError("RUNTIME_ACCEPTANCE_FAILED")
-        record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
+        record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN002_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
     except Exception as exc:
         record["failure"] = f"{type(exc).__name__}:{exc}"
     finally:
@@ -454,11 +501,16 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
             if label in sessions:
                 teardown.append(_teardown(sessions[label], label))
         record["teardown"] = teardown
-        record["teardown_pass"] = _teardown_is_clean(teardown)
-        record["acceptance"]["process_group_teardown_clean"] = record["teardown_pass"]
+        teardown_predicate = _teardown_is_clean(teardown)
+        record["acceptance"]["process_group_teardown_clean"] = teardown_predicate
+        record["teardown_pass"] = _teardown_verdict(teardown, record["acceptance"]["process_group_teardown_clean"])
+        record["acceptance"]["teardown_order_and_count_correct"] = _teardown_order_and_count_correct(teardown)
+        if record["teardown_pass"] == "INTERNAL_EVIDENCE_INCONSISTENCY":
+            record["failure"] = "INTERNAL_EVIDENCE_INCONSISTENCY"
+            record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN002_FAIL_NO_RETRY_GUARD_CONSUMED"
         record["failure_reason_literals"] = _failure_reasons(record["acceptance"], observer_document)
-        if not record["teardown_pass"] or record["terminal_outcome"] != "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT":
-            record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN001_FAIL_NO_RETRY_GUARD_CONSUMED"
+        if not record["teardown_pass"] or not record["acceptance"]["teardown_order_and_count_correct"] or record["terminal_outcome"] != "WP06_6F_RUNTIME_RUN002_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT":
+            record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN002_FAIL_NO_RETRY_GUARD_CONSUMED"
         record["finished_at"] = _now()
         record["duration_seconds"] = round(time.monotonic() - monotonic_start, 6)
         record["artifact_sha256"] = {}
@@ -473,7 +525,7 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         files["SHA256SUMS.txt"] = _sha256(run_dir / "SHA256SUMS.txt")
         manifest = {"schema": "wp06_6f_tf_ekf_runtime_artifacts/v1", "files": files}
         _write_json(run_dir / "artifact_manifest.json", manifest)
-    return 0 if record["terminal_outcome"] == "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT" else 1
+    return 0 if record["terminal_outcome"] == "WP06_6F_RUNTIME_RUN002_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT" else 1
 
 
 def _evaluate_acceptance(outputs, observer_document, process_groups):
@@ -519,13 +571,37 @@ def _evaluate_acceptance(outputs, observer_document, process_groups):
 
 
 def _failure_reasons(acceptance, observer_document):
-    matrix = importlib.import_module("mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer").RUNTIME_ACCEPTANCE_MATRIX
     observer_reasons = (observer_document or {}).get("failure_reason_literals", {})
     reasons = {}
-    for item in matrix:
-        key = item["record_key"]
+    defaults = {
+        "bootstrap_readiness": "BOOTSTRAP_READINESS_FAILED",
+        "bootstrap_stability_20_seconds": "BOOTSTRAP_DIED_DURING_STABILIZATION",
+        "composite_live_through_evidence": "COMPOSITE_EXITED_DURING_EVIDENCE",
+        "composite_stability_5_seconds": "COMPOSITE_DIED_DURING_STABILITY_WINDOW",
+        "wheel_info_one_publisher_and_type": "WHEEL_INPUT_TYPE_OR_PUBLISHER_FAILED",
+        "imu_info_one_publisher_and_type": "IMU_INPUT_TYPE_OR_PUBLISHER_FAILED",
+        "filtered_info_one_publisher_and_type": "FILTERED_ODOMETRY_TYPE_OR_PUBLISHER_FAILED",
+        "wheel_sample_contract": "WHEEL_INPUT_SAMPLE_CONTRACT_FAILED",
+        "imu_sample_contract": "IMU_INPUT_SAMPLE_CONTRACT_FAILED",
+        "ingress_use_sim_time_true": "INGRESS_USE_SIM_TIME_FALSE_OR_UNAVAILABLE",
+        "ekf_use_sim_time_true": "EKF_USE_SIM_TIME_FALSE_OR_UNAVAILABLE",
+        "ekf_inputs_and_outputs_bounded": "EKF_NODE_TOPOLOGY_OUT_OF_CONTRACT",
+        "ingress_outputs_bounded": "INGRESS_NODE_TOPOLOGY_OUT_OF_CONTRACT",
+        "ingress_bridge_outputs_bounded": "INGRESS_BRIDGE_TOPOLOGY_OUT_OF_CONTRACT",
+        "clock_bridge_outputs_only_clock": "CLOCK_BRIDGE_TOPOLOGY_OUT_OF_CONTRACT",
+        "forbidden_topics_and_processes_absent": "FORBIDDEN_BRIDGE_TOPIC_OR_PROCESS_OBSERVED",
+        "process_group_teardown_clean": "PROCESS_GROUP_TEARDOWN_FAILED",
+        "teardown_order_and_count_correct": "TEARDOWN_SEQUENCE_OR_COUNT_INVALID",
+        "clock_minimum_five_nonzero_strictly_increasing": "CLOCK_TIMESTAMP_NOT_STRICTLY_INCREASING_OR_TIMEOUT",
+        "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf": "TF_EDGE_PUBLISHER_GID_UNMAPPABLE",
+        "filtered_odometry_minimum_five_contract_and_monotonicity": "FILTERED_ODOMETRY_CONTRACT_OR_TIMEOUT",
+        "static_base_link_to_lidar_frame_exact": "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH",
+        "map_to_odom_absent_during_full_window": "MAP_TO_ODOM_EDGE_OBSERVED_OR_WINDOW_INCOMPLETE",
+        "observer_errors_absent": "RUNTIME_OBSERVER_CALLBACK_OR_API_ERROR",
+    }
+    for key, reason in defaults.items():
         if acceptance.get(key) is not True:
-            reasons[item["acceptance_id"]] = observer_reasons.get(key) or item["failure_reason_literal"]
+            reasons[key] = observer_reasons.get(key) or reason
     for key, reason in observer_reasons.items():
         reasons[key] = reason
     return reasons

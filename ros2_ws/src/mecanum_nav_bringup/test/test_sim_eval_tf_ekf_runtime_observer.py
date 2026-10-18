@@ -1,145 +1,142 @@
-"""Offline synthetic tests for multisample clock/odometry/TF evidence."""
+"""Synthetic offline contract tests for the C++ rclcpp MessageInfo observer JSON."""
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 OBSERVER_PATH = ROOT / "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py"
-SPEC = importlib.util.spec_from_file_location("wp06_6f_observer_test", OBSERVER_PATH)
+SPEC = importlib.util.spec_from_file_location("wp06_6f_offline_observer", OBSERVER_PATH)
 observer = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = observer
 SPEC.loader.exec_module(observer)
 
 
-def _clock_samples(times=(10, 11, 12, 13, 14)):
-    return [{"stamp": {"sec": value, "nanosec": 0}, "stamp_ns": value * 1_000_000_000} for value in times]
+def _message(stamp):
+    v = {"x": 0.0, "y": 0.0, "z": 0.0}
+    return {"header": {"frame_id": "odom", "stamp": {"sec": stamp, "nanosec": 0}},
+            "child_frame_id": "base_link",
+            "pose": {"covariance": [0.0] * 36, "pose": {"position": v, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}}},
+            "twist": {"covariance": [0.0] * 36, "twist": {"linear": v, "angular": v}}}
 
 
-def _odom_sample(stamp, frame="odom", covariance=None):
-    cov = [0.0] * 36 if covariance is None else covariance
-    message = {
-        "header": {"frame_id": frame, "stamp": {"sec": stamp, "nanosec": 0}},
-        "child_frame_id": "base_link",
-        "pose": {"pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}}, "covariance": list(cov)},
-        "twist": {"twist": {"linear": {"x": 0.0, "y": 0.0, "z": 0.0}, "angular": {"x": 0.0, "y": 0.0, "z": 0.0}}, "covariance": [0.0] * 36},
-    }
-    return {"stamp_ns": stamp * 1_000_000_000, "message": message}
+def _doc():
+    times = list(range(1, 6))
+    gid = "001122aabbcc"
+    endpoints = [{"gid": gid, "node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}]
+    return {"schema": observer.OBSERVER_SCHEMA, "expected_ekf_node_name": "ekf_filter_node", "window_complete": True,
+            "terminal_outcome": "PASS",
+            "observer_errors": [], "graph_endpoint_snapshot": endpoints,
+            "observed_forbidden_edges": [],
+            "endpoint_mapping": [{"gid": gid, "match_count": 1, "unique": True, "expected_owner": True,
+                                  "mapped_endpoint": {"node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}}],
+            "qos_used": {"/tf_static": dict(observer.EXPECTED_QOS)},
+            "topics": {
+                "/clock": {"type": "rosgraph_msgs/msg/Clock", "samples": [{"stamp": {"sec": n, "nanosec": 0}, "stamp_ns": n * 10**9, "valid": True} for n in times]},
+                "/odometry/filtered": {"type": "nav_msgs/msg/Odometry", "samples": [{"message": _message(n), "stamp_ns": n * 10**9, "valid": True} for n in times]},
+                "/tf": {"type": "tf2_msgs/msg/TFMessage", "window_complete": True, "transforms": [{"parent": "odom", "child": "base_link", "stamp_ns": n * 10**9, "publisher_gid": gid, "translation": [0.0, 0.0, 0.0], "rotation_xyzw": [0.0, 0.0, 0.0, 1.0], "valid": True} for n in times]},
+                "/tf_static": {"type": "tf2_msgs/msg/TFMessage", "window_complete": True, "transforms": [{"parent": "base_link", "child": "lidar_frame", "stamp_ns": 0, "publisher_gid": "ffeedd", "translation": list(observer.EXPECTED_TRANSLATION), "rotation_xyzw": list(observer.EXPECTED_ROTATION), "valid": True}]}} ,
+            "acceptance": {key: True for key in observer.EXPECTED_ACCEPTANCE_KEYS}, "failure_reason_literals": {}}
 
 
-def _dynamic_tf(stamps=(10, 11, 12, 13, 14), gids=None):
-    gids = gids or ["ekf-gid"] * len(stamps)
-    return [{"parent": "odom", "child": "base_link", "stamp_ns": stamp * 1_000_000_000,
-             "publisher_gid": gid, "translation": [0.0, 0.0, 0.0], "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]}
-            for stamp, gid in zip(stamps, gids)]
+def _validate(document):
+    return observer.validate_observer_document(document)["acceptance"]
 
 
-def _static_tf(translation=None, rotation=None):
-    return [{"parent": "base_link", "child": "lidar_frame", "stamp_ns": 0, "publisher_gid": "rsp-gid",
-             "translation": translation or [-0.031765, 0.0, 0.140],
-             "rotation_xyzw": rotation or [0.0, 0.0, 0.0, 1.0]}]
+def test_clock_five_increasing_pass_and_zero_duplicate_decreasing_fail():
+    doc = _doc()
+    assert _validate(doc)["clock_minimum_five_nonzero_strictly_increasing"]
+    for values in ([0, 2, 3, 4, 5], [1, 2, 2, 4, 5], [1, 3, 2, 4, 5]):
+        bad = _doc()
+        bad["topics"]["/clock"]["samples"] = [{"stamp": {"sec": n, "nanosec": 0}, "valid": True} for n in values]
+        with pytest.raises(observer.ObserverDocumentError, match="ACCEPTANCE_DOES_NOT_MATCH"):
+            _validate(bad)
 
 
-def _observation(clock=None, filtered=None, dynamic=None, static=None, qos=None, window=True):
-    return {
-        "/clock": {"samples": _clock_samples() if clock is None else clock},
-        "/odometry/filtered": {"samples": [_odom_sample(n) for n in range(10, 15)] if filtered is None else filtered},
-        "/tf": {"transforms": _dynamic_tf() if dynamic is None else dynamic, "window_complete": window},
-        "/tf_static": {"transforms": _static_tf() if static is None else static, "window_complete": window},
-    }, observer.STATIC_QOS_CONTRACT if qos is None else qos
+def test_filtered_odometry_rejects_bad_frame_covariance_or_time():
+    assert _validate(_doc())["filtered_odometry_minimum_five_contract_and_monotonicity"]
+    for mutate in (
+        lambda d: d["topics"]["/odometry/filtered"]["samples"][0]["message"]["header"].update(frame_id="map"),
+        lambda d: d["topics"]["/odometry/filtered"]["samples"][0]["message"]["pose"]["covariance"].__setitem__(0, float("nan")),
+        lambda d: d["topics"]["/odometry/filtered"]["samples"][1]["message"]["header"].update(stamp={"sec": 1, "nanosec": 0}),
+    ):
+        bad = _doc(); mutate(bad)
+        with pytest.raises(observer.ObserverDocumentError): _validate(bad)
 
 
-def test_clock_requires_five_nonzero_strict_timestamps():
-    observations, qos = _observation()
-    assert observer.evaluate_observations(observations, qos)["acceptance"]["clock_minimum_five_nonzero_strictly_increasing"] is True
-    for values in ((10, 11, 11, 13, 14), (10, 12, 11, 13, 14), (0, 11, 12, 13, 14), (10, 11, 12, 13)):
-        observations, qos = _observation(clock=_clock_samples(values))
-        result = observer.evaluate_observations(observations, qos)
-        assert result["acceptance"]["clock_minimum_five_nonzero_strictly_increasing"] is False
-        assert "/clock" in result["failure_reason_literals"]
+def test_dynamic_tf_requires_five_edges_one_gid_and_exact_endpoint_owner():
+    assert _validate(_doc())["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf"]
+    bad = _doc(); bad["topics"]["/tf"]["transforms"][0]["publisher_gid"] = "other"
+    bad["endpoint_mapping"].append({"gid": "other", "match_count": 1, "unique": True, "expected_owner": True})
+    bad["graph_endpoint_snapshot"].append({"gid": "other", "node_name": "ekf_filter_node"})
+    with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+    bad = _doc(); bad["graph_endpoint_snapshot"] = []
+    with pytest.raises(observer.ObserverDocumentError): _validate(bad)
 
 
-def test_filtered_odometry_requires_five_valid_monotonic_samples():
-    observations, qos = _observation()
-    assert observer.evaluate_observations(observations, qos)["acceptance"]["filtered_odometry_minimum_five_contract_and_monotonicity"] is True
+def test_static_tf_requires_qos_transform_and_single_edge():
+    assert _validate(_doc())["static_base_link_to_lidar_frame_exact"]
+    for mutate in (
+        lambda d: d["qos_used"]["/tf_static"].update(durability="VOLATILE"),
+        lambda d: d["topics"]["/tf_static"]["transforms"][0].update(translation=[0, 0, 0]),
+        lambda d: d["topics"]["/tf_static"]["transforms"].clear(),
+        lambda d: d["topics"]["/tf_static"]["transforms"].append(dict(d["topics"]["/tf_static"]["transforms"][0])),
+    ):
+        bad = _doc(); mutate(bad)
+        with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+
+
+def test_map_to_odom_and_incomplete_window_fail():
+    bad = _doc(); bad["observed_forbidden_edges"].append({"parent": "map", "child": "odom", "topic": "/tf"})
+    with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+    bad = _doc(); bad["window_complete"] = False
+    with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+
+
+def test_per_topic_timeout_reason_literals_are_required_for_failed_observations():
     cases = [
-        [_odom_sample(n, frame="map") for n in range(10, 15)],
-        [_odom_sample(n, covariance=[0.0] * 35 + ["NaN"]) for n in range(10, 15)],
-        [_odom_sample(n) for n in (10, 11, 11, 13, 14)],
-        [_odom_sample(n) for n in range(10, 14)],
+        ("/clock", "clock_minimum_five_nonzero_strictly_increasing", lambda d: d["topics"]["/clock"].update(samples=[]), "CLOCK_TIMEOUT_MINIMUM_FIVE_SAMPLES"),
+        ("/odometry/filtered", "filtered_odometry_minimum_five_contract_and_monotonicity", lambda d: d["topics"]["/odometry/filtered"].update(samples=[]), "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES"),
+        ("/tf:odom->base_link", "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf", lambda d: d["topics"]["/tf"].update(transforms=[]), "TF_DYNAMIC_TIMEOUT_MINIMUM_FIVE_EDGES_OR_GIDS"),
+        ("/tf_static:base_link->lidar_frame", "static_base_link_to_lidar_frame_exact", lambda d: d["topics"]["/tf_static"].update(transforms=[]), "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH"),
     ]
-    for samples in cases:
-        observations, qos = _observation(filtered=samples)
-        result = observer.evaluate_observations(observations, qos)
-        assert result["acceptance"]["filtered_odometry_minimum_five_contract_and_monotonicity"] is False
-        assert "/odometry/filtered" in result["failure_reason_literals"]
+    for reason_key, acceptance_key, mutate, reason in cases:
+        bad = _doc(); mutate(bad)
+        bad["acceptance"][acceptance_key] = False
+        bad["failure_reason_literals"][reason_key] = reason
+        bad["terminal_outcome"] = "FAIL_NO_RETRY"
+        result = observer.validate_observer_document(bad)
+        assert not result["acceptance"][acceptance_key]
+        assert result["failure_reason_literals"][reason_key] == reason
 
 
-def test_dynamic_tf_requires_five_samples_and_one_gid():
-    observations, qos = _observation()
-    assert observer.evaluate_observations(observations, qos)["acceptance"]["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid"] is True
-    for records in (_dynamic_tf(gids=["a", "a", "b", "a", "a"]), _dynamic_tf(stamps=(10, 11, 11, 13, 14)), _dynamic_tf(stamps=(10, 11, 12, 13))):
-        observations, qos = _observation(dynamic=records)
-        result = observer.evaluate_observations(observations, qos)
-        assert result["acceptance"]["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid"] is False
-        assert "/tf:odom->base_link" in result["failure_reason_literals"]
+def test_json_reader_rejects_duplicate_keys_and_noncanonical_bytes(tmp_path):
+    path = tmp_path / "observer.json"
+    path.write_bytes(b'{"a":1,"a":2}')
+    with pytest.raises(observer.ObserverDocumentError, match="DUPLICATE_JSON_KEY"):
+        observer.load_observer_json(path)
+    path.write_bytes(json.dumps(_doc(), sort_keys=True, separators=(",", ":")).encode())
+    assert observer.load_observer_json(path)["schema"] == observer.OBSERVER_SCHEMA
 
 
-def test_static_tf_requires_transient_local_qos_and_exact_transform():
-    observations, qos = _observation()
-    assert observer.evaluate_observations(observations, qos)["acceptance"]["static_base_link_to_lidar_frame_qos_and_transform_exact"] is True
-    wrong_qos = dict(qos, durability="VOLATILE")
-    wrong_translation = _static_tf(translation=[0.0, 0.0, 0.0])
-    wrong_rotation = _static_tf(rotation=[0.0, 0.0, 1.0, 0.0])
-    for records, profile in ((_static_tf(), wrong_qos), (wrong_translation, qos), (wrong_rotation, qos), ([], qos)):
-        observations, _ = _observation(static=records)
-        result = observer.evaluate_observations(observations, profile)
-        assert result["acceptance"]["static_base_link_to_lidar_frame_qos_and_transform_exact"] is False
-        assert "/tf_static:base_link->lidar_frame" in result["failure_reason_literals"]
+def test_observer_errors_are_a_structured_fail_closed_condition():
+    bad = _doc()
+    bad["observer_errors"] = ["TF_EDGE_PUBLISHER_GID_UNMAPPABLE"]
+    bad["acceptance"]["observer_errors_absent"] = False
+    bad["failure_reason_literals"]["observer_errors"] = "RUNTIME_OBSERVER_CALLBACK_OR_API_ERROR"
+    bad["terminal_outcome"] = "FAIL_NO_RETRY"
+    result = observer.validate_observer_document(bad)
+    assert not result["acceptance"]["observer_errors_absent"]
 
 
-def test_map_to_odom_and_observation_timeouts_fail_closed():
-    observations, qos = _observation()
-    observations["/tf"]["transforms"].append({"parent": "map", "child": "odom", "stamp_ns": 15, "publisher_gid": "amcl"})
-    result = observer.evaluate_observations(observations, qos)
-    assert result["acceptance"]["map_to_odom_absent_during_observation_window"] is False
-    assert result["failure_reason_literals"]["map->odom"] == "MAP_TO_ODOM_EDGE_OBSERVED"
-
-    observations, qos = _observation(window=False)
-    result = observer.evaluate_observations(observations, qos)
-    assert result["acceptance"]["map_to_odom_absent_during_observation_window"] is False
-    assert result["failure_reason_literals"]["map->odom"] == "TF_OBSERVATION_WINDOW_INCOMPLETE"
-
-    observations, qos = _observation(clock=[] , filtered=[], dynamic=[], static=[])
-    observations["/clock"]["timeout_reason"] = "CLOCK_TIMEOUT_NO_SAMPLE"
-    observations["/odometry/filtered"]["timeout_reason"] = "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES"
-    observations["/tf"]["timeout_reason"] = "TF_DYNAMIC_ODOM_BASE_LINK_TIMEOUT_MINIMUM_FIVE_EDGES"
-    observations["/tf_static"]["timeout_reason"] = "TF_STATIC_BASE_LINK_LIDAR_FRAME_TIMEOUT"
-    result = observer.evaluate_observations(observations, qos)
-    assert result["failure_reason_literals"] == {
-        "/clock": "CLOCK_TIMEOUT_NO_SAMPLE",
-        "/odometry/filtered": "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES",
-        "/tf:odom->base_link": "TF_DYNAMIC_ODOM_BASE_LINK_TIMEOUT_MINIMUM_FIVE_EDGES",
-        "/tf_static:base_link->lidar_frame": "TF_STATIC_BASE_LINK_LIDAR_FRAME_TIMEOUT",
-    }
-
-
-def test_observer_errors_fail_closed():
-    observations, qos = _observation()
-    result = observer.evaluate_observations(observations, qos, ["/tf_MESSAGE_INFO_OR_PARSE_FAILED"])
-    assert result["acceptance"]["observer_errors_absent"] is False
-    assert result["failure_reason_literals"]["observer_errors_absent"] == "RUNTIME_OBSERVER_CALLBACK_OR_API_ERROR"
-
-
-def test_runtime_acceptance_matrix_covers_all_required_criteria():
-    required = {
-        "bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness",
-        "clock_five_monotonic_samples", "wheel_input", "imu_input", "filtered_odometry_five_monotonic_samples",
-        "dynamic_tf_edge_gid", "static_tf_edge_qos", "map_to_odom_absent",
-        "forbidden_bridge_and_process_boundary", "process_group_teardown",
-    }
-    matrix = observer.RUNTIME_ACCEPTANCE_MATRIX
-    assert {item["acceptance_id"] for item in matrix} >= required
-    for item in matrix:
-        assert all(item.get(key) for key in ("collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "failure_reason_literal", "offline_test_name"))
+def test_runner_invokes_cpp_observer_once_and_never_uses_python_collector_matrix():
+    runner = (ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py").read_text()
+    assert runner.count("_run_cpp_observer(") == 2  # definition plus one call site
+    assert "collect_and_write" not in runner
+    assert "RUNTIME_ACCEPTANCE_MATRIX" not in runner
+    py_sources = list((ROOT / "ros2_ws/src").rglob("*.py"))
+    forbidden = "with_" + "info="
+    assert all(forbidden not in path.read_text(encoding="utf-8") for path in py_sources)

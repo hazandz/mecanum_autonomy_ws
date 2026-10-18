@@ -11,16 +11,16 @@ import tempfile
 from pathlib import Path
 
 
-RUN_ID = "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001"
+RUN_ID = "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002"
 PARTITION = "wp06_scan_probe_run_002"
 PENDING = "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
 CONSUMED = "CONSUMED"
 ARCHITECTURE_PATH = "docs/MECANUM_NAV_DRL_Architecture.docx"
 ARCHITECTURE_SHA256 = "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
 DECISION_PATH = "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md"
-MANIFEST_PATH = "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001_GUARD_MANIFEST.json"
+MANIFEST_PATH = "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json"
 EVIDENCE_PATH = "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json"
-GUARD_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001.json"
+GUARD_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002.json"
 
 
 class GuardError(RuntimeError):
@@ -127,6 +127,7 @@ def verify_runtime_preconditions(
         "bootstrap": ["ros2", "launch", "ROBOT_URDF_final_description", "sim_eval_scan_probe_bootstrap.launch.py"],
         "composite": ["ros2", "launch", "mecanum_nav_bringup", "sim_eval_tf_ekf_state_estimation.launch.py",
                       f"gz_partition:={PARTITION}", "use_sim_time:=true"],
+        "observer": ["ros2", "run", "wp06_6f_tf_ekf_runtime_observer", "wp06_6f_tf_ekf_runtime_observer"],
     }
     if manifest.get("command_contract") != expected_commands:
         raise GuardError("MANIFEST_COMMAND_CONTRACT_MISMATCH")
@@ -140,6 +141,22 @@ def verify_runtime_preconditions(
         raise GuardError("EVIDENCE_CEILING_MISMATCH")
     if evidence.get("source_pins") != manifest.get("source_pins"):
         raise GuardError("EVIDENCE_SOURCE_PINS_MISMATCH")
+    matrix = manifest.get("acceptance_to_collector_matrix")
+    if not isinstance(matrix, list) or matrix != evidence.get("acceptance_to_collector_matrix"):
+        raise GuardError("ACCEPTANCE_MATRIX_MISMATCH")
+    required_acceptances = {
+        "bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness", "composite_stability_5_seconds",
+        "clock_five_monotonic_samples", "wheel_input", "imu_input", "ingress_use_sim_time",
+        "filtered_odometry_five_monotonic_samples", "ekf_use_sim_time", "ekf_topology",
+        "dynamic_tf_edge_gid", "static_tf_edge_qos", "map_to_odom_absent",
+        "forbidden_bridge_and_process_boundary", "process_group_teardown", "process_group_teardown_order", "observer_error_absent",
+    }
+    matrix_by_id = {row.get("acceptance_id"): row for row in matrix if isinstance(row, dict)}
+    if set(matrix_by_id) != required_acceptances:
+        raise GuardError("ACCEPTANCE_MATRIX_COVERAGE_MISMATCH")
+    required_fields = ("collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "failure_reason_literal", "offline_test_name")
+    if any(not all(row.get(field) for field in required_fields) for row in matrix_by_id.values()):
+        raise GuardError("ACCEPTANCE_MATRIX_ROW_INCOMPLETE")
     source_pins = manifest.get("source_pins")
     if not isinstance(source_pins, dict) or not source_pins:
         raise GuardError("MANIFEST_SOURCE_PINS_INVALID")

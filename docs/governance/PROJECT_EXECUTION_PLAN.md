@@ -896,4 +896,9 @@ At exact base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`, this candidate adds on
 
 Evidence is limited to `IMPLEMENTED_OFFLINE_MULTISAMPLE_RUNTIME_OBSERVER_AND_GUARD_ONLY`. The capacity-one Run 001 guard remains pending and unconsumed; no runtime authorization, runtime evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is created. WP06-6C Run 003 remains audited bounded ingress evidence only, not EKF/TF/navigation evidence. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
 
-WP06-6F corrective continuation adds a single multi-sample observer for `/clock`, `/odometry/filtered`, `/tf`, and transient-local `/tf_static`; the runner records a collector/artifact/parser/test mapping for each future runtime acceptance. This changes only offline observability and runner evidence collection; no runtime execution or authorization is created. Guard remains pending, capacity one, unconsumed.
+The prior WP06-6F observer design used Python rclpy `create_subscription(..., with_info=True)` and Run 001 failed at that unsupported API. This is an immutable observer API failure, not evidence of TF/EKF failure, and is not retried. The current correction uses a C++ rclcpp MessageInfo observer with edge GID mapping; Run 002 has its own pending capacity-one guard with acquisition count zero and `runtime_authorization: NOT_GRANTED`. Evidence remains offline source/test/build only.
+
+
+### WP06-6F corrective observer and Run 002 authorization boundary
+
+Run 001 remains the immutable historical failure caused by an unsupported `rclpy` `with_info=True` subscription API; do not classify it as a TF/EKF failure or retry it. A dedicated C++ `rclcpp::MessageInfo` observer now provides edge-specific publisher GID evidence and exact graph-endpoint mapping; unmappable GIDs fail closed. The Python module only validates canonical observer JSON. Run 002 is a separate capacity-one guard seeded PENDING, acquisition count zero, `runtime_authorization: NOT_GRANTED`, and has not been authorized or consumed. This candidate supplies offline source/test/build evidence only; no runtime approval or Gate B transition is created.
