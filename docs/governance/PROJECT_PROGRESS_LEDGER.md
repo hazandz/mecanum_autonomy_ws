@@ -1577,3 +1577,15 @@
 | Run005 checker | Exact section-parsed topic names; EKF data-plane `/clock`, `/imu/data`, `/wheel/odometry_raw`; `/set_pose` allowed only as an EKF subscriber. Dedicated type/publisher/subscriber transcript and bounded echo require `geometry_msgs/msg/PoseWithCovarianceStamped`, one EKF subscriber, zero publishers, and no payload. Publisher failure literal: `EKF_SET_POSE_EXTERNAL_PUBLISHER_OBSERVED`. |
 | Run005 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; not authorized or executed. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN004_CHECKER_CONTRACT_CORRECTION_RUN005_GUARD_PENDING`; runtime eligible false, evidence not created, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`. |
+
+
+### WP06_6F_RUN005_TOPOLOGY_FALSE_NEGATIVE_CORRECTION_RUN006_CANDIDATE
+
+| Field | Record |
+|---|---|
+| Parent/base | `ca2e9798a49be6c9b3429ef0fd161410539ca12a`; integration base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`. |
+| Run005 disposition | Historical terminal outcome `WP06_6F_RUNTIME_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`, immutable. Raw topology included `/parameter_events` and `/rosout`; the checker included these ROS-standard endpoints in the EKF business equality and falsely rejected topology. Other stated runtime criteria passed; no TF/EKF/clock/robot failure is inferred; no retry. |
+| Run006 correction | New runner classifies exact `Publishers`/`Subscribers` sections, permits `/parameter_events` in either direction and `/rosout` only as a publisher, then requires exact business endpoint sets. Wrong-direction standard endpoints and every unapproved endpoint still fail closed. `/set_pose` remains restricted and requires zero publishers plus an empty timed echo. |
+| Run006 guard | Separate guard: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; not authorized or executed. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN005_TOPOLOGY_FALSE_NEGATIVE_CORRECTION_RUN006_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Supersedes only current WP06-6F topology-checker status. Run001–Run005 source guards and historical evidence remain unchanged. All parent Ledger bytes are an exact prefix. |
