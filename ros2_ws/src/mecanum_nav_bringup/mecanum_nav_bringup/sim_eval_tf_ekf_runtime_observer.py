@@ -59,7 +59,7 @@ def _reject_constant(value):
 
 
 def load_observer_json(path: str | Path) -> dict:
-    """Read UTF-8 canonical JSON, reject duplicate keys, then validate its contract."""
+    """Read strict UTF-8 JSON and validate its meaning independent of byte formatting."""
     raw = Path(path).read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ObserverDocumentError("OBSERVER_JSON_BOM")
@@ -71,9 +71,8 @@ def load_observer_json(path: str | Path) -> dict:
         raise ObserverDocumentError("OBSERVER_JSON_NOT_UTF8") from exc
     except json.JSONDecodeError as exc:
         raise ObserverDocumentError(f"OBSERVER_JSON_INVALID:{exc}") from exc
-    canonical = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    if raw != canonical:
-        raise ObserverDocumentError("OBSERVER_JSON_NOT_CANONICAL")
+    if not isinstance(document, dict):
+        raise ObserverDocumentError("OBSERVER_DOCUMENT_NOT_OBJECT")
     validate_observer_document(document)
     return document
 

@@ -1555,3 +1555,14 @@
 | Run 003 | The sole pending guard: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. |
 | Current pins | C++ observer SHA-256 `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; Python validator SHA-256 `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_JSON_COLLECTION_CORRECTION_RUN003_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+
+### WP06_6F_RUN003_CROSS_LANGUAGE_JSON_VALIDATION_CORRECTIVE_CANDIDATE
+
+| Field | Record |
+|---|---|
+| Parent/base | `3f2748dc2ef809610fe0f4ebb88aef5db24d9924` / integration base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`. |
+| Run003 disposition | `RUN003_VALID_JSON_REJECTED_BY_CROSS_LANGUAGE_BYTE_CANONICALITY_CHECK`; `NOT_A_TF_EKF_CLOCK_OR_ROBOT_FAILURE`. Run003 guard was consumed once; raw evidence is unchanged and the run was not retried. |
+| Correction | Python observer reader uses strict JSON parsing plus semantic validation; it no longer compares C++ bytes to Python serialization. Acceptance remains recomputed from validated raw values. |
+| Run004 | `RUN004_SEMANTIC_VALIDATION_GUARD_PENDING`; pending seed, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; no authorization or runtime execution. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_CROSS_LANGUAGE_JSON_SEMANTIC_VALIDATION_RUN004_GUARD_PENDING`; `runtime_eligible: false`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Supersedes only current WP06-6F status and the incorrect cross-language byte-canonicality requirement; historical Run001/Run002/Run003 records remain immutable. All parent Ledger bytes are an exact prefix. |

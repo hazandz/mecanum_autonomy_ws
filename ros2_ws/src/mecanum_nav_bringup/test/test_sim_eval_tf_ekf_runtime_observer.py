@@ -184,13 +184,44 @@ def test_per_topic_timeout_reason_literals_are_required_for_failed_observations(
         assert result["failure_reason_literals"][reason_key] == reason
 
 
-def test_json_reader_rejects_duplicate_keys_and_noncanonical_bytes(tmp_path):
+def test_json_reader_rejects_duplicate_keys_but_accepts_semantic_json(tmp_path):
     path = tmp_path / "observer.json"
     path.write_bytes(b'{"a":1,"a":2}')
     with pytest.raises(observer.ObserverDocumentError, match="DUPLICATE_JSON_KEY"):
         observer.load_observer_json(path)
-    path.write_bytes(json.dumps(_doc(), sort_keys=True, separators=(",", ":")).encode())
-    assert observer.load_observer_json(path)["schema"] == observer.OBSERVER_SCHEMA
+    document = _doc()
+    document["topics"]["/tf"]["transforms"][0]["translation"][0] = 0.002048539786289549
+    raw = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # Both JSON number spellings parse to the same IEEE-754 double, while
+    # nlohmann/json and Python are free to choose different valid spellings.
+    raw = raw.replace("0.002048539786289549", "2.048539786289549e-3", 1)
+    raw_bytes = raw.encode("utf-8")
+    parsed = json.loads(raw_bytes)
+    python_reserialized_bytes = json.dumps(
+        parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert parsed["topics"]["/tf"]["transforms"][0]["translation"][0] == 0.002048539786289549
+    assert raw_bytes != python_reserialized_bytes
+    path.write_bytes(raw_bytes)
+    loaded = observer.load_observer_json(path)
+    assert loaded["schema"] == observer.OBSERVER_SCHEMA
+    assert loaded["topics"]["/tf"]["transforms"][0]["translation"][0] == 0.002048539786289549
+
+
+@pytest.mark.parametrize("raw, literal", [
+    (b"\xef\xbb\xbf{}", "OBSERVER_JSON_BOM"),
+    (b"\xff", "OBSERVER_JSON_NOT_UTF8"),
+    (b'{"k":1,"k":2}', "DUPLICATE_JSON_KEY"),
+    (b'{"k":NaN}', "NONSTANDARD_JSON_CONSTANT:NaN"),
+    (b'{"k":Infinity}', "NONSTANDARD_JSON_CONSTANT:Infinity"),
+    (b"{", "OBSERVER_JSON_INVALID"),
+    (b"[]", "OBSERVER_DOCUMENT_NOT_OBJECT"),
+])
+def test_json_reader_rejects_invalid_encoding_duplicate_nonstandard_or_nonobject(tmp_path, raw, literal):
+    path = tmp_path / "invalid.json"
+    path.write_bytes(raw)
+    with pytest.raises(observer.ObserverDocumentError, match=literal):
+        observer.load_observer_json(path)
 
 
 def test_validator_rejects_nested_json_collections_with_structured_literals():
