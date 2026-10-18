@@ -26,7 +26,7 @@
 namespace wp06_6f_observer
 {
 using Json = nlohmann::json;
-constexpr const char * kSchema = "wp06_6f_cpp_runtime_observer/v1";
+constexpr const char * kSchema = "wp06_6f_cpp_runtime_observer/v2";
 constexpr const char * kExpectedEkfNodeName = "ekf_filter_node";
 constexpr std::int64_t kNsPerSecond = 1000000000LL;
 constexpr double kTolerance = 1e-9;
@@ -112,6 +112,34 @@ bool teardown_pass(const TeardownRecord & record)
 {
   return record.leader_returncode == 0 && record.live_member_pids.empty() &&
          record.zombie_member_pids.empty() && record.outcome == "STOPPED";
+}
+
+rclcpp::QoS dynamic_tf_qos()
+{
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(100));
+  qos.best_effort();
+  qos.durability_volatile();
+  return qos;
+}
+
+rclcpp::QoS static_tf_qos()
+{
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1));
+  qos.reliable();
+  qos.transient_local();
+  return qos;
+}
+
+Json qos_json(const rclcpp::QoS & qos)
+{
+  const auto & profile = qos.get_rmw_qos_profile();
+  const char * history = profile.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST ? "KEEP_LAST" : "UNKNOWN";
+  const char * reliability = profile.reliability == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT ?
+    "BEST_EFFORT" : profile.reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE ? "RELIABLE" : "UNKNOWN";
+  const char * durability = profile.durability == RMW_QOS_POLICY_DURABILITY_VOLATILE ?
+    "VOLATILE" : profile.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL ? "TRANSIENT_LOCAL" : "UNKNOWN";
+  return Json{{"depth", profile.depth}, {"durability", durability}, {"history", history},
+    {"reliability", reliability}};
 }
 
 std::int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
@@ -201,7 +229,7 @@ public:
       });
 
     tf_sub_ = create_subscription<tf2_msgs::msg::TFMessage>(
-      "/tf", rclcpp::QoS(100),
+      "/tf", dynamic_tf_qos(),
       [this](const tf2_msgs::msg::TFMessage & message, const rclcpp::MessageInfo & info) {
         const auto & rmw_info = info.get_rmw_message_info();
         const auto gid = canonical_gid(rmw_info.publisher_gid.data, RMW_GID_STORAGE_SIZE);
@@ -229,7 +257,7 @@ public:
         }
       });
 
-    auto static_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+    auto static_qos = static_tf_qos();
     tf_static_sub_ = create_subscription<tf2_msgs::msg::TFMessage>(
       "/tf_static", static_qos,
       [this](const tf2_msgs::msg::TFMessage & message, const rclcpp::MessageInfo & info) {
@@ -316,6 +344,8 @@ public:
     Json acceptance{
       {"clock_minimum_five_nonzero_strictly_increasing", clock_pass},
       {"dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf", tf_pass},
+      {"dynamic_tf_subscription_qos_contract", qos_json(dynamic_tf_qos()) ==
+        Json{{"depth", 100}, {"durability", "VOLATILE"}, {"history", "KEEP_LAST"}, {"reliability", "BEST_EFFORT"}}},
       {"filtered_odometry_minimum_five_contract_and_monotonicity", odom_pass},
       {"map_to_odom_absent_during_full_window", map_absent},
       {"observer_errors_absent", no_errors},
@@ -343,8 +373,7 @@ public:
       {"failure_reason_literals", reasons}, {"graph_endpoint_snapshot", endpoint_snapshot},
       {"observed_forbidden_edges", forbidden_edges_},
       {"map_to_odom_seen", map_to_odom_seen_}, {"observer_errors", errors_},
-      {"qos_used", Json{{"/tf_static", Json{{"depth", 1}, {"durability", "TRANSIENT_LOCAL"},
-        {"history", "KEEP_LAST"}, {"reliability", "RELIABLE"}}}}},
+      {"qos_used", Json{{"/tf", qos_json(dynamic_tf_qos())}, {"/tf_static", qos_json(static_tf_qos())}}},
       {"schema", kSchema}, {"started_at", started_at_}, {"finished_at", now()},
       {"terminal_outcome", outcome}, {"topics", Json{
         {"/clock", Json{{"samples", clock_samples_}, {"type", "rosgraph_msgs/msg/Clock"}, {"zero_samples_ignored", clock_zero_count_}}},

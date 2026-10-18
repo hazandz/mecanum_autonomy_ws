@@ -902,3 +902,7 @@ The prior WP06-6F observer design used Python rclpy `create_subscription(..., wi
 ### WP06-6F corrective observer and Run 002 authorization boundary
 
 Run 001 remains the immutable historical failure caused by an unsupported `rclpy` `with_info=True` subscription API; do not classify it as a TF/EKF failure or retry it. A dedicated C++ `rclcpp::MessageInfo` observer now provides edge-specific publisher GID evidence and exact graph-endpoint mapping; unmappable GIDs fail closed. The Python module only validates canonical observer JSON. Run 002 is a separate capacity-one guard seeded PENDING, acquisition count zero, `runtime_authorization: NOT_GRANTED`, and has not been authorized or consumed. This candidate supplies offline source/test/build evidence only; no runtime approval or Gate B transition is created.
+
+## WP06-6F dynamic TF QoS compatibility corrective — review delta
+
+The observer's dynamic `/tf` subscription is pinned to `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE`; static `/tf_static` retains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. The schema-versioned observer output records both profiles; the Python offline validator and acceptance matrix enforce dynamic QoS. C++ observer SHA-256 `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`; Python validator SHA-256 `cee7ac20fab7e6a86d066e9e76b12113399a19c1c8cceba60d265247b1ba4bf3`. This is offline source/test/build evidence only. Run 001 remains an immutable observer API mismatch (not a TF/EKF failure); Run 002 guard remains pending and unconsumed.

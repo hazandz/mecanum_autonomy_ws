@@ -33,7 +33,10 @@ def _doc():
             "observed_forbidden_edges": [],
             "endpoint_mapping": [{"gid": gid, "match_count": 1, "unique": True, "expected_owner": True,
                                   "mapped_endpoint": {"node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}}],
-            "qos_used": {"/tf_static": dict(observer.EXPECTED_QOS)},
+            "qos_used": {
+                "/tf": dict(observer.EXPECTED_DYNAMIC_TF_QOS),
+                "/tf_static": dict(observer.EXPECTED_STATIC_TF_QOS),
+            },
             "topics": {
                 "/clock": {"type": "rosgraph_msgs/msg/Clock", "samples": [{"stamp": {"sec": n, "nanosec": 0}, "stamp_ns": n * 10**9, "valid": True} for n in times]},
                 "/odometry/filtered": {"type": "nav_msgs/msg/Odometry", "samples": [{"message": _message(n), "stamp_ns": n * 10**9, "valid": True} for n in times]},
@@ -87,6 +90,31 @@ def test_static_tf_requires_qos_transform_and_single_edge():
     ):
         bad = _doc(); mutate(bad)
         with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+
+
+def test_dynamic_tf_qos_is_best_effort_volatile_and_static_qos_is_reliable_transient_local():
+    assert _validate(_doc())["dynamic_tf_subscription_qos_contract"]
+    for mutate in (
+        lambda d: d["qos_used"]["/tf"].update(reliability="RELIABLE"),
+        lambda d: d["qos_used"]["/tf"].update(durability="TRANSIENT_LOCAL"),
+        lambda d: d["qos_used"]["/tf_static"].update(reliability="BEST_EFFORT"),
+        lambda d: d["qos_used"]["/tf_static"].update(durability="VOLATILE"),
+        lambda d: d["qos_used"]["/tf"].update(depth=99),
+    ):
+        bad = _doc()
+        mutate(bad)
+        with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_QOS_CONTRACT_MISMATCH"):
+            _validate(bad)
+
+
+def test_json_reader_rejects_reliable_or_transient_local_dynamic_tf_qos(tmp_path):
+    for field, value in (("reliability", "RELIABLE"), ("durability", "TRANSIENT_LOCAL")):
+        document = _doc()
+        document["qos_used"]["/tf"][field] = value
+        path = tmp_path / f"invalid-{field}.json"
+        path.write_bytes(json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_QOS_CONTRACT_MISMATCH:/tf"):
+            observer.load_observer_json(path)
 
 
 def test_map_to_odom_and_incomplete_window_fail():

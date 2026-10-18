@@ -198,6 +198,7 @@ def test_wp06f_run002_json_guard_and_source_pin_closure_are_coherent():
     assert manifest["decision_sha256"] == guard["decision_sha256"]
     assert manifest["base_commit"] == BASE
     assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_CPP_GID_OBSERVER_AND_PENDING_RUN002_GUARD_ONLY"
+    assert "dynamic_tf_subscription_qos" in {row["acceptance_id"] for row in manifest["acceptance_to_collector_matrix"]}
     pins = manifest["source_pins"]
     for relative in (EKF_CONFIG_PATH, CLOCK_CONFIG_PATH, DECISION_PATH):
         assert pins[relative] == _sha(ROOT / relative)
@@ -210,8 +211,6 @@ def test_wp06f_run002_json_guard_and_source_pin_closure_are_coherent():
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py",
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_runtime_guard.py",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/CMakeLists.txt",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/package.xml",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/test/test_wp06_6f_tf_ekf_runtime_observer.cpp",
     ):
@@ -242,8 +241,6 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_runtime_guard.py",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_runtime_session.py",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/CMakeLists.txt",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/package.xml",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/test/test_wp06_6f_tf_ekf_runtime_observer.cpp",
         "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",

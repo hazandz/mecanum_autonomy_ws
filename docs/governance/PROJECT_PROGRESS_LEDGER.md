@@ -1489,3 +1489,15 @@
 | Run 002 | Separate capacity-one guard is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; not authorized or consumed. |
 | Evidence ceiling | Offline/source/test/build only. No runtime execution, retry, integration, runtime approval, or Gate B transition. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | `supersedes` | Corrects only the WP06-6F observer implementation and future Run 002 guard routing; Run 001 records and artifacts remain unchanged. |
+
+### WP06-6F dynamic TF QoS compatibility corrective
+
+| Field | Value |
+|---|---|
+| Parent / scope | `cb16bed6a14cb7518f9e55f6d4adfe21dbd07467`; observer QoS compatibility only, no runtime execution. |
+| Dynamic `/tf` QoS | `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE`; C++ observer source SHA-256 `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`. |
+| Static `/tf_static` QoS | Preserved as `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. |
+| Validation | Schema v2 records both profiles; Python validator fails closed and tests cover reliable/transient-local dynamic `/tf` rejection; acceptance matrix has a dedicated collector/parser/test row. |
+| Run boundary | Run 001 remains immutable observer API mismatch failure, not a TF/EKF failure. Run 002 remains pending, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. |
+| Evidence ceiling | Offline source/test/build only; no runtime authorization, runtime evidence, integration, `RUNTIME_APPROVED`, or Gate B transition. |
+| `supersedes` | Supersedes only the prior dynamic `/tf` observer QoS implementation detail; historical run records and other acceptance criteria are unchanged. Parent Ledger bytes remain an exact prefix. |

@@ -94,11 +94,18 @@ def test_acceptance_matrix_has_collector_artifact_parser_and_offline_test():
     required = {"bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness", "composite_stability_5_seconds",
                 "clock_five_monotonic_samples", "wheel_input", "imu_input", "ingress_use_sim_time",
                 "filtered_odometry_five_monotonic_samples", "ekf_use_sim_time", "ekf_topology", "dynamic_tf_edge_gid",
-                "static_tf_edge_qos", "map_to_odom_absent", "forbidden_bridge_and_process_boundary", "process_group_teardown",
+                "dynamic_tf_subscription_qos", "static_tf_edge_qos", "map_to_odom_absent", "forbidden_bridge_and_process_boundary", "process_group_teardown",
                 "process_group_teardown_order", "observer_error_absent"}
     assert required <= {item["acceptance_id"] for item in matrix}
     assert all(all(item.get(k) for k in ("collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "failure_reason_literal", "offline_test_name")) for item in matrix)
     assert any("runtime_observer.json" in item["raw_artifact_path"] for item in matrix)
+    dynamic_qos = next(item for item in matrix if item["acceptance_id"] == "dynamic_tf_subscription_qos")
+    assert dynamic_qos["raw_artifact_path"] == "transcripts/runtime_observer.json#/qos_used//tf"
+    assert dynamic_qos["failure_reason_literal"] == "DYNAMIC_TF_QOS_CONTRACT_MISMATCH"
+    assert dynamic_qos["offline_test_name"] == "test_json_reader_rejects_reliable_or_transient_local_dynamic_tf_qos"
+    assert "BEST_EFFORT" in dynamic_qos["pass_condition"] and "VOLATILE" in dynamic_qos["pass_condition"]
+    assert dynamic_qos["collector"].startswith("wp06_6f_tf_ekf_runtime_observer C++")
+    assert "QoS" in dynamic_qos["parser_or_validator"]
 
 
 def test_yaml_echo_parser_uses_multi_document_and_requires_single_mapping():

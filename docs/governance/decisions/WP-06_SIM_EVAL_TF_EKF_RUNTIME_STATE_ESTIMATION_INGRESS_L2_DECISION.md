@@ -33,3 +33,13 @@ Run 002 has a separate capacity-one guard seeded `PENDING_EXACT_INTEGRATION_AND_
 ## Evidence ceiling
 
 `IMPLEMENTED_OFFLINE_CPP_GID_OBSERVER_AND_PENDING_RUN002_GUARD_ONLY`. The Run 002 runtime remains unauthorized and unexecuted; independent audit and a separate exact-run Owner authorization are required before any runtime.
+
+## Corrective continuation — dynamic TF subscriber QoS
+
+The dynamic `/tf` observer subscription uses explicit `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE` QoS to match the standard dynamic TF publisher contract. `/tf_static` remains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. Observer schema v2 records both actual subscription profiles, and the offline validator rejects either mismatch. Dynamic TF edge ownership remains based on the edge publisher GID mapped uniquely to the EKF graph endpoint; acceptance is unchanged.
+
+Current source pins:
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp` — `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`
+- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py` — `cee7ac20fab7e6a86d066e9e76b12113399a19c1c8cceba60d265247b1ba4bf3`
+
+This is an offline source/test/build correction only. Run 001 remains the immutable observer API mismatch failure and is not a TF/EKF failure. Run 002 remains unauthorized and pending with capacity 1 and acquisition count 0. No runtime authorization, runtime evidence, integration, or Gate B transition is created.

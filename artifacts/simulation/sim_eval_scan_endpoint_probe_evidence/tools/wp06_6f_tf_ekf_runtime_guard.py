@@ -148,7 +148,7 @@ def verify_runtime_preconditions(
         "bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness", "composite_stability_5_seconds",
         "clock_five_monotonic_samples", "wheel_input", "imu_input", "ingress_use_sim_time",
         "filtered_odometry_five_monotonic_samples", "ekf_use_sim_time", "ekf_topology",
-        "dynamic_tf_edge_gid", "static_tf_edge_qos", "map_to_odom_absent",
+        "dynamic_tf_edge_gid", "dynamic_tf_subscription_qos", "static_tf_edge_qos", "map_to_odom_absent",
         "forbidden_bridge_and_process_boundary", "process_group_teardown", "process_group_teardown_order", "observer_error_absent",
     }
     matrix_by_id = {row.get("acceptance_id"): row for row in matrix if isinstance(row, dict)}

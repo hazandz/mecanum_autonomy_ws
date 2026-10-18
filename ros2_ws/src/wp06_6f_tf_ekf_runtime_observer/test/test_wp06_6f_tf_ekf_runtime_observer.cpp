@@ -52,6 +52,24 @@ TEST(Wp06fObserver, RequiresNonzeroStrictlyIncreasingTimestamps)
   EXPECT_FALSE(wp06_6f_observer::strictly_increasing_nonzero({10, 11, 12, 13}));
 }
 
+TEST(Wp06fObserver, DynamicTfQosIsBestEffortVolatileKeepLast100)
+{
+  const auto profile = wp06_6f_observer::dynamic_tf_qos().get_rmw_qos_profile();
+  EXPECT_EQ(profile.history, RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+  EXPECT_EQ(profile.depth, 100U);
+  EXPECT_EQ(profile.reliability, RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
+  EXPECT_EQ(profile.durability, RMW_QOS_POLICY_DURABILITY_VOLATILE);
+}
+
+TEST(Wp06fObserver, StaticTfQosRemainsReliableTransientLocalKeepLast1)
+{
+  const auto profile = wp06_6f_observer::static_tf_qos().get_rmw_qos_profile();
+  EXPECT_EQ(profile.history, RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+  EXPECT_EQ(profile.depth, 1U);
+  EXPECT_EQ(profile.reliability, RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+  EXPECT_EQ(profile.durability, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+}
+
 TEST(Wp06fObserver, TeardownPredicateIsSingleFailClosedContract)
 {
   using wp06_6f_observer::TeardownRecord;
