@@ -773,3 +773,8 @@ Run005 is immutable historical outcome `WP06_6F_RUNTIME_RUN005_FAIL_NO_RETRY_GUA
 Run006 introduces a separate offline runner and capacity-one guard. It parses `Publishers` and `Subscribers` sections and removes only direction-allowed ROS-standard endpoints before exact business-topic equality: `/parameter_events` in either section and `/rosout` only in `Publishers`. Wrong-direction standard endpoints and all other extra endpoints fail closed. `/set_pose` remains restricted to the EKF subscriber and must have exact type, zero publishers, and no payload.
 
 Run006 guard seed is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN005_TOPOLOGY_FALSE_NEGATIVE_CORRECTION_RUN006_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
+
+
+### WP06-6F Run007 current candidate
+
+Canonical Run007 guard manifest: `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_GUARD_MANIFEST.json`. Run007 có runner, guard và guard seed riêng. Run006 là historical runner finalization failure (mọi acceptance được ghi true sau teardown nhưng terminal failure đã bị quyết định trước teardown); không phải TF/EKF/clock/robot failure và không retry. Run007 chỉ là offline source/test/build candidate, guard pending capacity one, runtime chưa được authorize hoặc thực thi. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`.

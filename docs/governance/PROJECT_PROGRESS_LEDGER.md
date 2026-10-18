@@ -1589,3 +1589,14 @@
 | Run006 guard | Separate guard: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; not authorized or executed. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN005_TOPOLOGY_FALSE_NEGATIVE_CORRECTION_RUN006_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | `supersedes` | Supersedes only current WP06-6F topology-checker status. Run001–Run005 source guards and historical evidence remain unchanged. All parent Ledger bytes are an exact prefix. |
+
+
+### WP06-6F Run007 finalization-order corrective candidate
+
+| Field | Record |
+|---|---|
+| `supersedes` | Supersedes only the current WP06-6F candidate status describing Run006 as pending; earlier Ledger bytes and Run006 historical artifacts remain immutable. |
+| Run006 | Historical terminal outcome remains `WP06_6F_RUNTIME_RUN006_FAIL_NO_RETRY_GUARD_CONSUMED`; external raw record has all final acceptance values true and clean teardown, while the failure was emitted by the pre-teardown check. This is a runner finalization-order failure, not a TF/EKF/clock/robot failure. No retry. |
+| Run007 correction | A distinct runner separates pre-teardown runtime acceptance from teardown acceptance and computes final acceptance and the single terminal outcome only after composite-then-bootstrap teardown. Teardown failures receive teardown-specific literals. |
+| Run007 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; no authorization or runtime execution. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`; runtime eligible false, runtime evidence not created, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`. |

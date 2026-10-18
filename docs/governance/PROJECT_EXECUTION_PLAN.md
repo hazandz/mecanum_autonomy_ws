@@ -897,3 +897,8 @@ Run005 remains immutable with terminal outcome `WP06_6F_RUNTIME_RUN005_FAIL_NO_R
 Run006 uses section-aware exact topic parsing. It allows `/parameter_events` in both endpoint directions and `/rosout` only as a publisher, then checks exact EKF business endpoints. All other extra or wrong-direction endpoints fail closed. The `/set_pose` subscriber, zero-publisher, and empty timed echo checks remain.
 
 Run006 guard is pending, capacity one, acquisition count zero, `runtime_authorization=NOT_GRANTED`; no authorization or runtime execution is included. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN005_TOPOLOGY_FALSE_NEGATIVE_CORRECTION_RUN006_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
+
+
+### WP06-6F Run007 — finalization-order corrective candidate
+
+Run006 được giữ nguyên là historical runner finalization failure: raw record cho thấy runtime acceptance và teardown đều true, trong khi terminal failure được ghi trước khi teardown criteria được tính. Đây không phải bằng chứng lỗi TF/EKF/clock/robot. Run007 tách runtime acceptance, teardown acceptance và final acceptance; terminal outcome chỉ được chốt sau teardown. Guard Run007 riêng còn pending, capacity one, chưa acquire; chưa có runtime authorization. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`; runtime eligible false, runtime evidence chưa tạo, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`.

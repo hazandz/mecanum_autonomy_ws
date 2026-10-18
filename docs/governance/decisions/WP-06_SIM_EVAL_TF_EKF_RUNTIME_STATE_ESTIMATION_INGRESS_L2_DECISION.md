@@ -30,3 +30,12 @@ The EKF remains configured with simulation time, `reset_on_time_jump: true`, `pu
 Run006 has a new capacity-one guard seeded `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity `1`, acquisition count `0`, and `runtime_authorization=NOT_GRANTED`. It is not authorized or executed by this candidate. `runtime_eligible: false`; runtime evidence status is `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
 
 No launch, bridge mapping, EKF configuration, TF ownership, sensor semantics, or C++ observer behavior changes. This is offline checker, governance, and test evidence only.
+
+
+## WP06-6F Run007 corrective — finalization sau teardown
+
+Run006 là historical runner finalization failure, không phải lỗi TF, EKF, clock hoặc robot. Bản ghi Run006 giữ nguyên terminal outcome `WP06_6F_RUNTIME_RUN006_FAIL_NO_RETRY_GUARD_CONSUMED`; dữ liệu đọc trực tiếp cho thấy toàn bộ acceptance cuối cùng là true và teardown sạch, nhưng runner đã kiểm tra acceptance trước khi hai teardown criteria được tính. Run006 không được chạy lại và guard/artifact lịch sử không bị sửa.
+
+Run007 tách `pre_teardown_runtime_acceptance`, `teardown_acceptance` và final `acceptance`. Runner luôn thu dọn composite rồi bootstrap; chỉ sau teardown mới tính teardown predicate/order, hợp nhất kết quả và chốt đúng một terminal outcome. Teardown failure có literal ưu tiên nêu rõ teardown. Final record có invariant: PASS khi và chỉ khi mọi acceptance đều true; nếu mọi acceptance true thì không được có failure.
+
+Run007 là guard riêng với seed `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Chưa có authorization hoặc runtime execution. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
