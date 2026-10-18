@@ -43,6 +43,42 @@ def test_guard_atomic_capacity_one_acquire_and_rejects_second_acquire(tmp_path):
         guard.acquire_guard(path, "a" * 40, "b" * 40)
 
 
+def test_bootstrap_readiness_and_stability_fail_closed():
+    assert runner._bootstrap_readiness_and_stability(True, True) == {
+        "bootstrap_readiness": True, "bootstrap_stability_20_seconds": True
+    }
+    assert runner._bootstrap_readiness_and_stability(False, True)["bootstrap_readiness"] is False
+    assert runner._bootstrap_readiness_and_stability(True, False)["bootstrap_stability_20_seconds"] is False
+
+
+def test_wheel_and_imu_input_acceptance_is_fail_closed():
+    wheel = {"header": {"frame_id": "odom", "stamp": {"sec": 1, "nanosec": 0}},
+             "child_frame_id": "base_link", "twist": {"twist": {"linear": {"x": 0.1, "y": 0.0, "z": 0.0}}}}
+    imu = {"header": {"frame_id": "base_link", "stamp": {"sec": 1, "nanosec": 0}},
+           "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+           "angular_velocity": {"x": 0.0, "y": 0.0, "z": 0.0},
+           "linear_acceleration": {"x": 0.0, "y": 0.0, "z": 0.0}}
+    assert runner._wheel_imu_sample_contract(wheel, imu, True, True) == {
+        "wheel_sample_contract": True, "imu_sample_contract": True
+    }
+    assert runner._wheel_imu_sample_contract(wheel, imu, False, True)["wheel_sample_contract"] is False
+    bad_imu = {**imu, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 0.5}}
+    assert runner._wheel_imu_sample_contract(wheel, bad_imu, True, True)["imu_sample_contract"] is False
+
+
+def test_composite_liveness_and_teardown_acceptance_fail_closed():
+    assert runner._composite_liveness(True, True)
+    assert not runner._composite_liveness(False, True)
+    clean = [
+        {"name": "composite", "outcome": "STOPPED", "final_snapshot": {"live_members": [], "zombie_members": []}},
+        {"name": "bootstrap", "outcome": "STOPPED", "final_snapshot": {"live_members": [], "zombie_members": []}},
+    ]
+    assert runner._teardown_is_clean(clean)
+    assert not runner._teardown_is_clean(list(reversed(clean)))
+    assert not runner._teardown_is_clean(clean[:1])
+    assert not runner._teardown_is_clean([{**clean[0], "final_snapshot": {"live_members": [{"pid": 1}], "zombie_members": []}}, clean[1]])
+
+
 def test_runtime_host_preflight_failure_happens_before_guard_or_run_dir(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
@@ -71,20 +107,17 @@ def test_source_preflight_and_import_checks_precede_guard_acquisition():
 
 
 def test_tf_observer_contract_requires_unique_dynamic_gid_and_static_xacro_transform():
-    records = []
-    for stamp in range(10, 15):
-        records.append({"topic": "/tf", "parent": "odom", "child": "base_link", "stamp_ns": stamp,
-                        "publisher_gid": "ekf-gid", "translation": [0.0, 0.0, 0.0], "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]})
-    records.append({"topic": "/tf_static", "parent": "base_link", "child": "lidar_frame", "stamp_ns": 0,
-                    "publisher_gid": "rsp-gid", "translation": [-0.031765, 0.0, 0.140], "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]})
-    result = runner._tf_acceptance(records)
-    assert result["dynamic_edge_samples"] == 5
-    assert result["dynamic_timestamps_strictly_increasing"] is True
-    assert result["dynamic_unique_gid"] is True
-    assert result["static_edge_exactly_one_with_xacro_transform"] is True
-    assert result["map_to_odom_absent"] is True
-    records.append({**records[0], "publisher_gid": "second-gid"})
-    assert runner._tf_acceptance(records)["dynamic_unique_gid"] is False
+    import importlib.util
+    observer_path = ROOT / "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py"
+    module = _load("wp06_6f_observer_runtime_test", observer_path)
+    test_path = ROOT / "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py"
+    test_module = _load("wp06_6f_observer_fixtures", test_path)
+    observations, qos = test_module._observation()
+    result = module.evaluate_observations(observations, qos)["acceptance"]
+    assert result["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid"] is True
+    assert result["static_base_link_to_lidar_frame_qos_and_transform_exact"] is True
+    observations["/tf"]["transforms"].append({**observations["/tf"]["transforms"][0], "publisher_gid": "second-gid", "stamp_ns": 15})
+    assert module.evaluate_observations(observations, qos)["acceptance"]["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid"] is False
 
 
 def test_node_info_topic_parser_is_edge_and_section_specific():
@@ -98,6 +131,11 @@ def test_node_info_topic_parser_is_edge_and_section_specific():
 """
     assert runner._node_section_topics(sample, "Subscribers") == {"/clock", "/imu/data"}
     assert runner._data_topics(sample, "Publishers") == {"/odometry/filtered"}
+
+
+def test_forbidden_runtime_boundary_is_fail_closed():
+    assert runner._forbidden_process_present({"commands": [{"command": "ros2 run nav2_controller controller_server"}]})
+    assert not runner._forbidden_process_present({"commands": [{"command": "ros2 launch mecanum_nav_bringup sim_eval_tf_ekf_state_estimation.launch.py"}]})
 
 
 def test_yaml_parser_uses_multi_document_load_and_requires_one_mapping():
@@ -114,3 +152,36 @@ def test_supervisor_has_no_legacy_launch_or_forbidden_bridge_route():
     assert "parameter_bridge" not in source
     assert "os.killpg" in source
     assert "start_new_session=True" in source
+    assert "collect_and_write(observer_path, timeout_seconds=30.0)" in source
+    assert source.count("collect_and_write(observer_path") == 1
+    assert '"clock_echo"' not in source
+    assert '"filtered_echo"' not in source
+
+
+def test_runner_manifest_matrix_and_synthetic_preflight_failure_are_fail_closed(tmp_path, monkeypatch):
+    observer_path = ROOT / "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py"
+    module = _load("wp06_6f_observer_matrix_test", observer_path)
+    required = {
+        "bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness",
+        "clock_five_monotonic_samples", "wheel_input", "imu_input",
+        "filtered_odometry_five_monotonic_samples", "dynamic_tf_edge_gid", "static_tf_edge_qos",
+        "map_to_odom_absent", "forbidden_bridge_and_process_boundary", "process_group_teardown",
+    }
+    matrix = {row["acceptance_id"]: row for row in module.RUNTIME_ACCEPTANCE_MATRIX}
+    assert required <= matrix.keys()
+    assert all(matrix[name]["raw_artifact_path"] and matrix[name]["offline_test_name"] for name in required)
+    assert "runtime_observer.json" in str(matrix["clock_five_monotonic_samples"]["raw_artifact_path"])
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    run_dir = tmp_path / "unused-run-dir-for-synthetic-test"
+    acquire = Mock(side_effect=AssertionError("guard must remain pending on preflight failure"))
+    monkeypatch.setattr(runner, "verify_runtime_preconditions", lambda *args: {"source_pins": {}})
+    monkeypatch.setattr(runner, "acquire_guard", acquire)
+    monkeypatch.setattr(runner.importlib, "import_module", lambda name: type("M", (), {"RUNTIME_ACCEPTANCE_MATRIX": module.RUNTIME_ACCEPTANCE_MATRIX})())
+    monkeypatch.setattr(runner, "_stale_processes", lambda: None)
+    monkeypatch.setattr(runner, "_host_preflight", lambda root: (_ for _ in ()).throw(guard.GuardError("GETIFADDRS_UNAVAILABLE")))
+    with pytest.raises(guard.GuardError, match="GETIFADDRS_UNAVAILABLE"):
+        runner.run_session(root, tmp_path / "guard.json", run_dir, guard.RUN_ID, guard.PARTITION, "a" * 40, "b" * 40)
+    acquire.assert_not_called()
+    assert not run_dir.exists()

@@ -14,7 +14,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 
@@ -24,6 +23,7 @@ sys.path.insert(0, str(TOOLS))
 from wp06_6f_tf_ekf_runtime_guard import (  # noqa: E402
     CONSUMED,
     PARTITION,
+    PENDING,
     RUN_ID,
     GuardError,
     acquire_guard,
@@ -94,7 +94,10 @@ def _host_preflight(repository_root):
         )
         if result.returncode != 0 or not result.stdout.strip():
             raise GuardError(f"PACKAGE_PREFIX_UNAVAILABLE:{package}")
-    for module_name in ("rclpy", "tf2_ros", "tf2_msgs.msg", "rosgraph_msgs.msg", "yaml"):
+    for module_name in (
+        "rclpy", "tf2_ros", "tf2_msgs.msg", "rosgraph_msgs.msg", "nav_msgs.msg", "yaml",
+        "mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer",
+    ):
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -230,50 +233,6 @@ def _run_transcript(command, env, directory, name, timeout=8):
     return meta, stdout, stderr
 
 
-def _message_info_callback(records, lock, topic, kind):
-    def callback(message, info):
-        gid = bytes(info.publisher_gid).hex()
-        for transform in message.transforms:
-            stamp = transform.header.stamp
-            row = {
-                "topic": topic, "kind": kind, "parent": transform.header.frame_id,
-                "child": transform.child_frame_id,
-                "stamp_ns": int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec),
-                "publisher_gid": gid,
-                "translation": [transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z],
-                "rotation_xyzw": [transform.transform.rotation.x, transform.transform.rotation.y, transform.transform.rotation.z, transform.transform.rotation.w],
-            }
-            with lock:
-                records.append(row)
-    return callback
-
-
-def _start_tf_observer():
-    import rclpy
-    from rclpy.executors import SingleThreadedExecutor
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-    from tf2_msgs.msg import TFMessage
-
-    rclpy.init(args=None)
-    node = rclpy.create_node("wp06_6f_tf_observer", parameter_overrides=[])
-    records, lock = [], threading.Lock()
-    node.create_subscription(TFMessage, "/tf", _message_info_callback(records, lock, "/tf", "dynamic"), QoSProfile(depth=100), with_info=True)
-    static_qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-    node.create_subscription(TFMessage, "/tf_static", _message_info_callback(records, lock, "/tf_static", "static"), static_qos, with_info=True)
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-    thread = threading.Thread(target=executor.spin, daemon=True)
-    thread.start()
-    return {"rclpy": rclpy, "node": node, "executor": executor, "thread": thread, "records": records, "lock": lock}
-
-
-def _stop_tf_observer(observer):
-    observer["executor"].shutdown(timeout_sec=2)
-    observer["node"].destroy_node()
-    observer["rclpy"].shutdown()
-    observer["thread"].join(timeout=2)
-
-
 def _parse_single_yaml_mapping(raw):
     import yaml
     documents = [item for item in yaml.safe_load_all(raw.decode("utf-8")) if item is not None]
@@ -335,26 +294,67 @@ def _quaternion_norm(mapping):
         return None
 
 
-def _tf_acceptance(records):
-    dynamic = [row for row in records if row["topic"] == "/tf" and row["parent"] == "odom" and row["child"] == "base_link"]
-    static = [row for row in records if row["topic"] == "/tf_static" and row["parent"] == "base_link" and row["child"] == "lidar_frame"]
-    forbidden = [row for row in records if row["parent"] == "map" and row["child"] == "odom"]
-    gids = {row["publisher_gid"] for row in dynamic}
-    stamps = [row["stamp_ns"] for row in dynamic]
-    expected_translation = [-0.031765, 0.0, 0.140]
-    expected_rotation = [0.0, 0.0, 0.0, 1.0]
-    static_signatures = {
-        (row["publisher_gid"], tuple(row["translation"]), tuple(row["rotation_xyzw"]))
-        for row in static
-    }
-    static_exact = len(static_signatures) == 1 and bool(static_signatures) and all(abs(a-b) <= 1e-9 for a, b in zip(static[0]["translation"], expected_translation)) and all(abs(a-b) <= 1e-9 for a, b in zip(static[0]["rotation_xyzw"], expected_rotation))
-    return {
-        "dynamic_edge_samples": len(dynamic), "dynamic_gids": sorted(gids),
-        "dynamic_timestamps_strictly_increasing": len(stamps) >= 5 and all(a < b for a, b in zip(stamps, stamps[1:])),
-        "dynamic_unique_gid": len(gids) == 1,
-        "static_edge_exactly_one_with_xacro_transform": static_exact,
-        "map_to_odom_absent": not forbidden,
-    }
+def _imu_quaternion_norm(mapping):
+    orientation = mapping.get("orientation")
+    if not isinstance(orientation, dict):
+        return None
+    try:
+        return math.sqrt(sum(float(orientation[key]) ** 2 for key in ("x", "y", "z", "w")))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _bootstrap_readiness_and_stability(readiness_seen, alive_after_stability):
+    return {"bootstrap_readiness": readiness_seen, "bootstrap_stability_20_seconds": readiness_seen and alive_after_stability}
+
+
+def _composite_liveness(process_alive, observer_completed):
+    return process_alive and observer_completed
+
+
+def _teardown_is_clean(teardown):
+    return (len(teardown) == 2
+            and [row.get("name") for row in teardown] == ["composite", "bootstrap"]
+            and all(row.get("outcome") == "STOPPED"
+                    and not row.get("final_snapshot", {}).get("live_members")
+                    and not row.get("final_snapshot", {}).get("zombie_members")
+                    for row in teardown))
+
+
+def _wheel_imu_sample_contract(wheel, imu, wheel_info_ok, imu_info_ok):
+    wheel_ok = (wheel_info_ok and _valid_stamp(wheel)
+                and wheel.get("header", {}).get("frame_id") == "odom"
+                and wheel.get("child_frame_id") == "base_link"
+                and _finite_tree(wheel.get("twist")))
+    norm = _imu_quaternion_norm(imu)
+    imu_ok = (imu_info_ok and _valid_stamp(imu)
+              and imu.get("header", {}).get("frame_id") == "base_link"
+              and _finite_tree(imu) and norm is not None and 0.999 <= norm <= 1.001)
+    return {"wheel_sample_contract": wheel_ok, "imu_sample_contract": imu_ok}
+
+
+def _process_group_commands(pgid):
+    commands = []
+    observable = True
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8")
+            tail = stat[stat.rfind(")") + 1 :].split()
+            if int(tail[2]) == pgid:
+                command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+                commands.append({"pid": int(entry.name), "command": command})
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, IndexError):
+            observable = False
+    return {"commands": commands, "observable": observable}
+
+
+def _forbidden_process_present(process_group_commands):
+    forbidden = ("nav2", "amcl", "slam_toolbox", "map_server", "cmd_vel")
+    return any(any(marker in row["command"].lower() for marker in forbidden) for row in process_group_commands.get("commands", []))
 
 
 def run_session(repository_root, guard_path, run_directory, run_id, gz_partition,
@@ -370,6 +370,8 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
     _stale_processes()
     env = os.environ.copy()
     env.update({"GZ_PARTITION": PARTITION, "GZ_IP": "127.0.0.1", "WP06_REPOSITORY_ROOT": str(root)})
+    observer_module = importlib.import_module("mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer")
+    guard_state_before = verified["guard"]["state"]
     consumed = acquire_guard(guard_file, expected_review_commit, expected_integration_base)
     run_dir.mkdir(parents=True, mode=0o700)
     (run_dir / "transcripts").mkdir(mode=0o700)
@@ -378,15 +380,17 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
     monotonic_start = time.monotonic()
     record = {
         "schema": RECORD_SCHEMA, "run_id": RUN_ID, "review_commit": expected_review_commit,
-        "integration_base": expected_integration_base, "guard_state_before": "PENDING",
-        "guard_state_after": CONSUMED, "gz_partition": PARTITION, "started_at": start,
+        "integration_base": expected_integration_base, "guard_state_before": guard_state_before,
+        "guard_state_after_acquire": consumed["state"], "gz_partition": PARTITION, "started_at": start,
         "preflight": {"guard_manifest_sha256": _sha256(root / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001_GUARD_MANIFEST.json"),
                       "decision_sha256": _sha256(root / "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md"),
                       "source_pins": verified["source_pins"], "authorization_acquisition_count": consumed["acquisition_count"]},
-        "processes": {}, "transcripts": {}, "acceptance": {}, "terminal_outcome": "FAIL_NO_RETRY",
+        "processes": {}, "transcripts": {},
+        "acceptance": {item["record_key"]: False for item in observer_module.RUNTIME_ACCEPTANCE_MATRIX},
+        "terminal_outcome": "FAIL_NO_RETRY",
     }
     sessions = {}
-    observer = None
+    observer_document = None
     try:
         bootstrap_log = run_dir / "logs/bootstrap.log"
         sessions["bootstrap"] = _spawn(BOOTSTRAP_COMMAND, bootstrap_log, env)
@@ -399,17 +403,27 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         time.sleep(20)
         if sessions["bootstrap"]["process"].poll() is not None:
             raise GuardError("BOOTSTRAP_DIED_DURING_STABILIZATION")
+        record["acceptance"]["bootstrap_stability_20_seconds"] = True
         (run_dir / "authorization_state.txt").write_text("CONSUMED\n", encoding="utf-8")
         composite_log = run_dir / "logs/composite.log"
         sessions["composite"] = _spawn(COMPOSITE_COMMAND, composite_log, env)
         sessions["composite"]["log_path"] = str(composite_log)
         record["processes"]["composite"] = {k: sessions["composite"][k] for k in ("pid", "pgid", "command")}
-        observer = _start_tf_observer()
+        if sessions["composite"]["process"].poll() is not None:
+            record["acceptance"]["composite_live_through_evidence"] = False
+            raise GuardError("COMPOSITE_EXITED_BEFORE_OBSERVER")
+        observer_path = run_dir / "transcripts/runtime_observer.json"
+        observer_document = observer_module.collect_and_write(observer_path, timeout_seconds=30.0)
+        record["observer"] = {
+            "path": "transcripts/runtime_observer.json",
+            "schema": observer_document.get("schema"),
+            "acceptance": observer_document.get("acceptance", {}),
+            "failure_reason_literals": observer_document.get("failure_reason_literals", {}),
+            "observer_errors": observer_document.get("observer_errors", []),
+        }
         command_specs = [
-            ("clock_echo", ["ros2", "topic", "echo", "/clock", "rosgraph_msgs/msg/Clock", "--once"]),
             ("wheel_echo", ["ros2", "topic", "echo", "/wheel/odometry_raw", "nav_msgs/msg/Odometry", "--once"]),
             ("imu_echo", ["ros2", "topic", "echo", "/imu/data", "sensor_msgs/msg/Imu", "--once"]),
-            ("filtered_echo", ["ros2", "topic", "echo", "/odometry/filtered", "nav_msgs/msg/Odometry", "--once"]),
             ("wheel_info", ["ros2", "topic", "info", "--verbose", "/wheel/odometry_raw"]),
             ("imu_info", ["ros2", "topic", "info", "--verbose", "/imu/data"]),
             ("filtered_info", ["ros2", "topic", "info", "--verbose", "/odometry/filtered"]),
@@ -417,37 +431,34 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
             ("ingress_node_info", ["ros2", "node", "info", "/sim_eval_wheel_imu_ingress"]),
             ("ingress_bridge_node_info", ["ros2", "node", "info", "/sim_eval_wheel_imu_ingress_bridge"]),
             ("clock_bridge_node_info", ["ros2", "node", "info", "/sim_eval_clock_bridge"]),
-            ("use_sim_time", ["ros2", "param", "get", "/ekf_filter_node", "use_sim_time"]),
+            ("ekf_use_sim_time", ["ros2", "param", "get", "/ekf_filter_node", "use_sim_time"]),
+            ("ingress_use_sim_time", ["ros2", "param", "get", "/sim_eval_wheel_imu_ingress", "use_sim_time"]),
         ]
         outputs = {}
         for name, command in command_specs:
             meta, stdout, stderr = _run_transcript(command, env, run_dir / "transcripts", name)
             record["transcripts"][name] = meta
             outputs[name] = stdout
-        time.sleep(1)
-        record["tf_observer"] = {"records": list(observer["records"])}
-        record["acceptance"].update(_evaluate_acceptance(outputs, record["processes"], observer["records"]))
+        process_groups = {name: _process_group_commands(session["pgid"]) for name, session in sessions.items()}
+        record["process_group_commands"] = process_groups
+        record["acceptance"].update(_evaluate_acceptance(outputs, observer_document, process_groups))
+        record["acceptance"]["composite_live_through_evidence"] = sessions["composite"]["process"].poll() is None
         if not all(value is True for value in record["acceptance"].values() if isinstance(value, bool)):
             raise GuardError("RUNTIME_ACCEPTANCE_FAILED")
-        record["terminal_outcome"] = "OBSERVATION_ONLY_PASS_NOT_RUNTIME_APPROVAL"
+        record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
     except Exception as exc:
         record["failure"] = f"{type(exc).__name__}:{exc}"
     finally:
-        if observer is not None:
-            try:
-                _stop_tf_observer(observer)
-            except Exception as exc:
-                record.setdefault("teardown_errors", []).append(f"observer:{exc}")
         teardown = []
         for label in ("composite", "bootstrap"):
             if label in sessions:
                 teardown.append(_teardown(sessions[label], label))
         record["teardown"] = teardown
-        record["teardown_pass"] = all(item["outcome"] == "STOPPED" for item in teardown)
-        if not record["teardown_pass"]:
-            record["terminal_outcome"] = "FAIL_NO_RETRY"
-        elif record["terminal_outcome"] != "OBSERVATION_ONLY_PASS_NOT_RUNTIME_APPROVAL":
-            record["terminal_outcome"] = "FAIL_NO_RETRY"
+        record["teardown_pass"] = _teardown_is_clean(teardown)
+        record["acceptance"]["process_group_teardown_clean"] = record["teardown_pass"]
+        record["failure_reason_literals"] = _failure_reasons(record["acceptance"], observer_document)
+        if not record["teardown_pass"] or record["terminal_outcome"] != "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT":
+            record["terminal_outcome"] = "WP06_6F_RUNTIME_RUN001_FAIL_NO_RETRY_GUARD_CONSUMED"
         record["finished_at"] = _now()
         record["duration_seconds"] = round(time.monotonic() - monotonic_start, 6)
         record["artifact_sha256"] = {}
@@ -457,45 +468,67 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         _write_json(run_dir / "run_record.json", record)
         files = dict(record["artifact_sha256"])
         files["run_record.json"] = _sha256(run_dir / "run_record.json")
+        sums = "".join(f"{digest}  {relative}\n" for relative, digest in sorted(files.items()))
+        (run_dir / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
+        files["SHA256SUMS.txt"] = _sha256(run_dir / "SHA256SUMS.txt")
         manifest = {"schema": "wp06_6f_tf_ekf_runtime_artifacts/v1", "files": files}
         _write_json(run_dir / "artifact_manifest.json", manifest)
-    return 0 if record["terminal_outcome"] == "OBSERVATION_ONLY_PASS_NOT_RUNTIME_APPROVAL" else 1
+    return 0 if record["terminal_outcome"] == "WP06_6F_RUNTIME_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT" else 1
 
 
-def _evaluate_acceptance(outputs, processes, tf_records):
+def _evaluate_acceptance(outputs, observer_document, process_groups):
     result = {}
     for name, expected in (("wheel_info", "nav_msgs/msg/Odometry"), ("imu_info", "sensor_msgs/msg/Imu"), ("filtered_info", "nav_msgs/msg/Odometry")):
         text = outputs[name].decode("utf-8", "replace")
         result[f"{name}_one_publisher_and_type"] = _verify_topic_info(text, expected)
-    result["clock_message_received"] = bool(outputs["clock_echo"].strip())
-    result["use_sim_time_true"] = outputs["use_sim_time"].decode("utf-8", "replace").strip().lower().endswith("true")
+    observer_acceptance = (observer_document or {}).get("acceptance", {})
+    result.update(observer_acceptance)
+    result["ekf_use_sim_time_true"] = outputs["ekf_use_sim_time"].decode("utf-8", "replace").strip().lower().endswith("true")
+    result["ingress_use_sim_time_true"] = outputs["ingress_use_sim_time"].decode("utf-8", "replace").strip().lower().endswith("true")
     try:
         wheel = _parse_single_yaml_mapping(outputs["wheel_echo"])
         imu = _parse_single_yaml_mapping(outputs["imu_echo"])
-        filtered = _parse_single_yaml_mapping(outputs["filtered_echo"])
-        result["wheel_sample_contract"] = _valid_stamp(wheel) and wheel.get("header", {}).get("frame_id") == "odom" and wheel.get("child_frame_id") == "base_link" and _finite_tree(wheel.get("twist"))
-        result["imu_sample_finite"] = _valid_stamp(imu) and imu.get("header", {}).get("frame_id") == "base_link" and _finite_tree(imu)
-        filtered_norm = _quaternion_norm(filtered)
-        result["filtered_sample_contract"] = _valid_stamp(filtered) and filtered.get("header", {}).get("frame_id") == "odom" and filtered.get("child_frame_id") == "base_link" and _finite_tree(filtered) and filtered_norm is not None and 0.999 <= filtered_norm <= 1.001
+        result.update(_wheel_imu_sample_contract(
+            wheel, imu, result.get("wheel_info_one_publisher_and_type", False),
+            result.get("imu_info_one_publisher_and_type", False)))
     except Exception:
-        result["wheel_sample_contract"] = result["imu_sample_finite"] = result["filtered_sample_contract"] = False
+        result["wheel_sample_contract"] = result["imu_sample_contract"] = False
+    result["filtered_odometry_minimum_five_contract_and_monotonicity"] = (
+        result.get("filtered_odometry_minimum_five_contract_and_monotonicity", False)
+        and result.get("filtered_info_one_publisher_and_type", False)
+    )
     ekf_info = outputs["ekf_node_info"].decode("utf-8", "replace")
     ingress_info = outputs["ingress_node_info"].decode("utf-8", "replace")
     ingress_bridge_info = outputs["ingress_bridge_node_info"].decode("utf-8", "replace")
     clock_bridge_info = outputs["clock_bridge_node_info"].decode("utf-8", "replace")
     ekf_inputs = _data_topics(ekf_info, "Subscribers")
-    result["ekf_inputs_exactly_wheel_imu_clock"] = ekf_inputs == {"/wheel/odometry_raw", "/imu/data", "/clock"}
+    ekf_input_ok = ekf_inputs == {"/wheel/odometry_raw", "/imu/data", "/clock"}
     ekf_publishers = _data_topics(ekf_info, "Publishers")
-    result["ekf_filtered_output_and_tf"] = {"/odometry/filtered", "/tf"}.issubset(ekf_publishers)
+    ekf_output_ok = {"/odometry/filtered", "/tf"}.issubset(ekf_publishers)
+    result["ekf_inputs_and_outputs_bounded"] = ekf_input_ok and ekf_output_ok
     ingress_publishers = _data_topics(ingress_info, "Publishers")
     result["ingress_outputs_bounded"] = ingress_publishers == {"/wheel/odometry_raw", "/imu/data"}
     ingress_bridge_publishers = _data_topics(ingress_bridge_info, "Publishers")
     result["ingress_bridge_outputs_bounded"] = ingress_bridge_publishers == {"/sim_eval/wheel_joint_states", "/sim_eval/imu_raw"}
     clock_bridge_publishers = _data_topics(clock_bridge_info, "Publishers")
     result["clock_bridge_outputs_only_clock"] = clock_bridge_publishers == {"/clock"}
-    result["forbidden_topics_absent_from_ingress_nodes"] = not any(topic in ingress_info or topic in ingress_bridge_info or topic in clock_bridge_info for topic in FORBIDDEN_TOPICS)
-    result.update({f"tf_{key}": value for key, value in _tf_acceptance(tf_records).items()})
+    forbidden_topic = any(topic in ingress_info or topic in ingress_bridge_info or topic in clock_bridge_info or topic in ekf_info for topic in FORBIDDEN_TOPICS - {"/tf"})
+    forbidden_process = any(_forbidden_process_present(value) for value in process_groups.values())
+    result["forbidden_topics_and_processes_absent"] = not forbidden_topic and not forbidden_process
     return result
+
+
+def _failure_reasons(acceptance, observer_document):
+    matrix = importlib.import_module("mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer").RUNTIME_ACCEPTANCE_MATRIX
+    observer_reasons = (observer_document or {}).get("failure_reason_literals", {})
+    reasons = {}
+    for item in matrix:
+        key = item["record_key"]
+        if acceptance.get(key) is not True:
+            reasons[item["acceptance_id"]] = observer_reasons.get(key) or item["failure_reason_literal"]
+    for key, reason in observer_reasons.items():
+        reasons[key] = reason
+    return reasons
 
 
 def main(argv=None):

@@ -1467,3 +1467,14 @@
 | Evidence/status | `IMPLEMENTED_OFFLINE_TF_EKF_SOURCE_AND_GUARD_ONLY`; guard `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, not consumed; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | Historical boundary | WP06-6C Run 003 remains independently audited bounded ingress evidence only. WP06-6C/6D/6E sources and historical runtime records remain unchanged. |
 | `supersedes` | None. All parent Ledger bytes are retained as an exact prefix. |
+
+
+### WP06-6F multi-sample runtime observer corrective continuation
+
+| Field | Value |
+|---|---|
+| Scope | One rclpy observer call records multi-sample `/clock`, filtered odometry, dynamic TF edge GID, static transient-local TF, and `map -> odom` absence. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_MULTISAMPLE_RUNTIME_OBSERVER_AND_GUARD_ONLY`; no runtime executed. |
+| Guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; unchanged and unconsumed. |
+| Acceptance closure | Decision, evidence JSON, and guard manifest carry a collector/artifact/parser/pass/failure/test matrix for every runtime acceptance. |
+| `supersedes` | Supersedes only the prior WP06-6F evidence ceiling and single-sample observer design statement; no runtime result or architecture status. |

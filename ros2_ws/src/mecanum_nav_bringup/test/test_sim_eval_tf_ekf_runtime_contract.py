@@ -190,16 +190,26 @@ def test_wp06f_json_guard_and_source_pin_closure_are_coherent():
     assert manifest["gz_partition"] == guard["gz_partition"] == PARTITION
     assert guard["state"] == "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
     assert guard["capacity"] == 1
+    assert guard["acquisition_count"] == 0
+    assert guard["runtime_authorization"] == "NOT_GRANTED"
     assert guard["guard_manifest_sha256"] == _sha(MANIFEST_PATH)
     assert guard["decision_sha256"] == _sha(ROOT / DECISION_PATH)
     assert manifest["decision_sha256"] == guard["decision_sha256"]
     assert manifest["base_commit"] == BASE
-    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_TF_EKF_SOURCE_AND_GUARD_ONLY"
+    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_MULTISAMPLE_RUNTIME_OBSERVER_AND_GUARD_ONLY"
     pins = manifest["source_pins"]
     for relative in (EKF_CONFIG_PATH, CLOCK_CONFIG_PATH, DECISION_PATH):
         assert pins[relative] == _sha(ROOT / relative)
     assert pins["ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py"] == _sha(LAUNCH_PATH)
     assert pins["ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_contract.py"] == _sha(CONTRACT_PATH)
+    for relative in (
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_runtime_session.py",
+        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    ):
+        assert pins[relative] == _sha(ROOT / relative)
     assert len(pins) >= 8
 
 
@@ -220,22 +230,10 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
     allowed = {
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001.json",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_runtime_guard.py",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_runtime_session.py",
-        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
-        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_contract.py",
-        "ros2_ws/src/mecanum_nav_bringup/setup.py",
-        "ros2_ws/src/mecanum_nav_bringup/package.xml",
+        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py",
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_state_estimation_launch.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_dependency_lock_schema.py",
-        "ros2_ws/src/mecanum_nav_bringup/config/profiles/sim_eval_nav2_baseline.static.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_static_profile_contract.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_static_profile_contract.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_scan_endpoint_probe.py",
-        "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json",
         "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md",
         "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json",
         "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001_GUARD_MANIFEST.json",
@@ -243,8 +241,5 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
         "docs/governance/PROJECT_EXECUTION_PLAN.md",
         "docs/governance/PROJECT_PROGRESS_LEDGER.md",
     }
-    # The allowlist is a ceiling: unchanged approved paths need not appear in the diff.
-    assert changed <= allowed
-    assert "ros2_ws/src/mecanum_nav_bringup/package.xml" in changed
-    assert "ros2_ws/src/mecanum_nav_bringup/setup.py" in changed
+    assert changed == allowed
     assert not any("WP06_6C" in path or "WP06_6E" in path or "WP06_6D" in path for path in changed)
