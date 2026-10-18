@@ -1512,3 +1512,35 @@
 | Run boundary | Run 001 remains immutable historical observer API mismatch failure. Run 002 remains PENDING, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; no runtime was executed or authorized. |
 | Evidence ceiling | Offline source/test/build only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. Parent ledger bytes remain an exact prefix. |
 | `supersedes` | Supersedes only the prior assumption that validating the static transform and QoS sufficed; it does not alter historical runtime evidence. |
+
+
+### WP06-6F observer JSON container corrective continuation
+
+| Field | Value |
+|---|---|
+| Run 002 disposition | Historical observer execution failure: JSON brace-init created nested arrays; `edge.at("publisher_gid")` raised `json.exception.type_error.304`. This is not evidence of TF/EKF/clock failure. Run 002 guard/manifest and external runtime evidence remain unchanged; no retry. |
+| Correction | Five C++ collections now use explicit empty JSON arrays; C++ regression exercises valid TF object GID extraction and checks document shape. Python offline validation rejects nested arrays and non-object rows with structured literals. |
+| Run 003 | Separate runner/guard/test/manifest; guard `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; not authorized or consumed. |
+| Evidence ceiling | Offline source/test/build only; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Corrects only current observer JSON collection behavior and Run 003 routing. Historical Run 002 runtime evidence is immutable. All prior Ledger bytes are an exact prefix. |
+
+
+### WP06-6F Run003 source-pin closure
+
+| Field | Value |
+|---|---|
+| Corrected observer | C++ collection source SHA-256 `6ab41da8d6486e06d2f9031482e1037f1f9a6c8f828aaddeadfdaadcba2460c6`; Python offline parser SHA-256 `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. |
+| Run 002 | Historical observer JSON-container execution failure (`json.exception.type_error.304`), not evidence of TF/EKF/clock failure; historical runtime files remain unchanged. |
+| Run 003 | Separate capacity-one guard PENDING, acquisition count 0, `runtime_authorization: NOT_GRANTED`; no authorization or runtime evidence. |
+| Evidence ceiling | Offline source/test/build only; `runtime_eligible: false`; `runtime_evidence_status: NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| `supersedes` | Corrects only the Run003 source-pin/status routing. Prior Ledger bytes are retained as an exact prefix. |
+
+
+### WP06-6F Run003 final observer source-pin correction
+
+| Field | Value |
+|---|---|
+| Source pins | C++ observer `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; Python offline validator `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. This entry corrects only the pin values recorded in the preceding uncommitted candidate note; no historical Run002 artifact is modified. |
+| Run 002 / Run 003 | Run002 remains historical observer execution failure, not a TF/EKF/clock failure. Run003 guard remains pending, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. |
+| Evidence ceiling | Offline source/test/build only; no runtime authorization or Gate B transition. |
+| `supersedes` | Supersedes only the source-pin values in the immediately preceding candidate-only Ledger entry; all base Ledger bytes remain an exact prefix. |

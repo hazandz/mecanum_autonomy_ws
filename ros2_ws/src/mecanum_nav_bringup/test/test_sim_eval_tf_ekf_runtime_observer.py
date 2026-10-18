@@ -193,6 +193,36 @@ def test_json_reader_rejects_duplicate_keys_and_noncanonical_bytes(tmp_path):
     assert observer.load_observer_json(path)["schema"] == observer.OBSERVER_SCHEMA
 
 
+def test_validator_rejects_nested_json_collections_with_structured_literals():
+    cases = (
+        ("/clock", "samples", "OBSERVER_COLLECTION_ROW_NOT_OBJECT:/clock/samples:0"),
+        ("/odometry/filtered", "samples", "OBSERVER_COLLECTION_ROW_NOT_OBJECT:/odometry/filtered/samples:0"),
+        ("/tf", "transforms", "OBSERVER_COLLECTION_ROW_NOT_OBJECT:/tf/transforms:0"),
+        ("/tf_static", "transforms", "OBSERVER_COLLECTION_ROW_NOT_OBJECT:/tf_static/transforms:0"),
+    )
+    for topic, key, literal in cases:
+        malformed = _doc()
+        malformed["topics"][topic][key] = [[]]
+        with pytest.raises(observer.ObserverDocumentError) as error:
+            _validate(malformed)
+        assert str(error.value) == literal
+
+
+def test_validator_rejects_non_object_topic_and_mapping_rows_without_attribute_errors():
+    malformed = _doc()
+    malformed["topics"]["/tf"]["transforms"] = [None]
+    with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_COLLECTION_ROW_NOT_OBJECT:/tf/transforms:0"):
+        _validate(malformed)
+    malformed = _doc()
+    malformed["graph_endpoint_snapshot"]["/tf"] = [[]]
+    with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_COLLECTION_ROW_NOT_OBJECT:graph_endpoint_snapshot//tf:0"):
+        _validate(malformed)
+    malformed = _doc()
+    malformed["static_endpoint_mapping"] = [None]
+    with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_COLLECTION_ROW_NOT_OBJECT:static_endpoint_mapping:0"):
+        _validate(malformed)
+
+
 def test_observer_errors_are_a_structured_fail_closed_condition():
     bad = _doc()
     bad["observer_errors"] = ["TF_EDGE_PUBLISHER_GID_UNMAPPABLE"]

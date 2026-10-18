@@ -104,6 +104,21 @@ def _strictly_increasing(values) -> bool:
     return len(values) >= 2 and all(left < right for left, right in zip(values, values[1:]))
 
 
+def _require_object(value, literal: str) -> dict:
+    if not isinstance(value, dict):
+        raise ObserverDocumentError(literal)
+    return value
+
+
+def _require_object_rows(value, path: str) -> list[dict]:
+    if not isinstance(value, list):
+        raise ObserverDocumentError(f"OBSERVER_COLLECTION_NOT_ARRAY:{path}")
+    for index, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ObserverDocumentError(f"OBSERVER_COLLECTION_ROW_NOT_OBJECT:{path}:{index}")
+    return value
+
+
 def _expected_clock(document):
     topic = document["topics"]["/clock"]
     samples = topic.get("samples", [])
@@ -238,14 +253,31 @@ def validate_observer_document(document: dict) -> dict:
         "/tf_static": "tf2_msgs/msg/TFMessage",
     }
     for topic, message_type in expected_types.items():
+        if not isinstance(topics[topic], dict):
+            raise ObserverDocumentError(f"OBSERVER_TOPIC_DOCUMENT_NOT_OBJECT:{topic}")
         if topics[topic].get("type") != message_type:
             raise ObserverDocumentError(f"OBSERVER_TYPE_MISMATCH:{topic}")
+    for topic, key in (
+        ("/clock", "samples"),
+        ("/odometry/filtered", "samples"),
+        ("/tf", "transforms"),
+        ("/tf_static", "transforms"),
+    ):
+        _require_object_rows(topics[topic].get(key), f"{topic}/{key}")
+    _require_object_rows(document.get("observed_forbidden_edges"), "observed_forbidden_edges")
     graph_snapshot = document.get("graph_endpoint_snapshot")
     if (not isinstance(graph_snapshot, dict) or set(graph_snapshot) != {"/tf", "/tf_static"} or
         any(not isinstance(rows, list) for rows in graph_snapshot.values()) or
         not isinstance(document.get("endpoint_mapping"), list) or
         not isinstance(document.get("static_endpoint_mapping"), list)):
         raise ObserverDocumentError("OBSERVER_GRAPH_MAPPING_MISSING")
+    for topic, rows in graph_snapshot.items():
+        _require_object_rows(rows, f"graph_endpoint_snapshot/{topic}")
+    _require_object_rows(document.get("endpoint_mapping"), "endpoint_mapping")
+    _require_object_rows(document.get("static_endpoint_mapping"), "static_endpoint_mapping")
+    for row in document["endpoint_mapping"] + document["static_endpoint_mapping"]:
+        if row.get("mapped_endpoint") is not None and not isinstance(row.get("mapped_endpoint"), dict):
+            raise ObserverDocumentError("OBSERVER_ENDPOINT_MAPPING_ROW_INVALID")
     if document.get("expected_ekf_node_name") != EXPECTED_EKF_NODE_NAME:
         raise ObserverDocumentError("OBSERVER_EKF_NODE_IDENTITY_MISMATCH")
     if document.get("expected_static_tf_node_name") != EXPECTED_STATIC_TF_NODE_NAME:

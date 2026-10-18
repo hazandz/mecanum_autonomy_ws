@@ -50,3 +50,45 @@ This is an offline source/test/build correction only. Run 001 remains the immuta
 The observer now snapshots publisher endpoints for both `/tf` and `/tf_static`. It takes the static edge GID from `rclcpp::MessageInfo` and accepts `base_link -> lidar_frame` ownership only when that GID maps exactly once to `node_name=robot_state_publisher`, `node_namespace=/`, and `topic_type=tf2_msgs/msg/TFMessage`. Unmappable, non-unique, and wrong-owner mappings have distinct fail-closed literals; matching transform values alone cannot pass the owner criterion. Observer schema v3 records the endpoint snapshots, mapping, separate owner acceptance, and the QoS actually used. Dynamic `/tf` remains KEEP_LAST(100)/BEST_EFFORT/VOLATILE; `/tf_static` remains KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL.
 
 This candidate changes only observer validation/diagnostics and its governance pins. Run 001 remains the immutable observer API mismatch failure; Run 002 remains PENDING, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. No ROS/Gazebo/runtime was run and no authorization was issued. Evidence ceiling remains offline source/test/build only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
+
+
+## WP06-6F Run 002 JSON-container failure and Run 003 offline correction
+
+Run 002 is classified as a historical observer execution failure. The C++ observer initialized five JSON collection members with brace-init (`Json member_{Json::array()}`), producing nested arrays rather than empty arrays. Reading a TF row then failed at `edge.at("publisher_gid")` with `json.exception.type_error.304`. This does not establish a TF, EKF, clock, or robot-state-publisher runtime failure. Run 002 runtime evidence and external artifacts remain unchanged; no retry is performed.
+
+The corrective source initializes all five collections as actual empty arrays and validates dynamic TF rows as objects before GID access. Regression coverage checks each empty collection, a valid TF object through GID extraction, and absence of nested-array rows in the collection document. The offline Python validator rejects malformed collection shape using structured `OBSERVER_COLLECTION_NOT_ARRAY` / `OBSERVER_COLLECTION_ROW_NOT_OBJECT` literals and does not leak `AttributeError`.
+
+A distinct Run 003 runner, guard module, synthetic session test, pending capacity-one guard and guard manifest are introduced. Run 003 is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. It has not been authorized or consumed. Run 002 guard, manifest, runtime record, lock and raw external evidence are preserved byte-for-byte. Evidence ceiling remains offline source/test/build only; `runtime_eligible: false`, runtime evidence `NOT_CREATED`, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`.
+
+
+### Run 003 corrective source-pin snapshot
+
+- `artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run003_session.py` — `8a09146e744fa1fdab22a7ec4f016fd5a57e3d392acb897957f433dde21d9cfb`
+- `artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run003_session.py` — `528df24c81370718cc516e79af91d5d2a931276ce557e7b7bc5c0381dae84ef5`
+- `artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run003_runtime_guard.py` — `4611b250c89269c5a186eedeb4ad7a5aecfc94e3952fe1307c759605e8d6348e`
+- `docs/MECANUM_NAV_DRL_Architecture.docx` — `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`
+- `docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json` — `9cb0e74ba87db917f31b56fd87a12e9af200824211a8077de9eac96434e4c62e`
+- `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_scan_probe_bootstrap.launch.py` — `64a5f2f0e6435e56004fe050d8d5e70bfb06d33a98fdbf01a6599f129ae82ac0`
+- `ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.gazebo` — `7bbaa475578600d8e18e437fa83720483b90b4af2bf4212151257152429576a2`
+- `ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro` — `d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d`
+- `ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml` — `2dafb19da5daeeb91c451ae57055caa389a0353900525fb9a5861e1c670c6547`
+- `ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py` — `1612ce773eb0b7cb05e4d081eee441418dea32314c3685adcdcd96dd569069b8`
+- `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml` — `89220ef78125348776575b1a14fa1727c9cb098d9c46d84a74e27e5e8715f0b1`
+- `ros2_ws/src/mecanum_nav_bringup/config/profiles/sim_eval_nav2_baseline.static.yaml` — `4b1953e9ff161f610ba6eaeb97dccc9a8a7eba90a1a73ddf4addbb7f6d418d93`
+- `ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml` — `6aaacd93181eb3cbfc1bd25067ebdc441bad40998ccb486fea1c51f3ffe8a755`
+- `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py` — `a5b69d8ba721d63b0417dc93f877b68446bd764f824b3f0fefd574bfa367746f`
+- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_static_profile_contract.py` — `8830f9428e638bb7bb0f00eaa8f29c631dc5dcf68f8a0bc7bc1ccda8b808cb2e`
+- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_contract.py` — `29da105b2218795c74d52fbf88418ff1df43d25ced1c575aa413b09f06f4322d`
+- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py` — `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`
+- `ros2_ws/src/mecanum_nav_bringup/package.xml` — `c9a39f14de0e98fbb4749fdafa11150029f66f88d08d698030ecea84f8040187`
+- `ros2_ws/src/mecanum_nav_bringup/setup.py` — `197aedcc12800ad57bd772aeb27082422ccb6025f444ab4518220c28aa297a22`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_dependency_lock_schema.py` — `1509d369dcd0f2cbe925060da607dc708733a294d6827b4e1f502d07ad8cc3ed`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_scan_endpoint_probe.py` — `774956f0956541f1bf9bf6286f2398ae2648bbdf8560c5775267fce3b4362fa3`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_static_profile_contract.py` — `0521864d7646713d44c9e0d6cbae29d1f09b4faa4fb344a0ab6c61ddfd48493b`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` — `de40be3038ab42c8277c38b4c99e0df0863e4c4c7e52a6bd2bb44e3883b29736`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py` — `a06b0a1a911aad69044166474a9ce06dec749fcd08776dc4b1ae2ea4b95fe4ce`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_state_estimation_launch.py` — `0b9fc862ad6911411254c25f707cbaf488891609d959097e864e65367131b022`
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/CMakeLists.txt` — `900691f0cee9eb5fa4fb8ec6940f3cafae316f4aa5a2ff7f254fa76da5b3aed6`
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/package.xml` — `775abee8afce31c94b17ce13f0d63f5bd19f06b199ee645e5c2992fa404a21b4`
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp` — `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/test/test_wp06_6f_tf_ekf_runtime_observer.cpp` — `b850e4fb03351568cda0d3466c8e0915df6f088877b2a810a4e5433647c855f0`

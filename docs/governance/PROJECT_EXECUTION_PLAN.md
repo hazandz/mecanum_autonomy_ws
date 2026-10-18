@@ -911,3 +911,13 @@ The observer's dynamic `/tf` subscription is pinned to `KEEP_LAST(100)`, `BEST_E
 ### WP06-6F static TF publisher GID ownership correction
 
 Current observer schema v3 snapshots graph publisher endpoints for both `/tf` and `/tf_static`; the static transform's `rclcpp::MessageInfo` GID must map uniquely to the root-namespace `robot_state_publisher` endpoint of type `tf2_msgs/msg/TFMessage`. Wrong-owner, unmappable, and non-unique GIDs fail closed with distinct literals. Matching the transform alone is insufficient. QoS stays `/tf` KEEP_LAST(100)/BEST_EFFORT/VOLATILE and `/tf_static` KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL. Run 001 remains the immutable observer API mismatch historical failure; Run 002 remains pending, capacity one, acquisition count zero, and NOT_GRANTED. This is offline source/test/build evidence only; no runtime authorization, `RUNTIME_APPROVED`, or Gate B transition.
+
+
+### WP06-6F observer JSON container correction
+
+Correct the C++ observer's five collection initializers and fail-closed offline JSON shape validation. Run 002 remains an immutable observer execution failure, not a TF/EKF/clock failure. A separate Run 003 guard/runner/test/manifest is seeded PENDING and unconsumed. This work provides offline source/test/build evidence only; no runtime authorization or Gate B transition.
+
+
+### WP06-6F corrective JSON collection source pins
+
+The Run003 pending manifest carries the current source-pin closure. Corrected C++ observer SHA-256: `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; parser SHA-256: `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. Run002 is an immutable observer execution failure from nested JSON arrays, not a TF/EKF/clock failure. Run003 guard remains pending, capacity-one and unconsumed; no runtime authorization is issued.

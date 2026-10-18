@@ -36,7 +36,7 @@ PROFILE_PATH = PACKAGE / "config/profiles/sim_eval_nav2_baseline.static.yaml"
 PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_contract.py"
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
-PARENT = "90fb75b182b9de102e8d7eb48c5263137b7073ec"
+PARENT = "8939b7d8d0268eb595f906bcc97581d6dc62b581"
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -183,7 +183,7 @@ def test_setup_installs_only_the_two_explicit_wp06f_artifacts():
     assert deps.index("rosgraph_msgs") == deps.index("ros_gz_bridge") + 1
 
 
-def test_wp06f_run002_json_guard_and_source_pin_closure_are_coherent():
+def test_run002_guard_and_manifest_remain_parent_byte_identical():
     manifest = _load_json(MANIFEST_PATH)
     guard = _load_json(GUARD_PATH)
     assert manifest["run_id"] == guard["run_id"] == "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002"
@@ -193,34 +193,35 @@ def test_wp06f_run002_json_guard_and_source_pin_closure_are_coherent():
     assert guard["acquisition_count"] == 0
     assert guard["runtime_authorization"] == "NOT_GRANTED"
     assert guard["expected_review_commit"] is None
-    assert guard["guard_manifest_sha256"] == _sha(MANIFEST_PATH)
-    assert guard["decision_sha256"] == _sha(ROOT / DECISION_PATH)
-    assert manifest["decision_sha256"] == guard["decision_sha256"]
-    assert manifest["base_commit"] == BASE
-    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_CPP_GID_OBSERVER_AND_PENDING_RUN002_GUARD_ONLY"
-    matrix_ids = {row["acceptance_id"] for row in manifest["acceptance_to_collector_matrix"]}
-    assert {"dynamic_tf_subscription_qos", "static_tf_owner_gid", "static_tf_subscription_qos"} <= matrix_ids
-    pins = manifest["source_pins"]
-    for relative in (EKF_CONFIG_PATH, CLOCK_CONFIG_PATH, DECISION_PATH):
-        assert pins[relative] == _sha(ROOT / relative)
-    assert pins["ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py"] == _sha(LAUNCH_PATH)
-    assert pins["ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_contract.py"] == _sha(CONTRACT_PATH)
     for relative in (
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_runtime_session.py",
-        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_runtime_guard.py",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp",
-        "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/test/test_wp06_6f_tf_ekf_runtime_observer.cpp",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002.json",
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json",
     ):
-        assert pins[relative] == _sha(ROOT / relative)
-    assert all(len(value) == 64 and all(char in "0123456789abcdef" for char in value) for value in pins.values())
-    assert len(pins) >= 30
-    run001_guard = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001.json"
-    original = subprocess.run(["git", "show", f"{PARENT}:{run001_guard}"], cwd=ROOT, check=True, capture_output=True).stdout
-    assert (ROOT / run001_guard).read_bytes() == original
+        original = subprocess.run(["git", "show", f"{PARENT}:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
+        assert (ROOT / relative).read_bytes() == original
+
+
+def test_run003_guard_manifest_evidence_and_current_source_pins_are_coherent():
+    manifest_path = ROOT / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003_GUARD_MANIFEST.json"
+    guard_path = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003.json"
+    evidence_path = ROOT / "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json"
+    manifest, guard, evidence = map(_load_json, (manifest_path, guard_path, evidence_path))
+    assert manifest["run_id"] == guard["run_id"] == evidence["run_id"] == "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003"
+    assert guard["state"] == "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
+    assert guard["capacity"] == 1 and guard["acquisition_count"] == 0
+    assert guard["runtime_authorization"] == "NOT_GRANTED"
+    assert guard["guard_manifest_sha256"] == _sha(manifest_path)
+    assert manifest["decision_sha256"] == guard["decision_sha256"] == _sha(ROOT / DECISION_PATH)
+    assert manifest["evidence_sha256"] == _sha(evidence_path)
+    assert manifest["guard_seed"] == {"path": guard["guard_path"], "state": guard["state"], "capacity": 1, "consumed": False}
+    pins = manifest["source_pins"]
+    assert evidence["source_pins"] == pins
+    for relative, expected in pins.items():
+        assert len(expected) == 64 and all(char in "0123456789abcdef" for char in expected)
+        assert expected == _sha(ROOT / relative), relative
+    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_JSON_COLLECTION_CORRECTION_RUN003_GUARD_PENDING"
+    assert evidence["runtime_eligible"] is False
+    assert evidence["runtime_evidence_status"] == "NOT_CREATED"
 
 
 def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
@@ -238,10 +239,10 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
     result = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, check=True, capture_output=True, text=True)
     changed = {line[3:] for line in result.stdout.splitlines()}
     allowed = {
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_runtime_guard.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_runtime_session.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003.json",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run003_session.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run003_runtime_guard.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run003_session.py",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp",
         "ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/test/test_wp06_6f_tf_ekf_runtime_observer.cpp",
         "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",
@@ -249,7 +250,7 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
         "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md",
         "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json",
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003_GUARD_MANIFEST.json",
         "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
         "docs/governance/PROJECT_EXECUTION_PLAN.md",
         "docs/governance/PROJECT_PROGRESS_LEDGER.md",

@@ -785,3 +785,13 @@ The C++ observer now subscribes to dynamic `/tf` with explicit `KEEP_LAST(100)`,
 ### WP06-6F static TF publisher GID ownership correction
 
 Current observer schema v3 snapshots graph publisher endpoints for both `/tf` and `/tf_static`; the static transform's `rclcpp::MessageInfo` GID must map uniquely to the root-namespace `robot_state_publisher` endpoint of type `tf2_msgs/msg/TFMessage`. Wrong-owner, unmappable, and non-unique GIDs fail closed with distinct literals. Matching the transform alone is insufficient. QoS stays `/tf` KEEP_LAST(100)/BEST_EFFORT/VOLATILE and `/tf_static` KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL. Run 001 remains the immutable observer API mismatch historical failure; Run 002 remains pending, capacity one, acquisition count zero, and NOT_GRANTED. This is offline source/test/build evidence only; no runtime authorization, `RUNTIME_APPROVED`, or Gate B transition.
+
+
+### WP06-6F JSON observer collection corrective
+
+The current observer source uses explicit empty JSON arrays for its clock, odometry, dynamic TF, static TF and forbidden-edge collections; the offline parser rejects nested-array/non-object rows with structured errors. Run 002 is historical observer execution failure caused by the JSON collection initializer, not a TF/EKF/clock runtime failure. Run 003 has a separate pending capacity-one guard and manifest; it is not authorized or consumed. Evidence ceiling is offline source/test/build only.
+
+
+### WP06-6F Run 003 observer JSON correction
+
+Canonical pending guard manifest: `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003_GUARD_MANIFEST.json`. It pins the corrected C++ observer (`70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`), offline parser, Run003 runner/guard/tests and decision. Run002 remains a historical observer execution failure caused by nested JSON arrays; no TF/EKF/clock runtime failure is inferred. Run003 remains pending and unauthorized.

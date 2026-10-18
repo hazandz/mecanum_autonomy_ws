@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -204,6 +205,37 @@ std::vector<std::int64_t> valid_sample_times(const Json & samples)
   return result;
 }
 
+struct ObserverCollections
+{
+  Json forbidden_edges = Json::array();
+  Json clock_samples = Json::array();
+  Json odom_samples = Json::array();
+  Json dynamic_tf = Json::array();
+  Json static_tf = Json::array();
+};
+
+std::set<std::string> dynamic_edge_gids(const Json & dynamic_tf)
+{
+  if (!dynamic_tf.is_array()) {
+    throw std::invalid_argument("OBSERVER_DYNAMIC_TF_COLLECTION_NOT_ARRAY");
+  }
+  std::set<std::string> result;
+  for (const auto & edge : dynamic_tf) {
+    if (!edge.is_object() || !edge.contains("publisher_gid") || !edge["publisher_gid"].is_string()) {
+      throw std::invalid_argument("OBSERVER_DYNAMIC_TF_ROW_INVALID");
+    }
+    result.insert(edge.at("publisher_gid").get<std::string>());
+  }
+  return result;
+}
+
+Json collection_document(const ObserverCollections & collections)
+{
+  return Json{{"forbidden_edges", collections.forbidden_edges}, {"clock_samples", collections.clock_samples},
+    {"odom_samples", collections.odom_samples}, {"dynamic_tf", collections.dynamic_tf},
+    {"static_tf", collections.static_tf}};
+}
+
 class Observer final : public rclcpp::Node
 {
 public:
@@ -219,7 +251,7 @@ public:
           ++clock_zero_count_;
           return;
         }
-        clock_samples_.push_back(Json{{"stamp", stamp_json(stamp)}, {"stamp_ns", ns}, {"valid", true}});
+        collections_.clock_samples.push_back(Json{{"stamp", stamp_json(stamp)}, {"stamp_ns", ns}, {"valid", true}});
       });
 
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -233,7 +265,7 @@ public:
         }
         if (!finite_pose_twist(message)) {reasons.emplace_back("ODOMETRY_NONFINITE_POSE_TWIST_OR_COVARIANCE");}
         Json reason_json = reasons;
-        odom_samples_.push_back(Json{
+        collections_.odom_samples.push_back(Json{
           {"message", odometry_json(message)}, {"rejection_reasons", reason_json},
           {"stamp", stamp_json(stamp)}, {"stamp_ns", stamp_ns(stamp)}, {"valid", reasons.empty()}});
       });
@@ -248,7 +280,7 @@ public:
           const auto & child = transform.child_frame_id;
           if (is_map_odom_edge(parent, child)) {
             map_to_odom_seen_ = true;
-            forbidden_edges_.push_back(Json{{"child", child}, {"parent", parent}, {"topic", "/tf"}});
+            collections_.forbidden_edges.push_back(Json{{"child", child}, {"parent", parent}, {"topic", "/tf"}});
           }
           if (!is_dynamic_odom_edge(parent, child)) {continue;}
           if (!gid) {
@@ -258,7 +290,7 @@ public:
           const auto & t = transform.transform.translation;
           const auto & q = transform.transform.rotation;
           const auto & stamp = transform.header.stamp;
-          dynamic_tf_.push_back(Json{
+          collections_.dynamic_tf.push_back(Json{
             {"child", child}, {"parent", parent}, {"publisher_gid", *gid},
             {"rotation_xyzw", Json::array({q.x, q.y, q.z, q.w})},
             {"stamp", stamp_json(stamp)}, {"stamp_ns", stamp_ns(stamp)},
@@ -278,12 +310,12 @@ public:
           const auto & child = transform.child_frame_id;
           if (is_map_odom_edge(parent, child)) {
             map_to_odom_seen_ = true;
-            forbidden_edges_.push_back(Json{{"child", child}, {"parent", parent}, {"topic", "/tf_static"}});
+            collections_.forbidden_edges.push_back(Json{{"child", child}, {"parent", parent}, {"topic", "/tf_static"}});
           }
           if (parent != "base_link" || child != "lidar_frame") {continue;}
           const auto & t = transform.transform.translation;
           const auto & q = transform.transform.rotation;
-          static_tf_.push_back(Json{
+          collections_.static_tf.push_back(Json{
             {"child", child}, {"parent", parent}, {"publisher_gid", gid ? Json(*gid) : Json(nullptr)},
             {"rotation_xyzw", Json::array({q.x, q.y, q.z, q.w})},
             {"stamp", stamp_json(transform.header.stamp)},
@@ -321,8 +353,7 @@ public:
     snapshot_endpoints("/tf", endpoint_snapshots["/tf"], endpoints);
     snapshot_endpoints("/tf_static", endpoint_snapshots["/tf_static"], static_endpoints);
 
-    std::set<std::string> edge_gids;
-    for (const auto & edge : dynamic_tf_) {edge_gids.insert(edge.at("publisher_gid").get<std::string>());}
+    const auto edge_gids = dynamic_edge_gids(collections_.dynamic_tf);
     Json gid_mapping = Json::array();
     bool gid_unmappable = false;
     bool gid_missing_on_edge = std::find(errors_.begin(), errors_.end(), "TF_EDGE_PUBLISHER_GID_UNMAPPABLE") != errors_.end();
@@ -342,10 +373,10 @@ public:
     Json static_gid_mapping = Json::array();
     EndpointMapping static_mapping;
     bool static_gid_available = false;
-    if (static_tf_.size() == 1 && static_tf_.front().contains("publisher_gid") &&
-      static_tf_.front()["publisher_gid"].is_string())
+    if (collections_.static_tf.size() == 1 && collections_.static_tf.front().contains("publisher_gid") &&
+      collections_.static_tf.front()["publisher_gid"].is_string())
     {
-      const auto gid = static_tf_.front()["publisher_gid"].get<std::string>();
+      const auto gid = collections_.static_tf.front()["publisher_gid"].get<std::string>();
       static_gid_available = true;
       static_mapping = map_gid_to_endpoint(gid, static_endpoints, kExpectedStaticTfNodeName);
       static_gid_mapping.push_back(Json{
@@ -358,22 +389,22 @@ public:
         {"unique", static_mapping.unique}, {"expected_owner", static_mapping.expected_owner}});
     }
 
-    const auto clock_times = valid_sample_times(clock_samples_);
-    const auto odom_times = valid_sample_times(odom_samples_);
+    const auto clock_times = valid_sample_times(collections_.clock_samples);
+    const auto odom_times = valid_sample_times(collections_.odom_samples);
     std::vector<std::int64_t> tf_times;
-    for (const auto & edge : dynamic_tf_) {
+    for (const auto & edge : collections_.dynamic_tf) {
       if (edge.value("valid", false)) {tf_times.push_back(edge.value("stamp_ns", std::int64_t{0}));}
     }
     bool odom_monotonic = strictly_increasing_nonzero(odom_times);
     bool clock_monotonic = strictly_increasing_nonzero(clock_times);
     bool tf_monotonic = strictly_increasing_nonzero(tf_times);
-    bool clock_pass = clock_samples_.size() >= 5 && clock_monotonic;
-    bool odom_pass = odom_samples_.size() >= 5 && odom_monotonic &&
-      std::all_of(odom_samples_.begin(), odom_samples_.end(), [](const Json & sample) {return sample.value("valid", false);});
+    bool clock_pass = collections_.clock_samples.size() >= 5 && clock_monotonic;
+    bool odom_pass = collections_.odom_samples.size() >= 5 && odom_monotonic &&
+      std::all_of(collections_.odom_samples.begin(), collections_.odom_samples.end(), [](const Json & sample) {return sample.value("valid", false);});
     const auto valid_tf_count = static_cast<std::size_t>(std::count_if(
-      dynamic_tf_.begin(), dynamic_tf_.end(), [](const Json & edge) {return edge.value("valid", false);}));
+      collections_.dynamic_tf.begin(), collections_.dynamic_tf.end(), [](const Json & edge) {return edge.value("valid", false);}));
     bool tf_pass = valid_tf_count >= 5 && tf_monotonic && edge_gids.size() == 1 && owner_is_ekf;
-    bool static_transform_pass = static_tf_.size() == 1 && static_tf_.front().value("valid", false);
+    bool static_transform_pass = collections_.static_tf.size() == 1 && collections_.static_tf.front().value("valid", false);
     bool static_gid_mappable = static_transform_pass && static_gid_available && static_mapping.match_count > 0;
     bool static_gid_unique = static_transform_pass && static_gid_available && static_mapping.unique;
     bool static_owner_pass = static_gid_unique && static_mapping.expected_owner;
@@ -396,8 +427,8 @@ public:
       {"static_tf_owner_is_robot_state_publisher", static_owner_pass},
       {"static_tf_subscription_qos_contract", static_qos_pass}};
     Json reasons = Json::object();
-    if (!clock_pass) {reasons["/clock"] = clock_samples_.size() < 5 ? "CLOCK_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "CLOCK_TIMESTAMP_NOT_STRICTLY_INCREASING";}
-    if (!odom_pass) {reasons["/odometry/filtered"] = odom_samples_.size() < 5 ? "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "FILTERED_ODOMETRY_CONTRACT_OR_MONOTONICITY_FAILED";}
+    if (!clock_pass) {reasons["/clock"] = collections_.clock_samples.size() < 5 ? "CLOCK_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "CLOCK_TIMESTAMP_NOT_STRICTLY_INCREASING";}
+    if (!odom_pass) {reasons["/odometry/filtered"] = collections_.odom_samples.size() < 5 ? "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "FILTERED_ODOMETRY_CONTRACT_OR_MONOTONICITY_FAILED";}
     if (!tf_pass) {
       if (gid_unmappable || gid_missing_on_edge) {reasons["/tf:odom->base_link"] = "TF_EDGE_PUBLISHER_GID_UNMAPPABLE";}
       else if (edge_gids.size() == 1 && !owner_is_ekf) {reasons["/tf:odom->base_link"] = "TF_EDGE_PUBLISHER_NOT_EKF";}
@@ -423,21 +454,22 @@ public:
     std::string outcome = all_pass ? "PASS" : "FAIL_NO_RETRY";
     if (gid_unmappable || gid_missing_on_edge) {outcome = "TF_EDGE_PUBLISHER_GID_UNMAPPABLE";}
 
+    const auto collection_data = collection_document(collections_);
     return Json{
       {"acceptance", acceptance}, {"duration_seconds", duration_seconds_},
       {"endpoint_mapping", gid_mapping}, {"expected_ekf_node_name", expected_ekf_node_name_},
       {"expected_static_tf_node_name", kExpectedStaticTfNodeName},
       {"failure_reason_literals", reasons}, {"graph_endpoint_snapshot", endpoint_snapshots},
       {"static_endpoint_mapping", static_gid_mapping},
-      {"observed_forbidden_edges", forbidden_edges_},
+      {"observed_forbidden_edges", collections_.forbidden_edges},
       {"map_to_odom_seen", map_to_odom_seen_}, {"observer_errors", errors_},
       {"qos_used", Json{{"/tf", qos_json(dynamic_tf_qos())}, {"/tf_static", qos_json(static_tf_qos())}}},
       {"schema", kSchema}, {"started_at", started_at_}, {"finished_at", now()},
       {"terminal_outcome", outcome}, {"topics", Json{
-        {"/clock", Json{{"samples", clock_samples_}, {"type", "rosgraph_msgs/msg/Clock"}, {"zero_samples_ignored", clock_zero_count_}}},
-        {"/odometry/filtered", Json{{"samples", odom_samples_}, {"type", "nav_msgs/msg/Odometry"}}},
-        {"/tf", Json{{"transforms", dynamic_tf_}, {"type", "tf2_msgs/msg/TFMessage"}, {"window_complete", window_complete}}},
-        {"/tf_static", Json{{"transforms", static_tf_}, {"type", "tf2_msgs/msg/TFMessage"}, {"window_complete", window_complete}}}}},
+        {"/clock", Json{{"samples", collection_data.at("clock_samples")}, {"type", "rosgraph_msgs/msg/Clock"}, {"zero_samples_ignored", clock_zero_count_}}},
+        {"/odometry/filtered", Json{{"samples", collection_data.at("odom_samples")}, {"type", "nav_msgs/msg/Odometry"}}},
+        {"/tf", Json{{"transforms", collection_data.at("dynamic_tf")}, {"type", "tf2_msgs/msg/TFMessage"}, {"window_complete", window_complete}}},
+        {"/tf_static", Json{{"transforms", collection_data.at("static_tf")}, {"type", "tf2_msgs/msg/TFMessage"}, {"window_complete", window_complete}}}}},
       {"window_complete", window_complete}};
   }
 
@@ -490,11 +522,7 @@ private:
   std::size_t clock_zero_count_{0};
   bool map_to_odom_seen_{false};
   std::vector<std::string> errors_;
-  Json forbidden_edges_{Json::array()};
-  Json clock_samples_{Json::array()};
-  Json odom_samples_{Json::array()};
-  Json dynamic_tf_{Json::array()};
-  Json static_tf_{Json::array()};
+  struct ObserverCollections collections_;
   rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr clock_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;

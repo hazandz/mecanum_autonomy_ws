@@ -16,6 +16,41 @@ TEST(Wp06fObserver, RejectsUnavailablePublisherGid)
   EXPECT_FALSE(wp06_6f_observer::canonical_gid(nullptr, 4).has_value());
 }
 
+TEST(Wp06fObserver, JsonCollectionsAreEmptyArraysAndDynamicGidPathAcceptsObjectRows)
+{
+  using wp06_6f_observer::Json;
+  wp06_6f_observer::ObserverCollections collections;
+  const auto empty_document = wp06_6f_observer::collection_document(collections);
+  for (const auto * key : {"forbidden_edges", "clock_samples", "odom_samples", "dynamic_tf", "static_tf"}) {
+    ASSERT_TRUE(empty_document.at(key).is_array()) << key;
+    EXPECT_TRUE(empty_document.at(key).empty()) << key;
+  }
+
+  collections.dynamic_tf.push_back(Json{
+    {"parent", "odom"}, {"child", "base_link"}, {"publisher_gid", "a1b2"},
+    {"stamp_ns", 42}, {"valid", true}});
+  std::set<std::string> gids;
+  EXPECT_NO_THROW(gids = wp06_6f_observer::dynamic_edge_gids(collections.dynamic_tf));
+  EXPECT_EQ(gids, (std::set<std::string>{"a1b2"}));
+  const auto document = wp06_6f_observer::collection_document(collections);
+  ASSERT_TRUE(document.at("dynamic_tf").is_array());
+  ASSERT_EQ(document.at("dynamic_tf").size(), 1U);
+  EXPECT_TRUE(document.at("dynamic_tf").front().is_object());
+  EXPECT_NO_THROW(document.at("dynamic_tf").front().at("publisher_gid").get<std::string>());
+}
+
+TEST(Wp06fObserver, RejectsNestedCollectionRowsWithStructuredFailure)
+{
+  const wp06_6f_observer::Json malformed = wp06_6f_observer::Json::array({
+    wp06_6f_observer::Json::array()});
+  try {
+    (void)wp06_6f_observer::dynamic_edge_gids(malformed);
+    FAIL() << "expected fail-closed collection validation";
+  } catch (const std::invalid_argument & error) {
+    EXPECT_STREQ(error.what(), "OBSERVER_DYNAMIC_TF_ROW_INVALID");
+  }
+}
+
 TEST(Wp06fObserver, FiltersOnlyTheApprovedDynamicAndForbiddenEdges)
 {
   EXPECT_TRUE(wp06_6f_observer::is_dynamic_odom_edge("odom", "base_link"));
