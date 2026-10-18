@@ -1566,3 +1566,14 @@
 | Run004 | `RUN004_SEMANTIC_VALIDATION_GUARD_PENDING`; pending seed, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; no authorization or runtime execution. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_CROSS_LANGUAGE_JSON_SEMANTIC_VALIDATION_RUN004_GUARD_PENDING`; `runtime_eligible: false`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | `supersedes` | Supersedes only current WP06-6F status and the incorrect cross-language byte-canonicality requirement; historical Run001/Run002/Run003 records remain immutable. All parent Ledger bytes are an exact prefix. |
+
+
+### WP06_6F_RUN004_CHECKER_CONTRACT_CORRECTIVE_CANDIDATE — Run005 pending
+
+| Field | Record |
+|---|---|
+| `supersedes` | Supersedes only the current WP06-6F checker contract and pending-run routing; Run001–Run004 historical artifacts and outcomes are unchanged. |
+| Run004 | Historical terminal outcome `WP06_6F_RUNTIME_RUN004_FAIL_NO_RETRY_GUARD_CONSUMED`. The EKF's `/set_pose` administrative subscriber was rejected and substring checking mistook `/odometry/filtered` for `/odom`; this is not a TF/EKF/clock/robot failure. No retry. |
+| Run005 checker | Exact section-parsed topic names; EKF data-plane `/clock`, `/imu/data`, `/wheel/odometry_raw`; `/set_pose` allowed only as an EKF subscriber. Dedicated type/publisher/subscriber transcript and bounded echo require `geometry_msgs/msg/PoseWithCovarianceStamped`, one EKF subscriber, zero publishers, and no payload. Publisher failure literal: `EKF_SET_POSE_EXTERNAL_PUBLISHER_OBSERVED`. |
+| Run005 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; not authorized or executed. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN004_CHECKER_CONTRACT_CORRECTION_RUN005_GUARD_PENDING`; runtime eligible false, evidence not created, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`. |

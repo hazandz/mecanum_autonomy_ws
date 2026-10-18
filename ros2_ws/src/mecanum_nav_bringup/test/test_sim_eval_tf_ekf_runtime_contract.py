@@ -36,7 +36,7 @@ PROFILE_PATH = PACKAGE / "config/profiles/sim_eval_nav2_baseline.static.yaml"
 PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_contract.py"
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
-PARENT = "8939b7d8d0268eb595f906bcc97581d6dc62b581"
+PARENT = "8b21a9832c18bc8a91af5169a78ac621038def46"
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -201,19 +201,28 @@ def test_run002_guard_and_manifest_remain_parent_byte_identical():
         assert (ROOT / relative).read_bytes() == original
 
 
-def test_run003_history_is_unchanged_and_run004_guard_manifest_evidence_are_coherent():
-    for relative in (
+def test_run001_to_run004_repository_guards_and_manifests_are_parent_identical():
+    paths = (
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001.json",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002.json",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003.json",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004.json",
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json",
         "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003_GUARD_MANIFEST.json",
-    ):
-        original = subprocess.run(["git", "show", f"HEAD:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
-        assert (ROOT / relative).read_bytes() == original
-    manifest_path = ROOT / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004_GUARD_MANIFEST.json"
-    guard_path = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004.json"
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004_GUARD_MANIFEST.json",
+    )
+    for relative in paths:
+        expected = subprocess.run(["git", "show", f"{PARENT}:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
+        assert (ROOT / relative).read_bytes() == expected, relative
+
+
+def test_run005_guard_manifest_evidence_and_source_pins_are_coherent():
+    manifest_path = ROOT / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005_GUARD_MANIFEST.json"
+    guard_path = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005.json"
     evidence_path = ROOT / "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json"
     manifest, guard, evidence = map(_load_json, (manifest_path, guard_path, evidence_path))
-    assert manifest["run_id"] == guard["run_id"] == evidence["run_id"] == "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004"
-    assert guard["guard_path"].endswith("WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004.json")
+    run_id = "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005"
+    assert manifest["run_id"] == guard["run_id"] == evidence["run_id"] == run_id
     assert guard["state"] == "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
     assert guard["capacity"] == 1 and guard["acquisition_count"] == 0
     assert guard["runtime_authorization"] == "NOT_GRANTED"
@@ -221,15 +230,27 @@ def test_run003_history_is_unchanged_and_run004_guard_manifest_evidence_are_cohe
     assert manifest["decision_sha256"] == guard["decision_sha256"] == _sha(ROOT / DECISION_PATH)
     assert manifest["evidence_sha256"] == _sha(evidence_path)
     assert manifest["guard_seed"] == {"path": guard["guard_path"], "state": guard["state"], "capacity": 1, "consumed": False}
-    pins = manifest["source_pins"]
-    assert evidence["source_pins"] == pins
-    for relative, expected in pins.items():
+    assert manifest["source_pins"] == evidence["source_pins"]
+    for relative, expected in manifest["source_pins"].items():
         assert len(expected) == 64 and all(char in "0123456789abcdef" for char in expected)
         assert expected == _sha(ROOT / relative), relative
-    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_CROSS_LANGUAGE_JSON_SEMANTIC_VALIDATION_RUN004_GUARD_PENDING"
-    assert evidence["runtime_eligible"] is False
-    assert evidence["runtime_evidence_status"] == "NOT_CREATED"
+    assert manifest["runtime_eligible"] is False and evidence["runtime_eligible"] is False
+    assert manifest["runtime_evidence_status"] == evidence["runtime_evidence_status"] == "NOT_CREATED"
+    assert evidence["run_004_disposition"] == "WP06_6F_RUNTIME_RUN004_FAIL_NO_RETRY_GUARD_CONSUMED"
+    assert evidence["run_005_guard"]["state"] == guard["state"]
+    assert evidence["RUNTIME_APPROVED"] == "NOT_APPROVED" and evidence["GATE_B"] == "NOT_STARTED"
+    assert manifest["evidence_ceiling"] == evidence["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN004_CHECKER_CONTRACT_CORRECTION_RUN005_GUARD_PENDING"
 
+
+def test_run005_matrix_covers_set_pose_admin_publisher_and_payload_checks():
+    manifest = _load_json(ROOT / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005_GUARD_MANIFEST.json")
+    matrix = manifest["acceptance_to_collector_matrix"]
+    ids = {item["acceptance_id"] for item in matrix}
+    assert {"ekf_set_pose_admin_endpoint", "ekf_set_pose_zero_publishers_no_payload"} <= ids
+    row = next(item for item in matrix if item["acceptance_id"] == "ekf_set_pose_zero_publishers_no_payload")
+    assert row["raw_artifact_path"] == "transcripts/set_pose_info.stdout.bin;transcripts/set_pose_echo.stdout.bin"
+    assert row["failure_reason_literal"] == "EKF_SET_POSE_EXTERNAL_PUBLISHER_OBSERVED"
+    assert all(all(item.get(k) for k in ("collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "failure_reason_literal", "offline_test_name")) for item in matrix)
 
 def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
     profile = yaml.load(PROFILE_PATH.read_text(encoding="utf-8"), Loader=UniqueLoader)
@@ -246,16 +267,14 @@ def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
     result = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, check=True, capture_output=True, text=True)
     changed = {line[3:] for line in result.stdout.splitlines()}
     allowed = {
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run004_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run004_runtime_guard.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run004_session.py",
-        "ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_observer.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005.json",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run005_session.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run005_session.py",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run005_runtime_guard.py",
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
         "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md",
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005_GUARD_MANIFEST.json",
         "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004_GUARD_MANIFEST.json",
         "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
         "docs/governance/PROJECT_EXECUTION_PLAN.md",
         "docs/governance/PROJECT_PROGRESS_LEDGER.md",
