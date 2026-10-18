@@ -27,7 +27,7 @@ STATIC_PROFILE_DESCRIPTOR = {
     "static_configuration_sources": [
         {"role": "nav2_baseline", "path": "ros2_ws/src/mecanum_nav_bringup/config/navigation/nav2_baseline.yaml", "sha256": "1dabf8855ce39f74514620b1934f54c23aacc513257c8d5485f705d1aac69f91"},
         {"role": "amcl_omni", "path": "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml", "sha256": "c6e58320aa1b35f4c74ca7442bf00357266ad51428522ca93d4565c1d6617e60"},
-        {"role": "robot_localization_ekf", "path": "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml", "sha256": "6053950facb8eaf99243363158d7fd75e146215ab1241f383225e2c8518c0d71"},
+        {"role": "robot_localization_ekf", "path": "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml", "sha256": "6aaacd93181eb3cbfc1bd25067ebdc441bad40998ccb486fea1c51f3ffe8a755"},
         {"role": "lifecycle_startup", "path": "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/navigation_v1_startup.yaml", "sha256": "d9de3a9841c3f4f8823020fdf76b7e5dae6761e87f7f7dde11a8b80af1aa475a"},
         {"role": "remap_namespace", "path": "ros2_ws/src/mecanum_nav_bringup/config/remaps/navigation_v1.yaml", "sha256": "1cd358d552e04ad75f63583ee019f9b680a471f14cf6d436e542b34714e4fdbc"},
     ],

@@ -1453,3 +1453,17 @@
 | Status | `WP06_6C_RUN003_RUNTIME_EVIDENCE_AUDITED_PASS_BOUNDED_INGRESS_SCOPE`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization. |
 | Integration routing | Eligible only pending final independent audit of the exact L1 disposition commit and Owner decision. |
 | `supersedes` | Supersedes only current WP06-6C runtime-evidence status wording; all prior Ledger bytes remain an exact prefix. |
+
+
+### WP06-6F TF/EKF runtime state-estimation ingress with isolated clock — L2 review candidate
+
+| Field | Value |
+|---|---|
+| Base / branch | `8b73bcb0b026fe337c023f6a30205dbe89d31eb5` / `wp06-6f-tf-ekf-clock-ingress-8b73bcb` |
+| Classification | `L2_PROFILE_SPECIFIC_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS` |
+| Clock route | One dedicated `GZ_TO_ROS` mapping: Gazebo `/clock` (`gz.msgs.Clock`) to ROS `/clock` (`rosgraph_msgs/msg/Clock`). The legacy launch route is excluded. |
+| Composite | Existing 6C wheel/IMU ingress, one clock bridge, one `robot_localization/ekf_node`; no bootstrap/RSP duplicate, navigation stack, or command publisher. Partition is fixed to `wp06_scan_probe_run_002`. |
+| TF ownership | EKF is intended sole dynamic owner of `odom -> base_link`; bootstrap RSP retains static `base_link -> lidar_frame`; no `map -> odom`. Runtime ownership remains unvalidated. |
+| Evidence/status | `IMPLEMENTED_OFFLINE_TF_EKF_SOURCE_AND_GUARD_ONLY`; guard `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, not consumed; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+| Historical boundary | WP06-6C Run 003 remains independently audited bounded ingress evidence only. WP06-6C/6D/6E sources and historical runtime records remain unchanged. |
+| `supersedes` | None. All parent Ledger bytes are retained as an exact prefix. |

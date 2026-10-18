@@ -764,3 +764,10 @@ runtime evidence not created, and `RUNTIME_APPROVED: NOT_APPROVED`.
 ## WP06-6C Run 003 runtime evidence disposition — current bounded status
 
 Canonical runtime evidence disposition: `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`. Independent audit passed for the exact review source commit `9c945a4d52058e3f3cb3b8285e5cb017582fd8af`, limited to Gazebo IMU → ROS staging → normalizer → `/imu/data`, wheel ingress, effective `use_sim_time`, and teardown. Run 001 and Run 002 remain immutable historical failures. The disposition does not assert whole-graph, EKF, Nav2, AMCL, Map Server, global TF, or navigation-profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization is issued. Integration is eligible only pending final independent audit of the exact L1 disposition commit and Owner decision.
+
+
+## WP06-6F TF/EKF state-estimation ingress with clock — review candidate
+
+Canonical records are `docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md`, `docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json`, and `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001_GUARD_MANIFEST.json`. The only new Gazebo bridge mapping is `/clock` (`gz.msgs.Clock`) to ROS `/clock` (`rosgraph_msgs/msg/Clock`) with `GZ_TO_ROS`; the legacy launch route is not used. The future composite contains only existing 6C ingress, that clock bridge and one EKF. EKF is sole intended dynamic `odom -> base_link` owner; the bootstrap RSP retains static `base_link -> lidar_frame` ownership. No `map -> odom` edge is created.
+
+Evidence ceiling: `IMPLEMENTED_OFFLINE_TF_EKF_SOURCE_AND_GUARD_ONLY`. The capacity-one guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, unconsumed. Runtime evidence is `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. WP06-6C Run 003 remains bounded ingress-only evidence. This candidate does not validate EKF/TF runtime, Nav2, AMCL, SLAM, Map Server or the navigation profile.

@@ -888,3 +888,10 @@ bridge, or normalizer.
 ## WP06-6C Run 003 runtime evidence disposition — bounded ingress status
 
 WP06-6C implementation and runtime evidence are complete only within the wheel/IMU ingress scope. Independent audit passed the external Run 003 evidence for Gazebo IMU → ROS staging → normalizer → `/imu/data`, wheel ingress, effective `use_sim_time`, and teardown; see the canonical disposition manifest `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`. Run 001 and Run 002 remain immutable historical failures. This is not whole ROS graph, global TF, EKF, Nav2, AMCL, Map Server, or navigation-profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization is issued. Integration is eligible only after final independent audit of the exact L1 disposition commit and Owner decision.
+
+
+## WP06-6F TF/EKF state-estimation ingress with isolated ROS clock — review candidate
+
+At exact base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`, this candidate adds one dedicated `GZ_TO_ROS` `/clock` mapping, updates the existing EKF configuration with explicit `reset_on_time_jump: true` and `use_control: false`, and provides a composite launch for the existing WP06-6C ingress, the clock bridge, and one `robot_localization/ekf_node`. The selected fixed partition is `wp06_scan_probe_run_002`; the legacy `gazebo.launch.py` is neither included nor installed by this route. The EKF is the intended sole dynamic `odom -> base_link` owner, while the existing bootstrap `robot_state_publisher` retains the static `base_link -> lidar_frame` edge.
+
+Evidence is limited to `IMPLEMENTED_OFFLINE_TF_EKF_SOURCE_AND_GUARD_ONLY`. The capacity-one Run 001 guard remains pending and unconsumed; no runtime authorization, runtime evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is created. WP06-6C Run 003 remains audited bounded ingress evidence only, not EKF/TF/navigation evidence. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.

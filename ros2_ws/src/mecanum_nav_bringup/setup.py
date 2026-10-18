@@ -26,6 +26,7 @@ setup(
                 "config/bridge/sim_eval_lidar_scan_bridge.static.yaml",
                 "config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml",
                 "config/bridge/sim_eval_scan_endpoint_probe.static.yaml",
+                "config/bridge/sim_eval_clock.runtime.yaml",
             ],
         ),
         (
@@ -68,6 +69,7 @@ setup(
                 "launch/navigation_v1_static_bringup.launch.py",
                 "launch/navigation_v1.launch.py",
                 "launch/navigation_v1_lifecycle.launch.py",
+                "launch/sim_eval_tf_ekf_state_estimation.launch.py",
             ],
         ),
     ],
