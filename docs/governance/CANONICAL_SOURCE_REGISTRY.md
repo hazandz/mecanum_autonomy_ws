@@ -778,3 +778,7 @@ Run006 guard seed is `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacit
 ### WP06-6F Run007 current candidate
 
 Canonical Run007 guard manifest: `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_GUARD_MANIFEST.json`. Run007 có runner, guard và guard seed riêng. Run006 là historical runner finalization failure (mọi acceptance được ghi true sau teardown nhưng terminal failure đã bị quyết định trước teardown); không phải TF/EKF/clock/robot failure và không retry. Run007 chỉ là offline source/test/build candidate, guard pending capacity one, runtime chưa được authorize hoặc thực thi. Evidence ceiling: `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`.
+
+#### WP06-6F Run007 Owner authorization binding corrective
+
+Canonical Run007 manifest/evidence/decision pin the exact scope literal `WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY`. The future official runner requires five non-empty Owner authorization arguments and exact binding to Run007, expected review commit and integration base before any guard acquisition. Guard acquisition is the only operation that records `GRANTED_FOR_THIS_EXACT_RUN_ONLY`, owner metadata and acquired refs; the committed seed remains pending with capacity 1 and acquisition count 0. The run record v2 preserves all five values, acquisition count and before/after guard states. Offline evidence only; no authorization was supplied to or consumed by this candidate; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.

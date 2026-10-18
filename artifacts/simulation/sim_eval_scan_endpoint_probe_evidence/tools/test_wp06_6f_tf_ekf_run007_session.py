@@ -142,6 +142,111 @@ def test_run007_guard_is_pending_capacity_one_and_run_specific():
     assert data["runtime_authorization"] == "NOT_GRANTED"
 
 
+def _valid_owner_authorization():
+    return {
+        "owner_authorization": "OWNER_AUTHORIZATION_GRANTED_FOR_THIS_EXACT_RUN_ONLY",
+        "owner_authorization_scope": guard.OWNER_AUTHORIZATION_SCOPE,
+        "owner_authorization_run_id": guard.RUN_ID,
+        "owner_authorization_review_commit": "review-sha",
+        "owner_authorization_integration_base": "integration-sha",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_literal"),
+    [
+        ("owner_authorization", "", "OWNER_AUTHORIZATION_FIELD_EMPTY:owner_authorization"),
+        ("owner_authorization_scope", "", "OWNER_AUTHORIZATION_FIELD_EMPTY:owner_authorization_scope"),
+        ("owner_authorization_run_id", "", "OWNER_AUTHORIZATION_FIELD_EMPTY:owner_authorization_run_id"),
+        ("owner_authorization_review_commit", "", "OWNER_AUTHORIZATION_FIELD_EMPTY:owner_authorization_review_commit"),
+        ("owner_authorization_integration_base", "", "OWNER_AUTHORIZATION_FIELD_EMPTY:owner_authorization_integration_base"),
+        ("owner_authorization_run_id", "WP06_6F_OTHER_RUN", "OWNER_AUTHORIZATION_RUN_ID_MISMATCH"),
+        ("owner_authorization_review_commit", "wrong-review", "OWNER_AUTHORIZATION_REVIEW_COMMIT_MISMATCH"),
+        ("owner_authorization_integration_base", "wrong-base", "OWNER_AUTHORIZATION_INTEGRATION_BASE_MISMATCH"),
+        ("owner_authorization_scope", "scope-without-authority", "OWNER_AUTHORIZATION_SCOPE_MISMATCH"),
+    ],
+)
+def test_invalid_owner_authorization_fails_before_acquire_without_artifacts(
+    tmp_path, monkeypatch, field, value, expected_literal
+):
+    seed_path = ROOT / guard.GUARD_PATH
+    seed_before = seed_path.read_bytes()
+    run_dir = tmp_path / "run007-evidence"
+    calls = []
+    monkeypatch.setattr(runner, "acquire_guard", lambda *args, **kwargs: calls.append(args))
+    auth = _valid_owner_authorization()
+    auth[field] = value
+    with pytest.raises(guard.GuardError, match=expected_literal):
+        runner.run_session(
+            ROOT, seed_path, run_dir, guard.RUN_ID, guard.PARTITION,
+            "review-sha", "integration-sha", **auth,
+        )
+    assert calls == []
+    assert not run_dir.exists()
+    assert seed_path.read_bytes() == seed_before
+
+
+def test_valid_authorization_consumes_only_when_simulated_acquire_records_exact_metadata(tmp_path):
+    auth = _valid_owner_authorization()
+    guard_path = tmp_path / "guard.json"
+    seed = {
+        "run_id": guard.RUN_ID,
+        "gz_partition": guard.PARTITION,
+        "state": guard.PENDING,
+        "capacity": 1,
+        "acquisition_count": 0,
+        "runtime_authorization": "NOT_GRANTED",
+    }
+    guard_path.write_text(json.dumps(seed, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    before = guard_path.read_bytes()
+    verified = guard.validate_owner_authorization(
+        **auth, expected_review_commit="review-sha", expected_integration_base="integration-sha"
+    )
+    assert guard_path.read_bytes() == before
+    consumed = guard.acquire_guard(
+        guard_path, "review-sha", "integration-sha", **auth
+    )
+    assert consumed["state"] == "CONSUMED"
+    assert consumed["runtime_authorization"] == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
+    assert consumed["acquisition_count"] == 1
+    assert consumed["acquired_review_commit"] == "review-sha"
+    assert consumed["acquired_integration_base"] == "integration-sha"
+    assert {key: consumed[key] for key in verified} == verified
+    assert json.loads(guard_path.read_text(encoding="utf-8")) == consumed
+
+
+def test_run_record_authorization_fields_are_complete_and_exact():
+    auth = _valid_owner_authorization()
+    consumed = {"state": "CONSUMED", "acquisition_count": 1}
+    fields = runner._authorization_record_fields(auth, consumed, guard.PENDING)
+    assert fields == {
+        **auth,
+        "authorization_acquisition_count": 1,
+        "guard_state_before": guard.PENDING,
+        "guard_state_after_acquire": "CONSUMED",
+    }
+    assert all(key in fields for key in (
+        "owner_authorization", "owner_authorization_scope", "owner_authorization_run_id",
+        "owner_authorization_review_commit", "owner_authorization_integration_base",
+    ))
+
+
+def test_cli_requires_all_owner_authorization_arguments_before_session_dispatch(tmp_path):
+    args = [
+        "--repository-root", str(ROOT),
+        "--guard-path", str(ROOT / guard.GUARD_PATH),
+        "--run-directory", str(tmp_path / "run007"),
+        "--run-id", guard.RUN_ID,
+        "--gz-partition", guard.PARTITION,
+        "--expected-review-commit", "review-sha",
+        "--expected-integration-base", "integration-sha",
+    ]
+    with pytest.raises(SystemExit) as exc:
+        runner.main(args)
+    assert exc.value.code == 2
+    assert not (tmp_path / "run007").exists()
+
+
 def test_runner_decides_terminal_outcome_only_in_post_teardown_finalizer():
     import ast
     source = (TOOLS / "run_wp06_6f_tf_ekf_run007_session.py").read_text(encoding="utf-8")
@@ -181,6 +286,14 @@ def test_run007_manifest_guard_and_evidence_are_coherent_and_phase_complete():
     assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == seed["guard_manifest_sha256"]
     assert hashlib.sha256(evidence_path.read_bytes()).hexdigest() == manifest["evidence_sha256"]
     assert manifest["decision_sha256"] == seed["decision_sha256"]
+    contract = {
+        "required_fields": ["owner_authorization", "owner_authorization_scope", "owner_authorization_run_id",
+                            "owner_authorization_review_commit", "owner_authorization_integration_base"],
+        "scope_literal": guard.OWNER_AUTHORIZATION_SCOPE,
+        "record_schema": "wp06_6f_tf_ekf_runtime_record/v2",
+    }
+    assert manifest["owner_authorization_contract"] == evidence["owner_authorization_contract"] == contract
+    assert manifest["evidence_ceiling"] == evidence["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING"
     matrix_ids = {row["acceptance_id"] for row in manifest["acceptance_to_collector_matrix"]}
     assert matrix_ids == guard_required_ids()
     pins = manifest["source_pins"]

@@ -13,6 +13,7 @@ from pathlib import Path
 
 RUN_ID = "WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007"
 PARTITION = "wp06_scan_probe_run_002"
+OWNER_AUTHORIZATION_SCOPE = "WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY"
 PENDING = "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
 CONSUMED = "CONSUMED"
 ARCHITECTURE_PATH = "docs/MECANUM_NAV_DRL_Architecture.docx"
@@ -25,6 +26,37 @@ GUARD_PATH = "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approva
 
 class GuardError(RuntimeError):
     """A failed authority/precondition or consumed capacity-one guard."""
+
+
+def validate_owner_authorization(
+    owner_authorization,
+    owner_authorization_scope,
+    owner_authorization_run_id,
+    owner_authorization_review_commit,
+    owner_authorization_integration_base,
+    expected_review_commit,
+    expected_integration_base,
+):
+    """Bind the external Owner authorization to this exact capacity-one run."""
+    values = {
+        "owner_authorization": owner_authorization,
+        "owner_authorization_scope": owner_authorization_scope,
+        "owner_authorization_run_id": owner_authorization_run_id,
+        "owner_authorization_review_commit": owner_authorization_review_commit,
+        "owner_authorization_integration_base": owner_authorization_integration_base,
+    }
+    for key, value in values.items():
+        if not isinstance(value, str) or not value.strip():
+            raise GuardError(f"OWNER_AUTHORIZATION_FIELD_EMPTY:{key}")
+    if owner_authorization_scope != OWNER_AUTHORIZATION_SCOPE:
+        raise GuardError("OWNER_AUTHORIZATION_SCOPE_MISMATCH")
+    if owner_authorization_run_id != RUN_ID:
+        raise GuardError("OWNER_AUTHORIZATION_RUN_ID_MISMATCH")
+    if owner_authorization_review_commit != expected_review_commit:
+        raise GuardError("OWNER_AUTHORIZATION_REVIEW_COMMIT_MISMATCH")
+    if owner_authorization_integration_base != expected_integration_base:
+        raise GuardError("OWNER_AUTHORIZATION_INTEGRATION_BASE_MISMATCH")
+    return values
 
 
 def _sha256(path):
@@ -120,6 +152,16 @@ def verify_runtime_preconditions(
         raise GuardError("MANIFEST_CONTEXT_MISMATCH")
     if manifest.get("guard_path") != guard.get("guard_path"):
         raise GuardError("MANIFEST_GUARD_PATH_MISMATCH")
+    authorization_contract = manifest.get("owner_authorization_contract")
+    if authorization_contract != {
+        "required_fields": [
+            "owner_authorization", "owner_authorization_scope", "owner_authorization_run_id",
+            "owner_authorization_review_commit", "owner_authorization_integration_base",
+        ],
+        "scope_literal": OWNER_AUTHORIZATION_SCOPE,
+        "record_schema": "wp06_6f_tf_ekf_runtime_record/v2",
+    }:
+        raise GuardError("MANIFEST_OWNER_AUTHORIZATION_CONTRACT_MISMATCH")
     guard_seed = manifest.get("guard_seed", {})
     if guard_seed != {"path": GUARD_PATH, "state": PENDING, "capacity": 1, "consumed": False}:
         raise GuardError("MANIFEST_GUARD_SEED_MISMATCH")
@@ -139,10 +181,14 @@ def verify_runtime_preconditions(
     evidence = _load_json(evidence_path)
     if evidence.get("run_id") != RUN_ID or evidence.get("gz_partition") != PARTITION:
         raise GuardError("EVIDENCE_CONTEXT_MISMATCH")
+    if evidence.get("decision_sha256") != guard.get("decision_sha256"):
+        raise GuardError("EVIDENCE_DECISION_SHA_MISMATCH")
     if evidence.get("runtime_eligible") is not False or evidence.get("runtime_evidence_status") != "NOT_CREATED":
         raise GuardError("EVIDENCE_CEILING_MISMATCH")
     if evidence.get("source_pins") != manifest.get("source_pins"):
         raise GuardError("EVIDENCE_SOURCE_PINS_MISMATCH")
+    if evidence.get("owner_authorization_contract") != authorization_contract:
+        raise GuardError("EVIDENCE_OWNER_AUTHORIZATION_CONTRACT_MISMATCH")
     matrix = manifest.get("acceptance_to_collector_matrix")
     if not isinstance(matrix, list) or matrix != evidence.get("acceptance_to_collector_matrix"):
         raise GuardError("ACCEPTANCE_MATRIX_MISMATCH")
@@ -177,8 +223,15 @@ def verify_runtime_preconditions(
     return {"guard": guard, "manifest": manifest, "source_pins": source_pins}
 
 
-def acquire_guard(guard_path, expected_review_commit, expected_integration_base):
+def acquire_guard(guard_path, expected_review_commit, expected_integration_base,
+                  owner_authorization, owner_authorization_scope, owner_authorization_run_id,
+                  owner_authorization_review_commit, owner_authorization_integration_base):
     """Atomically consume a pending capacity-one guard once, after all preflight."""
+    authorization = validate_owner_authorization(
+        owner_authorization, owner_authorization_scope, owner_authorization_run_id,
+        owner_authorization_review_commit, owner_authorization_integration_base,
+        expected_review_commit, expected_integration_base,
+    )
     path = Path(guard_path).resolve()
     lock_path = path.with_suffix(path.suffix + ".lock")
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -191,6 +244,8 @@ def acquire_guard(guard_path, expected_review_commit, expected_integration_base)
             raise GuardError("GUARD_CONTEXT_MISMATCH")
         updated = dict(guard)
         updated["state"] = CONSUMED
+        updated["runtime_authorization"] = "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
+        updated.update(authorization)
         updated["acquired_review_commit"] = expected_review_commit
         updated["acquired_integration_base"] = expected_integration_base
         updated["acquisition_count"] = 1

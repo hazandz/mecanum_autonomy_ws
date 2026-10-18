@@ -1600,3 +1600,13 @@
 | Run007 correction | A distinct runner separates pre-teardown runtime acceptance from teardown acceptance and computes final acceptance and the single terminal outcome only after composite-then-bootstrap teardown. Teardown failures receive teardown-specific literals. |
 | Run007 guard | `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; no authorization or runtime execution. |
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING`; runtime eligible false, runtime evidence not created, `RUNTIME_APPROVED: NOT_APPROVED`, `GATE_B: NOT_STARTED`. |
+
+### WP06-6F Run007 exact Owner authorization binding corrective
+
+| Field | Record |
+|---|---|
+| `supersedes` | Supersedes only the current Run007 authorization-flow description; historical run outcomes, guard seeds, and runtime artifacts remain immutable. |
+| Parent/base | `a1348313dab704964e67572fd18dcdcecf1f66d7`; integration base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`. |
+| Authorization scope | `WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY`; five required non-empty values must bind to the exact Run007 ID, review commit, and integration base before acquisition. |
+| Guard/record contract | Seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Only atomic acquire after preflight may record exact Owner metadata, acquired refs, `GRANTED_FOR_THIS_EXACT_RUN_ONLY`, and count 1. Run record schema v2 preserves all five authorization fields and guard state before/after. Invalid/missing values stop before guard lock and evidence-directory creation. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING`; source/test/governance only. No runtime authorization, acquisition, runtime evidence, `RUNTIME_APPROVED`, or Gate B transition. |

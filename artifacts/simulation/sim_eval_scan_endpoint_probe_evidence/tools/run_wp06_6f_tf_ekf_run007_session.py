@@ -27,6 +27,7 @@ from wp06_6f_tf_ekf_run007_runtime_guard import (  # noqa: E402
     RUN_ID,
     GuardError,
     acquire_guard,
+    validate_owner_authorization,
     verify_runtime_preconditions,
 )
 
@@ -51,13 +52,23 @@ STALE_MARKERS = (
     "sim_eval_clock_bridge",
     "ekf_filter_node",
 )
-RECORD_SCHEMA = "wp06_6f_tf_ekf_runtime_record/v1"
+RECORD_SCHEMA = "wp06_6f_tf_ekf_runtime_record/v2"
 EKF_SUBSCRIBER_TOPICS = {"/clock", "/imu/data", "/wheel/odometry_raw", "/set_pose"}
 EKF_PUBLISHER_TOPICS = {"/odometry/filtered", "/tf", "/diagnostics"}
 ROS_STANDARD_ENDPOINTS_BY_DIRECTION = {
     "Subscribers": {"/parameter_events"},
     "Publishers": {"/parameter_events", "/rosout"},
 }
+
+
+def _authorization_record_fields(authorization, consumed, guard_state_before):
+    """Return the immutable, exact-run authorization facts for run_record.json."""
+    return {
+        **authorization,
+        "authorization_acquisition_count": consumed["acquisition_count"],
+        "guard_state_before": guard_state_before,
+        "guard_state_after_acquire": consumed["state"],
+    }
 
 
 def _now():
@@ -522,13 +533,20 @@ def _forbidden_process_present(process_group_commands):
 
 
 def run_session(repository_root, guard_path, run_directory, run_id, gz_partition,
-                expected_review_commit, expected_integration_base):
+                expected_review_commit, expected_integration_base, owner_authorization,
+                owner_authorization_scope, owner_authorization_run_id,
+                owner_authorization_review_commit, owner_authorization_integration_base):
     """Run exactly one authorized future session. Offline tests must never call this."""
     root = Path(repository_root).resolve()
     guard_file = Path(guard_path).resolve()
     run_dir = Path(run_directory).resolve()
     if run_id != RUN_ID or gz_partition != PARTITION:
         raise GuardError("RUN_OR_PARTITION_MISMATCH")
+    authorization = validate_owner_authorization(
+        owner_authorization, owner_authorization_scope, owner_authorization_run_id,
+        owner_authorization_review_commit, owner_authorization_integration_base,
+        expected_review_commit, expected_integration_base,
+    )
     verified = verify_runtime_preconditions(root, guard_file, run_dir, expected_review_commit, expected_integration_base)
     _host_preflight(root)
     _stale_processes()
@@ -536,7 +554,11 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
     env.update({"GZ_PARTITION": PARTITION, "GZ_IP": "127.0.0.1", "WP06_REPOSITORY_ROOT": str(root)})
     observer_module = importlib.import_module("mecanum_nav_bringup.sim_eval_tf_ekf_runtime_observer")
     guard_state_before = verified["guard"]["state"]
-    consumed = acquire_guard(guard_file, expected_review_commit, expected_integration_base)
+    consumed = acquire_guard(
+        guard_file, expected_review_commit, expected_integration_base,
+        owner_authorization, owner_authorization_scope, owner_authorization_run_id,
+        owner_authorization_review_commit, owner_authorization_integration_base,
+    )
     run_dir.mkdir(parents=True, mode=0o700)
     (run_dir / "transcripts").mkdir(mode=0o700)
     (run_dir / "logs").mkdir(mode=0o700)
@@ -544,8 +566,9 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
     monotonic_start = time.monotonic()
     record = {
         "schema": RECORD_SCHEMA, "run_id": RUN_ID, "review_commit": expected_review_commit,
-        "integration_base": expected_integration_base, "guard_state_before": guard_state_before,
-        "guard_state_after_acquire": consumed["state"], "gz_partition": PARTITION, "started_at": start,
+        "integration_base": expected_integration_base,
+        **_authorization_record_fields(authorization, consumed, guard_state_before),
+        "gz_partition": PARTITION, "started_at": start,
         "preflight": {"guard_manifest_sha256": _sha256(root / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_GUARD_MANIFEST.json"),
                       "decision_sha256": _sha256(root / "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md"),
                       "source_pins": verified["source_pins"], "authorization_acquisition_count": consumed["acquisition_count"]},
@@ -582,7 +605,16 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
         if sessions["bootstrap"]["process"].poll() is not None:
             raise GuardError("BOOTSTRAP_DIED_DURING_STABILIZATION")
         record["pre_teardown_runtime_acceptance"]["bootstrap_stability_20_seconds"] = True
-        (run_dir / "authorization_state.txt").write_text("CONSUMED\n", encoding="utf-8")
+        authorization_digest = hashlib.sha256(owner_authorization.encode("utf-8")).hexdigest()
+        (run_dir / "authorization_state.txt").write_text(
+            "state=CONSUMED\n"
+            f"scope={owner_authorization_scope}\n"
+            f"run_id={owner_authorization_run_id}\n"
+            f"review_commit={owner_authorization_review_commit}\n"
+            f"integration_base={owner_authorization_integration_base}\n"
+            f"owner_authorization_sha256={authorization_digest}\n",
+            encoding="utf-8",
+        )
         composite_log = run_dir / "logs/composite.log"
         sessions["composite"] = _spawn(COMPOSITE_COMMAND, composite_log, env)
         sessions["composite"]["log_path"] = str(composite_log)
@@ -794,10 +826,18 @@ def main(argv=None):
     parser.add_argument("--gz-partition", required=True)
     parser.add_argument("--expected-review-commit", required=True)
     parser.add_argument("--expected-integration-base", required=True)
+    parser.add_argument("--owner-authorization", required=True)
+    parser.add_argument("--owner-authorization-scope", required=True)
+    parser.add_argument("--owner-authorization-run-id", required=True)
+    parser.add_argument("--owner-authorization-review-commit", required=True)
+    parser.add_argument("--owner-authorization-integration-base", required=True)
     args = parser.parse_args(argv)
     try:
         return run_session(args.repository_root, args.guard_path, args.run_directory, args.run_id,
-                           args.gz_partition, args.expected_review_commit, args.expected_integration_base)
+                           args.gz_partition, args.expected_review_commit, args.expected_integration_base,
+                           args.owner_authorization, args.owner_authorization_scope,
+                           args.owner_authorization_run_id, args.owner_authorization_review_commit,
+                           args.owner_authorization_integration_base)
     except Exception as exc:
         print(f"PREFLIGHT_OR_RUN_FAILURE:{type(exc).__name__}:{exc}", file=sys.stderr)
         return 2

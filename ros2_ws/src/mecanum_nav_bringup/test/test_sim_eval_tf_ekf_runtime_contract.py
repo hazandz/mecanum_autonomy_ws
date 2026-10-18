@@ -245,10 +245,13 @@ def test_run007_guard_manifest_evidence_and_source_pins_are_coherent():
     assert guard["capacity"] == 1 and guard["acquisition_count"] == 0
     assert guard["runtime_authorization"] == "NOT_GRANTED"
     assert guard["guard_manifest_sha256"] == _sha(manifest_path)
-    assert manifest["decision_sha256"] == guard["decision_sha256"] == _sha(ROOT / DECISION_PATH)
+    decision_sha = _sha(ROOT / DECISION_PATH)
+    assert manifest["decision_sha256"] == guard["decision_sha256"] == decision_sha
+    assert evidence["decision_sha256"] == decision_sha
     assert manifest["evidence_sha256"] == _sha(evidence_path)
     assert manifest["guard_seed"] == {"path": guard["guard_path"], "state": guard["state"], "capacity": 1, "consumed": False}
     assert manifest["source_pins"] == evidence["source_pins"]
+    assert manifest["source_pins"][DECISION_PATH] == evidence["source_pins"][DECISION_PATH] == decision_sha
     for relative, expected in manifest["source_pins"].items():
         assert len(expected) == 64 and all(char in "0123456789abcdef" for char in expected)
         assert expected == _sha(ROOT / relative), relative
@@ -260,7 +263,9 @@ def test_run007_guard_manifest_evidence_and_source_pins_are_coherent():
     assert evidence["run_007_guard"]["state"] == guard["state"]
     assert evidence["run_007_guard"]["acquisition_count"] == 0
     assert evidence["RUNTIME_APPROVED"] == "NOT_APPROVED" and evidence["GATE_B"] == "NOT_STARTED"
-    assert manifest["evidence_ceiling"] == evidence["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN006_FINALIZATION_ORDER_CORRECTION_RUN007_GUARD_PENDING"
+    assert manifest["evidence_ceiling"] == evidence["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING"
+    assert manifest["owner_authorization_contract"] == evidence["owner_authorization_contract"]
+    assert manifest["owner_authorization_contract"]["scope_literal"] == "WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY"
     assert evidence["runtime_eligible"] is False
     assert evidence["runtime_evidence_status"] == "NOT_CREATED"
 
