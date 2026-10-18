@@ -8,8 +8,9 @@ from pathlib import Path
 import re
 
 
-OBSERVER_SCHEMA = "wp06_6f_cpp_runtime_observer/v2"
+OBSERVER_SCHEMA = "wp06_6f_cpp_runtime_observer/v3"
 EXPECTED_EKF_NODE_NAME = "ekf_filter_node"
+EXPECTED_STATIC_TF_NODE_NAME = "robot_state_publisher"
 EXPECTED_DYNAMIC_TF_QOS = {
     "history": "KEEP_LAST",
     "depth": 100,
@@ -32,6 +33,10 @@ EXPECTED_ACCEPTANCE_KEYS = {
     "map_to_odom_absent_during_full_window",
     "observer_errors_absent",
     "static_base_link_to_lidar_frame_exact",
+    "static_tf_edge_publisher_gid_mappable",
+    "static_tf_edge_publisher_gid_unique_mapped",
+    "static_tf_owner_is_robot_state_publisher",
+    "static_tf_subscription_qos_contract",
 }
 _GID_PATTERN = re.compile(r"^[0-9a-f]+$")
 
@@ -137,7 +142,7 @@ def _endpoint_mapping(document):
     gid = next(iter(gids))
     if not isinstance(gid, str) or not gid or len(gid) % 2 or _GID_PATTERN.fullmatch(gid) is None:
         return False, False
-    endpoints = document.get("graph_endpoint_snapshot", [])
+    endpoints = document.get("graph_endpoint_snapshot", {}).get("/tf", [])
     matches = [item for item in endpoints if item.get("gid") == gid]
     unique = len(matches) == 1
     expected_owner = (
@@ -168,13 +173,12 @@ def _expected_dynamic_tf(document):
     return basic and len({row.get("publisher_gid") for row in transforms}) == 1 and unique_gid and expected_owner
 
 
-def _expected_static(document):
-    qos = document.get("qos_used", {}).get("/tf_static")
+def _static_transform_pass(document):
     transforms = [
         row for row in document["topics"]["/tf_static"].get("transforms", [])
         if row.get("parent") == "base_link" and row.get("child") == "lidar_frame"
     ]
-    if qos != EXPECTED_STATIC_TF_QOS or len(transforms) != 1:
+    if len(transforms) != 1:
         return False
     row = transforms[0]
     translation, rotation = row.get("translation"), row.get("rotation_xyzw")
@@ -184,6 +188,39 @@ def _expected_static(document):
         all(abs(float(a) - b) <= 1e-9 for a, b in zip(translation, EXPECTED_TRANSLATION)) and
         all(abs(float(a) - b) <= 1e-9 for a, b in zip(rotation, EXPECTED_ROTATION))
     )
+
+
+def _static_gid_mapping(document):
+    transforms = [
+        row for row in document["topics"]["/tf_static"].get("transforms", [])
+        if row.get("parent") == "base_link" and row.get("child") == "lidar_frame"
+    ]
+    snapshots = document.get("graph_endpoint_snapshot", {})
+    endpoints = snapshots.get("/tf_static", []) if isinstance(snapshots, dict) else []
+    mappings = document.get("static_endpoint_mapping", [])
+    if len(transforms) != 1:
+        return False, False, False, "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH"
+    gid = transforms[0].get("publisher_gid")
+    if not isinstance(gid, str) or not gid or len(gid) % 2 or _GID_PATTERN.fullmatch(gid) is None:
+        return False, False, False, "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE"
+    matches = [item for item in endpoints if isinstance(item, dict) and item.get("gid") == gid]
+    mapping_rows = [item for item in mappings if isinstance(item, dict) and item.get("gid") == gid]
+    if not matches:
+        return False, False, False, "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE"
+    if len(matches) != 1 or len(mapping_rows) != 1 or mapping_rows[0].get("unique") is not True or mapping_rows[0].get("match_count") != 1:
+        return True, False, False, "TF_STATIC_EDGE_PUBLISHER_GID_NOT_UNIQUE"
+    endpoint = matches[0]
+    owner = (
+        endpoint.get("node_name") == EXPECTED_STATIC_TF_NODE_NAME and
+        endpoint.get("node_namespace") == "/" and
+        endpoint.get("topic_type") == "tf2_msgs/msg/TFMessage"
+    )
+    expected_endpoint = {key: endpoint.get(key) for key in ("node_name", "node_namespace", "topic_type")}
+    if mapping_rows[0].get("mapped_endpoint") != expected_endpoint or mapping_rows[0].get("expected_owner") is not owner:
+        return False, False, False, "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE"
+    if not owner:
+        return True, True, False, "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER"
+    return True, True, True, ""
 
 
 def validate_observer_document(document: dict) -> dict:
@@ -203,10 +240,16 @@ def validate_observer_document(document: dict) -> dict:
     for topic, message_type in expected_types.items():
         if topics[topic].get("type") != message_type:
             raise ObserverDocumentError(f"OBSERVER_TYPE_MISMATCH:{topic}")
-    if not isinstance(document.get("graph_endpoint_snapshot"), list) or not isinstance(document.get("endpoint_mapping"), list):
+    graph_snapshot = document.get("graph_endpoint_snapshot")
+    if (not isinstance(graph_snapshot, dict) or set(graph_snapshot) != {"/tf", "/tf_static"} or
+        any(not isinstance(rows, list) for rows in graph_snapshot.values()) or
+        not isinstance(document.get("endpoint_mapping"), list) or
+        not isinstance(document.get("static_endpoint_mapping"), list)):
         raise ObserverDocumentError("OBSERVER_GRAPH_MAPPING_MISSING")
     if document.get("expected_ekf_node_name") != EXPECTED_EKF_NODE_NAME:
         raise ObserverDocumentError("OBSERVER_EKF_NODE_IDENTITY_MISMATCH")
+    if document.get("expected_static_tf_node_name") != EXPECTED_STATIC_TF_NODE_NAME:
+        raise ObserverDocumentError("OBSERVER_STATIC_TF_NODE_IDENTITY_MISMATCH")
     qos_used = document.get("qos_used")
     if not isinstance(qos_used, dict) or qos_used.get("/tf") != EXPECTED_DYNAMIC_TF_QOS:
         raise ObserverDocumentError("OBSERVER_QOS_CONTRACT_MISMATCH:/tf")
@@ -218,6 +261,9 @@ def validate_observer_document(document: dict) -> dict:
     forbidden_edges = document.get("observed_forbidden_edges", [])
     map_edge_seen = any(row.get("parent") == "map" and row.get("child") == "odom" for row in forbidden_edges)
     errors_absent = document.get("observer_errors") == []
+    static_gid_mappable, static_gid_unique, static_owner, static_gid_reason = _static_gid_mapping(document)
+    static_transform = _static_transform_pass(document)
+    static_qos = qos_used["/tf_static"] == EXPECTED_STATIC_TF_QOS
     expected = {
         "clock_minimum_five_nonzero_strictly_increasing": _expected_clock(document),
         "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf": _expected_dynamic_tf(document),
@@ -225,7 +271,11 @@ def validate_observer_document(document: dict) -> dict:
         "filtered_odometry_minimum_five_contract_and_monotonicity": _expected_filtered(document),
         "map_to_odom_absent_during_full_window": not map_edge_seen and document.get("window_complete") is True,
         "observer_errors_absent": errors_absent,
-        "static_base_link_to_lidar_frame_exact": _expected_static(document),
+        "static_base_link_to_lidar_frame_exact": static_transform,
+        "static_tf_edge_publisher_gid_mappable": static_gid_mappable,
+        "static_tf_edge_publisher_gid_unique_mapped": static_gid_unique,
+        "static_tf_owner_is_robot_state_publisher": static_owner,
+        "static_tf_subscription_qos_contract": static_qos,
     }
     if document.get("acceptance") != expected:
         raise ObserverDocumentError("OBSERVER_ACCEPTANCE_DOES_NOT_MATCH_RAW_DATA")
@@ -237,12 +287,27 @@ def validate_observer_document(document: dict) -> dict:
         "filtered_odometry_minimum_five_contract_and_monotonicity": "/odometry/filtered",
         "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf": "/tf:odom->base_link",
         "static_base_link_to_lidar_frame_exact": "/tf_static:base_link->lidar_frame",
+        "static_tf_edge_publisher_gid_mappable": "/tf_static:base_link->lidar_frame",
+        "static_tf_edge_publisher_gid_unique_mapped": "/tf_static:base_link->lidar_frame",
+        "static_tf_owner_is_robot_state_publisher": "/tf_static:base_link->lidar_frame",
+        "static_tf_subscription_qos_contract": "/tf_static:qos",
         "map_to_odom_absent_during_full_window": "map->odom",
         "observer_errors_absent": "observer_errors",
     }
     for acceptance_key, reason_key in reason_keys.items():
         if not expected[acceptance_key] and not isinstance(reasons.get(reason_key), str):
             raise ObserverDocumentError(f"OBSERVER_FAILURE_REASON_MISSING:{reason_key}")
+    if not static_transform and static_gid_reason == "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH":
+        pass
+    elif (not static_gid_mappable or (static_gid_mappable and not static_gid_unique) or
+          (static_gid_unique and not static_owner)) and reasons.get("/tf_static:base_link->lidar_frame") != static_gid_reason:
+        raise ObserverDocumentError("OBSERVER_STATIC_GID_FAILURE_REASON_MISMATCH")
+    if not static_transform and reasons.get("/tf_static:base_link->lidar_frame") != "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH":
+        raise ObserverDocumentError("OBSERVER_STATIC_TRANSFORM_FAILURE_REASON_MISMATCH")
+    if static_gid_unique and not static_owner and reasons.get("/tf_static:base_link->lidar_frame") != "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER":
+        raise ObserverDocumentError("OBSERVER_STATIC_OWNER_FAILURE_REASON_MISMATCH")
+    if not static_qos and reasons.get("/tf_static:qos") != "TF_STATIC_QOS_CONTRACT_MISMATCH":
+        raise ObserverDocumentError("OBSERVER_STATIC_QOS_FAILURE_REASON_MISMATCH")
     all_pass = all(expected.values())
     expected_outcome = "PASS" if all_pass else "FAIL_NO_RETRY"
     if reasons.get("/tf:odom->base_link") == "TF_EDGE_PUBLISHER_GID_UNMAPPABLE":

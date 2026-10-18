@@ -36,10 +36,17 @@ Run 002 has a separate capacity-one guard seeded `PENDING_EXACT_INTEGRATION_AND_
 
 ## Corrective continuation — dynamic TF subscriber QoS
 
-The dynamic `/tf` observer subscription uses explicit `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE` QoS to match the standard dynamic TF publisher contract. `/tf_static` remains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. Observer schema v2 records both actual subscription profiles, and the offline validator rejects either mismatch. Dynamic TF edge ownership remains based on the edge publisher GID mapped uniquely to the EKF graph endpoint; acceptance is unchanged.
+The dynamic `/tf` observer subscription uses explicit `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE` QoS to match the standard dynamic TF publisher contract. `/tf_static` remains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. Observer schema v3 records both actual subscription profiles, graph publisher endpoint snapshots for `/tf` and `/tf_static`, and static-edge publisher GID mapping. The offline validator rejects QoS mismatches and requires the static `base_link -> lidar_frame` MessageInfo GID to map uniquely to the exact root-namespace `robot_state_publisher` TFMessage endpoint; there is no node-name fallback.
 
 Current source pins:
-- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp` — `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`
-- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py` — `cee7ac20fab7e6a86d066e9e76b12113399a19c1c8cceba60d265247b1ba4bf3`
+- `ros2_ws/src/wp06_6f_tf_ekf_runtime_observer/src/wp06_6f_tf_ekf_runtime_observer.cpp` — `1efd9d91479984d59726a63d8146302d1429841617393fdbe12ad27ce3a8b4ee`
+- `ros2_ws/src/mecanum_nav_bringup/mecanum_nav_bringup/sim_eval_tf_ekf_runtime_observer.py` — `41c2c8cfa705ef05a80cfe5bad3cfffb8478e03694458b458bbd1f4a1bd1b585`
 
 This is an offline source/test/build correction only. Run 001 remains the immutable observer API mismatch failure and is not a TF/EKF failure. Run 002 remains unauthorized and pending with capacity 1 and acquisition count 0. No runtime authorization, runtime evidence, integration, or Gate B transition is created.
+
+
+## WP06-6F static TF publisher ownership correction — current review delta
+
+The observer now snapshots publisher endpoints for both `/tf` and `/tf_static`. It takes the static edge GID from `rclcpp::MessageInfo` and accepts `base_link -> lidar_frame` ownership only when that GID maps exactly once to `node_name=robot_state_publisher`, `node_namespace=/`, and `topic_type=tf2_msgs/msg/TFMessage`. Unmappable, non-unique, and wrong-owner mappings have distinct fail-closed literals; matching transform values alone cannot pass the owner criterion. Observer schema v3 records the endpoint snapshots, mapping, separate owner acceptance, and the QoS actually used. Dynamic `/tf` remains KEEP_LAST(100)/BEST_EFFORT/VOLATILE; `/tf_static` remains KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL.
+
+This candidate changes only observer validation/diagnostics and its governance pins. Run 001 remains the immutable observer API mismatch failure; Run 002 remains PENDING, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. No ROS/Gazebo/runtime was run and no authorization was issued. Evidence ceiling remains offline source/test/build only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.

@@ -198,7 +198,8 @@ def test_wp06f_run002_json_guard_and_source_pin_closure_are_coherent():
     assert manifest["decision_sha256"] == guard["decision_sha256"]
     assert manifest["base_commit"] == BASE
     assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_CPP_GID_OBSERVER_AND_PENDING_RUN002_GUARD_ONLY"
-    assert "dynamic_tf_subscription_qos" in {row["acceptance_id"] for row in manifest["acceptance_to_collector_matrix"]}
+    matrix_ids = {row["acceptance_id"] for row in manifest["acceptance_to_collector_matrix"]}
+    assert {"dynamic_tf_subscription_qos", "static_tf_owner_gid", "static_tf_subscription_qos"} <= matrix_ids
     pins = manifest["source_pins"]
     for relative in (EKF_CONFIG_PATH, CLOCK_CONFIG_PATH, DECISION_PATH):
         assert pins[relative] == _sha(ROOT / relative)

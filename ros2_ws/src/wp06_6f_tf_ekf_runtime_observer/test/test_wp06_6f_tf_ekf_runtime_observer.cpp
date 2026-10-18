@@ -43,6 +43,37 @@ TEST(Wp06fObserver, MapsGidToOneExactGraphEndpointAndOwner)
   EXPECT_FALSE(wp06_6f_observer::map_gid_to_endpoint("gid-rsp", endpoints, "ekf_filter_node").expected_owner);
 }
 
+TEST(Wp06fObserver, StaticEdgeOwnershipRequiresUniqueRobotStatePublisherEndpoint)
+{
+  using wp06_6f_observer::EndpointRecord;
+  using wp06_6f_observer::map_gid_to_endpoint;
+  using wp06_6f_observer::static_gid_failure_literal;
+  const std::vector<EndpointRecord> endpoints{
+    {"gid-rsp", "robot_state_publisher", "/", "tf2_msgs/msg/TFMessage"}};
+  const auto mapped = map_gid_to_endpoint("gid-rsp", endpoints, "robot_state_publisher");
+  EXPECT_TRUE(mapped.unique);
+  EXPECT_TRUE(mapped.expected_owner);
+  EXPECT_TRUE(static_gid_failure_literal(mapped).empty());
+  const auto missing = map_gid_to_endpoint("unknown", endpoints, "robot_state_publisher");
+  EXPECT_EQ(static_gid_failure_literal(missing), "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE");
+  auto duplicate = endpoints;
+  duplicate.push_back(endpoints.front());
+  const auto ambiguous = map_gid_to_endpoint("gid-rsp", duplicate, "robot_state_publisher");
+  EXPECT_EQ(static_gid_failure_literal(ambiguous), "TF_STATIC_EDGE_PUBLISHER_GID_NOT_UNIQUE");
+  const std::vector<EndpointRecord> wrong_owner{
+    {"gid-other", "other_node", "/", "tf2_msgs/msg/TFMessage"}};
+  const auto other = map_gid_to_endpoint("gid-other", wrong_owner, "robot_state_publisher");
+  EXPECT_EQ(static_gid_failure_literal(other), "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER");
+  const std::vector<EndpointRecord> wrong_namespace{
+    {"gid-ns", "robot_state_publisher", "/nested", "tf2_msgs/msg/TFMessage"}};
+  EXPECT_EQ(static_gid_failure_literal(map_gid_to_endpoint("gid-ns", wrong_namespace, "robot_state_publisher")),
+    "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER");
+  const std::vector<EndpointRecord> wrong_type{
+    {"gid-type", "robot_state_publisher", "/", "std_msgs/msg/String"}};
+  EXPECT_EQ(static_gid_failure_literal(map_gid_to_endpoint("gid-type", wrong_type, "robot_state_publisher")),
+    "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER");
+}
+
 TEST(Wp06fObserver, RequiresNonzeroStrictlyIncreasingTimestamps)
 {
   EXPECT_TRUE(wp06_6f_observer::strictly_increasing_nonzero({10, 11, 12, 13, 14}));

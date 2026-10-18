@@ -1501,3 +1501,14 @@
 | Run boundary | Run 001 remains immutable observer API mismatch failure, not a TF/EKF failure. Run 002 remains pending, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. |
 | Evidence ceiling | Offline source/test/build only; no runtime authorization, runtime evidence, integration, `RUNTIME_APPROVED`, or Gate B transition. |
 | `supersedes` | Supersedes only the prior dynamic `/tf` observer QoS implementation detail; historical run records and other acceptance criteria are unchanged. Parent Ledger bytes remain an exact prefix. |
+
+
+### WP06-6F static TF publisher ownership observer correction
+
+| Field | Value |
+|---|---|
+| Change | Observer schema v3 captures `/tf_static` publisher GID from `rclcpp::MessageInfo`, snapshots `/tf_static` graph endpoints, and requires the unique GID mapping to identify the root-namespace `robot_state_publisher` TFMessage endpoint. Static transform matching alone no longer establishes ownership. |
+| Failure disposition | GID unmappable, GID non-unique, and publisher not `robot_state_publisher` have separate fail-closed literals. Dynamic `/tf` and static `/tf_static` QoS contracts remain unchanged and recorded. |
+| Run boundary | Run 001 remains immutable historical observer API mismatch failure. Run 002 remains PENDING, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`; no runtime was executed or authorized. |
+| Evidence ceiling | Offline source/test/build only; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. Parent ledger bytes remain an exact prefix. |
+| `supersedes` | Supersedes only the prior assumption that validating the static transform and QoS sufficed; it does not alter historical runtime evidence. |

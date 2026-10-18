@@ -94,7 +94,9 @@ def test_acceptance_matrix_has_collector_artifact_parser_and_offline_test():
     required = {"bootstrap_readiness", "bootstrap_stability_20_seconds", "composite_liveness", "composite_stability_5_seconds",
                 "clock_five_monotonic_samples", "wheel_input", "imu_input", "ingress_use_sim_time",
                 "filtered_odometry_five_monotonic_samples", "ekf_use_sim_time", "ekf_topology", "dynamic_tf_edge_gid",
-                "dynamic_tf_subscription_qos", "static_tf_edge_qos", "map_to_odom_absent", "forbidden_bridge_and_process_boundary", "process_group_teardown",
+                "dynamic_tf_subscription_qos", "static_tf_edge_qos", "static_tf_owner_gid_mappable",
+                "static_tf_owner_gid_unique", "static_tf_owner_gid", "static_tf_subscription_qos",
+                "map_to_odom_absent", "forbidden_bridge_and_process_boundary", "process_group_teardown",
                 "process_group_teardown_order", "observer_error_absent"}
     assert required <= {item["acceptance_id"] for item in matrix}
     assert all(all(item.get(k) for k in ("collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "failure_reason_literal", "offline_test_name")) for item in matrix)
@@ -106,6 +108,17 @@ def test_acceptance_matrix_has_collector_artifact_parser_and_offline_test():
     assert "BEST_EFFORT" in dynamic_qos["pass_condition"] and "VOLATILE" in dynamic_qos["pass_condition"]
     assert dynamic_qos["collector"].startswith("wp06_6f_tf_ekf_runtime_observer C++")
     assert "QoS" in dynamic_qos["parser_or_validator"]
+    static_owner = next(item for item in matrix if item["acceptance_id"] == "static_tf_owner_gid")
+    assert static_owner["raw_artifact_path"] == "transcripts/runtime_observer.json#/static_endpoint_mapping"
+    assert static_owner["failure_reason_literal"] == "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER"
+    assert static_owner["offline_test_name"] == "test_static_owner_failures_have_exact_fail_closed_literals"
+    assert "robot_state_publisher" in static_owner["pass_condition"] and "GID" in static_owner["pass_condition"]
+    static_mappable = next(item for item in matrix if item["acceptance_id"] == "static_tf_owner_gid_mappable")
+    assert static_mappable["failure_reason_literal"] == "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE"
+    static_unique = next(item for item in matrix if item["acceptance_id"] == "static_tf_owner_gid_unique")
+    assert static_unique["failure_reason_literal"] == "TF_STATIC_EDGE_PUBLISHER_GID_NOT_UNIQUE"
+    static_qos = next(item for item in matrix if item["acceptance_id"] == "static_tf_subscription_qos")
+    assert static_qos["failure_reason_literal"] == "TF_STATIC_QOS_CONTRACT_MISMATCH"
 
 
 def test_yaml_echo_parser_uses_multi_document_and_requires_single_mapping():

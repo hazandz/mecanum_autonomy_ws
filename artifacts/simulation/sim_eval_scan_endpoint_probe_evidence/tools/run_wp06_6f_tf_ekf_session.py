@@ -430,7 +430,10 @@ def run_session(repository_root, guard_path, run_directory, run_id, gz_partition
             "filtered_odometry_minimum_five_contract_and_monotonicity",
             "dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf",
             "dynamic_tf_subscription_qos_contract",
-            "static_base_link_to_lidar_frame_exact", "map_to_odom_absent_during_full_window",
+            "static_base_link_to_lidar_frame_exact", "static_tf_edge_publisher_gid_mappable",
+            "static_tf_edge_publisher_gid_unique_mapped",
+            "static_tf_owner_is_robot_state_publisher", "static_tf_subscription_qos_contract",
+            "map_to_odom_absent_during_full_window",
             "observer_errors_absent", "process_group_teardown_clean", "teardown_order_and_count_correct")},
         "terminal_outcome": "FAIL_NO_RETRY",
     }
@@ -598,6 +601,10 @@ def _failure_reasons(acceptance, observer_document):
         "filtered_odometry_minimum_five_contract_and_monotonicity": "FILTERED_ODOMETRY_CONTRACT_OR_TIMEOUT",
         "dynamic_tf_subscription_qos_contract": "DYNAMIC_TF_QOS_CONTRACT_MISMATCH",
         "static_base_link_to_lidar_frame_exact": "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH",
+        "static_tf_edge_publisher_gid_mappable": "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE",
+        "static_tf_edge_publisher_gid_unique_mapped": "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE",
+        "static_tf_owner_is_robot_state_publisher": "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER",
+        "static_tf_subscription_qos_contract": "TF_STATIC_QOS_CONTRACT_MISMATCH",
         "map_to_odom_absent_during_full_window": "MAP_TO_ODOM_EDGE_OBSERVED_OR_WINDOW_INCOMPLETE",
         "observer_errors_absent": "RUNTIME_OBSERVER_CALLBACK_OR_API_ERROR",
     }

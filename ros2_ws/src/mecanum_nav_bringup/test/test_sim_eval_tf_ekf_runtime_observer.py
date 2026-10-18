@@ -27,12 +27,17 @@ def _doc():
     times = list(range(1, 6))
     gid = "001122aabbcc"
     endpoints = [{"gid": gid, "node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}]
+    static_gid = "ffeedd"
+    static_endpoint = {"gid": static_gid, "node_name": "robot_state_publisher", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}
     return {"schema": observer.OBSERVER_SCHEMA, "expected_ekf_node_name": "ekf_filter_node", "window_complete": True,
             "terminal_outcome": "PASS",
-            "observer_errors": [], "graph_endpoint_snapshot": endpoints,
+            "observer_errors": [], "graph_endpoint_snapshot": {"/tf": endpoints, "/tf_static": [static_endpoint]},
+            "expected_static_tf_node_name": "robot_state_publisher",
             "observed_forbidden_edges": [],
             "endpoint_mapping": [{"gid": gid, "match_count": 1, "unique": True, "expected_owner": True,
                                   "mapped_endpoint": {"node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}}],
+            "static_endpoint_mapping": [{"gid": static_gid, "match_count": 1, "unique": True, "expected_owner": True,
+                                          "mapped_endpoint": {"node_name": "robot_state_publisher", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}}],
             "qos_used": {
                 "/tf": dict(observer.EXPECTED_DYNAMIC_TF_QOS),
                 "/tf_static": dict(observer.EXPECTED_STATIC_TF_QOS),
@@ -41,7 +46,7 @@ def _doc():
                 "/clock": {"type": "rosgraph_msgs/msg/Clock", "samples": [{"stamp": {"sec": n, "nanosec": 0}, "stamp_ns": n * 10**9, "valid": True} for n in times]},
                 "/odometry/filtered": {"type": "nav_msgs/msg/Odometry", "samples": [{"message": _message(n), "stamp_ns": n * 10**9, "valid": True} for n in times]},
                 "/tf": {"type": "tf2_msgs/msg/TFMessage", "window_complete": True, "transforms": [{"parent": "odom", "child": "base_link", "stamp_ns": n * 10**9, "publisher_gid": gid, "translation": [0.0, 0.0, 0.0], "rotation_xyzw": [0.0, 0.0, 0.0, 1.0], "valid": True} for n in times]},
-                "/tf_static": {"type": "tf2_msgs/msg/TFMessage", "window_complete": True, "transforms": [{"parent": "base_link", "child": "lidar_frame", "stamp_ns": 0, "publisher_gid": "ffeedd", "translation": list(observer.EXPECTED_TRANSLATION), "rotation_xyzw": list(observer.EXPECTED_ROTATION), "valid": True}]}} ,
+                "/tf_static": {"type": "tf2_msgs/msg/TFMessage", "window_complete": True, "transforms": [{"parent": "base_link", "child": "lidar_frame", "stamp_ns": 0, "publisher_gid": static_gid, "translation": list(observer.EXPECTED_TRANSLATION), "rotation_xyzw": list(observer.EXPECTED_ROTATION), "valid": True}]}} ,
             "acceptance": {key: True for key in observer.EXPECTED_ACCEPTANCE_KEYS}, "failure_reason_literals": {}}
 
 
@@ -74,22 +79,56 @@ def test_dynamic_tf_requires_five_edges_one_gid_and_exact_endpoint_owner():
     assert _validate(_doc())["dynamic_odom_to_base_link_minimum_five_strictly_increasing_single_gid_owned_by_ekf"]
     bad = _doc(); bad["topics"]["/tf"]["transforms"][0]["publisher_gid"] = "other"
     bad["endpoint_mapping"].append({"gid": "other", "match_count": 1, "unique": True, "expected_owner": True})
-    bad["graph_endpoint_snapshot"].append({"gid": "other", "node_name": "ekf_filter_node"})
+    bad["graph_endpoint_snapshot"]["/tf"].append({"gid": "other", "node_name": "ekf_filter_node"})
     with pytest.raises(observer.ObserverDocumentError): _validate(bad)
     bad = _doc(); bad["graph_endpoint_snapshot"] = []
     with pytest.raises(observer.ObserverDocumentError): _validate(bad)
 
 
-def test_static_tf_requires_qos_transform_and_single_edge():
-    assert _validate(_doc())["static_base_link_to_lidar_frame_exact"]
+def test_static_tf_requires_transform_qos_and_exact_rsp_gid_owner():
+    result = _validate(_doc())
+    assert result["static_base_link_to_lidar_frame_exact"]
+    assert result["static_tf_edge_publisher_gid_unique_mapped"]
+    assert result["static_tf_owner_is_robot_state_publisher"]
+    assert result["static_tf_subscription_qos_contract"]
     for mutate in (
         lambda d: d["qos_used"]["/tf_static"].update(durability="VOLATILE"),
         lambda d: d["topics"]["/tf_static"]["transforms"][0].update(translation=[0, 0, 0]),
         lambda d: d["topics"]["/tf_static"]["transforms"].clear(),
         lambda d: d["topics"]["/tf_static"]["transforms"].append(dict(d["topics"]["/tf_static"]["transforms"][0])),
+        lambda d: d["graph_endpoint_snapshot"]["/tf_static"][0].update(node_name="other_node"),
+        lambda d: d["graph_endpoint_snapshot"]["/tf_static"].clear(),
+        lambda d: d["static_endpoint_mapping"][0].update(unique=False, match_count=2),
     ):
         bad = _doc(); mutate(bad)
         with pytest.raises(observer.ObserverDocumentError): _validate(bad)
+
+
+def test_static_owner_failures_have_exact_fail_closed_literals():
+    cases = (
+        ("TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE", False, False, False, lambda d: (d["graph_endpoint_snapshot"]["/tf_static"].clear(), d["static_endpoint_mapping"].clear())),
+        ("TF_STATIC_EDGE_PUBLISHER_GID_NOT_UNIQUE", True, False, False, lambda d: (d["graph_endpoint_snapshot"]["/tf_static"].append(dict(d["graph_endpoint_snapshot"]["/tf_static"][0])), d["static_endpoint_mapping"][0].update(unique=False, match_count=2))),
+        ("TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER", True, True, False, lambda d: (d["graph_endpoint_snapshot"]["/tf_static"][0].update(node_name="other_node"), d["static_endpoint_mapping"][0].update(expected_owner=False, mapped_endpoint={"node_name": "other_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}))),
+    )
+    for literal, mappable, unique, owner, mutate in cases:
+        bad = _doc(); mutate(bad)
+        bad["acceptance"]["static_tf_edge_publisher_gid_mappable"] = mappable
+        bad["acceptance"]["static_tf_edge_publisher_gid_unique_mapped"] = unique
+        bad["acceptance"]["static_tf_owner_is_robot_state_publisher"] = owner
+        bad["failure_reason_literals"]["/tf_static:base_link->lidar_frame"] = literal
+        bad["terminal_outcome"] = "FAIL_NO_RETRY"
+        result = observer.validate_observer_document(bad)
+        assert result["failure_reason_literals"]["/tf_static:base_link->lidar_frame"] == literal
+        assert not result["all_pass"]
+
+
+def test_schema_v2_and_missing_static_ownership_are_rejected():
+    old = _doc(); old["schema"] = "wp06_6f_cpp_runtime_observer/v2"
+    with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_SCHEMA_MISMATCH"):
+        _validate(old)
+    missing = _doc(); missing.pop("static_endpoint_mapping")
+    with pytest.raises(observer.ObserverDocumentError, match="OBSERVER_GRAPH_MAPPING_MISSING"):
+        _validate(missing)
 
 
 def test_dynamic_tf_qos_is_best_effort_volatile_and_static_qos_is_reliable_transient_local():
@@ -134,6 +173,10 @@ def test_per_topic_timeout_reason_literals_are_required_for_failed_observations(
     for reason_key, acceptance_key, mutate, reason in cases:
         bad = _doc(); mutate(bad)
         bad["acceptance"][acceptance_key] = False
+        if acceptance_key == "static_base_link_to_lidar_frame_exact":
+            bad["acceptance"]["static_tf_edge_publisher_gid_mappable"] = False
+            bad["acceptance"]["static_tf_edge_publisher_gid_unique_mapped"] = False
+            bad["acceptance"]["static_tf_owner_is_robot_state_publisher"] = False
         bad["failure_reason_literals"][reason_key] = reason
         bad["terminal_outcome"] = "FAIL_NO_RETRY"
         result = observer.validate_observer_document(bad)

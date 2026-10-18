@@ -26,8 +26,9 @@
 namespace wp06_6f_observer
 {
 using Json = nlohmann::json;
-constexpr const char * kSchema = "wp06_6f_cpp_runtime_observer/v2";
+constexpr const char * kSchema = "wp06_6f_cpp_runtime_observer/v3";
 constexpr const char * kExpectedEkfNodeName = "ekf_filter_node";
+constexpr const char * kExpectedStaticTfNodeName = "robot_state_publisher";
 constexpr std::int64_t kNsPerSecond = 1000000000LL;
 constexpr double kTolerance = 1e-9;
 
@@ -98,6 +99,15 @@ EndpointMapping map_gid_to_endpoint(
   result.expected_owner = result.unique && result.endpoint->node_name == expected_node_name &&
     result.endpoint->node_namespace == "/" && result.endpoint->topic_type == "tf2_msgs/msg/TFMessage";
   return result;
+}
+
+std::string static_gid_failure_literal(const EndpointMapping & mapping)
+{
+  if (!mapping.unique) {
+    return mapping.match_count == 0 ? "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE" :
+           "TF_STATIC_EDGE_PUBLISHER_GID_NOT_UNIQUE";
+  }
+  return mapping.expected_owner ? "" : "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER";
 }
 
 struct TeardownRecord
@@ -285,24 +295,31 @@ public:
 
   Json finish(bool window_complete)
   {
-    Json endpoint_snapshot = Json::array();
+    Json endpoint_snapshots{{"/tf", Json::array()}, {"/tf_static", Json::array()}};
     std::vector<EndpointRecord> endpoints;
-    try {
-      for (const auto & endpoint : get_publishers_info_by_topic("/tf")) {
-        const auto canonical = canonical_gid(endpoint.endpoint_gid().data(), endpoint.endpoint_gid().size());
-        if (!canonical) {
-          errors_.push_back("GRAPH_ENDPOINT_GID_UNAVAILABLE");
-          continue;
+    std::vector<EndpointRecord> static_endpoints;
+    auto snapshot_endpoints = [this](const std::string & topic, Json & snapshot,
+        std::vector<EndpointRecord> & records) {
+        try {
+          for (const auto & endpoint : get_publishers_info_by_topic(topic)) {
+            const auto gid = endpoint.endpoint_gid();
+            const auto canonical = canonical_gid(gid.data(), gid.size());
+            if (!canonical) {
+              errors_.push_back("GRAPH_ENDPOINT_GID_UNAVAILABLE:" + topic);
+              continue;
+            }
+            EndpointRecord row{*canonical, endpoint.node_name(), endpoint.node_namespace(), endpoint.topic_type()};
+            records.push_back(row);
+            snapshot.push_back(Json{
+              {"gid", row.gid}, {"node_name", row.node_name}, {"node_namespace", row.node_namespace},
+              {"topic_type", row.topic_type}});
+          }
+        } catch (const std::exception & error) {
+          errors_.push_back("GRAPH_ENDPOINT_SNAPSHOT_FAILED:" + topic + ":" + error.what());
         }
-        EndpointRecord row{*canonical, endpoint.node_name(), endpoint.node_namespace(), endpoint.topic_type()};
-        endpoints.push_back(row);
-        endpoint_snapshot.push_back(Json{
-          {"gid", row.gid}, {"node_name", row.node_name}, {"node_namespace", row.node_namespace},
-          {"topic_type", row.topic_type}});
-      }
-    } catch (const std::exception & error) {
-      errors_.push_back(std::string("GRAPH_ENDPOINT_SNAPSHOT_FAILED:") + error.what());
-    }
+      };
+    snapshot_endpoints("/tf", endpoint_snapshots["/tf"], endpoints);
+    snapshot_endpoints("/tf_static", endpoint_snapshots["/tf_static"], static_endpoints);
 
     std::set<std::string> edge_gids;
     for (const auto & edge : dynamic_tf_) {edge_gids.insert(edge.at("publisher_gid").get<std::string>());}
@@ -322,6 +339,25 @@ public:
       owner_is_ekf = owner_is_ekf && mapping.expected_owner;
     }
 
+    Json static_gid_mapping = Json::array();
+    EndpointMapping static_mapping;
+    bool static_gid_available = false;
+    if (static_tf_.size() == 1 && static_tf_.front().contains("publisher_gid") &&
+      static_tf_.front()["publisher_gid"].is_string())
+    {
+      const auto gid = static_tf_.front()["publisher_gid"].get<std::string>();
+      static_gid_available = true;
+      static_mapping = map_gid_to_endpoint(gid, static_endpoints, kExpectedStaticTfNodeName);
+      static_gid_mapping.push_back(Json{
+        {"expected_node_name", kExpectedStaticTfNodeName}, {"gid", gid},
+        {"match_count", static_mapping.match_count},
+        {"mapped_endpoint", static_mapping.endpoint ? Json{
+          {"node_name", static_mapping.endpoint->node_name},
+          {"node_namespace", static_mapping.endpoint->node_namespace},
+          {"topic_type", static_mapping.endpoint->topic_type}} : Json(nullptr)},
+        {"unique", static_mapping.unique}, {"expected_owner", static_mapping.expected_owner}});
+    }
+
     const auto clock_times = valid_sample_times(clock_samples_);
     const auto odom_times = valid_sample_times(odom_samples_);
     std::vector<std::int64_t> tf_times;
@@ -337,7 +373,12 @@ public:
     const auto valid_tf_count = static_cast<std::size_t>(std::count_if(
       dynamic_tf_.begin(), dynamic_tf_.end(), [](const Json & edge) {return edge.value("valid", false);}));
     bool tf_pass = valid_tf_count >= 5 && tf_monotonic && edge_gids.size() == 1 && owner_is_ekf;
-    bool static_pass = static_tf_.size() == 1 && static_tf_.front().value("valid", false);
+    bool static_transform_pass = static_tf_.size() == 1 && static_tf_.front().value("valid", false);
+    bool static_gid_mappable = static_transform_pass && static_gid_available && static_mapping.match_count > 0;
+    bool static_gid_unique = static_transform_pass && static_gid_available && static_mapping.unique;
+    bool static_owner_pass = static_gid_unique && static_mapping.expected_owner;
+    bool static_qos_pass = qos_json(static_tf_qos()) ==
+      Json{{"depth", 1}, {"durability", "TRANSIENT_LOCAL"}, {"history", "KEEP_LAST"}, {"reliability", "RELIABLE"}};
     bool map_absent = !map_to_odom_seen_ && window_complete;
     bool no_errors = errors_.empty();
 
@@ -349,7 +390,11 @@ public:
       {"filtered_odometry_minimum_five_contract_and_monotonicity", odom_pass},
       {"map_to_odom_absent_during_full_window", map_absent},
       {"observer_errors_absent", no_errors},
-      {"static_base_link_to_lidar_frame_exact", static_pass}};
+      {"static_base_link_to_lidar_frame_exact", static_transform_pass},
+      {"static_tf_edge_publisher_gid_mappable", static_gid_mappable},
+      {"static_tf_edge_publisher_gid_unique_mapped", static_gid_unique},
+      {"static_tf_owner_is_robot_state_publisher", static_owner_pass},
+      {"static_tf_subscription_qos_contract", static_qos_pass}};
     Json reasons = Json::object();
     if (!clock_pass) {reasons["/clock"] = clock_samples_.size() < 5 ? "CLOCK_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "CLOCK_TIMESTAMP_NOT_STRICTLY_INCREASING";}
     if (!odom_pass) {reasons["/odometry/filtered"] = odom_samples_.size() < 5 ? "FILTERED_ODOMETRY_TIMEOUT_MINIMUM_FIVE_SAMPLES" : "FILTERED_ODOMETRY_CONTRACT_OR_MONOTONICITY_FAILED";}
@@ -359,7 +404,18 @@ public:
       else if (!tf_monotonic) {reasons["/tf:odom->base_link"] = "TF_DYNAMIC_TIMESTAMP_NOT_STRICTLY_INCREASING";}
       else {reasons["/tf:odom->base_link"] = "TF_DYNAMIC_TIMEOUT_MINIMUM_FIVE_EDGES_OR_GIDS";}
     }
-    if (!static_pass) {reasons["/tf_static:base_link->lidar_frame"] = "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH";}
+    if (!static_transform_pass) {
+      reasons["/tf_static:base_link->lidar_frame"] = "TF_STATIC_EDGE_MISSING_OR_TRANSFORM_MISMATCH";
+    } else if (!static_gid_available) {
+      reasons["/tf_static:base_link->lidar_frame"] = "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE";
+    } else if (static_mapping.match_count == 0) {
+      reasons["/tf_static:base_link->lidar_frame"] = "TF_STATIC_EDGE_PUBLISHER_GID_UNMAPPABLE";
+    } else if (!static_mapping.unique) {
+      reasons["/tf_static:base_link->lidar_frame"] = static_gid_failure_literal(static_mapping);
+    } else if (!static_mapping.expected_owner) {
+      reasons["/tf_static:base_link->lidar_frame"] = "TF_STATIC_EDGE_PUBLISHER_NOT_ROBOT_STATE_PUBLISHER";
+    }
+    if (!static_qos_pass) {reasons["/tf_static:qos"] = "TF_STATIC_QOS_CONTRACT_MISMATCH";}
     if (map_to_odom_seen_) {reasons["map->odom"] = "MAP_TO_ODOM_EDGE_OBSERVED";}
     else if (!window_complete) {reasons["map->odom"] = "TF_OBSERVATION_WINDOW_INCOMPLETE";}
     if (!no_errors) {reasons["observer_errors"] = "RUNTIME_OBSERVER_CALLBACK_OR_API_ERROR";}
@@ -370,7 +426,9 @@ public:
     return Json{
       {"acceptance", acceptance}, {"duration_seconds", duration_seconds_},
       {"endpoint_mapping", gid_mapping}, {"expected_ekf_node_name", expected_ekf_node_name_},
-      {"failure_reason_literals", reasons}, {"graph_endpoint_snapshot", endpoint_snapshot},
+      {"expected_static_tf_node_name", kExpectedStaticTfNodeName},
+      {"failure_reason_literals", reasons}, {"graph_endpoint_snapshot", endpoint_snapshots},
+      {"static_endpoint_mapping", static_gid_mapping},
       {"observed_forbidden_edges", forbidden_edges_},
       {"map_to_odom_seen", map_to_odom_seen_}, {"observer_errors", errors_},
       {"qos_used", Json{{"/tf", qos_json(dynamic_tf_qos())}, {"/tf_static", qos_json(static_tf_qos())}}},

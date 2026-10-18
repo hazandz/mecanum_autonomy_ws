@@ -780,3 +780,8 @@ Run 001 is an immutable historical failure caused by the unsupported Python `rcl
 ### WP06-6F dynamic TF QoS correction — current review delta
 
 The C++ observer now subscribes to dynamic `/tf` with explicit `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE`; `/tf_static` remains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. Observer JSON schema v2 records both profiles and the offline validator rejects mismatches. Edge-specific GID ownership checks remain fail-closed. Source pins: C++ observer `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`; Python JSON validator `cee7ac20fab7e6a86d066e9e76b12113399a19c1c8cceba60d265247b1ba4bf3`. Run 001 remains an immutable observer API mismatch failure, Run 002 remains pending and unconsumed, and evidence remains offline only.
+
+
+### WP06-6F static TF publisher GID ownership correction
+
+Current observer schema v3 snapshots graph publisher endpoints for both `/tf` and `/tf_static`; the static transform's `rclcpp::MessageInfo` GID must map uniquely to the root-namespace `robot_state_publisher` endpoint of type `tf2_msgs/msg/TFMessage`. Wrong-owner, unmappable, and non-unique GIDs fail closed with distinct literals. Matching the transform alone is insufficient. QoS stays `/tf` KEEP_LAST(100)/BEST_EFFORT/VOLATILE and `/tf_static` KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL. Run 001 remains the immutable observer API mismatch historical failure; Run 002 remains pending, capacity one, acquisition count zero, and NOT_GRANTED. This is offline source/test/build evidence only; no runtime authorization, `RUNTIME_APPROVED`, or Gate B transition.
