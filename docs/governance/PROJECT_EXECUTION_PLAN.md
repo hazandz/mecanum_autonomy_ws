@@ -890,34 +890,10 @@ bridge, or normalizer.
 WP06-6C implementation and runtime evidence are complete only within the wheel/IMU ingress scope. Independent audit passed the external Run 003 evidence for Gazebo IMU → ROS staging → normalizer → `/imu/data`, wheel ingress, effective `use_sim_time`, and teardown; see the canonical disposition manifest `docs/governance/evidence/WP-06_6C_WHEEL_IMU_RUNTIME_INGRESS_RUN_003_MANIFEST.json`. Run 001 and Run 002 remain immutable historical failures. This is not whole ROS graph, global TF, EKF, Nav2, AMCL, Map Server, or navigation-profile validation. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`; no new runtime authorization is issued. Integration is eligible only after final independent audit of the exact L1 disposition commit and Owner decision.
 
 
-## WP06-6F TF/EKF state-estimation ingress with isolated ROS clock — review candidate
+## WP06-6F TF/EKF state-estimation ingress with isolated ROS clock — reconciled current status
 
-At exact base `8b73bcb0b026fe337c023f6a30205dbe89d31eb5`, this candidate adds one dedicated `GZ_TO_ROS` `/clock` mapping, updates the existing EKF configuration with explicit `reset_on_time_jump: true` and `use_control: false`, and provides a composite launch for the existing WP06-6C ingress, the clock bridge, and one `robot_localization/ekf_node`. The selected fixed partition is `wp06_scan_probe_run_002`; the legacy `gazebo.launch.py` is neither included nor installed by this route. The EKF is the intended sole dynamic `odom -> base_link` owner, while the existing bootstrap `robot_state_publisher` retains the static `base_link -> lidar_frame` edge.
+The offline candidate keeps a dedicated `GZ_TO_ROS` `/clock` mapping, existing WP06-6C wheel/IMU ingress, and one EKF in the composite launch. EKF and RSP ownership are design contracts; this candidate does not establish runtime TF/EKF behavior. The observer is a C++ `rclcpp::MessageInfo` collector with edge-specific GID mapping; the Python module is an offline JSON validator.
 
-Evidence is limited to `IMPLEMENTED_OFFLINE_MULTISAMPLE_RUNTIME_OBSERVER_AND_GUARD_ONLY`. The capacity-one Run 001 guard remains pending and unconsumed; no runtime authorization, runtime evidence, profile resolution, `ResolvedConfigV3`, `config_hash`, Gate B transition, or runtime approval is created. WP06-6C Run 003 remains audited bounded ingress evidence only, not EKF/TF/navigation evidence. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
+Run 001 is an immutable historical observer API mismatch, not evidence of TF/EKF failure. Run 002 executed exactly once at review commit `8939b7d8d0268eb595f906bcc97581d6dc62b581`; the external guard is `CONSUMED`, acquisition count 1. It failed during observer execution with nested-array `json.exception.type_error.304`. This does not show TF, EKF, clock, or `robot_state_publisher` failure. Run 002 was not retried; its external evidence and guard are unchanged.
 
-The prior WP06-6F observer design used Python rclpy `create_subscription(..., with_info=True)` and Run 001 failed at that unsupported API. This is an immutable observer API failure, not evidence of TF/EKF failure, and is not retried. The current correction uses a C++ rclcpp MessageInfo observer with edge GID mapping; Run 002 has its own pending capacity-one guard with acquisition count zero and `runtime_authorization: NOT_GRANTED`. Evidence remains offline source/test/build only.
-
-
-### WP06-6F corrective observer and Run 002 authorization boundary
-
-Run 001 remains the immutable historical failure caused by an unsupported `rclpy` `with_info=True` subscription API; do not classify it as a TF/EKF failure or retry it. A dedicated C++ `rclcpp::MessageInfo` observer now provides edge-specific publisher GID evidence and exact graph-endpoint mapping; unmappable GIDs fail closed. The Python module only validates canonical observer JSON. Run 002 is a separate capacity-one guard seeded PENDING, acquisition count zero, `runtime_authorization: NOT_GRANTED`, and has not been authorized or consumed. This candidate supplies offline source/test/build evidence only; no runtime approval or Gate B transition is created.
-
-## WP06-6F dynamic TF QoS compatibility corrective — review delta
-
-The observer's dynamic `/tf` subscription is pinned to `KEEP_LAST(100)`, `BEST_EFFORT`, `VOLATILE`; static `/tf_static` retains `KEEP_LAST(1)`, `RELIABLE`, `TRANSIENT_LOCAL`. The schema-versioned observer output records both profiles; the Python offline validator and acceptance matrix enforce dynamic QoS. C++ observer SHA-256 `3e2e3227d4933a2cf0863b31810556c01116fb9598bb8ba850c1beb974f0b635`; Python validator SHA-256 `cee7ac20fab7e6a86d066e9e76b12113399a19c1c8cceba60d265247b1ba4bf3`. This is offline source/test/build evidence only. Run 001 remains an immutable observer API mismatch (not a TF/EKF failure); Run 002 guard remains pending and unconsumed.
-
-
-### WP06-6F static TF publisher GID ownership correction
-
-Current observer schema v3 snapshots graph publisher endpoints for both `/tf` and `/tf_static`; the static transform's `rclcpp::MessageInfo` GID must map uniquely to the root-namespace `robot_state_publisher` endpoint of type `tf2_msgs/msg/TFMessage`. Wrong-owner, unmappable, and non-unique GIDs fail closed with distinct literals. Matching the transform alone is insufficient. QoS stays `/tf` KEEP_LAST(100)/BEST_EFFORT/VOLATILE and `/tf_static` KEEP_LAST(1)/RELIABLE/TRANSIENT_LOCAL. Run 001 remains the immutable observer API mismatch historical failure; Run 002 remains pending, capacity one, acquisition count zero, and NOT_GRANTED. This is offline source/test/build evidence only; no runtime authorization, `RUNTIME_APPROVED`, or Gate B transition.
-
-
-### WP06-6F observer JSON container correction
-
-Correct the C++ observer's five collection initializers and fail-closed offline JSON shape validation. Run 002 remains an immutable observer execution failure, not a TF/EKF/clock failure. A separate Run 003 guard/runner/test/manifest is seeded PENDING and unconsumed. This work provides offline source/test/build evidence only; no runtime authorization or Gate B transition.
-
-
-### WP06-6F corrective JSON collection source pins
-
-The Run003 pending manifest carries the current source-pin closure. Corrected C++ observer SHA-256: `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; parser SHA-256: `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. Run002 is an immutable observer execution failure from nested JSON arrays, not a TF/EKF/clock failure. Run003 guard remains pending, capacity-one and unconsumed; no runtime authorization is issued.
+Run 003 is the sole pending guard (`PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`). Current C++ observer SHA-256 is `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; current Python validator SHA-256 is `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. Evidence ceiling is `IMPLEMENTED_OFFLINE_JSON_COLLECTION_CORRECTION_RUN003_GUARD_PENDING`; runtime evidence `NOT_CREATED`; `runtime_eligible: false`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No runtime was executed in this governance reconciliation.

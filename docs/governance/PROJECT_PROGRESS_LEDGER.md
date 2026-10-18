@@ -1544,3 +1544,14 @@
 | Run 002 / Run 003 | Run002 remains historical observer execution failure, not a TF/EKF/clock failure. Run003 guard remains pending, capacity 1, acquisition count 0, `runtime_authorization: NOT_GRANTED`. |
 | Evidence ceiling | Offline source/test/build only; no runtime authorization or Gate B transition. |
 | `supersedes` | Supersedes only the source-pin values in the immediately preceding candidate-only Ledger entry; all base Ledger bytes remain an exact prefix. |
+
+
+### WP06-6F governance reconciliation — Run 002 consumed, Run 003 pending
+
+| Field | Value |
+|---|---|
+| `supersedes` | Supersedes prior current-status statements in WP06-6F governance that described Run 002 as pending, unauthorized, unexecuted, or not acquired. Earlier Ledger bytes are retained unchanged as the required prefix. |
+| Run 002 | Executed exactly once at review commit `8939b7d8d0268eb595f906bcc97581d6dc62b581`; external guard state is `CONSUMED`, `acquisition_count=1`. It failed in observer execution with nested-array `json.exception.type_error.304`. It is not evidence of a TF, EKF, clock, or `robot_state_publisher` failure, and it was not retried. |
+| Run 003 | The sole pending guard: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. |
+| Current pins | C++ observer SHA-256 `70c74e56988ce750aa9c808e929d68df06a04f7a6d8bfeb175c74e40c2b014b7`; Python validator SHA-256 `163e02eb8db27a8e9f355c6f343d30a6291b37289f2bdc3e486bab85922d7c9e`. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_JSON_COLLECTION_CORRECTION_RUN003_GUARD_PENDING`; `runtime_eligible: false`; runtime evidence `NOT_CREATED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
