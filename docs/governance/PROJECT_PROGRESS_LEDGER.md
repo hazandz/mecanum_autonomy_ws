@@ -1716,3 +1716,35 @@
 | Supersedes | Earlier current-metadata attributions of the underlying packet’s parent, changed-path scope, pin count and test totals are superseded by this reconciliation. Prior Ledger entries are retained unchanged as historical records. |
 | Decision / evidence / Registry / PEP SHA-256 | Decision `0d5927d672b1d7c8083c50638f9b77ec8b9eac94f17a3b27bb460aa3ae167920`; evidence JSON `16a513a01e2ba71aaac99d6c4cee71ca36c22ce6cec811d1a0e92a60d78c6e39`; Registry `f4b4edd2b882b7b573502b3b0a86198c29556dc8ca11656f29a8813707c5f076`; PEP `03a7516ed7cb449df3549559d331f3a927db40251ec62bfaf6f0efe920d32e44`. |
 | Status and evidence ceiling | Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Evidence ceiling remains `STATIC_SOURCE_OFFLINE_BUILD_TEST_READY_FOR_STEP7_RUNTIME_CAMPAIGN`. No runtime claim. |
+
+
+### STEP07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001 — L2 review candidate
+
+- Base: `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`; Architecture SHA-256: `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
+- Scope: source/offline-test campaign guard, one-shot runner, evidence validator, C++ ROS observer, installed Gate-B Observation81 collector, and governance records. Exact pins and acceptance matrix: `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json`.
+- Guard seed remains pending, capacity one, acquisition count zero, runtime authorization not granted. No runner, ROS, Gazebo, Nav2, launch runtime, HIL, hardware, or PPO was executed.
+- Evidence ceiling: `IMPLEMENTED_SOURCE_AND_OFFLINE_TEST_CAMPAIGN_MACHINERY_ONLY`; runtime evidence `NOT_CREATED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. This does not alter Step 4–6 or PEP work-package statuses.
+
+
+### Step-7 integrated NAV2_BASELINE Run001 candidate — offline verification
+
+- Candidate source/offline verification: six-package colcon build PASS; `mecanum_nav_rl/test` 705 passed; `mecanum_nav_bringup/test` 237 passed; observer GTest 11 passed; interfaces colcon test 11 passed; focused campaign tests 36 passed.
+- Installed closure: ROSIDL import, C++ observer executable, Gate-B console script, installed parser import and checked source-byte equality PASS.
+- Test interpreter: `/tmp/roadmap-step4-pydantic.ymkohe/venv/bin/python`, Python 3.12.3, Pydantic 2.10.6. Build/install/log directories were external to the Git worktree.
+- Evidence ceiling remains `IMPLEMENTED_SOURCE_AND_OFFLINE_TEST_CAMPAIGN_MACHINERY_ONLY`; no runtime execution, Gate B transition or `RUNTIME_APPROVED` claim.
+
+### Step-7 Run001 candidate — TF ownership/evidence-matrix reconciliation
+
+- The C++ observer and offline validator now require an observed `map -> odom` GID to map uniquely to the AMCL `/tf` publisher endpoint, and require `world -> map` to remain absent. This follows the fixed Owner TF contract; it does not assert map/world numeric equality.
+- The evidence and guard manifest now enumerate each observer acceptance separately, including map-to-odom AMCL ownership, world-to-map absence, and explicit owners for scan, wheel/IMU ingress, filtered odometry, map, lifecycle state, final receipt, and `/cmd_vel` boundary. Source pins and guard-seed digest were refreshed from current bytes; the guard remains pending with capacity one and no runtime authorization.
+- Reverification after the correction: six-package external colcon build PASS; focused campaign tests 36 passed; `mecanum_nav_rl/test` 705 passed; `mecanum_nav_bringup/test` 237 passed; observer and interfaces colcon tests 22 passed, zero failures. Runtime remains unexecuted; Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`.
+
+### STEP07 Run001 separated bootstrap/composite topology correction — offline verification
+
+| Field | Record |
+|---|---|
+| Base and scope | Base `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`; exact 23-path candidate scope, the prior 21 paths plus the composite launch and its static test. |
+| Topology | Bootstrap and composite are separate one-shot process groups; composite is explicitly launched with `start_bootstrap:=false`; map/Fuel preflight stays active in both composite modes. Teardown verifies composite SIGINT/empty group before bootstrap SIGINT/empty group. |
+| Verification | Six-package colcon build PASS; `mecanum_nav_rl/test` 705 passed; `mecanum_nav_bringup/test` 238 passed; observer/interface colcon tests 11 each passed; focused tests 45 passed; installed closure PASS. |
+| Governance hashes | Decision `f03d04e1c6ccca2229773d4e417a68c3c280d778a2a01835b920cca1b3f172b2`; evidence `ec4c059ff3a0fa39df0b887426ae0517efda9b9820ecab6a2bad6a34135a973c`; guard manifest `11343554c3d0dec9b82ee7ef90a976e67828913fbfc991962988ba81f40830fb`; Registry `108952d170fdb8eee723bc1103b91b0776483575cdd24cebc5b797b24eac435e`; Plan `39365b348706cdfaff2d9d931d427ec018b551fa5cbc386ca10a452de49be33f`. |
+| Boundary | No runtime/runner execution. Run001 guard remains pending, capacity one, acquisition count zero, `runtime_authorization=NOT_GRANTED`; Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Historical WP06 Run001–Run007 files remain unchanged. |

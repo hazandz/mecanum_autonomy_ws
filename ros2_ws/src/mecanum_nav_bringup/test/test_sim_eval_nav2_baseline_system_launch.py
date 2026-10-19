@@ -20,7 +20,7 @@ def test_composite_launch_imports_without_starting_processes(monkeypatch, tmp_pa
     description = module.generate_launch_description()
     assert isinstance(description, LaunchDescription)
     # OpaqueFunction is left unevaluated, so no process is launched by this test.
-    assert len(description.entities) == 8
+    assert len(description.entities) == 9
 
 
 def test_system_launch_has_exact_command_route_and_safety_executables() -> None:
@@ -39,9 +39,14 @@ def test_system_launch_has_exact_command_route_and_safety_executables() -> None:
     assert "Path.cwd()" not in source
     assert "canonical_map_root" in source
     assert 'DeclareLaunchArgument("sim_estop_release_authorized", default_value="false")' in source
-    assert source.index("bootstrap_module.validate_fuel_cache(") < source.index("return [\n        IncludeLaunchDescription")
+    assert source.index("bootstrap_module.validate_fuel_cache(") < source.index("bootstrap_actions = _bootstrap_include(")
     assert '"fuel_cache_root": fuel_cache_root' in source
     assert '"canonical_map_root"' in source
+    assert 'DeclareLaunchArgument("start_bootstrap", default_value="true")' in source
+    assert '_literal_bool(start_bootstrap, "start_bootstrap")' in source
+    # The same map/Fuel validation occurs before the conditional include in both modes.
+    assert source.index("checked_map_yaml(") < source.index("bootstrap_module.validate_fuel_cache(")
+    assert source.index("bootstrap_module.validate_fuel_cache(") < source.index("bootstrap_actions = _bootstrap_include(")
     import importlib.util
     import pytest
     path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
@@ -54,6 +59,25 @@ def test_system_launch_has_exact_command_route_and_safety_executables() -> None:
     for invalid in ("True", "FALSE", "1", "yes", ""):
         with pytest.raises(RuntimeError, match="INVALID_LITERAL_BOOLEAN"):
             module._literal_bool(invalid, "sim_estop_release_authorized")
+
+
+def test_bootstrap_include_defaults_to_once_and_can_be_separated_without_launching():
+    import importlib.util
+    import pytest
+    from launch.actions import IncludeLaunchDescription
+
+    path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
+    spec = importlib.util.spec_from_file_location("sim_eval_bootstrap_split_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    pose = {"initial_pose_map_x": "0.0", "initial_pose_map_y": "0.0", "initial_pose_map_yaw": "0.0"}
+    default_actions = module._bootstrap_include("true", "/installed/bootstrap.launch.py", "partition-x", "/home/test/.gz/fuel", pose)
+    separated_actions = module._bootstrap_include("false", "/installed/bootstrap.launch.py", "partition-x", "/home/test/.gz/fuel", pose)
+    assert len(default_actions) == 1 and isinstance(default_actions[0], IncludeLaunchDescription)
+    assert separated_actions == []
+    with pytest.raises(RuntimeError, match="INVALID_LITERAL_BOOLEAN:start_bootstrap"):
+        module._bootstrap_include("True", "/installed/bootstrap.launch.py", "partition-x", "/home/test/.gz/fuel", pose)
 
 
 def test_map_root_is_absolute_and_all_canonical_files_are_pinned() -> None:

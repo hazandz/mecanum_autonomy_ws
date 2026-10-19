@@ -43,10 +43,23 @@ def _literal_bool(value: str, name: str) -> bool:
     raise RuntimeError(f"INVALID_LITERAL_BOOLEAN:{name}")
 
 
+def _bootstrap_include(start_bootstrap: str, bootstrap: str, partition: str,
+                       fuel_cache_root: str, pose: dict[str, str]):
+    if not _literal_bool(start_bootstrap, "start_bootstrap"):
+        return []
+    return [IncludeLaunchDescription(PythonLaunchDescriptionSource(bootstrap), launch_arguments={
+        "gz_partition": partition,
+        "fuel_cache_root": fuel_cache_root,
+        **pose,
+    }.items())]
+
+
 def _actions(context):
     partition = LaunchConfiguration("gz_partition").perform(context)
     if not partition.strip():
         raise RuntimeError("SIM_EVAL_GZ_PARTITION_REQUIRED")
+    start_bootstrap = LaunchConfiguration("start_bootstrap").perform(context)
+    _literal_bool(start_bootstrap, "start_bootstrap")
     map_yaml = checked_map_yaml(LaunchConfiguration("canonical_map_root").perform(context))
     fuel_cache_root = LaunchConfiguration("fuel_cache_root").perform(context)
     sim_estop_release_authorized = _literal_bool(
@@ -86,6 +99,10 @@ def _actions(context):
         "sim_estop_release_authorized": sim_estop_release_authorized,
     }
     pose = {key: LaunchConfiguration(key) for key in ("initial_pose_map_x", "initial_pose_map_y", "initial_pose_map_yaw")}
+    bootstrap_actions = _bootstrap_include(
+        start_bootstrap, bootstrap, partition, fuel_cache_root,
+        {key: value for key, value in pose.items()},
+    )
     nav2 = [
         Node(package="nav2_map_server", executable="map_server", name="map_server",
              parameters=[{"use_sim_time": True, "frame_id": "map", "yaml_filename": map_yaml}], output="screen"),
@@ -109,11 +126,7 @@ def _actions(context):
                  "node_names": ["map_server", "amcl", "planner_server", "controller_server", "behavior_server", "bt_navigator", "safety_lifecycle"]}], output="screen"),
     ]
     return [
-        IncludeLaunchDescription(PythonLaunchDescriptionSource(bootstrap), launch_arguments={
-            "gz_partition": partition,
-            "fuel_cache_root": fuel_cache_root,
-            **{k: LaunchConfiguration(k) for k in pose},
-        }.items()),
+        *bootstrap_actions,
         IncludeLaunchDescription(PythonLaunchDescriptionSource(ingress_ekf), launch_arguments={
             "gz_partition": partition, "use_sim_time": "true",
         }.items()),
@@ -134,6 +147,7 @@ def _actions(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("gz_partition"),
+        DeclareLaunchArgument("start_bootstrap", default_value="true"),
         DeclareLaunchArgument("canonical_map_root"),
         DeclareLaunchArgument("fuel_cache_root"),
         DeclareLaunchArgument("sim_estop_release_authorized", default_value="false"),

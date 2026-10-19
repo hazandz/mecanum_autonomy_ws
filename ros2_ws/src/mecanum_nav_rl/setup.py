@@ -98,6 +98,7 @@ setup(
             "safety_lifecycle=mecanum_nav_rl.runtime_safety.safety_lifecycle_node:main",
             "safety_supervisor=mecanum_nav_rl.runtime_safety.safety_supervisor_node:main",
             "final_twist_publisher=mecanum_nav_rl.runtime_safety.final_twist_publisher_node:main",
+            "step07_gate_b_observer=mecanum_nav_rl.observations.step07_gate_b_observer_node:main",
         ],
     },
 )

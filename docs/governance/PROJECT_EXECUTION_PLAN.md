@@ -942,3 +942,16 @@ At parent `04a2ba5332ea56feb24dc3cf393114d8158bcb62`, the offline corrective is 
 The exact underlying L2 corrective is `dbc00940f9f70a4ee3a846ceb6fde1964c35ff19` (sole parent `04a2ba5332ea56feb24dc3cf393114d8158bcb62`), with 14 changed paths and 46 source pins verified against its Git blobs. Its recorded offline results are 701 `mecanum_nav_rl` pytest cases, 234 `mecanum_nav_bringup` pytest cases, and 11 interface `colcon test` cases. The current L1 reconciliation is a distinct five-governance-path change; it does not alter source/test/runtime semantics or historical evidence.
 
 Reconciliation decision SHA-256: `0d5927d672b1d7c8083c50638f9b77ec8b9eac94f17a3b27bb460aa3ae167920`; evidence JSON SHA-256: `16a513a01e2ba71aaac99d6c4cee71ca36c22ce6cec811d1a0e92a60d78c6e39`; Registry SHA-256: `f4b4edd2b882b7b573502b3b0a86198c29556dc8ca11656f29a8813707c5f076`. This entry supersedes stale current metadata about the underlying packet’s parent, path scope, source-pin count, and test totals. Step 4 remains `CLOSED_FOR_SIM_EVAL`; Step 5 and Step 6 remain `IMPLEMENTED_OFFLINE_ONLY`; Step 7 remains `NOT_STARTED`; `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; the evidence ceiling is unchanged.
+
+
+### Roadmap Step 7 integrated NAV2_BASELINE campaign Run001 — review candidate
+
+This L2 candidate adds only source/offline campaign machinery at exact base `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`. The campaign input bundle is `sim_eval` + `NAV2_BASELINE` with Owner-pinned map/world/Fuel/poses/goal and ownership described in the candidate decision/evidence. A capacity-one guard remains pending; exact-run Owner authorization, runtime execution, independent evidence audit, and Owner approval are still future prerequisites.
+
+This review snapshot does not transition plan statuses: Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5 and Step 6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Evidence ceiling is `IMPLEMENTED_SOURCE_AND_OFFLINE_TEST_CAMPAIGN_MACHINERY_ONLY`; runtime evidence is not created. PEP work-package identifiers/statuses remain unchanged.
+
+Run001 campaign review evidence records six-package colcon build PASS, 705 `mecanum_nav_rl/test` tests, 237 `mecanum_nav_bringup/test` tests, 11 observer tests, 11 interface tests, and 36 focused tests PASS. These results do not transition Step 7, Gate B, or runtime approval.
+
+#### Roadmap Step-7 Run001 campaign topology candidate
+
+The review candidate remains source/offline-test machinery only. Composite launch has an exact `start_bootstrap` literal argument defaulting to `true`; separated mode disables inclusion while retaining map and Fuel preflight. The one-shot runner creates independent bootstrap and composite process groups, waits for bootstrap readiness before composite startup, and verifies composite-first then bootstrap teardown. Decision/evidence/manifest hashes are recorded in the Registry's current candidate entry. Offline checks passed as recorded in the campaign evidence; this does not start the campaign, consume the guard, transition Gate B, or change any PEP work-package status.

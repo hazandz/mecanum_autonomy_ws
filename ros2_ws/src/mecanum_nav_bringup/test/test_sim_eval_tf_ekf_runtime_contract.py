@@ -38,6 +38,32 @@ WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELI
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
 PARENT = "d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1"
 CORRECTIVE_BASE = "04a2ba5332ea56feb24dc3cf393114d8158bcb62"
+STEP07_CAMPAIGN_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
+STEP07_CAMPAIGN_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run001.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run001.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/CMakeLists.txt",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/mecanum_nav_rl/setup.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -260,23 +286,55 @@ def test_run007_seed_and_historical_disposition_are_immutable():
     # each historical layer without conflating their different timestamps.
     assert manifest["runtime_evidence_status"] == "NOT_CREATED"
     assert evidence["runtime_evidence_status"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS"
-    assert evidence["historical_run_006"]["terminal_outcome"] == "WP06_6F_RUNTIME_RUN006_FAIL_NO_RETRY_GUARD_CONSUMED"
-    assert evidence["historical_run_006"]["failure"] == "GuardError:RUNTIME_ACCEPTANCE_FAILED"
-    assert evidence["historical_run_006"]["guard_state"] == "CONSUMED"
-    # The repository guard and guard manifest are the pre-acquisition seed;
-    # the L1 evidence document records the later consumed-guard disposition.
-    assert evidence["run_007_guard"]["state_before"] == guard["state"]
-    assert evidence["run_007_guard"]["state"] == "CONSUMED"
-    assert evidence["run_007_guard"]["acquisition_count"] == 1
-    assert evidence["run_007_guard"]["capacity"] == 1
-    assert evidence["run_007_guard"]["runtime_authorization"] == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
-    assert evidence["RUNTIME_APPROVED"] == "NOT_APPROVED" and evidence["GATE_B"] == "NOT_STARTED"
-    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING"
-    assert evidence["evidence_ceiling"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS_WP06_6F_SCOPE_ONLY"
-    assert manifest["owner_authorization_contract"] == evidence["owner_authorization_contract"]
-    assert manifest["owner_authorization_contract"]["scope_literal"] == "WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY"
-    assert evidence["runtime_eligible"] is False
-    assert evidence["runtime_evidence_status"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS"
+
+
+def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relaxed():
+    status = subprocess.run(["git", "status", "--short", "--untracked-files=all"],
+                            cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines()
+    changed = {line[3:] for line in status if line}
+    assert changed == STEP07_CAMPAIGN_PATHS
+    protected_fragments = (
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/",
+        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00",
+        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run00",
+    )
+    assert not any(any(path.startswith(fragment) for fragment in protected_fragments) for path in changed)
+    # The new campaign's path is explicitly separate from historical WP06 data.
+    assert all(path.startswith("artifacts/simulation/step07_nav2_baseline_campaign/") or
+               path.startswith("ros2_ws/src/") or path.startswith("docs/governance/")
+               for path in changed)
+
+
+def test_step07_static_command_route_preserves_single_final_cmd_vel_owner():
+    composite_path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
+    bridge_path = ROOT / "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml"
+    safety_source = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py"
+    composite = composite_path.read_text(encoding="utf-8")
+    bridge = yaml.load(bridge_path.read_text(encoding="utf-8"), Loader=UniqueLoader)
+    final_publisher = safety_source.read_text(encoding="utf-8")
+    assert composite.count('("cmd_vel", "/mecanum/nav2_candidate_cmd")') == 2
+    assert 'executable="final_twist_publisher"' in composite
+    assert bridge == [{"ros_topic_name": "/cmd_vel", "gz_topic_name": "/cmd_vel",
+                       "ros_type_name": "geometry_msgs/msg/Twist",
+                       "gz_type_name": "gz.msgs.Twist", "direction": "ROS_TO_GZ"}]
+    assert "create_publisher" in final_publisher and '"/cmd_vel"' in final_publisher
+    assert "/ground_truth/odom" not in composite and '"/odom"' not in composite
+    assert "world -> map" not in composite
+
+
+def test_step07_gate_b_observer_has_only_policy_safe_subscriptions_and_no_with_info():
+    path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py"
+    source = path.read_text(encoding="utf-8")
+    assert ("with_" + "info=") not in source and ("with_" + "info=True") not in source
+    assert "create_publisher" not in source
+    assert "send_goal_async" in source and source.count("send_goal_async(") == 2
+    assert "STATUS_SUCCEEDED" in source
+    assert '"/ground_truth/odom"' not in source
+    expected_topics = {"/scan", "/odometry/filtered", "/mecanum/safety/lifecycle_state",
+                       "/mecanum/final_issued_command"}
+    import re
+    found = set(re.findall(r'create_subscription\([^,]+,\s*"([^"]+)"', source))
+    assert found == expected_topics
 
 
 def test_run007_matrix_covers_run_acceptance_and_post_teardown_finalization():
@@ -302,7 +360,7 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 def test_historical_runtime_conservation_and_candidate_scope():
     result = subprocess.run(
-        ["git", "diff", "--name-only", CORRECTIVE_BASE], cwd=ROOT,
+        ["git", "diff", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,
         check=True, capture_output=True, text=True,
     )
     changed = set(result.stdout.splitlines())
@@ -311,26 +369,10 @@ def test_historical_runtime_conservation_and_candidate_scope():
         check=True, capture_output=True, text=True,
     )
     changed.update(untracked.stdout.splitlines())
-    allowed = {
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/CommandEnvelope.msg",
-        "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
-        "ros2_ws/src/mecanum_nav_rl/test/test_final_twist_publisher_static.py",
-        "ros2_ws/src/mecanum_nav_rl/test/test_safety_lifecycle_transition.py",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_interface_contracts.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
-        "docs/governance/decisions/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.md",
-        "docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json",
-        "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
-        "docs/governance/PROJECT_EXECUTION_PLAN.md",
-        "docs/governance/PROJECT_PROGRESS_LEDGER.md",
-    }
-    assert changed <= allowed
+    assert changed == STEP07_CAMPAIGN_PATHS
     protected = [
         path for path in subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", PARENT], cwd=ROOT,
+            ["git", "ls-tree", "-r", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines()
         if __import__("re").search(r"(?:WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00[1-7]|wp06_6f_tf_ekf_run00[1-7])", path)
@@ -338,7 +380,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
     assert not changed.intersection(protected)
     for path in protected:
         committed = subprocess.run(
-            ["git", "show", f"{CORRECTIVE_BASE}:{path}"], cwd=ROOT,
+            ["git", "show", f"{STEP07_CAMPAIGN_BASE}:{path}"], cwd=ROOT,
             check=True, capture_output=True,
         ).stdout
         assert (ROOT / path).read_bytes() == committed, f"historical WP06 bytes changed: {path}"

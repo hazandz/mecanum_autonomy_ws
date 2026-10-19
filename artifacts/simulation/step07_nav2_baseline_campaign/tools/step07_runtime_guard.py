@@ -1,0 +1,155 @@
+"""Capacity-one guard primitives for the exact Step-7 campaign."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+
+RUN_ID = "STEP07_NAV2_BASELINE_RUN_001"
+PENDING = "PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION"
+AUTH_SCOPE = "STEP07_NAV2_BASELINE_RUN001_ONE_OFFICIAL_CAMPAIGN_INVOCATION_CAPACITY_ONE_NO_RETRY"
+ARCHITECTURE_SHA256 = "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
+INTEGRATION_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
+PARTITION = "mecanum_step7_nav2_run001_f7f98c6"
+
+
+def _unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"DUPLICATE_JSON_KEY:{key}")
+        result[key] = value
+    return result
+
+
+def load_guard(path: str | Path) -> dict:
+    raw = Path(path).read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("GUARD_JSON_BOM")
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
+                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"INVALID_JSON_CONSTANT:{value}")))
+    if type(value) is not dict:
+        raise ValueError("GUARD_ROOT_NOT_OBJECT")
+    return value
+
+
+def validate_seed(guard: dict, *, run_id: str, review_commit: str,
+                  integration_base: str, architecture_sha256: str,
+                  partition: str) -> None:
+    expected = {
+        "run_id": RUN_ID, "state": PENDING, "capacity": 1,
+        "acquisition_count": 0, "runtime_authorization": "NOT_GRANTED",
+        "integration_base": INTEGRATION_BASE,
+        "architecture_sha256": ARCHITECTURE_SHA256,
+        "partition": PARTITION,
+    }
+    if run_id != RUN_ID or integration_base != INTEGRATION_BASE or architecture_sha256 != ARCHITECTURE_SHA256 or partition != PARTITION:
+        raise ValueError("GUARD_AUTHORITY_ARGUMENT_MISMATCH")
+    for key, value in expected.items():
+        if guard.get(key) != value:
+            raise ValueError(f"GUARD_SEED_MISMATCH:{key}")
+    required_bindings = {
+        "runtime_profile": "sim_eval", "navigation_mode": "NAV2_BASELINE",
+        "use_sim_time": True, "map_id": "warehouse_map2",
+        "map_root": "artifacts/maps/warehouse_map2",
+        "map_artifact_identity": "4a8a23d0-7e27-4a50-8201-dd1abf1a3db4",
+        "map_content_hash": "2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90",
+        "world_path": "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf",
+        "world_name": "world_demo", "initial_pose_map": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "goal_pose_map": {"x": -4.0, "y": 0.0, "yaw": 0.0},
+        "runtime_eligible": False,
+        "expected_review_commit": None,
+        "owner_authorization_scope": AUTH_SCOPE,
+        "review_commit_binding": "EXACT_OWNER_SUPPLIED_REVIEW_COMMIT_MUST_EQUAL_HEAD",
+    }
+    for key, value in required_bindings.items():
+        if guard.get(key) != value:
+            raise ValueError(f"GUARD_BINDING_MISMATCH:{key}")
+    if not isinstance(guard.get("source_pins"), dict) or not guard["source_pins"]:
+        raise ValueError("GUARD_SOURCE_PINS_MISSING")
+    if not isinstance(review_commit, str) or len(review_commit) != 40 or any(c not in "0123456789abcdef" for c in review_commit):
+        raise ValueError("REVIEW_COMMIT_INVALID")
+
+
+def validate_owner_authorization(*, authorization: str, scope: str,
+                                 run_id: str, review_commit: str,
+                                 integration_base: str, expected_run_id: str,
+                                 expected_review_commit: str,
+                                 expected_integration_base: str) -> dict:
+    fields = (authorization, scope, run_id, review_commit, integration_base)
+    if any(type(value) is not str or not value.strip() for value in fields):
+        raise ValueError("OWNER_AUTHORIZATION_FIELD_MISSING")
+    if scope != AUTH_SCOPE:
+        raise ValueError("OWNER_AUTHORIZATION_SCOPE_MISMATCH")
+    if run_id != expected_run_id or run_id != RUN_ID:
+        raise ValueError("OWNER_AUTHORIZATION_RUN_ID_MISMATCH")
+    if review_commit != expected_review_commit:
+        raise ValueError("OWNER_AUTHORIZATION_REVIEW_COMMIT_MISMATCH")
+    if integration_base != expected_integration_base or integration_base != INTEGRATION_BASE:
+        raise ValueError("OWNER_AUTHORIZATION_INTEGRATION_BASE_MISMATCH")
+    return {
+        "owner_authorization": authorization,
+        "owner_authorization_scope": scope,
+        "owner_authorization_run_id": run_id,
+        "owner_authorization_review_commit": review_commit,
+        "owner_authorization_integration_base": integration_base,
+    }
+
+
+def acquire_guard(path: str | Path, guard: dict, authorization: dict,
+                  *, review_commit: str, integration_base: str) -> dict:
+    """Atomically consume only after the caller has completed every preflight."""
+    path = Path(path)
+    lock = path.with_suffix(path.suffix + ".lock")
+    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    try:
+        current = load_guard(path)
+        if current != guard or current.get("state") != PENDING or current.get("acquisition_count") != 0:
+            raise ValueError("GUARD_CHANGED_OR_ALREADY_CONSUMED")
+        consumed = dict(current)
+        consumed.update({
+            "state": "CONSUMED", "acquisition_count": 1,
+            "runtime_authorization": "GRANTED_FOR_THIS_EXACT_RUN_ONLY",
+            "acquired_review_commit": review_commit,
+            "acquired_integration_base": integration_base,
+            "owner_authorization": authorization["owner_authorization"],
+            "owner_authorization_scope": authorization["owner_authorization_scope"],
+            "owner_authorization_run_id": authorization["owner_authorization_run_id"],
+            "owner_authorization_review_commit": authorization["owner_authorization_review_commit"],
+            "owner_authorization_integration_base": authorization["owner_authorization_integration_base"],
+        })
+        payload = json.dumps(consumed, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as tmp:
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            temp_path = Path(tmp.name)
+        os.replace(temp_path, path)
+        return consumed
+    except BaseException:
+        try:
+            lock.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def sha256(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def validate_source_pins(root: str | Path, pins: dict) -> None:
+    root = Path(root).resolve(strict=True)
+    for relative, expected in pins.items():
+        if type(relative) is not str or type(expected) is not dict or set(expected) != {"sha256", "size_bytes"}:
+            raise ValueError("SOURCE_PIN_ROW_INVALID")
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("SOURCE_PIN_PATH_INVALID")
+        target = root / path
+        raw = target.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected["sha256"] or len(raw) != expected["size_bytes"]:
+            raise ValueError(f"SOURCE_PIN_MISMATCH:{relative}")
