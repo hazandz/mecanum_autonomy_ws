@@ -25,6 +25,30 @@ from mecanum_nav_rl.observations.v3_snapshot_types import (
 from mecanum_nav_rl.observations.v3_snapshot_validation import validate_observation_inputs
 
 
+LIFECYCLE_STATE_TOPIC = "/mecanum/safety_lifecycle_state"
+OBSOLETE_LIFECYCLE_STATE_TOPIC = "/mecanum/safety/lifecycle_state"
+LIFECYCLE_STATE_QOS_CONTRACT = {
+    "history": "KEEP_LAST", "depth": 10,
+    "reliability": "RELIABLE", "durability": "VOLATILE",
+}
+FINAL_RECEIPT_QOS_CONTRACT = {
+    "history": "KEEP_LAST", "depth": 1,
+    "reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL",
+}
+
+
+def lifecycle_state_qos_profile(qos=None):
+    """Build lifecycle subscription QoS independently from receipt QoS."""
+    if qos is None:
+        qos = importlib.import_module("rclpy.qos")
+    return qos.QoSProfile(
+        history=qos.HistoryPolicy.KEEP_LAST,
+        depth=10,
+        reliability=qos.ReliabilityPolicy.RELIABLE,
+        durability=qos.DurabilityPolicy.VOLATILE,
+    )
+
+
 def _json_bytes(document: dict) -> bytes:
     return json.dumps(document, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -150,13 +174,14 @@ class _Collector:
         self.odom_binding = IngressMessageBinding(Odometry, "/odometry/filtered", "nav_msgs/msg/Odometry", "odom", None, "base_link")
         self.path_binding = IngressMessageBinding(type(None), None, "nav_msgs/msg/Path", "map", None, None)
         sensor_qos = qos_profile_sensor_data
-        durable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
-                             reliability=ReliabilityPolicy.RELIABLE,
-                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        lifecycle_qos = lifecycle_state_qos_profile(qos)
+        receipt_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                 reliability=ReliabilityPolicy.RELIABLE,
+                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.node.create_subscription(LaserScan, "/scan", self._scan, sensor_qos)
         self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, sensor_qos)
-        self.node.create_subscription(SafetyLifecycleState, "/mecanum/safety/lifecycle_state", self._lifecycle, durable)
-        self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, durable)
+        self.node.create_subscription(SafetyLifecycleState, LIFECYCLE_STATE_TOPIC, self._lifecycle, lifecycle_qos)
+        self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos)
         self.compute = ActionClient(self.node, ComputePathToPose, "/compute_path_to_pose")
         self.navigate = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
         self.timer = self.node.create_timer(0.02, self._tick)

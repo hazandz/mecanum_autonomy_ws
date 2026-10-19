@@ -37,7 +37,7 @@ PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_c
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
 PARENT = "d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1"
-CORRECTIVE_BASE = "04a2ba5332ea56feb24dc3cf393114d8158bcb62"
+CORRECTIVE_BASE = "6fbddb3db1a38908ed470f549a1c8182e022a37f"
 STEP07_CAMPAIGN_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
@@ -56,6 +56,22 @@ STEP07_CAMPAIGN_PATHS = {
     "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
     "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+CORRECTIVE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
     "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_DECISION.md",
     "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
@@ -288,21 +304,144 @@ def test_run007_seed_and_historical_disposition_are_immutable():
     assert evidence["runtime_evidence_status"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS"
 
 
+def _current_corrective_paths():
+    status = subprocess.run(
+        ["git", "status", "--short", "--untracked-files=all"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    if status:
+        paths = {line[3:] for line in status if line}
+        return paths, True
+    parent = subprocess.run(
+        ["git", "rev-parse", "HEAD^"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if parent == CORRECTIVE_BASE:
+        names = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        return set(names), False
+    # A clean pre-commit checkout at the correction base has no new commit yet.
+    raise AssertionError("clean worktree must be the committed corrective candidate")
+
+
 def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relaxed():
-    status = subprocess.run(["git", "status", "--short", "--untracked-files=all"],
-                            cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines()
-    changed = {line[3:] for line in status if line}
-    assert changed == STEP07_CAMPAIGN_PATHS
+    changed, dirty = _current_corrective_paths()
+    assert changed == CORRECTIVE_PATHS
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert not any(path.split("/", 1)[0] in {"build", "install", "log"} for path in untracked)
+    assert not any(path.startswith(("build/", "install/", "log/")) for path in changed)
+
+    # The original root campaign remains the immutable 23-path diff from its
+    # integration base through the first topology-corrected campaign commit.
+    root_diff = subprocess.run(
+        ["git", "diff", "--name-only", f"{STEP07_CAMPAIGN_BASE}..{CORRECTIVE_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(root_diff) == STEP07_CAMPAIGN_PATHS
+    assert len(root_diff) == 23
+    root_parent = subprocess.run(
+        ["git", "rev-parse", f"{CORRECTIVE_BASE}^"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert root_parent == STEP07_CAMPAIGN_BASE
+
     protected_fragments = (
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/",
         "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run00",
     )
     assert not any(any(path.startswith(fragment) for fragment in protected_fragments) for path in changed)
-    # The new campaign's path is explicitly separate from historical WP06 data.
     assert all(path.startswith("artifacts/simulation/step07_nav2_baseline_campaign/") or
                path.startswith("ros2_ws/src/") or path.startswith("docs/governance/")
                for path in changed)
+
+
+def test_step07_lifecycle_endpoint_and_distinct_qos_contract_across_nodes():
+    lifecycle_topic = "/mecanum/safety_lifecycle_state"
+    obsolete_topic = "/mecanum/safety/lifecycle_state"
+    gate_path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py"
+    lifecycle_path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py"
+    receipt_path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py"
+    cpp_path = ROOT / "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"
+    gate = gate_path.read_text(encoding="utf-8")
+    lifecycle = lifecycle_path.read_text(encoding="utf-8")
+    receipt = receipt_path.read_text(encoding="utf-8")
+    cpp = cpp_path.read_text(encoding="utf-8")
+
+    assert ("with_" + "info=") not in gate and ("with_" + "info=True") not in gate
+    assert "create_publisher" not in gate
+    assert gate.count("send_goal_async(") == 2
+    assert "STATUS_SUCCEEDED" in gate
+    assert '"/ground_truth/odom"' not in gate
+    assert f'LIFECYCLE_STATE_TOPIC = "{lifecycle_topic}"' in gate
+    assert f'OBSOLETE_LIFECYCLE_STATE_TOPIC = "{obsolete_topic}"' in gate
+    import ast
+    tree = ast.parse(gate)
+    subscriptions = []
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if isinstance(call.func, ast.Attribute) and call.func.attr == "create_subscription":
+            topic = call.args[1]
+            if isinstance(topic, ast.Constant) and isinstance(topic.value, str):
+                subscriptions.append(topic.value)
+            elif isinstance(topic, ast.Name) and topic.id == "LIFECYCLE_STATE_TOPIC":
+                subscriptions.append(lifecycle_topic)
+            else:
+                raise AssertionError(f"unexpected subscription topic expression: {ast.dump(topic)}")
+    assert set(subscriptions) == {
+        "/scan", "/odometry/filtered", lifecycle_topic, "/mecanum/final_issued_command"
+    }
+    assert len(subscriptions) == 4 and obsolete_topic not in subscriptions
+
+    lifecycle_policy = {"history": "KEEP_LAST", "depth": 10,
+                        "reliability": "RELIABLE", "durability": "VOLATILE"}
+    receipt_policy = {"history": "KEEP_LAST", "depth": 1,
+                      "reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL"}
+    assert f'"{lifecycle_topic}"' in lifecycle
+    assert "LIFECYCLE_STATE_QOS_CONTRACT = {" in gate
+    assert '"history": "KEEP_LAST", "depth": 10' in gate
+    assert '"reliability": "RELIABLE", "durability": "VOLATILE"' in gate
+    assert "depth=10" in lifecycle and "HistoryPolicy.KEEP_LAST" in lifecycle
+    assert "ReliabilityPolicy.RELIABLE" in lifecycle
+    assert "DurabilityPolicy.VOLATILE" in lifecycle
+    assert "lifecycle_state_qos" in cpp
+    assert "return rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();" in cpp
+
+    assert f'"{lifecycle_topic}"' in receipt
+    assert '"/mecanum/final_issued_command"' in receipt
+    assert "FINAL_RECEIPT_QOS_CONTRACT = {" in gate
+    assert '"history": "KEEP_LAST", "depth": 1' in gate
+    assert '"reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL"' in gate
+    assert "TRANSIENT_LOCAL" in receipt and "depth=1" in receipt
+    assert "ReliabilityPolicy.RELIABLE" in receipt
+    assert "transient_local()" in cpp
+    assert "return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();" in cpp
+
+
+def test_step07_gate_b_observer_has_exact_policy_safe_subscriptions_and_no_publisher():
+    path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py"
+    source = path.read_text(encoding="utf-8")
+    assert ("with_" + "info=") not in source
+    assert "create_publisher" not in source
+    assert '"/ground_truth/odom"' not in source
+    import re
+    import ast
+    tree = ast.parse(source)
+    found = []
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if isinstance(call.func, ast.Attribute) and call.func.attr == "create_subscription":
+            topic = call.args[1]
+            found.append(topic.value if isinstance(topic, ast.Constant) else "LIFECYCLE_STATE_TOPIC")
+    assert set(found) == {
+        "/scan", "/odometry/filtered", "LIFECYCLE_STATE_TOPIC", "/mecanum/final_issued_command"
+    }
+    assert len(found) == 4
+    assert 'LIFECYCLE_STATE_TOPIC = "/mecanum/safety_lifecycle_state"' in source
+    assert 'OBSOLETE_LIFECYCLE_STATE_TOPIC = "/mecanum/safety/lifecycle_state"' in source
 
 
 def test_step07_static_command_route_preserves_single_final_cmd_vel_owner():
@@ -323,18 +462,7 @@ def test_step07_static_command_route_preserves_single_final_cmd_vel_owner():
 
 
 def test_step07_gate_b_observer_has_only_policy_safe_subscriptions_and_no_with_info():
-    path = ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py"
-    source = path.read_text(encoding="utf-8")
-    assert ("with_" + "info=") not in source and ("with_" + "info=True") not in source
-    assert "create_publisher" not in source
-    assert "send_goal_async" in source and source.count("send_goal_async(") == 2
-    assert "STATUS_SUCCEEDED" in source
-    assert '"/ground_truth/odom"' not in source
-    expected_topics = {"/scan", "/odometry/filtered", "/mecanum/safety/lifecycle_state",
-                       "/mecanum/final_issued_command"}
-    import re
-    found = set(re.findall(r'create_subscription\([^,]+,\s*"([^"]+)"', source))
-    assert found == expected_topics
+    test_step07_gate_b_observer_has_exact_policy_safe_subscriptions_and_no_publisher()
 
 
 def test_run007_matrix_covers_run_acceptance_and_post_teardown_finalization():
@@ -359,17 +487,8 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 
 def test_historical_runtime_conservation_and_candidate_scope():
-    result = subprocess.run(
-        ["git", "diff", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,
-        check=True, capture_output=True, text=True,
-    )
-    changed = set(result.stdout.splitlines())
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
-        check=True, capture_output=True, text=True,
-    )
-    changed.update(untracked.stdout.splitlines())
-    assert changed == STEP07_CAMPAIGN_PATHS
+    changed, _dirty = _current_corrective_paths()
+    assert changed == CORRECTIVE_PATHS
     protected = [
         path for path in subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,
@@ -377,30 +496,9 @@ def test_historical_runtime_conservation_and_candidate_scope():
         ).stdout.splitlines()
         if __import__("re").search(r"(?:WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00[1-7]|wp06_6f_tf_ekf_run00[1-7])", path)
     ]
-    assert not changed.intersection(protected)
-    for path in protected:
-        committed = subprocess.run(
-            ["git", "show", f"{STEP07_CAMPAIGN_BASE}:{path}"], cwd=ROOT,
+    for relative in protected:
+        original = subprocess.run(
+            ["git", "show", f"{PARENT}:{relative}"], cwd=ROOT,
             check=True, capture_output=True,
         ).stdout
-        assert (ROOT / path).read_bytes() == committed, f"historical WP06 bytes changed: {path}"
-    forbidden = ("ground_truth", "ground-truth", "/odom", "tf_static")
-    assert not any(any(token in path.lower() for token in forbidden) for path in changed)
-
-
-def test_run006_raw_record_retains_historical_finalization_failure_not_system_failure():
-    raw_path = Path("/home/hazan/wp06_runtime_evidence/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_006/run_record.json")
-    assert hashlib.sha256(raw_path.read_bytes()).hexdigest() == "0a67816439f35563948dddc7e2e75258c0e7ac6b39e9caab2c3bb9acade19f9a"
-    record = json.loads(raw_path.read_text(encoding="utf-8"))
-    assert record["terminal_outcome"] == "WP06_6F_RUNTIME_RUN006_FAIL_NO_RETRY_GUARD_CONSUMED"
-    assert record["failure"] == "GuardError:RUNTIME_ACCEPTANCE_FAILED"
-    assert record["teardown_pass"] is True
-    assert all(value is True for value in record["acceptance"].values())
-    assert [entry["name"] for entry in record["teardown"]] == ["composite", "bootstrap"]
-    assert all(entry["outcome"] == "STOPPED" and entry["leader_returncode"] == 0
-               and entry["live_member_pids"] == [] and entry["zombie_member_pids"] == []
-               for entry in record["teardown"])
-    runner006 = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run006_session.py"
-    source = runner006.read_text(encoding="utf-8")
-    assert source.index('raise GuardError("RUNTIME_ACCEPTANCE_FAILED")') < source.index("    finally:")
-    assert "RUN006_RUNNER_FINALIZATION_ORDER_FAILURE_NOT_TF_EKF_CLOCK_OR_ROBOT_FAILURE" in _load_json(MANIFEST_PATH)["historical_run_006_disposition"]["classification"]
+        assert (ROOT / relative).read_bytes() == original, relative

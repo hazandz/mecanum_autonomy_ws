@@ -74,3 +74,32 @@ This review snapshot records offline verification only: six selected colcon pack
 The authorized topology correction adds the required `start_bootstrap` literal boolean (default `true`). The default standalone composite includes bootstrap exactly once; `false` excludes bootstrap while still validating the canonical map identity and local Fuel cache. The official runner starts bootstrap once in its own process group, waits for its existing fail-closed readiness predicate, then starts the composite once with `start_bootstrap:=false` in a distinct process group. It records separate PIDs, PGIDs, commands, readiness results, return codes and final snapshots. Teardown sends SIGINT to and verifies the composite group before doing so for bootstrap; both groups must have no live or zombie members.
 
 Offline verification for this amended 23-path candidate: six-package external colcon build PASS; `mecanum_nav_rl/test` 705 passed; `mecanum_nav_bringup/test` 238 passed; observer and interface colcon tests 11 each passed; focused campaign/launch/contract tests 45 passed. Installed launch/source byte equality, Gate-B observer import and console script, C++ observer executable, and ROSIDL imports passed. The evidence and guard manifest are `ec4c059ff3a0fa39df0b887426ae0517efda9b9820ecab6a2bad6a34135a973c` and `11343554c3d0dec9b82ee7ef90a976e67828913fbfc991962988ba81f40830fb` respectively. Source pins cover 16 implementation/tool/test files. No campaign runner or runtime process was executed; Run001 guard remains pending, Gate B remains `NOT_STARTED`, and `RUNTIME_APPROVED` remains `NOT_APPROVED`.
+
+## Lifecycle endpoint/QoS contract correction — offline candidate
+
+The canonical `SafetyLifecycleState` topic is `/mecanum/safety_lifecycle_state`, type `mecanum_nav_rl_interfaces/msg/SafetyLifecycleState`, published by the unique `safety_lifecycle` endpoint offering RELIABLE + VOLATILE + KEEP_LAST(10). The C++ runtime observer and Gate-B observer use distinct dedicated subscriptions with that QoS. The validator recomputes owner and QoS acceptance from raw graph endpoint snapshots and rejects any endpoint on obsolete `/mecanum/safety/lifecycle_state`. Receipt remains `/mecanum/final_issued_command`, owned by `final_twist_publisher`, RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1); the observer validates its offered and requested QoS separately.
+
+The guard/evidence/manifest source-pin set remains exactly 16 entries. Seven changed pinned source/test files have these refreshed SHA-256 and byte sizes:
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `448d2302755c0fc3ce270109bca7266d877db4743050da2f9216c3aa2d97aab3` | 13715 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp` | `5f2f16d1a06b17cdf5831747c89c76e7c1cdc7743ee7505c685be15e3f8708af` | 7981 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` | 27451 |
+
+The guard seed remains PENDING, capacity one, acquisition count zero, and `runtime_authorization=NOT_GRANTED`. Runtime, Gate-B transition, integration, and runtime approval are not claimed.
+
+### Historical provisional verification disposition — superseded by contract-test closure
+
+This paragraph records the earlier provisional verification before the Owner-authorized contract-test path was added to scope. At that point the bringup suite had two failures in `test_sim_eval_tf_ekf_runtime_contract.py`; the following contract-test closure records the superseding verification for the amended 14-path candidate. The earlier failure report is historical and is not the current candidate disposition.
+
+
+### Contract-test scope closure — offline verification
+
+The previously recorded two bringup-test failures were a provisional verification result from before the Owner-authorized contract-test scope amendment. The amended contract test now separately preserves the exact 23-path root campaign diff (`f7f98c683d59cf4c62e462da9f37d4ffb2455c80` to `6fbddb3db1a38908ed470f549a1c8182e022a37f`) and enforces the exact 14-path corrective diff. It checks the canonical lifecycle topic and distinct lifecycle/receipt QoS. The existing 16-entry source-pin set includes this path; its refreshed pin is SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` and size 27451 bytes.
+
+Verification on the current candidate: six-package external colcon build PASS; focused Step-7 suite 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; observer and ROSIDL colcon tests 25 passed with zero failures; installed ROSIDL imports, observer executable, Gate-B observer import, and installed-source byte equality PASS. Root 23-path scope, corrective 14-path scope, historical WP06 preservation, source pins, canonical JSON, Ledger prefix, and diff checks PASS. Offline-only; no runner/runtime execution, guard acquisition, Gate-B transition, integration, or runtime approval.

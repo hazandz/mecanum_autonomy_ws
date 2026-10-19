@@ -831,3 +831,25 @@ Offline verification for this Run001 review candidate: six-package colcon build 
 The current review candidate remains based on `f7f98c683d59cf4c62e462da9f37d4ffb2455c80` and adds exactly two approved paths to the earlier 21-path scope: the canonical composite launch and its static launch test. The composite defaults `start_bootstrap=true` and validates map/Fuel in both modes; `false` supports the runner's distinct bootstrap/composite process groups. Runner evidence records independent invocation counts, PIDs/PGIDs, commands, readiness, return codes and snapshots, with composite-first then bootstrap SIGINT teardown.
 
 Decision SHA-256 `f03d04e1c6ccca2229773d4e417a68c3c280d778a2a01835b920cca1b3f172b2`; evidence SHA-256 `ec4c059ff3a0fa39df0b887426ae0517efda9b9820ecab6a2bad6a34135a973c`; guard manifest SHA-256 `11343554c3d0dec9b82ee7ef90a976e67828913fbfc991962988ba81f40830fb`. The guard is still pending/capacity-one/not authorized. Offline-only result: six-package build, 705 `mecanum_nav_rl` tests, 238 `mecanum_nav_bringup` tests, 22 C++ observer/interface tests, and 45 focused tests passed. No runtime, Gate B transition or runtime approval is claimed.
+
+## Step-7 Run001 lifecycle endpoint/QoS source correction
+
+The current corrective review snapshot pins the canonical lifecycle endpoint `/mecanum/safety_lifecycle_state` (SafetyLifecycleState, unique `safety_lifecycle` publisher, RELIABLE + VOLATILE + KEEP_LAST(10)); both campaign observers request dedicated matching subscription QoS. The evidence validator checks raw graph publisher/subscriber endpoint records and rejects use of `/mecanum/safety/lifecycle_state`. Final receipt QoS remains separately RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1). The unchanged 16-entry pin set is authoritative in the Run001 guard, evidence, and manifest. No status/classification or runtime authority changes. Refreshed source/test pin deltas:
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `448d2302755c0fc3ce270109bca7266d877db4743050da2f9216c3aa2d97aab3` | 13715 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp` | `5f2f16d1a06b17cdf5831747c89c76e7c1cdc7743ee7505c685be15e3f8708af` | 7981 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+
+### Historical provisional verification disposition — superseded by contract-test closure
+
+This paragraph records the earlier provisional verification before the Owner-authorized contract-test path was added to scope. At that point the bringup suite had two failures in `test_sim_eval_tf_ekf_runtime_contract.py`; the following contract-test closure records the superseding verification for the amended 14-path candidate. The earlier failure report is historical and is not the current candidate disposition.
+
+
+### Step-7 Run001 lifecycle-QoS test-contract closure — review candidate
+
+The existing source-pin set remains exactly 16 unique paths; the corrective test path `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` was already present and its entry is refreshed to SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` with size 27451 bytes. The contract test now distinguishes the immutable 23-path root campaign scope from the exact 14-path lifecycle-QoS corrective scope. Offline validation: six-package build PASS; focused tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; observer/interface colcon tests 25 passed. Historical WP06 evidence remains protected. No runtime was executed; Run001 guard remains pending/unconsumed, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`.

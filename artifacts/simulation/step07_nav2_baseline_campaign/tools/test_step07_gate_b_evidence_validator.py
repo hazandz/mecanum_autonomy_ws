@@ -77,7 +77,9 @@ def observer_doc():
         "map_to_odom_gids": ["04"], "world_to_map": [],
         "dynamic_tf_gids": ["01"], "static_tf_gids": ["02"],
         "qos": {"/tf": {"history": "KEEP_LAST", "depth": 100, "reliability": "BEST_EFFORT", "durability": "VOLATILE"},
-                "/tf_static": {"history": "KEEP_LAST", "depth": 1, "reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL"}},
+                "/tf_static": {"history": "KEEP_LAST", "depth": 1, "reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL"},
+                "/mecanum/safety_lifecycle_state": {"history": "KEEP_LAST", "depth": 10, "reliability": "RELIABLE", "durability": "VOLATILE"},
+                "/mecanum/final_issued_command": {"history": "KEEP_LAST", "depth": 1, "reliability": "RELIABLE", "durability": "TRANSIENT_LOCAL"}},
         "graph": {"/tf": {"publishers": [
                       {"gid": "01", "node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"},
                       {"gid": "04", "node_name": "amcl", "node_namespace": "/", "topic_type": "tf2_msgs/msg/TFMessage"}]},
@@ -87,8 +89,11 @@ def observer_doc():
                   "/imu/data": {"publishers": [{"node_name": "sim_eval_wheel_imu_ingress", "node_namespace": "/", "topic_type": "sensor_msgs/msg/Imu"}]},
                   "/odometry/filtered": {"publishers": [{"node_name": "ekf_filter_node", "node_namespace": "/", "topic_type": "nav_msgs/msg/Odometry"}]},
                   "/map": {"publishers": [{"node_name": "map_server", "node_namespace": "/", "topic_type": "nav_msgs/msg/OccupancyGrid"}]},
-                  "/mecanum/safety/lifecycle_state": {"publishers": [{"node_name": "safety_lifecycle", "node_namespace": "/", "topic_type": "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"}]},
-                  "/mecanum/final_issued_command": {"publishers": [{"node_name": "final_twist_publisher", "node_namespace": "/", "topic_type": "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt"}]},
+                  "/mecanum/safety_lifecycle_state": {
+                      "publishers": [{"node_name": "safety_lifecycle", "node_namespace": "/", "topic_type": "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState", "endpoint_type": "PUBLISHER", "reliability": 1, "durability": 2, "history": 1, "depth": 10}],
+                      "subscribers": [{"node_name": name, "node_namespace": "/", "topic_type": "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState", "endpoint_type": "SUBSCRIPTION", "reliability": 1, "durability": 2, "history": 1, "depth": 10} for name in ("safety_supervisor", "final_twist_publisher", "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer")]},
+                  "/mecanum/safety/lifecycle_state": {"publishers": [], "subscribers": []},
+                  "/mecanum/final_issued_command": {"publishers": [{"node_name": "final_twist_publisher", "node_namespace": "/", "topic_type": "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt", "endpoint_type": "PUBLISHER", "reliability": 1, "durability": 1, "history": 1, "depth": 1}]},
                   "/cmd_vel": {"publishers": [{"gid": "03", "node_name": "final_twist_publisher", "node_namespace": "/", "topic_type": "geometry_msgs/msg/Twist"}],
                                 "subscribers": [{"node_name": "sim_eval_cmd_vel_bridge"}]}},
         "cmd_vel_ownership": {"publisher_endpoints": [{"gid": "03", "node_name": "final_twist_publisher", "node_namespace": "/", "topic_type": "geometry_msgs/msg/Twist"}]},
@@ -99,7 +104,8 @@ def observer_doc():
             "map_to_odom_single_amcl_owner": True, "world_to_map_absent": True, "forbidden_boundary_clear": True,
             "scan_publisher_owner": True, "wheel_publisher_owner": True, "imu_publisher_owner": True,
             "filtered_odometry_publisher_owner": True, "map_server_publisher_owner": True,
-            "lifecycle_state_publisher_owner": True, "receipt_publisher_owner": True,
+            "lifecycle_endpoint_qos_contract": True, "receipt_qos_contract": True,
+            "obsolete_lifecycle_topic_absent": True, "receipt_publisher_owner": True,
             "cmd_vel_single_final_publisher": True, "cmd_vel_bridge_subscriber_only": True,
             "scan_valid_frame": True, "wheel_ingress_valid": True,
             "imu_ingress_valid": True, "lifecycle_ready_observed": True,
@@ -118,6 +124,21 @@ def test_cpp_observer_parser_recomputes_qos_gid_static_owner_and_boundary():
         lambda value: value["graph"]["/tf"]["publishers"][0].update(node_name="other"),
         lambda value: value["graph"]["/tf"]["publishers"][1].update(node_name="other"),
         lambda value: value["graph"]["/tf_static"]["publishers"][0].update(node_name="other"),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(node_name="other"),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(topic_type="wrong/type"),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(durability=1),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(reliability=2),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(history=2),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(depth=1),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"][0].update(durability=1),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"][0].update(reliability=2),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"][0].update(history=2),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"][0].update(depth=1),
+        lambda value: value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"].append(copy.deepcopy(value["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0])),
+        lambda value: value["qos"]["/mecanum/safety_lifecycle_state"].update(durability="TRANSIENT_LOCAL"),
+        lambda value: value["qos"]["/mecanum/final_issued_command"].update(depth=10),
+        lambda value: value["graph"]["/mecanum/final_issued_command"]["publishers"][0].update(durability=2),
+        lambda value: value["graph"]["/mecanum/safety/lifecycle_state"]["publishers"].append({"node_name": "safety_lifecycle"}),
         lambda value: value["map_to_odom"].append({"parent": "map", "child": "odom"}),
         lambda value: value["world_to_map"].append({"parent": "world", "child": "map", "publisher_gid": "05"}),
         lambda value: value["forbidden_boundary"]["/odom"]["publishers"].append({"node_name": "bridge"}),
@@ -143,3 +164,14 @@ def test_gate_b_document_requires_successful_nav2_actions_and_exact_vectors():
     doc["samples"].pop()
     with pytest.raises(ValueError, match="VECTOR"):
         validate_gate_b_document(doc, config_hash="b" * 64)
+
+
+def test_lifecycle_endpoint_contract_rejects_qos_conflation_and_obsolete_topic():
+    document = observer_doc()
+    document["qos"]["/mecanum/safety_lifecycle_state"] = dict(document["qos"]["/mecanum/final_issued_command"])
+    with pytest.raises(ValueError):
+        validate_observer(document, config_hash="a" * 64)
+    document = observer_doc()
+    document["graph"]["/mecanum/safety/lifecycle_state"]["subscribers"].append({"node_name": "safety_lifecycle"})
+    with pytest.raises(ValueError, match="LIFECYCLE_TOPIC_OBSOLETE_OR_IN_USE"):
+        validate_observer(document, config_hash="a" * 64)

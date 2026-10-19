@@ -1748,3 +1748,31 @@
 | Verification | Six-package colcon build PASS; `mecanum_nav_rl/test` 705 passed; `mecanum_nav_bringup/test` 238 passed; observer/interface colcon tests 11 each passed; focused tests 45 passed; installed closure PASS. |
 | Governance hashes | Decision `f03d04e1c6ccca2229773d4e417a68c3c280d778a2a01835b920cca1b3f172b2`; evidence `ec4c059ff3a0fa39df0b887426ae0517efda9b9820ecab6a2bad6a34135a973c`; guard manifest `11343554c3d0dec9b82ee7ef90a976e67828913fbfc991962988ba81f40830fb`; Registry `108952d170fdb8eee723bc1103b91b0776483575cdd24cebc5b797b24eac435e`; Plan `39365b348706cdfaff2d9d931d427ec018b551fa5cbc386ca10a452de49be33f`. |
 | Boundary | No runtime/runner execution. Run001 guard remains pending, capacity one, acquisition count zero, `runtime_authorization=NOT_GRANTED`; Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Historical WP06 Run001–Run007 files remain unchanged. |
+
+### Step-7 Run001 lifecycle endpoint/QoS contract correction — review candidate
+
+The corrective source contract uses `/mecanum/safety_lifecycle_state`, type `mecanum_nav_rl_interfaces/msg/SafetyLifecycleState`, and a unique `safety_lifecycle` publisher offering RELIABLE + VOLATILE + KEEP_LAST(10). C++ and Gate-B observer subscriptions use dedicated QoS with the same policy, separate from `/tf_static` and receipt QoS. The raw graph validator rejects the obsolete slash-separated endpoint and recomputes exact endpoint ownership/QoS. Receipt remains RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1). Source-pin count stays 16; refreshed changed-source pins:
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `448d2302755c0fc3ce270109bca7266d877db4743050da2f9216c3aa2d97aab3` | 13715 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp` | `5f2f16d1a06b17cdf5831747c89c76e7c1cdc7743ee7505c685be15e3f8708af` | 7981 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+
+Guard seed remains PENDING, capacity=1, acquisition_count=0, runtime authorization NOT_GRANTED. This candidate has offline-only scope; it makes no runtime, Gate-B, integration, or approval claim.
+
+### Verification disposition for lifecycle endpoint/QoS correction
+
+Offline build and independent checks completed so far: six-package colcon build passed; focused Step-7 tests passed 33; `mecanum_nav_rl/test` passed 707; observer and ROSIDL colcon tests passed 25 with zero failures. Full `mecanum_nav_bringup/test` reported 236 passed and two failures in `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`. That path is outside this corrective's exact 13-path allowlist. One assertion freezes the current diff to the prior campaign 23-path set; another still expects obsolete `/mecanum/safety/lifecycle_state`. No edit was made to that path. Delivery is blocked; no commit or push is made. Runtime remains unexecuted, the Run001 seed remains pending/unconsumed, and Gate B remains NOT_STARTED.
+
+### Step-7 Run001 lifecycle-QoS test-contract closure — verification continuation
+
+| Field | Record |
+|---|---|
+| Scope | Exact 14-path corrective candidate; the root campaign remains the exact 23-path diff from `f7f98c683d59cf4c62e462da9f37d4ffb2455c80` to `6fbddb3db1a38908ed470f549a1c8182e022a37f`. |
+| Source-pin closure | Exactly 16 unique pins. The already-pinned contract-test path `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` is refreshed to SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db`, size 27451 bytes. |
+| Offline verification | Six-package external colcon build PASS; focused Step-7 tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; C++ observer and ROSIDL colcon tests 25 passed, zero failures; installed closure PASS. |
+| Disposition | This entry supersedes the provisional blocked verification disposition above for the current corrective snapshot. No runtime execution; Run001 guard remains pending and unconsumed; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |

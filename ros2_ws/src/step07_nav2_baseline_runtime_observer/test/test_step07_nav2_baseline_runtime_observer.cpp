@@ -63,6 +63,57 @@ TEST(Step07Observer, StaticTfUsesReliableTransientLocalKeepLast1) {
   EXPECT_EQ(profile.durability, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
 }
 
+TEST(Step07Observer, LifecycleStateUsesDistinctReliableVolatileKeepLast10) {
+  const auto profile = step07_observer::lifecycle_state_qos().get_rmw_qos_profile();
+  EXPECT_EQ(profile.history, RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+  EXPECT_EQ(profile.depth, 10U);
+  EXPECT_EQ(profile.reliability, RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+  EXPECT_EQ(profile.durability, RMW_QOS_POLICY_DURABILITY_VOLATILE);
+  const auto receipt = step07_observer::receipt_qos().get_rmw_qos_profile();
+  EXPECT_EQ(receipt.history, RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+  EXPECT_EQ(receipt.depth, 1U);
+  EXPECT_EQ(receipt.reliability, RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+  EXPECT_EQ(receipt.durability, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+  const auto offered_receipt = step07_observer::Json::array({{{"node_name", "final_twist_publisher"},
+      {"node_namespace", "/"}, {"topic_type", "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt"},
+      {"endpoint_type", "PUBLISHER"}, {"reliability", RMW_QOS_POLICY_RELIABILITY_RELIABLE},
+      {"durability", RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL}, {"history", RMW_QOS_POLICY_HISTORY_KEEP_LAST}, {"depth", 1}}});
+  EXPECT_TRUE(step07_observer::receipt_publisher_contract(offered_receipt));
+  auto conflated_receipt = offered_receipt;
+  conflated_receipt[0]["depth"] = 10;
+  EXPECT_FALSE(step07_observer::receipt_publisher_contract(conflated_receipt));
+}
+
+TEST(Step07Observer, LifecyclePublisherRequiresExactOwnerTypeAndOfferedQos) {
+  auto publisher = step07_observer::Json::array({{{"node_name", "safety_lifecycle"},
+      {"node_namespace", "/"}, {"topic_type", "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"},
+      {"endpoint_type", "PUBLISHER"}, {"reliability", RMW_QOS_POLICY_RELIABILITY_RELIABLE},
+      {"durability", RMW_QOS_POLICY_DURABILITY_VOLATILE}, {"history", RMW_QOS_POLICY_HISTORY_KEEP_LAST}, {"depth", 10}}});
+  EXPECT_TRUE(step07_observer::lifecycle_publisher_contract(publisher));
+  publisher[0]["node_name"] = "other";
+  EXPECT_FALSE(step07_observer::lifecycle_publisher_contract(publisher));
+  publisher[0]["node_name"] = "safety_lifecycle";
+  publisher[0]["durability"] = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+  EXPECT_FALSE(step07_observer::lifecycle_publisher_contract(publisher));
+}
+
+TEST(Step07Observer, LifecycleGraphRequiresExactConsumersAndQos) {
+  auto subscribers = step07_observer::Json::array();
+  for (const auto *name : {"safety_supervisor", "final_twist_publisher",
+                           "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"}) {
+    subscribers.push_back({{"node_name", name}, {"node_namespace", "/"},
+      {"topic_type", "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"}, {"endpoint_type", "SUBSCRIPTION"},
+      {"reliability", RMW_QOS_POLICY_RELIABILITY_RELIABLE}, {"durability", RMW_QOS_POLICY_DURABILITY_VOLATILE},
+      {"history", RMW_QOS_POLICY_HISTORY_KEEP_LAST}, {"depth", 10}});
+  }
+  EXPECT_TRUE(step07_observer::lifecycle_observer_subscriptions_contract(subscribers));
+  subscribers[3]["durability"] = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+  EXPECT_FALSE(step07_observer::lifecycle_observer_subscriptions_contract(subscribers));
+  subscribers[3]["durability"] = RMW_QOS_POLICY_DURABILITY_VOLATILE;
+  subscribers.push_back(subscribers.front());
+  EXPECT_FALSE(step07_observer::lifecycle_observer_subscriptions_contract(subscribers));
+}
+
 TEST(Step07Observer, LifecycleAndReceiptIdentityMustMatchExactly) {
   EXPECT_TRUE(step07_observer::lifecycle_receipt_identity_matches(7, 3, 9, 7, 3, 9));
   EXPECT_FALSE(step07_observer::lifecycle_receipt_identity_matches(7, 3, 9, 7, 4, 9));

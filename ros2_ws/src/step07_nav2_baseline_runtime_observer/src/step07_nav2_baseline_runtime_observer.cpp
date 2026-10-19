@@ -33,6 +33,12 @@ rclcpp::QoS dynamic_tf_qos() {
 rclcpp::QoS static_tf_qos() {
   return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
 }
+rclcpp::QoS lifecycle_state_qos() {
+  return rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+}
+rclcpp::QoS receipt_qos() {
+  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+}
 bool is_dynamic_edge(const std::string &parent, const std::string &child) {
   return parent == "odom" && child == "base_link";
 }
@@ -129,6 +135,45 @@ bool unique_topic_owner(const Json &rows, const std::string &name, const std::st
       rows.front().value("node_namespace", "") == "/" && rows.front().value("topic_type", "") == type;
 }
 
+bool lifecycle_publisher_contract(const Json &rows) {
+  if (!rows.is_array() || rows.size() != 1) return false;
+  const auto &row = rows.front();
+  return row.value("node_name", "") == "safety_lifecycle" && row.value("node_namespace", "") == "/" &&
+      row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState" &&
+      row.value("endpoint_type", "") == "PUBLISHER" &&
+      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
+      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
+      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 10;
+}
+
+bool receipt_publisher_contract(const Json &rows) {
+  if (!rows.is_array() || rows.size() != 1) return false;
+  const auto &row = rows.front();
+  return row.value("node_name", "") == "final_twist_publisher" && row.value("node_namespace", "") == "/" &&
+      row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt" &&
+      row.value("endpoint_type", "") == "PUBLISHER" &&
+      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
+      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL &&
+      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 1;
+}
+
+bool lifecycle_observer_subscriptions_contract(const Json &rows) {
+  if (!rows.is_array()) return false;
+  const auto exact_subscription = [](const Json &row, const std::string &node) {
+    return row.value("node_name", "") == node && row.value("node_namespace", "") == "/" &&
+      row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState" &&
+      row.value("endpoint_type", "") == "SUBSCRIPTION" &&
+      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
+      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
+      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 10;
+  };
+  const std::vector<std::string> expected = {"safety_supervisor", "final_twist_publisher",
+      "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"};
+  return rows.size() == expected.size() && std::all_of(expected.begin(), expected.end(), [&](const std::string &node) {
+    return std::count_if(rows.begin(), rows.end(), [&](const Json &row) { return exact_subscription(row, node); }) == 1;
+  });
+}
+
 size_t endpoint_count_for_gid(const Json &rows, const std::string &gid) {
   return static_cast<size_t>(std::count_if(rows.begin(), rows.end(), [&](const Json &row) { return row.value("gid", "") == gid; }));
 }
@@ -166,9 +211,13 @@ class Observer final : public rclcpp::Node {
                                        {"all_endpoints", Json::array()}};
     doc_["qos"] = Json{
       {"/tf", {{"history", "KEEP_LAST"}, {"depth", 100}, {"reliability", "BEST_EFFORT"}, {"durability", "VOLATILE"}}},
-      {"/tf_static", {{"history", "KEEP_LAST"}, {"depth", 1}, {"reliability", "RELIABLE"}, {"durability", "TRANSIENT_LOCAL"}}}};
+      {"/tf_static", {{"history", "KEEP_LAST"}, {"depth", 1}, {"reliability", "RELIABLE"}, {"durability", "TRANSIENT_LOCAL"}}},
+      {"/mecanum/safety_lifecycle_state", {{"history", "KEEP_LAST"}, {"depth", 10}, {"reliability", "RELIABLE"}, {"durability", "VOLATILE"}}},
+      {"/mecanum/final_issued_command", {{"history", "KEEP_LAST"}, {"depth", 1}, {"reliability", "RELIABLE"}, {"durability", "TRANSIENT_LOCAL"}}}};
     auto sensor_qos = rclcpp::SensorDataQoS();
-    auto reliable_qos = static_tf_qos();
+    auto static_qos = static_tf_qos();
+    auto lifecycle_qos = lifecycle_state_qos();
+    auto receipt_subscription_qos = receipt_qos();
     clock_sub_ = create_subscription<rosgraph_msgs::msg::Clock>("/clock", sensor_qos,
       [this](rosgraph_msgs::msg::Clock::ConstSharedPtr msg) { doc_["clock"].push_back({{"sec", msg->clock.sec}, {"nanosec", msg->clock.nanosec}}); });
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>("/scan", sensor_qos,
@@ -181,11 +230,11 @@ class Observer final : public rclcpp::Node {
       [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) { const auto finite_array = [](const auto &values) { return std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); }); }; const auto &p = msg->pose.pose.position; const auto &q = msg->pose.pose.orientation; const auto &tw = msg->twist.twist; const bool pose_finite = std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w); const bool twist_finite = std::isfinite(tw.linear.x) && std::isfinite(tw.linear.y) && std::isfinite(tw.angular.z); doc_["filtered_odometry"].push_back({{"frame_id", msg->header.frame_id}, {"child_frame_id", msg->child_frame_id}, {"stamp_sec", msg->header.stamp.sec}, {"stamp_nanosec", msg->header.stamp.nanosec}, {"pose", {p.x, p.y, p.z, q.x, q.y, q.z, q.w}}, {"twist", {tw.linear.x, tw.linear.y, tw.linear.z, tw.angular.x, tw.angular.y, tw.angular.z}}, {"pose_covariance", msg->pose.covariance}, {"twist_covariance", msg->twist.covariance}, {"pose_finite", pose_finite}, {"twist_finite", twist_finite}, {"pose_covariance_finite", finite_array(msg->pose.covariance)}, {"twist_covariance_finite", finite_array(msg->twist.covariance)}, {"pose_covariance_count", msg->pose.covariance.size()}, {"twist_covariance_count", msg->twist.covariance.size()}}); });
     tf_sub_ = create_subscription<tf2_msgs::msg::TFMessage>("/tf", dynamic_tf_qos(),
       [this](tf2_msgs::msg::TFMessage::ConstSharedPtr msg, const rclcpp::MessageInfo &info) { collect_tf(msg, info, false); });
-    tf_static_sub_ = create_subscription<tf2_msgs::msg::TFMessage>("/tf_static", reliable_qos,
+    tf_static_sub_ = create_subscription<tf2_msgs::msg::TFMessage>("/tf_static", static_qos,
       [this](tf2_msgs::msg::TFMessage::ConstSharedPtr msg, const rclcpp::MessageInfo &info) { collect_tf(msg, info, true); });
-    lifecycle_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyLifecycleState>("/mecanum/safety/lifecycle_state", reliable_qos,
+    lifecycle_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyLifecycleState>("/mecanum/safety_lifecycle_state", lifecycle_qos,
       [this](mecanum_nav_rl_interfaces::msg::SafetyLifecycleState::ConstSharedPtr msg) { doc_["lifecycle"].push_back({{"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"primary_state", msg->primary_state}, {"barrier_state", msg->barrier_state}, {"motion_permitted", msg->motion_permitted}, {"reason", msg->reason}}); });
-    receipt_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt>("/mecanum/final_issued_command", reliable_qos,
+    receipt_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt>("/mecanum/final_issued_command", receipt_subscription_qos,
       [this](mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt::ConstSharedPtr msg) { doc_["receipt"].push_back({{"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"sequence", msg->final_publish_sequence}, {"source", msg->source}, {"vx", msg->final_command.linear.x}, {"vy", msg->final_command.linear.y}, {"wz", msg->final_command.angular.z}}); });
     started_ = std::chrono::steady_clock::now();
     timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
@@ -216,7 +265,7 @@ class Observer final : public rclcpp::Node {
   void finish() {
     if (finished_) return;
     finished_ = true;
-    for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command"}) {
+    for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety_lifecycle_state", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command"}) {
       Json pubs = endpoint_rows(*this, topic, true);
       Json subs = endpoint_rows(*this, topic, false);
       doc_["graph"][topic] = Json{{"publishers", pubs}, {"subscribers", subs}};
@@ -281,7 +330,21 @@ class Observer final : public rclcpp::Node {
       {"imu_publisher_owner", unique_topic_owner(doc_["graph"]["/imu/data"]["publishers"], "sim_eval_wheel_imu_ingress", "sensor_msgs/msg/Imu")},
       {"filtered_odometry_publisher_owner", unique_topic_owner(doc_["graph"]["/odometry/filtered"]["publishers"], "ekf_filter_node", "nav_msgs/msg/Odometry")},
       {"map_server_publisher_owner", unique_topic_owner(doc_["graph"]["/map"]["publishers"], "map_server", "nav_msgs/msg/OccupancyGrid")},
-      {"lifecycle_state_publisher_owner", unique_topic_owner(doc_["graph"]["/mecanum/safety/lifecycle_state"]["publishers"], "safety_lifecycle", "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState")},
+      {"lifecycle_endpoint_qos_contract", lifecycle_publisher_contract(doc_["graph"]["/mecanum/safety_lifecycle_state"]["publishers"]) &&
+        lifecycle_observer_subscriptions_contract(doc_["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"]) &&
+        doc_["qos"]["/mecanum/safety_lifecycle_state"]["history"] == "KEEP_LAST" &&
+        doc_["qos"]["/mecanum/safety_lifecycle_state"]["depth"] == 10 &&
+        doc_["qos"]["/mecanum/safety_lifecycle_state"]["reliability"] == "RELIABLE" &&
+        doc_["qos"]["/mecanum/safety_lifecycle_state"]["durability"] == "VOLATILE" &&
+        doc_["graph"]["/mecanum/safety/lifecycle_state"]["publishers"].empty() &&
+        doc_["graph"]["/mecanum/safety/lifecycle_state"]["subscribers"].empty()},
+      {"receipt_qos_contract", receipt_publisher_contract(doc_["graph"]["/mecanum/final_issued_command"]["publishers"]) &&
+        doc_["qos"]["/mecanum/final_issued_command"]["history"] == "KEEP_LAST" &&
+        doc_["qos"]["/mecanum/final_issued_command"]["depth"] == 1 &&
+        doc_["qos"]["/mecanum/final_issued_command"]["reliability"] == "RELIABLE" &&
+        doc_["qos"]["/mecanum/final_issued_command"]["durability"] == "TRANSIENT_LOCAL"},
+      {"obsolete_lifecycle_topic_absent", doc_["graph"]["/mecanum/safety/lifecycle_state"]["publishers"].empty() &&
+        doc_["graph"]["/mecanum/safety/lifecycle_state"]["subscribers"].empty()},
       {"receipt_publisher_owner", unique_topic_owner(doc_["graph"]["/mecanum/final_issued_command"]["publishers"], "final_twist_publisher", "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt")},
       {"cmd_vel_single_final_publisher", cmd_owner}, {"cmd_vel_bridge_subscriber_only", bridge_subscriber && bridge_not_publisher}, {"scan_valid_frame", scan_ok},
       {"wheel_ingress_valid", wheel_ok}, {"imu_ingress_valid", imu_ok},

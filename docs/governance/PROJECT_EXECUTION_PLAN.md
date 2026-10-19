@@ -955,3 +955,25 @@ Run001 campaign review evidence records six-package colcon build PASS, 705 `meca
 #### Roadmap Step-7 Run001 campaign topology candidate
 
 The review candidate remains source/offline-test machinery only. Composite launch has an exact `start_bootstrap` literal argument defaulting to `true`; separated mode disables inclusion while retaining map and Fuel preflight. The one-shot runner creates independent bootstrap and composite process groups, waits for bootstrap readiness before composite startup, and verifies composite-first then bootstrap teardown. Decision/evidence/manifest hashes are recorded in the Registry's current candidate entry. Offline checks passed as recorded in the campaign evidence; this does not start the campaign, consume the guard, transition Gate B, or change any PEP work-package status.
+
+#### Step-7 Run001 lifecycle endpoint/QoS correction — review-only
+
+This candidate aligns both observers and the raw graph validator with the existing SafetyLifecycle publisher endpoint and QoS. Seven changed source/test SHA-256 and byte-size pairs are recorded in the Run001 evidence and manifest; the amended contract-test path pin is documented in the following closure entry. The source-pin set remains 16. Run001 guard remains pending/capacity-one/not consumed; Step 7 remains `NOT_STARTED`, `GATE_B: NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`. This is offline candidate scope only and changes no runtime authorization or project status.
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `448d2302755c0fc3ce270109bca7266d877db4743050da2f9216c3aa2d97aab3` | 13715 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp` | `5f2f16d1a06b17cdf5831747c89c76e7c1cdc7743ee7505c685be15e3f8708af` | 7981 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+
+### Historical provisional verification disposition — superseded by contract-test closure
+
+This paragraph records the earlier provisional verification before the Owner-authorized contract-test path was added to scope. At that point the bringup suite had two failures in `test_sim_eval_tf_ekf_runtime_contract.py`; the following contract-test closure records the superseding verification for the amended 14-path candidate. The earlier failure report is historical and is not the current candidate disposition.
+
+
+### Step-7 Run001 lifecycle-QoS test-contract closure — review candidate
+
+The amended test contract preserves the root campaign's exact 23-path diff and validates the corrective's exact 14 paths, including a dirty-worktree and post-commit scope path. Existing source pins remain 16 unique entries; `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` remains the same pinned path with refreshed SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` and size 27451 bytes. Current offline verification: six-package external build PASS; focused Step-7 tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; observer and ROSIDL tests 25 passed; installed closure PASS. Run001 remains pending/unconsumed; no runtime or Gate-B status transition is made.
