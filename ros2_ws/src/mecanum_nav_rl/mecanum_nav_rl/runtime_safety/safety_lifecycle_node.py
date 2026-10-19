@@ -1,8 +1,10 @@
-"""Lifecycle barrier publisher; owns all episode/reset/runtime identity."""
+"""Lifecycle barrier publisher with explicit reset and rearm services."""
 from __future__ import annotations
 
 from lifecycle_msgs.msg import State
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_srvs.srv import Trigger
 from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
 
 from mecanum_nav_rl.runtime_safety.safety_contract import SafetyLifecycleCore
@@ -12,12 +14,21 @@ class SafetyLifecycleNode(LifecycleNode):
     def __init__(self) -> None:
         super().__init__("safety_lifecycle")
         self._core = SafetyLifecycleCore()
+        state_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
         self._publisher = self.create_lifecycle_publisher(
-            SafetyLifecycleState, "/mecanum/safety_lifecycle_state", 10
+            SafetyLifecycleState, "/mecanum/safety_lifecycle_state", state_qos
         )
         self._timer = self.create_timer(0.2, self._publish_barrier)
-        self.trigger_configure()
-        self.trigger_activate()
+        self._reset_service = self.create_service(
+            Trigger, "/mecanum/safety/request_reset", self._request_reset
+        )
+        self._rearm_service = self.create_service(
+            Trigger, "/mecanum/safety/rearm", self._request_rearm
+        )
 
     def on_configure(self, _state: State) -> TransitionCallbackReturn:
         self._core.configure(self.get_clock().now().nanoseconds)
@@ -28,19 +39,47 @@ class SafetyLifecycleNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_deactivate(self, _state: State) -> TransitionCallbackReturn:
-        self._core.mark_non_ready("LIFECYCLE_DEACTIVATED", self.get_clock().now().nanoseconds)
+        self._core.deactivate(self.get_clock().now().nanoseconds)
+        # This callback runs while the lifecycle publisher is still active.
+        self._publish_current()
         return TransitionCallbackReturn.SUCCESS
 
     def on_cleanup(self, _state: State) -> TransitionCallbackReturn:
-        self._core.mark_non_ready("LIFECYCLE_CLEANUP", self.get_clock().now().nanoseconds)
+        self._core.cleanup(self.get_clock().now().nanoseconds)
         return TransitionCallbackReturn.SUCCESS
 
     def on_error(self, _state: State) -> TransitionCallbackReturn:
         self._core.fault("LIFECYCLE_TRANSITION_ERROR", self.get_clock().now().nanoseconds)
+        self._publish_current()
         return TransitionCallbackReturn.SUCCESS
 
+    def _request_reset(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
+        identity = self._core.begin_reset(self.get_clock().now().nanoseconds)
+        response.success = not identity.motion_permitted
+        response.message = identity.reason
+        self._publish_current()
+        return response
+
+    def _request_rearm(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
+        try:
+            identity = self._core.rearm(self.get_clock().now().nanoseconds)
+        except ValueError as error:
+            response.success = False
+            response.message = str(error)
+            return response
+        response.success = identity.motion_permitted
+        response.message = identity.reason
+        self._publish_current()
+        return response
+
     def _publish_barrier(self) -> None:
-        identity = self._core.refresh(self.get_clock().now().nanoseconds)
+        self._core.refresh(self.get_clock().now().nanoseconds)
+        self._publish_current()
+
+    def _publish_current(self) -> None:
+        if not self._publisher.is_activated:
+            return
+        identity = self._core.snapshot()
         msg = SafetyLifecycleState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_link"

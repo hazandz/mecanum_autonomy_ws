@@ -20,7 +20,7 @@ def test_composite_launch_imports_without_starting_processes(monkeypatch, tmp_pa
     description = module.generate_launch_description()
     assert isinstance(description, LaunchDescription)
     # OpaqueFunction is left unevaluated, so no process is launched by this test.
-    assert len(description.entities) == 5
+    assert len(description.entities) == 8
 
 
 def test_system_launch_has_exact_command_route_and_safety_executables() -> None:
@@ -36,6 +36,40 @@ def test_system_launch_has_exact_command_route_and_safety_executables() -> None:
     assert "ground_truth" not in source
     assert '"/odom"' not in source
     assert '"/tf"' not in source
+    assert "Path.cwd()" not in source
+    assert "canonical_map_root" in source
+    assert 'DeclareLaunchArgument("sim_estop_release_authorized", default_value="false")' in source
+    assert source.index("bootstrap_module.validate_fuel_cache(") < source.index("return [\n        IncludeLaunchDescription")
+    assert '"fuel_cache_root": fuel_cache_root' in source
+    assert '"canonical_map_root"' in source
+    import importlib.util
+    import pytest
+    path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
+    spec = importlib.util.spec_from_file_location("sim_eval_estop_literal_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module._literal_bool("true", "sim_estop_release_authorized") is True
+    assert module._literal_bool("false", "sim_estop_release_authorized") is False
+    for invalid in ("True", "FALSE", "1", "yes", ""):
+        with pytest.raises(RuntimeError, match="INVALID_LITERAL_BOOLEAN"):
+            module._literal_bool(invalid, "sim_estop_release_authorized")
+
+
+def test_map_root_is_absolute_and_all_canonical_files_are_pinned() -> None:
+    import importlib.util
+    import pytest
+    path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
+    spec = importlib.util.spec_from_file_location("sim_eval_map_preflight_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(RuntimeError, match="SIM_EVAL_CANONICAL_MAP_ROOT_MUST_BE_ABSOLUTE"):
+        module.checked_map_yaml("relative/map")
+    with pytest.raises(RuntimeError, match="SIM_EVAL_CANONICAL_MAP_ROOT_MISSING"):
+        module.checked_map_yaml(str(ROOT / "missing-map-root"))
+    expected = module.checked_map_yaml(str(ROOT / "artifacts/maps/warehouse_map2"))
+    assert expected == str(ROOT / "artifacts/maps/warehouse_map2/map.yaml")
 
 
 def test_map_localization_and_tf_ownership_are_declared_once() -> None:

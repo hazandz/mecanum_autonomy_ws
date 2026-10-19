@@ -62,6 +62,10 @@ def test_resolved_config_is_full_16_section_profile_and_reproducible() -> None:
     assert document["frames_tf"]["base_link_to_lidar_authority"] == "robot_state_publisher"
     assert document["navigation"]["controller_owner"] == "Nav2ControllerServer"
     assert document["navigation"]["local_reference_contract_id"] == "nav2_msgs/action/ComputePathToPose"
+    owner_by_topic = {row["name"]: row["publisher_owner"] for row in document["topics_qos"]}
+    assert owner_by_topic["/imu/data"] == "mecanum_base_bridge"
+    assert owner_by_topic["/wheel/odometry_raw"] == "mecanum_base_bridge"
+    assert owner_by_topic["/scan"] == "ros_gz_bridge"
     assert document["motion_limits"] == {
         "source_class": "SIM_BASELINE", "source_id": "sim_eval_nav2_baseline_owner_decision",
         "max_vx_mps": 0.25, "max_vy_mps": 0.20, "max_wz_radps": 0.80,
@@ -142,8 +146,11 @@ def test_receipt_rosidl_source_and_command_routes_are_bounded() -> None:
 
 def test_bootstrap_requires_runtime_arguments_without_map_world_claim() -> None:
     source = (ROOT / "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py").read_text()
-    for arg in ("gz_partition", "initial_pose_map_x", "initial_pose_map_y", "initial_pose_map_yaw"):
+    for arg in ("gz_partition", "fuel_cache_root", "initial_pose_map_x", "initial_pose_map_y", "initial_pose_map_yaw"):
         assert f'DeclareLaunchArgument("{arg}")' in source
     assert "Map-frame initial pose" in source
     assert "world-frame transform" in source
-    assert "SetEnvironmentVariable(\"GZ_PARTITION\", EXPECTED_PARTITION)" in source
+    assert "SetEnvironmentVariable(\"GZ_PARTITION\", partition)" in source
+    assert "wp06_scan_probe_run_002" not in source
+    assert "Path.cwd()" not in source
+    assert "validate_fuel_cache(world, fuel_cache_root)" in source

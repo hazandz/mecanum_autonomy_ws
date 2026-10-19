@@ -16,7 +16,7 @@ topic_contracts:
     freshness_policy_id: EKF_SENSOR_TIMEOUT_200MS
   - name: /imu/data
     message_type: sensor_msgs/msg/Imu
-    publisher_owner: ros_gz_bridge
+    publisher_owner: mecanum_base_bridge
     subscriber_owner: robot_localization_EKF
     qos_profile_id: Q_IMU_INGRESS_SOURCE_CONFIG
     frame_contract_id: BASE_LINK

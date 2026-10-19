@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-EXPECTED_PARTITION = "wp06_scan_probe_run_002"
 MAP_FILES = {
     "map.yaml": "5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68",
     "map.pgm": "32f8a3eb626ebddecc15843748de0db8c6f7adc1b45a5edc1b1b1886407aef55",
@@ -21,8 +21,13 @@ MAP_FILES = {
 }
 
 
-def _checked_map_yaml():
-    root = Path.cwd() / "artifacts" / "maps" / "warehouse_map2"
+def checked_map_yaml(map_root: str | Path) -> str:
+    root = Path(map_root)
+    if not root.is_absolute():
+        raise RuntimeError("SIM_EVAL_CANONICAL_MAP_ROOT_MUST_BE_ABSOLUTE")
+    if not root.is_dir():
+        raise RuntimeError("SIM_EVAL_CANONICAL_MAP_ROOT_MISSING")
+    root = root.resolve(strict=True)
     for name, expected in MAP_FILES.items():
         path = root / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -30,10 +35,24 @@ def _checked_map_yaml():
     return str(root / "map.yaml")
 
 
+def _literal_bool(value: str, name: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise RuntimeError(f"INVALID_LITERAL_BOOLEAN:{name}")
+
+
 def _actions(context):
     partition = LaunchConfiguration("gz_partition").perform(context)
-    if partition != EXPECTED_PARTITION:
-        raise RuntimeError("SIM_EVAL_NAV2_BASELINE_PARTITION_MISMATCH")
+    if not partition.strip():
+        raise RuntimeError("SIM_EVAL_GZ_PARTITION_REQUIRED")
+    map_yaml = checked_map_yaml(LaunchConfiguration("canonical_map_root").perform(context))
+    fuel_cache_root = LaunchConfiguration("fuel_cache_root").perform(context)
+    sim_estop_release_authorized = _literal_bool(
+        LaunchConfiguration("sim_estop_release_authorized").perform(context),
+        "sim_estop_release_authorized",
+    )
     for arg in ("initial_pose_map_x", "initial_pose_map_y", "initial_pose_map_yaw"):
         value = LaunchConfiguration(arg).perform(context)
         try:
@@ -46,12 +65,26 @@ def _actions(context):
     description_share = get_package_share_directory("ROBOT_URDF_final_description")
     rl_share = get_package_share_directory("mecanum_nav_rl")
     bootstrap = os.path.join(description_share, "launch", "sim_eval_nav2_baseline_bootstrap.launch.py")
+    bootstrap_spec = importlib.util.spec_from_file_location("sim_eval_nav2_baseline_bootstrap_preflight", bootstrap)
+    if bootstrap_spec is None or bootstrap_spec.loader is None:
+        raise RuntimeError("SIM_EVAL_BOOTSTRAP_PREFLIGHT_UNAVAILABLE")
+    bootstrap_module = importlib.util.module_from_spec(bootstrap_spec)
+    bootstrap_spec.loader.exec_module(bootstrap_module)
+    bootstrap_module.validate_fuel_cache(
+        os.path.join(description_share, "launch", "tugbot_depot.sdf"), fuel_cache_root
+    )
     ingress_ekf = os.path.join(share, "launch", "sim_eval_tf_ekf_state_estimation.launch.py")
     nav_config = os.path.join(share, "config", "navigation", "sim_eval_nav2_baseline.runtime.yaml")
     amcl_config = os.path.join(share, "config", "localization", "amcl_omni.yaml")
     lifecycle_config = os.path.join(share, "config", "lifecycle", "sim_eval_nav2_baseline.runtime.yaml")
     safety_config = os.path.join(rl_share, "config", "safety", "sim_eval_nav2_baseline_safety.yaml")
-    map_yaml = _checked_map_yaml()
+    import yaml
+    safety_policy = yaml.safe_load(Path(safety_config).read_text(encoding="utf-8"))
+    safety_parameters = {
+        **{f"freshness_ns.{key}": value for key, value in safety_policy["freshness_ns"].items()},
+        **{f"limits.{key}": value for key, value in safety_policy["limits"].items()},
+        "sim_estop_release_authorized": sim_estop_release_authorized,
+    }
     pose = {key: LaunchConfiguration(key) for key in ("initial_pose_map_x", "initial_pose_map_y", "initial_pose_map_yaw")}
     nav2 = [
         Node(package="nav2_map_server", executable="map_server", name="map_server",
@@ -73,15 +106,16 @@ def _actions(context):
              parameters=[nav_config, {"use_sim_time": True}], output="screen"),
         Node(package="nav2_lifecycle_manager", executable="lifecycle_manager", name="lifecycle_manager_navigation",
              parameters=[lifecycle_config, {"use_sim_time": True, "autostart": True,
-                 "node_names": ["map_server", "amcl", "planner_server", "controller_server", "behavior_server", "bt_navigator"]}], output="screen"),
+                 "node_names": ["map_server", "amcl", "planner_server", "controller_server", "behavior_server", "bt_navigator", "safety_lifecycle"]}], output="screen"),
     ]
     return [
         IncludeLaunchDescription(PythonLaunchDescriptionSource(bootstrap), launch_arguments={
-            "gz_partition": EXPECTED_PARTITION,
+            "gz_partition": partition,
+            "fuel_cache_root": fuel_cache_root,
             **{k: LaunchConfiguration(k) for k in pose},
         }.items()),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(ingress_ekf), launch_arguments={
-            "gz_partition": EXPECTED_PARTITION, "use_sim_time": "true",
+            "gz_partition": partition, "use_sim_time": "true",
         }.items()),
         Node(package="ros_gz_bridge", executable="parameter_bridge", name="sim_eval_scan_bridge",
              parameters=[{"config_file": os.path.join(share, "config", "bridge", "sim_eval_lidar_scan_bridge.runtime.yaml"), "use_sim_time": True}], output="screen"),
@@ -89,7 +123,7 @@ def _actions(context):
         Node(package="mecanum_nav_rl", executable="safety_lifecycle", name="safety_lifecycle",
              parameters=[{"use_sim_time": True}], output="screen"),
         Node(package="mecanum_nav_rl", executable="safety_supervisor", name="safety_supervisor",
-             parameters=[safety_config, {"use_sim_time": True}], output="screen"),
+             parameters=[safety_parameters, {"use_sim_time": True}], output="screen"),
         Node(package="mecanum_nav_rl", executable="final_twist_publisher", name="final_twist_publisher",
              parameters=[{"use_sim_time": True}], output="screen"),
         Node(package="ros_gz_bridge", executable="parameter_bridge", name="sim_eval_cmd_vel_bridge",
@@ -100,6 +134,9 @@ def _actions(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("gz_partition"),
+        DeclareLaunchArgument("canonical_map_root"),
+        DeclareLaunchArgument("fuel_cache_root"),
+        DeclareLaunchArgument("sim_estop_release_authorized", default_value="false"),
         DeclareLaunchArgument("initial_pose_map_x"),
         DeclareLaunchArgument("initial_pose_map_y"),
         DeclareLaunchArgument("initial_pose_map_yaw"),

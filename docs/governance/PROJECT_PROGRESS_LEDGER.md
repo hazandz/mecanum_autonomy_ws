@@ -1660,3 +1660,27 @@
 | Offline verification | Five-package colcon build PASS; `mecanum_nav_rl/test` 687 passed; `mecanum_nav_bringup/test` 232 passed; interface colcon test 11 passed; py_compile 25 Python files; installed ROSIDL imports, three console executables, and installed launch/config byte equality PASS. JSON/YAML/XML, duplicate-key, UTF-8/canonical, config-hash, source-pin, historical WP06 preservation, exact scope, Ledger prefix, and diff checks PASS. |
 | Test interpreter | Temporary external venv; Pydantic `2.10.6`; `pip freeze` SHA-256 `8fc5de359c1faf157acf11c35b740cd433abbe4d3a432158d88ff75e6677d26e`. Build/install/log directories remain outside the Git worktree. |
 | Evidence boundary | Offline source/build/test only. No runtime, Nav2-live, AMCL convergence, full TF runtime, Gate B, PPO training, HIL, or hardware result. Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+
+
+### ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE_CORRECTIVE_L2 — offline candidate record (2026-10-19)
+
+| Field | Record |
+|---|---|
+| Review branch / base | `roadmap-step4-step5-step6-consolidated-closure-d44ba71`; exact parent `d8db18aa3a5819b42d130221904281cec3360cae`; integration reference was not changed. |
+| Classification | `L2_CORRECTIVE_RUNTIME_ASSEMBLY_AND_SAFETY_CLOSURE`; only the pre-authorized corrective allowlist is changed. |
+| Map/Fuel closure | Absolute canonical map root and four artifact hashes checked before Map Server configuration. Fuel cache root is restricted to `$HOME/.gz/fuel`, the exact two SDF URIs and one positive-version cache directory per model, with `model.config` and `model.sdf`; this does not equate local cache content to remote Fuel content. |
+| Lifecycle/safety closure | Lifecycle configure/activate remain `NON_READY` until explicit rearm; reset/rearm services and generation transitions are unit-tested. Safety limits/freshness are parsed from YAML-backed parameters; sim E-stop defaults active and release requires explicit launch authorization plus fresh valid inputs and READY barrier. |
+| V3 ownership | `/imu/data` and `/wheel/odometry_raw` publisher owner is `mecanum_base_bridge`; resolved config JCS SHA-256 `5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071`. |
+| Offline verification | Five-package colcon build PASS; `mecanum_nav_rl/test` 698 passed; `mecanum_nav_bringup/test` 234 passed; interface colcon test 11 passed; focused corrective tests 37 passed; ROSIDL imports, three installed safety executables, and installed launch/config byte equality PASS. |
+| Evidence | `docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json`, SHA-256 `8769f701291ad9f57881130500ea3ecd12885a0ceb19530a759015573942ede1`; 44 source pins are recorded there. Pydantic test dependency is `2.10.6`; build/install/log/test ROS directories are external to the Git worktree. |
+| Limits | Source/build/offline-test evidence only. No ROS/Gazebo/runtime/HIL/hardware was run. Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. Independent audit remains pending. |
+
+
+### ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE_CORRECTIVE_L2 — evidence accounting correction (2026-10-19)
+
+| Field | Record |
+|---|---|
+| Corrected evidence identity | Current closure evidence SHA-256 is `01075f9930e796f79760d999a1fb06c05d289ecd0d6ce79b9d35400c270db14b`; the prior ledger entry’s `8769f701...` value is superseded for current evidence accounting only. |
+| Corrected scope | Exact current candidate diff contains 21 paths, all within the authorized allowlist; `ppo.yaml` is byte-identical to base and absent from the diff. |
+| Verification record | Five-package build PASS; `mecanum_nav_rl/test` 698 passed; `mecanum_nav_bringup/test` 234 passed; interfaces colcon test 11 passed; final integrity/source-pin checks are recorded in the candidate evidence. |
+| Status and boundary | Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No runtime execution or runtime claim. |

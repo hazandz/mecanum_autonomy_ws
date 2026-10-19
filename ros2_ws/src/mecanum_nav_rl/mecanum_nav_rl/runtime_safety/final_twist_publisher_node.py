@@ -5,6 +5,7 @@ import os
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt, SafetyLifecycleState
 
 
@@ -15,10 +16,25 @@ class FinalTwistPublisherNode(Node):
         self._identity: SafetyLifecycleState | None = None
         self._final_publish_sequence = 0
         self._publisher_instance_id = os.getpid()
-        self._cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self._receipt_pub = self.create_publisher(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", 1)
-        self.create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd", self._on_accepted, 10)
-        self.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._on_lifecycle, 10)
+        command_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        receipt_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        reliable_volatile = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._cmd_pub = self.create_publisher(Twist, "/cmd_vel", command_qos)
+        self._receipt_pub = self.create_publisher(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", receipt_qos)
+        self.create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd", self._on_accepted, reliable_volatile)
+        self.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._on_lifecycle, reliable_volatile)
 
     def _on_lifecycle(self, msg: SafetyLifecycleState) -> None:
         self._identity = msg
@@ -26,14 +42,26 @@ class FinalTwistPublisherNode(Node):
     def _on_accepted(self, envelope: CommandEnvelope) -> None:
         identity = self._identity
         if identity is None:
+            try:
+                self._cmd_pub.publish(Twist())
+            except Exception as error:
+                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
             return
         if envelope.reset_epoch != identity.reset_epoch or envelope.runtime_generation != identity.runtime_generation:
+            try:
+                self._cmd_pub.publish(Twist())
+            except Exception as error:
+                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
             return
         now_ns = self.get_clock().now().nanoseconds
         identity_ns = identity.header.stamp.sec * 1_000_000_000 + identity.header.stamp.nanosec
         identity_fresh = identity_ns > 0 and 0 <= now_ns - identity_ns <= 500_000_000
         is_safe_stop = envelope.source == CommandEnvelope.SOURCE_SAFE_STOP
         if not is_safe_stop and (not identity.motion_permitted or not identity_fresh):
+            try:
+                self._cmd_pub.publish(Twist())
+            except Exception as error:
+                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
             return
         final_command = envelope.twist if not is_safe_stop else Twist()
         try:

@@ -25,3 +25,7 @@ fail_closed:
   invalid_localization: true
   estop: true
 collision_policy: NAV2_COSTMAP_WITH_STALE_INVALID_FAIL_SAFE_NO_UNVALIDATED_TTC
+estop_boundary:
+  scope: SIM_EVAL_ONLY_NOT_HARDWARE_ESTOP
+  default_active: true
+  release_requires_launch_authorization: true

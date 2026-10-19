@@ -6,12 +6,16 @@ ROOT = Path(__file__).resolve().parents[4]
 
 def test_final_publisher_is_the_only_declared_ros_cmd_vel_publisher() -> None:
     source = (ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py").read_text()
-    assert source.count('create_publisher(Twist, "/cmd_vel"') == 1
+    assert source.count('self.create_publisher(Twist, "/cmd_vel", command_qos)') == 1
     assert 'create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd"' in source
     assert "create_publisher(Twist, \"/cmd_vel\"" not in (
         ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py"
     ).read_text()
     assert source.index("self._cmd_pub.publish(final_command)") < source.index("self._receipt_pub.publish(receipt)")
+    assert "history=HistoryPolicy.KEEP_LAST, depth=1" in source
+    assert "reliability=ReliabilityPolicy.RELIABLE" in source
+    assert "durability=DurabilityPolicy.VOLATILE" in source
+    assert "durability=DurabilityPolicy.TRANSIENT_LOCAL" in source
 
 
 def test_receipt_identity_only_comes_from_safety_lifecycle_and_publish_failure_emits_none() -> None:
