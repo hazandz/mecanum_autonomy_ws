@@ -1007,3 +1007,19 @@ The review-only Run003 candidate, based on `6d730bd54d7f99429ee4832a3f6f96beffae
 ### Step-7 Run004 host provisioning environment decoupling — corrective candidate
 
 Run004 corrective base `cbf59ff938d8b96ec650859d9367bc6cb840f0c6`, exact 11-path delivery scope (four source/test paths in Phase A); the original 17-path Run004 candidate remains historical. The host helper validates Python 3.12, exact Pydantic 2.10.6 and fingerprint, and defers `rclpy` to the sourced runner preflight. Historical Run001–Run003 pins remain Git-blob verified; Run004 has 20 current-worktree pins. Decision SHA-256 `f4dd7b7c4b24eceeae85bb08812ea32ac9c3029b681f127816349176c6997b0a`, evidence SHA-256 `e3b9eaab981f7bcb44192fcc1d61af53c79878f79103037a3857adc4389ff8ff`, manifest SHA-256 `1369bac8fd60586a8e2231ff9f458cdc2820cfa599c32ab6e35df98533a0c376`. Run004 guard remains pending/unconsumed; no runtime evidence; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+
+### Step-7 Run005 installed package-prefix closure — review candidate
+
+At exact base `b7105ccb651da6d0dcb916d7544481f7beacaae1`, the Run005 L1 correction addresses only the historical Run004 pre-acquire root cause `PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION`. The Run005 runner collects the exact eight package prefixes and verifies installed-file comparison package membership before comparing installed bytes. Run004 remains an immutable, non-retried pre-acquire failure; its prior disposition is not broadened.
+
+The Run005 candidate has an exact 13-path scope and 21 current-worktree source pins. Historical Run001–Run004 pins are validated from exact Git blobs at their respective historical commits; Run005 pins use current candidate bytes. Offline checks recorded for this candidate: Step-7 tools 182 passed; bringup 239 passed; RL 707 passed; six-package external build PASS; observer/ROSIDL tests 13/8 passed; installed closure, static parsing, source-pin and scope checks PASS. These checks do not authorize or claim runtime. Run005 remains pending with capacity one, acquisition zero, and `runtime_authorization=NOT_GRANTED`; Step 7/Gate B remain `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. No PEP work-package status or dependency is changed.
+
+Decision SHA-256 `3fe0df3816bcbfd4569ae9279b2e6be3ecf8f6041bc07295e1a14455a3ded51c`; evidence SHA-256 `fdc65d78e947fd302acc5e4885d4f2aefefc14d98e98632c8e2d8cbdbf05b777`; guard manifest SHA-256 `c8abea65d820b6b850e6853e7f52bd1566ff99f1c60647126f30ac871f1d4986`; Registry SHA-256 `4feffc633d5f16d9a35ced9a81b06b9d4fa5837d4789e9dd8ba0e3c2d562a793`.
+
+
+### Step-7 Run005 package-prefix closure final pin/scope reconciliation
+
+This current Run005 reconciliation supersedes its earlier candidate metadata references without changing PEP work-package status or dependencies. The dirty/clean final contract test requires the exact 13-path `RUN005_PATHS`; worktree dirtiness no longer selects a different invariant. The existing contract-test source pin is SHA-256 `50e826ba266c8177ec73c450c0a8a3ea77ae33184d98b0c534c4f08f1d6f409b`, size `40187`; 21 unique current source pins remain independent of the 13-path delivery scope. Phase A passed: Step-7 tools 182, bringup 239, RL 707, focused scope/historical 46, six-package build, observer/ROSIDL and installed-byte closure. No runtime or Gate-B result is claimed. Run004 remains immutable and not retried.
+
+Decision SHA-256 `6b9cb13114504f3c2b33e7187c6d32b227f79e2a101c6f57f89a99a21038f72c`; evidence SHA-256 `5a7c70bb5c9a21300d23ab0d2318223fcb1909ff6326b0b6540aba4863baedae`; manifest SHA-256 `b51c528653b9b6b58118f020e05c6d2148ae419fc8acb89563cd268dc2542986`; Registry SHA-256 `84c006da0f6fdf523e06027f1d863d0b0cedca7c698cd1b3e2fe69578a2d6b91`.

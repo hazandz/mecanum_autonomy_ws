@@ -1864,3 +1864,21 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Guard / evidence | Run004 PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; no runtime evidence; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
 | Decision / evidence / manifest SHA-256 | `f4dd7b7c4b24eceeae85bb08812ea32ac9c3029b681f127816349176c6997b0a` / `e3b9eaab981f7bcb44192fcc1d61af53c79878f79103037a3857adc4389ff8ff` / `1369bac8fd60586a8e2231ff9f458cdc2820cfa599c32ab6e35df98533a0c376` |
 | Evidence ceiling | Source/offline candidate only; no runtime claim. Parent Ledger bytes are an exact prefix. |
+
+
+### STEP07 Run005 installed package-prefix closure — offline candidate
+
+Run004 remains the historical immutable outcome `STEP07_NAV2_BASELINE_RUN004_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`, with sole root cause `PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION`; it was not retried. Run005 closes this source-level prefix omission by collecting and validating the exact eight package prefixes and ensuring every installed-file equality target has a collected prefix before byte comparison. No runtime semantics, Python/Pydantic, Fuel, map/world, TF, Gate-B, safety, or retry/capacity contract changed.
+
+Exact Run005 base/sole-parent target: `b7105ccb651da6d0dcb916d7544481f7beacaae1`. Exact current delivery scope: 13 paths. Runtime source-pin inventory: 21 unique paths, SHA-256/size checked against current Run005 candidate bytes; historical Run001–Run004 pins read exact Git blobs with no worktree fallback. Historical path scopes remain 23 → 14 → 9 → 13 → 14 → 17 → 11; Run005 current scope is 13. Offline tests/build and all recorded static closures passed; no runtime was executed. Run005 guard remains pending/capacity-one/acquisition-zero/NOT_GRANTED; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+Decision SHA-256 `3fe0df3816bcbfd4569ae9279b2e6be3ecf8f6041bc07295e1a14455a3ded51c`; evidence SHA-256 `fdc65d78e947fd302acc5e4885d4f2aefefc14d98e98632c8e2d8cbdbf05b777`; manifest SHA-256 `c8abea65d820b6b850e6853e7f52bd1566ff99f1c60647126f30ac871f1d4986`; Registry SHA-256 `4feffc633d5f16d9a35ced9a81b06b9d4fa5837d4789e9dd8ba0e3c2d562a793`; PEP SHA-256 `9c4f9cf66520546fb53f656c438068b896a660142bb7d9e39ff9b2fd80b53da9`. This entry is append-only; the complete parent Ledger remains an exact byte prefix. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+
+### STEP07 Run005 final-scope/source-pin reconciliation — Phase A pass
+
+This entry supersedes the earlier Run005 provisional scope-test and pin references. The contract test requires exact 13-path `RUN005_PATHS` whether the worktree is dirty or the candidate is committed. Its already-existing Run005 pin is `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`, SHA-256 `50e826ba266c8177ec73c450c0a8a3ea77ae33184d98b0c534c4f08f1d6f409b`, size `40187`; Run005 still has 21 unique source pins. Historical Run001–Run004 pins are checked from exact Git blobs with no worktree fallback. Historical scope counts remain 23 → 14 → 9 → 13 → 14 → 17 → 11; current Run005 scope is 13.
+
+Phase A passed: focused scope/historical tests 46; Step-7 tools 182; bringup 239; RL 707; six-package external build; observer/ROSIDL colcon tests; installed equality 6/6; JSON/YAML/XML duplicate-key validation; Python compile; historical and scope preservation. Run004 remains immutable with sole root cause `PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION` and was not retried. Run005 remains pending, capacity one, acquisition zero, `runtime_authorization=NOT_GRANTED`; no runtime executed; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+Decision SHA-256 `6b9cb13114504f3c2b33e7187c6d32b227f79e2a101c6f57f89a99a21038f72c`; evidence SHA-256 `5a7c70bb5c9a21300d23ab0d2318223fcb1909ff6326b0b6540aba4863baedae`; manifest SHA-256 `b51c528653b9b6b58118f020e05c6d2148ae419fc8acb89563cd268dc2542986`; Registry SHA-256 `84c006da0f6fdf523e06027f1d863d0b0cedca7c698cd1b3e2fe69578a2d6b91`; PEP SHA-256 `3a594acf33142261e167f84c8834b1c7babccaeb46c77150c9597e794f12846a`. Parent Ledger bytes remain an exact prefix. Evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
