@@ -1794,3 +1794,24 @@ Offline build and independent checks completed so far: six-package colcon build 
 | Immutable chain | Root campaign `f7f98c683d59cf4c62e462da9f37d4ffb2455c80..6fbddb3db1a38908ed470f549a1c8182e022a37f` remains 23 paths; lifecycle-QoS corrective `6fbddb3db1a38908ed470f549a1c8182e022a37f..5fa2e89f84d683723eba8eb989cfef59059ae603` remains 14 paths. |
 | Source pin | The existing contract-test pin remains one of exactly 16 unique paths and is refreshed in the guard, evidence and manifest to SHA-256 `41de1850413727308aac4c49a7104f40576789d830ce3f96102ba04a0991f280` and size `28656` bytes. |
 | Boundary | Run001 guard remains pending, capacity one, acquisition count zero and `runtime_authorization=NOT_GRANTED`; no runtime, Gate-B transition or integration is claimed. |
+
+
+### Step-7 Run002 pre-acquire failure evidence corrective — offline candidate
+
+| Field | Record |
+|---|---|
+| Base and scope | Exact base `5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8`; 12-path Run002 corrective allowlist. |
+| Historical boundary | Run001 remains `STEP07_RUN001_OFFICIAL_RUNNER_INVOKED_PREACQUIRE_FAILURE_NO_RETRY`; no raw literal or replacement evidence is invented. |
+| Run002 seed | PENDING; capacity 1; acquisition count 0; `runtime_authorization=NOT_GRANTED`; retry disabled. |
+| Correction | Build/host-preflight failure after exact source/guard and runtime-worktree preparation is recorded with canonical record, failure document, manifest, and checksums before guard acquisition; no lock, runtime process, or teardown. |
+| Evidence ceiling | Offline mechanism only; no runtime execution; `GATE_B=NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+
+
+### Run002 source-pin cross-reference reconciliation
+
+Exactly 16 unique Run002-specific source pins (SHA-256 and byte size) are shared by the pending Run002 guard, its L2 evidence, guard manifest, and Registry inventory. This entry is append-only and does not revise Run001 history or runtime status.
+
+
+### STEP07 Run002 reference-aware historical guard-test correction
+
+The 13-path Run002 corrective adds reference-aware checking of the unchanged Run001 guard pins from Git blobs at `5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8`; missing objects and hash/size mismatches fail closed. Run002’s own 16 unique pins remain current-worktree checks. The verified scope chain is 23 → 14 → 9 → 13 paths. This entry supersedes only the provisional 12-path Run002 scope note; Run001 history, guard, outcome, Gate B and runtime-approval status remain unchanged.

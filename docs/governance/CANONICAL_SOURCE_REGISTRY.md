@@ -861,3 +861,35 @@ The Run001 L2 evidence and guard manifest now list the seven lifecycle/receipt-r
 ### Run001 acceptance-matrix scope-chain closure
 
 The immutable scope chain remains 23 root campaign paths (`f7f98c6..6fbddb3`), 14 lifecycle-QoS corrective paths (`6fbddb3..5fa2e89`), and the exact nine-path acceptance-matrix corrective (`5fa2e89..candidate`). The contract test supports dirty and committed review states and rejects untracked artifacts. Its existing one-of-16 source pin is refreshed in the guard, evidence and manifest; pin cardinality remains 16 unique paths.
+
+
+### STEP07_NAV2_BASELINE_RUN_002 — pre-acquire failure evidence candidate
+
+Run002 uses independent guard, runner, tests, and source-pin inventory recorded in `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN002_L2_EVIDENCE.json` (16 Run002 source pins). The seed is PENDING, capacity one, acquisition count zero, and runtime authorization NOT_GRANTED. Run001 remains immutable with its historical pre-acquire failure disposition; no Run001 pin inventory is reused as Run002 provenance. No runtime evidence or Gate B transition is claimed.
+
+
+Run002 source-pin inventory (16 unique pins; path SHA-256 and byte size are mirrored exactly in the Run002 seed guard, L2 evidence, and guard manifest):
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run002_runtime_guard.py` | `5057f2a1474b14e64de32fd2f1d2d1a30078fbdf7fa956d6628a60a146fa49ff` | 8199 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run002.py` | `69f71af7ebb1ebc55fd10aa783218ad2d3914784d33a7c7e180c82bba044f1b3` | 45236 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run002_runtime_guard.py` | `cab62fa394887f83304916fb41e1fed784c77d1e9dd8d5f3a987c17d42281338` | 2668 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run002.py` | `58a4f7f0e91d1a1528ce3ea53bfa8b0410f8aef57a06d2e9c2e866c355663467` | 8550 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp` | `5f2f16d1a06b17cdf5831747c89c76e7c1cdc7743ee7505c685be15e3f8708af` | 7981 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `283010f115b1608f8a73613f45e4da674f54ec93c2b91584d86b9514030fb013` | 8870 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `2bc2901a9fad989149ac663b42ac9ac55e926483056431e09b4b073f38770d14` | 6391 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `d44339ff4edd064f3c28dc98c2e19eed0b72f1c8588bcd44198b0337c7fc21d5` | 30381 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+
+
+### Run002 historical-pin reference policy and scope-chain correction
+
+The Run001 pending guard’s 16 historical source pins are checked from Git blobs at `5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8`, including exact byte length; absent objects or mismatches fail closed without checkout fallback. Run002 pins remain a distinct 16-entry inventory over current worktree bytes. Its corrective scope is exactly 13 paths and the contract preserves the 23 → 14 → 9 → 13 path chain. Run001 guard/runtime semantics and historical outcomes are unchanged.

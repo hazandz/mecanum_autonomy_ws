@@ -985,3 +985,16 @@ The acceptance matrix in both Run001 governance records is aligned with raw obse
 ### Run001 acceptance-matrix scope-chain closure
 
 The current corrective preserves root 23-path and lifecycle-QoS 14-path historical diffs and validates the current nine-path scope separately. This is offline test/governance closure only; Run001 guard remains pending/unconsumed, and no Gate-B or runtime status transition is made.
+
+
+### Step-7 Run002 pre-acquire evidence correction — review candidate
+
+The Run002 source/offline candidate adds pre-acquire failure evidence persistence after source/guard identity and detached runtime worktree validation. It records the exact exception and traceback, zero runtime-process calls, unchanged pending guard, and a terminal no-consumption outcome. Run001 remains historical and immutable. No runtime execution, Gate B transition, or `RUNTIME_APPROVED` is claimed; Run002 authorization remains NOT_GRANTED.
+
+
+Run002 source provenance: exactly 16 unique path/SHA-256/size pins are recorded consistently in the Run002 guard seed, evidence, guard manifest, and Registry. This is an offline source-closure record only; it does not authorize or claim runtime.
+
+
+### STEP07 Run002 historical source-pin reference-aware correction
+
+The Run002 candidate remains based on `5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8`. Its direct corrective scope is exactly 13 paths. The scope-chain test preserves the Run001 root campaign (23 paths), lifecycle/QoS correction (14), acceptance-matrix correction (9), and current Run002 correction (13). Run001 guard pins are verified by SHA-256 and size against `git show 5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8:<path>` with no fallback; Run002 pins continue to verify current worktree bytes and remain 16 unique entries. Run002 remains pending/unconsumed; no runtime execution or Gate B transition is asserted.
