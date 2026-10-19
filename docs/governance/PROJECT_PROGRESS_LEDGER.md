@@ -1835,3 +1835,18 @@ Run003 direct scope is exactly 14 paths, including the Owner-authorized historic
 ### STEP07 Run003 scope assertion and pin finalization
 
 The exact active Run003 scope test now includes the Owner-authorized Run002 historical guard test and asserts exactly 14 distinct paths. The historical 23/14/9/13 path scopes remain separate. The existing 16-pin Run003 inventory is refreshed for its existing pinned bringup contract-test path to SHA-256 `d16c487554495e73dbbdd8f7df857b383897db6a804c85aef9a1572c2486203d`, size 32084 bytes; no additional source pin was added. Evidence/manifest guard-seed references were recomputed. This entry supersedes the preceding candidate-only pin references; all Ledger bytes at the base remain an exact prefix. Decision SHA-256 `04ef84ed664fcdde8d0d9e6eb902632e1a001e8687f3caa077a33dfccadf3d29; evidence SHA-256 `2f26ff124310e55568605f8e8d9958fa19c673955e257bcd41bc35fe0bc762f6; guard manifest SHA-256 `121b0f1b02dce97811397168286a55bddc99160b61062fb09b8e93fdde57fa65.
+
+
+### STEP07 Run004 Python runtime environment closure — L1 candidate
+
+| Field | Disposition |
+|---|---|
+| Base / integration | `fdc0e299515bda2286832aabec635948629517b5` / `f7f98c683d59cf4c62e462da9f37d4ffb2455c80` |
+| Scope | Exact 17-path Run004 candidate; 20 unique source pins are a distinct inventory. |
+| Run003 | Historical immutable `STEP07_NAV2_BASELINE_RUN003_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`; missing Pydantic V2 in Python 3.12 overlay (`PYDANTIC_V2_RUNTIME_ENVIRONMENT_CLOSURE_MISSING`); not a Fuel/Nav2/Gate B/safety/robot-runtime failure; no retry. |
+| Pins | Run001/Run002/Run003 verified via exact Git blobs at pinned commits, SHA-256 and size, no checkout fallback; Run004 verified from current worktree bytes. |
+| Environment | `/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python`, Python 3.12, `pydantic==2.10.6`; Owner-invoked external venv helper only; runner performs no installation/network access. |
+| Offline verification | Step-7 tools 138 passed; RL 707 passed; bringup 239 passed; six-package build PASS; observer/ROSIDL tests 25 passed; py_compile 9 files PASS. |
+| Guard / ceiling | PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; no runtime evidence; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+| Decision / evidence / manifest SHA-256 | `4764d4e183f51ed5a58a3807c5c51ddd67e429b04c13f0c184c98947c716de66` / `65365fa083db06098e3dfe63568a9ba1ff7f78eda596c9c3c2ab301e1a20a444` / `7fd9eb0d27e45fa348233b0f7df7de8cf34ba0caa550c28c701c52e80f4a1c6d` |
+| `supersedes` | Supersedes only the pending Run004 environment-closure candidate description and its previous incomplete pin-reference reconciliation; Run001–Run003 historical evidence/outcomes remain immutable. All parent Ledger bytes remain an exact prefix. |

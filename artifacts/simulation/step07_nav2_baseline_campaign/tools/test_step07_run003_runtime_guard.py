@@ -1,16 +1,19 @@
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from step07_run003_runtime_guard import (
     ARCHITECTURE_SHA256, AUTH_SCOPE, INTEGRATION_BASE, PARTITION, PENDING, RUN_ID,
-    acquire_guard, load_guard, validate_seed, validate_source_pins,
+    acquire_guard, load_guard, validate_seed,
 )
 
 ROOT = Path(__file__).resolve().parents[4]
 GUARD = ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json"
-REVIEW = "a" * 40
+RUN003_REVIEW_SHA = "fdc0e299515bda2286832aabec635948629517b5"
+REVIEW = RUN003_REVIEW_SHA
 EXPECTED_SOURCE_PIN_PATHS = {
     "artifacts/maps/warehouse_map2/map.yaml",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run003.py",
@@ -29,6 +32,28 @@ EXPECTED_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
 }
+
+
+def _git_blob(relative, commit=RUN003_REVIEW_SHA):
+    return subprocess.run(
+        ["git", "show", f"{commit}:{relative}"], cwd=ROOT,
+        check=True, capture_output=True,
+    ).stdout
+
+
+def _validate_run003_historical_source_pins(document):
+    pins = document.get("source_pins")
+    if type(pins) is not dict or not pins:
+        raise ValueError("HISTORICAL_RUN003_SOURCE_PINS_MISSING")
+    for relative, expected in pins.items():
+        if type(relative) is not str or type(expected) is not dict or set(expected) != {"sha256", "size_bytes"}:
+            raise ValueError("HISTORICAL_RUN003_SOURCE_PIN_ROW_INVALID")
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("HISTORICAL_RUN003_SOURCE_PIN_PATH_INVALID")
+        raw = _git_blob(relative)
+        if hashlib.sha256(raw).hexdigest() != expected["sha256"] or len(raw) != expected["size_bytes"]:
+            raise ValueError(f"HISTORICAL_RUN003_SOURCE_PIN_MISMATCH:{relative}")
 
 
 def test_committed_run003_guard_is_exact_pending_seed_and_its_own_source_closes():
@@ -56,7 +81,10 @@ def test_committed_run003_guard_is_exact_pending_seed_and_its_own_source_closes(
     assert len(pins) == 16 and set(pins) == EXPECTED_SOURCE_PIN_PATHS
     assert "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run003.py" in pins
     assert not any("run002" in path.lower() for path in pins)
-    validate_source_pins(ROOT, pins)
+    historical_guard = _git_blob(
+        "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json")
+    assert GUARD.read_bytes() == historical_guard
+    _validate_run003_historical_source_pins(document)
 
 
 @pytest.mark.parametrize("raw", [
@@ -83,3 +111,23 @@ def test_acquisition_is_explicit_and_capacity_one(tmp_path):
     assert consumed["acquisition_count"] == 1
     assert consumed["runtime_authorization"] == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
     assert path.with_suffix(".json.lock").exists()
+
+
+def test_run003_historical_pins_ignore_run004_worktree_bytes():
+    document = load_guard(GUARD)
+    relative = "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py"
+    assert (ROOT / relative).read_bytes() != _git_blob(relative)
+    _validate_run003_historical_source_pins(document)
+
+
+def test_run003_historical_hash_and_missing_blob_fail_closed():
+    document = load_guard(GUARD)
+    relative = next(iter(document["source_pins"]))
+    mutated = json.loads(json.dumps(document))
+    mutated["source_pins"][relative]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="HISTORICAL_RUN003_SOURCE_PIN_MISMATCH"):
+        _validate_run003_historical_source_pins(mutated)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob(relative, "0" * 40)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob("missing/historical/path")

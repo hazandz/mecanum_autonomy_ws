@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[4]
 GUARD = ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json"
 RUN001_REVIEW_SHA = "5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8"
 RUN002_REVIEW_SHA = "6d730bd54d7f99429ee4832a3f6f96beffae020f"
+RUN003_REVIEW_SHA = "fdc0e299515bda2286832aabec635948629517b5"
 REVIEW = "a" * 40
 AUTH = {"authorization": "OWNER_APPROVED_EXACT_RUN", "scope": AUTH_SCOPE,
         "run_id": RUN_ID, "review_commit": REVIEW, "integration_base": INTEGRATION_BASE}
@@ -202,3 +203,35 @@ def test_valid_authorization_consumes_only_when_acquire_is_explicit(tmp_path):
     for key, value in metadata.items():
         assert consumed[key] == value
     assert guard_path.with_suffix(".json.lock").exists()
+
+
+def test_run003_historical_guard_and_source_pins_use_exact_git_blobs():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json"
+    historical_guard = _strict_git_json(ROOT, RUN003_REVIEW_SHA, guard_path)
+    assert historical_guard["run_id"] == "STEP07_NAV2_BASELINE_RUN_003"
+    _validate_historical_pins_at_commit(ROOT, historical_guard, RUN003_REVIEW_SHA)
+    assert (ROOT / guard_path).read_bytes() == _git_blob(ROOT, RUN003_REVIEW_SHA, guard_path)
+
+
+def test_run003_current_candidate_does_not_change_historical_pins():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json"
+    historical_guard = _strict_git_json(ROOT, RUN003_REVIEW_SHA, guard_path)
+    relative = "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py"
+    current = (ROOT / relative).read_bytes()
+    historical = _git_blob(ROOT, RUN003_REVIEW_SHA, relative)
+    assert current != historical
+    _validate_historical_pins_at_commit(ROOT, historical_guard, RUN003_REVIEW_SHA)
+
+
+def test_run003_historical_pin_mismatch_or_missing_blob_fails_closed():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json"
+    historical_guard = _strict_git_json(ROOT, RUN003_REVIEW_SHA, guard_path)
+    relative = next(iter(historical_guard["source_pins"]))
+    mutated = json.loads(json.dumps(historical_guard))
+    mutated["source_pins"][relative]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="HISTORICAL_SOURCE_PIN_MISMATCH"):
+        _validate_historical_pins_at_commit(ROOT, mutated, RUN003_REVIEW_SHA)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob(ROOT, "0" * 40, relative)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob(ROOT, RUN003_REVIEW_SHA, "missing/historical/path")
