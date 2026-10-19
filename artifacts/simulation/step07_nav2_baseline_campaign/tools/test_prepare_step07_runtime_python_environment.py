@@ -50,7 +50,7 @@ def test_prepare_requests_system_site_packages_and_exact_pin(tmp_path, monkeypat
     monkeypatch.setattr(helper, "_run", fake_run)
     monkeypatch.setattr(helper, "inspect_interpreter", lambda _path: {
         "python_major": 3, "python_minor": 12, "pydantic_version": "2.10.6",
-        "rclpy_module": "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py",
+        "rclpy_validation": "DEFERRED_TO_SOURCED_RUNNER_PREFLIGHT",
     })
     helper.prepare_environment(target, repo)
     assert calls[0][1:4] == ["-m", "venv", "--system-site-packages"]
@@ -59,10 +59,9 @@ def test_prepare_requests_system_site_packages_and_exact_pin(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("facts,expected", [
-    ({"python_major": 3, "python_minor": 12, "errors": ["PYDANTIC_IMPORT:ModuleNotFoundError"]}, "PYDANTIC_IMPORT_FAILED"),
+    ({"python_major": 3, "python_minor": 12, "pydantic_import_error": "ModuleNotFoundError"}, "PYDANTIC_IMPORT_FAILED"),
     ({"python_major": 3, "python_minor": 12, "pydantic_version": "1.10.12", "errors": []}, "PYDANTIC_VERSION_MISMATCH"),
     ({"python_major": 3, "python_minor": 11, "pydantic_version": "2.10.6", "errors": []}, "PYTHON_VERSION_MISMATCH"),
-    ({"python_major": 3, "python_minor": 12, "pydantic_version": "2.10.6", "errors": ["RCLPY_IMPORT:ModuleNotFoundError"]}, "RCLPY_IMPORT_FAILED"),
 ])
 def test_helper_rejects_invalid_interpreter_fingerprint(tmp_path, monkeypatch, facts, expected):
     import json
@@ -78,3 +77,25 @@ def test_helper_rejects_invalid_interpreter_fingerprint(tmp_path, monkeypatch, f
 def test_helper_rejects_missing_interpreter(tmp_path):
     with pytest.raises(RuntimeError, match="RUNTIME_PYTHON_ENVIRONMENT_INVALID:INTERPRETER_MISSING_OR_NOT_EXECUTABLE"):
         helper.inspect_interpreter(tmp_path / "missing-python")
+
+
+def test_provisioning_fingerprint_passes_without_rclpy_in_provisioning_shell(tmp_path, monkeypatch):
+    import json
+
+    interpreter = tmp_path / "python"
+    interpreter.write_text("#!/bin/sh\nexit 0\n")
+    interpreter.chmod(0o755)
+    facts = {"python_major": 3, "python_minor": 12, "python_version": "3.12.3",
+             "pydantic_version": "2.10.6", "pydantic_module": "/venv/site-packages/pydantic/__init__.py"}
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        assert "import rclpy" not in command[-1]
+        return type("R", (), {"returncode": 0, "stdout": json.dumps(facts), "stderr": ""})()
+
+    monkeypatch.setattr(helper, "_run", fake_run)
+    result = helper.inspect_interpreter(interpreter)
+    assert result["pydantic_version"] == "2.10.6"
+    assert result["rclpy_validation"] == "DEFERRED_TO_SOURCED_RUNNER_PREFLIGHT"
+    assert len(calls) == 1

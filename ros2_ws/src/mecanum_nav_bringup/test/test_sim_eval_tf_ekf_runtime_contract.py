@@ -44,6 +44,7 @@ RUN002_BASE = "5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8"
 RUN002_COMMIT = "6d730bd54d7f99429ee4832a3f6f96beffae020f"
 RUN003_COMMIT = "fdc0e299515bda2286832aabec635948629517b5"
 RUN004_BASE = RUN003_COMMIT
+RUN004_CORRECTIVE_BASE = "cbf59ff938d8b96ec650859d9367bc6cb840f0c6"
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
@@ -371,35 +372,69 @@ RUN004_CORRECTIVE_PATHS = {
     "docs/governance/PROJECT_PROGRESS_LEDGER.md",
 }
 
+RUN004_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_prepare_step07_runtime_python_environment.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run004.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
+
+RUN004_FINAL_CORRECTIVE_PATHS = {
+    *RUN004_PHASE_A_PATHS,
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_004.json",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN004_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN004_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN004_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+
 def _candidate_changed_paths():
     status = subprocess.run(
         ["git", "status", "--short", "--untracked-files=all"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     if status:
-        return {line[3:] for line in status if line}, True
+        changed = {line[3:] for line in status if line}
+        if changed in (RUN004_PHASE_A_PATHS, RUN004_FINAL_CORRECTIVE_PATHS):
+            return changed, True
+        raise AssertionError(f"dirty Run004 corrective path set is not an authorized phase scope: {sorted(changed)}")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
     parent = subprocess.run(
         ["git", "rev-parse", "HEAD^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    if parent == RUN004_BASE:
+    if parent == RUN004_CORRECTIVE_BASE:
         names = subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines()
-        return set(names), False
-    raise AssertionError("clean worktree must be the committed Run004 candidate")
+        changed = set(names)
+        if changed != RUN004_FINAL_CORRECTIVE_PATHS:
+            raise AssertionError("clean Run004 corrective commit does not match the exact 11-path allowlist")
+        return changed, False
+    raise AssertionError(f"clean worktree is not the base or committed Run004 corrective: HEAD={head}")
 
 
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
     changed, dirty = _candidate_changed_paths()
-    assert changed == RUN004_CORRECTIVE_PATHS
-    assert len(changed) == 17
+    assert changed in (RUN004_PHASE_A_PATHS, RUN004_FINAL_CORRECTIVE_PATHS)
+    assert len(changed) in (4, 11)
+    original_run004 = subprocess.run(
+        ["git", "diff", "--name-only", f"{RUN004_BASE}..{RUN004_CORRECTIVE_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(original_run004) == RUN004_CORRECTIVE_PATHS
+    assert len(original_run004) == 17
     untracked = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
-    assert set(untracked) <= RUN004_CORRECTIVE_PATHS, f"untracked paths outside the exact candidate allowlist: {untracked}"
+    assert set(untracked) <= changed, f"untracked paths outside the exact current phase allowlist: {untracked}"
     assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
                    or "/__pycache__/" in path for path in untracked), untracked
     assert not any(path.startswith(("build/", "install/", "log/")) for path in changed)
@@ -584,8 +619,14 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 def test_historical_runtime_conservation_and_candidate_scope():
     changed, _dirty = _candidate_changed_paths()
-    assert changed == RUN004_CORRECTIVE_PATHS
-    assert len(changed) == 17
+    assert changed in (RUN004_PHASE_A_PATHS, RUN004_FINAL_CORRECTIVE_PATHS)
+    assert len(changed) in (4, 11)
+    original_run004 = subprocess.run(
+        ["git", "diff", "--name-only", f"{RUN004_BASE}..{RUN004_CORRECTIVE_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(original_run004) == RUN004_CORRECTIVE_PATHS
+    assert len(original_run004) == 17
     protected = [
         path for path in subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,

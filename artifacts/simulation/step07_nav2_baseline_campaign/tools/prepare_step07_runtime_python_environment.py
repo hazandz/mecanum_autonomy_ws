@@ -17,24 +17,15 @@ PYDANTIC_VERSION = "2.10.6"
 REQUIREMENT = f"pydantic=={PYDANTIC_VERSION}"
 DEFAULT_VENV_ROOT = Path("/home/hazan/step07_runtime_python312_pydantic_2_10_6")
 
-_FINGERPRINT_CODE = r'''import importlib.metadata as md, json, platform, sys
+_FINGERPRINT_CODE = r'''import json, platform, sys
 facts = {"python_version": platform.python_version(), "python_major": sys.version_info.major,
          "python_minor": sys.version_info.minor}
-errors = []
 try:
     import pydantic
     facts["pydantic_version"] = pydantic.__version__
     facts["pydantic_module"] = pydantic.__file__
 except Exception as exc:
-    errors.append("PYDANTIC_IMPORT:" + type(exc).__name__)
-try:
-    import rclpy
-    facts["rclpy_module"] = rclpy.__file__
-    try: facts["rclpy_distribution_version"] = md.version("rclpy")
-    except md.PackageNotFoundError: facts["rclpy_distribution_version"] = "ROS_PACKAGE_NO_PYPI_METADATA"
-except Exception as exc:
-    errors.append("RCLPY_IMPORT:" + type(exc).__name__)
-facts["errors"] = errors
+    facts["pydantic_import_error"] = type(exc).__name__
 print(json.dumps(facts, sort_keys=True, separators=(",", ":")))
 '''
 
@@ -72,14 +63,15 @@ def inspect_interpreter(interpreter: Path) -> dict:
         facts = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError) as exc:
         raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:INTERPRETER_PROBE_INVALID") from exc
+    if type(facts) is not dict:
+        raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:INTERPRETER_PROBE_INVALID")
     if (facts.get("python_major"), facts.get("python_minor")) != (3, 12):
         raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:PYTHON_VERSION_MISMATCH")
-    if any(error.startswith("PYDANTIC_IMPORT:") for error in facts.get("errors", [])):
+    if facts.get("pydantic_import_error"):
         raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:PYDANTIC_IMPORT_FAILED")
     if facts.get("pydantic_version") != PYDANTIC_VERSION:
         raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:PYDANTIC_VERSION_MISMATCH")
-    if any(error.startswith("RCLPY_IMPORT:") for error in facts.get("errors", [])):
-        raise RuntimeError("RUNTIME_PYTHON_ENVIRONMENT_INVALID:RCLPY_IMPORT_FAILED")
+    facts["rclpy_validation"] = "DEFERRED_TO_SOURCED_RUNNER_PREFLIGHT"
     return facts
 
 

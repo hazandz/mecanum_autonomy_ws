@@ -1,23 +1,19 @@
-# Step-7 Run004 — Python 3.12 / Pydantic V2 environment closure
+# Step-7 Run004 — provisioning/runtime environment boundary correction
 
-Classification: `L1_PYTHON_RUNTIME_ENVIRONMENT_CLOSURE`. This is a source/offline candidate based on `fdc0e299515bda2286832aabec635948629517b5`; integration base remains `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`. Architecture SHA-256: `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
+Classification: `L1_HOST_PROVISIONING_HELPER_ENVIRONMENT_DECOUPLING`. Corrective base and required sole parent: `cbf59ff938d8b96ec650859d9367bc6cb840f0c6`. Run004 original candidate base: `fdc0e299515bda2286832aabec635948629517b5`. Integration base: `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`. Architecture SHA-256: `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 
-## Historical disposition
+## Finding and fixed behavior
 
-Run003 remains the immutable pre-acquire failure `STEP07_NAV2_BASELINE_RUN003_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`. The cause recorded for this corrective is `PYDANTIC_V2_RUNTIME_ENVIRONMENT_CLOSURE_MISSING`: the Python 3.12 overlay lacked Pydantic V2. This is not a Fuel, Nav2, Gate B, safety, or robot-runtime failure. Run003 is not changed or retried. Run001–Run003 historical source pins are verified from exact Git blobs at their respective commits by SHA-256 and byte size, with no worktree fallback.
+The prior host provisioning helper attempted to import `rclpy` before ROS Jazzy setup and the install overlay were sourced. That made provisioning depend on the caller shell. This corrective confines the helper to absolute outside-repository venv target validation, Python 3.12, exact `pydantic==2.10.6`, executable interpreter, and a valid non-secret package/version fingerprint. The helper records `rclpy_validation=DEFERRED_TO_SOURCED_RUNNER_PREFLIGHT`; absence of `rclpy` in the provisioning shell is not a helper failure.
 
-## Run004 dependency contract
+The official Run004 runner remains the source of truth for ROS-dependent checks after `prepare_ros_environment()` sources ROS and the overlay: `rclpy`, Gate-B observer import, and observer module location within the installed overlay. Its `RUNTIME_PYTHON_ENVIRONMENT_INVALID:RCLPY_IMPORT_FAILED` pre-acquire failure remains fail-closed. Canonical interpreter, requirements pin, Gate-B semantics, guard behavior, historical source-pin policy, and retry policy are unchanged.
 
-The canonical interpreter is `/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python` (Python 3.12) with exact requirement `pydantic==2.10.6`. The host provisioning helper creates a `--system-site-packages` virtual environment outside the repository and is Owner-invoked only. It is never called by the official runner. The runner does not install dependencies or access the network.
+## Scope and evidence
 
-Before guard acquisition, Run004 validates the exact interpreter path and executable status, Python minor version, exact Pydantic version, `rclpy`, Gate-B observer import, and that the imported observer resolves inside the install overlay. These failures fail closed with `RUNTIME_PYTHON_ENVIRONMENT_INVALID:<reason>`. The exact interpreter is used for the probe, Gate-B observer process, and ROSIDL import check; the Gate-B observer does not fall back to bare `python3`.
+The Run004 original candidate remains exactly 17 paths from `fdc0e299515bda2286832aabec635948629517b5` to `cbf59ff938d8b96ec650859d9367bc6cb840f0c6`. This corrective has exactly 11 paths from `cbf59ff938d8b96ec650859d9367bc6cb840f0c6`; its source/test Phase A scope is exactly four paths and its final scope adds the approved five remaining governance/guard paths plus the contract-test path as listed in evidence. The 20-entry Run004 current-worktree source-pin inventory is distinct from changed-path count. Run001–Run003 pins are checked against exact historical Git blobs; Run004 pins are checked against current candidate bytes.
 
-## Guard, source pins and evidence ceiling
+Run004 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Run001–Run003 historical artifacts remain unchanged. No runtime was executed; runtime evidence is `NOT_CREATED`; Gate B is `NOT_STARTED`; `RUNTIME_APPROVED` is `NOT_APPROVED`.
 
-Run004 seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, retry disabled. Run004 has 20 unique current-worktree SHA-256/size source pins, distinct from its exact 17 changed paths. No runtime evidence is created by this candidate. `GATE_B=NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; runtime eligibility is false.
+Offline verification: Step-7 tools 139 passed; bringup 239 passed; RL 707 passed; six-package external colcon build PASS; observer/ROSIDL tests PASS; py_compile and static parsing PASS; historical preservation, 20/20 source pins, exact scope chain, Ledger prefix, and diff checks PASS.
 
-Offline results: Step-7 tools 138 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; six-package external colcon build PASS; observer and ROSIDL colcon tests 25 passed; py_compile 9 files PASS. The test dependency fingerprint is Python 3.12.3/Pydantic 2.10.6, with `pip freeze` SHA-256 `8fc5de359c1faf157acf11c35b740cd433abbe4d3a432158d88ff75e6677d26e`.
-
-Evidence JSON SHA-256: `65365fa083db06098e3dfe63568a9ba1ff7f78eda596c9c3c2ab301e1a20a444`. Guard-manifest SHA-256: `7fd9eb0d27e45fa348233b0f7df7de8cf34ba0caa550c28c701c52e80f4a1c6d`.
-
-Evidence: `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN004_L1_EVIDENCE.json`. Guard manifest: `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN004_GUARD_MANIFEST.json`.
+Evidence SHA-256: `e3b9eaab981f7bcb44192fcc1d61af53c79878f79103037a3857adc4389ff8ff`. Guard manifest SHA-256: `1369bac8fd60586a8e2231ff9f458cdc2820cfa599c32ab6e35df98533a0c376`. Guard SHA-256: `9704aad346fad36ae8a66054eac69b2ff882243c6dc9130cdc348b9dc4971abe`.

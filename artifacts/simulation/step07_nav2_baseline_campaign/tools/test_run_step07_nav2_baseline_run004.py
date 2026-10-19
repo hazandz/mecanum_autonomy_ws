@@ -345,6 +345,57 @@ def test_runtime_python_environment_failure_is_recorded_preacquire_without_guard
                                        "cpp_observer": 0, "gate_b_observer": 0}
 
 
+def test_rclpy_import_failure_after_ros_overlay_source_is_preacquire_and_not_guarded(tmp_path, monkeypatch):
+    import os
+
+    runtime_worktree = tmp_path / "runtime"
+    runtime_worktree.mkdir()
+    run_directory = tmp_path / "evidence"
+    guard_path = runtime_worktree / "guard.json"
+    lock = guard_path.with_suffix(".json.lock")
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    guard_raw = json.dumps(guard, sort_keys=True, separators=(",", ":")).encode()
+    guard_path.write_bytes(guard_raw)
+    phases = []
+
+    def sourced_ros_environment(*_args):
+        phases.append("ros_and_overlay_sourced")
+        return {"AMENT_PREFIX_PATH": "/external/install", "PATH": "/opt/ros/jazzy/bin"}
+
+    overlay = tmp_path / "overlay"
+    overlay.mkdir()
+    runtime_python = Path(runner.RUNTIME_PYTHON_PATH)
+    original_is_file = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda self: True if self == runtime_python else original_is_file(self))
+    monkeypatch.setattr(os, "access", lambda *_args: True)
+    facts = {"python_major": 3, "python_minor": 12, "pydantic_version": "2.10.6",
+             "errors": ["RCLPY_IMPORT:ModuleNotFoundError"], "observer_module_path": str(overlay / "observer.py")}
+    monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs: type("R", (), {
+        "returncode": 0, "stdout": json.dumps(facts), "stderr": ""})())
+
+    def sourced_host_preflight(env, _worktree, _run_directory, _partition, _map, _fuel, _pins, runtime_python):
+        assert "AMENT_PREFIX_PATH" in env
+        phases.append("runtime_interpreter_probe_after_source")
+        return runner.validate_runtime_python_environment(runtime_python, env, overlay)
+
+    monkeypatch.setattr(runner, "prepare_ros_environment", sourced_ros_environment)
+    monkeypatch.setattr(runner, "host_preflight", sourced_host_preflight)
+    monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("must not acquire"))
+    record = {"run_id": runner.RUN_ID, "review_commit": "a" * 40,
+              "integration_base": runner.INTEGRATION_BASE, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING}
+    *_, failure = runner.preacquire_preflight(
+        runtime_worktree, {}, run_directory, runner.PARTITION, tmp_path / "map", tmp_path / "fuel",
+        {}, guard_path, lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        runtime_python, record)
+    assert phases == ["ros_and_overlay_sourced", "runtime_interpreter_probe_after_source"]
+    assert failure["exception_message"] == "RUNTIME_PYTHON_ENVIRONMENT_INVALID:RCLPY_IMPORT_FAILED"
+    assert failure["failure_reason_literals"] == ["RUNTIME_PYTHON_ENVIRONMENT_INVALID:RCLPY_IMPORT_FAILED"]
+    assert guard_path.read_bytes() == guard_raw and not lock.exists()
+    assert failure["guard_acquired"] is False and failure["runtime_execution"] is False
+
+
 def test_runtime_python_wrong_overlay_fails_with_required_literal(tmp_path, monkeypatch):
     import os
     import json as json_module

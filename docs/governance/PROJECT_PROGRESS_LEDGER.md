@@ -1850,3 +1850,17 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Guard / ceiling | PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; no runtime evidence; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
 | Decision / evidence / manifest SHA-256 | `4764d4e183f51ed5a58a3807c5c51ddd67e429b04c13f0c184c98947c716de66` / `65365fa083db06098e3dfe63568a9ba1ff7f78eda596c9c3c2ab301e1a20a444` / `7fd9eb0d27e45fa348233b0f7df7de8cf34ba0caa550c28c701c52e80f4a1c6d` |
 | `supersedes` | Supersedes only the pending Run004 environment-closure candidate description and its previous incomplete pin-reference reconciliation; Run001–Run003 historical evidence/outcomes remain immutable. All parent Ledger bytes remain an exact prefix. |
+
+
+### STEP07 Run004 provisioning helper environment decoupling — L1 corrective
+
+| Field | Disposition |
+|---|---|
+| `supersedes` | Supersedes the prior Run004 helper contract only; original Run004 17-path candidate and Run001–Run003 history remain unchanged. |
+| Base / scope | `cbf59ff938d8b96ec650859d9367bc6cb840f0c6`; exact 11-path corrective scope, with exact four-path source/test Phase A. |
+| Correction | Provisioning helper validates outside-repository Python 3.12, exact Pydantic 2.10.6, executable path and package/version fingerprint. It does not require or import `rclpy`; that check remains in the runner after ROS and overlay source. |
+| Pins | Run004 20 unique current-worktree source pins; Run001–Run003 exact historical Git blobs, SHA-256/size, no fallback. |
+| Offline verification | Step-7 tools 139 passed; bringup 239; RL 707; six-package build PASS; observer/ROSIDL tests PASS; py_compile/static parsing PASS; exact scopes and history PASS. |
+| Guard / evidence | Run004 PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; no runtime evidence; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+| Decision / evidence / manifest SHA-256 | `f4dd7b7c4b24eceeae85bb08812ea32ac9c3029b681f127816349176c6997b0a` / `e3b9eaab981f7bcb44192fcc1d61af53c79878f79103037a3857adc4389ff8ff` / `1369bac8fd60586a8e2231ff9f458cdc2820cfa599c32ab6e35df98533a0c376` |
+| Evidence ceiling | Source/offline candidate only; no runtime claim. Parent Ledger bytes are an exact prefix. |
