@@ -1704,3 +1704,15 @@
 | Corrected pin | `ros2_ws/src/mecanum_nav_rl/test/test_safety_lifecycle_transition.py` SHA-256 `25596f1b81ca0d3b53422123c9bba386e6e8a743b9b6d107259e6579650637bf`, size `3696` bytes. |
 | Current evidence | `docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json` SHA-256 `f757d8e9b035c23e27f01d44afa37082f4e62a061324ace6b0cf5fa91e349ff3`; its 46 source pins match current bytes. |
 | Boundary | This append-only correction records a trailing-newline normalization before delivery. No historical WP06 data, runtime status, Gate B, or Step 7 status changes. |
+
+### ROADMAP_STEP4_STEP5_STEP6_EVIDENCE_RECONCILIATION_L1 — 2026-10-19
+
+| Field | Record |
+|---|---|
+| Underlying L2 corrective | Exact commit `dbc00940f9f70a4ee3a846ceb6fde1964c35ff19`; sole parent `04a2ba5332ea56feb24dc3cf393114d8158bcb62`; exactly 14 changed paths; 46 source pins verified against exact Git blobs including path, SHA-256 and byte size. |
+| Scope distinction | Underlying L2 packet is the 14-path source/test/interface/governance change. This L1 reconciliation is a separate commit scope of exactly five governance paths only. |
+| Offline tests | `mecanum_nav_rl` pytest: 701 passed; `mecanum_nav_bringup` pytest: 234 passed; interface `colcon test`: 11 passed. These are the recorded offline results for the exact underlying commit; no tests were rerun for this governance-only reconciliation. |
+| Corrective semantics recorded | Lifecycle managed-publisher callback delegation; `CommandEnvelope.episode_generation`; SafetySupervisor identity propagation; NAV2 identity validation in FinalTwistPublisher; receipt only after successful final command publication; associated static regression coverage. |
+| Supersedes | Earlier current-metadata attributions of the underlying packet’s parent, changed-path scope, pin count and test totals are superseded by this reconciliation. Prior Ledger entries are retained unchanged as historical records. |
+| Decision / evidence / Registry / PEP SHA-256 | Decision `0d5927d672b1d7c8083c50638f9b77ec8b9eac94f17a3b27bb460aa3ae167920`; evidence JSON `16a513a01e2ba71aaac99d6c4cee71ca36c22ce6cec811d1a0e92a60d78c6e39`; Registry `f4b4edd2b882b7b573502b3b0a86198c29556dc8ca11656f29a8813707c5f076`; PEP `03a7516ed7cb449df3549559d331f3a927db40251ec62bfaf6f0efe920d32e44`. |
+| Status and evidence ceiling | Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. Evidence ceiling remains `STATIC_SOURCE_OFFLINE_BUILD_TEST_READY_FOR_STEP7_RUNTIME_CAMPAIGN`. No runtime claim. |
