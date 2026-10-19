@@ -37,6 +37,7 @@ PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_c
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
 PARENT = "d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1"
+CORRECTIVE_BASE = "04a2ba5332ea56feb24dc3cf393114d8158bcb62"
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -300,66 +301,32 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 
 def test_historical_runtime_conservation_and_candidate_scope():
-    result = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, check=True, capture_output=True, text=True)
-    changed = {line[3:] for line in result.stdout.splitlines()}
+    result = subprocess.run(
+        ["git", "diff", "--name-only", CORRECTIVE_BASE], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    )
+    changed = set(result.stdout.splitlines())
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+        check=True, capture_output=True, text=True,
+    )
+    changed.update(untracked.stdout.splitlines())
     allowed = {
-        "artifacts/maps/warehouse_map2/sim_eval_navigation_world_binding.json",
-        "artifacts/maps/warehouse_map2/sim_eval_map_world_validation_plan.yaml",
-        "docs/governance/decisions/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.md",
-        "docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json",
-        "docs/governance/evidence/STEP4_SIM_EVAL_ARTIFACT_BUNDLE_MANIFEST.json",
-        "docs/governance/evidence/WP12_DEPLOY_REAL_HARDWARE_MEASUREMENT_ROUTING.json",
-        "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
-        "docs/governance/PROJECT_EXECUTION_PLAN.md",
-        "docs/governance/PROJECT_PROGRESS_LEDGER.md",
-        "ros2_ws/src/mecanum_nav_rl/package.xml",
-        "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_compiler.py",
-        "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_assets.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_dependency_lock_schema.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/base.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/topics.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/qos.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/frames.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/acceptance.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/measurements.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/profiles/sim_eval.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/modes/nav2_baseline.yaml",
-        "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_models.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_compiler.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_hashing.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_validators.py",
-        "ros2_ws/src/mecanum_nav_rl/setup.py",
-        "ros2_ws/src/mecanum_nav_rl/test/test_step4_step5_static_closure.py",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/SafetyLifecycleState.msg",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/CMakeLists.txt",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/package.xml",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_interface_contracts.py",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_final_issued_command_receipt_rosidl_enablement.py",
-        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_safety_lifecycle_state_interface.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/__init__.py",
         "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
         "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
         "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
-        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py",
-        "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/CommandEnvelope.msg",
         "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
         "ros2_ws/src/mecanum_nav_rl/test/test_final_twist_publisher_static.py",
-        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
-        "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
-        "ros2_ws/src/mecanum_nav_bringup/setup.py",
-        "ros2_ws/src/mecanum_nav_bringup/package.xml",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_static_contract.py",
-        "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
-        "ros2_ws/src/ROBOT_URDF_final_description/setup.py",
-        "ros2_ws/src/ROBOT_URDF_final_description/test/test_sim_eval_nav2_baseline_bootstrap_launch.py",
+        "ros2_ws/src/mecanum_nav_rl/test/test_safety_lifecycle_transition.py",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_interface_contracts.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+        "docs/governance/decisions/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.md",
+        "docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json",
+        "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+        "docs/governance/PROJECT_EXECUTION_PLAN.md",
+        "docs/governance/PROJECT_PROGRESS_LEDGER.md",
     }
-    assert len(changed) <= 55
     assert changed <= allowed
     protected = [
         path for path in subprocess.run(
@@ -369,6 +336,12 @@ def test_historical_runtime_conservation_and_candidate_scope():
         if __import__("re").search(r"(?:WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00[1-7]|wp06_6f_tf_ekf_run00[1-7])", path)
     ]
     assert not changed.intersection(protected)
+    for path in protected:
+        committed = subprocess.run(
+            ["git", "show", f"{CORRECTIVE_BASE}:{path}"], cwd=ROOT,
+            check=True, capture_output=True,
+        ).stdout
+        assert (ROOT / path).read_bytes() == committed, f"historical WP06 bytes changed: {path}"
     forbidden = ("ground_truth", "ground-truth", "/odom", "tf_static")
     assert not any(any(token in path.lower() for token in forbidden) for path in changed)
 

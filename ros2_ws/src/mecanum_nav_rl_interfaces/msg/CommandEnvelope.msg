@@ -7,6 +7,7 @@ uint8 SOURCE_SAFE_STOP=4
 std_msgs/Header header
 uint8 source
 uint64 sequence
+uint64 episode_generation
 uint32 reset_epoch
 uint32 runtime_generation
 uint64 source_instance_id

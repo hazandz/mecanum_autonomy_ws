@@ -31,6 +31,14 @@ Evidence ceiling: `STATIC_SOURCE_OFFLINE_BUILD_TEST_READY_FOR_STEP7_RUNTIME_CAMP
 
 Terminal candidate disposition: `ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE_CANDIDATE_PENDING_INDEPENDENT_AUDIT`.
 
+## Safety lifecycle managed-entity and final-issued receipt corrective
+
+This corrective is based on review parent `04a2ba5332ea56feb24dc3cf393114d8158bcb62` and remains offline-only. `SafetyLifecycleNode` delegates configure, activate, deactivate, cleanup and error transitions to the ROS lifecycle parent callbacks so the lifecycle publisher follows the managed-entity activation state. Activation leaves the barrier `NON_READY`; only explicit rearm after `ACTIVE` makes it `READY`. Deactivation publishes the fail-closed state while the lifecycle publisher remains active, then delegates deactivation.
+
+`CommandEnvelope` now carries `episode_generation` alongside `reset_epoch` and `runtime_generation`. `SafetySupervisor` copies all three from the latest `SafetyLifecycleState`; if no barrier has been received, it emits only a `SOURCE_SAFE_STOP` envelope with zero identity. `FinalTwistPublisher` accepts a non-safe-stop envelope only when all three identity values match the current lifecycle state and the barrier is fresh and motion-permitted. A mismatch produces no command publication and no receipt. Every successful final `/cmd_vel` publication is followed by exactly one receipt mirroring the envelope identity and published command; failed command publication emits no receipt. Safe-stop envelopes publish zero and receive a matching receipt. Receipt QoS remains RELIABLE / TRANSIENT_LOCAL / KEEP_LAST(1), and the final publisher remains the sole ROS `/cmd_vel` publisher.
+
+Verification is limited to offline build, isolated lifecycle transition, receipt-order/identity unit tests, and static/historical checks. It does not establish runtime, Gate B, Step 7, Nav2-live, HIL or hardware acceptance. Evidence ceiling remains `STATIC_SOURCE_OFFLINE_BUILD_TEST_READY_FOR_STEP7_RUNTIME_CAMPAIGN`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`.
+
 ## Corrective L2 source assembly and safety closure
 
 This corrective packet is based on `d8db18aa3a5819b42d130221904281cec3360cae`, preserves the same selected `sim_eval` / `NAV2_BASELINE` decisions, and changes only the authorized existing allowlist. The composite launch takes an absolute `canonical_map_root`, verifies all four canonical map artifact hashes, and passes only its `map.yaml` to Map Server; it has no working-directory dependency. The bootstrap takes the supplied nonempty partition and the exact Owner-bound Fuel cache root before returning Gazebo actions.

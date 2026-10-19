@@ -144,6 +144,7 @@ EXPECTED_FIELDS = {
         ("header", "std_msgs/Header"),
         ("source", "uint8"),
         ("sequence", "uint64"),
+        ("episode_generation", "uint64"),
         ("reset_epoch", "uint32"),
         ("runtime_generation", "uint32"),
         ("source_instance_id", "uint64"),

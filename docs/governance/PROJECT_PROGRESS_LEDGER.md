@@ -1684,3 +1684,23 @@
 | Corrected scope | Exact current candidate diff contains 21 paths, all within the authorized allowlist; `ppo.yaml` is byte-identical to base and absent from the diff. |
 | Verification record | Five-package build PASS; `mecanum_nav_rl/test` 698 passed; `mecanum_nav_bringup/test` 234 passed; interfaces colcon test 11 passed; final integrity/source-pin checks are recorded in the candidate evidence. |
 | Status and boundary | Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. No runtime execution or runtime claim. |
+
+
+### ROADMAP_STEP4_STEP5_STEP6_SAFETY_LIFECYCLE_RECEIPT_CORRECTIVE_L2 — offline verification correction (2026-10-19)
+
+| Field | Record |
+|---|---|
+| Parent / scope | Exact parent `04a2ba5332ea56feb24dc3cf393114d8158bcb62`; current corrective has exactly 14 allowed paths. The historical Run001–Run007 artifact and runner set remains byte-identical to the corrective base. |
+| Lifecycle and receipt contract | Lifecycle parent callbacks manage publisher activation/deactivation; activation remains NON_READY until explicit rearm. `CommandEnvelope` carries `episode_generation`; NAV2 final publication requires matching episode/reset/runtime identity. Each successful final Twist publish is followed by one identity-matching receipt, including zero safe-stop; command-publish exceptions produce no receipt. |
+| Verification | Five-package build PASS; `mecanum_nav_rl/test` 701 passed; `mecanum_nav_bringup/test` 234 passed; ROSIDL interface colcon test 11 passed; isolated lifecycle and receipt contract tests PASS; historical-preservation and exact 14-path contract PASS. |
+| Evidence | Current decision SHA-256 `0e1a84b8c2a8147db8ce57522aa55648241df110920830b29e28145273e988d5`; current evidence JSON SHA-256 `536b35461eb2e538e44eb2727e0aec28d670f3d1e5b5ec8be3378d992c962aad`; 46 exact path/hash/size source pins. |
+| Boundary | Offline source/build/test only. No ROS/Gazebo runtime, Nav2 live, HIL, hardware, Gate B transition or runtime approval. Step 7 remains `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
+
+
+### Safety lifecycle receipt corrective — source-pin accounting correction (2026-10-19)
+
+| Field | Record |
+|---|---|
+| Corrected pin | `ros2_ws/src/mecanum_nav_rl/test/test_safety_lifecycle_transition.py` SHA-256 `25596f1b81ca0d3b53422123c9bba386e6e8a743b9b6d107259e6579650637bf`, size `3696` bytes. |
+| Current evidence | `docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json` SHA-256 `f757d8e9b035c23e27f01d44afa37082f4e62a061324ace6b0cf5fa91e349ff3`; its 46 source pins match current bytes. |
+| Boundary | This append-only correction records a trailing-newline normalization before delivery. No historical WP06 data, runtime status, Gate B, or Step 7 status changes. |

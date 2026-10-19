@@ -135,6 +135,12 @@ def test_lifecycle_node_has_only_explicit_reset_and_rearm_services_and_no_auto_t
     assert source.count("self.create_service(") == 2
     assert "trigger_configure" not in source and "trigger_activate" not in source
     assert "self._publisher.is_activated" in source
+    for callback in ("on_configure", "on_activate", "on_deactivate", "on_cleanup", "on_error"):
+        block = source.split(f"def {callback}(", 1)[1].split("\n    def ", 1)[0]
+        assert f"super().{callback}(state)" in block
+    assert source.index("super().on_activate(state)") < source.index("self._publish_current()", source.index("super().on_activate(state)"))
+    deactivate = source.split("def on_deactivate(", 1)[1].split("\n    def ", 1)[0]
+    assert deactivate.index("self._publish_current()") < deactivate.index("super().on_deactivate(state)")
 
 
 def test_supervisor_defaults_to_estop_active_and_emits_safe_stop_without_inputs() -> None:
@@ -144,6 +150,10 @@ def test_supervisor_defaults_to_estop_active_and_emits_safe_stop_without_inputs(
     assert "if self._command is None" not in source
     assert "self._accepted_pub.publish(envelope)" in source
     assert "create_publisher(Bool" not in source
+    assert "envelope.episode_generation = barrier_msg.episode_generation if barrier_msg is not None else 0" in source
+    assert "envelope.reset_epoch = barrier_msg.reset_epoch if barrier_msg is not None else 0" in source
+    assert "envelope.runtime_generation = barrier_msg.runtime_generation if barrier_msg is not None else 0" in source
+    assert "SOURCE_SAFE_STOP" in source
 
 
 def test_safety_policy_is_loaded_from_selected_yaml_values() -> None:

@@ -131,6 +131,7 @@ class SafetySupervisorNode(Node):
         envelope.source = CommandEnvelope.SOURCE_NAV2 if result.accepted else CommandEnvelope.SOURCE_SAFE_STOP
         self._source_sequence += 1
         envelope.sequence = self._source_sequence
+        envelope.episode_generation = barrier_msg.episode_generation if barrier_msg is not None else 0
         envelope.reset_epoch = barrier_msg.reset_epoch if barrier_msg is not None else 0
         envelope.runtime_generation = barrier_msg.runtime_generation if barrier_msg is not None else 0
         import os

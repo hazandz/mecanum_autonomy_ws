@@ -41,29 +41,32 @@ class FinalTwistPublisherNode(Node):
 
     def _on_accepted(self, envelope: CommandEnvelope) -> None:
         identity = self._identity
-        if identity is None:
-            try:
-                self._cmd_pub.publish(Twist())
-            except Exception as error:
-                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
-            return
-        if envelope.reset_epoch != identity.reset_epoch or envelope.runtime_generation != identity.runtime_generation:
-            try:
-                self._cmd_pub.publish(Twist())
-            except Exception as error:
-                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
-            return
-        now_ns = self.get_clock().now().nanoseconds
-        identity_ns = identity.header.stamp.sec * 1_000_000_000 + identity.header.stamp.nanosec
-        identity_fresh = identity_ns > 0 and 0 <= now_ns - identity_ns <= 500_000_000
         is_safe_stop = envelope.source == CommandEnvelope.SOURCE_SAFE_STOP
-        if not is_safe_stop and (not identity.motion_permitted or not identity_fresh):
-            try:
-                self._cmd_pub.publish(Twist())
-            except Exception as error:
-                self.get_logger().error(f"FINAL_SAFE_STOP_PUBLISH_FAILED:{type(error).__name__}")
+        if not is_safe_stop and envelope.source != CommandEnvelope.SOURCE_NAV2:
             return
-        final_command = envelope.twist if not is_safe_stop else Twist()
+        if not is_safe_stop:
+            if identity is None:
+                return
+            envelope_identity = (
+                envelope.episode_generation,
+                envelope.reset_epoch,
+                envelope.runtime_generation,
+            )
+            lifecycle_identity = (
+                identity.episode_generation,
+                identity.reset_epoch,
+                identity.runtime_generation,
+            )
+            if envelope_identity != lifecycle_identity:
+                self.get_logger().error("NAV2_COMMAND_LIFECYCLE_IDENTITY_MISMATCH")
+                return
+            now_ns = self.get_clock().now().nanoseconds
+            identity_ns = identity.header.stamp.sec * 1_000_000_000 + identity.header.stamp.nanosec
+            identity_fresh = identity_ns > 0 and 0 <= now_ns - identity_ns <= 500_000_000
+            if not identity.motion_permitted or not identity_fresh:
+                self.get_logger().error("NAV2_COMMAND_LIFECYCLE_BARRIER_NOT_READY_OR_STALE")
+                return
+        final_command = Twist() if is_safe_stop else envelope.twist
         try:
             self._cmd_pub.publish(final_command)
         except Exception as error:
@@ -73,9 +76,9 @@ class FinalTwistPublisherNode(Node):
         receipt = FinalIssuedCommandReceipt()
         receipt.header.stamp = self.get_clock().now().to_msg()
         receipt.header.frame_id = "base_link"
-        receipt.episode_generation = identity.episode_generation
-        receipt.reset_epoch = identity.reset_epoch
-        receipt.runtime_generation = identity.runtime_generation
+        receipt.episode_generation = envelope.episode_generation
+        receipt.reset_epoch = envelope.reset_epoch
+        receipt.runtime_generation = envelope.runtime_generation
         receipt.step_index = envelope.sequence
         receipt.transition_id = "sim_eval_nav2_baseline"
         receipt.source = envelope.source
@@ -84,8 +87,6 @@ class FinalTwistPublisherNode(Node):
         receipt.final_publisher_instance_id = self._publisher_instance_id
         receipt.final_publish_sequence = self._final_publish_sequence
         receipt.final_command = final_command
-        if not identity_fresh:
-            return
         self._receipt_pub.publish(receipt)
 
 

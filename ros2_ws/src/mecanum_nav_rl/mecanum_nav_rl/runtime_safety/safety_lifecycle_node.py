@@ -30,28 +30,36 @@ class SafetyLifecycleNode(LifecycleNode):
             Trigger, "/mecanum/safety/rearm", self._request_rearm
         )
 
-    def on_configure(self, _state: State) -> TransitionCallbackReturn:
+    def on_configure(self, state: State) -> TransitionCallbackReturn:
         self._core.configure(self.get_clock().now().nanoseconds)
-        return TransitionCallbackReturn.SUCCESS
+        result = super().on_configure(state)
+        if result != TransitionCallbackReturn.SUCCESS:
+            self._core.fault("LIFECYCLE_CONFIGURE_PARENT_FAILED", self.get_clock().now().nanoseconds)
+        return result
 
-    def on_activate(self, _state: State) -> TransitionCallbackReturn:
+    def on_activate(self, state: State) -> TransitionCallbackReturn:
         self._core.activate(self.get_clock().now().nanoseconds)
-        return TransitionCallbackReturn.SUCCESS
+        result = super().on_activate(state)
+        if result == TransitionCallbackReturn.SUCCESS:
+            self._publish_current()
+        else:
+            self._core.fault("LIFECYCLE_ACTIVATE_PARENT_FAILED", self.get_clock().now().nanoseconds)
+        return result
 
-    def on_deactivate(self, _state: State) -> TransitionCallbackReturn:
+    def on_deactivate(self, state: State) -> TransitionCallbackReturn:
         self._core.deactivate(self.get_clock().now().nanoseconds)
         # This callback runs while the lifecycle publisher is still active.
         self._publish_current()
-        return TransitionCallbackReturn.SUCCESS
+        return super().on_deactivate(state)
 
-    def on_cleanup(self, _state: State) -> TransitionCallbackReturn:
+    def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         self._core.cleanup(self.get_clock().now().nanoseconds)
-        return TransitionCallbackReturn.SUCCESS
+        return super().on_cleanup(state)
 
-    def on_error(self, _state: State) -> TransitionCallbackReturn:
+    def on_error(self, state: State) -> TransitionCallbackReturn:
         self._core.fault("LIFECYCLE_TRANSITION_ERROR", self.get_clock().now().nanoseconds)
         self._publish_current()
-        return TransitionCallbackReturn.SUCCESS
+        return super().on_error(state)
 
     def _request_reset(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         identity = self._core.begin_reset(self.get_clock().now().nanoseconds)
