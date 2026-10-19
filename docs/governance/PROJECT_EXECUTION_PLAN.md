@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.13` WP04/WP05 runtime measurement evidence schema F-01 correction review snapshot |
+| Revision | `0.10.14` Step-7 Gate B authority/input closure survey review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -911,3 +911,12 @@ Candidate corrective offline-only trên parent `a1348313dab704964e67572fd18dcdce
 ### WP06-6F Run007 — bounded evidence audit disposition
 
 The exact Run007 evidence for source commit `93468611748e3966cd6fa7fa280e840651d2c895` was independently audited PASS and is recorded by `docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_MANIFEST.json`. This records only WP06-6F wheel/IMU ingress, `/clock`, EKF filtered odometry, specified TF edges/ownership/QoS, `/set_pose` boundary, and clean teardown. Run001–Run006 remain immutable historical. This does not mark the broader WP06, navigation profile, Nav2, AMCL, Map Server, whole ROS graph, Gate B, or runtime approval complete. `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. This review-branch disposition remains subject to independent audit and a separate Owner integration decision.
+
+
+## Step-7 Gate B authority/input closure survey — review snapshot
+
+This is the Step-7 roadmap survey step, not PEP work package `WP-07-BRIDGE-FIRMWARE-OFFLINE`. The PEP WP-07 row and all ordered work-package statuses/dependencies remain unchanged (`WP-07` remains `BLOCKED_BY_DEPENDENCY`).
+
+At exact integration base `5471e8860050326215bb83761629e9969def16ea`, candidate branch `step-07-gate-b-authority-input-closure-5471e88` records an L2 governance/evidence-only survey in `docs/governance/decisions/STEP-07_GATE_B_SAFETY_LIFECYCLE_PPO_AUTHORITY_INPUT_CLOSURE_SURVEY.md` and `docs/governance/evidence/STEP-07_GATE_B_SAFETY_LIFECYCLE_PPO_AUTHORITY_INPUT_CLOSURE_SURVEY.json`. The survey finds no concrete Gate B profile closed: the six input groups remain partial or unresolved pending Owner selections, immutable source pins, and applicable measurements. It records the `.msg` status-comment versus CMake generator contradiction without deciding or changing either side. WP06-6F Run007 remains bounded to its independently audited ingress/clock/EKF/TF evidence; it does not validate Nav2, map selection, `map -> odom`, whole-graph state, SafetyLifecycle, or PPO.
+
+Candidate survey state: `STEP07_L2_AUTHORITY_INPUT_CLOSURE_SURVEY_CANDIDATE_PENDING_INDEPENDENT_AUDIT`. This is not a status transition or implementation authorization. `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04 and WP-07 status/dependencies are unchanged. Terminal decision for this survey is `STEP07_L2_SURVEY_PASS_IMPLEMENTATION_NOT_AUTHORIZED`.

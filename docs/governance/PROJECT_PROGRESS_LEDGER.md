@@ -1622,3 +1622,19 @@
 | Run001–Run006 | Immutable historical; no records, guards, manifests, transcripts, raw evidence, or terminal outcomes rewritten. |
 | Authorization/Gate | Run007 guard is consumed, acquisition count 1, exact-run authorization recorded. This disposition issues no new authorization; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |
 | `supersedes` | Supersedes only prior current-status statements that Run007 evidence was pending independent audit; historical entries are retained byte-for-byte. |
+
+
+### STEP-07_GATE_B_AUTHORITY_INPUT_CLOSURE_SURVEY — L2 governance/evidence candidate
+
+| Field | Record |
+|---|---|
+| Exact integration base / sole parent | `5471e8860050326215bb83761629e9969def16ea` |
+| Review branch | `step-07-gate-b-authority-input-closure-5471e88` |
+| Architecture authority | `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204` |
+| Scope | Read-only authority/provenance survey for six Gate B input groups and three cross-cutting contracts. Only the survey decision/evidence plus Registry, PEP, and this append-only Ledger are in scope. |
+| Findings | No Gate B concrete profile is closed. LiDAR, LocalReference, measured twist, frame/TF, lifecycle/barrier are `PARTIAL`; concrete profile is `UNRESOLVED`. Receipt v2/QoS6, SafetyLifecycle/SafetySupervisor/final command ownership, and PPO boundary are recorded as partial closure with explicit gaps. `INTERFACE_STATUS_COMMENT_VS_CMAKE_GENERATOR_CONTRADICTION` is unresolved; neither side is selected by this survey. |
+| WP06 evidence boundary | WP06-6F Run007 remains audited PASS only within its ingress/clock/EKF/TF scope; it does not prove Nav2, map, `map -> odom`, whole ROS graph, SafetyLifecycle, or PPO. Missing `map -> odom` in that run is not treated as runtime failure. |
+| Step naming | “Step-7” is this survey roadmap step, distinct from PEP `WP-07-BRIDGE-FIRMWARE-OFFLINE`; WP-07 remains `BLOCKED_BY_DEPENDENCY`. |
+| Decision/status | `STEP07_L2_SURVEY_PASS_IMPLEMENTATION_NOT_AUTHORIZED`; no implementation/runtime authorization or Gate B transition. `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-07 statuses and dependencies unchanged. |
+| Evidence ceiling | Governance/source provenance only; no build/test/runtime/HIL/hardware evidence is created. |
+| `supersedes` | None; new survey entry only. All parent Ledger bytes are preserved as an exact prefix. |
