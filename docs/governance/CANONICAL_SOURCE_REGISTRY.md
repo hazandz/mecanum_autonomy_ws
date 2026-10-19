@@ -853,3 +853,11 @@ This paragraph records the earlier provisional verification before the Owner-aut
 ### Step-7 Run001 lifecycle-QoS test-contract closure — review candidate
 
 The existing source-pin set remains exactly 16 unique paths; the corrective test path `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` was already present and its entry is refreshed to SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` with size 27451 bytes. The contract test now distinguishes the immutable 23-path root campaign scope from the exact 14-path lifecycle-QoS corrective scope. Offline validation: six-package build PASS; focused tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; observer/interface colcon tests 25 passed. Historical WP06 evidence remains protected. No runtime was executed; Run001 guard remains pending/unconsumed, Gate B `NOT_STARTED`, and `RUNTIME_APPROVED: NOT_APPROVED`.
+
+### Step-7 Run001 acceptance matrix closure
+
+The Run001 L2 evidence and guard manifest now list the seven lifecycle/receipt-related observer acceptance IDs emitted by `validate_observer`. They contain one each of `lifecycle_endpoint_qos_contract`, `receipt_qos_contract`, and `obsolete_lifecycle_topic_absent`, omit retired `lifecycle_state_publisher_owner`, and use the C++ raw-literal convention `ACCEPTANCE_FAILED:<acceptance_id>`. The validator's earlier `LIFECYCLE_TOPIC_OBSOLETE_OR_IN_USE` rejection is recorded as parser behavior only. Runtime authorization and Gate-B status are unchanged.
+
+### Run001 acceptance-matrix scope-chain closure
+
+The immutable scope chain remains 23 root campaign paths (`f7f98c6..6fbddb3`), 14 lifecycle-QoS corrective paths (`6fbddb3..5fa2e89`), and the exact nine-path acceptance-matrix corrective (`5fa2e89..candidate`). The contract test supports dirty and committed review states and rejects untracked artifacts. Its existing one-of-16 source pin is refreshed in the guard, evidence and manifest; pin cardinality remains 16 unique paths.

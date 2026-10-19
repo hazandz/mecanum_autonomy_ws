@@ -977,3 +977,11 @@ This paragraph records the earlier provisional verification before the Owner-aut
 ### Step-7 Run001 lifecycle-QoS test-contract closure — review candidate
 
 The amended test contract preserves the root campaign's exact 23-path diff and validates the corrective's exact 14 paths, including a dirty-worktree and post-commit scope path. Existing source pins remain 16 unique entries; `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` remains the same pinned path with refreshed SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db` and size 27451 bytes. Current offline verification: six-package external build PASS; focused Step-7 tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; observer and ROSIDL tests 25 passed; installed closure PASS. Run001 remains pending/unconsumed; no runtime or Gate-B status transition is made.
+
+### Step-7 Run001 acceptance-matrix closure
+
+The acceptance matrix in both Run001 governance records is aligned with raw observer acceptance IDs for lifecycle endpoint/QoS, receipt QoS, obsolete lifecycle topic absence, receipt publisher owner, READY lifecycle observation, receipt identity, and final receipt observation. No source/runtime contract or status transition is implied; Run001 guard remains pending and unconsumed.
+
+### Run001 acceptance-matrix scope-chain closure
+
+The current corrective preserves root 23-path and lifecycle-QoS 14-path historical diffs and validates the current nine-path scope separately. This is offline test/governance closure only; Run001 guard remains pending/unconsumed, and no Gate-B or runtime status transition is made.

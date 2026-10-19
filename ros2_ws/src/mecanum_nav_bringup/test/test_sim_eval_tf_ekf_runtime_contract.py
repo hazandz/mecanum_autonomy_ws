@@ -39,6 +39,7 @@ BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
 PARENT = "d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1"
 CORRECTIVE_BASE = "6fbddb3db1a38908ed470f549a1c8182e022a37f"
 STEP07_CAMPAIGN_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
+ACCEPTANCE_MATRIX_BASE = "5fa2e89f84d683723eba8eb989cfef59059ae603"
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
@@ -72,6 +73,17 @@ CORRECTIVE_PATHS = {
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
     "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
     "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+CURRENT_CORRECTIVE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
     "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_DECISION.md",
     "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
@@ -316,7 +328,7 @@ def _current_corrective_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    if parent == CORRECTIVE_BASE:
+    if parent == ACCEPTANCE_MATRIX_BASE:
         names = subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
@@ -328,12 +340,12 @@ def _current_corrective_paths():
 
 def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relaxed():
     changed, dirty = _current_corrective_paths()
-    assert changed == CORRECTIVE_PATHS
+    assert changed == CURRENT_CORRECTIVE_PATHS
     untracked = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
-    assert not any(path.split("/", 1)[0] in {"build", "install", "log"} for path in untracked)
+    assert not untracked, f"untracked/generated repository artifacts are prohibited: {untracked}"
     assert not any(path.startswith(("build/", "install/", "log/")) for path in changed)
 
     # The original root campaign remains the immutable 23-path diff from its
@@ -349,6 +361,13 @@ def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relax
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert root_parent == STEP07_CAMPAIGN_BASE
+
+    lifecycle_qos_diff = subprocess.run(
+        ["git", "diff", "--name-only", f"{CORRECTIVE_BASE}..{ACCEPTANCE_MATRIX_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(lifecycle_qos_diff) == CORRECTIVE_PATHS
+    assert len(lifecycle_qos_diff) == 14
 
     protected_fragments = (
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/",
@@ -488,7 +507,7 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 def test_historical_runtime_conservation_and_candidate_scope():
     changed, _dirty = _current_corrective_paths()
-    assert changed == CORRECTIVE_PATHS
+    assert changed == CURRENT_CORRECTIVE_PATHS
     protected = [
         path for path in subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,

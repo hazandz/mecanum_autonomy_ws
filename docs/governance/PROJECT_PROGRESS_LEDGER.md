@@ -1776,3 +1776,21 @@ Offline build and independent checks completed so far: six-package colcon build 
 | Source-pin closure | Exactly 16 unique pins. The already-pinned contract-test path `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` is refreshed to SHA-256 `8f03f5feef72d81eb86600f2dfcabffe18765fd4db57c1484bd67ec5250dd6db`, size 27451 bytes. |
 | Offline verification | Six-package external colcon build PASS; focused Step-7 tests 49 passed; `mecanum_nav_rl/test` 707 passed; `mecanum_nav_bringup/test` 239 passed; C++ observer and ROSIDL colcon tests 25 passed, zero failures; installed closure PASS. |
 | Disposition | This entry supersedes the provisional blocked verification disposition above for the current corrective snapshot. No runtime execution; Run001 guard remains pending and unconsumed; Gate B `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`. |
+
+### Step-7 Run001 acceptance-matrix closure corrective — offline only
+
+| Field | Record |
+|---|---|
+| Scope | Exact eight-path matrix/test/governance correction on top of `5fa2e89f84d683723eba8eb989cfef59059ae603`; root campaign remains 23 paths and the lifecycle-QoS corrective remains 14 paths. |
+| Acceptance closure | Both current matrices list the seven lifecycle/receipt-related observer acceptance IDs. They retain one row each for `lifecycle_endpoint_qos_contract`, `receipt_qos_contract`, and `obsolete_lifecycle_topic_absent`, omit retired `lifecycle_state_publisher_owner`, and use `ACCEPTANCE_FAILED:<acceptance_id>` for raw observer failures. |
+| Parser behavior | The semantic validator can reject an observed obsolete topic earlier with `LIFECYCLE_TOPIC_OBSOLETE_OR_IN_USE`; this does not replace the raw observer acceptance literal. |
+| Evidence boundary | Source pin set remains 16 unique entries; the validator test pin is refreshed in guard/evidence/manifest. Run001 guard remains PENDING, capacity one, acquisition count zero, `runtime_authorization=NOT_GRANTED`. No runtime, evidence directory, Gate-B transition, integration, or approval is claimed. |
+
+### Step-7 Run001 acceptance-matrix scope-chain closure — offline only
+
+| Field | Record |
+|---|---|
+| Base/scope | Current corrective is based on `5fa2e89f84d683723eba8eb989cfef59059ae603` and is limited to the exact nine approved paths. |
+| Immutable chain | Root campaign `f7f98c683d59cf4c62e462da9f37d4ffb2455c80..6fbddb3db1a38908ed470f549a1c8182e022a37f` remains 23 paths; lifecycle-QoS corrective `6fbddb3db1a38908ed470f549a1c8182e022a37f..5fa2e89f84d683723eba8eb989cfef59059ae603` remains 14 paths. |
+| Source pin | The existing contract-test pin remains one of exactly 16 unique paths and is refreshed in the guard, evidence and manifest to SHA-256 `41de1850413727308aac4c49a7104f40576789d830ce3f96102ba04a0991f280` and size `28656` bytes. |
+| Boundary | Run001 guard remains pending, capacity one, acquisition count zero and `runtime_authorization=NOT_GRANTED`; no runtime, Gate-B transition or integration is claimed. |

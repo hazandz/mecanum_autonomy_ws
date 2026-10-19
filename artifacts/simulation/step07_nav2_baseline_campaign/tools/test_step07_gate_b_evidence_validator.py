@@ -114,6 +114,82 @@ def observer_doc():
     }
 
 
+def _duplicate_rejecting_json(path):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError(f"duplicate key: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
+
+
+def test_governance_acceptance_matrices_match_observer_lifecycle_receipt_contracts():
+    root = Path(__file__).resolve().parents[4]
+    matrix_paths = (
+        root / "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_L2_EVIDENCE.json",
+        root / "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN001_GUARD_MANIFEST.json",
+    )
+    canonical_ids = {
+        "lifecycle_endpoint_qos_contract",
+        "receipt_qos_contract",
+        "obsolete_lifecycle_topic_absent",
+    }
+    observer_ids = {
+        "lifecycle_endpoint_qos_contract",
+        "receipt_qos_contract",
+        "obsolete_lifecycle_topic_absent",
+        "receipt_publisher_owner",
+        "lifecycle_ready_observed",
+        "lifecycle_receipt_identity",
+        "final_receipt_observed",
+    }
+    cxx = (root / "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp").read_text(encoding="utf-8")
+
+    for path in matrix_paths:
+        document = _duplicate_rejecting_json(path)
+        rows = document["acceptance_to_collector_matrix"]
+        ids = [row["acceptance_id"] for row in rows]
+        assert observer_ids <= set(ids)
+        for acceptance_id in canonical_ids:
+            assert ids.count(acceptance_id) == 1
+            row = next(row for row in rows if row["acceptance_id"] == acceptance_id)
+            assert row["failure_reason_literal"] == f"ACCEPTANCE_FAILED:{acceptance_id}"
+            assert {"collector", "raw_artifact_path", "parser_or_validator", "pass_condition", "offline_test_name"} <= set(row)
+        assert "lifecycle_state_publisher_owner" not in ids
+
+    # C++ builds raw failure literals by the shared acceptance-id convention.
+    assert '"ACCEPTANCE_FAILED:" + name' in cxx
+    for acceptance_id in canonical_ids:
+        assert acceptance_id in cxx
+
+
+@pytest.mark.parametrize(
+    ("acceptance_id", "mutate", "early_literal"),
+    [
+        ("lifecycle_endpoint_qos_contract",
+         lambda doc: doc["graph"]["/mecanum/safety_lifecycle_state"]["publishers"][0].update(depth=9), None),
+        ("receipt_qos_contract",
+         lambda doc: doc["graph"]["/mecanum/final_issued_command"]["publishers"][0].update(depth=2), None),
+        ("obsolete_lifecycle_topic_absent",
+         lambda doc: doc["graph"]["/mecanum/safety/lifecycle_state"]["subscribers"].append({"node_name": "unexpected"}),
+         "LIFECYCLE_TOPIC_OBSOLETE_OR_IN_USE"),
+    ],
+)
+def test_lifecycle_receipt_acceptance_mismatches_fail_closed(acceptance_id, mutate, early_literal):
+    document = observer_doc()
+    mutate(document)
+    if early_literal:
+        # The parser rejects an observed obsolete endpoint before acceptance-map comparison.
+        with pytest.raises(ValueError, match=early_literal):
+            validate_observer(document, config_hash="a" * 64)
+        return
+    with pytest.raises(ValueError, match="OBSERVER_ACCEPTANCE_RAW_MISMATCH"):
+        validate_observer(document, config_hash="a" * 64)
+
+
 def test_cpp_observer_parser_recomputes_qos_gid_static_owner_and_boundary():
     doc = observer_doc()
     result = validate_observer(doc, config_hash="a" * 64)
