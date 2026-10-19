@@ -893,3 +893,32 @@ Run002 source-pin inventory (16 unique pins; path SHA-256 and byte size are mirr
 ### Run002 historical-pin reference policy and scope-chain correction
 
 The Run001 pending guard’s 16 historical source pins are checked from Git blobs at `5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8`, including exact byte length; absent objects or mismatches fail closed without checkout fallback. Run002 pins remain a distinct 16-entry inventory over current worktree bytes. Its corrective scope is exactly 13 paths and the contract preserves the 23 → 14 → 9 → 13 path chain. Run001 guard/runtime semantics and historical outcomes are unchanged.
+
+### STEP07_NAV2_BASELINE_RUN_003 — Fuel path normalization candidate
+
+Run003 tạo candidate offline cho mapping Fuel cache lowercase. Run002 historical outcome vẫn là `STEP07_NAV2_BASELINE_RUN002_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`, root cause `FUEL_CACHE_PATH_CASE_NORMALIZATION_MISMATCH`; pre-acquire evidence mechanism đã được chứng minh trong record Run002 và không có retry. Run003 seed PENDING/capacity-one/acquisition 0/NOT_GRANTED. Host Depot asset chưa được xác minh hoặc provision trong candidate.
+
+Run003 evidence: `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN003_L2_EVIDENCE.json` (SHA-256 `2f26ff124310e55568605f8e8d9958fa19c673955e257bcd41bc35fe0bc762f6`); guard manifest SHA-256 `121b0f1b02dce97811397168286a55bddc99160b61062fb09b8e93fdde57fa65`; decision SHA-256 `04ef84ed664fcdde8d0d9e6eb902632e1a001e8687f3caa077a33dfccadf3d29`. Direct scope: exactly 14 paths from exact base `6d730bd54d7f99429ee4832a3f6f96beffae020f`, comprising the original 13 Run003 paths plus the Owner-authorized historical Run002 guard-test reconciliation path. That additional test reads Run002 Git blobs at its pinned commit and is not added to the 16-entry Run003 runtime source-pin inventory.
+
+Run003 source inventory (16 unique current-worktree SHA-256 and byte-size pins, mirrored in Run003 seed/evidence/manifest):
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run003.py` | `e8801e6329411d5d80baadb7f73172bc91612965c3c53628d52c5e572b62a9c7` | 46288 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run003_runtime_guard.py` | `8e30f9671ca67e25a332afe0b5fd3c7c78fa37a67035106dcf1a54b533bafb6b` | 8942 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run003.py` | `12d0886bd2823aad00a75f9766c522294dc6c24cc341b9adba804da9295384b6` | 12757 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `a7b907a87b3b3bee3c75263261aeee5c06f70c92289b1b82c28c544cc64ecba7` | 4826 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `3a672e0516d975c83998df691e9a01099a2f8dbfcdd5bcac37b8a07891020a26` | 9920 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `283010f115b1608f8a73613f45e4da674f54ec93c2b91584d86b9514030fb013` | 8870 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `2bc2901a9fad989149ac663b42ac9ac55e926483056431e09b4b073f38770d14` | 6391 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `d16c487554495e73dbbdd8f7df857b383897db6a804c85aef9a1572c2486203d` | 32084 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+
+No runtime evidence, Gate B transition, or `RUNTIME_APPROVED` is claimed. Run001/Run002 and WP06 historical artifacts are unchanged.

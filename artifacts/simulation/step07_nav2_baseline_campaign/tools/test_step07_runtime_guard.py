@@ -13,6 +13,7 @@ from step07_runtime_guard import (
 ROOT = Path(__file__).resolve().parents[4]
 GUARD = ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json"
 RUN001_REVIEW_SHA = "5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8"
+RUN002_REVIEW_SHA = "6d730bd54d7f99429ee4832a3f6f96beffae020f"
 REVIEW = "a" * 40
 AUTH = {"authorization": "OWNER_APPROVED_EXACT_RUN", "scope": AUTH_SCOPE,
         "run_id": RUN_ID, "review_commit": REVIEW, "integration_base": INTEGRATION_BASE}
@@ -50,6 +51,35 @@ def _validate_run001_historical_source_pins(root: Path, guard: dict) -> None:
         raw = _git_blob(root, RUN001_REVIEW_SHA, relative)
         if (hashlib.sha256(raw).hexdigest() != expected["sha256"]
                 or len(raw) != expected["size_bytes"]):
+            raise ValueError(f"HISTORICAL_SOURCE_PIN_MISMATCH:{relative}")
+
+
+def _strict_git_json(root: Path, commit: str, relative: str) -> dict:
+    raw = _git_blob(root, commit, relative)
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=lambda pairs: _no_duplicate_pairs(pairs))
+    if raw != json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"):
+        raise ValueError("HISTORICAL_GUARD_NOT_CANONICAL")
+    return value
+
+
+def _no_duplicate_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"DUPLICATE_JSON_KEY:{key}")
+        result[key] = value
+    return result
+
+
+def _validate_historical_pins_at_commit(root: Path, guard: dict, commit: str) -> None:
+    pins = guard.get("source_pins")
+    if type(pins) is not dict or not pins:
+        raise ValueError("HISTORICAL_SOURCE_PINS_MISSING")
+    for relative, expected in pins.items():
+        if type(expected) is not dict or set(expected) != {"sha256", "size_bytes"}:
+            raise ValueError("HISTORICAL_SOURCE_PIN_ROW_INVALID")
+        raw = _git_blob(root, commit, relative)
+        if hashlib.sha256(raw).hexdigest() != expected["sha256"] or len(raw) != expected["size_bytes"]:
             raise ValueError(f"HISTORICAL_SOURCE_PIN_MISMATCH:{relative}")
 
 
@@ -107,6 +137,37 @@ def test_run002_generic_source_pin_validation_uses_current_worktree_bytes(tmp_pa
     source.write_bytes(b"changed")
     with pytest.raises(ValueError, match="SOURCE_PIN_MISMATCH"):
         validate_current(tmp_path, pin)
+
+
+def test_run002_historical_guard_and_source_pins_use_its_exact_git_commit():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_002.json"
+    historical_guard = _strict_git_json(ROOT, RUN002_REVIEW_SHA, guard_path)
+    assert historical_guard["run_id"] == "STEP07_NAV2_BASELINE_RUN_002"
+    _validate_historical_pins_at_commit(ROOT, historical_guard, RUN002_REVIEW_SHA)
+
+
+def test_run002_historical_pins_ignore_current_run003_worktree_bytes():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_002.json"
+    historical_guard = _strict_git_json(ROOT, RUN002_REVIEW_SHA, guard_path)
+    relative = "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py"
+    current = (ROOT / relative).read_bytes()
+    historical = _git_blob(ROOT, RUN002_REVIEW_SHA, relative)
+    assert current != historical
+    _validate_historical_pins_at_commit(ROOT, historical_guard, RUN002_REVIEW_SHA)
+
+
+def test_run002_historical_pin_mismatch_or_missing_blob_fails_closed():
+    guard_path = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_002.json"
+    historical_guard = _strict_git_json(ROOT, RUN002_REVIEW_SHA, guard_path)
+    relative = next(iter(historical_guard["source_pins"]))
+    mutated = json.loads(json.dumps(historical_guard))
+    mutated["source_pins"][relative]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="HISTORICAL_SOURCE_PIN_MISMATCH"):
+        _validate_historical_pins_at_commit(ROOT, mutated, RUN002_REVIEW_SHA)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob(ROOT, "0" * 40, relative)
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_blob(ROOT, RUN002_REVIEW_SHA, "missing/historical/path")
 
 
 @pytest.mark.parametrize("field,value", [

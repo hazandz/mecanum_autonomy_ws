@@ -41,6 +41,7 @@ CORRECTIVE_BASE = "6fbddb3db1a38908ed470f549a1c8182e022a37f"
 STEP07_CAMPAIGN_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
 ACCEPTANCE_MATRIX_BASE = "5fa2e89f84d683723eba8eb989cfef59059ae603"
 RUN002_BASE = "5a44cd9910e9b6d6058d8d2d9252a86f7cf9dcd8"
+RUN002_COMMIT = "6d730bd54d7f99429ee4832a3f6f96beffae020f"
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
@@ -104,6 +105,22 @@ RUN002_CORRECTIVE_PATHS = {
     "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN002_L2_DECISION.md",
     "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN002_L2_EVIDENCE.json",
     "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN002_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN003_CORRECTIVE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_003.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run003_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run003.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run003.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run002_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN003_L2_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN003_GUARD_MANIFEST.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN003_L2_EVIDENCE.json",
     "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
     "docs/governance/PROJECT_EXECUTION_PLAN.md",
     "docs/governance/PROJECT_PROGRESS_LEDGER.md",
@@ -344,24 +361,25 @@ def _current_corrective_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    if parent == RUN002_BASE:
+    if parent == RUN002_COMMIT:
         names = subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines()
         return set(names), False
     # A clean pre-commit checkout at the correction base has no new commit yet.
-    raise AssertionError("clean worktree must be the committed corrective candidate")
+    raise AssertionError("clean worktree must be the committed Run003 corrective candidate")
 
 
-def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relaxed():
+def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
     changed, dirty = _current_corrective_paths()
-    assert changed == RUN002_CORRECTIVE_PATHS
+    assert changed == RUN003_CORRECTIVE_PATHS
+    assert len(changed) == 14
     untracked = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
-    assert set(untracked) <= RUN002_CORRECTIVE_PATHS, f"untracked paths outside the exact candidate allowlist: {untracked}"
+    assert set(untracked) <= RUN003_CORRECTIVE_PATHS, f"untracked paths outside the exact candidate allowlist: {untracked}"
     assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
                    or "/__pycache__/" in path for path in untracked), untracked
     assert not any(path.startswith(("build/", "install/", "log/")) for path in changed)
@@ -393,6 +411,13 @@ def test_current_step07_campaign_scope_is_exact_and_historical_wp06_is_not_relax
     ).stdout.splitlines()
     assert set(acceptance_diff) == CURRENT_CORRECTIVE_PATHS
     assert len(acceptance_diff) == 9
+
+    run002_diff = subprocess.run(
+        ["git", "diff", "--name-only", f"{RUN002_BASE}..{RUN002_COMMIT}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(run002_diff) == RUN002_CORRECTIVE_PATHS
+    assert len(run002_diff) == 13
 
     protected_fragments = (
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/",
@@ -532,7 +557,8 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
 
 def test_historical_runtime_conservation_and_candidate_scope():
     changed, _dirty = _current_corrective_paths()
-    assert changed == RUN002_CORRECTIVE_PATHS
+    assert changed == RUN003_CORRECTIVE_PATHS
+    assert len(changed) == 14
     protected = [
         path for path in subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", STEP07_CAMPAIGN_BASE], cwd=ROOT,
