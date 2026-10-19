@@ -4,6 +4,7 @@ from mecanum_nav_rl_interfaces.msg import (
     Heartbeat,
     NavigationState,
     SafetyState,
+    SafetyLifecycleState,
 )
 
 
@@ -72,6 +73,15 @@ EXPECTED_CONSTANTS = {
         "SOURCE_NAV2": 2,
         "SOURCE_TELEOP": 3,
         "SOURCE_SAFE_STOP": 4,
+    },
+    SafetyLifecycleState: {
+        "PRIMARY_UNCONFIGURED": 0,
+        "PRIMARY_INACTIVE": 1,
+        "PRIMARY_ACTIVE": 2,
+        "BARRIER_INIT": 0,
+        "BARRIER_READY": 1,
+        "BARRIER_NON_READY": 2,
+        "BARRIER_FAULT": 3,
     },
 }
 
@@ -153,6 +163,18 @@ EXPECTED_FIELDS = {
         ("final_publish_sequence", "uint64"),
         ("final_command", "geometry_msgs/Twist"),
     ],
+    SafetyLifecycleState: [
+        ("header", "std_msgs/Header"),
+        ("episode_generation", "uint64"),
+        ("reset_epoch", "uint32"),
+        ("runtime_generation", "uint32"),
+        ("sequence", "uint64"),
+        ("primary_state", "uint8"),
+        ("barrier_state", "uint8"),
+        ("barrier_stamp", "builtin_interfaces/Time"),
+        ("motion_permitted", "boolean"),
+        ("reason", "string"),
+    ],
 }
 
 
@@ -163,6 +185,7 @@ def test_all_messages_import() -> None:
         NavigationState,
         CommandEnvelope,
         FinalIssuedCommandReceipt,
+        SafetyLifecycleState,
     ):
         assert isinstance(message_type, type)
 

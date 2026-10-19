@@ -1638,3 +1638,25 @@
 | Decision/status | `STEP07_L2_SURVEY_PASS_IMPLEMENTATION_NOT_AUTHORIZED`; no implementation/runtime authorization or Gate B transition. `GATE_B: NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; WP-04/WP-07 statuses and dependencies unchanged. |
 | Evidence ceiling | Governance/source provenance only; no build/test/runtime/HIL/hardware evidence is created. |
 | `supersedes` | None; new survey entry only. All parent Ledger bytes are preserved as an exact prefix. |
+
+
+### ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE — L2 candidate
+
+| Field | Record |
+|---|---|
+| Source base | `d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1`; candidate branch `roadmap-step4-step5-step6-consolidated-closure-d44ba71`. |
+| Authority | Frozen Architecture SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`; supplied Owner decisions select `sim_eval` + `NAV2_BASELINE`, map/world source identity, localization/TF ownership, safety ownership and runtime command routing. |
+| Status | Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5 `IMPLEMENTED_OFFLINE_ONLY`; Step 6 `IMPLEMENTED_OFFLINE_ONLY`; roadmap Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. PEP WP-07 status/dependencies unchanged. |
+| Evidence | Candidate source/config/interface pins and map/world manifest are recorded in `docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json` and `docs/governance/evidence/STEP4_SIM_EVAL_ARTIFACT_BUNDLE_MANIFEST.json`. Evidence ceiling `STATIC_SOURCE_OFFLINE_BUILD_TEST_READY_FOR_STEP7_RUNTIME_CAMPAIGN`; final offline checks are pending at ledger creation. |
+| Boundary | No ROS/Gazebo/runtime, Nav2 live, AMCL convergence, full TF runtime, Gate B, PPO training, HIL, or hardware validation is claimed. WP06-6F Run007 remains bounded to its audited ingress/clock/EKF/TF scope; historical WP06 artifacts are unchanged. |
+| Next prerequisites | Local world asset-cache preflight; separate exact capacity-one runtime authorization; initial pose/partition; full composite runtime evidence; independent evidence audit; Owner decision. |
+
+
+### ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE — offline verification record
+
+| Field | Record |
+|---|---|
+| Candidate source base | `d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1`; branch `roadmap-step4-step5-step6-consolidated-closure-d44ba71`. |
+| Offline verification | Five-package colcon build PASS; `mecanum_nav_rl/test` 687 passed; `mecanum_nav_bringup/test` 232 passed; interface colcon test 11 passed; py_compile 25 Python files; installed ROSIDL imports, three console executables, and installed launch/config byte equality PASS. JSON/YAML/XML, duplicate-key, UTF-8/canonical, config-hash, source-pin, historical WP06 preservation, exact scope, Ledger prefix, and diff checks PASS. |
+| Test interpreter | Temporary external venv; Pydantic `2.10.6`; `pip freeze` SHA-256 `8fc5de359c1faf157acf11c35b740cd433abbe4d3a432158d88ff75e6677d26e`. Build/install/log directories remain outside the Git worktree. |
+| Evidence boundary | Offline source/build/test only. No runtime, Nav2-live, AMCL convergence, full TF runtime, Gate B, PPO training, HIL, or hardware result. Step 4 `CLOSED_FOR_SIM_EVAL`; Step 5/6 `IMPLEMENTED_OFFLINE_ONLY`; Step 7 `NOT_STARTED`; `RUNTIME_APPROVED: NOT_APPROVED`; `GATE_B: NOT_STARTED`. |

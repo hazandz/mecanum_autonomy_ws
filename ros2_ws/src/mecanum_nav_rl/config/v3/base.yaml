@@ -1,48 +1,23 @@
-# Architecture V3 input skeleton; not a resolved or runtime-ready configuration.
+# Resolved baseline inputs for the approved sim_eval/NAV2_BASELINE bundle.
 schema_version: "3.0"
 project:
-  project_id:
-    field_path: project.project_id
-    token: FIXED_ARCH
-    reference_id: architecture_project_identity
-  robot_model_id:
-    field_path: project.robot_model_id
-    token: FIXED_ARCH
-    reference_id: architecture_robot_identity
-  architecture_sha256:
-    field_path: project.architecture_sha256
-    token: REQUIRED_BUILD_INPUT
-    reference_id: architecture_authority_hash
+  project_id: mecanum_nav_drl
+  robot_model_id: ROBOT_URDF_final
+  architecture_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
 provenance:
   config_hash_algorithm: sha256
-  resolution_policy_id:
-    field_path: provenance.resolution_policy_id
-    token: FIXED_ARCH
-    reference_id: v3_resolution_policy
-  source_manifest_sha256:
-    field_path: provenance.source_manifest_sha256
-    token: REQUIRED_BUILD_INPUT
-    reference_id: v3_source_manifest
+  resolution_policy_id: architecture_v3_strict_no_unresolved_tokens
+  source_manifest_sha256: 7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1
 observation:
-  schema_id: obs-v3-l72-g3-t3-c3-f32
-  dtype: float32
-  lidar_sector_count: 72
-  local_reference_components: [distance, sin_bearing, cos_bearing]
-  measured_twist_components: [vx, vy, wz]
-  previous_final_issued_command_components: [vx, vy, wz]
-  dimension: 81
-action:
-  component_order: [vx, vy, wz]
-  dimension: 3
-  normalized_minimum: -1.0
-  normalized_maximum: 1.0
+  input_profile:
+    schema_id: obs-v3-l72-g3-t3-c3-f32
+    dtype: float32
+    lidar_sector_count: 72
+    local_reference_components: [distance, sin_bearing, cos_bearing]
+    measured_twist_components: [vx, vy, wz]
+    previous_final_issued_command_components: [vx, vy, wz]
+    dimension: 81
 map_identity:
-  source_root: artifacts/maps
-  map_id:
-    field_path: map_identity.map_id
-    token: REQUIRED_BUILD_INPUT
-    reference_id: canonical_map_identity
-  canonical_manifest_sha256:
-    field_path: map_identity.canonical_manifest_sha256
-    token: REQUIRED_BUILD_INPUT
-    reference_id: canonical_map_manifest
+  map_id: warehouse_map2
+  canonical_manifest_sha256: 7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1
+  artifact_contract_id: mecanum_map_manifest/v1

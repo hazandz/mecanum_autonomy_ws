@@ -1,0 +1,27 @@
+schema: mecanum.sim_eval_nav2_baseline_safety/v1
+classification: SIM_EVAL_BASELINE_SAFETY_CONTRACT
+candidate_topic: /mecanum/nav2_candidate_cmd
+candidate_type: geometry_msgs/msg/Twist
+accepted_topic: /mecanum/safety_accepted_cmd
+final_command_topic: /cmd_vel
+final_publisher_owner: FinalTwistPublisher
+supervisor_owner: SafetySupervisor
+use_sim_time: true
+freshness_ns:
+  command_ttl: 200000000
+  scan_max_age: 500000000
+  filtered_odometry_max_age: 250000000
+  lifecycle_barrier_max_age: 500000000
+limits:
+  velocity: [0.25, 0.20, 0.80]
+  acceleration: [0.50, 0.50, 1.00]
+  jerk: [2.0, 2.0, 4.0]
+fail_closed:
+  stale: true
+  non_finite: true
+  non_ready: true
+  fault: true
+  invalid_tf: true
+  invalid_localization: true
+  estop: true
+collision_policy: NAV2_COSTMAP_WITH_STALE_INVALID_FAIL_SAFE_NO_UNVALIDATED_TTC

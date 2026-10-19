@@ -21,6 +21,7 @@
   <!-- Nền tảng ROS 2 cho Python -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 
   <!-- Custom message của dự án -->
   <exec_depend>mecanum_nav_rl_interfaces</exec_depend>

@@ -264,3 +264,23 @@ def compile_v3_config(
     config = ResolvedConfigV3.model_validate(final_payload)
     validate_resolved_config_v3(config)
     return config
+
+
+def compile_resolved_document_v3(
+    unhashed_document: Mapping[str, object],
+) -> ResolvedConfigV3:
+    """Validate a fully resolved document and deterministically seal its JCS hash.
+
+    The caller must supply all 16 architecture sections and metadata except
+    ``provenance.config_hash``. No defaults or profile selection are applied.
+    """
+    document = load_v3_mapping(unhashed_document)
+    if "provenance" not in document or not isinstance(document["provenance"], dict):
+        raise ValueError("resolved document requires provenance mapping")
+    _assert_no_caller_config_hash(document)
+    config_hash = config_v3_sha256(document)
+    sealed = deepcopy(document)
+    sealed["provenance"]["config_hash"] = config_hash  # type: ignore[index]
+    config = ResolvedConfigV3.model_validate(sealed)
+    validate_resolved_config_v3(config)
+    return config

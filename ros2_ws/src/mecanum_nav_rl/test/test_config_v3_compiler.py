@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -91,13 +92,15 @@ def _base_layer() -> dict[str, object]:
             "goal_settle_contract_id": "test_settle_v1",
         },
         "observation": {
-            "schema_id": "obs-v3-l72-g3-t3-c3-f32",
-            "dtype": "float32",
-            "lidar_sector_count": 72,
-            "local_reference_components": ["distance", "sin_bearing", "cos_bearing"],
-            "measured_twist_components": ["vx", "vy", "wz"],
-            "previous_final_issued_command_components": ["vx", "vy", "wz"],
-            "dimension": 81,
+            "input_profile": {
+                "schema_id": "obs-v3-l72-g3-t3-c3-f32",
+                "dtype": "float32",
+                "lidar_sector_count": 72,
+                "local_reference_components": ["distance", "sin_bearing", "cos_bearing"],
+                "measured_twist_components": ["vx", "vy", "wz"],
+                "previous_final_issued_command_components": ["vx", "vy", "wz"],
+                "dimension": 81,
+            }
         },
         "action": {
             "component_order": ["vx", "vy", "wz"],
@@ -256,13 +259,26 @@ def test_hash_is_canonical_semantic_and_never_self_referential() -> None:
     config = _compile(first)
     assert config.provenance.config_hash == config_v3_sha256(first)
     payload = hash_payload_from_resolved_v3(config)
-    assert "config_hash" not in payload["resolved_config_without_config_hash"]["provenance"]  # type: ignore[index]
+    assert "config_hash" not in payload["provenance"]
+    full_resolved = config.model_dump(mode="json")
+    expected = deepcopy(full_resolved)
+    expected["provenance"].pop("config_hash")
+    assert payload == expected
+    assert set(payload) == set(full_resolved)
+    changed_resolved_value = deepcopy(payload)
+    changed_resolved_value["acceptance"]["contract_id"] = "different_acceptance"
+    assert config_v3_sha256(payload) != config_v3_sha256(changed_resolved_value)
+    from mecanum_nav_rl.config.v3_hashing import canonical_v3_config_json
+    serialized = canonical_v3_config_json(payload).encode("utf-8")
+    assert serialized == canonical_v3_config_json(payload).encode("utf-8")
+    assert hashlib.sha256(serialized).hexdigest() == config_v3_sha256(payload)
     with_hash = _base_layer()
     with_hash["provenance"]["config_hash"] = _HASH  # type: ignore[index]
     with pytest.raises(ValueError, match="config_hash"):
         _compile(with_hash)
-    with pytest.raises(ValueError, match="config_hash"):
-        canonical_v3_hash_payload(with_hash)
+    payload_with_hash = canonical_v3_hash_payload(with_hash)
+    assert "config_hash" not in payload_with_hash["provenance"]  # type: ignore[index]
+    assert payload_with_hash == canonical_v3_hash_payload(_base_layer())
 
 
 def test_loader_rejects_invalid_yaml_keys_duplicates_and_unknown_runtime_fields(

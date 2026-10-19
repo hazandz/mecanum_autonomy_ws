@@ -197,8 +197,8 @@ class NavigationContractV3(ConfigModelV3):
     goal_settle_contract_id: IdentifierV3
 
 
-class ObservationContractV3(ConfigModelV3):
-    """The fixed D05 observation schema."""
+class ObservationInputProfileV3(ConfigModelV3):
+    """The fixed D05 observation input profile."""
 
     schema_id: Literal["obs-v3-l72-g3-t3-c3-f32"]
     dtype: Literal["float32"]
@@ -211,6 +211,65 @@ class ObservationContractV3(ConfigModelV3):
         Literal["vx"], Literal["vy"], Literal["wz"]
     ]
     dimension: Literal[81]
+
+
+class ObservationContractV3(ConfigModelV3):
+    """Observation root with the architecture-required nested profile."""
+
+    input_profile: ObservationInputProfileV3
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_constructor_fields(cls, value: object) -> object:
+        """Accept the pre-nesting Python constructor while serializing nested.
+
+        This is a source compatibility shim for callers constructing the model
+        directly. Mapping/config inputs remain required to use input_profile.
+        """
+        if not isinstance(value, Mapping):
+            return value
+        flat_names = {
+            "schema_id",
+            "dtype",
+            "lidar_sector_count",
+            "local_reference_components",
+            "measured_twist_components",
+            "previous_final_issued_command_components",
+            "dimension",
+        }
+        if "input_profile" in value or not (flat_names & set(value)):
+            return value
+        if set(value) != flat_names:
+            return value
+        return {"input_profile": dict(value)}
+
+    @property
+    def schema_id(self) -> str:
+        return self.input_profile.schema_id
+
+    @property
+    def dtype(self) -> str:
+        return self.input_profile.dtype
+
+    @property
+    def lidar_sector_count(self) -> int:
+        return self.input_profile.lidar_sector_count
+
+    @property
+    def local_reference_components(self) -> tuple[str, str, str]:
+        return self.input_profile.local_reference_components
+
+    @property
+    def measured_twist_components(self) -> tuple[str, str, str]:
+        return self.input_profile.measured_twist_components
+
+    @property
+    def previous_final_issued_command_components(self) -> tuple[str, str, str]:
+        return self.input_profile.previous_final_issued_command_components
+
+    @property
+    def dimension(self) -> int:
+        return self.input_profile.dimension
 
 
 class ActionContractV3(ConfigModelV3):

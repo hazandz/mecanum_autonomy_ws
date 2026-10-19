@@ -1,13 +1,20 @@
+# QoS IDs bind to the selected architecture and source contracts.
 qos_contracts:
-  scan:
-    field_path: qos.scan
-    token: REQUIRED_BUILD_INPUT
-    reference_id: scan_qos_contract
-  final_command:
-    field_path: qos.final_command
-    token: REQUIRED_BUILD_INPUT
-    reference_id: final_command_qos_contract
-  heartbeat:
-    field_path: qos.heartbeat
-    token: REQUIRED_BUILD_INPUT
-    reference_id: heartbeat_qos_contract
+  scan: Q_SIM_SCAN_SENSOR_DATA
+  wheel_odometry: Q_WHEEL_ODOMETRY_INGRESS_SOURCE_CONFIG
+  imu: Q_IMU_INGRESS_SOURCE_CONFIG
+  filtered_odometry: Q_FILTERED_ODOMETRY_SOURCE_CONFIG
+  map: Q_MAP_SERVER_SOURCE_CONFIG
+  final_command: Q_FINAL_COMMAND_BRIDGE_SOURCE_CONFIG
+  final_issued_receipt:
+    id: Q_FINAL_ISSUED_RECEIPT_V1
+    reliability: RELIABLE
+    durability: TRANSIENT_LOCAL
+    history: KEEP_LAST
+    depth: 1
+    deadline: DISABLED
+    lifespan: DISABLED
+    liveliness: AUTOMATIC
+    lease_duration: DISABLED
+    source_contract: docs/RECEIPT_TOPIC_QOS_CONTRACT.md
+    source_sha256: 4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022

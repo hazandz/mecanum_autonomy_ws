@@ -1,17 +1,14 @@
-measured_registry:
-  registry_id:
-    field_path: measured_registry.registry_id
-    token: TBD_MEASURED
-    reference_id: approved_measured_registry
-  registry_sha256:
-    field_path: measured_registry.registry_sha256
-    token: TBD_MEASURED
-    reference_id: approved_measured_registry
-  provenance_approval_id:
-    field_path: measured_registry.provenance_approval_id
-    token: REQUIRED_BUILD_INPUT
-    reference_id: measured_registry_approval
-  provenance_approval_sha256:
-    field_path: measured_registry.provenance_approval_sha256
-    token: REQUIRED_BUILD_INPUT
-    reference_id: measured_registry_approval
+# Hardware measurements are deferred to WP12, not sim-eval inputs.
+measurement_policy:
+  runtime_profile: sim_eval
+  measured_hardware_registry: NOT_APPLICABLE_TO_SIM_EVAL
+  wp12_deferred_measurements:
+    - wheel_radius
+    - wheelbase
+    - track
+    - encoder_scale_and_sign
+    - physical_estop
+    - mcu_watchdog
+    - tb6612_thermal_and_current
+    - power_integrity
+    - real_braking_and_latency

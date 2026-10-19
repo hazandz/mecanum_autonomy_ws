@@ -3,3 +3,12 @@ runtime:
 navigation:
   local_controller_owner: Nav2ControllerServer
   path_planner_owner: Nav2PlannerServer
+  local_reference_provider: nav2_msgs/action/ComputePathToPose
+  local_reference_type: nav_msgs/msg/Path
+  local_reference_frame: map
+  local_reference_adapter_output_frame: base_link
+  local_reference_is_ppo_policy_ingress: false
+  controller_output_topic: /mecanum/nav2_candidate_cmd
+  command_bridge_direction: ROS_TO_GZ
+  command_bridge_ros_topic: /cmd_vel
+  command_bridge_gz_topic: /cmd_vel

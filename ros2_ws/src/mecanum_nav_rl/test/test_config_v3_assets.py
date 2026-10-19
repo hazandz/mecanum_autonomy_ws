@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
+import os
 from pathlib import Path
 
 import pytest
@@ -180,9 +182,56 @@ def test_v1_assets_remain_present_and_separate() -> None:
 
 
 def test_after_build_every_v3_asset_is_installed_with_identical_content() -> None:
-    install_root = _PACKAGE_ROOT.parents[1] / "install" / "mecanum_nav_rl" / "share" / "mecanum_nav_rl" / "config" / "v3"
-    for relative_path in _REQUIRED_ASSETS:
-        source = _asset(relative_path)
-        installed = install_root / relative_path
+    raw_install_base = os.environ.get("MECANUM_NAV_RL_INSTALL_BASE")
+    if not raw_install_base:
+        pytest.fail(
+            "PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_REQUIRED: "
+            "set MECANUM_NAV_RL_INSTALL_BASE to the external colcon install base"
+        )
+    install_base = Path(raw_install_base)
+    if not install_base.is_absolute():
+        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_ABSOLUTE")
+    if not install_base.is_dir():
+        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_EXIST_AS_DIRECTORY")
+    repository_root = _PACKAGE_ROOT.parents[2]
+    try:
+        install_base.resolve().relative_to(repository_root.resolve())
+    except ValueError:
+        pass
+    else:
+        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_OUTSIDE_WORKTREE")
+
+    setup_path = _PACKAGE_ROOT / "setup.py"
+    setup_tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
+    data_files_node = next(
+        node.value
+        for node in setup_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_V3_CONFIG_DATA_FILES" for target in node.targets)
+    )
+    declared_data_files = ast.literal_eval(data_files_node)
+    declared_assets: list[tuple[str, str]] = []
+    for destination, sources in declared_data_files:
+        if destination.startswith("share/mecanum_nav_rl/config/v3"):
+            for source in sources:
+                declared_assets.append((destination, source))
+    assert declared_assets, "setup.py must declare V3 config assets"
+    assert "config/v3/resolved/sim_eval_nav2_baseline.resolved.json" in {
+        source for _, source in declared_assets
+    }
+
+    package_prefixes = (install_base / "mecanum_nav_rl", install_base)
+    for destination, source_name in declared_assets:
+        source = _PACKAGE_ROOT / source_name
+        assert source.is_file(), source
+        installed_candidates = [prefix / destination / Path(source_name).name for prefix in package_prefixes]
+        installed = next(
+            (candidate for candidate in installed_candidates if candidate.is_file()),
+            installed_candidates[0],
+        )
+        try:
+            installed.resolve().relative_to(install_base.resolve())
+        except ValueError:
+            pytest.fail(f"INSTALL_CLOSURE_PATH_ESCAPES_BASE: {installed}")
         assert installed.is_file(), installed
-        assert installed.read_bytes() == source.read_bytes()
+        assert installed.read_bytes() == source.read_bytes(), (source, installed)

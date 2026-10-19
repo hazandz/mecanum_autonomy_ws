@@ -3,9 +3,7 @@ frames_tf:
   odom_frame: odom
   base_frame: base_link
   lidar_frame: lidar_frame
+  map_to_odom_authority: AMCL_Omni
   odom_to_base_link_authority: EKF
   base_link_to_lidar_authority: robot_state_publisher
-  map_to_odom_authority:
-    field_path: frames_tf.map_to_odom_authority
-    token: FIXED_ARCH
-    reference_id: localization_mode_authority
+  ground_truth_isolation_policy_id: ARCHITECTURE_D13_HIDDEN_GROUND_TRUTH_POLICY

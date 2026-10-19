@@ -1,15 +1,51 @@
-# Exact endpoint identity only; unresolved QoS/freshness remains in qos.yaml.
+# Exact runtime endpoint ownership and freshness contracts selected for sim_eval.
 topic_contracts:
-  scan: /scan
-  raw_wheel_odometry: /wheel/odometry_raw
-  final_command:
-    name: /cmd_vel
+  - name: /scan
+    message_type: sensor_msgs/msg/LaserScan
+    publisher_owner: ros_gz_bridge
+    subscriber_owner: Nav2Costmap
+    qos_profile_id: Q_SIM_SCAN_SENSOR_DATA
+    frame_contract_id: LIDAR_FRAME
+    freshness_policy_id: SCAN_MAX_AGE_500MS
+  - name: /wheel/odometry_raw
+    message_type: nav_msgs/msg/Odometry
+    publisher_owner: mecanum_base_bridge
+    subscriber_owner: robot_localization_EKF
+    qos_profile_id: Q_WHEEL_ODOMETRY_INGRESS_SOURCE_CONFIG
+    frame_contract_id: ODOM_TO_BASE_LINK
+    freshness_policy_id: EKF_SENSOR_TIMEOUT_200MS
+  - name: /imu/data
+    message_type: sensor_msgs/msg/Imu
+    publisher_owner: ros_gz_bridge
+    subscriber_owner: robot_localization_EKF
+    qos_profile_id: Q_IMU_INGRESS_SOURCE_CONFIG
+    frame_contract_id: BASE_LINK
+    freshness_policy_id: EKF_SENSOR_TIMEOUT_200MS
+  - name: /odometry/filtered
+    message_type: nav_msgs/msg/Odometry
+    publisher_owner: robot_localization_EKF
+    subscriber_owner: Nav2AndSafetySupervisor
+    qos_profile_id: Q_FILTERED_ODOMETRY_SOURCE_CONFIG
+    frame_contract_id: ODOM_TO_BASE_LINK
+    freshness_policy_id: FILTERED_TWIST_MAX_AGE_250MS
+  - name: /map
+    message_type: nav_msgs/msg/OccupancyGrid
+    publisher_owner: MapServer
+    subscriber_owner: Nav2AndAMCL
+    qos_profile_id: Q_MAP_SERVER_SOURCE_CONFIG
+    frame_contract_id: MAP_FRAME
+    freshness_policy_id: MAP_ARTIFACT_IDENTITY
+  - name: /cmd_vel
+    message_type: geometry_msgs/msg/Twist
     publisher_owner: FinalTwistPublisher
-  heartbeat:
-    field_path: topics.heartbeat
-    token: REQUIRED_BUILD_INPUT
-    reference_id: heartbeat_topic_contract
-  safety_state:
-    field_path: topics.safety_state
-    token: REQUIRED_BUILD_INPUT
-    reference_id: safety_state_topic_contract
+    subscriber_owner: ros_gz_bridge
+    qos_profile_id: Q_FINAL_COMMAND_BRIDGE_SOURCE_CONFIG
+    frame_contract_id: BASE_LINK_PLANAR_TWIST
+    freshness_policy_id: SAFETY_SUPERVISOR_TTL_200MS
+  - name: /mecanum/final_issued_command
+    message_type: mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt
+    publisher_owner: FinalTwistPublisher
+    subscriber_owner: V3ObservationIngress
+    qos_profile_id: Q_FINAL_ISSUED_RECEIPT_V1
+    frame_contract_id: BASE_LINK_PLANAR_TWIST_V1
+    freshness_policy_id: ACTION_BOUND_RECEIPT_V1

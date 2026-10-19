@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import xml.etree.ElementTree as ET
 
 import yaml
@@ -16,7 +17,9 @@ COMMON_NAVIGATION_V1_ROOTS = [
     "nav_msgs", "geometry_msgs",
 ]
 PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = [
-    "ros_gz_bridge", "rosgraph_msgs", "launch", "launch_ros"
+    "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
+    "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
+    "launch", "launch_ros",
 ]
 PROFILE_SPECIFIC_NOT_COMMON_LOCK = PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
 
@@ -62,7 +65,9 @@ def test_package_exec_dependencies_are_common_roots_then_profile_specific_runtim
         "nav_msgs", "geometry_msgs",
     ]
     assert PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS == [
-        "ros_gz_bridge", "rosgraph_msgs", "launch", "launch_ros"
+        "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
+        "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
+        "launch", "launch_ros",
     ]
     assert exec_dependencies.count("rosgraph_msgs") == 1
     assert _dependency_schema_is_exact(
@@ -70,7 +75,7 @@ def test_package_exec_dependencies_are_common_roots_then_profile_specific_runtim
         PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
         exec_dependencies,
     )
-    assert exec_dependencies[-4:] == PROFILE_SPECIFIC_NOT_COMMON_LOCK
+    assert exec_dependencies[len(COMMON_NAVIGATION_V1_ROOTS):] == PROFILE_SPECIFIC_NOT_COMMON_LOCK
 
 
 def test_rosgraph_msgs_is_profile_specific_only_and_exact_schema_rejects_mutations():
@@ -94,4 +99,52 @@ def test_rosgraph_msgs_is_profile_specific_only_and_exact_schema_rejects_mutatio
         common_with_clock,
         PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
         common_with_clock + PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
+    )
+
+
+def test_bringup_direct_launch_dependencies_are_profile_specific_and_order_locked():
+    package = ET.parse(ROOT / "package.xml").getroot()
+    actual = [node.text for node in package.findall("exec_depend")]
+    baseline = ET.fromstring(
+        subprocess.run(
+            ["git", "show", "8b73bcb0b026fe337c023f6a30205dbe89d31eb5:ros2_ws/src/mecanum_nav_bringup/package.xml"],
+            cwd=REPOSITORY,
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    baseline_exec = [node.text for node in baseline.findall("exec_depend")]
+    baseline_profile_roots = [
+        item for item in baseline_exec if item not in COMMON_NAVIGATION_V1_ROOTS
+    ]
+    additions = [
+        "mecanum_nav_rl",
+        "mecanum_nav_rl_interfaces",
+        "nav2_msgs",
+        "lifecycle_msgs",
+    ]
+    expected_profile_roots = [
+        "ros_gz_bridge",
+        "rosgraph_msgs",
+        *additions,
+        "launch",
+        "launch_ros",
+    ]
+    assert baseline_profile_roots == ["ros_gz_bridge", "launch", "launch_ros"]
+    assert actual == COMMON_NAVIGATION_V1_ROOTS + expected_profile_roots
+    for missing in additions:
+        assert not _dependency_schema_is_exact(
+            COMMON_NAVIGATION_V1_ROOTS,
+            [item for item in expected_profile_roots if item != missing],
+            actual,
+        )
+    assert not _dependency_schema_is_exact(
+        COMMON_NAVIGATION_V1_ROOTS,
+        expected_profile_roots + ["mecanum_nav_rl"],
+        actual,
+    )
+    assert not _dependency_schema_is_exact(
+        COMMON_NAVIGATION_V1_ROOTS,
+        list(reversed(expected_profile_roots)),
+        actual,
     )

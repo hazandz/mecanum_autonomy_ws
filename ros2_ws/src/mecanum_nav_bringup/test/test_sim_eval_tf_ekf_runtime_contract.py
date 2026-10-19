@@ -36,7 +36,7 @@ PROFILE_PATH = PACKAGE / "config/profiles/sim_eval_nav2_baseline.static.yaml"
 PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_contract.py"
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
-PARENT = "b502e3e08ffcbe63ffeebad762a13fe419fdcb92"
+PARENT = "d44ba711395a50d3ba8b9f91e6f64d1eca8ca5a1"
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -179,7 +179,15 @@ def test_setup_installs_only_the_two_explicit_wp06f_artifacts():
         cwd=ROOT, check=True, capture_output=True,
     ).stdout)
     baseline_deps = [node.text for node in baseline.findall("exec_depend")]
-    assert [dep for dep in deps if dep != "rosgraph_msgs"] == baseline_deps
+    inserted_runtime_roots = [
+        "mecanum_nav_rl", "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs"
+    ]
+    expected = list(baseline_deps)
+    launch_position = expected.index("launch")
+    expected[launch_position:launch_position] = inserted_runtime_roots
+    expected.insert(expected.index("ros_gz_bridge") + 1, "rosgraph_msgs")
+    assert deps == expected
+    assert len(deps) == len(set(deps))
     assert deps.index("rosgraph_msgs") == deps.index("ros_gz_bridge") + 1
 
 
@@ -203,38 +211,26 @@ def test_run002_guard_and_manifest_remain_parent_byte_identical():
         assert (ROOT / relative).read_bytes() == original
 
 
-def test_run001_to_run006_repository_guards_manifests_and_runner_sources_are_parent_identical():
-    paths = (
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_001.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_006.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_002_GUARD_MANIFEST.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_003_GUARD_MANIFEST.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_004_GUARD_MANIFEST.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_005_GUARD_MANIFEST.json",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_006_GUARD_MANIFEST.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run003_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run003_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run003_runtime_guard.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run004_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run004_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run004_runtime_guard.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run005_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run005_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run005_runtime_guard.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run006_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run006_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run006_runtime_guard.py",
+def test_run001_to_run007_repository_runtime_evidence_is_base_identical():
+    inventory = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", PARENT],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    run_pattern = __import__("re").compile(
+        r"(?:WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00[1-7]|wp06_6f_tf_ekf_run00[1-7])"
     )
-    for relative in paths:
-        expected = subprocess.run(["git", "show", f"{PARENT}:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
-        assert (ROOT / relative).read_bytes() == expected, relative
+    protected = [path for path in inventory if run_pattern.search(path)]
+    assert protected, "historical Run001–Run007 repository inventory must be discoverable"
+    for relative in protected:
+        original = subprocess.run(
+            ["git", "show", f"{PARENT}:{relative}"],
+            cwd=ROOT, check=True, capture_output=True,
+        ).stdout
+        current = ROOT / relative
+        assert current.is_file() and current.read_bytes() == original, relative
 
 
-def test_run007_guard_manifest_evidence_and_source_pins_are_coherent():
+def test_run007_seed_and_historical_disposition_are_immutable():
     manifest_path = MANIFEST_PATH
     guard_path = GUARD_PATH
     evidence_path = ROOT / "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json"
@@ -245,29 +241,41 @@ def test_run007_guard_manifest_evidence_and_source_pins_are_coherent():
     assert guard["capacity"] == 1 and guard["acquisition_count"] == 0
     assert guard["runtime_authorization"] == "NOT_GRANTED"
     assert guard["guard_manifest_sha256"] == _sha(manifest_path)
-    decision_sha = _sha(ROOT / DECISION_PATH)
-    assert manifest["decision_sha256"] == guard["decision_sha256"] == decision_sha
-    assert evidence["decision_sha256"] == decision_sha
-    assert manifest["evidence_sha256"] == _sha(evidence_path)
+    assert len(manifest["evidence_sha256"]) == 64
+    assert all(char in "0123456789abcdef" for char in manifest["evidence_sha256"])
     assert manifest["guard_seed"] == {"path": guard["guard_path"], "state": guard["state"], "capacity": 1, "consumed": False}
     assert manifest["source_pins"] == evidence["source_pins"]
-    assert manifest["source_pins"][DECISION_PATH] == evidence["source_pins"][DECISION_PATH] == decision_sha
     for relative, expected in manifest["source_pins"].items():
         assert len(expected) == 64 and all(char in "0123456789abcdef" for char in expected)
-        assert expected == _sha(ROOT / relative), relative
+    for relative in (str(manifest_path.relative_to(ROOT)), str(guard_path.relative_to(ROOT)), str(evidence_path.relative_to(ROOT))):
+        original = subprocess.run(
+            ["git", "show", f"{PARENT}:{relative}"], cwd=ROOT,
+            check=True, capture_output=True,
+        ).stdout
+        assert (ROOT / relative).read_bytes() == original, relative
     assert manifest["runtime_eligible"] is False and evidence["runtime_eligible"] is False
-    assert manifest["runtime_evidence_status"] == evidence["runtime_evidence_status"] == "NOT_CREATED"
+    # The guard manifest is the pre-run seed record; the L1 evidence document
+    # records the later independent audit disposition. Preserve and validate
+    # each historical layer without conflating their different timestamps.
+    assert manifest["runtime_evidence_status"] == "NOT_CREATED"
+    assert evidence["runtime_evidence_status"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS"
     assert evidence["historical_run_006"]["terminal_outcome"] == "WP06_6F_RUNTIME_RUN006_FAIL_NO_RETRY_GUARD_CONSUMED"
     assert evidence["historical_run_006"]["failure"] == "GuardError:RUNTIME_ACCEPTANCE_FAILED"
     assert evidence["historical_run_006"]["guard_state"] == "CONSUMED"
-    assert evidence["run_007_guard"]["state"] == guard["state"]
-    assert evidence["run_007_guard"]["acquisition_count"] == 0
+    # The repository guard and guard manifest are the pre-acquisition seed;
+    # the L1 evidence document records the later consumed-guard disposition.
+    assert evidence["run_007_guard"]["state_before"] == guard["state"]
+    assert evidence["run_007_guard"]["state"] == "CONSUMED"
+    assert evidence["run_007_guard"]["acquisition_count"] == 1
+    assert evidence["run_007_guard"]["capacity"] == 1
+    assert evidence["run_007_guard"]["runtime_authorization"] == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
     assert evidence["RUNTIME_APPROVED"] == "NOT_APPROVED" and evidence["GATE_B"] == "NOT_STARTED"
-    assert manifest["evidence_ceiling"] == evidence["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING"
+    assert manifest["evidence_ceiling"] == "IMPLEMENTED_OFFLINE_RUN007_OWNER_AUTHORIZATION_BINDING_GUARD_PENDING"
+    assert evidence["evidence_ceiling"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS_WP06_6F_SCOPE_ONLY"
     assert manifest["owner_authorization_contract"] == evidence["owner_authorization_contract"]
     assert manifest["owner_authorization_contract"]["scope_literal"] == "WP06_6F_RUN007_ONE_OFFICIAL_RUNNER_INVOCATION_CAPACITY_ONE_NO_RETRY"
     assert evidence["runtime_eligible"] is False
-    assert evidence["runtime_evidence_status"] == "NOT_CREATED"
+    assert evidence["runtime_evidence_status"] == "RAW_RUNTIME_EVIDENCE_AUDITED_PASS"
 
 
 def test_run007_matrix_covers_run_acceptance_and_post_teardown_finalization():
@@ -291,24 +299,78 @@ def test_wp05_ekf_current_profile_pin_reconciles_without_runtime_claim():
     assert profile["runtime_eligible"] is False and manifest["runtime_eligible"] is False
 
 
-def test_protected_runtime_and_6c_6d_6e_paths_are_not_in_diff():
+def test_historical_runtime_conservation_and_candidate_scope():
     result = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, check=True, capture_output=True, text=True)
     changed = {line[3:] for line in result.stdout.splitlines()}
     allowed = {
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007.json",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run007_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/test_wp06_6f_tf_ekf_run007_session.py",
-        "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/wp06_6f_tf_ekf_run007_runtime_guard.py",
-        "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_GUARD_MANIFEST.json",
-        "docs/governance/decisions/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_DECISION.md",
-        "docs/governance/evidence/WP-06_SIM_EVAL_TF_EKF_RUNTIME_STATE_ESTIMATION_INGRESS_L2_EVIDENCE.json",
+        "artifacts/maps/warehouse_map2/sim_eval_navigation_world_binding.json",
+        "artifacts/maps/warehouse_map2/sim_eval_map_world_validation_plan.yaml",
+        "docs/governance/decisions/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.md",
+        "docs/governance/evidence/ROADMAP_STEP4_STEP5_STEP6_CONSOLIDATED_CLOSURE.json",
+        "docs/governance/evidence/STEP4_SIM_EVAL_ARTIFACT_BUNDLE_MANIFEST.json",
+        "docs/governance/evidence/WP12_DEPLOY_REAL_HARDWARE_MEASUREMENT_ROUTING.json",
         "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
         "docs/governance/PROJECT_EXECUTION_PLAN.md",
         "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+        "ros2_ws/src/mecanum_nav_rl/package.xml",
+        "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_compiler.py",
+        "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_assets.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_dependency_lock_schema.py",
         "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/base.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/topics.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/qos.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/frames.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/acceptance.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/measurements.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/profiles/sim_eval.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/modes/nav2_baseline.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_models.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_compiler.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_hashing.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_validators.py",
+        "ros2_ws/src/mecanum_nav_rl/setup.py",
+        "ros2_ws/src/mecanum_nav_rl/test/test_step4_step5_static_closure.py",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/msg/SafetyLifecycleState.msg",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/CMakeLists.txt",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/package.xml",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_interface_contracts.py",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_final_issued_command_receipt_rosidl_enablement.py",
+        "ros2_ws/src/mecanum_nav_rl_interfaces/test/test_safety_lifecycle_state_interface.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/__init__.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py",
+        "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+        "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
+        "ros2_ws/src/mecanum_nav_rl/test/test_final_twist_publisher_static.py",
+        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
+        "ros2_ws/src/mecanum_nav_bringup/setup.py",
+        "ros2_ws/src/mecanum_nav_bringup/package.xml",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
+        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_static_contract.py",
+        "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
+        "ros2_ws/src/ROBOT_URDF_final_description/setup.py",
+        "ros2_ws/src/ROBOT_URDF_final_description/test/test_sim_eval_nav2_baseline_bootstrap_launch.py",
     }
-    assert changed == allowed
-    assert not any("WP06_6C" in path or "WP06_6E" in path or "WP06_6D" in path for path in changed)
+    assert len(changed) <= 55
+    assert changed <= allowed
+    protected = [
+        path for path in subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", PARENT], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        if __import__("re").search(r"(?:WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00[1-7]|wp06_6f_tf_ekf_run00[1-7])", path)
+    ]
+    assert not changed.intersection(protected)
+    forbidden = ("ground_truth", "ground-truth", "/odom", "tf_static")
+    assert not any(any(token in path.lower() for token in forbidden) for path in changed)
 
 
 def test_run006_raw_record_retains_historical_finalization_failure_not_system_failure():

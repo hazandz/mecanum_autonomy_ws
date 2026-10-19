@@ -1,9 +1,3 @@
 acceptance:
-  contract_id:
-    field_path: acceptance.contract_id
-    token: TBD_PROJECT_ACCEPTANCE
-    reference_id: project_acceptance_contract
-  contract_sha256:
-    field_path: acceptance.contract_sha256
-    token: TBD_PROJECT_ACCEPTANCE
-    reference_id: project_acceptance_contract
+  contract_id: ARCHITECTURE_SECTION_50_VERIFICATION_OBLIGATIONS
+  contract_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204

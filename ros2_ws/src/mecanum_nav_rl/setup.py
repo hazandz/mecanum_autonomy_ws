@@ -38,6 +38,14 @@ _V3_CONFIG_DATA_FILES = [
         "share/mecanum_nav_rl/config/v3/algorithms",
         ["config/v3/algorithms/ppo.yaml"],
     ),
+    (
+        "share/mecanum_nav_rl/config/v3/resolved",
+        ["config/v3/resolved/sim_eval_nav2_baseline.resolved.json"],
+    ),
+    (
+        "share/mecanum_nav_rl/config/safety",
+        ["config/safety/sim_eval_nav2_baseline_safety.yaml"],
+    ),
 ]
 
 
@@ -86,6 +94,10 @@ setup(
     ],
 
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "safety_lifecycle=mecanum_nav_rl.runtime_safety.safety_lifecycle_node:main",
+            "safety_supervisor=mecanum_nav_rl.runtime_safety.safety_supervisor_node:main",
+            "final_twist_publisher=mecanum_nav_rl.runtime_safety.final_twist_publisher_node:main",
+        ],
     },
 )

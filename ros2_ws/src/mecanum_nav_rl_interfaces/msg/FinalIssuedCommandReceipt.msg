@@ -1,5 +1,5 @@
-# DRAFT public receipt schema, proposed interface ID: mecanum.final-issued-receipt/v2
-# Not installed in a ROSIDL package; no implementation or runtime authorization.
+# Canonical receipt v2 interface: mecanum.final-issued-receipt/v2.
+# ROSIDL generation is enabled; this does not claim runtime or Gate B acceptance.
 uint8 SOURCE_UNKNOWN=0
 uint8 SOURCE_POLICY=1
 uint8 SOURCE_NAV2=2

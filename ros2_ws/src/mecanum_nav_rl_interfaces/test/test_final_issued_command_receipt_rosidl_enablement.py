@@ -16,6 +16,9 @@ EVIDENCE_PATH = (
 )
 REGISTRY_PATH = REPOSITORY_ROOT / "docs/governance/CANONICAL_SOURCE_REGISTRY.md"
 EXPECTED_RECEIPT_SHA256 = (
+    "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c"
+)
+HISTORICAL_RECEIPT_SHA256 = (
     "0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a"
 )
 EXPECTED_INTERFACE_FILES = [
@@ -24,6 +27,7 @@ EXPECTED_INTERFACE_FILES = [
     "msg/NavigationState.msg",
     "msg/CommandEnvelope.msg",
     "msg/FinalIssuedCommandReceipt.msg",
+    "msg/SafetyLifecycleState.msg",
 ]
 EXPECTED_ALLOWLIST = [
     "ros2_ws/src/mecanum_nav_rl_interfaces/CMakeLists.txt",
@@ -99,7 +103,7 @@ def test_atomic_l2_packet_is_routed_by_registry_without_runtime_claim() -> None:
     assert data["authority_fingerprints"]["project_progress_ledger"]["sha256"] == "3dcffb51f355090aa6eb0ad71aa6e956f03011cc0afa01a1ea8402a0961b028b"
     assert data["receipt_contract"]["interface_id"] == "mecanum.final-issued-receipt/v2"
     assert data["receipt_contract"]["schema_revision"] == 2
-    assert data["receipt_contract"]["source_sha256"] == EXPECTED_RECEIPT_SHA256
+    assert data["receipt_contract"]["source_sha256"] == HISTORICAL_RECEIPT_SHA256
     assert data["receipt_contract"]["dependency_closure_sha256"] == "0872fa8c10179f69c2e9e9546392ac734a4f4e94ade176a8be431f06905ecf73"
     assert data["receipt_contract"]["qos6_document_sha256"] == "4200cd2fbdc81a19400f168dd3526eb7871ac2251049fc7c4f5d5c2fddfd2022"
     assert data["receipt_contract"]["qos6_transport_manifest_sha256"] == "338bea1b7350d3b82146c7e728516ec7947471ee68db0f8871ddb72071b79620"
@@ -110,6 +114,7 @@ def test_atomic_l2_packet_is_routed_by_registry_without_runtime_claim() -> None:
     assert "RUNTIME_AUTHORIZATION" in data["non_goals"]
     assert data["candidate_lifecycle"]["pre_integration_status"] == "REVIEW_CANDIDATE_ONLY"
     registry = REGISTRY_PATH.read_text(encoding="utf-8")
+    assert EXPECTED_RECEIPT_SHA256 in registry
     assert "WP-06_RECEIPT_V2_ROSIDL_ENABLEMENT_ATOMIC_L2_DECISION.md" in registry
     assert "IMPLEMENTED_OFFLINE_BUILD_INTERFACE_ONLY" in registry
     assert "/mecanum/final_issued_command" in registry

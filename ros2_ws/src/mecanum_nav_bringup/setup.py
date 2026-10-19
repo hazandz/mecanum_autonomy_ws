@@ -27,6 +27,7 @@ setup(
                 "config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml",
                 "config/bridge/sim_eval_scan_endpoint_probe.static.yaml",
                 "config/bridge/sim_eval_clock.runtime.yaml",
+                "config/bridge/sim_eval_cmd_vel.runtime.yaml",
             ],
         ),
         (
@@ -52,11 +53,12 @@ setup(
             [
                 "config/lifecycle/navigation_v1_localization_lifecycle.static.template.yaml",
                 "config/lifecycle/navigation_v1_startup.yaml",
+                "config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
             ],
         ),
         (
             "share/" + package_name + "/config/navigation",
-            ["config/navigation/nav2_baseline.yaml"],
+            ["config/navigation/nav2_baseline.yaml", "config/navigation/sim_eval_nav2_baseline.runtime.yaml"],
         ),
         (
             "share/" + package_name + "/config/remaps",
@@ -70,6 +72,7 @@ setup(
                 "launch/navigation_v1.launch.py",
                 "launch/navigation_v1_lifecycle.launch.py",
                 "launch/sim_eval_tf_ekf_state_estimation.launch.py",
+                "launch/sim_eval_nav2_baseline_system.launch.py",
             ],
         ),
     ],

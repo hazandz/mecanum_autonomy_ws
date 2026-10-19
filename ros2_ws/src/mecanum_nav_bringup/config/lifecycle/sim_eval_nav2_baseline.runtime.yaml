@@ -1,0 +1,9 @@
+schema: mecanum.sim_eval_nav2_baseline_lifecycle/v1
+use_sim_time: true
+primary_states: [Unconfigured, Inactive, Active]
+barrier_owner: SafetyLifecycle
+barrier_topic: /mecanum/safety_lifecycle_state
+barrier_freshness_max_ms: 500
+motion_requires: [READY, fresh_barrier]
+reset_owner: SafetyLifecycle
+missing_stale_invalid_or_mismatched_input: FAIL_CLOSED
