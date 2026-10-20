@@ -20,6 +20,7 @@ DEPOT_URI = "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Depot"
 TUGBOT_URI = "https://fuel.gazebosim.org/1.0/MovAi/models/Tugbot"
 FUEL_URIS = [DEPOT_URI, TUGBOT_URI]
 RUN005_ATTEMPT_001_SHA = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
+RUN005_ATTEMPT_002_OUTPUT_BASE = "99d5c29c1c302260a8971e19e46f93d778a52f86"
 RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
 
 
@@ -181,7 +182,6 @@ def test_installed_runtime_artifact_closure_is_the_exact_fifteen_source_set():
 def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_checks(
     tmp_path, monkeypatch
 ):
-    import socket
     from types import SimpleNamespace
 
     assert set(runner.REQUIRED_PACKAGE_PREFIXES) == {
@@ -270,11 +270,8 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     monkeypatch.setattr(runner, "validate_runtime_python_environment",
                         lambda _python, _env, _prefix: {"observer_module_path": str(module)})
     monkeypatch.setattr(runner.os, "access", lambda *_args: True)
-    def forbidden_network_probe():
-        raise PermissionError("simulated sandbox network-interface denial")
-
-    monkeypatch.setattr(socket, "if_nameindex", forbidden_network_probe)
-    assert "socket.if_nameindex" not in RUNNER_PATH.read_text(encoding="utf-8")
+    monkeypatch.setattr(runner, "validate_gz_transport_host_capability",
+                        lambda *_args: {"gz_topic_list": "PASS"})
     monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
     monkeypatch.setattr(runner, "stale_partition_processes", lambda _partition: [])
 
@@ -561,14 +558,14 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
         "runtime_worktree": runtime_target,
         "run_directory": evidence_target,
         "guard_path": guard_path,
-        "expected_review_commit": "da82b2e5d65eedd80f42000283dccc42a5f6ed66",
+            "expected_review_commit": RUN005_ATTEMPT_002_OUTPUT_BASE,
         "expected_integration_base": runner.INTEGRATION_BASE,
         "run_id": runner.RUN_ID,
         "gz_partition": runner.PARTITION,
         "owner_authorization": "test-authorization",
         "owner_authorization_scope": runner.AUTH_SCOPE,
         "owner_authorization_run_id": runner.RUN_ID,
-        "owner_authorization_review_commit": "da82b2e5d65eedd80f42000283dccc42a5f6ed66",
+            "owner_authorization_review_commit": RUN005_ATTEMPT_002_OUTPUT_BASE,
         "owner_authorization_integration_base": runner.INTEGRATION_BASE,
     })()
     monkeypatch.setattr(runner, "_parse", lambda: args)
@@ -611,10 +608,167 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
     assert not list(evidence_parent.iterdir())
 
 
-def test_runner_has_no_network_interface_probe():
+def test_gz_transport_capability_pass_uses_exact_partition_and_fake_probes():
+    from types import SimpleNamespace
+
+    class FakeSocket:
+        def __init__(self):
+            self.bound = None
+            self.closed = False
+
+        def bind(self, address):
+            self.bound = address
+
+        def close(self):
+            self.closed = True
+
+    udp = FakeSocket()
+    commands = []
+
+    def fake_command(command, **kwargs):
+        commands.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="/clock\n", stderr="")
+
+    facts = runner.validate_gz_transport_host_capability(
+        {"PATH": "/fake/bin", "GZ_PARTITION": "wrong"}, runner.PARTITION,
+        interface_enumerator=lambda: [(2, "lo")],
+        socket_factory=lambda *_args: udp, command_runner=fake_command,
+    )
+    assert facts["gz_topic_list"] == "PASS"
+    assert udp.bound == ("127.0.0.1", 0) and udp.closed
+    assert commands[0][0] == ["gz", "topic", "-l"]
+    assert commands[0][1]["env"]["GZ_PARTITION"] == runner.PARTITION
+
+
+def test_gz_transport_capability_fails_if_udp_socket_close_fails():
+    class CloseFailureSocket:
+        def bind(self, _address):
+            pass
+
+        def close(self):
+            raise PermissionError("close denied")
+
+    with pytest.raises(RuntimeError, match=(
+        "^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:UDP_LOOPBACK_PERMISSION_DENIED$"
+    )):
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, interface_enumerator=lambda: [(1, "lo")],
+            socket_factory=lambda *_args: CloseFailureSocket(),
+            command_runner=lambda *_a, **_k: pytest.fail("gz probe follows successful UDP close"),
+        )
+
+
+@pytest.mark.parametrize(("interfaces", "socket_error", "command_error", "returncode", "output", "reason"), [
+    (PermissionError(), None, None, 0, "", "INTERFACE_ENUMERATION_PERMISSION_DENIED"),
+    (OSError(), None, None, 0, "", "INTERFACE_ENUMERATION_OS_ERROR"),
+    ([], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
+    ([(0, "lo")], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
+    ([(1, "")], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
+    ([(1, "lo", "extra")], None, None, 0, "", "INTERFACE_ENUMERATION_INVALID"),
+    ([(1, "lo")], PermissionError(), None, 0, "", "UDP_LOOPBACK_PERMISSION_DENIED"),
+    ([(1, "lo")], OSError(), None, 0, "", "UDP_LOOPBACK_OS_ERROR"),
+    ([(1, "lo")], None, subprocess.TimeoutExpired("gz topic -l", 1), 0, "", "GZ_TOPIC_TIMEOUT"),
+    ([(1, "lo")], None, PermissionError(), 0, "", "GZ_TOPIC_PERMISSION_DENIED"),
+    ([(1, "lo")], None, OSError(), 0, "", "GZ_TOPIC_OS_ERROR"),
+    ([(1, "lo")], None, None, 1, "", "GZ_TOPIC_EXIT_NONZERO"),
+    ([(1, "lo")], None, None, 0, "getifaddrs: Operation not permitted", "GZ_TOPIC_TRANSPORT_ERROR_OUTPUT"),
+    ([(1, "lo")], None, None, 0, "Error creating socket: Operation not permitted", "GZ_TOPIC_TRANSPORT_ERROR_OUTPUT"),
+])
+def test_gz_transport_capability_fails_closed_with_stable_literal(
+    interfaces, socket_error, command_error, returncode, output, reason,
+):
+    from types import SimpleNamespace
+
+    def enumerate_interfaces():
+        if isinstance(interfaces, BaseException):
+            raise interfaces
+        return interfaces
+
+    class FakeSocket:
+        def bind(self, _address):
+            if socket_error:
+                raise socket_error
+
+        def close(self):
+            pass
+
+    def command(_command, **_kwargs):
+        if command_error:
+            raise command_error
+        return SimpleNamespace(returncode=returncode, stdout=output, stderr="")
+
+    with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, interface_enumerator=enumerate_interfaces,
+            socket_factory=lambda *_args: FakeSocket(), command_runner=command,
+        )
+
+
+def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
+    tmp_path, monkeypatch,
+):
+    runtime_worktree = tmp_path / "runtime"
+    runtime_worktree.mkdir()
+    evidence = tmp_path / "evidence"
+    guard_path = runtime_worktree / "guard.json"
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    raw_guard = json.dumps(guard, sort_keys=True, separators=(",", ":")).encode()
+    guard_path.write_bytes(raw_guard)
+    lock = guard_path.with_suffix(".json.lock")
+    calls = []
+
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"PATH": ""})
+    def host(*_args):
+        calls.append("host")
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, interface_enumerator=lambda: (_ for _ in ()).throw(PermissionError()),
+            socket_factory=lambda *_: pytest.fail("UDP probe must follow interfaces"),
+            command_runner=lambda *_a, **_k: pytest.fail("gz probe must follow UDP"),
+        )
+    monkeypatch.setattr(runner, "host_preflight", host)
+    monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("guard must remain pending"))
+    record = {"run_id": runner.RUN_ID, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING}
+    result = runner.preacquire_preflight(
+        runtime_worktree, {}, evidence, runner.PARTITION, tmp_path / "map", tmp_path / "fuel",
+        {}, guard_path, lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record,
+    )
+    assert calls == ["host"] and result[3]["failure_reason_literals"] == [
+        "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:INTERFACE_ENUMERATION_PERMISSION_DENIED"]
+    assert record["guard_state_after"] == runner.PENDING
+    assert record["call_counts"] == {"runner": 1, "bootstrap": 0, "composite": 0,
+                                      "cpp_observer": 0, "gate_b_observer": 0}
+    assert guard_path.read_bytes() == raw_guard and not lock.exists()
+    assert (evidence / "run_record.json").is_file()
+    assert (evidence / "preflight_failure.json").is_file()
+
+
+def test_sigterm_handler_raises_stable_exception_and_runtime_path_finalizes_after_teardown():
     source = RUNNER_PATH.read_text(encoding="utf-8")
-    assert "socket.if_nameindex" not in source
-    assert "import socket" not in source
+    assert source.index("signal.signal(signal.SIGTERM, sigterm_handler)") < source.index("try:\n        args.run_directory.mkdir")
+    assert source.index("sigterm_handler.begin_finalization()") < source.index(
+        "finalise_after_teardown(record, runtime_acceptance, teardown)")
+    assert source.index("finalise_after_teardown(record, runtime_acceptance, teardown)") < source.index(
+        "signal.signal(signal.SIGTERM, previous_sigterm_handler)")
+    handler = runner.SigtermHandler()
+    with pytest.raises(runner.RunnerInterruptedBySignal,
+                       match="^RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM$"):
+        handler(runner.signal.SIGTERM, None)
+    handler(runner.signal.SIGTERM, None)  # second signal cannot interrupt evidence finalization
+    handler = runner.SigtermHandler()
+    handler.begin_finalization()
+    handler(runner.signal.SIGTERM, None)
+    assert handler.interrupted is True
+    record = {"pre_teardown_failure": "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"}
+    finalized = runner.finalise_after_teardown(
+        record, {"runtime_acceptance": False},
+        {"completed": True, "clean": True, "order_correct": True},
+    )
+    assert finalized["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    assert finalized["finalized_after_teardown"] is True
+    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in finalized["failure_reason_literals"]
 
 
 @pytest.mark.parametrize("raw", [

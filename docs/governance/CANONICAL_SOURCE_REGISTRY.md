@@ -1100,3 +1100,48 @@ The exact current corrective scope is 11 paths from `da82b2e5d65eedd80f42000283d
 | `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `e88f0fc6be4a8c9bd22e7f855fc160c656b530870529d753ae788f8b55206982` | 47558 |
 
 Current decision SHA-256 `ab30bbbf37f4961e70c4369e3c370590438d12f16031cb9d0fc5850653694311`; guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`. Verification is source/offline only; Gate B remains `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`.
+
+### STEP-7 Run005 attempt_002 host transport and terminal evidence corrective — current reconciliation
+
+Exact base `99d5c29c1c302260a8971e19e46f93d778a52f86`; exact 11-path current direct scope is checked as a set. Run005 retains 34 unique current-worktree runtime pins; changed-path count and source-pin count are independent. Host transport preflight validates `socket.if_nameindex()`, a UDP loopback bind/close, and `gz topic -l` with the exact campaign partition before guard acquisition. Failures are pre-acquire and produce evidence with the guard pending. SIGTERM is routed through teardown and finalization; SIGKILL cannot be caught or guaranteed to produce a final record.
+
+Invocation_005 is immutable. Persisted `run_record.json` SHA-256 `5ffa675f8ec846d09a6c7e70ebaa3689eb7566f03398db565c4bd53874b360da` exists and reports `BOOTSTRAP_READINESS_TIMEOUT`, bootstrap 1, composite/observers 0, consumed runtime guard, and teardown completed but not clean. Its bootstrap log contains Gazebo `getifaddrs` and UDP socket permission errors. The record's existence means the claim that external termination prevented the final record is not supported by the persisted artifact. No historical evidence was changed.
+
+Guard/evidence/manifest current hashes: guard `1b11297c2a8ff391c4bcf556ca6c11a935b85b8d0f489441d8d467faf367cf5c`, evidence `a0dee26a56d10a896939588f4f0b3b1b287fbf293edf313cd69c9e3ba276beee`, manifest `84cd34016d1c2784df0ad4a911507dae02b3f067bb9fe9758e5d4db45b6abc7f`.
+
+| Current Run005 source pin | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `f9c3490681d47dfef6c639d3fe072178bd3d8719dc390dd12d463b10c378cce5` | 65993 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `ab838d7fc952d5b625391fc59f1d38682915e53aefa0232315672a17e7a3a71f` | 9468 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `06913f32079f22c53000b262e993120ebfdb1edbedacac0010bf161ce0688e7f` | 61711 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `2ea2906e34decd293b58bd21ca2c6ad4cd646c93816b234b25d4ae6419f28016` | 12611 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `c93c4f2d1f87c05e31ad13306b37f20f2f906b14898aa9bbf89a22aab97b99e2` | 11918 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml` | `2dafb19da5daeeb91c451ae57055caa389a0353900525fb9a5861e1c670c6547` | 506 |
+| `ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py` | `1612ce773eb0b7cb05e4d081eee441418dea32314c3685adcdcd96dd569069b8` | 1795 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml` | `89220ef78125348776575b1a14fa1727c9cb098d9c46d84a74e27e5e8715f0b1` | 143 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml` | `6577ad07506be16666fc11095cfab07e75b6fb2b3fb72d697e634c97417b373f` | 147 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml` | `fbfcf29e197ea94622b5e86858ffef6b5fee05a5d9bcf6ab58bf110d9c5561c2` | 214 |
+| `ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml` | `cf1c942f76f4e432c1716e82f759a1d17012866714e8a958d59585585694102f` | 352 |
+| `ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml` | `c6e58320aa1b35f4c74ca7442bf00357266ad51428522ca93d4565c1d6617e60` | 891 |
+| `ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml` | `ee0ea126c3bf08386b9b4d408ef0b9775398f1d821c1cc5a1f6f3f08efb81167` | 2971 |
+| `ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml` | `6aaacd93181eb3cbfc1bd25067ebdc441bad40998ccb486fea1c51f3ffe8a755` | 776 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `283010f115b1608f8a73613f45e4da674f54ec93c2b91584d86b9514030fb013` | 8870 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py` | `1bf0098b9534257cb57b7f69e47179f2a61b0340745a8f68be7c24254d32a061` | 2753 |
+| `ros2_ws/src/mecanum_nav_bringup/package.xml` | `0e82b208575f11a46d12f1053f6721092f5e4f69af0da77abda28cd40ccc33fd` | 1737 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `d64c265a07b5c3e4f525177004b894ed82a6765f0e2536154658f6b2fb524c52` | 10672 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `b71a8bbd23e6c0f9867ae9041de5935cfe0513fd7cf2c9b1b2af15ee0487fbff` | 48690 |
+| `ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml` | `d9120562549f3a14b6b7673afe247696c0233d2f9d1be1399eac37ec6ff423bd` | 943 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml` | `ec322d9068526ba43b878e7ebb249d0587fb9189f49fcb8999e38eea2b68791b` | 733 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |

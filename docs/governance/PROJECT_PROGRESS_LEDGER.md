@@ -1991,3 +1991,17 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Guard / evidence | PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Record hashes | Decision `ab30bbbf37f4961e70c4369e3c370590438d12f16031cb9d0fc5850653694311`; Registry `cd615016ac39364067ef8474f7d1343882cc102c775b398a201a6122c2af80ff`; Plan `9ef449ec0a8bf67f16cbcdd3cbc0e9df8513949074d0f759cbcf23e37bfcaf65`; guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`. |
 | Next action | Independent audit of the exact corrective commit. |
+
+### STEP-7 Run005 attempt_002 host transport and terminal evidence corrective
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes only active Run005 attempt_002 host preflight and terminal-record handling metadata. Earlier Ledger bytes remain an exact parent prefix. Invocation_001–005 artifacts remain immutable. |
+| Base / scope | Parent target `99d5c29c1c302260a8971e19e46f93d778a52f86`; exact current direct scope is the 11 authorized paths. |
+| Host transport | Before guard acquisition: exact campaign `GZ_PARTITION`, valid `socket.if_nameindex()` entry, UDP loopback bind/close without sending, and `gz topic -l`. Stable failure prefix `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:`; pre-acquire evidence, no lock/process. |
+| Terminal handling | After acquisition, SIGTERM raises `RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM`, then composite-before-bootstrap teardown and terminal record/manifest/checksum finalization. Prior signal handler restored. SIGKILL is uncapturable and may prevent final evidence. |
+| Invocation_005 history | Immutable saved run record `5ffa675f8ec846d09a6c7e70ebaa3689eb7566f03398db565c4bd53874b360da` exists and reports `BOOTSTRAP_READINESS_TIMEOUT`; bootstrap 1, composite 0, observers 0; guard consumed; teardown completed but not clean. Bootstrap log records `getifaddrs` and UDP socket permission failures. The run record exists, so “external termination prevented final record” is contradicted by the saved artifact and is not adopted. |
+| Source pins | 34/34 existing unique current-worktree source pins refreshed by SHA-256 and byte size; no pin added. |
+| Evidence status | Source/offline candidate only; no runtime run in this corrective; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+| Record hashes | Decision `f1da8032e445e743f3c5b2182972c60a6494a568eb1706684687126887f566f6`; Registry `2d16d344dff91e079c270b5a3513e83f63ef791b5482802a18975496128986d4`; Plan `39dee18a77ec1b4283c05e79872d5310a7b1cec1350b30a23acb9e538a47c53d`; guard `1b11297c2a8ff391c4bcf556ca6c11a935b85b8d0f489441d8d467faf367cf5c`; evidence `a0dee26a56d10a896939588f4f0b3b1b287fbf293edf313cd69c9e3ba276beee`; manifest `84cd34016d1c2784df0ad4a911507dae02b3f067bb9fe9758e5d4db45b6abc7f`. |
+| Next action | Independent audit of the exact corrective commit; future runtime only under a separate exact Owner authorization and a live session/poll that waits through terminal exit. |

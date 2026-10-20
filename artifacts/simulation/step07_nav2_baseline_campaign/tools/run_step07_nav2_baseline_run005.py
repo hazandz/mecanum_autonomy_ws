@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import signal
 import stat
 import subprocess
@@ -534,13 +535,103 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     stale = stale_partition_processes(partition)
     if stale:
         raise RuntimeError("STALE_PARTITION_PROCESS_FOUND")
+    transport_facts = validate_gz_transport_host_capability(env, partition)
     return {"canonical_map_yaml": str(map_path / "map.yaml"), "fuel_cache": fuel,
             "package_prefixes": prefixes, "observer_executable": str(observer),
             "nav2_executables": nav2_executables,
             "gate_b_observer_console_script": str(gate_script),
             "runtime_python": str(runtime_python), "runtime_python_fingerprint": runtime_facts,
             "installed_source_byte_equality": equality, "rosidl_import": "PASS",
-            "stale_processes": stale}
+            "stale_processes": stale, "gz_transport_host_capability": transport_facts}
+
+
+def validate_gz_transport_host_capability(
+    env: dict[str, str], partition: str, *, interface_enumerator=None,
+    socket_factory=None, command_runner=None, timeout: float = 15,
+) -> dict:
+    """Fail closed unless host interface and Gazebo transport probes work."""
+    interface_enumerator = interface_enumerator or socket.if_nameindex
+    socket_factory = socket_factory or socket.socket
+    command_runner = command_runner or _run
+    def unavailable(reason: str, error: BaseException | None = None):
+        failure = RuntimeError(f"GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}")
+        if error is not None:
+            raise failure from error
+        raise failure
+
+    try:
+        interfaces = interface_enumerator()
+    except PermissionError as error:
+        unavailable("INTERFACE_ENUMERATION_PERMISSION_DENIED", error)
+    except OSError as error:
+        unavailable("INTERFACE_ENUMERATION_OS_ERROR", error)
+    try:
+        valid_interfaces = [
+            (index, name) for index, name in interfaces
+            if isinstance(index, int) and index > 0 and isinstance(name, str) and name.strip()
+        ]
+    except (TypeError, ValueError) as error:
+        unavailable("INTERFACE_ENUMERATION_INVALID", error)
+    if not valid_interfaces:
+        unavailable("INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED")
+
+    probe_socket = None
+    socket_failure = None
+    try:
+        probe_socket = socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
+        probe_socket.bind(("127.0.0.1", 0))
+    except PermissionError as error:
+        socket_failure = ("UDP_LOOPBACK_PERMISSION_DENIED", error)
+    except OSError as error:
+        socket_failure = ("UDP_LOOPBACK_OS_ERROR", error)
+    if probe_socket is not None:
+        try:
+            probe_socket.close()
+        except PermissionError as error:
+            socket_failure = socket_failure or ("UDP_LOOPBACK_PERMISSION_DENIED", error)
+        except OSError as error:
+            socket_failure = socket_failure or ("UDP_LOOPBACK_OS_ERROR", error)
+    if socket_failure is not None:
+        unavailable(*socket_failure)
+
+    probe_env = dict(env)
+    probe_env["GZ_PARTITION"] = partition
+    try:
+        result = command_runner(["gz", "topic", "-l"], env=probe_env,
+                                check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        unavailable("GZ_TOPIC_TIMEOUT", error)
+    except PermissionError as error:
+        unavailable("GZ_TOPIC_PERMISSION_DENIED", error)
+    except OSError as error:
+        unavailable("GZ_TOPIC_OS_ERROR", error)
+    output = (getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")
+    if "getifaddrs:" in output or "Error creating socket:" in output:
+        unavailable("GZ_TOPIC_TRANSPORT_ERROR_OUTPUT")
+    if getattr(result, "returncode", 1) != 0:
+        unavailable("GZ_TOPIC_EXIT_NONZERO")
+    return {"interface_count": len(valid_interfaces), "udp_loopback_bind": "PASS",
+            "gz_topic_list": "PASS", "partition": partition}
+
+
+class RunnerInterruptedBySignal(RuntimeError):
+    """A catchable runner interruption that still enters campaign teardown."""
+
+
+class SigtermHandler:
+    """Raise once during campaign work and defer signals during finalization."""
+    def __init__(self):
+        self.interrupted = False
+        self.finalizing = False
+
+    def __call__(self, signum, _frame):
+        if signum == signal.SIGTERM and not self.interrupted:
+            self.interrupted = True
+            if not self.finalizing:
+                raise RunnerInterruptedBySignal("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+
+    def begin_finalization(self):
+        self.finalizing = True
 
 
 def _atomic_write(path: Path, document: dict):
@@ -718,7 +809,9 @@ def _write_preacquire_failure_evidence(run_directory: Path, record: dict,
         raise RuntimeError("EVIDENCE_DIRECTORY_ALREADY_EXISTS")
     if guard_lock.exists():
         raise RuntimeError("PREACQUIRE_FAILURE_GUARD_LOCK_PRESENT")
-    failure_literal = (str(error) if str(error).startswith("RUNTIME_PYTHON_ENVIRONMENT_INVALID:")
+    failure_literal = (str(error) if str(error).startswith((
+                           "RUNTIME_PYTHON_ENVIRONMENT_INVALID:",
+                           "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:"))
                        else f"PREACQUIRE_FAILURE:{type(error).__name__}:{error}")
     failure = {
         "schema_version": "1.0", "run_id": RUN_ID,
@@ -809,6 +902,8 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
         "teardown_order_and_count_correct": teardown.get("order_correct") is True}
     passed = all(record["acceptance"].values())
     failures = [f"RUNTIME_ACCEPTANCE_FAILED:{key}" for key, value in runtime_acceptance.items() if not value]
+    if str(record.get("pre_teardown_failure", "")).endswith("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"):
+        failures.append("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
     if not teardown.get("clean"):
         failures.append("PROCESS_GROUP_TEARDOWN_FAILED")
     if not teardown.get("order_correct"):
@@ -922,15 +1017,17 @@ def main():
                                "gate_b_vectors": False,
                                "bootstrap_composite_process_groups_distinct": False,
                                "bootstrap_readiness": False, "composite_readiness": False})
-    args.run_directory.mkdir(parents=True, exist_ok=False)
-    (args.run_directory / "authorization_state.txt").write_text(
-        f"run_id={RUN_ID}\nscope={AUTH_SCOPE}\nreview_commit={head}\nintegration_base={args.expected_integration_base}\nauthorization_sha256={hashlib.sha256(authorization['owner_authorization'].encode()).hexdigest()}\n", encoding="utf-8")
-    logdir = args.run_directory / "logs"; logdir.mkdir()
-    bootstrap_command, composite_command = campaign_launch_commands(
-        preflight, partition=PARTITION, fuel_root=args.fuel_cache_root,
-        repository_root=args.runtime_worktree)
     record["process_groups"] = {}
+    sigterm_handler = SigtermHandler()
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, sigterm_handler)
     try:
+        args.run_directory.mkdir(parents=True, exist_ok=False)
+        (args.run_directory / "authorization_state.txt").write_text(
+            f"run_id={RUN_ID}\nscope={AUTH_SCOPE}\nreview_commit={head}\nintegration_base={args.expected_integration_base}\nauthorization_sha256={hashlib.sha256(authorization['owner_authorization'].encode()).hexdigest()}\n", encoding="utf-8")
+        logdir = args.run_directory / "logs"; logdir.mkdir()
+        bootstrap_command, composite_command = campaign_launch_commands(
+            preflight, partition=PARTITION, fuel_root=args.fuel_cache_root,
+            repository_root=args.runtime_worktree)
         bootstrap_proc, bootstrap_member = _spawn_owned_process(
             bootstrap_command, name="bootstrap", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "bootstrap.log", processes=processes)
@@ -1011,6 +1108,7 @@ def main():
         record["pre_teardown_failure"] = f"{type(error).__name__}:{error}"
         record["traceback"] = traceback.format_exc()
     finally:
+        sigterm_handler.begin_finalization()
         collector_members = {member["name"]: member for member in processes
                              if member["name"] in {"gate_b_observer", "cpp_observer"}}
         composite_teardown = _stop_owned_process(composite_proc, composite_member, timeout=30)
@@ -1057,10 +1155,13 @@ def main():
         teardown["completed"] = True
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
                                         "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
+        if sigterm_handler.interrupted:
+            record.setdefault("pre_teardown_failure", "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
         if runtime_acceptance:
             result = finalise_after_teardown(record, runtime_acceptance, teardown)
             _atomic_write(args.run_directory / "run_record.json", result)
             _write_artifact_manifest(args.run_directory)
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         # Keep every guard, lock, log and evidence artifact after acquisition.
     return 0 if record.get("terminal_outcome", "").endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT") else 2
 
