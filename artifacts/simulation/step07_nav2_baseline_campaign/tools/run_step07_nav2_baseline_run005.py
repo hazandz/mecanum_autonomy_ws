@@ -671,6 +671,7 @@ class SigtermHandler:
         self.exception_raised = False
         self.handler_restored = False
         self.terminal_committed = False
+        self.registration_depth = 0
 
     def __call__(self, signum, _frame):
         if signum != signal.SIGTERM:
@@ -678,6 +679,8 @@ class SigtermHandler:
         if self.terminal_committed:
             return
         self.interrupted = True
+        if self.registration_depth:
+            return
         if not self.guard_acquired:
             self._raise_once()
         elif self.campaign_active and not self.finalizing:
@@ -831,19 +834,82 @@ def validate_distinct_process_groups(bootstrap: dict | None, composite: dict | N
 
 
 def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[str, str],
-                         log_path: Path, processes: list[dict]) -> tuple[subprocess.Popen, dict]:
-    with open(log_path, "wb") as log:
-        proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+                         log_path: Path, processes: list[dict],
+                         ownership_ledger: dict | None = None,
+                         sigterm_handler: SigtermHandler | None = None) -> tuple[subprocess.Popen, dict]:
+    """Đăng ký handle trước PGID/snapshot; SIGTERM chỉ latch trong registration."""
+    ledger = ownership_ledger if ownership_ledger is not None else {}
+    if name in ledger:
+        raise RuntimeError(f"PROCESS_ALREADY_REGISTERED:{name}")
+    if sigterm_handler is not None:
+        sigterm_handler.registration_depth += 1
     try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        pgid = -1
-    member = {"name": name, "pid": proc.pid, "pgid": pgid, "command": list(command),
-              "returncode": None, "readiness": None, "initial_snapshot": _process_group_members(pgid) if pgid > 1 else {"live_member_pids": [], "zombie_member_pids": []},
-              "final_snapshot": None}
-    processes.append(member)
+        with open(log_path, "wb") as log:
+            proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+            member = {"name": name, "pid": proc.pid, "pgid": None,
+                      "command": list(command), "returncode": None, "readiness": None,
+                      "initial_snapshot": None, "final_snapshot": None,
+                      "ownership_verified": False, "ownership_errors": []}
+            ledger[name] = {"process": proc, "member": member}
+            processes.append(member)
+        try:
+            member["pgid"] = os.getpgid(proc.pid)
+            member["initial_snapshot"] = _process_group_members(member["pgid"])
+            snapshot = member["initial_snapshot"]
+            member["ownership_verified"] = (
+                member["pgid"] == proc.pid and proc.pid > 1
+                and snapshot.get("verified") is True
+                and proc.pid in snapshot.get("live_member_pids", []))
+            if not member["ownership_verified"]:
+                raise RuntimeError(f"PROCESS_OWNERSHIP_UNVERIFIED:{name}")
+        except BaseException as error:
+            member["ownership_errors"].append(f"PROCESS_REGISTRATION_FAILED:{type(error).__name__}:{error}")
+            raise
+    finally:
+        if sigterm_handler is not None:
+            sigterm_handler.registration_depth -= 1
+    if sigterm_handler is not None and sigterm_handler.interrupted:
+        sigterm_handler._raise_once()
     return proc, member
+
+
+def _owned_group_verified(proc, member) -> bool:
+    return (proc is not None and isinstance(member, dict)
+            and type(member.get("pid")) is int and member["pid"] > 1
+            and member["pid"] == proc.pid == member.get("pgid")
+            and (member.get("ownership_verified") is True
+                 or (member.get("initial_snapshot") or {}).get("verified") is True
+                 and proc.pid in (member.get("initial_snapshot") or {}).get("live_member_pids", [])))
+
+
+def _stop_unverified_child(proc, member, timeout):
+    """Không killpg khi ownership chưa rõ; chỉ thử dừng child đã giữ handle."""
+    errors = ["PROCESS_OWNERSHIP_UNVERIFIED"]
+    errors.extend(member.get("ownership_errors", []) if isinstance(member, dict) else [])
+    try:
+        proc.send_signal(signal.SIGINT)
+    except BaseException as error:
+        errors.append(f"CHILD_SIGNAL_FAILED:{type(error).__name__}:{error}")
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        errors.append("CHILD_WAIT_TIMEOUT")
+        try:
+            proc.kill()
+            proc.wait(timeout=timeout)
+        except BaseException as error:
+            errors.append(f"CHILD_STOP_FAILED:{type(error).__name__}:{error}")
+    except BaseException as error:
+        errors.append(f"CHILD_WAIT_FAILED:{type(error).__name__}:{error}")
+    snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                "inspection_errors": ["PROCESS_OWNERSHIP_UNVERIFIED"]}
+    if isinstance(member, dict):
+        member["final_snapshot"] = snapshot
+        member["returncode"] = getattr(proc, "returncode", None)
+    return {"signal": "SIGINT", "signal_sent": False, "child_stop_attempted": True,
+            "leader_returncode": getattr(proc, "returncode", None), **snapshot,
+            "errors": errors, "clean": False}
 
 
 def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None:
@@ -854,15 +920,25 @@ def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None
 
 
 def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, timeout: float) -> dict:
+    if proc is not None and not _owned_group_verified(proc, member):
+        return _stop_unverified_child(proc, member, timeout)
     if proc is None or type(member) is not dict or type(member.get("pgid")) is not int or member["pgid"] <= 1:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
                 "live_member_pids": [], "zombie_member_pids": [], "verified": False,
                 "errors": ["PROCESS_GROUP_MISSING"], "clean": False}
+    try:
+        leader_exited = proc.poll() is not None
+        if not leader_exited and os.getpgid(proc.pid) != member["pgid"]:
+            return _stop_unverified_child(proc, member, timeout)
+    except BaseException as error:
+        member.setdefault("ownership_errors", []).append(f"PROCESS_GROUP_RECHECK_FAILED:{type(error).__name__}:{error}")
+        return _stop_unverified_child(proc, member, timeout)
     signal_sent = False
     errors = []
     try:
-        os.killpg(member["pgid"], signal.SIGINT)
-        signal_sent = True
+        if not leader_exited:
+            os.killpg(member["pgid"], signal.SIGINT)
+            signal_sent = True
     except ProcessLookupError:
         errors.append("KILLPG_PROCESS_NOT_FOUND")
     except BaseException as error:
@@ -878,6 +954,9 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
     except BaseException as error:
         snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
                     "inspection_errors": [f"PROC_SNAPSHOT_FAILED:{type(error).__name__}:{error}"]}
+    if leader_exited and (snapshot.get("live_member_pids") or snapshot.get("zombie_member_pids")):
+        member.setdefault("ownership_errors", []).append("GROUP_OWNER_EXITED_WITH_REMAINING_MEMBERS")
+        return _stop_unverified_child(proc, member, timeout)
     if not snapshot.get("verified"):
         errors.extend(snapshot.get("inspection_errors", ["PROC_SNAPSHOT_UNVERIFIED"]))
     try:
@@ -887,7 +966,7 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
         errors.append(f"PROCESS_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
     member["returncode"] = returncode
     member["final_snapshot"] = snapshot
-    clean = (signal_sent and not errors and returncode == 0
+    clean = ((signal_sent or leader_exited) and not errors and returncode == 0
              and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
     return {"signal": "SIGINT", "signal_sent": signal_sent, "leader_returncode": returncode,
             **snapshot, "verified": snapshot.get("verified") is True,
@@ -917,50 +996,7 @@ def _stop_collector(proc, member, timeout: float = 20) -> dict:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
                 "live_member_pids": [], "zombie_member_pids": [], "verified": True,
                 "inspection_errors": [], "errors": [], "clean": True, "started": False}
-    errors = []
-    signal_sent = False
-    if proc is not None:
-        try:
-            if proc.poll() is None:
-                pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, signal.SIGINT)
-                signal_sent = True
-        except ProcessLookupError:
-            errors.append("COLLECTOR_PROCESS_NOT_FOUND")
-        except BaseException as error:
-            errors.append(f"COLLECTOR_KILLPG_FAILED:{type(error).__name__}:{error}")
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            errors.append("COLLECTOR_WAIT_TIMEOUT")
-        except BaseException as error:
-            errors.append(f"COLLECTOR_WAIT_FAILED:{type(error).__name__}:{error}")
-    if isinstance(member, dict):
-        try:
-            snapshot = _process_group_members(member["pgid"])
-        except BaseException as error:
-            snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
-                        "inspection_errors": [f"COLLECTOR_SNAPSHOT_FAILED:{type(error).__name__}:{error}"]}
-        member["final_snapshot"] = snapshot
-        try:
-            returncode = proc.returncode if proc is not None else None
-        except BaseException as error:
-            returncode = None
-            errors.append(f"COLLECTOR_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
-        member["returncode"] = returncode
-        if snapshot.get("verified") is not True:
-            errors.extend(snapshot.get("inspection_errors", ["COLLECTOR_SNAPSHOT_UNVERIFIED"]))
-    else:
-        snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
-                    "inspection_errors": ["COLLECTOR_GROUP_MISSING"]}
-        returncode = None
-        errors.append("COLLECTOR_GROUP_MISSING")
-    clean = (not errors and snapshot.get("verified") is True
-             and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"]
-             and returncode == 0)
-    return {"signal": "SIGINT", "signal_sent": signal_sent,
-            "leader_returncode": returncode, **snapshot,
-            "verified": snapshot.get("verified") is True, "errors": errors, "clean": clean}
+    return _safe_stop_owned_process(proc, member, timeout)
 
 
 def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_proc,
@@ -1142,6 +1178,47 @@ def _write_preacquire_failure_evidence(run_directory: Path, record: dict,
     return record
 
 
+def recover_guard_handoff_failure(*, runtime_guard, guard_lock, guard, authorization,
+                                  review_commit, integration_base, error, run_directory,
+                                  record, sigterm_handler=None, env=None, preflight=None):
+    """Chỉ strict runtime readback được quyền phân loại guard sau exception."""
+    readback_error = None
+    try:
+        current = load_guard(runtime_guard)
+    except (OSError, ValueError) as read_error:
+        current = None
+        readback_error = f"{type(read_error).__name__}:{read_error}"
+    consumed = (isinstance(current, dict) and current.get("state") == "CONSUMED"
+                and current.get("capacity") == 1 and current.get("acquisition_count") == 1
+                and current.get("runtime_authorization") == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
+                and current.get("acquired_review_commit") == review_commit
+                and current.get("acquired_integration_base") == integration_base
+                and all(current.get(key) == value for key, value in authorization.items()))
+    if consumed:
+        if sigterm_handler is not None:
+            sigterm_handler.mark_guard_acquired()
+        return env, preflight, current, error
+    if current == guard and current is not None and current.get("state") == PENDING and not guard_lock.exists():
+        failure = _write_preacquire_failure_evidence(
+            run_directory, record, error, guard_lock=guard_lock)
+        return None, None, None, failure
+    # Không biết chắc guard còn pending: giữ lock và không tuyên bố chưa consume.
+    if run_directory.exists():
+        raise RuntimeError("GUARD_STATE_UNVERIFIED_EVIDENCE_ALREADY_EXISTS") from error
+    literal = "GUARD_ACQUISITION_STATE_UNVERIFIED"
+    record.update({"guard_acquired": None, "guard_state_after": "UNVERIFIED",
+                   "guard_acquisition_count": None, "runtime_execution": False,
+                   "teardown_applicable": False, "guard_lock_exists": guard_lock.exists(),
+                   "guard_readback_error": readback_error,
+                   "exception_type": type(error).__name__, "exception_message": str(error),
+                   "failure_reason_literals": [literal],
+                   "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_FAIL_GUARD_ACQUISITION_STATE_UNVERIFIED_NO_RETRY"})
+    _atomic_write(run_directory / "preflight_failure.json", record)
+    _atomic_write(run_directory / "run_record.json", record)
+    _write_artifact_manifest(run_directory)
+    return None, None, None, record
+
+
 def preacquire_preflight(worktree: Path, dirs: dict[str, Path], run_directory: Path,
                          partition: str, map_root: Path, fuel_root: Path,
                          source_pins: dict, runtime_guard: Path, guard_lock: Path,
@@ -1161,13 +1238,12 @@ def preacquire_preflight(worktree: Path, dirs: dict[str, Path], run_directory: P
             sigterm_handler=sigterm_handler, mask_signals=mask_signals)
         return env, preflight, consumed, None
     except BaseException as error:
-        if sigterm_handler is not None and sigterm_handler.guard_acquired:
-            # Acquisition already happened. The main campaign path must record
-            # this as a consumed FAIL and finalize it after an empty teardown.
-            return locals().get("env"), locals().get("preflight"), locals().get("consumed"), error
-        failure = _write_preacquire_failure_evidence(
-            run_directory, record, error, guard_lock=guard_lock)
-        return None, None, None, failure
+        return recover_guard_handoff_failure(
+            runtime_guard=runtime_guard, guard_lock=guard_lock, guard=guard,
+            authorization=authorization, review_commit=review_commit,
+            integration_base=integration_base, error=error, run_directory=run_directory,
+            record=record, sigterm_handler=sigterm_handler,
+            env=locals().get("env"), preflight=locals().get("preflight"))
 
 
 def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: dict) -> dict:
@@ -1252,12 +1328,28 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                                         composite_member, bootstrap_proc, bootstrap_member,
                                         collector_procs, collector_members, bootstrap_calls,
                                         composite_calls, cpp_calls, gate_b_calls, run_directory,
-                                        sigterm_handler, previous_sigterm_handler):
+                                        sigterm_handler, previous_sigterm_handler,
+                                        ownership_ledger=None):
     """Run best-effort teardown and terminal persistence under a restored handler."""
     teardown = {"completed": True, "clean": False, "order_correct": False,
                 "verified": False, "errors": ["TEARDOWN_NOT_VERIFIED"]}
     result = None
     try:
+        sigterm_handler.begin_finalization()
+        if ownership_ledger is not None:
+            def owned(name):
+                row = ownership_ledger.get(name, {})
+                return row.get("process"), row.get("member")
+            composite_proc, composite_member = owned("composite")
+            bootstrap_proc, bootstrap_member = owned("bootstrap")
+            collector_procs = {name: owned(name)[0] for name in ("gate_b_observer", "cpp_observer")}
+            collector_members = {name: owned(name)[1] for name in collector_procs if owned(name)[1] is not None}
+            bootstrap_calls = int("bootstrap" in ownership_ledger)
+            composite_calls = int("composite" in ownership_ledger)
+            cpp_calls = int("cpp_observer" in ownership_ledger)
+            gate_b_calls = int("gate_b_observer" in ownership_ledger)
+            record["process_groups"] = {name: row["member"] for name, row in ownership_ledger.items()}
+            record["runtime_execution"] = bool(ownership_ledger)
         try:
             teardown = teardown_campaign_processes(
                 composite_proc=composite_proc, composite_member=composite_member,
@@ -1379,6 +1471,7 @@ def main():
               "runner_invoked": True, "runtime_execution": False,
               "teardown_applicable": False}
     processes = []
+    ownership_ledger = {}
     runtime_acceptance = {"guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
                           "runtime_graph_and_goal": False, "observer_acceptance": False,
                           "gate_b_vectors": False,
@@ -1399,20 +1492,16 @@ def main():
             args.expected_integration_base, args.runtime_python, record,
             sigterm_handler=sigterm_handler)
     except BaseException as error:
-        # Covers a signal in the handoff from handler installation into
-        # preflight. No guard acquisition has been reported unless the handler
-        # was explicitly advanced by acquire_guard_with_sigterm_handoff().
-        if sigterm_handler.guard_acquired:
-            env = preflight = None
-            consumed = load_guard(runtime_guard)
-            preacquire_failure = error
-        else:
-            try:
-                _write_preacquire_failure_evidence(
-                    args.run_directory, record, error, guard_lock=guard_lock)
-            finally:
-                sigterm_handler.restore(previous_sigterm_handler)
-            return 2
+        try:
+            env, preflight, consumed, preacquire_failure = recover_guard_handoff_failure(
+                runtime_guard=runtime_guard, guard_lock=guard_lock, guard=guard,
+                authorization=authorization, review_commit=head,
+                integration_base=args.expected_integration_base, error=error,
+                run_directory=args.run_directory, record=record,
+                sigterm_handler=sigterm_handler)
+        except BaseException:
+            sigterm_handler.restore(previous_sigterm_handler)
+            raise
     if preacquire_failure is not None:
         if consumed is None:
             sigterm_handler.restore(previous_sigterm_handler)
@@ -1447,7 +1536,8 @@ def main():
             repository_root=args.runtime_worktree)
         bootstrap_proc, bootstrap_member = _spawn_owned_process(
             bootstrap_command, name="bootstrap", cwd=args.runtime_worktree, env=env,
-            log_path=logdir / "bootstrap.log", processes=processes)
+            log_path=logdir / "bootstrap.log", processes=processes,
+            ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         bootstrap_calls = 1
         record["call_counts"]["bootstrap"] = bootstrap_calls
         record["process_groups"]["bootstrap"] = bootstrap_member
@@ -1461,7 +1551,8 @@ def main():
         runtime_acceptance["bootstrap_readiness"] = True
         composite_proc, composite_member = _spawn_owned_process(
             composite_command, name="composite", cwd=args.runtime_worktree, env=env,
-            log_path=logdir / "composite.log", processes=processes)
+            log_path=logdir / "composite.log", processes=processes,
+            ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         composite_calls = 1
         record["call_counts"]["composite"] = composite_calls
         record["process_groups"]["composite"] = composite_member
@@ -1481,30 +1572,24 @@ def main():
         if "success=true" not in response.stdout.replace(" ", "").lower():
             raise RuntimeError("SAFETY_LIFECYCLE_REARM_NOT_CONFIRMED")
         observer_path = args.run_directory / "runtime_observer.json"
-        cpp_log = open(logdir / "cpp_observer.log", "wb")
-        cpp = subprocess.Popen(["ros2", "run", "step07_nav2_baseline_runtime_observer",
-                               "step07_nav2_baseline_runtime_observer", "--ros-args",
-                               "-p", f"output_path:={observer_path}", "-p", f"config_hash:={record['config_hash']}",
-                               "-p", "duration_sec:=1800"], cwd=args.runtime_worktree, env=env,
-                              stdout=cpp_log, stderr=subprocess.STDOUT, start_new_session=True)
-        cpp_member = {"name": "cpp_observer", "pid": cpp.pid, "pgid": os.getpgid(cpp.pid),
-                      "command": ["ros2", "run", "step07_nav2_baseline_runtime_observer"],
-                      "returncode": None, "readiness": {"started": True}, "final_snapshot": None}
-        processes.append(cpp_member)
+        cpp_command = ["ros2", "run", "step07_nav2_baseline_runtime_observer",
+                       "step07_nav2_baseline_runtime_observer", "--ros-args",
+                       "-p", f"output_path:={observer_path}", "-p", f"config_hash:={record['config_hash']}",
+                       "-p", "duration_sec:=1800"]
+        cpp, cpp_member = _spawn_owned_process(
+            cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
+            log_path=logdir / "cpp_observer.log", processes=processes,
+            ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         collector_members["cpp_observer"] = cpp_member
         cpp_calls = 1; record["call_counts"]["cpp_observer"] = 1
-        gate_log = open(logdir / "gate_b_observer.log", "wb")
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
                               "--config-hash", record["config_hash"], "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
-        gate = subprocess.Popen(gate_command,
-                             cwd=args.runtime_worktree, env=env, stdout=gate_log, stderr=subprocess.STDOUT,
-                             start_new_session=True)
+        gate, gate_member = _spawn_owned_process(
+            gate_command, name="gate_b_observer", cwd=args.runtime_worktree, env=env,
+            log_path=logdir / "gate_b_observer.log", processes=processes,
+            ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         gate_b_calls = 1; record["call_counts"]["gate_b_observer"] = 1
-        gate_member = {"name": "gate_b_observer", "pid": gate.pid, "pgid": os.getpgid(gate.pid),
-                       "command": gate_command,
-                       "returncode": None, "readiness": {"started": True}, "final_snapshot": None}
-        processes.append(gate_member)
         collector_members["gate_b_observer"] = gate_member
         gate.wait(timeout=1800)
         if gate.returncode != 0:
@@ -1537,7 +1622,8 @@ def main():
                 composite_calls=composite_calls, cpp_calls=cpp_calls,
                 gate_b_calls=gate_b_calls, run_directory=args.run_directory,
                 sigterm_handler=sigterm_handler,
-                previous_sigterm_handler=previous_sigterm_handler)
+                previous_sigterm_handler=previous_sigterm_handler,
+                ownership_ledger=ownership_ledger)
         # Keep every guard, lock, log and evidence artifact after acquisition.
     return terminal_exit_code(record)
 

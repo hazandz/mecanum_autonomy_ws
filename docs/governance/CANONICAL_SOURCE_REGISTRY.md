@@ -1115,14 +1115,14 @@ Guard/evidence/manifest current hashes: guard `1b11297c2a8ff391c4bcf556ca6c11a93
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `8aae15ff5b1b752efa80fd3839a7f5e815adc172e249b7bbd5f4b436112c75d8` | 85522 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `ab838d7fc952d5b625391fc59f1d38682915e53aefa0232315672a17e7a3a71f` | 9468 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `325889d73bfcb4eb5b33a8373a6fc22b73fa5571893adb7626e6d8caed963dce` | 9843 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `bcbe8793d51c258e5a8bbc8aa37ba1fa7d2ce2b27753a5bf39f32d47121d5fa3` | 85822 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `30813145c8921b0a3e4995a9072e5fecb7343230bd51c2c81acc61f23e6750a9` | 14390 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `c93c4f2d1f87c05e31ad13306b37f20f2f906b14898aa9bbf89a22aab97b99e2` | 11918 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `120f24891f6c39eb5af814393c879e479f4736cadd14a2bb35821a6a546ce28b` | 12752 |
 | `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
 | `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
 | `ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml` | `2dafb19da5daeeb91c451ae57055caa389a0353900525fb9a5861e1c670c6547` | 506 |
@@ -1166,9 +1166,31 @@ The SIGTERM handler is installed before pre-acquire checks. A pre-acquisition SI
 Phase A passed: focused runner/guard 122, focused scope-chain 2, Step-7 tools 263, bringup 244, nav_rl 707; six-package external build; observer 13 and ROSIDL 8 tests; installed-source equality 15/15; py_compile; 34/34 pins; canonical JSON/YAML/XML, history, exact scope and diff checks. No runner/runtime was executed. Run005 remains pending/unconsumed, Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
 
 Current refreshes (SHA-256, bytes):
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `8aae15ff5b1b752efa80fd3839a7f5e815adc172e249b7bbd5f4b436112c75d8` | 85522 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `bcbe8793d51c258e5a8bbc8aa37ba1fa7d2ce2b27753a5bf39f32d47121d5fa3` | 85822 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `30813145c8921b0a3e4995a9072e5fecb7343230bd51c2c81acc61f23e6750a9` | 14390 |
-| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `b8ccb7d0ca3018ab2c620bf4f7a75d0ee3727007c65f83255f0e99886a64f92e` | 51569 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `4f9e56c939a5dfa362672ae63d61395c6b263ccd049ff23098a0bae693f8a117` | 90789 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `add635ab907ea8b0b927c2dd2eea4d9ab05527d1630db6b1e6de24132fd98ce3` | 104828 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `d1432e3453bbf8145537bc41265fcfc7bce562a10ebfe6568b21c1ad2cd448be` | 17078 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `376bc411bb5983be062279e8c7f5696f1af448d4fea5d48b31048ec69eb5727a` | 52485 |
 
 Current guard SHA-256 `c7c2caaff6d1d81fbc3300cedb226de2daec3f6f35f0db13a6d2a91a57fe7b89`, evidence SHA-256 `1ab3eb1247841ab0eb707c0b18d315a84aa36d6d9f3b49eb59fbc81192feb79d`, and manifest SHA-256 `4e9deab757bdadbb28399b94f65e068aeb730f7dccee863bc41675dc9e4148a3`.
+
+
+### Run005 attempt_002 — reconciliation guard/process ownership hiện hành
+
+Corrective L1 trên base `53b7790c23c7d4969612259a8ee06be0353babd2`, vẫn Run005 attempt_002. Direct scope là exact 13 path; runtime source-pin inventory giữ 34 path duy nhất. Guard mutation exception chỉ được xóa lock khi strict runtime readback xác nhận đúng seed PENDING chưa acquire. Sau replacement hoặc unmask failure, strict readback CONSUMED đúng commit/authorization/count=1 đi vào post-acquire FAIL và terminal evidence. Readback không xác định giữ lock, ghi UNVERIFIED và không fallback sang source checkout.
+
+Cả bốn component dùng cùng owned-spawn helper: SIGTERM được latch trong registration; child handle được ghi ledger trước PGID/snapshot. Teardown lấy ledger kể cả khi caller chưa nhận assignment. Chỉ signal process group đã xác minh; nếu không xác minh được, thử dừng chính child đã biết và ghi FAIL/unverified. Thứ tự composite trước bootstrap, acceptance, partition, QoS và capacity-one không đổi.
+
+Phase A PASS: focused runner 142, guard 15, historical guard 19; full Step-7 tools 299, bringup 244, RL 707; build sáu package ngoài worktree; observer 13 và ROSIDL 8; py_compile sáu file; installed/source equality 15/15; source pins 34/34 sau reconciliation, JSON/YAML/XML và history/scope/diff checks. Không official runtime invocation trong corrective này.
+
+Giữ lịch sử invocation_001–005, consumed guards/locks/evidence/runtime worktrees bất biến. Source seed còn PENDING, capacity 1, acquisition 0, runtime_authorization=NOT_GRANTED, không lock. Gate B NOT_STARTED; RUNTIME_APPROVED=NOT_APPROVED. Giới hạn: SIGKILL, mất điện hoặc filesystem không ghi được vẫn có thể ngăn terminal evidence. Evidence ceiling: SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. Bước tiếp theo: independent audit exact corrective commit; runtime cần authorization riêng.
+
+| Source pin đã refresh | SHA-256 | Byte size |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `4f9e56c939a5dfa362672ae63d61395c6b263ccd049ff23098a0bae693f8a117` | 90789 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `325889d73bfcb4eb5b33a8373a6fc22b73fa5571893adb7626e6d8caed963dce` | 9843 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `add635ab907ea8b0b927c2dd2eea4d9ab05527d1630db6b1e6de24132fd98ce3` | 104828 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `d1432e3453bbf8145537bc41265fcfc7bce562a10ebfe6568b21c1ad2cd448be` | 17078 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `120f24891f6c39eb5af814393c879e479f4736cadd14a2bb35821a6a546ce28b` | 12752 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `376bc411bb5983be062279e8c7f5696f1af448d4fea5d48b31048ec69eb5727a` | 52485 |
+
+Guard SHA-256 `47ba096c850081ff073cb54c66381a128a3ea2eca812ed650ddae939045548fa`; evidence `8e87e4fd9b5cf7fa08b3529a3448cd36418ad077432d27ed855edee6b5f9082e`; manifest `f0403ddb4d140937635972a8156c6eadcf677bd454d1cd0917fad8c3f539b759`.

@@ -830,14 +830,16 @@ def test_sigterm_during_finalization_rewrites_durable_fail_record(tmp_path, monk
 
 
 def test_process_group_kill_wait_and_proc_errors_cannot_report_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
     class FakeProcess:
         pid = 212
         returncode = None
 
+        def poll(self): return None
         def wait(self, timeout):
             raise subprocess.TimeoutExpired("fake", timeout)
 
-    member = {"name": "composite", "pid": 212, "pgid": 212}
+    member = {"name": "composite", "pid": 212, "pgid": 212, "ownership_verified": True}
     monkeypatch.setattr(runner.os, "killpg", lambda *_args: (_ for _ in ()).throw(PermissionError("denied")))
     monkeypatch.setattr(runner, "_process_group_members", lambda *_args, **_kwargs: (
         (_ for _ in ()).throw(OSError("proc unreadable"))))
@@ -860,6 +862,7 @@ def test_process_group_kill_wait_and_proc_errors_cannot_report_clean(tmp_path, m
 
 
 def test_sigterm_during_teardown_still_stops_both_groups_and_persists_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
     handler = _acquired_campaign_handler()
     class FakeProcess:
         def __init__(self, pid):
@@ -883,8 +886,8 @@ def test_sigterm_during_teardown_still_stops_both_groups_and_persists_failure(tm
     monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
         "live_member_pids": [], "zombie_member_pids": [], "verified": True,
         "inspection_errors": []})
-    composite = {"name": "composite", "pid": 31, "pgid": 31}
-    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32}
+    composite = {"name": "composite", "pid": 31, "pgid": 31, "ownership_verified": True}
+    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32, "ownership_verified": True}
     run_directory = tmp_path / "evidence"
     run_directory.mkdir()
     record = {"call_counts": {"runner": 1}}
@@ -1152,6 +1155,7 @@ def test_sigterm_at_terminal_commit_boundary_fails_before_handler_restore(tmp_pa
 
 
 def test_sigterm_after_terminal_commit_does_not_rewrite_completed_campaign(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
     run_directory = tmp_path / "evidence"
     run_directory.mkdir()
     handler = _acquired_campaign_handler()
@@ -1166,8 +1170,8 @@ def test_sigterm_after_terminal_commit_does_not_rewrite_completed_campaign(tmp_p
     previous = runner.signal.getsignal(runner.signal.SIGTERM)
     result = runner.finalize_campaign_after_acquisition(
         record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
-        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11},
-        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12},
+        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11,"ownership_verified":True},
+        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12,"ownership_verified":True},
         collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1,
         cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
         sigterm_handler=handler, previous_sigterm_handler=previous)
@@ -1179,6 +1183,7 @@ def test_sigterm_after_terminal_commit_does_not_rewrite_completed_campaign(tmp_p
 
 
 def test_normal_completion_restores_handler_and_keeps_pass_bundle(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
     run_directory = tmp_path / "evidence"
     run_directory.mkdir()
     handler = _acquired_campaign_handler()
@@ -1194,8 +1199,8 @@ def test_normal_completion_restores_handler_and_keeps_pass_bundle(tmp_path, monk
     previous = runner.signal.getsignal(runner.signal.SIGTERM)
     result = runner.finalize_campaign_after_acquisition(
         record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
-        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11},
-        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12},
+        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11,"ownership_verified":True},
+        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12,"ownership_verified":True},
         collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1,
         cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
         sigterm_handler=handler, previous_sigterm_handler=previous)
@@ -1261,8 +1266,8 @@ def test_success_path_acquires_guard_before_any_campaign_process_and_finalizes_a
 
 def test_best_effort_teardown_attempts_composite_before_bootstrap(tmp_path, monkeypatch):
     order = []
-    composite = {"name": "composite", "pid": 31, "pgid": 31}
-    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32}
+    composite = {"name": "composite", "pid": 31, "pgid": 31, "ownership_verified": True}
+    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32, "ownership_verified": True}
 
     def fake_stop(_proc, member, _timeout):
         order.append(member["name"])
@@ -1685,3 +1690,316 @@ def test_missing_runtime_python_executable_fails_closed_before_probe(tmp_path, m
     monkeypatch.setattr(runner, "_run", lambda *_a, **_k: pytest.fail("must not probe missing interpreter"))
     with pytest.raises(RuntimeError, match="RUNTIME_PYTHON_ENVIRONMENT_INVALID:INTERPRETER_MISSING_OR_NOT_EXECUTABLE"):
         runner.validate_runtime_python_environment(runtime_python, {}, tmp_path)
+
+
+def _assert_real_bundle(directory):
+    for line in (directory / "SHA256SUMS.txt").read_text().splitlines():
+        expected, relative = line.split("  ", 1)
+        assert hashlib.sha256((directory / relative).read_bytes()).hexdigest() == expected
+    manifest = runner.load_canonical_json(directory / "artifact_manifest.json")
+    for row in manifest["artifacts"]:
+        raw = (directory / row["path"]).read_bytes()
+        assert row["sha256"] == hashlib.sha256(raw).hexdigest()
+        assert row["size_bytes"] == len(raw)
+
+
+@pytest.mark.parametrize("fault", ["after_replace", "unmask"])
+def test_consumed_guard_readback_overrides_handoff_exception_and_saves_terminal_fail(tmp_path, monkeypatch, fault):
+    import step07_run005_runtime_guard as guard_module
+    worktree = tmp_path / "runtime"; worktree.mkdir()
+    guard_path = worktree / "guard.json"; lock = guard_path.with_suffix(".json.lock")
+    seed = {"run_id": runner.RUN_ID, "state": runner.PENDING, "capacity": 1,
+            "acquisition_count": 0, "runtime_authorization": "NOT_GRANTED"}
+    guard_path.write_bytes(json.dumps(seed, sort_keys=True, separators=(",", ":")).encode())
+    auth = {"owner_authorization": "TEST_EXACT_AUTH", "owner_authorization_scope": runner.AUTH_SCOPE,
+            "owner_authorization_run_id": runner.RUN_ID, "owner_authorization_review_commit": "a" * 40,
+            "owner_authorization_integration_base": runner.INTEGRATION_BASE}
+    handler = runner.SigtermHandler()
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {})
+    monkeypatch.setattr(runner, "host_preflight", lambda *_: {})
+    original_replace = guard_module.os.replace
+    def replace(source, target):
+        original_replace(source, target)
+        if Path(target) == guard_path and fault == "after_replace":
+            raise OSError("AFTER_REPLACE")
+    monkeypatch.setattr(guard_module.os, "replace", replace)
+    def masks(how, _mask):
+        if fault == "unmask" and how == runner.signal.SIG_SETMASK:
+            raise OSError("UNMASK_FAILED")
+        return set()
+    directory = tmp_path / "evidence"
+    record = {"call_counts": {"runner": 1}, "guard_state_before": runner.PENDING}
+    _, _, consumed, failure = runner.preacquire_preflight(
+        worktree, {}, directory, runner.PARTITION, tmp_path / "map", tmp_path / "fuel", {},
+        guard_path, lock, seed, auth, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record, sigterm_handler=handler, mask_signals=masks)
+    assert consumed == runner.load_guard(guard_path)
+    assert consumed["state"] == "CONSUMED" and handler.guard_acquired
+    assert lock.exists() and not directory.exists()
+    with pytest.raises(FileExistsError):
+        runner.acquire_guard(guard_path, seed, auth, review_commit="a" * 40,
+                             integration_base=runner.INTEGRATION_BASE)
+    record.update({"guard_acquired": True, "guard_state_after": consumed["state"],
+                   "guard_acquisition_count": consumed["acquisition_count"],
+                   "pre_teardown_failure": str(failure)})
+    result = runner.finalize_campaign_after_acquisition(
+        record=record, runtime_acceptance={"all": True}, composite_proc=None,
+        composite_member=None, bootstrap_proc=None, bootstrap_member=None,
+        collector_procs={}, collector_members={}, bootstrap_calls=0, composite_calls=0,
+        cpp_calls=0, gate_b_calls=0, run_directory=directory,
+        sigterm_handler=handler, previous_sigterm_handler=runner.signal.getsignal(runner.signal.SIGTERM),
+        ownership_ledger={})
+    assert runner.terminal_exit_code(result) == 2
+    assert result["guard_acquired"] and result["guard_acquisition_count"] == 1
+    assert result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert result["runtime_execution"] is False and lock.exists()
+    _assert_real_bundle(directory)
+
+
+def test_unreadable_runtime_guard_never_falls_back_to_source_pending_seed(tmp_path, monkeypatch):
+    guard = tmp_path / "runtime_guard.json"; guard.write_bytes(b'not-json')
+    lock = guard.with_suffix(".json.lock"); lock.write_bytes(b'held')
+    directory = tmp_path / "evidence"
+    record = {"call_counts": {"runner": 1}}
+    result = runner.recover_guard_handoff_failure(
+        runtime_guard=guard, guard_lock=lock, guard={"state": runner.PENDING}, authorization={},
+        review_commit="a" * 40, integration_base=runner.INTEGRATION_BASE,
+        error=OSError("HANDOFF"), run_directory=directory, record=record)
+    assert result[2] is None and record["guard_acquired"] is None
+    assert record["guard_state_after"] == "UNVERIFIED"
+    assert "NO_GUARD_CONSUMED" not in record["terminal_outcome"]
+    assert lock.exists() and guard.read_bytes() == b'not-json'
+    _assert_real_bundle(directory)
+
+
+@pytest.mark.parametrize("name", ["bootstrap", "composite", "cpp_observer", "gate_b_observer"])
+@pytest.mark.parametrize("stage", ["popen_return", "getpgid", "snapshot", "registration", "caller_handoff"])
+def test_sigterm_at_spawn_boundaries_retains_every_child_for_ledger_teardown(tmp_path, monkeypatch, name, stage):
+    _exercise_owned_spawn_boundary(tmp_path, monkeypatch, name, stage, "SIGTERM")
+
+
+@pytest.mark.parametrize("stage", ["getpgid", "snapshot", "registration"])
+def test_oserror_after_popen_stops_known_child_without_unverified_killpg(tmp_path, monkeypatch, stage):
+    _exercise_owned_spawn_boundary(tmp_path, monkeypatch, "composite", stage, "OSError")
+
+
+def _exercise_owned_spawn_boundary(tmp_path, monkeypatch, target, stage, fault):
+    consumed_guard = tmp_path / "consumed_guard.json"
+    guard_bytes = b'{"acquisition_count":1,"capacity":1,"state":"CONSUMED"}'
+    consumed_guard.write_bytes(guard_bytes)
+    consumed_lock = consumed_guard.with_suffix(".json.lock"); consumed_lock.write_bytes(b"held")
+    handler = _acquired_campaign_handler()
+    ledger = {}; children = {}; signals = []; child_signals = []; delivered = False
+    current = None
+    def inject(where):
+        nonlocal delivered
+        if not delivered and current == target and stage == where:
+            delivered = True
+            if fault == "SIGTERM": handler(runner.signal.SIGTERM, None)
+            else: raise OSError("INJECTED_AFTER_POPEN")
+    class Child:
+        def __init__(self, pid): self.pid, self.returncode = pid, None
+        def poll(self): return self.returncode
+        def wait(self, timeout): self.returncode = 0; return 0
+        def send_signal(self, sig): child_signals.append(self.pid)
+        def kill(self): self.returncode = -9
+    def popen(*_args, **_kwargs):
+        child = Child(101 + len(children)); children[child.pid] = child
+        inject("popen_return")
+        return child
+    def getpgid(pid): inject("getpgid"); return pid
+    def snapshot(pgid):
+        inject("snapshot")
+        return {"live_member_pids": [pgid] if children[pgid].returncode is None else [],
+                "zombie_member_pids": [], "verified": True, "inspection_errors": []}
+    class Members(list):
+        def append(self, item): super().append(item); inject("registration")
+    members = Members()
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    monkeypatch.setattr(runner.os, "getpgid", getpgid)
+    monkeypatch.setattr(runner, "_process_group_members", snapshot)
+    def killpg(pgid, _sig):
+        assert any(row["member"].get("ownership_verified") and row["member"]["pgid"] == pgid
+                   for row in ledger.values())
+        signals.append(pgid)
+    monkeypatch.setattr(runner.os, "killpg", killpg)
+    error = None
+    for current in ("bootstrap", "composite", "cpp_observer", "gate_b_observer"):
+        try:
+            result = runner._spawn_owned_process(
+                ["fake", current], name=current, cwd=tmp_path, env={},
+                log_path=tmp_path / (current + ".log"), processes=members,
+                ownership_ledger=ledger, sigterm_handler=handler)
+            inject("caller_handoff")
+        except (runner.RunnerInterruptedBySignal, OSError) as caught:
+            error = caught
+            break
+    assert delivered and error is not None
+    assert len(ledger) == len(children)
+    assert all(row["process"] in children.values() for row in ledger.values())
+    record = {"call_counts": {"runner": 1}, "pre_teardown_failure": str(error), "guard_acquired": True}
+    directory = tmp_path / "evidence"
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record=record, runtime_acceptance={"all": True}, composite_proc=None,
+        composite_member=None, bootstrap_proc=None, bootstrap_member=None,
+        collector_procs={}, collector_members={}, bootstrap_calls=0, composite_calls=0,
+        cpp_calls=0, gate_b_calls=0, run_directory=directory, sigterm_handler=handler,
+        previous_sigterm_handler=previous, ownership_ledger=ledger)
+    assert runner.terminal_exit_code(result) == 2
+    assert result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert all(child.returncode is not None for child in children.values())
+    if "composite" in ledger:
+        comp = ledger["composite"]["member"]["pid"]; boot = ledger["bootstrap"]["member"]["pid"]
+        if comp in signals and boot in signals: assert signals.index(comp) < signals.index(boot)
+    if fault == "OSError":
+        pid = ledger[target]["member"]["pid"]
+        assert pid in child_signals and pid not in signals
+        assert result["teardown"]["verified"] is False
+    assert result["call_counts"]["bootstrap"] == int("bootstrap" in ledger)
+    assert result["call_counts"]["composite"] == int("composite" in ledger)
+    assert result["call_counts"]["cpp_observer"] == int("cpp_observer" in ledger)
+    assert result["call_counts"]["gate_b_observer"] == int("gate_b_observer" in ledger)
+    assert runner.signal.getsignal(runner.signal.SIGTERM) == previous
+    assert consumed_guard.read_bytes() == guard_bytes and consumed_lock.read_bytes() == b"held"
+    _assert_real_bundle(directory)
+
+
+def test_all_four_components_use_the_same_owned_spawn_and_finalizer_ledger():
+    import inspect
+    body = inspect.getsource(runner.main)
+    assert body.count("_spawn_owned_process(") == 4
+    assert "subprocess.Popen" not in body
+    assert body.count("ownership_ledger=ownership_ledger") == 5
+
+
+def test_verified_ledger_all_acceptance_true_has_clean_ordered_pass_bundle(tmp_path, monkeypatch):
+    ledger = {}; processes = []; children = {}; order = []
+    handler = _acquired_campaign_handler()
+    class Child:
+        def __init__(self, pid): self.pid, self.returncode = pid, None
+        def poll(self): return self.returncode
+        def wait(self, timeout): self.returncode = 0; return 0
+    def popen(*_args, **_kwargs):
+        child = Child(301 + len(children)); children[child.pid] = child; return child
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(runner.os, "killpg", lambda pgid, _sig: order.append(pgid))
+    monkeypatch.setattr(runner, "_process_group_members", lambda pgid: {
+        "live_member_pids": [pgid] if children[pgid].returncode is None else [],
+        "zombie_member_pids": [], "verified": True, "inspection_errors": []})
+    for name in ("bootstrap", "composite", "cpp_observer", "gate_b_observer"):
+        proc, _ = runner._spawn_owned_process(["fake"], name=name, cwd=tmp_path, env={},
+            log_path=tmp_path / (name + ".log"), processes=processes,
+            ownership_ledger=ledger, sigterm_handler=handler)
+        if name.endswith("observer"): proc.wait(timeout=1)
+    directory = tmp_path / "evidence"
+    result = runner.finalize_campaign_after_acquisition(
+        record={"call_counts": {"runner": 1}, "guard_acquired": True},
+        runtime_acceptance={"all": True}, composite_proc=None, composite_member=None,
+        bootstrap_proc=None, bootstrap_member=None, collector_procs={}, collector_members={},
+        bootstrap_calls=0, composite_calls=0, cpp_calls=0, gate_b_calls=0,
+        run_directory=directory, sigterm_handler=handler,
+        previous_sigterm_handler=runner.signal.getsignal(runner.signal.SIGTERM), ownership_ledger=ledger)
+    assert result["terminal_outcome"].endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
+    assert runner.terminal_exit_code(result) == 0 and result["failure_reason_literals"] == []
+    assert all(result["teardown"][key] for key in ("completed", "clean", "order_correct", "verified"))
+    assert order == [302, 301]
+    assert result["call_counts"] == {"runner":1,"bootstrap":1,"composite":1,"cpp_observer":1,"gate_b_observer":1}
+    _assert_real_bundle(directory)
+
+
+def test_changed_group_never_receives_killpg_and_known_child_is_stopped(tmp_path, monkeypatch):
+    calls = []
+    class Child:
+        pid = 901
+        returncode = None
+        def poll(self): return None
+        def send_signal(self, _sig): calls.append("child")
+        def wait(self, timeout): self.returncode = 0
+    monkeypatch.setattr(runner.os, "getpgid", lambda _pid: 999)
+    monkeypatch.setattr(runner.os, "killpg", lambda *_: pytest.fail("group not owned"))
+    member={"pid":901,"pgid":901,"ownership_verified":True}
+    result=runner._stop_owned_process(Child(), member, 1)
+    assert calls == ["child"]
+    assert result["verified"] is result["clean"] is False
+
+
+def test_pre_replacement_failure_releases_only_pending_guard_lock_and_saves_preacquire_bundle(tmp_path, monkeypatch):
+    import step07_run005_runtime_guard as guard_module
+    worktree = tmp_path / "runtime"; worktree.mkdir()
+    guard = worktree / "guard.json"; lock = guard.with_suffix(".json.lock")
+    seed = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+            "runtime_authorization": "NOT_GRANTED"}
+    raw = json.dumps(seed, sort_keys=True, separators=(",", ":")).encode(); guard.write_bytes(raw)
+    replace = guard_module.os.replace
+    def fail_before_guard_replace(source, target):
+        if Path(target) == guard: raise OSError("BEFORE_REPLACE")
+        replace(source, target)
+    monkeypatch.setattr(guard_module.os, "replace", fail_before_guard_replace)
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {})
+    monkeypatch.setattr(runner, "host_preflight", lambda *_: {})
+    directory = tmp_path / "evidence"
+    _, _, consumed, failure = runner.preacquire_preflight(
+        worktree, {}, directory, runner.PARTITION, tmp_path / "map", tmp_path / "fuel", {},
+        guard, lock, seed, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), {"call_counts": {"runner": 1}})
+    assert consumed is None and failure["guard_acquired"] is False
+    assert failure["guard_state_after"] == runner.PENDING and failure["guard_acquisition_count"] == 0
+    assert guard.read_bytes() == raw and not lock.exists()
+    assert failure["runtime_execution"] is False
+    assert failure["call_counts"] == {"runner":1,"bootstrap":0,"composite":0,"cpp_observer":0,"gate_b_observer":0}
+    _assert_real_bundle(directory)
+
+
+@pytest.mark.parametrize("fault", ["after_replace", "unmask"])
+def test_simulated_main_never_returns_without_consumed_terminal_bundle_after_handoff_error(tmp_path, monkeypatch, fault):
+    from types import SimpleNamespace
+    source = tmp_path / "source"; source.mkdir()
+    seed_path = source / "guard.json"; seed_path.write_bytes((ROOT / RUN005_GUARD_REL).read_bytes())
+    source_bytes = seed_path.read_bytes()
+    runtime = tmp_path / "runtime"; evidence = tmp_path / "evidence"
+    args = SimpleNamespace(repository_root=source, guard_path=seed_path,
+        expected_review_commit="a" * 40, expected_integration_base=runner.INTEGRATION_BASE,
+        run_id=runner.RUN_ID, gz_partition=runner.PARTITION,
+        owner_authorization="TEST_ONLY_EXACT_AUTH", owner_authorization_scope=runner.AUTH_SCOPE,
+        owner_authorization_run_id=runner.RUN_ID, owner_authorization_review_commit="a" * 40,
+        owner_authorization_integration_base=runner.INTEGRATION_BASE,
+        runtime_worktree=runtime, run_directory=evidence, canonical_map_root=source / "map",
+        fuel_cache_root=tmp_path / "fuel", runtime_python=Path(runner.RUNTIME_PYTHON_PATH))
+    monkeypatch.setattr(runner, "_parse", lambda: args)
+    def git_read(command, **_kwargs):
+        assert command[0] == "git"
+        if command[1:4] == ["remote", "get-url", "origin"]: text = runner.EXPECTED_ORIGIN
+        elif command[1:3] == ["rev-parse", "HEAD"]: text = "a" * 40
+        else: text = ""
+        return SimpleNamespace(stdout=text, returncode=0)
+    monkeypatch.setattr(runner, "_run", git_read)
+    def private_clone(*_args):
+        runtime.mkdir(); (runtime / "guard.json").write_bytes(source_bytes)
+    monkeypatch.setattr(runner, "create_isolated_runtime_checkout", private_clone)
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {})
+    monkeypatch.setattr(runner, "host_preflight", lambda *_: {})
+    monkeypatch.setattr(runner, "_spawn_owned_process", lambda *_a, **_k: pytest.fail("no component may spawn"))
+    original_replace = runner.os.replace
+    def replace(source_file, target):
+        original_replace(source_file, target)
+        if fault == "after_replace" and Path(target) == runtime / "guard.json": raise OSError("AFTER_REPLACE")
+    monkeypatch.setattr(runner.os, "replace", replace)
+    def masks(how, _mask):
+        if fault == "unmask" and how == runner.signal.SIG_SETMASK: raise OSError("UNMASK_FAILED")
+        return set()
+    monkeypatch.setattr(runner.signal, "pthread_sigmask", masks)
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    assert runner.main() == 2
+    assert runner.signal.getsignal(runner.signal.SIGTERM) == previous
+    consumed = runner.load_guard(runtime / "guard.json")
+    assert consumed["state"] == "CONSUMED" and consumed["acquisition_count"] == 1
+    assert (runtime / "guard.json.lock").exists() and seed_path.read_bytes() == source_bytes
+    record = runner.load_canonical_json(evidence / "run_record.json")
+    assert record["guard_acquired"] is True and record["guard_acquisition_count"] == 1
+    assert record["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert record["runtime_execution"] is False and record["call_counts"] == {
+        "runner":1,"bootstrap":0,"composite":0,"cpp_observer":0,"gate_b_observer":0}
+    assert record["teardown"]["completed"] is True
+    _assert_real_bundle(evidence)

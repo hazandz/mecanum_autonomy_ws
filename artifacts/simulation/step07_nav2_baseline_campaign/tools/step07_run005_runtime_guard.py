@@ -165,10 +165,18 @@ def acquire_guard(path: str | Path, guard: dict, authorization: dict,
         os.replace(temp_path, path)
         return consumed
     except BaseException:
+        # Chỉ trả lại capacity khi strict readback chứng minh chưa consume.
         try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+            readback = load_guard(path)
+            pending = (readback == guard and readback.get("state") == PENDING
+                       and readback.get("acquisition_count") == 0)
+        except (OSError, ValueError):
+            pending = False
+        if pending:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
         raise
 
 

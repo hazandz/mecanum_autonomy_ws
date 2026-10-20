@@ -2033,3 +2033,25 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Guard / evidence | Seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. No runner/runtime was invoked. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Current pin refresh | Four existing pins refreshed by SHA-256 and exact size; 34 unique paths retained. Changed-path set and runtime pin inventory remain distinct. |
 | Next action | Independent audit of the exact corrective commit. A later runtime still requires separate exact Owner authorization. |
+
+
+### Run005 attempt_002 — guard mutation/process ownership corrective
+
+`supersedes`: chỉ thay metadata/current source của corrective trên base `53b7790c23c7d4969612259a8ee06be0353babd2`; giữ toàn bộ parent-byte-prefix và lịch sử invocation.
+
+Corrective L1 trên base `53b7790c23c7d4969612259a8ee06be0353babd2`, vẫn Run005 attempt_002. Direct scope là exact 13 path; runtime source-pin inventory giữ 34 path duy nhất. Guard mutation exception chỉ được xóa lock khi strict runtime readback xác nhận đúng seed PENDING chưa acquire. Sau replacement hoặc unmask failure, strict readback CONSUMED đúng commit/authorization/count=1 đi vào post-acquire FAIL và terminal evidence. Readback không xác định giữ lock, ghi UNVERIFIED và không fallback sang source checkout.
+
+Cả bốn component dùng cùng owned-spawn helper: SIGTERM được latch trong registration; child handle được ghi ledger trước PGID/snapshot. Teardown lấy ledger kể cả khi caller chưa nhận assignment. Chỉ signal process group đã xác minh; nếu không xác minh được, thử dừng chính child đã biết và ghi FAIL/unverified. Thứ tự composite trước bootstrap, acceptance, partition, QoS và capacity-one không đổi.
+
+Phase A PASS: focused runner 142, guard 15, historical guard 19; full Step-7 tools 299, bringup 244, RL 707; build sáu package ngoài worktree; observer 13 và ROSIDL 8; py_compile sáu file; installed/source equality 15/15; source pins 34/34 sau reconciliation, JSON/YAML/XML và history/scope/diff checks. Không official runtime invocation trong corrective này.
+
+Giữ lịch sử invocation_001–005, consumed guards/locks/evidence/runtime worktrees bất biến. Source seed còn PENDING, capacity 1, acquisition 0, runtime_authorization=NOT_GRANTED, không lock. Gate B NOT_STARTED; RUNTIME_APPROVED=NOT_APPROVED. Giới hạn: SIGKILL, mất điện hoặc filesystem không ghi được vẫn có thể ngăn terminal evidence. Evidence ceiling: SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. Bước tiếp theo: independent audit exact corrective commit; runtime cần authorization riêng.
+
+Sáu source pins được refresh theo exact bytes:
+
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py`: SHA-256 `4f9e56c939a5dfa362672ae63d61395c6b263ccd049ff23098a0bae693f8a117`, 90789 bytes.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py`: SHA-256 `325889d73bfcb4eb5b33a8373a6fc22b73fa5571893adb7626e6d8caed963dce`, 9843 bytes.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py`: SHA-256 `add635ab907ea8b0b927c2dd2eea4d9ab05527d1630db6b1e6de24132fd98ce3`, 104828 bytes.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py`: SHA-256 `d1432e3453bbf8145537bc41265fcfc7bce562a10ebfe6568b21c1ad2cd448be`, 17078 bytes.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py`: SHA-256 `120f24891f6c39eb5af814393c879e479f4736cadd14a2bb35821a6a546ce28b`, 12752 bytes.
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`: SHA-256 `376bc411bb5983be062279e8c7f5696f1af448d4fea5d48b31048ec69eb5727a`, 52485 bytes.

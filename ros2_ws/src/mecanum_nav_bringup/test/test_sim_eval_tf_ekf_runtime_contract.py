@@ -74,6 +74,15 @@ RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PHASE_A_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
 }
+RUN005_OWNERSHIP_BASE = "53b7790c23c7d4969612259a8ee06be0353babd2"
+RUN005_OWNERSHIP_PATHS = RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
+}
+RUN005_OWNERSHIP_PHASE_A_PATHS = RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
+}
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
@@ -555,19 +564,19 @@ def _candidate_changed_paths():
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
+        ).stdout.strip() == RUN005_OWNERSHIP_BASE
         changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
     else:
         assert subprocess.run(
             ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
+        ).stdout.strip() == RUN005_OWNERSHIP_BASE
         changed = set(subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines())
-    if changed not in (RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PHASE_A_PATHS,
-                       RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS):
+    if changed not in (RUN005_OWNERSHIP_PHASE_A_PATHS,
+                       RUN005_OWNERSHIP_PATHS):
         raise AssertionError(
             f"Run005 attempt_002 host transport corrective path set is not exact: {sorted(changed)}"
         )
@@ -615,6 +624,13 @@ def _assert_run005_attempt002_historical_scope():
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE}^"],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE
+    guard_handoff = subprocess.run(
+        ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE}..{RUN005_OWNERSHIP_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(guard_handoff) == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_OWNERSHIP_BASE}^"],
+                          cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
 
 
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
@@ -643,8 +659,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         ["git", "rev-parse", f"{RUN004_HOST_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN004_CORRECTIVE_BASE
-    assert changed in (RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PHASE_A_PATHS,
-                       RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS)
+    assert changed in (RUN005_OWNERSHIP_PHASE_A_PATHS, RUN005_OWNERSHIP_PATHS)
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
@@ -845,8 +860,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     assert set(run004_host_diff) == RUN004_HOST_CORRECTIVE_PATHS
-    assert changed in (RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PHASE_A_PATHS,
-                       RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS)
+    assert changed in (RUN005_OWNERSHIP_PHASE_A_PATHS, RUN005_OWNERSHIP_PATHS)
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
         cwd=ROOT, check=True, capture_output=True, text=True,

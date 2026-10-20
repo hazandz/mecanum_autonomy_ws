@@ -132,6 +132,8 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
             stale_current_sources.add(relative)
             prospective[relative] = actual
     assert stale_current_sources <= {
+        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
+        "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py",
         "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
         "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
         "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
@@ -250,3 +252,56 @@ def test_acquisition_is_explicit_and_capacity_one(tmp_path):
     assert consumed["acquisition_count"] == 1
     assert consumed["runtime_authorization"] == "GRANTED_FOR_THIS_EXACT_RUN_ONLY"
     assert path.with_suffix(".json.lock").exists()
+
+
+def _fault_guard_seed(path):
+    document = {"run_id": RUN_ID, "state": PENDING, "capacity": 1,
+                "acquisition_count": 0, "runtime_authorization": "NOT_GRANTED"}
+    path.write_bytes(json.dumps(document, sort_keys=True, separators=(",", ":")).encode())
+    return document
+
+
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_guard_exception_preserves_capacity_only_when_strictly_pending(tmp_path, monkeypatch, after_replace):
+    import step07_run005_runtime_guard as guard_module
+    path = tmp_path / "guard.json"
+    document = _fault_guard_seed(path)
+    replace = guard_module.os.replace
+    def injected_replace(source, target):
+        if after_replace:
+            replace(source, target)
+        raise OSError("INJECTED_REPLACEMENT_BOUNDARY")
+    with monkeypatch.context() as context:
+        context.setattr(guard_module.os, "replace", injected_replace)
+        with pytest.raises(OSError, match="INJECTED_REPLACEMENT_BOUNDARY"):
+            acquire_guard(path, document, {"owner_authorization": "test"},
+                          review_commit=REVIEW, integration_base=INTEGRATION_BASE)
+    readback = load_guard(path)
+    lock = path.with_suffix(".json.lock")
+    assert readback["state"] == ("CONSUMED" if after_replace else PENDING)
+    assert readback["acquisition_count"] == int(after_replace)
+    assert lock.exists() is after_replace
+    if after_replace:
+        with pytest.raises(FileExistsError):
+            acquire_guard(path, document, {"owner_authorization": "test"},
+                          review_commit=REVIEW, integration_base=INTEGRATION_BASE)
+
+
+def test_guard_keeps_lock_when_cleanup_readback_is_unverifiable(tmp_path, monkeypatch):
+    import step07_run005_runtime_guard as guard_module
+    path = tmp_path / "guard.json"
+    document = _fault_guard_seed(path)
+    original_load = guard_module.load_guard
+    calls = 0
+    def readback(target):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise PermissionError("READBACK_DENIED")
+        return original_load(target)
+    monkeypatch.setattr(guard_module, "load_guard", readback)
+    monkeypatch.setattr(guard_module.os, "replace", lambda *_: (_ for _ in ()).throw(OSError("BEFORE_REPLACE")))
+    with pytest.raises(OSError, match="BEFORE_REPLACE"):
+        acquire_guard(path, document, {}, review_commit=REVIEW, integration_base=INTEGRATION_BASE)
+    assert path.with_suffix(".json.lock").exists()
+    assert original_load(path) == document

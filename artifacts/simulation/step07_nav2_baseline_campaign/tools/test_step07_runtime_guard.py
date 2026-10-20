@@ -235,3 +235,16 @@ def test_run003_historical_pin_mismatch_or_missing_blob_fails_closed():
         _git_blob(ROOT, "0" * 40, relative)
     with pytest.raises(subprocess.CalledProcessError):
         _git_blob(ROOT, RUN003_REVIEW_SHA, "missing/historical/path")
+
+
+def test_run005_parent_pin_inventory_uses_immutable_git_blobs_after_guard_source_changes():
+    commit = "53b7790c23c7d4969612259a8ee06be0353babd2"
+    relative_guard = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
+    historical = _strict_git_json(ROOT, commit, relative_guard)
+    changed = "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py"
+    assert (ROOT / changed).read_bytes() != _git_blob(ROOT, commit, changed)
+    _validate_historical_pins_at_commit(ROOT, historical, commit)
+    invalid = json.loads(json.dumps(historical))
+    invalid["source_pins"][changed]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="HISTORICAL_SOURCE_PIN_MISMATCH"):
+        _validate_historical_pins_at_commit(ROOT, invalid, commit)
