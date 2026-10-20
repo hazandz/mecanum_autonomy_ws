@@ -141,6 +141,21 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
     validate_source_pins(ROOT, prospective)
 
 
+def test_attempt_002_source_seed_remains_pending_and_historical_invocations_are_not_retried():
+    document = load_guard(GUARD)
+    assert document["state"] == PENDING
+    assert document["capacity"] == 1
+    assert document["acquisition_count"] == 0
+    assert document["runtime_authorization"] == "NOT_GRANTED"
+    assert document["retry_permitted"] is False
+    assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
+    historical = document["run005_attempt_002_invocation_005_disposition"]
+    assert historical["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    assert historical["guard_consumed"] is True
+    assert historical["retry_performed"] is False
+    assert historical["immutable"] is True
+
+
 def test_invocation_003_is_recorded_as_preacquire_without_guard_consumption():
     document = load_guard(GUARD)
     disposition = document["run005_attempt_002_invocation_003_disposition"]

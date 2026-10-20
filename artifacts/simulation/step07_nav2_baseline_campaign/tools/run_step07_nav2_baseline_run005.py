@@ -536,13 +536,15 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     if stale:
         raise RuntimeError("STALE_PARTITION_PROCESS_FOUND")
     transport_facts = validate_gz_transport_host_capability(env, partition)
+    ros_discovery_facts = validate_ros_discovery_host_capability(env)
     return {"canonical_map_yaml": str(map_path / "map.yaml"), "fuel_cache": fuel,
             "package_prefixes": prefixes, "observer_executable": str(observer),
             "nav2_executables": nav2_executables,
             "gate_b_observer_console_script": str(gate_script),
             "runtime_python": str(runtime_python), "runtime_python_fingerprint": runtime_facts,
             "installed_source_byte_equality": equality, "rosidl_import": "PASS",
-            "stale_processes": stale, "gz_transport_host_capability": transport_facts}
+            "stale_processes": stale, "gz_transport_host_capability": transport_facts,
+            "ros_discovery_host_capability": ros_discovery_facts}
 
 
 def validate_gz_transport_host_capability(
@@ -614,6 +616,47 @@ def validate_gz_transport_host_capability(
             "gz_topic_list": "PASS", "partition": partition}
 
 
+ROS_DISCOVERY_ERROR_MARKERS = (
+    "getifaddrs:", "error creating socket:", "operation not permitted",
+    "permission denied", "failed to create participant", "failed to initialize",
+    "network is unreachable", "cannot assign requested address",
+)
+
+
+def validate_ros_discovery_host_capability(
+    env: dict[str, str], *, command_runner=None, timeout: float = 10,
+) -> dict:
+    """Probe ROS 2 discovery in the sourced overlay without starting a daemon."""
+    command_runner = command_runner or _run
+    support_command = ["ros2", "topic", "list", "--no-daemon", "--spin-time", "3", "--help"]
+    probe_command = ["ros2", "topic", "list", "--no-daemon", "--spin-time", "3"]
+    try:
+        support = command_runner(support_command, env=env, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:CLI_SUPPORT_TIMEOUT") from error
+    except (PermissionError, OSError) as error:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:CLI_SUPPORT_ERROR") from error
+    support_output = (getattr(support, "stdout", "") or "") + "\n" + (getattr(support, "stderr", "") or "")
+    if getattr(support, "returncode", 1) != 0 or "--no-daemon" not in support_output or "--spin-time" not in support_output:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:CLI_OPTIONS_UNSUPPORTED")
+    try:
+        result = command_runner(probe_command, env=env, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:PROBE_TIMEOUT") from error
+    except PermissionError as error:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:SOCKET_PERMISSION_DENIED") from error
+    except OSError as error:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:PROBE_OS_ERROR") from error
+    output = (getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")
+    lowered = output.lower()
+    if any(marker in lowered for marker in ROS_DISCOVERY_ERROR_MARKERS):
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:NETWORK_ERROR_OUTPUT")
+    if getattr(result, "returncode", 1) != 0:
+        raise RuntimeError("ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:PROBE_EXIT_NONZERO")
+    return {"cli_options": "PASS", "probe": "PASS", "empty_graph_valid": True,
+            "command": probe_command, "output_line_count": len((getattr(result, "stdout", "") or "").splitlines())}
+
+
 class RunnerInterruptedBySignal(RuntimeError):
     """A catchable runner interruption that still enters campaign teardown."""
 
@@ -627,8 +670,7 @@ class SigtermHandler:
     def __call__(self, signum, _frame):
         if signum == signal.SIGTERM and not self.interrupted:
             self.interrupted = True
-            if not self.finalizing:
-                raise RunnerInterruptedBySignal("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+            raise RunnerInterruptedBySignal("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
 
     def begin_finalization(self):
         self.finalizing = True
@@ -637,9 +679,19 @@ class SigtermHandler:
 def _atomic_write(path: Path, document: dict):
     payload = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-        tmp = Path(handle.name); handle.write(payload); handle.flush(); os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
+            tmp = Path(handle.name)
+            handle.write(payload); handle.flush(); os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def load_canonical_json(path: Path) -> dict:
@@ -671,18 +723,30 @@ def _unique_json_pairs(pairs):
     return result
 
 
-def _process_group_members(pgid: int) -> dict:
-    live, zombies = [], []
-    for proc in Path("/proc").iterdir():
+def _process_group_members(pgid: int, *, proc_root: Path = Path("/proc")) -> dict:
+    live, zombies, errors = [], [], []
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError as error:
+        return {"live_member_pids": [], "zombie_member_pids": [],
+                "verified": False, "inspection_errors": [f"PROC_ENUMERATION:{type(error).__name__}"]}
+    for proc in entries:
         if not proc.name.isdigit():
             continue
         try:
-            stat = (proc / "stat").read_text().split()
-            if int(stat[4]) == pgid:
-                (zombies if stat[2] == "Z" else live).append(int(proc.name))
-        except (OSError, ValueError, IndexError):
-            continue
-    return {"live_member_pids": sorted(live), "zombie_member_pids": sorted(zombies)}
+            stat_text = (proc / "stat").read_text()
+            closing = stat_text.rfind(")")
+            if closing < 0:
+                raise ValueError("stat command delimiter missing")
+            stat_fields = stat_text[closing + 1:].split()
+            if int(stat_fields[2]) == pgid:
+                (zombies if stat_fields[0] == "Z" else live).append(int(proc.name))
+        except (ValueError, IndexError) as error:
+            errors.append(f"{proc.name}:PROC_STAT_INVALID:{type(error).__name__}")
+        except OSError as error:
+            errors.append(f"{proc.name}:PROC_STAT_UNREADABLE:{type(error).__name__}")
+    return {"live_member_pids": sorted(live), "zombie_member_pids": sorted(zombies),
+            "verified": not errors, "inspection_errors": sorted(errors)}
 
 
 def campaign_launch_commands(preflight: dict, *, partition: str, fuel_root: Path,
@@ -732,6 +796,7 @@ def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[
 
 def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None:
     if (proc.poll() is not None or member.get("pid") != member.get("pgid")
+            or member.get("initial_snapshot", {}).get("verified") is not True
             or member.get("pid") not in member.get("initial_snapshot", {}).get("live_member_pids", [])):
         raise RuntimeError(f"CAMPAIGN_PROCESS_GROUP_STALE_OR_INVALID:{member.get('name', 'unknown')}")
 
@@ -739,23 +804,166 @@ def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None
 def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, timeout: float) -> dict:
     if proc is None or type(member) is not dict or type(member.get("pgid")) is not int or member["pgid"] <= 1:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
-                "live_member_pids": [], "zombie_member_pids": [], "clean": False}
+                "live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                "errors": ["PROCESS_GROUP_MISSING"], "clean": False}
     signal_sent = False
+    errors = []
     try:
         os.killpg(member["pgid"], signal.SIGINT)
         signal_sent = True
     except ProcessLookupError:
-        pass
+        errors.append("KILLPG_PROCESS_NOT_FOUND")
+    except BaseException as error:
+        errors.append(f"KILLPG_FAILED:{type(error).__name__}:{error}")
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        pass
-    snapshot = _process_group_members(member["pgid"])
-    member["returncode"] = proc.returncode
+        errors.append("PROCESS_WAIT_TIMEOUT")
+    except BaseException as error:
+        errors.append(f"PROCESS_WAIT_FAILED:{type(error).__name__}:{error}")
+    try:
+        snapshot = _process_group_members(member["pgid"])
+    except BaseException as error:
+        snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                    "inspection_errors": [f"PROC_SNAPSHOT_FAILED:{type(error).__name__}:{error}"]}
+    if not snapshot.get("verified"):
+        errors.extend(snapshot.get("inspection_errors", ["PROC_SNAPSHOT_UNVERIFIED"]))
+    try:
+        returncode = proc.returncode
+    except BaseException as error:
+        returncode = None
+        errors.append(f"PROCESS_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
+    member["returncode"] = returncode
     member["final_snapshot"] = snapshot
-    clean = signal_sent and proc.returncode == 0 and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"]
-    return {"signal": "SIGINT", "signal_sent": signal_sent, "leader_returncode": proc.returncode,
-            **snapshot, "clean": clean}
+    clean = (signal_sent and not errors and returncode == 0
+             and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
+    return {"signal": "SIGINT", "signal_sent": signal_sent, "leader_returncode": returncode,
+            **snapshot, "verified": snapshot.get("verified") is True,
+            "errors": errors, "clean": clean}
+
+
+def _safe_stop_owned_process(proc, member, timeout: float) -> dict:
+    try:
+        return _stop_owned_process(proc, member, timeout)
+    except BaseException as error:
+        snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                    "inspection_errors": [f"TEARDOWN_EXCEPTION:{type(error).__name__}:{error}"]}
+        if isinstance(member, dict):
+            member["final_snapshot"] = snapshot
+            try:
+                member["returncode"] = proc.returncode if proc is not None else None
+            except BaseException:
+                member["returncode"] = None
+        return {"signal": "SIGINT", "signal_sent": False,
+                "leader_returncode": member.get("returncode") if isinstance(member, dict) else None,
+                **snapshot, "errors": [f"TEARDOWN_EXCEPTION:{type(error).__name__}:{error}"],
+                "clean": False}
+
+
+def _stop_collector(proc, member, timeout: float = 20) -> dict:
+    if proc is None and member is None:
+        return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
+                "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+                "inspection_errors": [], "errors": [], "clean": True, "started": False}
+    errors = []
+    signal_sent = False
+    if proc is not None:
+        try:
+            if proc.poll() is None:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGINT)
+                signal_sent = True
+        except ProcessLookupError:
+            errors.append("COLLECTOR_PROCESS_NOT_FOUND")
+        except BaseException as error:
+            errors.append(f"COLLECTOR_KILLPG_FAILED:{type(error).__name__}:{error}")
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            errors.append("COLLECTOR_WAIT_TIMEOUT")
+        except BaseException as error:
+            errors.append(f"COLLECTOR_WAIT_FAILED:{type(error).__name__}:{error}")
+    if isinstance(member, dict):
+        try:
+            snapshot = _process_group_members(member["pgid"])
+        except BaseException as error:
+            snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                        "inspection_errors": [f"COLLECTOR_SNAPSHOT_FAILED:{type(error).__name__}:{error}"]}
+        member["final_snapshot"] = snapshot
+        try:
+            returncode = proc.returncode if proc is not None else None
+        except BaseException as error:
+            returncode = None
+            errors.append(f"COLLECTOR_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
+        member["returncode"] = returncode
+        if snapshot.get("verified") is not True:
+            errors.extend(snapshot.get("inspection_errors", ["COLLECTOR_SNAPSHOT_UNVERIFIED"]))
+    else:
+        snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                    "inspection_errors": ["COLLECTOR_GROUP_MISSING"]}
+        returncode = None
+        errors.append("COLLECTOR_GROUP_MISSING")
+    clean = (not errors and snapshot.get("verified") is True
+             and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"]
+             and returncode == 0)
+    return {"signal": "SIGINT", "signal_sent": signal_sent,
+            "leader_returncode": returncode, **snapshot,
+            "verified": snapshot.get("verified") is True, "errors": errors, "clean": clean}
+
+
+def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_proc,
+                                bootstrap_member, collector_procs, collector_members,
+                                bootstrap_calls: int, composite_calls: int) -> dict:
+    """Best-effort ordered shutdown; every unverified operation makes teardown fail."""
+    teardown = {"completed": False, "clean": False, "order_correct": False,
+                "verified": False, "errors": []}
+    teardown["composite"] = _safe_stop_owned_process(composite_proc, composite_member, 30)
+    teardown["bootstrap"] = _safe_stop_owned_process(bootstrap_proc, bootstrap_member, 30)
+    teardown["order"] = ["composite", "bootstrap"]
+    for name in ("gate_b_observer", "cpp_observer"):
+        teardown.setdefault("collectors", {})[name] = _stop_collector(
+            collector_procs.get(name), collector_members.get(name))
+    members = {member.get("name"): member for member in (collector_members or {}).values()
+               if isinstance(member, dict)}
+    members.update({"composite": composite_member, "bootstrap": bootstrap_member})
+    snapshots = {}
+    for name, member in members.items():
+        try:
+            snapshot = member.get("final_snapshot") or _process_group_members(member["pgid"])
+        except BaseException as error:
+            snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
+                        "inspection_errors": [f"FINAL_SNAPSHOT_FAILED:{type(error).__name__}:{error}"]}
+        snapshots[name] = snapshot
+    teardown["process_group_snapshots"] = snapshots
+    all_live = sorted({pid for snapshot in snapshots.values() for pid in snapshot.get("live_member_pids", [])})
+    all_zombie = sorted({pid for snapshot in snapshots.values() for pid in snapshot.get("zombie_member_pids", [])})
+    verified = all(snapshot.get("verified") is True for snapshot in snapshots.values())
+    verified = verified and all(
+        item.get("verified") is True
+        for item in (teardown["composite"], teardown["bootstrap"], *teardown["collectors"].values())
+    )
+    teardown.update({"live_member_pids": all_live, "zombie_member_pids": all_zombie,
+                     "verified": verified})
+    teardown["errors"] = [error for item in (teardown["composite"], teardown["bootstrap"],
+        *teardown["collectors"].values()) for error in item.get("errors", [])]
+    teardown["clean"] = (verified and not teardown["errors"] and not all_live and not all_zombie
+                          and teardown["composite"].get("clean") is True
+                          and teardown["bootstrap"].get("clean") is True
+                          and all(item.get("clean") is True for item in teardown["collectors"].values()))
+    teardown["order_correct"] = (
+        teardown["order"] == ["composite", "bootstrap"]
+        and teardown["composite"].get("signal_sent") is True
+        and teardown["bootstrap"].get("signal_sent") is True
+        and bootstrap_calls == 1 and composite_calls == 1
+        and isinstance(bootstrap_member, dict) and isinstance(composite_member, dict)
+        and bootstrap_member.get("pgid") != composite_member.get("pgid")
+        and not teardown["composite"].get("live_member_pids")
+        and not teardown["composite"].get("zombie_member_pids")
+        and not teardown["bootstrap"].get("live_member_pids")
+        and not teardown["bootstrap"].get("zombie_member_pids")
+    )
+    teardown["completed"] = True
+    return teardown
 
 
 def _wait_bootstrap_ready(env: dict[str, str], logdir: Path, process: subprocess.Popen) -> dict:
@@ -796,7 +1004,21 @@ def _write_artifact_manifest(run_directory: Path) -> None:
                 "artifact_count": len(entries), "artifacts": entries}
     _atomic_write(run_directory / "artifact_manifest.json", manifest)
     sums = "".join(f"{item['sha256']}  {item['path']}\n" for item in entries)
-    (run_directory / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
+    sums_path = run_directory / "SHA256SUMS.txt"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="",
+                                         dir=run_directory, prefix=".SHA256SUMS.", delete=False) as handle:
+            tmp = Path(handle.name)
+            handle.write(sums); handle.flush(); os.fsync(handle.fileno())
+        os.replace(tmp, sums_path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 PREACQUIRE_TERMINAL = "STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED"
@@ -811,7 +1033,8 @@ def _write_preacquire_failure_evidence(run_directory: Path, record: dict,
         raise RuntimeError("PREACQUIRE_FAILURE_GUARD_LOCK_PRESENT")
     failure_literal = (str(error) if str(error).startswith((
                            "RUNTIME_PYTHON_ENVIRONMENT_INVALID:",
-                           "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:"))
+                           "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:",
+                           "ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:"))
                        else f"PREACQUIRE_FAILURE:{type(error).__name__}:{error}")
     failure = {
         "schema_version": "1.0", "run_id": RUN_ID,
@@ -900,21 +1123,100 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
     record["acceptance"] = {**runtime_acceptance,
         "process_group_teardown_clean": teardown.get("clean") is True,
         "teardown_order_and_count_correct": teardown.get("order_correct") is True}
-    passed = all(record["acceptance"].values())
     failures = [f"RUNTIME_ACCEPTANCE_FAILED:{key}" for key, value in runtime_acceptance.items() if not value]
-    if str(record.get("pre_teardown_failure", "")).endswith("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"):
-        failures.append("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+    pre_teardown_failure = record.get("pre_teardown_failure")
+    if pre_teardown_failure:
+        literal = str(pre_teardown_failure)
+        if "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in literal:
+            failures.append("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+        else:
+            failures.append(f"PRE_TEARDOWN_FAILURE:{literal}")
     if not teardown.get("clean"):
         failures.append("PROCESS_GROUP_TEARDOWN_FAILED")
     if not teardown.get("order_correct"):
         failures.append("TEARDOWN_ORDER_OR_COUNT_FAILED")
+    if teardown.get("verified") is not True:
+        failures.append("PROCESS_GROUP_TEARDOWN_UNVERIFIED")
+    failures = list(dict.fromkeys(failures))
+    passed = all(record["acceptance"].values()) and not failures
     record["failure_reason_literals"] = failures
     record["terminal_outcome"] = ("STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
                                   if passed else "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED")
     record["finalized_after_teardown"] = True
-    if passed != all(record["acceptance"].values()) or (passed and failures):
-        raise ValueError("FINAL_RECORD_INTERNAL_INCONSISTENCY")
     return record
+
+
+def persist_terminal_evidence(record: dict, runtime_acceptance: dict, teardown: dict,
+                              run_directory: Path, sigterm_handler: SigtermHandler) -> dict:
+    """Finalize once, converting catchable interruption into a durable FAIL record."""
+    sigterm_handler.begin_finalization()
+    try:
+        if sigterm_handler.interrupted:
+            record.setdefault("pre_teardown_failure", "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+        result = finalise_after_teardown(record, runtime_acceptance, teardown)
+        _atomic_write(run_directory / "run_record.json", result)
+        _write_artifact_manifest(run_directory)
+        return result
+    except BaseException as error:
+        if sigterm_handler.interrupted:
+            failure_literal = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
+        else:
+            failure_literal = f"FINAL_EVIDENCE_FINALIZATION_FAILED:{type(error).__name__}:{error}"
+        record["finalization_failure"] = failure_literal
+        failures = list(record.get("failure_reason_literals", []))
+        if failure_literal not in failures:
+            failures.append(failure_literal)
+        record["failure_reason_literals"] = failures
+        record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+        record["finalized_after_teardown"] = True
+        # The acceptance matrix may be all true; the explicit failure still wins.
+        _atomic_write(run_directory / "run_record.json", record)
+        _write_artifact_manifest(run_directory)
+        return record
+
+
+def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite_proc,
+                                        composite_member, bootstrap_proc, bootstrap_member,
+                                        collector_procs, collector_members, bootstrap_calls,
+                                        composite_calls, cpp_calls, gate_b_calls, run_directory,
+                                        sigterm_handler, previous_sigterm_handler):
+    """Run best-effort teardown and terminal persistence under a restored handler."""
+    teardown = {"completed": True, "clean": False, "order_correct": False,
+                "verified": False, "errors": ["TEARDOWN_NOT_VERIFIED"]}
+    try:
+        try:
+            teardown = teardown_campaign_processes(
+                composite_proc=composite_proc, composite_member=composite_member,
+                bootstrap_proc=bootstrap_proc, bootstrap_member=bootstrap_member,
+                collector_procs=collector_procs, collector_members=collector_members,
+                bootstrap_calls=bootstrap_calls, composite_calls=composite_calls)
+        except BaseException as error:
+            teardown = {"completed": True, "clean": False, "order_correct": False,
+                        "verified": False,
+                        "errors": [f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}"]}
+            record.setdefault("pre_teardown_failure", f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}")
+        record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
+                                      "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
+        if sigterm_handler.interrupted:
+            record.setdefault("pre_teardown_failure", "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+        return persist_terminal_evidence(record, runtime_acceptance, teardown,
+                                         run_directory, sigterm_handler)
+    except BaseException as error:
+        if sigterm_handler.interrupted:
+            reason = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
+        else:
+            reason = f"FINALIZATION_PATH_FAILED:{type(error).__name__}:{error}"
+        record.setdefault("pre_teardown_failure", reason)
+        teardown.update({"completed": True, "clean": False, "order_correct": False,
+                         "verified": False, "finalization_path_error": reason})
+        record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
+                                      "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
+        if sigterm_handler.interrupted:
+            record["pre_teardown_failure"] = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
+        return persist_terminal_evidence(record, runtime_acceptance, teardown,
+                                         run_directory, sigterm_handler)
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 def _parse():
@@ -993,7 +1295,12 @@ def main():
               "runner_invoked": True, "runtime_execution": False,
               "teardown_applicable": False}
     processes = []
-    runtime_acceptance = {}
+    runtime_acceptance = {"guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
+                          "runtime_graph_and_goal": False, "observer_acceptance": False,
+                          "gate_b_vectors": False,
+                          "bootstrap_composite_process_groups_distinct": False,
+                          "bootstrap_readiness": False, "composite_readiness": False}
+    collector_members = {}
     teardown = {"completed": False, "clean": False, "order_correct": False}
     runtime_guard = args.runtime_worktree / args.guard_path.relative_to(source)
     guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
@@ -1004,23 +1311,24 @@ def main():
         args.expected_integration_base, args.runtime_python, record)
     if preacquire_failure is not None:
         return 2
-    record["preflight"] = preflight
-    record["guard_state_after_acquire"] = consumed["state"]
-    record["guard_state_after"] = consumed["state"]
-    record["guard_acquired"] = True
-    record["guard_acquisition_count"] = consumed["acquisition_count"]
-    record["authorization_acquisition_count"] = consumed["acquisition_count"]
-    record["runtime_execution"] = True
-    record["teardown_applicable"] = True
-    runtime_acceptance.update({"guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
-                               "runtime_graph_and_goal": False, "observer_acceptance": False,
-                               "gate_b_vectors": False,
-                               "bootstrap_composite_process_groups_distinct": False,
-                               "bootstrap_readiness": False, "composite_readiness": False})
-    record["process_groups"] = {}
     sigterm_handler = SigtermHandler()
-    previous_sigterm_handler = signal.signal(signal.SIGTERM, sigterm_handler)
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
     try:
+        previous_sigterm_handler = signal.signal(signal.SIGTERM, sigterm_handler)
+        record["preflight"] = preflight
+        record["guard_state_after_acquire"] = consumed["state"]
+        record["guard_state_after"] = consumed["state"]
+        record["guard_acquired"] = True
+        record["guard_acquisition_count"] = consumed["acquisition_count"]
+        record["authorization_acquisition_count"] = consumed["acquisition_count"]
+        record["runtime_execution"] = True
+        record["teardown_applicable"] = True
+        runtime_acceptance.update({"guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
+                                   "runtime_graph_and_goal": False, "observer_acceptance": False,
+                                   "gate_b_vectors": False,
+                                   "bootstrap_composite_process_groups_distinct": False,
+                                   "bootstrap_readiness": False, "composite_readiness": False})
+        record["process_groups"] = {}
         args.run_directory.mkdir(parents=True, exist_ok=False)
         (args.run_directory / "authorization_state.txt").write_text(
             f"run_id={RUN_ID}\nscope={AUTH_SCOPE}\nreview_commit={head}\nintegration_base={args.expected_integration_base}\nauthorization_sha256={hashlib.sha256(authorization['owner_authorization'].encode()).hexdigest()}\n", encoding="utf-8")
@@ -1074,6 +1382,7 @@ def main():
                       "command": ["ros2", "run", "step07_nav2_baseline_runtime_observer"],
                       "returncode": None, "readiness": {"started": True}, "final_snapshot": None}
         processes.append(cpp_member)
+        collector_members["cpp_observer"] = cpp_member
         cpp_calls = 1; record["call_counts"]["cpp_observer"] = 1
         gate_log = open(logdir / "gate_b_observer.log", "wb")
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
@@ -1087,6 +1396,7 @@ def main():
                        "command": gate_command,
                        "returncode": None, "readiness": {"started": True}, "final_snapshot": None}
         processes.append(gate_member)
+        collector_members["gate_b_observer"] = gate_member
         gate.wait(timeout=1800)
         if gate.returncode != 0:
             raise RuntimeError(f"GATE_B_OBSERVER_FAILED:{gate.returncode}")
@@ -1108,60 +1418,17 @@ def main():
         record["pre_teardown_failure"] = f"{type(error).__name__}:{error}"
         record["traceback"] = traceback.format_exc()
     finally:
-        sigterm_handler.begin_finalization()
-        collector_members = {member["name"]: member for member in processes
-                             if member["name"] in {"gate_b_observer", "cpp_observer"}}
-        composite_teardown = _stop_owned_process(composite_proc, composite_member, timeout=30)
-        teardown["composite"] = composite_teardown
-        bootstrap_teardown = _stop_owned_process(bootstrap_proc, bootstrap_member, timeout=30)
-        teardown["bootstrap"] = bootstrap_teardown
-        teardown["order"] = ["composite", "bootstrap"]
-        for name, proc in (("gate_b_observer", gate), ("cpp_observer", cpp)):
-            if proc is not None and proc.poll() is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                    proc.wait(timeout=20)
-                except (ProcessLookupError, subprocess.TimeoutExpired):
-                    teardown["clean"] = False
-            if proc is not None:
-                teardown.setdefault("collector_returncodes", {})[name] = proc.returncode
-                member = collector_members.get(name)
-                if member is not None:
-                    member["returncode"] = proc.returncode
-                    member["final_snapshot"] = _process_group_members(member["pgid"])
-        teardown["clean"] = (composite_teardown["clean"] and bootstrap_teardown["clean"]
-                              and all(value == 0 for value in teardown.get("collector_returncodes", {}).values()))
-        teardown["order_correct"] = (teardown["order"] == ["composite", "bootstrap"]
-                                     and composite_teardown["signal_sent"]
-                                     and bootstrap_teardown["signal_sent"]
-                                     and bootstrap_calls == 1
-                                     and composite_calls == 1
-                                     and bootstrap_member is not None
-                                     and composite_member is not None
-                                     and bootstrap_member.get("pid") != composite_member.get("pid")
-                                     and bootstrap_member.get("pgid") != composite_member.get("pgid")
-                                     and not composite_teardown["live_member_pids"]
-                                     and not composite_teardown["zombie_member_pids"]
-                                     and not bootstrap_teardown["live_member_pids"]
-                                     and not bootstrap_teardown["zombie_member_pids"])
-        group_snapshots = {member["name"]: member.get("final_snapshot") or _process_group_members(member["pgid"])
-                           for member in processes}
-        teardown["process_group_snapshots"] = group_snapshots
-        all_live = sorted({pid for snapshot in group_snapshots.values() for pid in snapshot["live_member_pids"]})
-        all_zombie = sorted({pid for snapshot in group_snapshots.values() for pid in snapshot["zombie_member_pids"]})
-        teardown["live_member_pids"] = all_live
-        teardown["zombie_member_pids"] = all_zombie
-        teardown["clean"] = teardown["clean"] and not all_live and not all_zombie
-        teardown["completed"] = True
-        record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
-                                        "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
-        if sigterm_handler.interrupted:
-            record.setdefault("pre_teardown_failure", "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
         if runtime_acceptance:
-            result = finalise_after_teardown(record, runtime_acceptance, teardown)
-            _atomic_write(args.run_directory / "run_record.json", result)
-            _write_artifact_manifest(args.run_directory)
-        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+            finalize_campaign_after_acquisition(
+                record=record, runtime_acceptance=runtime_acceptance,
+                composite_proc=composite_proc, composite_member=composite_member,
+                bootstrap_proc=bootstrap_proc, bootstrap_member=bootstrap_member,
+                collector_procs={"gate_b_observer": gate, "cpp_observer": cpp},
+                collector_members=collector_members, bootstrap_calls=bootstrap_calls,
+                composite_calls=composite_calls, cpp_calls=cpp_calls,
+                gate_b_calls=gate_b_calls, run_directory=args.run_directory,
+                sigterm_handler=sigterm_handler,
+                previous_sigterm_handler=previous_sigterm_handler)
         # Keep every guard, lock, log and evidence artifact after acquisition.
     return 0 if record.get("terminal_outcome", "").endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT") else 2
 

@@ -1086,3 +1086,8 @@ Current record references: decision `ab30bbbf37f4961e70c4369e3c370590438d12f1603
 ### Run005 attempt_002 host transport and durable terminal evidence corrective
 
 The current L1 corrective is based on `99d5c29c1c302260a8971e19e46f93d778a52f86` with exact 11-path scope and 34 unique existing Run005 runtime pins. Host transport is checked before acquisition through interface enumeration, UDP loopback bind/close, and `gz topic -l` under the campaign partition. SIGTERM after acquisition enters teardown and terminal artifact finalization; SIGKILL remains uncapturable. Invocation_005 evidence is preserved and records bootstrap readiness timeout after Gazebo transport errors; its run record exists, so the prior assertion that external termination prevented that record is not supported by the stored artifact. This source/offline candidate does not authorize a runtime invocation.
+
+
+### Run005 attempt_002 terminal verdict and ROS discovery corrective (offline candidate)
+
+Current base: `87ee34b1a945ecc12b525fe9f4711a368c0bdbc3`; exact direct scope: 11 paths. Before acquisition, the runner checks ROS CLI support and bounded discovery capability in the sourced ROS/overlay environment. Empty graph is permitted; capability errors fail closed with pre-acquire evidence. Terminal PASS requires all acceptance values true, no failure literals, and completed, ordered, clean, verified teardown. SIGTERM produces failure and best-effort composite-before-bootstrap teardown/finalization; unverifiable teardown fails. SIGKILL, power loss, and unwritable filesystems can prevent durable finalization. Phase A results are recorded in the Run005 L1 evidence. This offline candidate does not authorize runtime or transition Gate B.

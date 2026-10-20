@@ -272,6 +272,8 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     monkeypatch.setattr(runner.os, "access", lambda *_args: True)
     monkeypatch.setattr(runner, "validate_gz_transport_host_capability",
                         lambda *_args: {"gz_topic_list": "PASS"})
+    monkeypatch.setattr(runner, "validate_ros_discovery_host_capability",
+                        lambda *_args: {"probe": "PASS", "empty_graph_valid": True})
     monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
     monkeypatch.setattr(runner, "stale_partition_processes", lambda _partition: [])
 
@@ -558,14 +560,18 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
         "runtime_worktree": runtime_target,
         "run_directory": evidence_target,
         "guard_path": guard_path,
-            "expected_review_commit": RUN005_ATTEMPT_002_OUTPUT_BASE,
+            "expected_review_commit": subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+                capture_output=True, text=True).stdout.strip(),
         "expected_integration_base": runner.INTEGRATION_BASE,
         "run_id": runner.RUN_ID,
         "gz_partition": runner.PARTITION,
         "owner_authorization": "test-authorization",
         "owner_authorization_scope": runner.AUTH_SCOPE,
         "owner_authorization_run_id": runner.RUN_ID,
-            "owner_authorization_review_commit": RUN005_ATTEMPT_002_OUTPUT_BASE,
+            "owner_authorization_review_commit": subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+                capture_output=True, text=True).stdout.strip(),
         "owner_authorization_integration_base": runner.INTEGRATION_BASE,
     })()
     monkeypatch.setattr(runner, "_parse", lambda: args)
@@ -704,6 +710,229 @@ def test_gz_transport_capability_fails_closed_with_stable_literal(
         )
 
 
+def test_ros_discovery_capability_accepts_empty_graph_and_uses_no_daemon_probe():
+    from types import SimpleNamespace
+
+    commands = []
+
+    def fake_command(command, **kwargs):
+        commands.append((list(command), kwargs))
+        if command[-1] == "--help":
+            return SimpleNamespace(returncode=0, stdout="--no-daemon --spin-time", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    env = {"AMENT_PREFIX_PATH": "/sourced/overlay", "ROS_DISTRO": "jazzy"}
+    result = runner.validate_ros_discovery_host_capability(env, command_runner=fake_command)
+    assert result["empty_graph_valid"] is True
+    assert commands[0][0] == ["ros2", "topic", "list", "--no-daemon", "--spin-time", "3", "--help"]
+    assert commands[1][0] == ["ros2", "topic", "list", "--no-daemon", "--spin-time", "3"]
+    assert all(call[1]["env"] is env and call[1]["timeout"] <= 10 for call in commands)
+
+
+@pytest.mark.parametrize(("mode", "reason"), [
+    ("support_nonzero", "CLI_OPTIONS_UNSUPPORTED"),
+    ("probe_timeout", "PROBE_TIMEOUT"),
+    ("probe_permission", "SOCKET_PERMISSION_DENIED"),
+    ("probe_oserror", "PROBE_OS_ERROR"),
+    ("probe_nonzero", "PROBE_EXIT_NONZERO"),
+    ("probe_network_output", "NETWORK_ERROR_OUTPUT"),
+])
+def test_ros_discovery_capability_fails_closed_with_stable_literal(mode, reason):
+    from types import SimpleNamespace
+
+    def fake_command(command, **_kwargs):
+        if command[-1] == "--help":
+            if mode == "support_nonzero":
+                return SimpleNamespace(returncode=1, stdout="", stderr="unsupported option")
+            return SimpleNamespace(returncode=0, stdout="--no-daemon --spin-time", stderr="")
+        if mode == "probe_timeout":
+            raise subprocess.TimeoutExpired(command, 1)
+        if mode == "probe_permission":
+            raise PermissionError("socket denied")
+        if mode == "probe_oserror":
+            raise OSError("probe failed")
+        if mode == "probe_nonzero":
+            return SimpleNamespace(returncode=2, stdout="", stderr="failed")
+        return SimpleNamespace(returncode=0, stdout="", stderr="getifaddrs: denied")
+
+    with pytest.raises(RuntimeError, match=f"^ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
+        runner.validate_ros_discovery_host_capability(
+            {"AMENT_PREFIX_PATH": "/sourced/overlay"}, command_runner=fake_command)
+
+
+@pytest.mark.parametrize(("acceptance", "record_extra", "teardown", "expected"), [
+    ({"all": True}, {"pre_teardown_failure": "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"},
+     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
+    ({"all": True}, {"pre_teardown_failure": "RuntimeError:campaign failed"},
+     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
+    ({"all": True}, {},
+     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"),
+    ({"all": True}, {},
+     {"completed": True, "clean": False, "order_correct": True, "verified": False},
+     "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
+])
+def test_terminal_verdict_and_real_artifacts_include_all_failure_conditions(
+    tmp_path, acceptance, record_extra, teardown, expected,
+):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    record = {"schema_version": "1.0", "run_id": runner.RUN_ID,
+              "call_counts": {"runner": 1, "bootstrap": 1, "composite": 1,
+                              "cpp_observer": 0, "gate_b_observer": 0}, **record_extra}
+    handler = runner.SigtermHandler()
+    result = runner.persist_terminal_evidence(record, acceptance, teardown, run_directory, handler)
+    assert result["terminal_outcome"] == expected
+    stored = runner.load_canonical_json(run_directory / "run_record.json")
+    assert stored["terminal_outcome"] == expected
+    manifest = runner.load_canonical_json(run_directory / "artifact_manifest.json")
+    listed = {item["path"]: item for item in manifest["artifacts"]}
+    raw = (run_directory / "run_record.json").read_bytes()
+    assert listed["run_record.json"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert listed["run_record.json"]["size_bytes"] == len(raw)
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_sigterm_during_finalization_rewrites_durable_fail_record(tmp_path, monkeypatch):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    handler = runner.SigtermHandler()
+    original_write = runner._atomic_write
+    first = True
+
+    def interrupt_first_write(path, document):
+        nonlocal first
+        if first and path.name == "run_record.json":
+            first = False
+            handler(runner.signal.SIGTERM, None)
+        original_write(path, document)
+
+    monkeypatch.setattr(runner, "_atomic_write", interrupt_first_write)
+    result = runner.persist_terminal_evidence(
+        {"call_counts": {"runner": 1}}, {"all": True},
+        {"completed": True, "clean": True, "order_correct": True, "verified": True},
+        run_directory, handler)
+    assert result["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in result["failure_reason_literals"]
+    assert runner.load_canonical_json(run_directory / "run_record.json")["terminal_outcome"].endswith(
+        "FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert (run_directory / "artifact_manifest.json").is_file()
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_process_group_kill_wait_and_proc_errors_cannot_report_clean(tmp_path, monkeypatch):
+    class FakeProcess:
+        pid = 212
+        returncode = None
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("fake", timeout)
+
+    member = {"name": "composite", "pid": 212, "pgid": 212}
+    monkeypatch.setattr(runner.os, "killpg", lambda *_args: (_ for _ in ()).throw(PermissionError("denied")))
+    monkeypatch.setattr(runner, "_process_group_members", lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(OSError("proc unreadable"))))
+    result = runner._stop_owned_process(FakeProcess(), member, timeout=0.01)
+    assert result["clean"] is False and result["verified"] is False
+    assert any(item.startswith("KILLPG_FAILED:PermissionError") for item in result["errors"])
+    assert "PROCESS_WAIT_TIMEOUT" in result["errors"]
+    assert any(item.startswith("PROC_SNAPSHOT_FAILED:OSError") for item in result["errors"])
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    verdict = runner.persist_terminal_evidence(
+        {"call_counts": {"runner": 1, "bootstrap": 1, "composite": 1}}, {"all": True},
+        {"completed": True, "clean": False, "order_correct": True, "verified": False,
+         "errors": result["errors"]}, run_directory, runner.SigtermHandler())
+    assert verdict["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert runner.load_canonical_json(run_directory / "run_record.json")["terminal_outcome"].endswith(
+        "FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert (run_directory / "artifact_manifest.json").is_file()
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_sigterm_during_teardown_still_stops_both_groups_and_persists_failure(tmp_path, monkeypatch):
+    handler = runner.SigtermHandler()
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            self.returncode = 0
+            return 0
+
+    kill_order = []
+    def injected_killpg(pgid, _sig):
+        kill_order.append(pgid)
+        if len(kill_order) == 1:
+            handler(runner.signal.SIGTERM, None)
+
+    monkeypatch.setattr(runner.os, "killpg", injected_killpg)
+    monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
+        "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+        "inspection_errors": []})
+    composite = {"name": "composite", "pid": 31, "pgid": 31}
+    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32}
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    record = {"call_counts": {"runner": 1}}
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record=record, runtime_acceptance={"all": True},
+        composite_proc=FakeProcess(31), composite_member=composite,
+        bootstrap_proc=FakeProcess(32), bootstrap_member=bootstrap,
+        collector_procs={}, collector_members={}, bootstrap_calls=1,
+        composite_calls=1, cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=previous)
+    assert kill_order == [31, 32]
+    assert result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in result["failure_reason_literals"]
+    assert runner.load_canonical_json(run_directory / "run_record.json")["terminal_outcome"].endswith(
+        "FAIL_NO_RETRY_GUARD_CONSUMED")
+
+
+def test_ros_discovery_failure_writes_preacquire_bundle_without_acquiring_guard(tmp_path, monkeypatch):
+    runtime_worktree = tmp_path / "runtime"
+    runtime_worktree.mkdir()
+    evidence = tmp_path / "evidence"
+    guard_path = tmp_path / "guard.json"
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    raw_guard = json.dumps(guard, sort_keys=True, separators=(",", ":")).encode()
+    guard_path.write_bytes(raw_guard)
+    lock = guard_path.with_suffix(".json.lock")
+    calls = []
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"AMENT_PREFIX_PATH": "/overlay"})
+
+    def host(_env, *_args):
+        calls.append("gazebo_probe")
+        calls.append("ros_probe")
+        runner.validate_ros_discovery_host_capability(
+            {"AMENT_PREFIX_PATH": "/overlay"}, command_runner=lambda *_a, **_k: (
+                (_ for _ in ()).throw(PermissionError("socket denied"))))
+
+    monkeypatch.setattr(runner, "host_preflight", host)
+    monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("must remain pre-acquire"))
+    record = {"run_id": runner.RUN_ID, "review_commit": "a" * 40,
+              "integration_base": runner.INTEGRATION_BASE, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING}
+    result = runner.preacquire_preflight(
+        runtime_worktree, {}, evidence, runner.PARTITION, tmp_path / "map", tmp_path / "fuel",
+        {}, guard_path, lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record)
+    assert calls == ["gazebo_probe", "ros_probe"]
+    assert result[3]["preacquire_failure_literal"] == (
+        "ROS_DISCOVERY_HOST_CAPABILITY_UNAVAILABLE:CLI_SUPPORT_ERROR")
+    assert guard_path.read_bytes() == raw_guard and not lock.exists()
+    assert runner.load_canonical_json(evidence / "run_record.json")["guard_acquired"] is False
+    assert (evidence / "preflight_failure.json").is_file()
+
+
 def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
     tmp_path, monkeypatch,
 ):
@@ -747,11 +976,13 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
 
 def test_sigterm_handler_raises_stable_exception_and_runtime_path_finalizes_after_teardown():
     source = RUNNER_PATH.read_text(encoding="utf-8")
-    assert source.index("signal.signal(signal.SIGTERM, sigterm_handler)") < source.index("try:\n        args.run_directory.mkdir")
+    main_body = source[source.index("def main():"):]
+    assert main_body.index("preacquire_preflight(") < main_body.index(
+        "signal.signal(signal.SIGTERM, sigterm_handler)") < main_body.index("args.run_directory.mkdir")
     assert source.index("sigterm_handler.begin_finalization()") < source.index(
         "finalise_after_teardown(record, runtime_acceptance, teardown)")
-    assert source.index("finalise_after_teardown(record, runtime_acceptance, teardown)") < source.index(
-        "signal.signal(signal.SIGTERM, previous_sigterm_handler)")
+    finalizer = source[source.index("def finalize_campaign_after_acquisition("):]
+    assert "finally:\n        signal.signal(signal.SIGTERM, previous_sigterm_handler)" in finalizer
     handler = runner.SigtermHandler()
     with pytest.raises(runner.RunnerInterruptedBySignal,
                        match="^RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM$"):
@@ -759,6 +990,9 @@ def test_sigterm_handler_raises_stable_exception_and_runtime_path_finalizes_afte
     handler(runner.signal.SIGTERM, None)  # second signal cannot interrupt evidence finalization
     handler = runner.SigtermHandler()
     handler.begin_finalization()
+    with pytest.raises(runner.RunnerInterruptedBySignal,
+                       match="^RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM$"):
+        handler(runner.signal.SIGTERM, None)
     handler(runner.signal.SIGTERM, None)
     assert handler.interrupted is True
     record = {"pre_teardown_failure": "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"}
@@ -812,13 +1046,34 @@ def test_success_path_acquires_guard_before_any_campaign_process_and_finalizes_a
     runner.validate_distinct_process_groups(bootstrap, composite)
     result = runner.finalise_after_teardown(
         {}, {"guard_acquired_once": True, "runtime_acceptance": True},
-        {"completed": True, "clean": True, "order_correct": True},
+        {"completed": True, "clean": True, "order_correct": True, "verified": True},
     )
     assert result["terminal_outcome"].endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
     assert all(result["acceptance"].values())
     source = RUNNER_PATH.read_text()
     assert source.index("preacquire_preflight(") < source.index("_spawn_owned_process(", source.index("def main():"))
-    assert source.index("composite_teardown = _stop_owned_process") < source.index("bootstrap_teardown = _stop_owned_process")
+
+
+def test_best_effort_teardown_attempts_composite_before_bootstrap(tmp_path, monkeypatch):
+    order = []
+    composite = {"name": "composite", "pid": 31, "pgid": 31}
+    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32}
+
+    def fake_stop(_proc, member, _timeout):
+        order.append(member["name"])
+        member["final_snapshot"] = {"live_member_pids": [], "zombie_member_pids": [],
+                                     "verified": True, "inspection_errors": []}
+        return {"signal_sent": True, "clean": True, "verified": True,
+                "live_member_pids": [], "zombie_member_pids": [], "errors": []}
+
+    monkeypatch.setattr(runner, "_stop_owned_process", fake_stop)
+    teardown = runner.teardown_campaign_processes(
+        composite_proc=object(), composite_member=composite,
+        bootstrap_proc=object(), bootstrap_member=bootstrap,
+        collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1)
+    assert order == ["composite", "bootstrap"]
+    assert teardown["completed"] and teardown["verified"] and teardown["clean"]
+    assert teardown["order_correct"]
 
 
 def test_process_groups_and_final_record_fail_closed():

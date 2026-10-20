@@ -2005,3 +2005,17 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Evidence status | Source/offline candidate only; no runtime run in this corrective; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
 | Record hashes | Decision `f1da8032e445e743f3c5b2182972c60a6494a568eb1706684687126887f566f6`; Registry `2d16d344dff91e079c270b5a3513e83f63ef791b5482802a18975496128986d4`; Plan `39dee18a77ec1b4283c05e79872d5310a7b1cec1350b30a23acb9e538a47c53d`; guard `1b11297c2a8ff391c4bcf556ca6c11a935b85b8d0f489441d8d467faf367cf5c`; evidence `a0dee26a56d10a896939588f4f0b3b1b287fbf293edf313cd69c9e3ba276beee`; manifest `84cd34016d1c2784df0ad4a911507dae02b3f067bb9fe9758e5d4db45b6abc7f`. |
 | Next action | Independent audit of the exact corrective commit; future runtime only under a separate exact Owner authorization and a live session/poll that waits through terminal exit. |
+
+
+### STEP-7 Run005 attempt_002 terminal verdict and ROS discovery preflight corrective
+
+| Field | Result |
+|---|---|
+| Base / scope | `87ee34b1a945ecc12b525fe9f4711a368c0bdbc3`; exact current direct diff is the authorized 11-path set. The 34 runtime source pins are a separate inventory. |
+| Terminal verdict | PASS requires all acceptance booleans true, no failure literals, and complete, ordered, clean, verified teardown. Any SIGTERM, pre-teardown failure, false acceptance, or unverified/incomplete teardown is FAIL. Verdict failure is recorded as outcome, distinct from checksum/filesystem finalization errors. |
+| Teardown / signals | Best-effort composite before bootstrap; inaccessible `/proc`, kill or wait failures remain unverified and fail. SIGTERM is converted to `RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM`; original handler is restored. SIGKILL, power loss, or unwritable filesystem cannot guarantee durable evidence. |
+| ROS host preflight | After ROS/overlay sourcing and before guard acquisition, check CLI flags and run bounded `ros2 topic list --no-daemon --spin-time 3`; empty graph is allowed. Permission/socket errors, timeout, nonzero, or network-error output fail closed with pre-acquire evidence. Exact-partition `gz topic -l` remains. This is capability evidence only, not a runtime graph pass. |
+| Invocation_005 | Immutable record exists; `BOOTSTRAP_READINESS_TIMEOUT` after acquisition, bootstrap 1, composite/observers 0, teardown completed but not clean/order-correct. Bootstrap log contains interface/socket permission errors. Evidence does not support the claim that external termination prevented the record. No history changed. |
+| Offline verification | Focused Run005 runner/guard 116; scope 2; Step-7 tools 257; bringup 244; nav_rl 707; six-package external build PASS; observer 13 and ROSIDL 25 PASS; installed source equality 15/15; source pins 34/34; JSON/YAML/XML, history, scope, Ledger-prefix and diff checks PASS. No runtime was run. |
+| Guard / evidence | Seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Next action | Independent audit of the exact corrective commit; a later runtime requires separate exact Owner authorization. |
