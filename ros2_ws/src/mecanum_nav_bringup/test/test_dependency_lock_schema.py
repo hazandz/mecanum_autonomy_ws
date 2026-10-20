@@ -16,11 +16,21 @@ COMMON_NAVIGATION_V1_ROOTS = [
     "robot_localization", "tf2_ros", "robot_state_publisher", "sensor_msgs",
     "nav_msgs", "geometry_msgs",
 ]
-PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = [
+BASE_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = [
     "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
     "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
     "launch", "launch_ros",
 ]
+STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = [
+    "nav2_behaviors",
+    "nav2_navfn_planner",
+    "nav2_dwb_controller",
+    "nav2_behavior_tree",
+]
+PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = (
+    BASE_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
+    + STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
+)
 PROFILE_SPECIFIC_NOT_COMMON_LOCK = PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
 
 
@@ -64,10 +74,14 @@ def test_package_exec_dependencies_are_common_roots_then_profile_specific_runtim
         "robot_localization", "tf2_ros", "robot_state_publisher", "sensor_msgs",
         "nav_msgs", "geometry_msgs",
     ]
-    assert PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS == [
+    assert BASE_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS == [
         "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
         "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
         "launch", "launch_ros",
+    ]
+    assert STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS == [
+        "nav2_behaviors", "nav2_navfn_planner", "nav2_dwb_controller",
+        "nav2_behavior_tree",
     ]
     assert exec_dependencies.count("rosgraph_msgs") == 1
     assert _dependency_schema_is_exact(
@@ -102,6 +116,32 @@ def test_rosgraph_msgs_is_profile_specific_only_and_exact_schema_rejects_mutatio
     )
 
 
+def test_step07_nav2_provider_dependencies_are_exact_ordered_and_unique():
+    package = ET.parse(ROOT / "package.xml").getroot()
+    exec_dependencies = [node.text for node in package.findall("exec_depend")]
+    for dependency in STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS:
+        assert exec_dependencies.count(dependency) == 1
+    assert _dependency_schema_is_exact(
+        COMMON_NAVIGATION_V1_ROOTS,
+        PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
+        exec_dependencies,
+    )
+    assert exec_dependencies == COMMON_NAVIGATION_V1_ROOTS + PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
+    for missing in STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS:
+        mutated = [item for item in exec_dependencies if item != missing]
+        assert not _dependency_schema_is_exact(
+            COMMON_NAVIGATION_V1_ROOTS,
+            [item for item in PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS if item != missing],
+            mutated,
+        )
+    duplicate = exec_dependencies + [STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS[0]]
+    assert not _dependency_schema_is_exact(
+        COMMON_NAVIGATION_V1_ROOTS,
+        PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
+        duplicate,
+    )
+
+
 def test_bringup_direct_launch_dependencies_are_profile_specific_and_order_locked():
     package = ET.parse(ROOT / "package.xml").getroot()
     actual = [node.text for node in package.findall("exec_depend")]
@@ -129,6 +169,7 @@ def test_bringup_direct_launch_dependencies_are_profile_specific_and_order_locke
         *additions,
         "launch",
         "launch_ros",
+        *STEP07_PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS,
     ]
     assert baseline_profile_roots == ["ros_gz_bridge", "launch", "launch_ros"]
     assert actual == COMMON_NAVIGATION_V1_ROOTS + expected_profile_roots

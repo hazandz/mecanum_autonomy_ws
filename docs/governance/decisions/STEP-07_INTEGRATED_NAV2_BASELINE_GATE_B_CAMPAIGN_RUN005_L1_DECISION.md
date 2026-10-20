@@ -34,3 +34,18 @@ The attempt_002 runner creates the runtime checkout with a local `git clone --no
 This corrective commit is based on `72d04391a9d6d83e3e18589212d566f17dc220d1`, the prior attempt_002 candidate. It does not alter attempt_001 or attempt_002 guard semantics, Fuel/map/TF/safety/Gate-B behavior, or retry policy. The exact cumulative attempt_002 scope is 13 paths; its current source-pin inventory remains 22 unique paths. A new exact candidate commit, independent audit, and Owner authorization remain prerequisites before any runtime invocation.
 
 Current corrective record hashes: guard `4be7b4bd00324ba023c11a2717cdfcc91f8d9418ace98b47de40e2f181cc178f`; evidence `6f4ad54ecfd3b51a17c3a1251ef1322a63b4a9222fca1c47220dfa0bcdb8a24b`; guard manifest `22e1d9b6bc9d013a831b0ffbb06bddce8a18b05c1ab6092fac88a42a61761818`.
+
+
+## Corrective: partition ownership and Nav2 pre-acquire closure
+
+This L1 corrective is based on exact `87af41f45d721969f2767d36291252e3b14e3dcb`. It supersedes only current corrective scope and verification metadata; the prior attempt_002 13-path scope is preserved as historical. The direct corrective scope from that base is the exact 16-path set recorded in the current evidence JSON and manifest.
+
+The child state-estimation launch now requires a non-empty caller-owned `gz_partition`, rejects missing/blank values with `SIM_EVAL_GZ_PARTITION_REQUIRED`, exports that exact value as `GZ_PARTITION`, and forwards it unchanged to wheel/IMU ingress. The WP06 partition literal is not a runtime routing condition. `use_sim_time=true` remains fail-closed. `mecanum_nav_bringup/package.xml` declares the four Step-7 Nav2 providers once, after the preserved WP05 common-root block and existing profile-specific dependencies. The runner checks seven Nav2 node package prefixes/executables and four plugin-provider prefixes before guard acquisition, then checks installed bytes for 15 runtime launch/config artifacts.
+
+Run005 attempt_002 invocation_002 remains immutable: `COMPOSITE_EXITED_BEFORE_READINESS`, caused by `LEGACY_WP06_PARTITION_LOCK`; its consumed guard and evidence are untouched and it was not retried. Attempt_001 remains the separate immutable Fuel-case failure. This offline corrective did not run a runtime or official runner.
+
+The current guard seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, and `runtime_authorization=NOT_GRANTED`; Gate B remains `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Current Run005 inventory is 34 unique SHA-256/size source pins, independent from the 16 changed paths. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Offline verification: focused tests 89 passed; Step-7 tools 205 passed; `mecanum_nav_bringup/test` 244 passed; `mecanum_nav_rl/test` 707 passed; six-package external colcon build PASS; observer 13 C++ cases PASS; ROSIDL 8 pytest cases PASS; installed source-byte closure 15/15 PASS; source pins 34/34 PASS.
+
+Current record references: guard SHA-256 `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence SHA-256 `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; guard-manifest SHA-256 `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`.

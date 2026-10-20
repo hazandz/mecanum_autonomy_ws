@@ -16,7 +16,6 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-EXPECTED_PARTITION = "wp06_scan_probe_run_002"
 CLOCK_CONFIG = PathJoinSubstitution([
     FindPackageShare("mecanum_nav_bringup"),
     "config",
@@ -31,10 +30,19 @@ EKF_CONFIG = PathJoinSubstitution([
 ])
 
 
+def _require_partition(value):
+    partition = "" if value is None else str(value).strip()
+    if not partition:
+        raise RuntimeError("SIM_EVAL_GZ_PARTITION_REQUIRED")
+    return partition
+
+
 def _create_runtime_actions(context):
-    partition = LaunchConfiguration("gz_partition").perform(context)
-    if partition != EXPECTED_PARTITION:
-        raise RuntimeError("WP06-6F requires the bootstrap's exact GZ_PARTITION")
+    try:
+        supplied_partition = LaunchConfiguration("gz_partition").perform(context)
+    except Exception as error:
+        raise RuntimeError("SIM_EVAL_GZ_PARTITION_REQUIRED") from error
+    partition = _require_partition(supplied_partition)
 
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context).strip().lower()
     if use_sim_time != "true":
@@ -46,10 +54,11 @@ def _create_runtime_actions(context):
         "sim_eval_wheel_imu_ingress.launch.py",
     )
     return [
+        SetEnvironmentVariable("GZ_PARTITION", partition),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(ingress_launch),
             launch_arguments={
-                "gz_partition": EXPECTED_PARTITION,
+                "gz_partition": partition,
                 "use_sim_time": "true",
             }.items(),
         ),
@@ -72,8 +81,7 @@ def _create_runtime_actions(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument("gz_partition", default_value=EXPECTED_PARTITION),
+        DeclareLaunchArgument("gz_partition"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
-        SetEnvironmentVariable("GZ_PARTITION", LaunchConfiguration("gz_partition")),
         OpaqueFunction(function=_create_runtime_actions),
     ])

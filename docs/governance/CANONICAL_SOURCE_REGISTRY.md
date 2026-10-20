@@ -1008,3 +1008,53 @@ Decision SHA-256 `ba12bd8e4d24a17e3455622770cf0449dc2724216b93411ee8444fa4ae7d58
 At corrective base `72d04391a9d6d83e3e18589212d566f17dc220d1`, the runner replaces linked worktree creation with a local `git clone --no-hardlinks --no-checkout`; it detaches at the exact source HEAD, uses private destination Git metadata, retains the official origin, verifies a clean destination, and confirms source metadata is unchanged. The cumulative attempt_002 path set is exactly 13; 22 source pins remain a separate inventory. The refreshed runner, runner-test, and contract-test hashes are in the active Run005 source-pin table above. No runtime is claimed; the attempt_002 guard remains pending/unconsumed.
 
 Record hashes for this correction: decision `ddff30ade74efaf4d8d8e202de4decdb5594766589097a29a2d6780e7f088180`; evidence `6f4ad54ecfd3b51a17c3a1251ef1322a63b4a9222fca1c47220dfa0bcdb8a24b`; manifest `22e1d9b6bc9d013a831b0ffbb06bddce8a18b05c1ab6092fac88a42a61761818`; guard `4be7b4bd00324ba023c11a2717cdfcc91f8d9418ace98b47de40e2f181cc178f`.
+
+
+### STEP07 Run005 attempt_002 partition and Nav2 pre-acquire corrective
+
+This entry supersedes only the active attempt_002 scope/pin summary. The original attempt_002 corrective remains its historical exact 13-path diff from `71ca32471f8e042a0048d319ca39cb9deff0c6f4` to `87af41f45d721969f2767d36291252e3b14e3dcb`. The current direct corrective diff from `87af41f45d721969f2767d36291252e3b14e3dcb` is exactly 16 paths. The latest scope test checks both exact path sets.
+
+The child EKF/clock launch accepts only a non-empty supplied partition, forwards it unchanged to ingress and `GZ_PARTITION`, and does not route on the historical WP06 literal. The runner verifies seven Nav2 node package/executable pairs, four plugin-provider package prefixes, and source/installed equality for 15 runtime artifacts before guard acquisition. The four new Nav2 dependencies are profile-specific and are not added to the WP05 14-root lock/template.
+
+There are exactly 34 unique current Run005 source pins (22 existing + 12 new); this inventory is independent of the 16-path delivery scope. Historical Run001–Run005 pins use exact Git blobs and fail closed without worktree fallback. Run005 attempt_002 invocation_002 is immutable: `COMPOSITE_EXITED_BEFORE_READINESS` caused by `LEGACY_WP06_PARTITION_LOCK`; no retry. Attempt_001 and all Run001–Run004 evidence remain immutable.
+
+| Path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `8d518ec71e9aa1e4707ea48574a7b373b15287973bdb9a4219d57bece74a88cd` | 57583 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `ab838d7fc952d5b625391fc59f1d38682915e53aefa0232315672a17e7a3a71f` | 9468 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `98430e85ec3afd0c4845a7df57bfd6cdeeb9040f6685a5d95f5fcc31062ed3e8` | 42555 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `d1db51ef78a218fbe929aae28b7c43220b2f8cd3b613ec5c3d1c173437200b11` | 9778 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `c93c4f2d1f87c05e31ad13306b37f20f2f906b14898aa9bbf89a22aab97b99e2` | 11918 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml` | `2dafb19da5daeeb91c451ae57055caa389a0353900525fb9a5861e1c670c6547` | 506 |
+| `ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py` | `1612ce773eb0b7cb05e4d081eee441418dea32314c3685adcdcd96dd569069b8` | 1795 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml` | `89220ef78125348776575b1a14fa1727c9cb098d9c46d84a74e27e5e8715f0b1` | 143 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml` | `6577ad07506be16666fc11095cfab07e75b6fb2b3fb72d697e634c97417b373f` | 147 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml` | `fbfcf29e197ea94622b5e86858ffef6b5fee05a5d9bcf6ab58bf110d9c5561c2` | 214 |
+| `ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml` | `cf1c942f76f4e432c1716e82f759a1d17012866714e8a958d59585585694102f` | 352 |
+| `ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml` | `c6e58320aa1b35f4c74ca7442bf00357266ad51428522ca93d4565c1d6617e60` | 891 |
+| `ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml` | `ee0ea126c3bf08386b9b4d408ef0b9775398f1d821c1cc5a1f6f3f08efb81167` | 2971 |
+| `ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml` | `6aaacd93181eb3cbfc1bd25067ebdc441bad40998ccb486fea1c51f3ffe8a755` | 776 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `283010f115b1608f8a73613f45e4da674f54ec93c2b91584d86b9514030fb013` | 8870 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py` | `1bf0098b9534257cb57b7f69e47179f2a61b0340745a8f68be7c24254d32a061` | 2753 |
+| `ros2_ws/src/mecanum_nav_bringup/package.xml` | `0e82b208575f11a46d12f1053f6721092f5e4f69af0da77abda28cd40ccc33fd` | 1737 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `d64c265a07b5c3e4f525177004b894ed82a6765f0e2536154658f6b2fb524c52` | 10672 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `12e6598c0021f1cc5063315d8feb7e82f96e83bf046d334bede9cc2a124626ff` | 43898 |
+| `ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml` | `d9120562549f3a14b6b7673afe247696c0233d2f9d1be1399eac37ec6ff423bd` | 943 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml` | `ec322d9068526ba43b878e7ebb249d0587fb9189f49fcb8999e38eea2b68791b` | 733 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+
+Verification: focused tests 89; Step-7 tools 205; bringup 244; RL 707; six-package external build PASS; observer 13 C++ tests and ROSIDL 8 tests PASS; installed artifact equality 15/15; 34/34 pins and exact scope/history PASS. No runtime was executed in this corrective. Run005 guard remains pending, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+Current hashes: decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`; guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`.

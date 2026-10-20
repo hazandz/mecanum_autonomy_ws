@@ -143,6 +143,28 @@ def test_installed_file_closure_rejects_any_artifact_package_without_prefix():
         runner.validate_installed_file_package_closure(runner.INSTALLED_FILE_ARTIFACTS, prefixes)
 
 
+def test_installed_runtime_artifact_closure_is_the_exact_fifteen_source_set():
+    expected = {
+        "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
+        "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
+        "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf",
+        "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
+        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
+        "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
+        "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+        "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+    }
+    assert len(runner.INSTALLED_FILE_ARTIFACTS) == 15
+    assert {relative for _package, _installed, relative in runner.INSTALLED_FILE_ARTIFACTS} == expected
+
+
 def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_checks(
     tmp_path, monkeypatch
 ):
@@ -153,8 +175,9 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
         "ros_gz_sim", "ros_gz_bridge", "mecanum_base_bridge",
         "mecanum_nav_bringup", "ROBOT_URDF_final_description",
         "robot_localization", "step07_nav2_baseline_runtime_observer",
-        "mecanum_nav_rl",
+        "mecanum_nav_rl", *runner.NAV2_RUNTIME_PACKAGES,
     }
+    assert len(runner.INSTALLED_FILE_ARTIFACTS) == 15
 
     worktree = tmp_path / "source"
     worktree.mkdir()
@@ -191,6 +214,10 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     gate_script = prefixes["mecanum_nav_rl"] / "lib/mecanum_nav_rl/step07_gate_b_observer"
     gate_script.parent.mkdir(parents=True)
     gate_script.write_bytes(b"gate script fixture")
+    for package, executable in runner.NAV2_NODE_EXECUTABLES:
+        installed_executable = prefixes[package] / "lib" / package / executable
+        installed_executable.parent.mkdir(parents=True, exist_ok=True)
+        installed_executable.write_bytes(b"executable fixture")
 
     for package, install_relative, source_relative in runner.INSTALLED_FILE_ARTIFACTS:
         source = worktree / source_relative
@@ -212,8 +239,8 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
         if args[:3] == ["ros2", "pkg", "prefix"]:
             package = args[3]
             prefix_requests.append(package)
-            return SimpleNamespace(stdout=str(prefixes[package]))
-        return SimpleNamespace(stdout="ROSIDL_IMPORT_PASS")
+            return SimpleNamespace(stdout=str(prefixes[package]), returncode=0)
+        return SimpleNamespace(stdout="ROSIDL_IMPORT_PASS", returncode=0)
 
     original_read_bytes = Path.read_bytes
 
@@ -241,11 +268,52 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
 
     assert tuple(prefix_requests) == runner.REQUIRED_PACKAGE_PREFIXES
     assert "ROBOT_URDF_final_description" in result["package_prefixes"]
+    assert set(result["nav2_executables"]) == {
+        f"{package}/{executable}" for package, executable in runner.NAV2_NODE_EXECUTABLES
+    }
     assert result["installed_source_byte_equality"] == {
         relative_source: True for _package, _relative_install, relative_source
         in runner.INSTALLED_FILE_ARTIFACTS
     }
     assert equality_started, "the full host preflight simulation must reach installed byte checks"
+
+
+@pytest.mark.parametrize("package", runner.NAV2_RUNTIME_PACKAGES)
+def test_missing_nav2_package_prefix_has_stable_preacquire_failure(package, monkeypatch):
+    from types import SimpleNamespace
+
+    def fake_run(args, **_kwargs):
+        requested = args[3]
+        if requested == package:
+            return SimpleNamespace(stdout="", returncode=1)
+        return SimpleNamespace(stdout=f"/overlay/{requested}", returncode=0)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    with pytest.raises(RuntimeError, match=f"NAV2_PACKAGE_PREFIX_MISSING:{package}"):
+        runner.collect_package_prefixes({"PATH": "/opt/ros/jazzy/bin"})
+
+
+@pytest.mark.parametrize("package,executable", runner.NAV2_NODE_EXECUTABLES)
+def test_missing_nav2_executable_has_stable_preacquire_failure(package, executable, tmp_path):
+    prefixes = {name: str(tmp_path / name) for name in runner.REQUIRED_PACKAGE_PREFIXES}
+    for name in runner.REQUIRED_PACKAGE_PREFIXES:
+        Path(prefixes[name]).mkdir()
+    for other_package, other_executable in runner.NAV2_NODE_EXECUTABLES:
+        path = Path(prefixes[other_package]) / "lib" / other_package / other_executable
+        if (other_package, other_executable) == (package, executable):
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+        path.chmod(0o755)
+    with pytest.raises(RuntimeError, match=f"NAV2_EXECUTABLE_MISSING:{package}/{executable}"):
+        runner.validate_nav2_executables(prefixes)
+
+
+def test_nav2_prefix_and_executable_checks_precede_all_installed_byte_comparisons():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    body = source[source.index("def host_preflight("):source.index("def _atomic_write(")]
+    assert body.index("collect_package_prefixes(env)") < body.index("validate_nav2_executables(prefixes)")
+    assert body.index("validate_nav2_executables(prefixes)") < body.index("for package, relative_install, relative_source in installed_files")
 
 
 def test_host_preflight_missing_robot_description_prefix_fails_before_installed_checks(

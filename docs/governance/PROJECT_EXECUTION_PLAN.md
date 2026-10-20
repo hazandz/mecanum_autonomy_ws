@@ -1041,3 +1041,16 @@ Current decision/evidence/manifest/guard SHA-256: `ba12bd8e4d24a17e3455622770cf0
 Corrective base `72d04391a9d6d83e3e18589212d566f17dc220d1`. The runner creates a private local clone from the exact source checkout with `--no-hardlinks`, checks out the exact review HEAD detached, verifies clean status and official origin, and confirms that source repository ref/status/origin remain unchanged. Linked worktree metadata writes are removed from the runner path. The cumulative attempt_002 exact path set is 13; the runtime source-pin inventory remains 22 unique paths. Offline validation is recorded in the current Run005 evidence; there is no runtime claim or PEP status transition. Independent audit of the exact corrective commit, followed by the separately authorized steps, remains outstanding.
 
 Current Run005 attempt_002 corrective hashes: decision `ddff30ade74efaf4d8d8e202de4decdb5594766589097a29a2d6780e7f088180`; evidence `6f4ad54ecfd3b51a17c3a1251ef1322a63b4a9222fca1c47220dfa0bcdb8a24b`; manifest `22e1d9b6bc9d013a831b0ffbb06bddce8a18b05c1ab6092fac88a42a61761818`; guard `4be7b4bd00324ba023c11a2717cdfcc91f8d9418ace98b47de40e2f181cc178f`; Registry `1b685ed46e820c48971ccced80be39644b2632c499c442d31bfd06cd3438c76a`.
+
+
+### Step-7 Run005 attempt_002 partition and Nav2 pre-acquire closure corrective
+
+At corrective base `87af41f45d721969f2767d36291252e3b14e3dcb`, this L1 packet preserves the original attempt_002 13-path historical scope and adds a separate exact 16-path direct corrective scope. The scope contract uses exact sets in both dirty Phase A and final committed states.
+
+The state-estimation child launch now requires a caller-supplied non-empty partition, exports and forwards it exactly, and does not hard-code the WP06 partition. Four Nav2 Step-7 providers are declared once as profile-specific runtime dependencies; the WP05 14-root lock/template is unchanged. Before guard acquisition, the runner validates seven Nav2 node package prefixes/executables, four plugin-provider prefixes, and installed/source byte equality for 15 runtime artifacts.
+
+Run005 attempt_002 invocation_002 remains immutable with terminal `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`, root `LEGACY_WP06_PARTITION_LOCK`, and was not retried. No runtime was executed in this corrective. The seed remains pending, capacity one, acquisition zero, `runtime_authorization=NOT_GRANTED`; Gate B is `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`.
+
+Phase A PASS: focused 89; Step-7 tools 205; bringup 244; RL 707; six-package external build; observer 13 C++ and ROSIDL 8 tests; installed artifacts 15/15; current source pins 34/34; exact historical/current scope and parsing checks. Current evidence ceiling remains `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Record references: Run005 decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`, Registry `c75d979c58b555c9dfed76667f96f7bcc5151033b779c9f96d43066f983a4831`, guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`, evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`, manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`. No PEP status or dependency transition is made.

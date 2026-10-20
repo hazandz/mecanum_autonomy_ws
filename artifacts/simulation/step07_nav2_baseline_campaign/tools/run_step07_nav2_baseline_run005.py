@@ -186,7 +186,7 @@ def validate_map_root(root: Path) -> Path:
     return root
 
 
-REQUIRED_PACKAGE_PREFIXES = (
+BASE_REQUIRED_PACKAGE_PREFIXES = (
     "ros_gz_sim",
     "ros_gz_bridge",
     "mecanum_base_bridge",
@@ -197,6 +197,29 @@ REQUIRED_PACKAGE_PREFIXES = (
     "mecanum_nav_rl",
 )
 
+NAV2_NODE_EXECUTABLES = (
+    ("nav2_map_server", "map_server"),
+    ("nav2_amcl", "amcl"),
+    ("nav2_planner", "planner_server"),
+    ("nav2_controller", "controller_server"),
+    ("nav2_behaviors", "behavior_server"),
+    ("nav2_bt_navigator", "bt_navigator"),
+    ("nav2_lifecycle_manager", "lifecycle_manager"),
+)
+NAV2_PLUGIN_PROVIDER_PACKAGES = (
+    "nav2_costmap_2d",
+    "nav2_navfn_planner",
+    "nav2_dwb_controller",
+    "nav2_behavior_tree",
+)
+NAV2_RUNTIME_PACKAGES = tuple(dict.fromkeys(
+    tuple(package for package, _executable in NAV2_NODE_EXECUTABLES)
+    + NAV2_PLUGIN_PROVIDER_PACKAGES
+))
+REQUIRED_PACKAGE_PREFIXES = tuple(dict.fromkeys(
+    BASE_REQUIRED_PACKAGE_PREFIXES + NAV2_RUNTIME_PACKAGES
+))
+
 INSTALLED_FILE_ARTIFACTS = (
     ("mecanum_nav_bringup", "launch/sim_eval_nav2_baseline_system.launch.py", "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"),
     ("ROBOT_URDF_final_description", "launch/sim_eval_nav2_baseline_bootstrap.launch.py", "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py"),
@@ -204,7 +227,43 @@ INSTALLED_FILE_ARTIFACTS = (
     ("mecanum_nav_bringup", "config/navigation/sim_eval_nav2_baseline.runtime.yaml", "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml"),
     ("mecanum_nav_bringup", "config/bridge/sim_eval_cmd_vel.runtime.yaml", "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml"),
     ("mecanum_nav_bringup", "config/lifecycle/sim_eval_nav2_baseline.runtime.yaml", "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml"),
+    ("mecanum_nav_bringup", "launch/sim_eval_tf_ekf_state_estimation.launch.py", "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py"),
+    ("mecanum_nav_bringup", "config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml", "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml"),
+    ("mecanum_nav_bringup", "config/localization/amcl_omni.yaml", "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml"),
+    ("mecanum_nav_bringup", "config/bridge/sim_eval_clock.runtime.yaml", "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml"),
+    ("mecanum_nav_bringup", "config/state_estimation/ekf_sim.yaml", "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml"),
+    ("mecanum_base_bridge", "launch/sim_eval_wheel_imu_ingress.launch.py", "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py"),
+    ("mecanum_base_bridge", "config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml", "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml"),
+    ("mecanum_nav_rl", "config/safety/sim_eval_nav2_baseline_safety.yaml", "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml"),
+    ("mecanum_nav_rl", "config/v3/resolved/sim_eval_nav2_baseline.resolved.json", CONFIG_REL),
 )
+
+
+def collect_package_prefixes(env: dict[str, str]) -> dict[str, str]:
+    """Resolve package prefixes and report stable Nav2 closure failures."""
+    prefixes = {}
+    nav2_packages = set(NAV2_RUNTIME_PACKAGES)
+    for package in REQUIRED_PACKAGE_PREFIXES:
+        result = _run(["ros2", "pkg", "prefix", package], env=env,
+                      check=package not in nav2_packages)
+        prefix = result.stdout.strip()
+        if package in nav2_packages and (getattr(result, "returncode", 0) != 0 or not prefix):
+            raise RuntimeError(f"NAV2_PACKAGE_PREFIX_MISSING:{package}")
+        if not prefix:
+            raise RuntimeError(f"PACKAGE_PREFIX_EMPTY:{package}")
+        prefixes[package] = prefix
+    return prefixes
+
+
+def validate_nav2_executables(prefixes: dict[str, str]) -> dict[str, str]:
+    """Require installed Nav2 nodes before the capacity-one guard is acquired."""
+    executables = {}
+    for package, executable in NAV2_NODE_EXECUTABLES:
+        path = Path(prefixes[package]) / "lib" / package / executable
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise RuntimeError(f"NAV2_EXECUTABLE_MISSING:{package}/{executable}")
+        executables[f"{package}/{executable}"] = str(path)
+    return executables
 
 
 def validate_installed_file_package_closure(installed_files, prefixes: dict[str, str]) -> None:
@@ -352,12 +411,8 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     for program in ("ros2", "gz"):
         if not any((Path(part) / program).is_file() for part in env.get("PATH", "").split(os.pathsep)):
             raise RuntimeError(f"REQUIRED_EXECUTABLE_MISSING:{program}")
-    packages = REQUIRED_PACKAGE_PREFIXES
-    prefixes = {}
-    for package in packages:
-        prefixes[package] = _run(["ros2", "pkg", "prefix", package], env=env).stdout.strip()
-        if not prefixes[package]:
-            raise RuntimeError(f"PACKAGE_PREFIX_EMPTY:{package}")
+    prefixes = collect_package_prefixes(env)
+    nav2_executables = validate_nav2_executables(prefixes)
     installed_files = INSTALLED_FILE_ARTIFACTS
     validate_installed_file_package_closure(installed_files, prefixes)
     observer = Path(prefixes["step07_nav2_baseline_runtime_observer"]) / "lib" / "step07_nav2_baseline_runtime_observer" / "step07_nav2_baseline_runtime_observer"
@@ -387,6 +442,7 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
         raise RuntimeError("STALE_PARTITION_PROCESS_FOUND")
     return {"canonical_map_yaml": str(map_path / "map.yaml"), "fuel_cache": fuel,
             "package_prefixes": prefixes, "observer_executable": str(observer),
+            "nav2_executables": nav2_executables,
             "gate_b_observer_console_script": str(gate_script),
             "runtime_python": str(runtime_python), "runtime_python_fingerprint": runtime_facts,
             "installed_source_byte_equality": equality, "rosidl_import": "PASS",

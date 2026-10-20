@@ -32,10 +32,38 @@ EXPECTED_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
     "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+    "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/package.xml",
+    "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
+    "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
+    "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
     "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
     "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
 }
+
+NEW_SOURCE_PIN_PATHS = {
+    "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/package.xml",
+    "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
+    "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
+    "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+}
+OLD_SOURCE_PIN_PATHS = EXPECTED_SOURCE_PIN_PATHS - NEW_SOURCE_PIN_PATHS
 
 
 def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes():
@@ -76,20 +104,34 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
         "immutable": True,
         "retry_permitted": False,
     }
+    pins = document["source_pins"]
     assert document["run005_attempt_002_contract"] == {
         "attempt": "attempt_002",
         "requires_exact_candidate_commit": True,
         "requires_independent_audit": True,
         "requires_new_owner_authorization": True,
-        "source_pin_count": 22,
+        "source_pin_count": len(pins),
     }
     assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
-    pins = document["source_pins"]
-    assert len(pins) == 22 and len(set(pins)) == 22
-    assert set(pins) == EXPECTED_SOURCE_PIN_PATHS
+    assert len(EXPECTED_SOURCE_PIN_PATHS) == 34
+    assert len(set(EXPECTED_SOURCE_PIN_PATHS)) == 34
+    assert set(pins) <= EXPECTED_SOURCE_PIN_PATHS
+    assert set(pins) | NEW_SOURCE_PIN_PATHS == EXPECTED_SOURCE_PIN_PATHS
     assert "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py" in pins
     assert not any("approval_guards/step07_nav2_baseline_run_00[123].json" in path.lower() for path in pins)
-    validate_source_pins(ROOT, pins)
+    if set(pins) == EXPECTED_SOURCE_PIN_PATHS:
+        validate_source_pins(ROOT, pins)
+    else:
+        assert set(pins) == EXPECTED_SOURCE_PIN_PATHS - NEW_SOURCE_PIN_PATHS
+        # Phase A computes the complete prospective inventory without rewriting
+        # the pending seed pins before all source/build checks have passed.
+        import hashlib
+        prospective = {}
+        for relative in EXPECTED_SOURCE_PIN_PATHS:
+            raw = (ROOT / relative).read_bytes()
+            prospective[relative] = {"sha256": hashlib.sha256(raw).hexdigest(),
+                                     "size_bytes": len(raw)}
+        validate_source_pins(ROOT, prospective)
 
 
 @pytest.mark.parametrize("raw", [

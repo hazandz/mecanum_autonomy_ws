@@ -1,5 +1,6 @@
 """Static-only import and ownership checks for the consolidated launch."""
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from launch import LaunchDescription
 
@@ -111,3 +112,82 @@ def test_map_localization_and_tf_ownership_are_declared_once() -> None:
     assert "base_frame_id: base_link" in amcl
     xacro = (ROOT / "ros2_ws/src/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro").read_text()
     assert "lidar_frame" in xacro
+
+
+def test_state_estimation_child_forwards_the_exact_caller_partition_without_runtime(
+    monkeypatch,
+):
+    import importlib.util
+    import pytest
+    from launch import LaunchContext
+    from launch.utilities import perform_substitutions
+    from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+
+    relative = "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py"
+    path = ROOT / relative
+    spec = importlib.util.spec_from_file_location("state_estimation_partition_contract", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    description = module.generate_launch_description()
+    partition_argument = next(
+        action for action in description.entities
+        if isinstance(action, DeclareLaunchArgument) and action.name == "gz_partition"
+    )
+    assert partition_argument.default_value is None
+    source = path.read_text(encoding="utf-8")
+    assert "EXPECTED_PARTITION" not in source
+    assert "wp06_scan_probe_run_002" not in source
+    assert "partition !=" not in source
+    assert "use_sim_time != \"true\"" in source
+
+    monkeypatch.setattr(module, "get_package_share_directory", lambda _package: "/share/mecanum_base_bridge")
+    context = LaunchContext()
+    supplied = "caller_partition_opaque_123"
+    context.launch_configurations.update({"gz_partition": supplied, "use_sim_time": "true"})
+    actions = module._create_runtime_actions(context)
+    env_action = next(action for action in actions if isinstance(action, SetEnvironmentVariable))
+    include = next(action for action in actions if isinstance(action, IncludeLaunchDescription))
+    assert perform_substitutions(context, env_action.name) == "GZ_PARTITION"
+    assert perform_substitutions(context, env_action.value) == supplied
+    assert dict(include.launch_arguments)["gz_partition"] == supplied
+
+    for invalid in ("", "   ", "\t\n"):
+        bad_context = LaunchContext()
+        bad_context.launch_configurations.update({"gz_partition": invalid, "use_sim_time": "true"})
+        with pytest.raises(RuntimeError, match="SIM_EVAL_GZ_PARTITION_REQUIRED"):
+            module._create_runtime_actions(bad_context)
+    with pytest.raises(RuntimeError, match="SIM_EVAL_GZ_PARTITION_REQUIRED"):
+        module._create_runtime_actions(LaunchContext())
+    invalid_clock = LaunchContext()
+    invalid_clock.launch_configurations.update({"gz_partition": supplied, "use_sim_time": "false"})
+    with pytest.raises(RuntimeError, match="WP06-6F requires use_sim_time=true"):
+        module._create_runtime_actions(invalid_clock)
+
+
+def test_nav2_runtime_dependencies_cover_required_nodes_and_plugin_providers():
+    package = ET.parse(ROOT / "ros2_ws/src/mecanum_nav_bringup/package.xml").getroot()
+    exec_dependencies = [node.text for node in package.findall("exec_depend")]
+    assert len(exec_dependencies) == len(set(exec_dependencies))
+    required = {
+        "nav2_map_server", "nav2_amcl", "nav2_planner", "nav2_controller",
+        "nav2_behaviors", "nav2_bt_navigator", "nav2_lifecycle_manager",
+        "nav2_costmap_2d", "nav2_navfn_planner", "nav2_dwb_controller",
+        "nav2_behavior_tree",
+    }
+    assert required <= set(exec_dependencies)
+    launch = (ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py").read_text()
+    nav = (ROOT / "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml").read_text()
+    for package, executable in (
+        ("nav2_map_server", "map_server"), ("nav2_amcl", "amcl"),
+        ("nav2_planner", "planner_server"), ("nav2_controller", "controller_server"),
+        ("nav2_behaviors", "behavior_server"), ("nav2_bt_navigator", "bt_navigator"),
+        ("nav2_lifecycle_manager", "lifecycle_manager"),
+    ):
+        assert f'package="{package}"' in launch
+        assert f'executable="{executable}"' in launch
+    for plugin in ("nav2_navfn_planner::NavfnPlanner", "dwb_core::DWBLocalPlanner",
+                   "nav2_costmap_2d::StaticLayer", "nav2_costmap_2d::ObstacleLayer",
+                   "nav2_costmap_2d::InflationLayer"):
+        assert plugin in nav or plugin in launch

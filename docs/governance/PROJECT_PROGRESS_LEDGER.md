@@ -1931,3 +1931,20 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Guard / evidence | Attempt_002 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, no lock. No runtime or official runner was invoked; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling remains `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Record hashes | Decision `ddff30ade74efaf4d8d8e202de4decdb5594766589097a29a2d6780e7f088180`; evidence `6f4ad54ecfd3b51a17c3a1251ef1322a63b4a9222fca1c47220dfa0bcdb8a24b`; guard manifest `22e1d9b6bc9d013a831b0ffbb06bddce8a18b05c1ab6092fac88a42a61761818`; guard `4be7b4bd00324ba023c11a2717cdfcc91f8d9418ace98b47de40e2f181cc178f`; Registry `1b685ed46e820c48971ccced80be39644b2632c499c442d31bfd06cd3438c76a`; Execution Plan `d7a433e0502f6ab2ff0c23e4a7fa518cdf3e9862af22491e1e17c24b39aaef76`. |
 | Next prerequisite | Independent audit of the exact corrective commit; no runtime authorization is granted by this candidate. |
+
+
+### STEP07 Run005 attempt_002 partition and Nav2 pre-acquire corrective
+
+| Field | Result |
+|---|---|
+| Date | 2026-10-20 |
+| Branch / base | `step07-integrated-nav2-gateb-campaign-f7f98c6` / `87af41f45d721969f2767d36291252e3b14e3dcb` |
+| Work item | Run005 attempt_002 caller-owned partition, Nav2 provider and installed runtime artifact closure corrective; no new Run ID. |
+| `supersedes` | Supersedes only active attempt_002 candidate scope/pin/verification metadata. The original attempt_002 13-path scope, attempt_001 outcome, and invocation_002 runtime evidence remain immutable. Parent Ledger bytes are retained as an exact prefix. |
+| Current scope / pins | Exact 16-path direct corrective scope from `87af41f45d721969f2767d36291252e3b14e3dcb`. Exactly 34 unique current source pins (22 existing + 12 new), distinct from changed-path count. |
+| Corrections | Child launch validates and forwards caller partition; Nav2 node executable/prefix and plugin-provider checks run before acquire; 15 installed runtime artifacts require byte equality; four Nav2 provider dependencies are profile-specific while WP05 common lock remains 14 roots. |
+| Historical invocation_002 | Immutable terminal `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`; `COMPOSITE_EXITED_BEFORE_READINESS` caused by `LEGACY_WP06_PARTITION_LOCK`; consumed and not retried. |
+| Offline verification | Focused 89; Step-7 tools 205; bringup 244; RL 707; six-package external build PASS; observer 13 C++ cases and ROSIDL 8 cases PASS; installed equality 15/15; source pins 34/34; exact scope/history checks PASS. |
+| Guard / evidence | Source seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime executed in this corrective. Evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Record hashes | Decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`; Registry `c75d979c58b555c9dfed76667f96f7bcc5151033b779c9f96d43066f983a4831`; Plan `6555238df7353670e8ca35fee1260b4bcad1f60466e0c3d9faddda03f722168a`; guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`. |
+| Next prerequisite | Independent audit of the exact corrective commit; no runtime authorization is granted. |
