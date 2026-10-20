@@ -1962,3 +1962,32 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Offline checks | Focused runner/output tests 68 passed; Step-7 tools 218 passed; bringup 244; RL 707; six-package external build PASS; observer C++ 13 and ROSIDL 8 cases PASS; installed equality 15/15; 34/34 pins; exact 11-path scope and historical chain PASS. No runtime executed. |
 | Guard / evidence ceiling | Source guard PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Record hashes | Decision `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`; Registry `ece7c9142e77dff08fbd84aa4f1e2c0534aa4de432233dbb16516093a22484df`; Plan `69f168e695b20993a95664384e37d0dcca95d915a36a8455a6349bf35a0c7884`; guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`. |
+
+
+### STEP-7 Run005 attempt_002 exact GZ_PARTITION process identity corrective
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes only current Run005 attempt_002 stale-process detection and associated scope/pin metadata. Earlier Ledger bytes remain an exact parent prefix. Invocation_001 through invocation_004 historical outcomes remain immutable. |
+| Base / scope | Sole-parent target `da82b2e5d65eedd80f42000283dccc42a5f6ed66`; exact direct corrective set is 11 paths. The preceding output-parent correction remains its historical 11-path diff from `c408ccd2a2f7b11787f725a24e818ffa038e3d36`. |
+| Runner correction | Stale process means a non-ancestry PID whose raw NUL-delimited environment contains the exact entry `GZ_PARTITION=mecanum_step7_nav2_run005_f7f98c6`. No cmdline or textual heuristic is used. Process-disappearance and inaccessible-environment errors are ignored; diagnostics are numeric PIDs sorted numerically. |
+| Invocation_004 | Invoked once; exit 2; pre-acquire literal `PREACQUIRE_FAILURE:RuntimeError:STALE_PARTITION_PROCESS_FOUND`. Runner count 1; bootstrap/composite/C++ observer/Gate-B observer counts 0. Guard stayed pending, acquisition 0, no lock; runtime false; teardown not applicable. Evidence SHA256SUMS verification PASS. No retry. |
+| Source pins | Exactly 34 unique current pins; three existing entries refreshed by SHA-256 and size. |
+| Offline verification | Focused runner 72; Step-7 tools 222; bringup 244; nav_rl 707; six-package external build PASS; observer CTest 1/1; ROSIDL CTest 3/3; installed equality 15/15; 34/34 pins; exact scope/history PASS. No runtime was run in this corrective. |
+| Record hashes | Decision `{decision_sha}`; Registry `{registry_sha}`; Plan `{plan_sha}`; guard `{guard_sha}`; evidence `{evidence_sha}`; manifest `{manifest_sha}`. |
+| Evidence status | `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+| Next prerequisite | Independent audit of the exact corrective commit. No runtime authorization is created by this record. |
+
+
+### STEP-7 Run005 attempt_002 exact GZ_PARTITION process identity — final reconciliation
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes the preceding current-candidate pin/test-count metadata only. Prior ledger bytes remain an exact parent prefix; historical runtime artifacts are unchanged. |
+| Base / scope | Corrective parent `da82b2e5d65eedd80f42000283dccc42a5f6ed66`; exact direct scope is 11 authorized paths. |
+| Implementation | Stale-process detection excludes ancestry and matches only a complete NUL-delimited `GZ_PARTITION=mecanum_step7_nav2_run005_f7f98c6` entry in `/proc/<pid>/environ`; inaccessible or vanished non-ancestry entries are ignored. |
+| Offline verification | Focused runner/guard 82; Step-7 tools 223; bringup 244; nav_rl 707; six-package external build PASS; observer CTest 1/1 (13 cases); ROSIDL 25 tests PASS; installed artifacts 15/15; py_compile 4 files; 34/34 unique current pins. |
+| Historical invocation_004 | Immutable pre-acquire `STALE_PARTITION_PROCESS_FOUND`, checksum verification PASS, no guard consumption/lock, no bootstrap/composite/observer calls, no retry. |
+| Guard / evidence | PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Record hashes | Decision `ab30bbbf37f4961e70c4369e3c370590438d12f16031cb9d0fc5850653694311`; Registry `cd615016ac39364067ef8474f7d1343882cc102c775b398a201a6122c2af80ff`; Plan `9ef449ec0a8bf67f16cbcdd3cbc0e9df8513949074d0f759cbcf23e37bfcaf65`; guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`. |
+| Next action | Independent audit of the exact corrective commit. |

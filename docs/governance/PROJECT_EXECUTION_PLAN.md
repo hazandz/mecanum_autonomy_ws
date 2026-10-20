@@ -1064,3 +1064,21 @@ Invocation_003 is recorded accurately as a pre-acquire failure: initial `Permiss
 Run005 source pins remain 34 unique current-worktree entries, separate from the 11 changed paths. Four existing pin entries were refreshed; no new pin was added. Offline verification recorded: Step-7 tools 218 passed, bringup 244, RL 707, six-package external build PASS, observer/ROSIDL tests PASS, installed artifacts 15/15, and pins 34/34. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
 
 Decision SHA-256 `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`; Registry SHA-256 `ece7c9142e77dff08fbd84aa4f1e2c0534aa4de432233dbb16516093a22484df`; guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`.
+
+
+### Step-7 Run005 attempt_002 exact partition-process identity corrective
+
+This L1 corrective has an exact 11-path direct scope from `da82b2e5d65eedd80f42000283dccc42a5f6ed66`. Invocation_004 is an immutable pre-acquire failure: `STALE_PARTITION_PROCESS_FOUND`, runner invoked once, no bootstrap/composite/observer calls, no guard consumption, no lock, and verified evidence checksums. The stale scan matches only an exact NUL-delimited `GZ_PARTITION` environment entry for non-ancestry processes; inaccessible/disappeared process environments are ignored.
+
+Offline verification passed: 72 focused runner tests; 222 Step-7 tool tests; bringup 244; nav_rl 707; six-package external build; observer CTest 1/1 and ROSIDL CTest 3/3; installed/source equality 15/15; and 34/34 current source pins. Guard remains pending, capacity one, acquisition zero, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling is `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Record hashes: decision `{decision_sha}`, Registry `{registry_sha}`, guard `{guard_sha}`, evidence `{evidence_sha}`, manifest `{manifest_sha}`.
+
+
+## Run005 attempt_002 exact partition-process identity corrective — final verification
+
+This update supersedes only the current attempt_002 stale-process scanner verification metadata; no PEP work-package status or dependency changes. Exact direct scope from `da82b2e5d65eedd80f42000283dccc42a5f6ed66` is 11 paths. The scanner matches only exact NUL-delimited `GZ_PARTITION=<partition>` entries for non-ancestry processes; process disappearance/inaccessible environment is ignored, and numeric PID diagnostics are deterministic.
+
+Final offline checks: focused runner/guard 82; Step-7 tools 223; bringup 244; nav_rl 707; six-package external build PASS; observer CTest 1/1 with 13 cases; ROSIDL 25 cases; installed-source equality 15/15; py_compile 4 modified files; current source pins 34/34. Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED, no lock. Invocation_004 remains immutable with verified evidence and no guard consumption. No runtime claim, Gate B transition, or authorization.
+
+Current record references: decision `ab30bbbf37f4961e70c4369e3c370590438d12f16031cb9d0fc5850653694311`; Registry `cd615016ac39364067ef8474f7d1343882cc102c775b398a201a6122c2af80ff`; guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`.

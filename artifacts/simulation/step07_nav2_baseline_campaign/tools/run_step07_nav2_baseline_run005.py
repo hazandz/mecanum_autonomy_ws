@@ -418,26 +418,43 @@ def validate_fuel_cache(world_path: Path, cache_root: Path) -> dict:
     return validate_fuel_cache_layout(uris, cache_root, expected_root)
 
 
-def stale_partition_processes(partition: str) -> list[str]:
+def stale_partition_processes(partition: str, proc_root: Path = Path("/proc")) -> list[str]:
+    """Return non-ancestry PIDs whose exact environment owns this partition."""
     own_ancestry = {os.getpid()}
     parent = os.getppid()
     while parent > 1:
         own_ancestry.add(parent)
         try:
-            parent = int(Path(f"/proc/{parent}/stat").read_text().split()[3])
+            stat = (proc_root / str(parent) / "stat").read_text(encoding="ascii")
+            # The comm field is parenthesized and may contain spaces. Fields
+            # after its closing delimiter start with state, then ppid.
+            close = stat.rfind(")")
+            fields_after_comm = stat[close + 1 :].split()
+            parent = int(fields_after_comm[1])
         except (OSError, ValueError, IndexError):
             break
+
+    expected = b"GZ_PARTITION=" + partition.encode("utf-8")
     matches = []
-    for proc in Path("/proc").iterdir():
-        if not proc.name.isdigit() or int(proc.name) in own_ancestry:
+    try:
+        processes = list(proc_root.iterdir())
+    except OSError:
+        return matches
+    for proc in processes:
+        if not proc.name.isdigit():
+            continue
+        pid = int(proc.name)
+        if pid in own_ancestry:
             continue
         try:
-            command = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            environment = (proc / "environ").read_bytes()
         except OSError:
+            # Unrelated processes can disappear or restrict proc access while
+            # the scan is in progress; inaccessible metadata is not a match.
             continue
-        if partition in command:
-            matches.append(f"{proc.name}:{command}")
-    return matches
+        if expected in environment.split(b"\0"):
+            matches.append(pid)
+    return [str(pid) for pid in sorted(matches)]
 
 
 def prepare_ros_environment(worktree: Path, dirs: dict[str, Path]) -> dict[str, str]:

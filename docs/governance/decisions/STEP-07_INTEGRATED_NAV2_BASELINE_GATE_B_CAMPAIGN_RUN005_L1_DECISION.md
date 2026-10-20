@@ -65,3 +65,21 @@ Offline verification: focused runner/output tests 68 passed; full Step-7 tools 2
 The guard seed remains pending, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
 
 Current record hashes: guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`.
+
+
+## Corrective: exact GZ_PARTITION process identity
+
+Invocation_004 ran once and stopped before guard acquisition with `PREACQUIRE_FAILURE:RuntimeError:STALE_PARTITION_PROCESS_FOUND`. The run record shows runner count 1; bootstrap, composite, C++ observer, and Gate-B observer counts 0; `runtime_execution=false`; pending guard unchanged; no lock; and `teardown_applicable=false`. The evidence checksum verification passed. The runtime checkout was created and is preserved. This was a process-identity preflight result; no runtime campaign started and no retry occurred.
+
+The stale-process scan now excludes runner ancestry, enumerates numeric `/proc` PID entries, and reads each candidate's NUL-delimited `environ`. A process matches only when one complete entry equals `GZ_PARTITION=mecanum_step7_nav2_run005_f7f98c6`. Disappeared or inaccessible candidate environments are ignored. Diagnostics contain numeric PIDs only and are ordered numerically. The scanner does not inspect command lines or infer partition ownership from arbitrary text.
+
+The exact current direct corrective scope is 11 paths from `da82b2e5d65eedd80f42000283dccc42a5f6ed66`; the preceding output-parent correction remains the exact historical 11-path diff from `c408ccd2a2f7b11787f725a24e818ffa038e3d36`. Run005 retains exactly 34 unique source pins; three existing source/test pins were refreshed by SHA-256 and byte size. The source guard remains pending with capacity 1, acquisition count 0, and `runtime_authorization=NOT_GRANTED`. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling remains `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+
+## Corrective record: exact partition process identity — final offline reconciliation
+
+This entry records the finalized current candidate state after the source/test stabilization and existing-pin refresh. The exact direct diff from `da82b2e5d65eedd80f42000283dccc42a5f6ed66` remains 11 paths. The scanner reads only numeric PID `environ` data for matching; ancestry exclusion uses process stat metadata. A match requires an exact NUL-delimited environment entry; inaccessible/disappeared environments do not block preflight.
+
+Verification: focused Run005 runner/guard 82 passed; full Step-7 tools 223 passed; `mecanum_nav_bringup/test` 244 passed; `mecanum_nav_rl/test` 707 passed; six-package external build PASS; observer CTest 1/1 (13 cases) and ROSIDL tests 25/25 passed; installed runtime source equality 15/15; `py_compile` PASS for four modified Python files. Current source-pin inventory is 34/34 unique SHA-256/size entries. Invocation_004 remains the immutable checksum-verified pre-acquire failure recorded above; this corrective ran no official runner/runtime and did not consume the guard.
+
+Current record hashes: guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`. Corrected pin: `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` SHA-256 `b5532869ebbf6f3cbdf7c657c89dd291d005671ae1d41c76e25224b2b9bc370d`, size `12201`; contract test SHA-256 `e88f0fc6be4a8c9bd22e7f855fc160c656b530870529d753ae788f8b55206982`, size `47558`.

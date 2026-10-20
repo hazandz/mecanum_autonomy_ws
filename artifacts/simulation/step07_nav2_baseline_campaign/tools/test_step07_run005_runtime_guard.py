@@ -10,6 +10,7 @@ from step07_run005_runtime_guard import (
 
 ROOT = Path(__file__).resolve().parents[4]
 GUARD = ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
+EVIDENCE = ROOT / "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json"
 REVIEW = "fdc0e299515bda2286832aabec635948629517b5"
 EXPECTED_SOURCE_PIN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py",
@@ -151,6 +152,35 @@ def test_invocation_003_is_recorded_as_preacquire_without_guard_consumption():
         "runtime_execution": False,
         "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED",
     }
+
+
+def test_invocation_004_checksum_verified_preacquire_record_keeps_seed_pending():
+    document = load_guard(GUARD)
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    disposition = evidence["run005_attempt_002_invocation_004"]
+    assert disposition["preacquire_failure_literal"] == (
+        "PREACQUIRE_FAILURE:RuntimeError:STALE_PARTITION_PROCESS_FOUND"
+    )
+    assert disposition["terminal_outcome"] == (
+        "STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED"
+    )
+    assert disposition["call_counts"] == {
+        "runner": 1, "bootstrap": 0, "composite": 0,
+        "cpp_observer": 0, "gate_b_observer": 0,
+    }
+    assert disposition["runtime_execution"] is False
+    assert disposition["guard_acquired"] is disposition["guard_consumed"] is False
+    assert disposition["guard_state_before"] == disposition["guard_state_after"] == PENDING
+    assert disposition["guard_capacity"] == 1
+    assert disposition["guard_acquisition_count"] == 0
+    assert disposition["lock_exists"] is False
+    assert disposition["teardown_applicable"] is False
+    assert disposition["sha256sums_check"] == "PASS"
+    assert disposition["artifact_manifest_count"] == 2
+    assert document["state"] == PENDING and document["capacity"] == 1
+    assert document["acquisition_count"] == 0
+    assert document["runtime_authorization"] == "NOT_GRANTED"
+    assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
 
 
 @pytest.mark.parametrize("raw", [

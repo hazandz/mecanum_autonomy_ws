@@ -1073,3 +1073,30 @@ Run005 keeps exactly 34 unique runtime source pins. The following existing entri
 | `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `3a4dfb51fa5f0d160fca04adf8a4d1819dde5d613598ea5b7f899b5b09b8eb47` | 45389 |
 
 Guard SHA-256 `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence SHA-256 `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest SHA-256 `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`; Decision SHA-256 `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`. The guard remains pending/capacity-one/acquisition-zero/NOT_GRANTED; no runtime or Gate-B claim is made.
+
+
+### STEP07 Run005 attempt_002 exact GZ_PARTITION process identity corrective
+
+The current exact direct scope is 11 paths from `da82b2e5d65eedd80f42000283dccc42a5f6ed66`. Stale partition detection now accepts only an exact NUL-delimited `GZ_PARTITION=<partition>` entry from a non-ancestry process environment; command-line matching is removed. Invocation_004 is preserved as a checksum-verified pre-acquire failure, with no guard consumption or lock and no campaign process invocation.
+
+Run005 keeps 34 unique current source pins. These three existing entries were refreshed; no pin was added:
+
+| Existing source/test path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `5c463f20dc2daa63b48a25ba205e4248967bc6fe1a80001dc2328b736b84c5cf` | 61495 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `5dffb67426258b7b88d77208d460358d00b7f64cb6ea01dd0d0bddfc05dc95ff` | 54257 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `719116c137289e79306869c951a7ac9fdd5c75749fd082ca7c97d7958673097d` | 47458 |
+
+Current record hashes: decision `b1aa4f60806bec6fdc5ceab9b72b9da44f38f872a703a1083bfe97dee8fdf5f5`, guard `01c77c369129f963791d176091e803a5596f9ebd91e1de4033c5bb3bc684bdbc`, evidence `98cb7844f4af480f2e14dd4def6806c484b15175dc35a3591471cef066347e34`, manifest `d53650a6273f9ccf4ab0696bd3b4d6f9c8c91f60f6cf518a0b372550c9b50952`. Guard state remains pending/capacity-one/acquisition-zero/NOT_GRANTED. No runtime or Gate-B claim is made.
+
+
+## Run005 attempt_002 exact GZ_PARTITION process-identity corrective — final pin reconciliation
+
+The exact current corrective scope is 11 paths from `da82b2e5d65eedd80f42000283dccc42a5f6ed66`; source-pin count remains 34 unique entries and is independent of changed-path count. The existing 34 pins were checked against current bytes; two entries required refresh after test stabilization. Historical attempt_001 through invocation_004 records remain immutable. Invocation_004 was a checksum-verified pre-acquire failure with the guard pending and unconsumed.
+
+| Current existing pin | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `b5532869ebbf6f3cbdf7c657c89dd291d005671ae1d41c76e25224b2b9bc370d` | 12201 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `e88f0fc6be4a8c9bd22e7f855fc160c656b530870529d753ae788f8b55206982` | 47558 |
+
+Current decision SHA-256 `ab30bbbf37f4961e70c4369e3c370590438d12f16031cb9d0fc5850653694311`; guard `e71580a8c3ffb0feb7740f8aa194ad2206ce18f9e60cfc9fb4b5ad1c600da36a`; evidence `fe28092b4589cf85b270fdc6e8696197687626aa32ca33f85e3360f36db462e6`; manifest `a012aae26afbc5af4c025f7d70d3ef6a562b34c4659c361cccdf86622f9c5f93`. Verification is source/offline only; Gate B remains `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`.

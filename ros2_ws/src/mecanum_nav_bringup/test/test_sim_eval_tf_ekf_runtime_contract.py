@@ -51,6 +51,7 @@ RUN005_ATTEMPT_001_COMMIT = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
 RUN005_BASE = RUN005_ATTEMPT_001_COMMIT
 RUN005_ATTEMPT_002_CORRECTIVE_BASE = "87af41f45d721969f2767d36291252e3b14e3dcb"
 RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT = "c408ccd2a2f7b11787f725a24e818ffa038e3d36"
+RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT = "da82b2e5d65eedd80f42000283dccc42a5f6ed66"
 STEP07_CAMPAIGN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_001.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_guard.py",
@@ -496,6 +497,12 @@ RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS = {
     "docs/governance/PROJECT_EXECUTION_PLAN.md",
     "docs/governance/PROJECT_PROGRESS_LEDGER.md",
 }
+RUN005_ATTEMPT_002_PARTITION_SOURCE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
 
 def _candidate_changed_paths():
     status = subprocess.run(
@@ -504,13 +511,26 @@ def _candidate_changed_paths():
     ).stdout
     dirty = bool(status.strip())
     if dirty:
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip() == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT
         changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
     else:
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip() == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT
         changed = set(subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines())
-    if changed != RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS:
+    if dirty:
+        assert changed in (
+            RUN005_ATTEMPT_002_PARTITION_SOURCE_PATHS,
+            RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS,
+        ), f"Run005 attempt_002 output corrective path set is not exact: {sorted(changed)}"
+    elif changed != RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS:
         raise AssertionError(
             f"Run005 attempt_002 output corrective path set is not exact: {sorted(changed)}"
         )
@@ -528,6 +548,16 @@ def _assert_run005_attempt002_historical_scope():
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     assert set(previous_corrective) == RUN005_ATTEMPT_002_CORRECTIVE_PATHS
+    output_precondition = subprocess.run(
+        ["git", "diff", "--name-only",
+         f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}..{RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(output_precondition) == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS
+    assert subprocess.run(
+        ["git", "rev-parse", f"{RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT}^"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip() == RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT
 
 
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
@@ -556,7 +586,13 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         ["git", "rev-parse", f"{RUN004_HOST_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN004_CORRECTIVE_BASE
-    assert changed == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS
+    if _dirty:
+        assert changed in (
+            RUN005_ATTEMPT_002_PARTITION_SOURCE_PATHS,
+            RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS,
+        )
+    else:
+        assert changed == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
@@ -757,7 +793,13 @@ def test_historical_runtime_conservation_and_candidate_scope():
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     assert set(run004_host_diff) == RUN004_HOST_CORRECTIVE_PATHS
-    assert changed == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS
+    if _dirty:
+        assert changed in (
+            RUN005_ATTEMPT_002_PARTITION_SOURCE_PATHS,
+            RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS,
+        )
+    else:
+        assert changed == RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_PATHS
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
         cwd=ROOT, check=True, capture_output=True, text=True,

@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import inspect
 import json
 import errno
 import os
@@ -20,6 +21,17 @@ TUGBOT_URI = "https://fuel.gazebosim.org/1.0/MovAi/models/Tugbot"
 FUEL_URIS = [DEPOT_URI, TUGBOT_URI]
 RUN005_ATTEMPT_001_SHA = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
 RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
+
+
+def _fake_proc_process(proc_root, pid, *, environ=None, cmdline=None, ppid=1):
+    process = proc_root / str(pid)
+    process.mkdir(parents=True, exist_ok=True)
+    (process / "stat").write_text(f"{pid} (fake process {pid}) S {ppid} 0 0\n", encoding="ascii")
+    if environ is not None:
+        (process / "environ").write_bytes(environ)
+    if cmdline is not None:
+        (process / "cmdline").write_bytes(cmdline)
+    return process
 
 
 def _git_blob(root: Path, commit: str, relative: str) -> bytes:
@@ -549,14 +561,14 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
         "runtime_worktree": runtime_target,
         "run_directory": evidence_target,
         "guard_path": guard_path,
-        "expected_review_commit": "c408ccd2a2f7b11787f725a24e818ffa038e3d36",
+        "expected_review_commit": "da82b2e5d65eedd80f42000283dccc42a5f6ed66",
         "expected_integration_base": runner.INTEGRATION_BASE,
         "run_id": runner.RUN_ID,
         "gz_partition": runner.PARTITION,
         "owner_authorization": "test-authorization",
         "owner_authorization_scope": runner.AUTH_SCOPE,
         "owner_authorization_run_id": runner.RUN_ID,
-        "owner_authorization_review_commit": "c408ccd2a2f7b11787f725a24e818ffa038e3d36",
+        "owner_authorization_review_commit": "da82b2e5d65eedd80f42000283dccc42a5f6ed66",
         "owner_authorization_integration_base": runner.INTEGRATION_BASE,
     })()
     monkeypatch.setattr(runner, "_parse", lambda: args)
@@ -737,6 +749,113 @@ def test_fuel_validation_has_no_ambiguous_recursive_lookup_or_download_path():
     assert ".rglob(" not in fuel_function
     assert "gz fuel download" not in source
     assert "OpenRobotics/models/Depot" in source and "MovAi/models/Tugbot" in source
+
+
+def test_stale_partition_scan_uses_only_exact_nul_delimited_environment_entries(tmp_path, monkeypatch):
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(runner.os, "getpid", lambda: 999)
+    monkeypatch.setattr(runner.os, "getppid", lambda: 1)
+    partition = runner.PARTITION
+    _fake_proc_process(proc_root, 10, cmdline=f"wrapper {partition}".encode())
+    _fake_proc_process(proc_root, 11, environ=f"GZ_PARTITION={partition}\0OTHER=x\0".encode())
+    _fake_proc_process(proc_root, 12, environ=f"GZ_PARTITION={partition}-extra\0".encode())
+    _fake_proc_process(proc_root, 13, environ=f"XGZ_PARTITION={partition}\0".encode())
+    _fake_proc_process(proc_root, 14, environ=f"OTHER=GZ_PARTITION={partition}\0".encode())
+    _fake_proc_process(proc_root, 15, environ=b"GZ_PARTITION=another_partition\0")
+    _fake_proc_process(proc_root, 16, environ=f"PATH=/bin\0GZ_PARTITION={partition}\0LANG=C\0".encode())
+
+    assert runner.stale_partition_processes(partition, proc_root=proc_root) == ["11", "16"]
+    source = inspect.getsource(runner.stale_partition_processes)
+    assert "cmdline" not in source
+    assert '.split(b"\\0")' in source
+
+
+def test_stale_partition_scan_excludes_process_ancestry_and_sorts_numeric_pids(tmp_path, monkeypatch):
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(runner.os, "getpid", lambda: 900)
+    monkeypatch.setattr(runner.os, "getppid", lambda: 500)
+    exact = f"GZ_PARTITION={runner.PARTITION}\0".encode()
+    _fake_proc_process(proc_root, 900, environ=exact)
+    _fake_proc_process(proc_root, 500, environ=exact, ppid=1)
+    _fake_proc_process(proc_root, 10, environ=exact)
+    _fake_proc_process(proc_root, 2, environ=exact)
+
+    assert runner.stale_partition_processes(runner.PARTITION, proc_root=proc_root) == ["2", "10"]
+
+
+def test_stale_partition_scan_ignores_disappeared_or_inaccessible_environ(tmp_path, monkeypatch):
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(runner.os, "getpid", lambda: 999)
+    monkeypatch.setattr(runner.os, "getppid", lambda: 1)
+    for pid in (3, 4, 5):
+        _fake_proc_process(proc_root, pid, environ=b"GZ_PARTITION=other\0")
+    original_read_bytes = Path.read_bytes
+
+    def selective_read_bytes(path):
+        if path.name == "environ" and path.parent.name == "3":
+            raise PermissionError("proc environ denied")
+        if path.name == "environ" and path.parent.name == "4":
+            raise FileNotFoundError("process disappeared")
+        if path.name == "environ" and path.parent.name == "5":
+            raise OSError("proc read failed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", selective_read_bytes)
+    assert runner.stale_partition_processes(runner.PARTITION, proc_root=proc_root) == []
+
+
+def test_exact_stale_environment_match_fails_preacquire_without_guard_or_lock(tmp_path, monkeypatch):
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(runner.os, "getpid", lambda: 999)
+    monkeypatch.setattr(runner.os, "getppid", lambda: 1)
+    _fake_proc_process(
+        proc_root, 123,
+        environ=f"GZ_PARTITION={runner.PARTITION}\0".encode(),
+        cmdline=b"unrelated-command\0",
+    )
+    runtime_worktree = tmp_path / "runtime-worktree"
+    runtime_worktree.mkdir()
+    run_directory = tmp_path / "evidence"
+    guard_path = tmp_path / "guard.json"
+    guard = {"run_id": runner.RUN_ID, "state": runner.PENDING, "capacity": 1,
+             "acquisition_count": 0, "runtime_authorization": "NOT_GRANTED"}
+    guard_raw = json.dumps(guard, sort_keys=True, separators=(",", ":")).encode()
+    guard_path.write_bytes(guard_raw)
+    lock = guard_path.with_suffix(".json.lock")
+
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"ROS_DISTRO": "jazzy"})
+
+    def host_preflight(_env, _worktree, _run_directory, partition, *_args):
+        if runner.stale_partition_processes(partition, proc_root=proc_root):
+            raise RuntimeError("STALE_PARTITION_PROCESS_FOUND")
+        return {"stale_processes": []}
+
+    def acquire(*_args, **_kwargs):
+        raise AssertionError("exact stale match must stop before guard acquisition")
+
+    monkeypatch.setattr(runner, "host_preflight", host_preflight)
+    monkeypatch.setattr(runner, "acquire_guard", acquire)
+    record = {"schema_version": "1.0", "run_id": runner.RUN_ID,
+              "review_commit": "a" * 40, "integration_base": runner.INTEGRATION_BASE,
+              "partition": runner.PARTITION, "guard_state_before": runner.PENDING}
+    result = runner.preacquire_preflight(
+        runtime_worktree, {"build": tmp_path / "build"}, run_directory,
+        runner.PARTITION, tmp_path / "map", tmp_path / "fuel", {}, guard_path,
+        lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record,
+    )
+
+    assert result[:3] == (None, None, None)
+    assert result[3]["preacquire_failure_literal"] == "PREACQUIRE_FAILURE:RuntimeError:STALE_PARTITION_PROCESS_FOUND"
+    assert result[3]["guard_acquired"] is False
+    assert result[3]["call_counts"] == {"runner": 1, "bootstrap": 0, "composite": 0,
+                                         "cpp_observer": 0, "gate_b_observer": 0}
+    assert guard_path.read_bytes() == guard_raw
+    assert not lock.exists()
 
 
 def test_bootstrap_and_run005_host_preflight_share_lowercase_fuel_binding(tmp_path, monkeypatch):
