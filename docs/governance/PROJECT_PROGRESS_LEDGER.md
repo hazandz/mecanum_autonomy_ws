@@ -1917,3 +1917,17 @@ Offline results: focused tests 72 passed; full Step-7 tools 184 passed; bringup 
 | Project Execution Plan | `05f3f27bb736a306cbd5cac71a8c026b994932fe20f711559a783542655564af` |
 
 Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This entry supersedes only prior current-attempt_002 scope/pin/test metadata. The exact parent Ledger byte sequence remains an unchanged prefix.
+
+
+### STEP07 Run005 attempt_002 isolated runtime checkout corrective — offline candidate
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes the prior attempt_002 runner checkout-creation method and its 12-path scope/pin summary only. Run005 attempt_001 remains immutable, consumed, and not retried; all parent Ledger bytes remain an exact byte prefix. |
+| Base / scope | Corrective base and required sole parent `72d04391a9d6d83e3e18589212d566f17dc220d1`. Cumulative attempt_002 scope from `71ca32471f8e042a0048d319ca39cb9deff0c6f4` is exactly 13 paths; exact path-set test works in dirty and committed candidate states. |
+| Correction | Runner now clones locally from the exact clean source checkout with `git clone --no-hardlinks --no-checkout`, checks out the exact review HEAD detached, verifies private destination `.git`, no alternates, clean status and official origin, and confirms source ref/status/origin and Git metadata are unchanged. It does not use linked worktree commands or network clone. |
+| Pins | 22 unique current Run005 source pins; runner, runner-test and contract-test SHA-256/size values are refreshed in guard, evidence, manifest and Registry. Attempt_001 source pins remain exact Git-blob checks at `71ca32471f8e042a0048d319ca39cb9deff0c6f4`, with no current-worktree fallback. |
+| Offline verification | Isolated-checkout runner tests 36 passed; focused bootstrap/scope tests 29 passed; Step-7 tools 185 passed; `mecanum_nav_bringup/test` 239 passed; `mecanum_nav_rl/test` 707 passed; six-package external build PASS; observer/ROSIDL tests 25 passed; py_compile and installed bootstrap byte equality PASS. |
+| Guard / evidence | Attempt_002 guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, no lock. No runtime or official runner was invoked; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling remains `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Record hashes | Decision `ddff30ade74efaf4d8d8e202de4decdb5594766589097a29a2d6780e7f088180`; evidence `6f4ad54ecfd3b51a17c3a1251ef1322a63b4a9222fca1c47220dfa0bcdb8a24b`; guard manifest `22e1d9b6bc9d013a831b0ffbb06bddce8a18b05c1ab6092fac88a42a61761818`; guard `4be7b4bd00324ba023c11a2717cdfcc91f8d9418ace98b47de40e2f181cc178f`; Registry `1b685ed46e820c48971ccced80be39644b2632c499c442d31bfd06cd3438c76a`; Execution Plan `d7a433e0502f6ab2ff0c23e4a7fa518cdf3e9862af22491e1e17c24b39aaef76`. |
+| Next prerequisite | Independent audit of the exact corrective commit; no runtime authorization is granted by this candidate. |

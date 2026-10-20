@@ -36,6 +36,7 @@ WORLD_SHA256 = "a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d
 CONFIG_REL = "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json"
 CONFIG_SHA256 = "3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84"
 PYDANTIC_VERSION = "2.10.6"
+EXPECTED_ORIGIN = "https://github.com/hazandz/mecanum_autonomy_ws.git"
 
 RUNTIME_PYTHON_PROBE = r'''import importlib, json, platform, sys
 facts = {"python_version": platform.python_version(), "python_major": sys.version_info.major,
@@ -110,6 +111,68 @@ def _run(args, *, cwd=None, env=None, timeout=30, check=True, capture=True):
     if check and result.returncode != 0:
         raise RuntimeError(f"COMMAND_FAILED:{args[0]}:{result.returncode}:{result.stdout or ''}")
     return result
+
+
+def create_isolated_runtime_checkout(source: Path, destination: Path,
+                                     expected_head: str) -> Path:
+    """Copy the exact local source commit into a repository with private Git metadata.
+
+    The source is read-only input.  In particular, this must not use linked
+    worktree operations, because those write administrative state into the
+    source repository's common Git directory.
+    """
+    source = Path(source).resolve(strict=True)
+    destination = Path(destination)
+    if not destination.is_absolute():
+        raise RuntimeError("RUNTIME_CHECKOUT_PATH_NOT_ABSOLUTE")
+    if destination.resolve(strict=False) == source or source in destination.resolve(strict=False).parents:
+        raise RuntimeError("RUNTIME_CHECKOUT_PATH_INSIDE_SOURCE_REPOSITORY")
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError("RUNTIME_CHECKOUT_PATH_ALREADY_EXISTS")
+    if not destination.parent.is_dir():
+        raise RuntimeError("RUNTIME_CHECKOUT_PARENT_MISSING")
+    if len(expected_head) != 40 or any(c not in "0123456789abcdef" for c in expected_head):
+        raise RuntimeError("RUNTIME_CHECKOUT_EXPECTED_COMMIT_INVALID")
+
+    source_origin = _run(["git", "remote", "get-url", "origin"], cwd=source).stdout.strip()
+    source_head = _run(["git", "rev-parse", "HEAD"], cwd=source).stdout.strip()
+    source_status = _run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=source).stdout
+    if source_origin != EXPECTED_ORIGIN or source_head != expected_head or source_status.strip():
+        raise RuntimeError("SOURCE_REPOSITORY_IDENTITY_CHANGED_DURING_RUNTIME_CHECKOUT_CREATION")
+
+    _run([
+        "git", "clone", "--no-hardlinks", "--no-checkout", "--origin", "origin",
+        "--", str(source), str(destination),
+    ], cwd=source)
+    _run(["git", "checkout", "--detach", expected_head], cwd=destination)
+    _run(["git", "remote", "set-url", "origin", source_origin], cwd=destination)
+
+    git_metadata = destination / ".git"
+    if not git_metadata.is_dir() or git_metadata.is_symlink():
+        raise RuntimeError("RUNTIME_CHECKOUT_GIT_METADATA_NOT_PRIVATE")
+    common_dir = Path(_run(["git", "rev-parse", "--git-common-dir"], cwd=destination).stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (destination / common_dir).resolve(strict=True)
+    if common_dir != git_metadata.resolve(strict=True):
+        raise RuntimeError("RUNTIME_CHECKOUT_GIT_METADATA_NOT_PRIVATE")
+    alternates = git_metadata / "objects" / "info" / "alternates"
+    if alternates.exists() and alternates.read_text(encoding="utf-8").strip():
+        raise RuntimeError("RUNTIME_CHECKOUT_USES_SHARED_OBJECT_ALTERNATES")
+
+    runtime_head = _run(["git", "rev-parse", "HEAD"], cwd=destination).stdout.strip()
+    runtime_status = _run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=destination
+    ).stdout.strip()
+    runtime_origin = _run(["git", "remote", "get-url", "origin"], cwd=destination).stdout.strip()
+    symbolic_head = _run(["git", "symbolic-ref", "-q", "HEAD"], cwd=destination, check=False)
+    if runtime_head != expected_head or runtime_status or runtime_origin != EXPECTED_ORIGIN or symbolic_head.returncode == 0:
+        raise RuntimeError("RUNTIME_CHECKOUT_NOT_EXACT_CLEAN_DETACHED")
+
+    if (_run(["git", "rev-parse", "HEAD"], cwd=source).stdout.strip() != source_head
+            or _run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=source).stdout != source_status
+            or _run(["git", "remote", "get-url", "origin"], cwd=source).stdout.strip() != source_origin):
+        raise RuntimeError("SOURCE_REPOSITORY_CHANGED_DURING_RUNTIME_CHECKOUT_CREATION")
+    return destination
 
 
 def validate_map_root(root: Path) -> Path:
@@ -643,7 +706,7 @@ def main():
         raise SystemExit("INTEGRATION_BASE_MISMATCH")
     origin = _run(["git", "remote", "get-url", "origin"], cwd=source).stdout.strip()
     head = _run(["git", "rev-parse", "HEAD"], cwd=source).stdout.strip()
-    if origin != "https://github.com/hazandz/mecanum_autonomy_ws.git" or head != args.expected_review_commit:
+    if origin != EXPECTED_ORIGIN or head != args.expected_review_commit:
         raise SystemExit("SOURCE_REPOSITORY_IDENTITY_MISMATCH")
     if _run(["git", "status", "--porcelain"], cwd=source).stdout.strip():
         raise SystemExit("SOURCE_REPOSITORY_NOT_CLEAN")
@@ -661,9 +724,7 @@ def main():
     dirs_root = Path(tempfile.mkdtemp(prefix="step07_nav2_run005_"))
     dirs = {name: dirs_root / name for name in ("build", "install", "log", "ros_home", "ros_log")}
     for path in dirs.values(): path.mkdir(parents=True, exist_ok=True)
-    _run(["git", "worktree", "add", "--detach", str(args.runtime_worktree), head], cwd=source)
-    if _run(["git", "rev-parse", "HEAD"], cwd=args.runtime_worktree).stdout.strip() != head or _run(["git", "status", "--porcelain"], cwd=args.runtime_worktree).stdout.strip():
-        raise SystemExit("RUNTIME_WORKTREE_NOT_EXACT_CLEAN_DETACHED")
+    create_isolated_runtime_checkout(source, args.runtime_worktree, head)
     bootstrap_proc = composite_proc = cpp = gate = None
     bootstrap_member = composite_member = None
     bootstrap_calls = composite_calls = cpp_calls = gate_b_calls = 0

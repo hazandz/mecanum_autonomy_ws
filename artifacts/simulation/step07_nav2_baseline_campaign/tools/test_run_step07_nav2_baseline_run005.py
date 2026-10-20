@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -42,6 +43,96 @@ def _validate_layout(root):
 
 def _strict_load(path):
     return runner.load_canonical_json(path)
+
+
+def _git_metadata_snapshot(git_dir: Path):
+    snapshot = {}
+    for path in sorted(git_dir.rglob("*")):
+        relative = path.relative_to(git_dir).as_posix()
+        info = path.lstat()
+        snapshot[relative] = (info.st_mode & 0o777, info.st_size, info.st_mtime_ns,
+                              path.read_bytes() if path.is_file() and not path.is_symlink() else None,
+                              os.readlink(path) if path.is_symlink() else None)
+    return snapshot
+
+
+def test_runtime_checkout_is_private_local_clone_and_leaves_read_only_source_metadata_unchanged(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "runtime-copy"
+    source.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=source, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=source, check=True)
+    (source / "payload.txt").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "payload.txt"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=source, check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", runner.EXPECTED_ORIGIN], cwd=source, check=True)
+    expected_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    git_dir = source / ".git"
+    original_modes = {path: path.stat().st_mode & 0o777 for path in [git_dir, *git_dir.rglob("*")]}
+    for path in sorted(original_modes, key=lambda item: len(item.parts), reverse=True):
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    source_snapshot = _git_metadata_snapshot(git_dir)
+
+    commands = []
+    original_run = runner._run
+
+    def recording_run(args, **kwargs):
+        commands.append(list(args))
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(runner, "_run", recording_run)
+    try:
+        result = runner.create_isolated_runtime_checkout(source, destination, expected_head)
+        assert result == destination
+        assert destination.joinpath(".git").is_dir()
+        assert not destination.joinpath(".git").is_symlink()
+        common_dir = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"], cwd=destination,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        common_path = Path(common_dir)
+        if not common_path.is_absolute():
+            common_path = destination / common_path
+        assert common_path.resolve() == (destination / ".git").resolve()
+        assert not (destination / ".git/objects/info/alternates").exists()
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=destination, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip() == expected_head
+        assert subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"], cwd=destination,
+            capture_output=True, text=True,
+        ).returncode != 0
+        assert subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"], cwd=destination,
+            check=True, capture_output=True, text=True,
+        ).stdout == ""
+        assert subprocess.run(
+            ["git", "remote", "get-url", "origin"], cwd=destination,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip() == runner.EXPECTED_ORIGIN
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=source, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip() == expected_head
+        assert subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"], cwd=source,
+            check=True, capture_output=True, text=True,
+        ).stdout == ""
+        assert _git_metadata_snapshot(git_dir) == source_snapshot
+        rendered = [" ".join(command) for command in commands]
+        assert any(command[:3] == ["git", "clone", "--no-hardlinks"]
+                   and "--no-checkout" in command for command in commands)
+        assert any(command[:3] == ["git", "checkout", "--detach"] for command in commands)
+        assert any(command[:4] == ["git", "remote", "set-url", "origin"] for command in commands)
+        assert not any("worktree" in command for command in rendered)
+        assert not any(command[:2] in (["git", "fetch"], ["git", "pull"]) for command in commands)
+    finally:
+        for path, mode in original_modes.items():
+            path.chmod(mode)
 
 
 def test_installed_file_closure_rejects_any_artifact_package_without_prefix():

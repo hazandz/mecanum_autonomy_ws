@@ -426,6 +426,7 @@ RUN005_ATTEMPT_001_PATHS = {
 
 RUN005_ATTEMPT_002_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
     "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
@@ -440,33 +441,21 @@ RUN005_ATTEMPT_002_PATHS = {
 }
 
 def _candidate_changed_paths():
-    status = subprocess.run(
-        ["git", "status", "--short", "--untracked-files=all"], cwd=ROOT,
+    names = subprocess.run(
+        ["git", "diff", "--name-only", RUN005_BASE], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
-    if status:
-        changed = {line[3:] for line in status if line}
-        if changed == RUN005_ATTEMPT_002_PATHS:
-            return changed, True
-        raise AssertionError(f"dirty Run005 attempt_002 path set is not exact: {sorted(changed)}")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT,
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
         check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    parent = subprocess.run(
-        ["git", "rev-parse", "HEAD^"], cwd=ROOT,
+    ).stdout.splitlines()
+    changed = set(names) | set(untracked)
+    if changed != RUN005_ATTEMPT_002_PATHS:
+        raise AssertionError(f"Run005 attempt_002 cumulative path set is not exact: {sorted(changed)}")
+    return changed, bool(subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
         check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    if parent == RUN005_BASE:
-        names = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
-            check=True, capture_output=True, text=True,
-        ).stdout.splitlines()
-        changed = set(names)
-        if changed != RUN005_ATTEMPT_002_PATHS:
-            raise AssertionError("clean Run005 attempt_002 does not match its exact authorized path set")
-        return changed, False
-    raise AssertionError(f"clean worktree is not the attempt_002 base or committed candidate: HEAD={head}")
+    ).stdout.strip())
 
 
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
