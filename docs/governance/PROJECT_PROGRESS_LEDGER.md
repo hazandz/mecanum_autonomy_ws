@@ -2019,3 +2019,17 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Offline verification | Focused Run005 runner/guard 116; scope 2; Step-7 tools 257; bringup 244; nav_rl 707; six-package external build PASS; observer 13 and ROSIDL 25 PASS; installed source equality 15/15; source pins 34/34; JSON/YAML/XML, history, scope, Ledger-prefix and diff checks PASS. No runtime was run. |
 | Guard / evidence | Seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Next action | Independent audit of the exact corrective commit; a later runtime requires separate exact Owner authorization. |
+
+
+### STEP-7 Run005 attempt_002 SIGTERM/guard handoff corrective — final offline reconciliation
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes only current Run005 attempt_002 SIGTERM boundary/finalization semantics and associated source-pin/scope metadata. All prior Ledger bytes remain an exact parent prefix; invocation_001–005 historical artifacts remain immutable. |
+| Base / scope | Parent `bee34dd2d689fe585ae12000058b2f2903196659`; current direct corrective scope is the exact authorized 11-path set. |
+| Signal/acquisition boundary | Handler is installed before pre-acquire. Pre-acquire SIGTERM preserves pending guard state and emits pre-acquire evidence if writable. SIGTERM is masked only around acquisition/handoff; acquired state is marked before unmasking. A pending signal after mutation is a consumed FAIL. |
+| Terminal evidence | SIGTERM in campaign enters FAIL handling. In teardown/finalization the handler latches without throwing; best-effort composite-before-bootstrap teardown continues. Before handler restoration, interruption resynchronizes run_record, manifest, and checksums to FAIL when writable. Prior handler is restored once. SIGKILL, power loss, and unwritable storage cannot guarantee durable evidence. Verdict failure is distinct from checksum/filesystem failure. |
+| Phase A verification | Focused runner/guard 122; scope-chain 2; Step-7 tools 263; bringup 244; nav_rl 707; six-package external build PASS; observer C++ 13 and ROSIDL 8 PASS; installed-source equality 15/15; py_compile 4 Python files; current pins 34/34; canonical JSON/YAML/XML, historical Git blobs, exact scope, and diff checks PASS. |
+| Guard / evidence | Seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. No runner/runtime was invoked. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Current pin refresh | Four existing pins refreshed by SHA-256 and exact size; 34 unique paths retained. Changed-path set and runtime pin inventory remain distinct. |
+| Next action | Independent audit of the exact corrective commit. A later runtime still requires separate exact Owner authorization. |

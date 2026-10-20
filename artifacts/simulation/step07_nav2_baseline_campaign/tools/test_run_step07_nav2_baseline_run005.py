@@ -24,6 +24,13 @@ RUN005_ATTEMPT_002_OUTPUT_BASE = "99d5c29c1c302260a8971e19e46f93d778a52f86"
 RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
 
 
+def _acquired_campaign_handler():
+    handler = runner.SigtermHandler()
+    handler.mark_guard_acquired()
+    handler.begin_campaign()
+    return handler
+
+
 def _fake_proc_process(proc_root, pid, *, environ=None, cmdline=None, ppid=1):
     process = proc_root / str(pid)
     process.mkdir(parents=True, exist_ok=True)
@@ -798,7 +805,7 @@ def test_terminal_verdict_and_real_artifacts_include_all_failure_conditions(
 def test_sigterm_during_finalization_rewrites_durable_fail_record(tmp_path, monkeypatch):
     run_directory = tmp_path / "evidence"
     run_directory.mkdir()
-    handler = runner.SigtermHandler()
+    handler = _acquired_campaign_handler()
     original_write = runner._atomic_write
     first = True
 
@@ -853,7 +860,7 @@ def test_process_group_kill_wait_and_proc_errors_cannot_report_clean(tmp_path, m
 
 
 def test_sigterm_during_teardown_still_stops_both_groups_and_persists_failure(tmp_path, monkeypatch):
-    handler = runner.SigtermHandler()
+    handler = _acquired_campaign_handler()
     class FakeProcess:
         def __init__(self, pid):
             self.pid = pid
@@ -974,35 +981,233 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
     assert (evidence / "preflight_failure.json").is_file()
 
 
-def test_sigterm_handler_raises_stable_exception_and_runtime_path_finalizes_after_teardown():
-    source = RUNNER_PATH.read_text(encoding="utf-8")
-    main_body = source[source.index("def main():"):]
-    assert main_body.index("preacquire_preflight(") < main_body.index(
-        "signal.signal(signal.SIGTERM, sigterm_handler)") < main_body.index("args.run_directory.mkdir")
-    assert source.index("sigterm_handler.begin_finalization()") < source.index(
-        "finalise_after_teardown(record, runtime_acceptance, teardown)")
-    finalizer = source[source.index("def finalize_campaign_after_acquisition("):]
-    assert "finally:\n        signal.signal(signal.SIGTERM, previous_sigterm_handler)" in finalizer
+def test_sigterm_before_guard_acquisition_writes_preacquire_failure_without_consuming(tmp_path, monkeypatch):
+    runtime_worktree = tmp_path / "runtime"
+    runtime_worktree.mkdir()
+    run_directory = tmp_path / "evidence"
+    guard_path = runtime_worktree / "guard.json"
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    guard_bytes = json.dumps(guard, sort_keys=True, separators=(",", ":")).encode()
+    guard_path.write_bytes(guard_bytes)
+    lock = guard_path.with_suffix(".json.lock")
+    launches = []
     handler = runner.SigtermHandler()
-    with pytest.raises(runner.RunnerInterruptedBySignal,
-                       match="^RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM$"):
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"PATH": "/fake"})
+    monkeypatch.setattr(runner, "host_preflight", lambda *_args: {})
+    monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("must not acquire"))
+
+    def interrupt_before_acquire(*_args, **_kwargs):
+        launches.append("acquire-handoff")
         handler(runner.signal.SIGTERM, None)
-    handler(runner.signal.SIGTERM, None)  # second signal cannot interrupt evidence finalization
+
+    monkeypatch.setattr(runner, "acquire_guard_with_sigterm_handoff", interrupt_before_acquire)
+    record = {"run_id": runner.RUN_ID, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING,
+              "call_counts": {"runner": 1, "bootstrap": 0, "composite": 0,
+                              "cpp_observer": 0, "gate_b_observer": 0}}
+    result = runner.preacquire_preflight(
+        runtime_worktree, {}, run_directory, runner.PARTITION, tmp_path / "map", tmp_path / "fuel",
+        {}, guard_path, lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record, sigterm_handler=handler)
+    assert launches == ["acquire-handoff"]
+    assert result[2] is None
+    assert result[3]["preacquire_failure_literal"] == (
+        "PREACQUIRE_FAILURE:RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+    assert guard_path.read_bytes() == guard_bytes and not lock.exists()
+    stored = runner.load_canonical_json(run_directory / "run_record.json")
+    assert stored["guard_acquired"] is False and stored["guard_state_after"] == runner.PENDING
+    assert stored["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED"
+    assert runner.terminal_exit_code(stored) == 2
+    assert (run_directory / "artifact_manifest.json").is_file()
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_sigterm_after_guard_mutation_is_buffered_through_handoff_and_finalized_fail(tmp_path, monkeypatch):
+    runtime_worktree = tmp_path / "runtime"
+    runtime_worktree.mkdir()
+    run_directory = tmp_path / "evidence"
+    guard_path = runtime_worktree / "guard.json"
+    lock = guard_path.with_suffix(".json.lock")
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    guard_path.write_text(json.dumps(guard))
     handler = runner.SigtermHandler()
-    handler.begin_finalization()
-    with pytest.raises(runner.RunnerInterruptedBySignal,
-                       match="^RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM$"):
-        handler(runner.signal.SIGTERM, None)
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"PATH": "/fake"})
+    monkeypatch.setattr(runner, "host_preflight", lambda *_args: {"ready": True})
+
+    def acquire(*_args, **_kwargs):
+        consumed = {**guard, "state": "CONSUMED", "acquisition_count": 1}
+        guard_path.write_text(json.dumps(consumed))
+        lock.write_text("capacity-one")
+        return consumed
+
+    monkeypatch.setattr(runner, "acquire_guard", acquire)
+    mask_events = []
+
+    def masked_signal(how, mask):
+        mask_events.append(how)
+        if how == runner.signal.SIG_SETMASK:
+            handler(runner.signal.SIGTERM, None)
+        return set()
+
+    record = {"run_id": runner.RUN_ID, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING,
+              "call_counts": {"runner": 1, "bootstrap": 0, "composite": 0,
+                              "cpp_observer": 0, "gate_b_observer": 0}}
+    env, preflight, consumed, failure = runner.preacquire_preflight(
+        runtime_worktree, {}, run_directory, runner.PARTITION, tmp_path / "map", tmp_path / "fuel",
+        {}, guard_path, lock, guard, {}, "a" * 40, runner.INTEGRATION_BASE,
+        Path(runner.RUNTIME_PYTHON_PATH), record, sigterm_handler=handler,
+        mask_signals=masked_signal)
+    assert consumed["state"] == "CONSUMED" and consumed["acquisition_count"] == 1
+    assert failure is None and handler.guard_acquired and handler.interrupted
+    assert mask_events == [runner.signal.SIG_BLOCK, runner.signal.SIG_SETMASK]
+    with pytest.raises(runner.RunnerInterruptedBySignal, match="RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"):
+        handler.begin_campaign()
+    record.update({"guard_acquired": True, "guard_state_after": "CONSUMED",
+                   "guard_acquisition_count": 1, "call_counts": record["call_counts"]})
+    result = runner.finalize_campaign_after_acquisition(
+        record=record, runtime_acceptance={"all": True}, composite_proc=None,
+        composite_member=None, bootstrap_proc=None, bootstrap_member=None,
+        collector_procs={}, collector_members={}, bootstrap_calls=0,
+        composite_calls=0, cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=runner.signal.getsignal(runner.signal.SIGTERM))
+    assert result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert runner.terminal_exit_code(result) == 2
+    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in result["failure_reason_literals"]
+    assert json.loads(guard_path.read_text())["state"] == "CONSUMED" and lock.exists()
+    assert runner.load_canonical_json(run_directory / "run_record.json")["guard_acquired"] is True
+    assert (run_directory / "artifact_manifest.json").is_file()
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_sigterm_after_checksums_before_handler_restore_rewrites_bundle_fail(tmp_path, monkeypatch):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    handler = runner.SigtermHandler()
+    handler.mark_guard_acquired()
+    handler.begin_campaign()
+    original_manifest = runner._write_artifact_manifest
+    delivered = False
+
+    def write_then_interrupt(directory):
+        nonlocal delivered
+        original_manifest(directory)
+        if not delivered:
+            delivered = True
+            handler(runner.signal.SIGTERM, None)
+
+    monkeypatch.setattr(runner, "_write_artifact_manifest", write_then_interrupt)
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
+        composite_proc=None, composite_member=None, bootstrap_proc=None, bootstrap_member=None,
+        collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1,
+        cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=previous)
+    assert delivered and result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in result["failure_reason_literals"]
+    record_bytes = (run_directory / "run_record.json").read_bytes()
+    manifest = runner.load_canonical_json(run_directory / "artifact_manifest.json")
+    item = next(x for x in manifest["artifacts"] if x["path"] == "run_record.json")
+    assert item["sha256"] == hashlib.sha256(record_bytes).hexdigest()
+    assert item["size_bytes"] == len(record_bytes)
+    assert runner.signal.getsignal(runner.signal.SIGTERM) == previous
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+
+
+def test_sigterm_at_terminal_commit_boundary_fails_before_handler_restore(tmp_path, monkeypatch):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    handler = _acquired_campaign_handler()
+    original_restore = handler.restore
+    delivered = False
+
+    def interrupt_before_restore(previous_handler):
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            handler(runner.signal.SIGTERM, None)
+        return original_restore(previous_handler)
+
+    monkeypatch.setattr(handler, "restore", interrupt_before_restore)
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
+        composite_proc=None, composite_member=None, bootstrap_proc=None, bootstrap_member=None,
+        collector_procs={}, collector_members={}, bootstrap_calls=0, composite_calls=0,
+        cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=previous)
+    assert delivered and runner.terminal_exit_code(result) == 2
+    assert result["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+    persisted = runner.load_canonical_json(run_directory / "run_record.json")
+    assert persisted["terminal_outcome"] == result["terminal_outcome"]
+    manifest = runner.load_canonical_json(run_directory / "artifact_manifest.json")
+    artifact = next(item for item in manifest["artifacts"] if item["path"] == "run_record.json")
+    raw = (run_directory / "run_record.json").read_bytes()
+    assert artifact["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert artifact["size_bytes"] == len(raw)
+    assert runner.signal.getsignal(runner.signal.SIGTERM) == previous
+
+
+def test_sigterm_after_terminal_commit_does_not_rewrite_completed_campaign(tmp_path, monkeypatch):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    handler = _acquired_campaign_handler()
+    class FakeProcess:
+        def __init__(self, pid): self.pid, self.returncode = pid, None
+        def poll(self): return None
+        def wait(self, timeout): self.returncode = 0; return 0
+    monkeypatch.setattr(runner.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
+        "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+        "inspection_errors": []})
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
+        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11},
+        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12},
+        collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1,
+        cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=previous)
+    assert runner.terminal_exit_code(result) == 0
+    raw = (run_directory / "run_record.json").read_bytes()
     handler(runner.signal.SIGTERM, None)
-    assert handler.interrupted is True
-    record = {"pre_teardown_failure": "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"}
-    finalized = runner.finalise_after_teardown(
-        record, {"runtime_acceptance": False},
-        {"completed": True, "clean": True, "order_correct": True},
-    )
-    assert finalized["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
-    assert finalized["finalized_after_teardown"] is True
-    assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in finalized["failure_reason_literals"]
+    assert handler.interrupted is False
+    assert (run_directory / "run_record.json").read_bytes() == raw
+
+
+def test_normal_completion_restores_handler_and_keeps_pass_bundle(tmp_path, monkeypatch):
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    handler = _acquired_campaign_handler()
+    class FakeProcess:
+        def __init__(self, pid): self.pid, self.returncode = pid, None
+        def poll(self): return None
+        def wait(self, timeout): self.returncode = 0; return 0
+    kill_order = []
+    monkeypatch.setattr(runner.os, "killpg", lambda pgid, _sig: kill_order.append(pgid))
+    monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
+        "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+        "inspection_errors": []})
+    previous = runner.signal.getsignal(runner.signal.SIGTERM)
+    result = runner.finalize_campaign_after_acquisition(
+        record={"call_counts": {"runner": 1}}, runtime_acceptance={"all": True},
+        composite_proc=FakeProcess(11), composite_member={"name":"composite","pid":11,"pgid":11},
+        bootstrap_proc=FakeProcess(12), bootstrap_member={"name":"bootstrap","pid":12,"pgid":12},
+        collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1,
+        cpp_calls=0, gate_b_calls=0, run_directory=run_directory,
+        sigterm_handler=handler, previous_sigterm_handler=previous)
+    assert result["terminal_outcome"].endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
+    assert runner.terminal_exit_code(result) == 0
+    before = (run_directory / "run_record.json").read_bytes()
+    assert runner.signal.getsignal(runner.signal.SIGTERM) == previous
+    assert kill_order == [11, 12]
+    assert not handler.interrupted
+    assert (run_directory / "artifact_manifest.json").is_file()
+    assert (run_directory / "SHA256SUMS.txt").is_file()
+    assert (run_directory / "run_record.json").read_bytes() == before
 
 
 @pytest.mark.parametrize("raw", [

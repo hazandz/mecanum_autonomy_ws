@@ -54,6 +54,7 @@ RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT = "c408ccd2a2f7b11787f725a24e818ff
 RUN005_ATTEMPT_002_OUTPUT_PRECONDITION_COMMIT = "da82b2e5d65eedd80f42000283dccc42a5f6ed66"
 RUN005_ATTEMPT_002_HOST_TRANSPORT_BASE = "99d5c29c1c302260a8971e19e46f93d778a52f86"
 RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE = "87ee34b1a945ecc12b525fe9f4711a368c0bdbc3"
+RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE = "bee34dd2d689fe585ae12000058b2f2903196659"
 RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
@@ -554,13 +555,13 @@ def _candidate_changed_paths():
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE
+        ).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
         changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
     else:
         assert subprocess.run(
             ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE
+        ).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
         changed = set(subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
@@ -604,6 +605,16 @@ def _assert_run005_attempt002_historical_scope():
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE}^"],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN005_ATTEMPT_002_HOST_TRANSPORT_BASE
+    terminal_ros_discovery = subprocess.run(
+        ["git", "diff", "--name-only",
+         f"{RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE}..{RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert set(terminal_ros_discovery) == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_PATHS
+    assert subprocess.run(
+        ["git", "rev-parse", f"{RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE}^"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip() == RUN005_ATTEMPT_002_TERMINAL_ROS_DISCOVERY_BASE
 
 
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():

@@ -662,18 +662,70 @@ class RunnerInterruptedBySignal(RuntimeError):
 
 
 class SigtermHandler:
-    """Raise once during campaign work and defer signals during finalization."""
+    """Track SIGTERM across guard acquisition, campaign, and finalization."""
     def __init__(self):
         self.interrupted = False
+        self.guard_acquired = False
+        self.campaign_active = False
         self.finalizing = False
+        self.exception_raised = False
+        self.handler_restored = False
+        self.terminal_committed = False
 
     def __call__(self, signum, _frame):
-        if signum == signal.SIGTERM and not self.interrupted:
-            self.interrupted = True
+        if signum != signal.SIGTERM:
+            return
+        if self.terminal_committed:
+            return
+        self.interrupted = True
+        if not self.guard_acquired:
+            self._raise_once()
+        elif self.campaign_active and not self.finalizing:
+            self._raise_once()
+
+    def _raise_once(self):
+        if not self.exception_raised:
+            self.exception_raised = True
             raise RunnerInterruptedBySignal("RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+
+    def mark_guard_acquired(self):
+        self.guard_acquired = True
+
+    def begin_campaign(self):
+        self.campaign_active = True
+        if self.interrupted:
+            self._raise_once()
 
     def begin_finalization(self):
         self.finalizing = True
+
+    def restore(self, previous_handler):
+        if not self.handler_restored:
+            signal.signal(signal.SIGTERM, previous_handler)
+            self.handler_restored = True
+
+def acquire_guard_with_sigterm_handoff(runtime_guard: Path, guard: dict,
+                                       authorization: dict, review_commit: str,
+                                       integration_base: str,
+                                       sigterm_handler: SigtermHandler | None = None,
+                                       mask_signals=None):
+    """Block SIGTERM only while guard mutation is handed to the campaign."""
+    if sigterm_handler is None:
+        return acquire_guard(runtime_guard, guard, authorization,
+                             review_commit=review_commit,
+                             integration_base=integration_base)
+    if not hasattr(signal, "pthread_sigmask"):
+        raise RuntimeError("SIGTERM_GUARD_HANDOFF_MASK_UNAVAILABLE")
+    mask = mask_signals or signal.pthread_sigmask
+    previous_mask = mask(signal.SIG_BLOCK, {signal.SIGTERM})
+    try:
+        consumed = acquire_guard(runtime_guard, guard, authorization,
+                                 review_commit=review_commit,
+                                 integration_base=integration_base)
+        sigterm_handler.mark_guard_acquired()
+        return consumed
+    finally:
+        mask(signal.SIG_SETMASK, previous_mask)
 
 
 def _atomic_write(path: Path, document: dict):
@@ -1094,7 +1146,9 @@ def preacquire_preflight(worktree: Path, dirs: dict[str, Path], run_directory: P
                          partition: str, map_root: Path, fuel_root: Path,
                          source_pins: dict, runtime_guard: Path, guard_lock: Path,
                          guard: dict, authorization: dict, review_commit: str,
-                         integration_base: str, runtime_python: Path, record: dict):
+                         integration_base: str, runtime_python: Path, record: dict,
+                         sigterm_handler: SigtermHandler | None = None,
+                         mask_signals=None):
     """Build, host-check and acquire; on failure, save evidence without teardown."""
     try:
         env = prepare_ros_environment(worktree, dirs)
@@ -1102,11 +1156,15 @@ def preacquire_preflight(worktree: Path, dirs: dict[str, Path], run_directory: P
                                    map_root, fuel_root, source_pins, runtime_python)
         if guard_lock.exists():
             raise RuntimeError("GUARD_LOCK_ALREADY_EXISTS")
-        consumed = acquire_guard(runtime_guard, guard, authorization,
-                                 review_commit=review_commit,
-                                 integration_base=integration_base)
+        consumed = acquire_guard_with_sigterm_handoff(
+            runtime_guard, guard, authorization, review_commit, integration_base,
+            sigterm_handler=sigterm_handler, mask_signals=mask_signals)
         return env, preflight, consumed, None
     except BaseException as error:
+        if sigterm_handler is not None and sigterm_handler.guard_acquired:
+            # Acquisition already happened. The main campaign path must record
+            # this as a consumed FAIL and finalize it after an empty teardown.
+            return locals().get("env"), locals().get("preflight"), locals().get("consumed"), error
         failure = _write_preacquire_failure_evidence(
             run_directory, record, error, guard_lock=guard_lock)
         return None, None, None, failure
@@ -1146,16 +1204,31 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
     return record
 
 
+def terminal_exit_code(record: dict) -> int:
+    """Map the persisted terminal verdict to the runner's process status."""
+    return 0 if record.get("terminal_outcome", "").endswith(
+        "PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT") else 2
+
+
 def persist_terminal_evidence(record: dict, runtime_acceptance: dict, teardown: dict,
                               run_directory: Path, sigterm_handler: SigtermHandler) -> dict:
-    """Finalize once, converting catchable interruption into a durable FAIL record."""
+    """Finalize, resyncing a FAIL bundle if SIGTERM arrives before return."""
     sigterm_handler.begin_finalization()
     try:
         if sigterm_handler.interrupted:
-            record.setdefault("pre_teardown_failure", "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
+            record["pre_teardown_failure"] = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
         result = finalise_after_teardown(record, runtime_acceptance, teardown)
         _atomic_write(run_directory / "run_record.json", result)
         _write_artifact_manifest(run_directory)
+        # The handler does not raise during finalization. If it observed a
+        # signal while the record, manifest, or checksums were being written,
+        # replace any provisional PASS and synchronize the complete bundle.
+        if (sigterm_handler.interrupted and
+                record.get("pre_teardown_failure") != "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"):
+            record["pre_teardown_failure"] = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
+            result = finalise_after_teardown(record, runtime_acceptance, teardown)
+            _atomic_write(run_directory / "run_record.json", result)
+            _write_artifact_manifest(run_directory)
         return result
     except BaseException as error:
         if sigterm_handler.interrupted:
@@ -1183,6 +1256,7 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
     """Run best-effort teardown and terminal persistence under a restored handler."""
     teardown = {"completed": True, "clean": False, "order_correct": False,
                 "verified": False, "errors": ["TEARDOWN_NOT_VERIFIED"]}
+    result = None
     try:
         try:
             teardown = teardown_campaign_processes(
@@ -1199,8 +1273,8 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
         if sigterm_handler.interrupted:
             record.setdefault("pre_teardown_failure", "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM")
-        return persist_terminal_evidence(record, runtime_acceptance, teardown,
-                                         run_directory, sigterm_handler)
+        result = persist_terminal_evidence(record, runtime_acceptance, teardown,
+                                           run_directory, sigterm_handler)
     except BaseException as error:
         if sigterm_handler.interrupted:
             reason = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
@@ -1213,10 +1287,20 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
         if sigterm_handler.interrupted:
             record["pre_teardown_failure"] = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
-        return persist_terminal_evidence(record, runtime_acceptance, teardown,
-                                         run_directory, sigterm_handler)
+        result = persist_terminal_evidence(record, runtime_acceptance, teardown,
+                                           run_directory, sigterm_handler)
     finally:
-        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        sigterm_handler.restore(previous_sigterm_handler)
+        # Keep the custom handler installed through the final write and until
+        # the restoration boundary. If it observed SIGTERM just before the
+        # handler swap, synchronize a FAIL bundle after restoration.
+        if result is not None and sigterm_handler.interrupted and result.get(
+                "terminal_outcome", "").endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"):
+            record["pre_teardown_failure"] = "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"
+            result = persist_terminal_evidence(record, runtime_acceptance, teardown,
+                                               run_directory, sigterm_handler)
+        sigterm_handler.terminal_committed = True
+    return result
 
 
 def _parse():
@@ -1304,17 +1388,39 @@ def main():
     teardown = {"completed": False, "clean": False, "order_correct": False}
     runtime_guard = args.runtime_worktree / args.guard_path.relative_to(source)
     guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
-    env, preflight, consumed, preacquire_failure = preacquire_preflight(
-        args.runtime_worktree, dirs, args.run_directory, args.gz_partition,
-        args.canonical_map_root, args.fuel_cache_root, guard["source_pins"],
-        runtime_guard, guard_lock, guard, authorization, head,
-        args.expected_integration_base, args.runtime_python, record)
-    if preacquire_failure is not None:
-        return 2
     sigterm_handler = SigtermHandler()
     previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, sigterm_handler)
     try:
-        previous_sigterm_handler = signal.signal(signal.SIGTERM, sigterm_handler)
+        env, preflight, consumed, preacquire_failure = preacquire_preflight(
+            args.runtime_worktree, dirs, args.run_directory, args.gz_partition,
+            args.canonical_map_root, args.fuel_cache_root, guard["source_pins"],
+            runtime_guard, guard_lock, guard, authorization, head,
+            args.expected_integration_base, args.runtime_python, record,
+            sigterm_handler=sigterm_handler)
+    except BaseException as error:
+        # Covers a signal in the handoff from handler installation into
+        # preflight. No guard acquisition has been reported unless the handler
+        # was explicitly advanced by acquire_guard_with_sigterm_handoff().
+        if sigterm_handler.guard_acquired:
+            env = preflight = None
+            consumed = load_guard(runtime_guard)
+            preacquire_failure = error
+        else:
+            try:
+                _write_preacquire_failure_evidence(
+                    args.run_directory, record, error, guard_lock=guard_lock)
+            finally:
+                sigterm_handler.restore(previous_sigterm_handler)
+            return 2
+    if preacquire_failure is not None:
+        if consumed is None:
+            sigterm_handler.restore(previous_sigterm_handler)
+            return 2
+    if consumed is None:
+        sigterm_handler.restore(previous_sigterm_handler)
+        return 2
+    try:
         record["preflight"] = preflight
         record["guard_state_after_acquire"] = consumed["state"]
         record["guard_state_after"] = consumed["state"]
@@ -1329,6 +1435,9 @@ def main():
                                    "bootstrap_composite_process_groups_distinct": False,
                                    "bootstrap_readiness": False, "composite_readiness": False})
         record["process_groups"] = {}
+        sigterm_handler.begin_campaign()
+        if preacquire_failure is not None:
+            raise preacquire_failure
         args.run_directory.mkdir(parents=True, exist_ok=False)
         (args.run_directory / "authorization_state.txt").write_text(
             f"run_id={RUN_ID}\nscope={AUTH_SCOPE}\nreview_commit={head}\nintegration_base={args.expected_integration_base}\nauthorization_sha256={hashlib.sha256(authorization['owner_authorization'].encode()).hexdigest()}\n", encoding="utf-8")
@@ -1430,7 +1539,7 @@ def main():
                 sigterm_handler=sigterm_handler,
                 previous_sigterm_handler=previous_sigterm_handler)
         # Keep every guard, lock, log and evidence artifact after acquisition.
-    return 0 if record.get("terminal_outcome", "").endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT") else 2
+    return terminal_exit_code(record)
 
 
 def _wait_ready(env, logdir, process):

@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,27 @@ def test_attempt_002_source_seed_remains_pending_and_historical_invocations_are_
     assert historical["guard_consumed"] is True
     assert historical["retry_performed"] is False
     assert historical["immutable"] is True
+
+
+def test_run005_historical_dispositions_match_the_immutable_parent_guard_blob():
+    historical_raw = subprocess.run(
+        ["git", "show", "bee34dd2d689fe585ae12000058b2f2903196659:" +
+         "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"],
+        cwd=ROOT, check=True, capture_output=True,
+    ).stdout
+    historical = json.loads(historical_raw)
+    current = load_guard(GUARD)
+    preserved_keys = {
+        "run005_attempt_001_disposition",
+        "run005_attempt_002_invocation_003_disposition",
+        "run005_attempt_002_invocation_005_disposition",
+    }
+    assert preserved_keys <= historical.keys()
+    for key in preserved_keys:
+        assert current[key] == historical[key]
+    assert current["run005_attempt_001_disposition"]["immutable"] is True
+    assert current["run005_attempt_002_invocation_005_disposition"]["immutable"] is True
+    assert current["run005_attempt_002_invocation_003_disposition"]["guard_consumed"] is False
 
 
 def test_invocation_003_is_recorded_as_preacquire_without_guard_consumption():

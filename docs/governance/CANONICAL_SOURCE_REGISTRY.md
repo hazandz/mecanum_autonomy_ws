@@ -1113,15 +1113,15 @@ Guard/evidence/manifest current hashes: guard `1b11297c2a8ff391c4bcf556ca6c11a93
 |---|---|---:|
 | `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `ace510ceced00a2cfa3f2dfe8fe00392bb787802ed6cb37e9dd9c3d2620d6e1a` | 80374 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `8aae15ff5b1b752efa80fd3839a7f5e815adc172e249b7bbd5f4b436112c75d8` | 85522 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `ab838d7fc952d5b625391fc59f1d38682915e53aefa0232315672a17e7a3a71f` | 9468 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `57857e32dde913d730a6728781ce5e30dcf02f0d51075e8039725ab23e5fdd9b` | 74727 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `bcbe8793d51c258e5a8bbc8aa37ba1fa7d2ce2b27753a5bf39f32d47121d5fa3` | 85822 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
-| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `28cfec1e38c9ffe26cc6541d31d1131249dd04c9993c60f8480a9bcd84f24296` | 13360 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `30813145c8921b0a3e4995a9072e5fecb7343230bd51c2c81acc61f23e6750a9` | 14390 |
 | `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `c93c4f2d1f87c05e31ad13306b37f20f2f906b14898aa9bbf89a22aab97b99e2` | 11918 |
 | `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
 | `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
@@ -1138,7 +1138,7 @@ Guard/evidence/manifest current hashes: guard `1b11297c2a8ff391c4bcf556ca6c11a93
 | `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py` | `1bf0098b9534257cb57b7f69e47179f2a61b0340745a8f68be7c24254d32a061` | 2753 |
 | `ros2_ws/src/mecanum_nav_bringup/package.xml` | `0e82b208575f11a46d12f1053f6721092f5e4f69af0da77abda28cd40ccc33fd` | 1737 |
 | `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `d64c265a07b5c3e4f525177004b894ed82a6765f0e2536154658f6b2fb524c52` | 10672 |
-| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `07669217d2f25982e8b80be001a0ec2dba56ffe86194cbb400dd2a918821a70b` | 50893 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `b8ccb7d0ca3018ab2c620bf4f7a75d0ee3727007c65f83255f0e99886a64f92e` | 51569 |
 | `ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml` | `d9120562549f3a14b6b7673afe247696c0233d2f9d1be1399eac37ec6ff423bd` | 943 |
 | `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
 | `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
@@ -1156,3 +1156,19 @@ Invocation_005 remains immutable. Its persisted run record exists and reports `R
 Phase A offline checks passed: focused Run005 runner/guard 116; focused scope 2; Step-7 tools 257; bringup 244; nav_rl 707; six-package external build; observer 13 and ROSIDL 25 cases; installed-source equality 15/15; source pins 34/34; parsing, history, scope and diff checks. No runtime was run. Guard remains pending/capacity 1/acquisition 0/NOT_GRANTED; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
 
 Governance artifact hashes: decision `17a72941d1e32a42692615f81abb69c9613a5be0d5de18a406f9d55312943215`, guard `2dc8a9bf9d4fab3593bd9c85a563cc3ad6122565cbf1bb25215fddd833b72470`, evidence `14c9d7ec0abc4d5062ad11f545c401d233b08f523b7dca46ef5b050c478a5d0b`, manifest `f97ade36ac0b0a5be1c614d742abab340c7ecb80d4705072f6679600eb1ffd93`.
+
+### STEP-7 Run005 attempt_002 SIGTERM/guard handoff corrective — current reconciliation
+
+This L1 correction is based on `bee34dd2d689fe585ae12000058b2f2903196659` and keeps Run005 attempt_002, the 34-pin current source inventory, and the existing pending capacity-one guard. The exact current corrective path set is independently checked as 11 paths; the source-pin inventory remains exactly 34 unique paths.
+
+The SIGTERM handler is installed before pre-acquire checks. A pre-acquisition SIGTERM writes pre-acquire failure evidence without claiming guard consumption. SIGTERM is blocked only during guard mutation/handoff; the acquired state is marked before unblocking so a pending signal is classified as consumed FAIL. During teardown/finalization the handler records interruption without raising; terminal verdict is FAIL for any pre-teardown failure, SIGTERM, false acceptance, or incomplete/unclean/unverified teardown. A SIGTERM delivered before handler restoration causes record/manifest/checksum resynchronization to FAIL where writable. The previous handler is restored once. SIGKILL, power loss, or an unwritable evidence filesystem cannot guarantee durable evidence.
+
+Phase A passed: focused runner/guard 122, focused scope-chain 2, Step-7 tools 263, bringup 244, nav_rl 707; six-package external build; observer 13 and ROSIDL 8 tests; installed-source equality 15/15; py_compile; 34/34 pins; canonical JSON/YAML/XML, history, exact scope and diff checks. No runner/runtime was executed. Run005 remains pending/unconsumed, Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Current refreshes (SHA-256, bytes):
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `8aae15ff5b1b752efa80fd3839a7f5e815adc172e249b7bbd5f4b436112c75d8` | 85522 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `bcbe8793d51c258e5a8bbc8aa37ba1fa7d2ce2b27753a5bf39f32d47121d5fa3` | 85822 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `30813145c8921b0a3e4995a9072e5fecb7343230bd51c2c81acc61f23e6750a9` | 14390 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `b8ccb7d0ca3018ab2c620bf4f7a75d0ee3727007c65f83255f0e99886a64f92e` | 51569 |
+
+Current guard SHA-256 `c7c2caaff6d1d81fbc3300cedb226de2daec3f6f35f0db13a6d2a91a57fe7b89`, evidence SHA-256 `1ab3eb1247841ab0eb707c0b18d315a84aa36d6d9f3b49eb59fbc81192feb79d`, and manifest SHA-256 `4e9deab757bdadbb28399b94f65e068aeb730f7dccee863bc41675dc9e4148a3`.
