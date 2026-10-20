@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -257,7 +258,11 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     monkeypatch.setattr(runner, "validate_runtime_python_environment",
                         lambda _python, _env, _prefix: {"observer_module_path": str(module)})
     monkeypatch.setattr(runner.os, "access", lambda *_args: True)
-    monkeypatch.setattr(socket, "if_nameindex", lambda: [])
+    def forbidden_network_probe():
+        raise PermissionError("simulated sandbox network-interface denial")
+
+    monkeypatch.setattr(socket, "if_nameindex", forbidden_network_probe)
+    assert "socket.if_nameindex" not in RUNNER_PATH.read_text(encoding="utf-8")
     monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
     monkeypatch.setattr(runner, "stale_partition_processes", lambda _partition: [])
 
@@ -364,7 +369,6 @@ def test_host_preflight_missing_robot_description_prefix_fails_before_installed_
     monkeypatch.setattr(runner, "validate_source_pins", lambda *_args: None)
     monkeypatch.setattr(runner, "sha256", lambda _path: runner.ARCHITECTURE_SHA256)
     monkeypatch.setattr(runner.os, "access", lambda *_args: True)
-    monkeypatch.setattr(socket, "if_nameindex", lambda: [])
     monkeypatch.setattr(runner, "validate_runtime_python_environment",
                         lambda *_args: pytest.fail("runtime Python checks must follow complete prefix closure"))
     monkeypatch.setattr(runner, "stale_partition_processes", lambda _partition: [])
@@ -466,6 +470,139 @@ def test_preacquire_build_or_host_failure_writes_complete_audit_without_guard_or
         sums[path] = digest
     for name in ("run_record.json", "preflight_failure.json", "artifact_manifest.json"):
         assert sums[name] == hashlib.sha256((run_directory / name).read_bytes()).hexdigest()
+
+
+def test_runtime_output_target_probe_passes_and_cleans_sentinels(tmp_path):
+    runtime_parent = tmp_path / "runtime-parent"
+    evidence_parent = tmp_path / "evidence-parent"
+    runtime_parent.mkdir()
+    evidence_parent.mkdir()
+    runner.validate_runtime_output_targets(
+        runtime_parent / "runtime", evidence_parent / "evidence"
+    )
+    assert list(runtime_parent.iterdir()) == []
+    assert list(evidence_parent.iterdir()) == []
+
+
+@pytest.mark.parametrize("case", [
+    "relative", "missing_parent", "symlink_parent", "existing_target", "symlink_target",
+])
+def test_runtime_output_targets_reject_invalid_paths(tmp_path, case):
+    runtime_parent = tmp_path / "runtime-parent"
+    evidence_parent = tmp_path / "evidence-parent"
+    runtime_parent.mkdir()
+    evidence_parent.mkdir()
+    runtime_target = runtime_parent / "runtime"
+    evidence_target = evidence_parent / "evidence"
+    expected = "RUNTIME_OUTPUT_PARENT_INVALID:runtime_worktree"
+    if case == "relative":
+        runtime_target = Path("relative-runtime")
+    elif case == "missing_parent":
+        runtime_target = tmp_path / "missing-parent" / "runtime"
+    elif case == "symlink_parent":
+        link_parent = tmp_path / "runtime-link"
+        link_parent.symlink_to(runtime_parent, target_is_directory=True)
+        runtime_target = link_parent / "runtime"
+    elif case == "existing_target":
+        runtime_target.mkdir()
+    elif case == "symlink_target":
+        runtime_target.symlink_to(evidence_parent, target_is_directory=True)
+    with pytest.raises(RuntimeError, match=expected):
+        runner.validate_runtime_output_targets(runtime_target, evidence_target)
+
+
+@pytest.mark.parametrize("relation", ["same", "nested_runtime", "nested_evidence"])
+def test_runtime_output_targets_reject_colliding_or_nested_targets(tmp_path, relation):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    runtime_target = parent / "runtime"
+    evidence_target = parent / "evidence"
+    if relation == "same":
+        evidence_target = runtime_target
+    elif relation == "nested_runtime":
+        evidence_target = runtime_target / "evidence"
+        runtime_target.parent.mkdir(exist_ok=True)
+    else:
+        runtime_target = evidence_target / "runtime"
+    invalid_label = "run_directory" if relation == "nested_runtime" else "runtime_worktree"
+    with pytest.raises(RuntimeError, match=f"RUNTIME_OUTPUT_PARENT_INVALID:{invalid_label}"):
+        runner.validate_runtime_output_targets(runtime_target, evidence_target)
+
+
+@pytest.mark.parametrize("failure_errno", [errno.EPERM, errno.EROFS])
+def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_guard_mutation(
+    tmp_path, monkeypatch, failure_errno
+):
+    runtime_parent = tmp_path / "runtime-parent"
+    evidence_parent = tmp_path / "evidence-parent"
+    runtime_parent.mkdir()
+    evidence_parent.mkdir()
+    runtime_target = runtime_parent / "runtime"
+    evidence_target = evidence_parent / "evidence"
+    guard_path = ROOT / RUN005_GUARD_REL
+    original_guard = guard_path.read_bytes()
+    lock_path = guard_path.with_suffix(guard_path.suffix + ".lock")
+    assert not lock_path.exists()
+
+    args = type("Args", (), {
+        "repository_root": ROOT,
+        "runtime_worktree": runtime_target,
+        "run_directory": evidence_target,
+        "guard_path": guard_path,
+        "expected_review_commit": "c408ccd2a2f7b11787f725a24e818ffa038e3d36",
+        "expected_integration_base": runner.INTEGRATION_BASE,
+        "run_id": runner.RUN_ID,
+        "gz_partition": runner.PARTITION,
+        "owner_authorization": "test-authorization",
+        "owner_authorization_scope": runner.AUTH_SCOPE,
+        "owner_authorization_run_id": runner.RUN_ID,
+        "owner_authorization_review_commit": "c408ccd2a2f7b11787f725a24e818ffa038e3d36",
+        "owner_authorization_integration_base": runner.INTEGRATION_BASE,
+    })()
+    monkeypatch.setattr(runner, "_parse", lambda: args)
+    original_runner_run = runner._run
+
+    def clean_status_run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return type("Result", (), {"stdout": "", "returncode": 0})()
+        return original_runner_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "_run", clean_status_run)
+    monkeypatch.setattr(runner, "validate_seed", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner, "validate_owner_authorization", lambda **_kwargs: {})
+    clone_calls = []
+    monkeypatch.setattr(
+        runner, "create_isolated_runtime_checkout",
+        lambda *a, **k: clone_calls.append((a, k)),
+    )
+    monkeypatch.setattr(
+        runner.tempfile, "mkdtemp",
+        lambda **_kwargs: pytest.fail("external build dirs must not be created before output validation"),
+    )
+    original_open = runner.os.open
+
+    def denied_evidence_open(path, flags, mode=0o777):
+        if Path(path).parent == evidence_parent:
+            raise PermissionError(failure_errno, "simulated read-only output parent")
+        return original_open(path, flags, mode)
+
+    monkeypatch.setattr(runner.os, "open", denied_evidence_open)
+    with pytest.raises(SystemExit) as raised:
+        runner.main()
+    assert str(raised.value) == "RUNTIME_OUTPUT_PARENT_NOT_WRITABLE:run_directory"
+    assert clone_calls == []
+    assert not runtime_target.exists()
+    assert not evidence_target.exists()
+    assert guard_path.read_bytes() == original_guard
+    assert not lock_path.exists()
+    assert not list(runtime_parent.iterdir())
+    assert not list(evidence_parent.iterdir())
+
+
+def test_runner_has_no_network_interface_probe():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    assert "socket.if_nameindex" not in source
+    assert "import socket" not in source
 
 
 @pytest.mark.parametrize("raw", [

@@ -1054,3 +1054,13 @@ Run005 attempt_002 invocation_002 remains immutable with terminal `STEP07_NAV2_B
 Phase A PASS: focused 89; Step-7 tools 205; bringup 244; RL 707; six-package external build; observer 13 C++ and ROSIDL 8 tests; installed artifacts 15/15; current source pins 34/34; exact historical/current scope and parsing checks. Current evidence ceiling remains `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
 
 Record references: Run005 decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`, Registry `c75d979c58b555c9dfed76667f96f7bcc5151033b779c9f96d43066f983a4831`, guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`, evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`, manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`. No PEP status or dependency transition is made.
+
+### Step-7 Run005 attempt_002 output-parent preflight reliability corrective
+
+This current corrective has exact direct scope 11 paths from `c408ccd2a2f7b11787f725a24e818ffa038e3d36`; it does not alter Run005's profile, map/world, TF, safety, Nav2 behavior, Gate-B acceptance, or command ownership. The runner removes the unused `socket.if_nameindex()` probe and validates real writable output parents with an exclusive create/write/fsync/close/unlink probe before clone/build/host checks/evidence/guard/processes. Stable output-parent failures do not attempt evidence writes.
+
+Invocation_003 is recorded accurately as a pre-acquire failure: initial `PermissionError: [Errno 1] Operation not permitted`, then evidence persistence failed with `OSError: [Errno 30] Read-only file system`; no evidence bundle, guard consumption, lock, or campaign process resulted. No retry occurred. The source guard remains pending, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B remains `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`.
+
+Run005 source pins remain 34 unique current-worktree entries, separate from the 11 changed paths. Four existing pin entries were refreshed; no new pin was added. Offline verification recorded: Step-7 tools 218 passed, bringup 244, RL 707, six-package external build PASS, observer/ROSIDL tests PASS, installed artifacts 15/15, and pins 34/34. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Decision SHA-256 `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`; Registry SHA-256 `ece7c9142e77dff08fbd84aa4f1e2c0534aa4de432233dbb16516093a22484df`; guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`.

@@ -1058,3 +1058,18 @@ There are exactly 34 unique current Run005 source pins (22 existing + 12 new); t
 Verification: focused tests 89; Step-7 tools 205; bringup 244; RL 707; six-package external build PASS; observer 13 C++ tests and ROSIDL 8 tests PASS; installed artifact equality 15/15; 34/34 pins and exact scope/history PASS. No runtime was executed in this corrective. Run005 guard remains pending, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
 
 Current hashes: decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`; guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`.
+
+### STEP07 Run005 attempt_002 output-parent preflight corrective — current source pins
+
+The current direct corrective scope is exactly 11 paths from `c408ccd2a2f7b11787f725a24e818ffa038e3d36`. It removes the non-authoritative network-interface probe and requires a create/write/fsync/close/unlink output-parent probe before the private runtime clone, build, host preflight, evidence, guard acquisition, or process launch. Invocation_003 remains an immutable pre-acquire failure with no evidence bundle and no guard consumption; its initial `PermissionError: [Errno 1] Operation not permitted` and subsequent evidence-write `OSError: [Errno 30] Read-only file system` are recorded without implying runtime execution.
+
+Run005 keeps exactly 34 unique runtime source pins. The following existing entries were refreshed from current candidate bytes; the remaining 30 entries are unchanged.
+
+| Existing pinned source/test path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `6a2943049203a6a6768c040715a55cbae501af0ed8d2f71af18edcd8e5f6d8cc` | 60768 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `b30211ebce9b635c28c3a22c5eede940e370b8d926d79b9ba98ed37b806c6086` | 48457 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `3b0a8b7ca8f9f1c11d8eeff1b067b9c25356a26d048bc9084380a121d6d03281` | 10630 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `3a4dfb51fa5f0d160fca04adf8a4d1819dde5d613598ea5b7f899b5b09b8eb47` | 45389 |
+
+Guard SHA-256 `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence SHA-256 `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest SHA-256 `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`; Decision SHA-256 `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`. The guard remains pending/capacity-one/acquisition-zero/NOT_GRANTED; no runtime or Gate-B claim is made.

@@ -7,16 +7,19 @@ test. A future exact-run Owner prompt must supply the authorization fields.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import traceback
+import uuid
 
 from step07_run005_runtime_guard import (
     ARCHITECTURE_SHA256, AUTH_SCOPE, INTEGRATION_BASE, PARTITION, PENDING, RUN_ID,
@@ -98,6 +101,82 @@ def validate_runtime_python_environment(runtime_python: Path, env: dict[str, str
     facts["observer_module_path"] = str(module_path)
     facts["install_overlay_prefix"] = str(prefix)
     return facts
+
+
+def validate_runtime_output_targets(runtime_worktree: Path, run_directory: Path) -> None:
+    """Prove both new output targets have distinct, writable real parents."""
+    targets = (
+        ("runtime_worktree", Path(runtime_worktree)),
+        ("run_directory", Path(run_directory)),
+    )
+    normalized: dict[str, Path] = {}
+    for label, target in targets:
+        if not target.is_absolute():
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_INVALID:{label}")
+        target = Path(os.path.abspath(target))
+        normalized[label] = target
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_NOT_WRITABLE:{label}") from error
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_INVALID:{label}") from error
+        else:
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_INVALID:{label}")
+
+        parent = target.parent
+        try:
+            parent_info = parent.lstat()
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_NOT_WRITABLE:{label}") from error
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_INVALID:{label}") from error
+        if parent.is_symlink() or not stat.S_ISDIR(parent_info.st_mode):
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_INVALID:{label}")
+
+    runtime_target = normalized["runtime_worktree"]
+    evidence_target = normalized["run_directory"]
+    if (runtime_target == evidence_target
+            or runtime_target in evidence_target.parents
+            or evidence_target in runtime_target.parents):
+        raise RuntimeError("RUNTIME_OUTPUT_PARENT_INVALID:runtime_worktree")
+
+    for label, _target in targets:
+        parent = normalized[label].parent
+        sentinel = parent / f".step07-output-probe-{os.getpid()}-{uuid.uuid4().hex}"
+        descriptor = None
+        created = False
+        try:
+            descriptor = os.open(
+                sentinel, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            created = True
+            marker = b"step07-output-parent-writable\n"
+            offset = 0
+            while offset < len(marker):
+                count = os.write(descriptor, marker[offset:])
+                if count <= 0:
+                    raise OSError(errno.EIO, "output-parent probe write made no progress")
+                offset += count
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+            os.unlink(sentinel)
+            created = False
+        except OSError as error:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if created:
+                try:
+                    os.unlink(sentinel)
+                except OSError:
+                    pass
+            raise RuntimeError(f"RUNTIME_OUTPUT_PARENT_NOT_WRITABLE:{label}") from error
 
 
 def sha256(path: Path) -> str:
@@ -406,8 +485,6 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
         raise RuntimeError("RESOLVED_CONFIG_HASH_MISMATCH")
     if not os.access("/dev/shm", os.W_OK):
         raise RuntimeError("DEV_SHM_NOT_WRITABLE")
-    import socket
-    socket.if_nameindex()
     for program in ("ros2", "gz"):
         if not any((Path(part) / program).is_file() for part in env.get("PATH", "").split(os.pathsep)):
             raise RuntimeError(f"REQUIRED_EXECUTABLE_MISSING:{program}")
@@ -752,8 +829,6 @@ def _parse():
 def main():
     args = _parse()
     source = args.repository_root.resolve(strict=True)
-    if args.run_directory.exists() or args.runtime_worktree.exists():
-        raise SystemExit("RUN_OR_WORKTREE_PATH_ALREADY_EXISTS")
     try:
         args.guard_path.relative_to(source)
     except ValueError as error:
@@ -777,6 +852,10 @@ def main():
         run_id=args.owner_authorization_run_id, review_commit=args.owner_authorization_review_commit,
         integration_base=args.owner_authorization_integration_base, expected_run_id=args.run_id,
         expected_review_commit=head, expected_integration_base=args.expected_integration_base)
+    try:
+        validate_runtime_output_targets(args.runtime_worktree, args.run_directory)
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
     dirs_root = Path(tempfile.mkdtemp(prefix="step07_nav2_run005_"))
     dirs = {name: dirs_root / name for name in ("build", "install", "log", "ros_home", "ros_log")}
     for path in dirs.values(): path.mkdir(parents=True, exist_ok=True)

@@ -1948,3 +1948,17 @@ Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This
 | Guard / evidence | Source seed remains PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime executed in this corrective. Evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
 | Record hashes | Decision `8e6437172e324cf0407a612209ab2759ca02634b95a003f4b685ede2bd58e90a`; Registry `c75d979c58b555c9dfed76667f96f7bcc5151033b779c9f96d43066f983a4831`; Plan `6555238df7353670e8ca35fee1260b4bcad1f60466e0c3d9faddda03f722168a`; guard `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; manifest `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`. |
 | Next prerequisite | Independent audit of the exact corrective commit; no runtime authorization is granted. |
+
+
+### STEP-7 Run005 attempt_002 output-parent preflight reliability corrective
+
+| Field | Result |
+|---|---|
+| `supersedes` | Supersedes only active Run005 attempt_002 runner/output-preflight metadata. All earlier Ledger bytes are an exact prefix. |
+| Base / scope | Corrective base and sole-parent target `c408ccd2a2f7b11787f725a24e818ffa038e3d36`; exact direct corrective set 11 paths. The preceding partition/Nav2 corrective remains its historical 16-path diff from `87af41f45d721969f2767d36291252e3b14e3dcb`. |
+| Runner correction | Removed unused `socket.if_nameindex()`. Both output targets now undergo absolute/absent/real-parent/non-symlink/non-nested checks and exclusive sentinel create/write/fsync/close/unlink probes before private clone, build, host preflight, evidence writes, guard acquisition, or process invocation. Invalid and unwritable parent failures produce stable literals and no second evidence write. |
+| Invocation_003 | Invoked once; pre-acquire `PermissionError: [Errno 1] Operation not permitted` from the removed interface probe; attempted evidence persistence failed with `OSError: [Errno 30] Read-only file system`. No evidence bundle; no guard acquisition/consumption or lock; runtime execution false; bootstrap/composite/C++ observer/Gate-B observer counts zero. Runtime checkout had been created. No retry. |
+| Source pins | Exactly 34 unique Run005 pins, distinct from the 11 changed paths; four existing entries refreshed, no new entry. Current source/test pin closure is SHA-256/size checked. |
+| Offline checks | Focused runner/output tests 68 passed; Step-7 tools 218 passed; bringup 244; RL 707; six-package external build PASS; observer C++ 13 and ROSIDL 8 cases PASS; installed equality 15/15; 34/34 pins; exact 11-path scope and historical chain PASS. No runtime executed. |
+| Guard / evidence ceiling | Source guard PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. |
+| Record hashes | Decision `3d42d895ee8bc3a583e3b2f2dd08caa751afa0a12b23914ce2e1af5ccc7ba735`; Registry `ece7c9142e77dff08fbd84aa4f1e2c0534aa4de432233dbb16516093a22484df`; Plan `69f168e695b20993a95664384e37d0dcca95d915a36a8455a6349bf35a0c7884`; guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`. |

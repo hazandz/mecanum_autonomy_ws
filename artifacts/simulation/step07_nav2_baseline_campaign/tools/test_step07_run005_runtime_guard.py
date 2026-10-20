@@ -134,6 +134,25 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
         validate_source_pins(ROOT, prospective)
 
 
+def test_invocation_003_is_recorded_as_preacquire_without_guard_consumption():
+    document = load_guard(GUARD)
+    disposition = document["run005_attempt_002_invocation_003_disposition"]
+    assert disposition == {
+        "attempt": "attempt_002_invocation_003",
+        "call_counts": {
+            "runner": 1, "bootstrap": 0, "composite": 0,
+            "cpp_observer": 0, "gate_b_observer": 0,
+        },
+        "evidence_bundle_created": False,
+        "evidence_write_exception": "OSError: [Errno 30] Read-only file system",
+        "guard_consumed": False,
+        "initial_preacquire_exception": "PermissionError: [Errno 1] Operation not permitted",
+        "runtime_checkout_created": True,
+        "runtime_execution": False,
+        "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED",
+    }
+
+
 @pytest.mark.parametrize("raw", [
     b'{"a":1,"a":2}', b'{"a":NaN}', b'\xef\xbb\xbf{}', b'{}\n', b'{ "a":1}', b'\xff',
 ])

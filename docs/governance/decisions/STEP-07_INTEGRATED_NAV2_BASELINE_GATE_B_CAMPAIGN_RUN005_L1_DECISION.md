@@ -49,3 +49,19 @@ The current guard seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION
 Offline verification: focused tests 89 passed; Step-7 tools 205 passed; `mecanum_nav_bringup/test` 244 passed; `mecanum_nav_rl/test` 707 passed; six-package external colcon build PASS; observer 13 C++ cases PASS; ROSIDL 8 pytest cases PASS; installed source-byte closure 15/15 PASS; source pins 34/34 PASS.
 
 Current record references: guard SHA-256 `1c8468d3df731719522e64d8b21370ce33543ff07f9c1835aa920bd5c8f0b520`; evidence SHA-256 `265807e5cc1da274dd0f08ffcdede4791838d6e334904c1dbfbf2b6d3341fe51`; guard-manifest SHA-256 `424104bafd0e164720499e6e5204a7de4d7916c87ac1d596db92ae6093c0bc87`.
+
+## Corrective: output-parent preflight and pre-acquire evidence reliability
+
+This L1 corrective is based on `c408ccd2a2f7b11787f725a24e818ffa038e3d36`. It supersedes only the active Run005 attempt_002 runner/output-preflight metadata. No new Run ID, attempt, runtime authorization, or runtime semantics are introduced.
+
+Invocation_003 was invoked once and failed before guard acquisition. The observed pre-acquire exception was `PermissionError: [Errno 1] Operation not permitted` from the unused `socket.if_nameindex()` probe; the runner then failed to persist pre-acquire evidence with `OSError: [Errno 30] Read-only file system`. No evidence bundle was created; the pending source guard was not consumed, no lock was created, and bootstrap/composite/observers were not invoked. The runtime checkout had already been created. This outcome is recorded as `STEP07_NAV2_BASELINE_RUN005_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`; invocation_003 was not retried.
+
+The runner removes the network-interface probe and validates both absolute, absent output targets before clone/build/host checks/evidence/guard/processes. Each parent must already be a real, non-symlink directory; targets must be distinct and non-nested. An exclusive sentinel is created, written, fsynced, closed, and unlinked. Invalid targets fail with `RUNTIME_OUTPUT_PARENT_INVALID:<runtime_worktree|run_directory>`; inaccessible/read-only parents fail with `RUNTIME_OUTPUT_PARENT_NOT_WRITABLE:<runtime_worktree|run_directory>`. Such failure exits once with the stable literal and performs no secondary evidence write. Existing isolated-clone, package-prefix, partition, Fuel, runtime-Python, and installed-artifact checks remain unchanged.
+
+The exact direct corrective scope is 11 paths from `c408ccd2a2f7b11787f725a24e818ffa038e3d36`; the prior 16-path partition/Nav2 corrective from `87af41f45d721969f2767d36291252e3b14e3dcb` remains historical. Run005 retains 34 unique current source pins, independent of changed-path count. Four existing pins were refreshed for the modified runner/test/contract paths; no pin was added.
+
+Offline verification: focused runner/output tests 68 passed; full Step-7 tools 218 passed; bringup 244 passed; RL 707 passed; six-package external colcon build PASS; observer C++ 13 cases and ROSIDL 8 cases PASS; installed runtime artifacts 15/15; source pins 34/34. No ROS/Gazebo/runtime invocation occurred in this corrective.
+
+The guard seed remains pending, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+Current record hashes: guard `db5cfd94b9623c1497ba103444e931064c04cf76e7ebe455ba8a7f29a313752e`; evidence `39b220725d48f19f7b140da97868bc9c31ba5321c21dfa5c1be14572ca050813`; manifest `66bb591039054556824e0c032d552247d5319e8b5ec240bddea7960bf99bd17d`.
