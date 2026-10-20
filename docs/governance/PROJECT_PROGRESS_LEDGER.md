@@ -1882,3 +1882,38 @@ This entry supersedes the earlier Run005 provisional scope-test and pin referenc
 Phase A passed: focused scope/historical tests 46; Step-7 tools 182; bringup 239; RL 707; six-package external build; observer/ROSIDL colcon tests; installed equality 6/6; JSON/YAML/XML duplicate-key validation; Python compile; historical and scope preservation. Run004 remains immutable with sole root cause `PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION` and was not retried. Run005 remains pending, capacity one, acquisition zero, `runtime_authorization=NOT_GRANTED`; no runtime executed; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
 
 Decision SHA-256 `6b9cb13114504f3c2b33e7187c6d32b227f79e2a101c6f57f89a99a21038f72c`; evidence SHA-256 `5a7c70bb5c9a21300d23ab0d2318223fcb1909ff6326b0b6540aba4863baedae`; manifest SHA-256 `b51c528653b9b6b58118f020e05c6d2148ae419fc8acb89563cd268dc2542986`; Registry SHA-256 `84c006da0f6fdf523e06027f1d863d0b0cedca7c698cd1b3e2fe69578a2d6b91`; PEP SHA-256 `3a594acf33142261e167f84c8834b1c7babccaeb46c77150c9597e794f12846a`. Parent Ledger bytes remain an exact prefix. Evidence ceiling `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+
+
+### STEP07_RUN005_ATTEMPT_002_FUEL_CASE_NORMALIZATION_CORRECTIVE
+
+| Field | Result |
+|---|---|
+| Work item | Run005 attempt_002 canonical Fuel filesystem case correction; no new Run ID. |
+| `supersedes` | Supersedes only attempt_001 candidate interpretation and current bootstrap cache-path mapping. Attempt_001 runtime outcome/evidence/consumed guard/lock remain immutable; all earlier Ledger bytes remain an exact byte prefix. |
+| Attempt_001 | `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`; root `SIM_EVAL_FUEL_CACHE_MODEL_MISSING:OpenRobotics/Depot` → `BOOTSTRAP_EXITED_BEFORE_READINESS`; run_record SHA-256 `374565871f170fb2cbd7a9c089a2d0f47dd4e34d217357769259ef74f5409040`; no retry. |
+| Attempt_002 correction | Bootstrap retains original Fuel URI casing but maps to lowercase `openrobotics/depot` and `movai/tugbot`; uppercase parents reject. No SDF/cache/network changes. |
+| Scope and pins | Exact attempt_002 scope 12 paths; attempt_001 exact historical scope 13 paths. Current runtime source pins 22 unique paths; attempt_001 pins verified from Git blobs at `71ca32471f8e042a0048d319ca39cb9deff0c6f4`, SHA-256/size, no fallback. |
+| Offline checks | Focused Fuel/bootstrap/Run005 tests 56 PASS; Step-7 tools 184 PASS; RL 707 PASS; bringup non-scope tests 237 PASS, with exact-scope assertions completed in final verification; six-package external build and observer/ROSIDL 25 PASS; bootstrap installed bytes equal source. No runtime. |
+| Guard/evidence | Attempt_002 seed PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. |
+| Hashes | Guard `056ffa3bc5397233c4bc7c52fabda0a21e5b55e15fb5ae509c5350e66551b85e`; evidence `30565cbc2f3cd8d8a2d8d0790cb58999d1bee9df8a370fdddf725123cfbffd99`; manifest `6a433566058add66dc50cda7b513df3328f650729bb997627f783c68dac747e8`; decision `d21b0d3cd4a9f79d9bc1204ac0617fef4282d2cb9277111c1ce90d0de9aa1682`; Registry `ea9d9f8c9fa162a81ba0bcf98e1fb354b9ca247ee5158fde87f686cce649a3b8`; Plan `48dc42186ff6626026fb8dd7f02d56926dedec3c24bdc9d885f8c51b4d377e3e`. |
+| Evidence ceiling | `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`; exact attempt_002 commit requires independent audit and new Owner authorization before any runtime. |
+
+
+### STEP07 Run005 attempt_002 final scope-test and source-pin reconciliation
+
+This append-only entry supersedes the preceding attempt_002 test-result and source-pin metadata. The two stale fixed-count assertions were replaced with exact equality against `RUN005_ATTEMPT_002_PATHS`; no runtime or runner semantics changed. The exact direct attempt_002 scope is 12 paths in dirty and committed states. Attempt_001 remains immutable at the 13-path `b7105ccb651da6d0dcb916d7544481f7beacaae1..71ca32471f8e042a0048d319ca39cb9deff0c6f4` diff.
+
+The current Run005 source-pin inventory is exactly 22 unique paths. The corrected contract-test entry is SHA-256 `62f62468215d920d650657f158300b401fc4bfe83f04dd5a1be09c8cb5bcf7b2`, size 41631 bytes; the bootstrap launch remains pinned. Historical attempt_001 pins are verified only from exact Git blobs at `71ca32471f8e042a0048d319ca39cb9deff0c6f4` with SHA-256/size checks and no current-worktree fallback.
+
+Offline results: focused tests 72 passed; full Step-7 tools 184 passed; bringup 239 passed; RL 707 passed; six-package external build passed; observer/ROSIDL colcon tests 25 passed; Python compilation and installed bootstrap launch byte equality passed. Canonical JSON/duplicate-key/encoding checks, YAML/XML parsing, 22/22 pins, guard/evidence/manifest coherence, exact scope/history preservation, and diff checks passed. Guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; no lock. No runtime executed; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+| Record | SHA-256 |
+|---|---|
+| Decision | `ba12bd8e4d24a17e3455622770cf0449dc2724216b93411ee8444fa4ae7d58db` |
+| Evidence | `79ebedc1c3831760be2b8c5bc2c588588cd237e377d1ba0ff6ff759ff2ee1ed2` |
+| Guard manifest | `b95b01b7f98490ae9e157e471790d1d36cb835c8330f91c1ddfc2b1de09b4caa` |
+| Guard | `ad5feb501244511edbe2fe9aded8e53d984453182aff0b3d14939e8a46dff181` |
+| Canonical Source Registry | `d6b0ba9b3492f17006a887e7316db117806ceea1936fe317e14194947ca7903f` |
+| Project Execution Plan | `05f3f27bb736a306cbd5cac71a8c026b994932fe20f711559a783542655564af` |
+
+Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`. This entry supersedes only prior current-attempt_002 scope/pin/test metadata. The exact parent Ledger byte sequence remains an unchanged prefix.

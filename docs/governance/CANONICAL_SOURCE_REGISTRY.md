@@ -966,3 +966,39 @@ Decision SHA-256 `3fe0df3816bcbfd4569ae9279b2e6be3ecf8f6041bc07295e1a14455a3ded5
 This entry supersedes the prior Run005 candidate-only pin and evidence hash references above. The corrected final-scope contract test pin is `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` SHA-256 `50e826ba266c8177ec73c450c0a8a3ea77ae33184d98b0c534c4f08f1d6f409b`, size `40187`. Run005 retains exactly 21 unique current-worktree source pins and an exact 13-path delivery scope. Phase A passed with focused scope/historical tests 46, Step-7 tools 182, bringup 239, RL 707, six-package build PASS, observer/ROSIDL tests PASS, installed source-byte equality 6/6, and parsing/pin/history checks PASS. Historical Run001–Run004 pins use exact Git blobs; Run004 remains its immutable package-prefix pre-acquire failure and was not retried.
 
 Decision SHA-256 `6b9cb13114504f3c2b33e7187c6d32b227f79e2a101c6f57f89a99a21038f72c`; evidence SHA-256 `5a7c70bb5c9a21300d23ab0d2318223fcb1909ff6326b0b6540aba4863baedae`; guard manifest SHA-256 `b51c528653b9b6b58118f020e05c6d2148ae419fc8acb89563cd268dc2542986`; guard SHA-256 `14820301519f35bef273627ca0cd95372413389284df6c824a5f2d37ed3dcf5e`. Run005 guard remains pending/unconsumed; no runtime or integration is claimed.
+
+
+### STEP07 Run005 attempt_002 Fuel path case-normalization correction
+
+Run005 attempt_001 is the immutable consumed failure `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`, root `SIM_EVAL_FUEL_CACHE_MODEL_MISSING:OpenRobotics/Depot` followed by `BOOTSTRAP_EXITED_BEFORE_READINESS`; run-record SHA-256 `374565871f170fb2cbd7a9c089a2d0f47dd4e34d217357769259ef74f5409040`. It was not retried. Attempt_002 retains the Run005 ID and maps the unchanged case-sensitive SDF URIs to lowercase Fuel filesystem parents `openrobotics/depot` and `movai/tugbot`; uppercase parents reject. No cache download or mutation is part of this candidate.
+
+Attempt_002 base `71ca32471f8e042a0048d319ca39cb9deff0c6f4`; exact direct scope is 12 paths. Its runtime source-pin inventory is 22 unique current-worktree entries, including the bootstrap launch pin. Attempt_001 historical pins are read from exact Git blobs at `71ca32471f8e042a0048d319ca39cb9deff0c6f4`, checked by SHA-256/size, and never fall back to worktree bytes. Historical scopes remain 23 → 14 → 9 → 13 → 14 → 17 → 11; attempt_001 is 13 paths and attempt_002 is 12 paths.
+
+Offline results: focused suite 72 passed; Step-7 tools 184 passed; bringup 239 passed; RL 707 passed; six-package external build passed; observer/ROSIDL tests 25 passed; installed bootstrap launch byte equality and static parsing/pin/scope/history checks passed. No runtime was run.
+
+| Current Run005 attempt_002 source path | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `c5f6d39870b58571ad97fb11d5e9ad526c0d94093f8b27588de46454128bdc2a` | 50866 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `210694c3b9c270e20d4650ca7bb8362ee703c62a0a22bfe6e4f21a8cab970190` | 23255 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `ab838d7fc952d5b625391fc59f1d38682915e53aefa0232315672a17e7a3a71f` | 9468 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `d745bd45a810f88d53488512cbe86c48fb108d84ef5eff8a9cbb0a392ab108a1` | 33805 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `f5b2f0a96aac0bbc429a5ab41a19f558006d05f19c54b9a5d5ec8c7f429ec795` | 17061 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `2fb5fd07d368f0ab69855b8b0aac944292c562484a2a1ce54283f72089e96eea` | 6936 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `c93c4f2d1f87c05e31ad13306b37f20f2f906b14898aa9bbf89a22aab97b99e2` | 11918 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `283010f115b1608f8a73613f45e4da674f54ec93c2b91584d86b9514030fb013` | 8870 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `2bc2901a9fad989149ac663b42ac9ac55e926483056431e09b4b073f38770d14` | 6391 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `62f62468215d920d650657f158300b401fc4bfe83f04dd5a1be09c8cb5bcf7b2` | 41631 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `32f1c754bfe65268317d2a2cebe34982285a0273a071fb9fb2f25649df4dc4f4` | 21067 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `4f0f661f507846dd0623877a5a6b93a56e9029f93d1f7f988c745896ab06ae70` | 4580 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml` | `ec322d9068526ba43b878e7ebb249d0587fb9189f49fcb8999e38eea2b68791b` | 733 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
+
+Decision SHA-256 `ba12bd8e4d24a17e3455622770cf0449dc2724216b93411ee8444fa4ae7d58db`; evidence SHA-256 `79ebedc1c3831760be2b8c5bc2c588588cd237e377d1ba0ff6ff759ff2ee1ed2`; guard-manifest SHA-256 `b95b01b7f98490ae9e157e471790d1d36cb835c8330f91c1ddfc2b1de09b4caa`; guard SHA-256 `ad5feb501244511edbe2fe9aded8e53d984453182aff0b3d14939e8a46dff181`. Run005 remains pending, capacity one, acquisition zero, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.

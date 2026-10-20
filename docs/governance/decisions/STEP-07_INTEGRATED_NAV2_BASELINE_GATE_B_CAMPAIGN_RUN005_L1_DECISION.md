@@ -1,25 +1,27 @@
-# Step-7 Run005 — installed package-prefix closure correction
+# Step-7 Run005 attempt_002 — Fuel cache case-normalization correction
 
-Classification: `L1_HISTORICAL_PACKAGE_PREFIX_CLOSURE_CORRECTION`. Exact base and required sole parent: `b7105ccb651da6d0dcb916d7544481f7beacaae1`. Integration base: `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`. Architecture SHA-256: `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
+Classification: `L1_CANONICAL_FUEL_CACHE_PATH_CASE_NORMALIZATION_CORRECTION`. Exact base and required sole parent: `71ca32471f8e042a0048d319ca39cb9deff0c6f4`. Integration base: `f7f98c683d59cf4c62e462da9f37d4ffb2455c80`. Architecture SHA-256: `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
 
-## Historical disposition
+## Immutable attempt_001 disposition
 
-Run004 remains the immutable pre-acquire failure `STEP07_NAV2_BASELINE_RUN004_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED`. Its sole root cause is `PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION`. This is a package-prefix preflight defect only, not a Pydantic, Fuel, Nav2, Gate B, safety, TF, or robot-runtime failure. Run004 is not retried and its guard, evidence, manifest, decision, runtime artifacts, and runtime worktree are unchanged.
+Run005 attempt_001 was invoked once and is immutable. Its terminal outcome is `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`; the root failure is `SIM_EVAL_FUEL_CACHE_MODEL_MISSING:OpenRobotics/Depot`, followed by `BOOTSTRAP_EXITED_BEFORE_READINESS`. The run record SHA-256 is `374565871f170fb2cbd7a9c089a2d0f47dd4e34d217357769259ef74f5409040`. This was the bootstrap's uppercase filesystem mapping disagreeing with the host preflight's canonical lowercase mapping. It is not a LiDAR, Nav2, Gate B, safety, TF, or robot failure. No retry or reinterpretation is permitted.
 
-## Run005 correction
+## Attempt_002 correction and scope
 
-The Run005 runner requires exactly these package prefixes: `ros_gz_sim`, `ros_gz_bridge`, `mecanum_base_bridge`, `mecanum_nav_bringup`, `ROBOT_URDF_final_description`, `robot_localization`, `step07_nav2_baseline_runtime_observer`, and `mecanum_nav_rl`. It verifies before installed-byte comparisons that every package used by the installed-file equality checks belongs to the collected prefix set. Regression coverage exercises the complete mocked host-preflight path and rejects a missing prefix.
+The SDF retains the exact case-sensitive Fuel URIs. Bootstrap cache lookup uses only the lowercase filesystem parents `fuel.gazebosim.org/openrobotics/models/depot` and `fuel.gazebosim.org/movai/models/tugbot`, matching Run005 host preflight. Uppercase owner/model parents reject. Exact URI set, one positive-integer version, required `model.config` and `model.sdf`, and root-contained path checks remain fail-closed. No host cache was changed and no Fuel download is included.
 
-The contract test’s final Run005 scope invariant now requires exact `RUN005_PATHS` for both dirty and committed candidate states; it no longer treats worktree dirtiness as a Phase-A/Phase-B selector. Its existing Run005 source-pin entry was refreshed to SHA-256 `50e826ba266c8177ec73c450c0a8a3ea77ae33184d98b0c534c4f08f1d6f409b`, size `40187`. The source-pin inventory remains 21 unique current-worktree pins, distinct from the 13-path delivery scope.
+The bootstrap/host-preflight regression test requires both validators to resolve the same canonical lowercase paths and both to reject uppercase layout. Historical attempt_001 pins are read only from exact Git blobs at `71ca32471f8e042a0048d319ca39cb9deff0c6f4` and checked by SHA-256 and byte size with no checkout fallback. The active Run005 guard seed is for attempt_002 only: pending, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`. Attempt_002 requires its own exact candidate commit, independent audit, and new Owner authorization.
 
-The canonical runtime interpreter remains `/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python` with Python 3.12 and Pydantic 2.10.6. Fuel lowercase-path, map/world, TF ownership, Gate-B observer, safety/final-command, capacity, and retry contracts remain unchanged.
+The direct attempt_002 corrective scope is exactly 12 paths (`RUN005_ATTEMPT_002_PATHS`), verified by exact set equality in dirty and committed states. Attempt_001 remains the immutable exact 13-path diff from `b7105ccb651da6d0dcb916d7544481f7beacaae1` to `71ca32471f8e042a0048d319ca39cb9deff0c6f4`. The runtime source-pin inventory remains 22 unique entries, independent from the 12 changed paths.
 
-## Scope and offline evidence
+## Offline verification
 
-The exact Run005 corrective scope is 13 paths from `b7105ccb651da6d0dcb916d7544481f7beacaae1`. Historical Run001–Run004 pins are checked using exact Git blobs at their historical commits, with SHA-256 and byte-size verification and no worktree fallback. Historical scope counts remain root campaign 23, lifecycle/QoS 14, acceptance-matrix 9, Run002 13, Run003 14, Run004 original 17, and Run004 corrective 11.
+- Focused bootstrap/Run005/scope suite: 72 passed.
+- Full Step-7 tools suite: 184 passed.
+- Full `mecanum_nav_bringup/test`: 239 passed.
+- Full `mecanum_nav_rl/test`: 707 passed using the external install base.
+- Six-package external colcon build: PASS.
+- Observer and ROSIDL colcon tests: 25 passed, zero failures/errors.
+- Python compilation, installed bootstrap launch byte equality, 22/22 source pins, canonical JSON/UTF-8/no-BOM/no-final-newline/duplicate-key, YAML/XML parsing, historical Git-blob checks, exact scope, and diff checks: PASS.
 
-Phase-A results: focused Run005 scope/historical-pin tests 46 passed; full Step-7 tools 182 passed; bringup 239 passed; RL 707 passed; six-package external colcon build PASS; observer/interface tests PASS; installed source equality 6/6; eight required package prefixes and ROSIDL imports PASS; six Python files compiled; JSON/YAML/XML and duplicate-key checks PASS; Run005 pins 21/21; exact 13-path and historical checks PASS. Build/install/log and bytecode cache were outside the worktree.
-
-Evidence SHA-256 `5a7c70bb5c9a21300d23ab0d2318223fcb1909ff6326b0b6540aba4863baedae`. Guard manifest SHA-256 `b51c528653b9b6b58118f020e05c6d2148ae419fc8acb89563cd268dc2542986`. Guard SHA-256 `14820301519f35bef273627ca0cd95372413389284df6c824a5f2d37ed3dcf5e`.
-
-Run005 remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, retry disabled. Runtime evidence is `NOT_CREATED`; `GATE_B=NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime was executed and no integration is claimed. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.
+These are source/offline results only. No runtime was executed. Guard SHA-256 `ad5feb501244511edbe2fe9aded8e53d984453182aff0b3d14939e8a46dff181`; evidence SHA-256 `79ebedc1c3831760be2b8c5bc2c588588cd237e377d1ba0ff6ff759ff2ee1ed2`; guard-manifest SHA-256 `b95b01b7f98490ae9e157e471790d1d36cb835c8330f91c1ddfc2b1de09b4caa`. Run005 remains pending, capacity one, acquisition zero, and `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_CANDIDATE_ONLY_NO_RUNTIME_EVIDENCE`.

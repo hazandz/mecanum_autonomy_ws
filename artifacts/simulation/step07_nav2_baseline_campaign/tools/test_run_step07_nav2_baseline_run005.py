@@ -16,6 +16,15 @@ SPEC.loader.exec_module(runner)
 DEPOT_URI = "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Depot"
 TUGBOT_URI = "https://fuel.gazebosim.org/1.0/MovAi/models/Tugbot"
 FUEL_URIS = [DEPOT_URI, TUGBOT_URI]
+RUN005_ATTEMPT_001_SHA = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
+RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
+
+
+def _git_blob(root: Path, commit: str, relative: str) -> bytes:
+    return subprocess.run(
+        ["git", "show", f"{commit}:{relative}"], cwd=root,
+        check=True, capture_output=True,
+    ).stdout
 
 
 def _valid_fuel_cache(root):
@@ -432,6 +441,56 @@ def test_fuel_validation_has_no_ambiguous_recursive_lookup_or_download_path():
     assert ".rglob(" not in fuel_function
     assert "gz fuel download" not in source
     assert "OpenRobotics/models/Depot" in source and "MovAi/models/Tugbot" in source
+
+
+def test_bootstrap_and_run005_host_preflight_share_lowercase_fuel_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROS_HOME", str(tmp_path / "ros_home"))
+    monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_log"))
+    bootstrap_path = ROOT / "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py"
+    spec = importlib.util.spec_from_file_location("run005_bootstrap_fuel_contract", bootstrap_path)
+    assert spec and spec.loader
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+
+    sdf = tmp_path / "world.sdf"
+    sdf.write_text(
+        "<sdf><world name='w'>"
+        f"<include><uri>{DEPOT_URI}</uri></include>"
+        f"<include><uri>{TUGBOT_URI}</uri></include>"
+        "</world></sdf>", encoding="utf-8",
+    )
+    lower = _valid_fuel_cache(tmp_path / "fuel-lower")
+    launch_paths = bootstrap.validate_fuel_layout(sdf, lower)
+    host_paths = runner.validate_fuel_cache_layout(FUEL_URIS, lower, lower)
+    assert {uri: Path(path).resolve() for uri, path in launch_paths.items()} == {
+        uri: Path(path).resolve() for uri, path in host_paths.items()
+    }
+    for uri, expected_suffix in (
+        (DEPOT_URI, "openrobotics/models/depot/1"),
+        (TUGBOT_URI, "movai/models/tugbot/1"),
+    ):
+        assert launch_paths[uri].as_posix().endswith(expected_suffix)
+
+    upper = tmp_path / "fuel-uppercase"
+    for owner, model in (("OpenRobotics", "Depot"), ("MovAi", "Tugbot")):
+        version = upper / "fuel.gazebosim.org" / owner / "models" / model / "1"
+        version.mkdir(parents=True)
+        (version / "model.config").write_text("<model/>", encoding="utf-8")
+        (version / "model.sdf").write_text("<sdf/>", encoding="utf-8")
+    with pytest.raises(RuntimeError):
+        bootstrap.validate_fuel_layout(sdf, upper)
+    with pytest.raises(RuntimeError):
+        runner.validate_fuel_cache_layout(FUEL_URIS, upper, upper)
+
+
+def test_run005_attempt001_historical_pins_are_git_blob_only_and_match_exact_bytes():
+    historical_guard = json.loads(_git_blob(ROOT, RUN005_ATTEMPT_001_SHA, RUN005_GUARD_REL))
+    pins = historical_guard["source_pins"]
+    assert pins
+    for relative, expected in pins.items():
+        blob = _git_blob(ROOT, RUN005_ATTEMPT_001_SHA, relative)
+        assert hashlib.sha256(blob).hexdigest() == expected["sha256"], relative
+        assert len(blob) == expected["size_bytes"], relative
 
 
 @pytest.mark.parametrize("facts,expected", [

@@ -27,6 +27,7 @@ EXPECTED_SOURCE_PIN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py",
     "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf",
+    "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
     "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
@@ -65,9 +66,27 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
         "root_cause": "PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION",
         "retry_permitted": False,
     }
+    assert document["run005_attempt_001_disposition"] == {
+        "attempt": "attempt_001",
+        "evidence_directory": "/home/hazan/step07_runtime_evidence/STEP07_NAV2_BASELINE_RUN_005",
+        "root_failure": "SIM_EVAL_FUEL_CACHE_MODEL_MISSING:OpenRobotics/Depot",
+        "run_record_sha256": "374565871f170fb2cbd7a9c089a2d0f47dd4e34d217357769259ef74f5409040",
+        "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED",
+        "guard_consumed": True,
+        "immutable": True,
+        "retry_permitted": False,
+    }
+    assert document["run005_attempt_002_contract"] == {
+        "attempt": "attempt_002",
+        "requires_exact_candidate_commit": True,
+        "requires_independent_audit": True,
+        "requires_new_owner_authorization": True,
+        "source_pin_count": 22,
+    }
     assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
     pins = document["source_pins"]
-    assert len(pins) == 21 and set(pins) == EXPECTED_SOURCE_PIN_PATHS
+    assert len(pins) == 22 and len(set(pins)) == 22
+    assert set(pins) == EXPECTED_SOURCE_PIN_PATHS
     assert "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py" in pins
     assert not any("approval_guards/step07_nav2_baseline_run_00[123].json" in path.lower() for path in pins)
     validate_source_pins(ROOT, pins)
