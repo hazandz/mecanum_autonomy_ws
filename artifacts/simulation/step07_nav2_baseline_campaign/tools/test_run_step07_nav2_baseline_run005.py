@@ -621,114 +621,182 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
     assert not list(evidence_parent.iterdir())
 
 
-def _fake_route_sysfs(tmp_path, interface="enp2s0", *, physical=True):
-    from types import SimpleNamespace
+def _route_row(interface, *, destination="00000000", gateway="0100000A", flags="0003", metric=100, mask="00000000"):
+    return f"{interface} {destination} {gateway} {flags} 0 0 {metric} {mask} 0 0 0"
 
+
+def _route_text(*rows):
+    return "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n" + "\n".join(rows) + "\n"
+
+
+def _fake_route_sysfs(tmp_path, interfaces=("enp2s0",), *, down=(), virtual=()):
     sysfs = tmp_path / "sys"
     (sysfs / "devices/virtual/net").mkdir(parents=True)
-    net = sysfs / "class/net" / interface
-    net.mkdir(parents=True)
-    if physical:
-        device = sysfs / "devices/pci0000/0000:00:00.0"
-        device.mkdir(parents=True)
-        (net / "device").symlink_to(device)
-
-    def command(argv, **_kwargs):
-        if argv[:7] == ["ip", "-j", "-4", "route", "show", "table", "main"]:
-            return SimpleNamespace(returncode=0, stdout=json.dumps([
-                {"dst": "default", "dev": interface, "metric": 100,
-                 "prefsrc": "192.168.50.23", "gateway": "192.168.50.1"}]), stderr="")
-        if argv[:4] == ["ip", "-j", "-d", "link"]:
-            return SimpleNamespace(returncode=0, stdout=json.dumps([
-                {"ifname": interface, "flags": ["BROADCAST", "UP"], "operstate": "UP"}]), stderr="")
-        if argv[:4] == ["ip", "-j", "-4", "addr"]:
-            return SimpleNamespace(returncode=0, stdout=json.dumps([
-                {"ifname": interface, "addr_info": [
-                    {"family": "inet", "local": "192.168.50.23", "prefixlen": 24}]}]), stderr="")
-        if argv[0:2] == ["gz", "topic"]:
-            return SimpleNamespace(returncode=0, stdout="published one message", stderr="")
-        raise AssertionError(f"unexpected command: {argv}")
-    return sysfs, command
+    (sysfs / "devices/pci0000").mkdir(parents=True)
+    for index, interface in enumerate(interfaces):
+        if interface in virtual:
+            net = sysfs / "devices/virtual/net" / interface
+            net.mkdir(parents=True)
+        else:
+            device = sysfs / "devices/pci0000" / f"device{index}"
+            device.mkdir(parents=True)
+            net = sysfs / "devices/pci0000" / f"net{index}" / interface
+            net.mkdir(parents=True)
+            (net / "device").symlink_to(device)
+        (net / "flags").write_text("0x1002" if interface in down else "0x1003", encoding="ascii")
+        (net / "operstate").write_text("down" if interface in down else "up", encoding="ascii")
+        class_net = sysfs / "class/net"
+        class_net.mkdir(parents=True, exist_ok=True)
+        (class_net / interface).symlink_to(net)
+    return sysfs
 
 
-def test_gz_transport_capability_selects_local_default_route_and_sets_shared_environment(tmp_path):
-    sysfs, base_command = _fake_route_sysfs(tmp_path)
+class _FakeUdpSocket:
+    def __init__(self, source="192.168.50.23", error=None):
+        self.source = source
+        self.error = error
+        self.closed = False
+        self.connected = None
+
+    def connect(self, address):
+        self.connected = address
+        if self.error:
+            raise self.error
+
+    def getsockname(self):
+        return (self.source, 49152)
+
+    def close(self):
+        self.closed = True
+
+
+def _resolver_args(tmp_path, *, interfaces=("enp2s0",), routes=None, source="192.168.50.23",
+                   assigned=None, down=(), virtual=(), udp_error=None):
+    sysfs = _fake_route_sysfs(tmp_path, interfaces, down=down, virtual=virtual)
+    route_path = tmp_path / "proc/net/route"
+    route_path.parent.mkdir(parents=True)
+    route_path.write_text(_route_text(*(routes if routes is not None else
+                                        [_route_row(interfaces[0])])), encoding="ascii")
+    udp = _FakeUdpSocket(source, udp_error)
+    addresses = assigned if assigned is not None else {interfaces[0]: ("192.168.50.23",)}
+    return route_path, sysfs, udp, lambda *_args: addresses.get(_args[1], ())
+
+
+def _run_transport_with_fakes(tmp_path, *, interfaces=("enp2s0",), routes=None,
+                              source="192.168.50.23", assigned=None, down=(), virtual=(),
+                              udp_error=None, command_runner=None):
+    from types import SimpleNamespace
+    route_path, sysfs, udp, address_lookup = _resolver_args(
+        tmp_path, interfaces=interfaces, routes=routes, source=source,
+        assigned=assigned, down=down, virtual=virtual, udp_error=udp_error)
     commands = []
     def command(argv, **kwargs):
         commands.append((list(argv), kwargs))
-        return base_command(argv, **kwargs)
-
-    env = {"PATH": "/fake/bin", "GZ_PARTITION": "wrong"}
+        assert argv[0] != "ip", "resolver must not invoke ip executable"
+        if command_runner:
+            return command_runner(argv, **kwargs)
+        assert argv[:2] == ["gz", "topic"]
+        return SimpleNamespace(returncode=0, stdout="publish succeeded", stderr="")
+    env = {"PATH": "/fake/bin"}
     record = {}
-    facts = runner.validate_gz_transport_host_capability(
-        env, runner.PARTITION, command_runner=command, sysfs_root=sysfs, record=record)
-    assert facts["interface"] == "enp2s0" and facts["ipv4"] == "192.168.50.23"
-    assert facts["probe"]["status"] == "PASS"
-    assert env["GZ_IP"] == "192.168.50.23" and env["GZ_PARTITION"] == runner.PARTITION
-    probe_command, probe_kwargs = commands[-1]
-    assert probe_command[:2] == ["gz", "topic"] and "-p" in probe_command
-    assert probe_kwargs["env"]["GZ_IP"] == "192.168.50.23"
-    assert probe_kwargs["env"]["GZ_PARTITION"] == runner.PARTITION
-    assert record["gz_transport_host_capability"]["probe"]["output_sha256"]
-    assert "published one message" not in json.dumps(record)
+    result = runner.validate_gz_transport_host_capability(
+        env, runner.PARTITION, socket_factory=lambda *_args: udp,
+        interface_address_lookup=address_lookup, command_runner=command,
+        proc_route_path=route_path, sysfs_root=sysfs, record=record)
+    return result, env, udp, commands, record
 
 
-def test_every_campaign_component_spawn_inherits_the_verified_partition_and_gz_ip(tmp_path, monkeypatch):
-    captured = []
-    class Child:
-        pid = 501
-    def popen(_command, *, env, **_kwargs):
-        captured.append(dict(env))
-        return Child()
-    monkeypatch.setattr(runner.subprocess, "Popen", popen)
-    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
-    monkeypatch.setattr(runner, "_process_group_members", lambda pgid: {
-        "live_member_pids": [pgid], "zombie_member_pids": [], "verified": True,
-        "inspection_errors": []})
-    env = {"GZ_IP": "192.168.50.23", "GZ_PARTITION": runner.PARTITION}
-    ledger = {}
-    for name in ("bootstrap", "composite", "cpp_observer", "gate_b_observer"):
-        runner._spawn_owned_process(["fake", name], name=name, cwd=tmp_path, env=env,
-            log_path=tmp_path / f"{name}.log", processes=[], ownership_ledger=ledger)
-    assert len(captured) == 4
-    assert all(row["GZ_IP"] == "192.168.50.23" and row["GZ_PARTITION"] == runner.PARTITION
-               for row in captured)
+def test_gz_transport_resolves_lowest_metric_route_and_binds_shared_environment(tmp_path):
+    routes = [_route_row("enp2s0", metric=200), _route_row("eno1", metric=20)]
+    result, env, udp, commands, record = _run_transport_with_fakes(
+        tmp_path, interfaces=("enp2s0", "eno1"), routes=routes,
+        assigned={"enp2s0": ("192.168.50.23",), "eno1": ("10.10.0.7",)},
+        source="10.10.0.7")
+    assert result["interface"] == "eno1" and result["ipv4"] == "10.10.0.7"
+    assert result["route_source"] == "PROC_NET_ROUTE_AND_UDP_CONNECT"
+    assert udp.connected == ("192.0.2.1", 9) and udp.closed
+    assert env["GZ_IP"] == "10.10.0.7" and env["GZ_PARTITION"] == runner.PARTITION
+    assert len(commands) == 1 and commands[0][0][:2] == ["gz", "topic"]
+    assert commands[0][1]["env"]["GZ_IP"] == env["GZ_IP"]
+    assert commands[0][1]["env"]["GZ_PARTITION"] == runner.PARTITION
+    facts = record["gz_transport_host_capability"]
+    assert set(facts) == {"interface", "ipv4", "partition", "route_source", "probe", "status"}
+    assert "publish succeeded" not in json.dumps(facts)
 
 
-@pytest.mark.parametrize(("mutation", "reason"), [
-    ("missing_route", "DEFAULT_ROUTE_MISSING"),
-    ("docker_interface", "ROUTE_INTERFACE_NOT_PHYSICAL"),
-    ("loopback_source", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
-    ("link_local_source", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
-    ("interface_down", "ROUTE_INTERFACE_DOWN"),
-    ("source_not_on_route_interface", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
-    ("address_interface_mismatch", "ROUTE_INTERFACE_ADDRESS_INVALID"),
+def test_gz_transport_rejects_missing_malformed_and_ambiguous_routes(tmp_path):
+    cases = [
+        ([], "DEFAULT_ROUTE_MISSING"),
+        (["not a route"], "PROC_NET_ROUTE_MALFORMED"),
+        ([_route_row("enp2s0", metric=10), _route_row("eno1", metric=10)],
+         "DEFAULT_ROUTE_AMBIGUOUS"),
+        ([_route_row("enp2s0", flags="0002")], "DEFAULT_ROUTE_NOT_UP"),
+    ]
+    for index, (routes, reason) in enumerate(cases):
+        case = tmp_path / str(index)
+        case.mkdir()
+        route_path, sysfs, udp, lookup = _resolver_args(
+            case, interfaces=("enp2s0", "eno1"), routes=routes)
+        with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
+            runner.validate_gz_transport_host_capability(
+                {}, runner.PARTITION, socket_factory=lambda *_: udp,
+                interface_address_lookup=lookup, command_runner=lambda *_a, **_k: pytest.fail("probe too early"),
+                proc_route_path=route_path, sysfs_root=sysfs)
+
+
+def test_gz_transport_fails_closed_when_proc_route_cannot_be_read(tmp_path):
+    sysfs = _fake_route_sysfs(tmp_path)
+    with pytest.raises(RuntimeError, match="^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:PROC_NET_ROUTE_UNREADABLE$"):
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, proc_route_path=tmp_path / "missing-route",
+            sysfs_root=sysfs, command_runner=lambda *_a, **_k: pytest.fail("probe too early"))
+
+
+def test_gz_transport_rejects_virtual_and_down_route_interfaces(tmp_path):
+    for name, down, virtual, reason in (
+        ("virtual0", (), ("virtual0",), "ROUTE_INTERFACE_SYSFS_INVALID"),
+        ("enp2s0", ("enp2s0",), (), "ROUTE_INTERFACE_DOWN"),
+    ):
+        case = tmp_path / name
+        case.mkdir()
+        route_path, sysfs, udp, lookup = _resolver_args(
+            case, interfaces=(name,), routes=[_route_row(name)], down=down, virtual=virtual)
+        with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
+            runner.validate_gz_transport_host_capability(
+                {}, runner.PARTITION, socket_factory=lambda *_: udp,
+                interface_address_lookup=lookup, command_runner=lambda *_a, **_k: pytest.fail("probe too early"),
+                proc_route_path=route_path, sysfs_root=sysfs)
+
+
+@pytest.mark.parametrize(("source", "reason"), [
+    ("127.0.0.1", "DEFAULT_ROUTE_SOURCE_INVALID"),
+    ("169.254.10.1", "DEFAULT_ROUTE_SOURCE_INVALID"),
+    ("0.0.0.0", "DEFAULT_ROUTE_SOURCE_INVALID"),
+    ("224.0.0.1", "DEFAULT_ROUTE_SOURCE_INVALID"),
+    ("192.0.2.44", "DEFAULT_ROUTE_SOURCE_INVALID"),
+    ("10.10.0.7", "DEFAULT_ROUTE_SOURCE_NOT_ON_INTERFACE"),
 ])
-def test_gz_default_route_selection_fails_closed(tmp_path, mutation, reason):
-    sysfs, base_command = _fake_route_sysfs(tmp_path, interface="docker0",
-                                            physical=mutation != "docker_interface")
-    def command(argv, **kwargs):
-        result = base_command(argv, **kwargs)
-        if mutation == "missing_route" and argv[3:5] == ["route", "show"]:
-            from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
-        if mutation in {"loopback_source", "link_local_source"} and argv[0:4] == ["ip", "-j", "-4", "route"]:
-            from types import SimpleNamespace
-            source = "127.0.0.1" if mutation == "loopback_source" else "169.254.1.2"
-            return SimpleNamespace(returncode=0, stdout=json.dumps([{"dst":"default","dev":"docker0","metric":100,"prefsrc":source}]), stderr="")
-        if mutation == "interface_down" and argv[0:4] == ["ip", "-j", "-d", "link"]:
-            from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"docker0","flags":[],"operstate":"DOWN"}]), stderr="")
-        if mutation == "source_not_on_route_interface" and argv[0:4] == ["ip", "-j", "-4", "addr"]:
-            from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"docker0","addr_info":[{"family":"inet","local":"192.168.50.99"}]}]), stderr="")
-        if mutation == "address_interface_mismatch" and argv[0:4] == ["ip", "-j", "-4", "addr"]:
-            from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"other0","addr_info":[{"family":"inet","local":"192.168.50.23"}]}]), stderr="")
-        return result
+def test_gz_transport_rejects_invalid_or_unowned_source_address(tmp_path, source, reason):
+    route_path, sysfs, udp, lookup = _resolver_args(tmp_path, source=source)
     with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
-        runner.validate_gz_transport_host_capability({}, runner.PARTITION,
-                                                      command_runner=command, sysfs_root=sysfs)
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, socket_factory=lambda *_: udp,
+            interface_address_lookup=lookup, command_runner=lambda *_a, **_k: pytest.fail("probe too early"),
+            proc_route_path=route_path, sysfs_root=sysfs)
+
+
+def test_gz_transport_udp_failure_is_closed_and_does_not_invoke_ip(tmp_path):
+    route_path, sysfs, udp, lookup = _resolver_args(
+        tmp_path, udp_error=OSError("synthetic connect failure"))
+    def command(argv, **_kwargs):
+        assert argv[0] != "ip"
+        pytest.fail("publish probe must not run after UDP resolver failure")
+    with pytest.raises(RuntimeError, match="^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:UDP_SOURCE_RESOLUTION_FAILED$"):
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, socket_factory=lambda *_: udp,
+            interface_address_lookup=lookup, command_runner=command,
+            proc_route_path=route_path, sysfs_root=sysfs)
+    assert udp.closed
 
 
 @pytest.mark.parametrize(("mode", "reason"), [
@@ -738,21 +806,22 @@ def test_gz_default_route_selection_fails_closed(tmp_path, mutation, reason):
 ])
 def test_gz_publish_probe_fails_closed_and_records_sanitized_result(tmp_path, mode, reason):
     from types import SimpleNamespace
-    sysfs, base_command = _fake_route_sysfs(tmp_path)
+    route_path, sysfs, udp, lookup = _resolver_args(tmp_path)
     def command(argv, **kwargs):
-        if argv[:2] == ["gz", "topic"]:
-            if mode == "timeout":
-                raise subprocess.TimeoutExpired(argv, 1)
-            return SimpleNamespace(returncode=2 if mode == "nonzero" else 0,
-                                   stdout="", stderr="Network is unreachable" if mode == "unreachable" else "failed")
-        return base_command(argv, **kwargs)
+        assert argv[0] != "ip"
+        if mode == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1)
+        return SimpleNamespace(returncode=2 if mode == "nonzero" else 0,
+                               stdout="", stderr="Network is unreachable" if mode == "unreachable" else "failed")
     record = {}
     with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
-        runner.validate_gz_transport_host_capability({}, runner.PARTITION,
-                                                      command_runner=command, sysfs_root=sysfs, record=record)
+        runner.validate_gz_transport_host_capability(
+            {}, runner.PARTITION, socket_factory=lambda *_: udp,
+            interface_address_lookup=lookup, command_runner=command,
+            proc_route_path=route_path, sysfs_root=sysfs, record=record)
     facts = record["gz_transport_host_capability"]
     assert facts["interface"] == "enp2s0" and facts["ipv4"] == "192.168.50.23"
-    assert facts["status"] == "FAIL"
+    assert facts["status"] == "FAIL" and "Network is unreachable" not in json.dumps(facts)
 
 
 def test_preacquire_gz_probe_failure_persists_sanitized_route_and_probe_facts(tmp_path, monkeypatch):
@@ -760,15 +829,18 @@ def test_preacquire_gz_probe_failure_persists_sanitized_route_and_probe_facts(tm
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     evidence = tmp_path / "evidence"
-    sysfs, base_command = _fake_route_sysfs(tmp_path)
+    route_path, sysfs, udp, lookup = _resolver_args(tmp_path)
     def command(argv, **kwargs):
         if argv[:2] == ["gz", "topic"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="Network is unreachable")
-        return base_command(argv, **kwargs)
+        raise AssertionError(f"unexpected executable: {argv[0]}")
     monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_args: {"PATH": "/fake"})
     monkeypatch.setattr(runner, "host_preflight", lambda env, worktree, run_directory, partition,
-                        map_root, fuel_root, pins, runtime_python, record: _preflight_transport_probe(
-                            env, partition, record, command, sysfs))
+                        map_root, fuel_root, pins, runtime_python, record:
+                        runner.validate_gz_transport_host_capability(
+                            env, partition, socket_factory=lambda *_: udp,
+                            interface_address_lookup=lookup, command_runner=command,
+                            proc_route_path=route_path, sysfs_root=sysfs, record=record))
     guard_path = runtime / "guard.json"
     guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
              "runtime_authorization": "NOT_GRANTED"}
@@ -1044,10 +1116,7 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
     monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_: {"PATH": ""})
     def host(*_args):
         calls.append("host")
-        runner.validate_gz_transport_host_capability(
-            {}, runner.PARTITION,
-            command_runner=lambda *_a, **_k: (_ for _ in ()).throw(PermissionError("route denied")),
-        )
+        raise RuntimeError("GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:PROC_NET_ROUTE_UNREADABLE")
     monkeypatch.setattr(runner, "host_preflight", host)
     monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("guard must remain pending"))
     record = {"run_id": runner.RUN_ID, "partition": runner.PARTITION,
@@ -1058,7 +1127,7 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
         Path(runner.RUNTIME_PYTHON_PATH), record,
     )
     assert calls == ["host"] and result[3]["failure_reason_literals"] == [
-        "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_COMMAND_FAILED"]
+        "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:PROC_NET_ROUTE_UNREADABLE"]
     assert record["guard_state_after"] == runner.PENDING
     assert record["call_counts"] == {"runner": 1, "bootstrap": 0, "composite": 0,
                                       "cpp_observer": 0, "gate_b_observer": 0}

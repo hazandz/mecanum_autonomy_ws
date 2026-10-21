@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[4]
 GUARD = ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
 EVIDENCE = ROOT / "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json"
 REVIEW = "fdc0e299515bda2286832aabec635948629517b5"
+PIN_MEMBERSHIP_BASE = "e921b04e9ef8dc933a76966cf101613fab0f8062"
 EXPECTED_SOURCE_PIN_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt",
@@ -146,6 +147,19 @@ def test_attempt_002_source_seed_remains_pending_and_historical_invocations_are_
     assert historical["guard_consumed"] is True
     assert historical["retry_performed"] is False
     assert historical["immutable"] is True
+
+
+def test_default_route_corrective_preserves_exact_run005_pin_membership():
+    relative = str(GUARD.relative_to(ROOT))
+    historical_raw = subprocess.run(
+        ["git", "show", f"{PIN_MEMBERSHIP_BASE}:{relative}"], cwd=ROOT,
+        check=True, capture_output=True,
+    ).stdout
+    historical = json.loads(historical_raw)
+    current = load_guard(GUARD)
+    expected = set(historical["source_pins"])
+    assert expected == EXPECTED_SOURCE_PIN_PATHS
+    assert set(current["source_pins"]) == expected
 
 
 def test_attempt_002_pass_requires_graceful_teardown_and_invocation_007_is_immutable_failure():

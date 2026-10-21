@@ -172,3 +172,13 @@ Run005 attempt_002 invocation_007 được ghi nhận là runtime failure bất 
 Sau khi bổ sung regression test guard trong allowlist và làm mới entry pin hiện hữu, Phase A được chạy lại: focused guard/contract 35 PASS; focused scope 4 PASS; full Step-7 tools 307 PASS; full bringup 250 PASS; full RL 715 PASS với external install base; external six-package build PASS; observer 13 và ROSIDL 8 PASS; `py_compile` PASS; installed/source artifacts 15/15 PASS. Source pin inventory giữ 37 unique entries, không đổi membership. Direct scope exact 13 paths từ base nêu trên.
 
 Guard source vẫn `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, không lock. Không có runtime trong corrective này; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. Next action: independent audit exact corrective commit; runtime cần authorization riêng.
+
+## L1 corrective — pure-Python default-route resolver
+
+Base / sole parent: `e921b04e9ef8dc933a76966cf101613fab0f8062`. Đây vẫn là Run005 attempt_002; không tạo run hoặc thay đổi authorization. Invocation_009 là historical immutable pre-acquire failure với literal `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_EXIT_NONZERO`. Evidence chỉ xác nhận lệnh route bên ngoài trả nonzero; không suy đoán do cú pháp, quyền hay phiên bản.
+
+Runner không còn gọi executable `ip` hoặc dùng netlink route dump. Resolver đọc `/proc/net/route`, chọn duy nhất default IPv4 route có metric thấp nhất, kiểm tra interface UP và physical qua sysfs, rồi dùng UDP `connect()` tới TEST-NET (không gửi packet) để lấy source IPv4. Source phải là địa chỉ usable, không loopback/link-local/multicast/unspecified/reserved và phải khớp địa chỉ trên interface bằng `SIOCGIFADDR`. Mọi lỗi fail-closed với `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:<reason>`.
+
+Probe `gz topic` publish bounded vẫn chạy trước guard với exact `GZ_PARTITION` và `GZ_IP` đã xác minh; bootstrap, composite và hai observer kế thừa cùng environment. Evidence chỉ lưu interface, IPv4 đã chọn, `PROC_NET_ROUTE_AND_UDP_CONNECT`, partition và kết quả probe đã sanitize; không lưu gateway hoặc raw network output.
+
+Regression tests dùng route/sysfs/socket/command fakes; không gọi network thật. Offline evidence sau kiểm tra cuối được ghi trong Run005 evidence và append-only Ledger. Guard seed giữ PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, không lock. Không chạy runtime; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -16,6 +17,7 @@ from pathlib import Path
 import socket
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -552,13 +554,13 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
 
 
 def validate_gz_transport_host_capability(
-    env: dict[str, str], partition: str, *, interface_enumerator=None,
-    socket_factory=None, command_runner=None, timeout: float = 15,
+    env: dict[str, str], partition: str, *, socket_factory=None,
+    interface_address_lookup=None, command_runner=None, timeout: float = 15,
+    proc_route_path: Path = Path("/proc/net/route"),
     sysfs_root: Path = Path("/sys"), record: dict | None = None,
 ) -> dict:
-    """Select the physical default-route IPv4 and prove bounded Gazebo transport."""
+    """Resolve a physical default-route IPv4 without invoking external route tools."""
     command_runner = command_runner or _run
-    root = Path(sysfs_root)
     facts: dict = {"partition": partition, "status": "PENDING"}
 
     def unavailable(reason: str, error: BaseException | None = None):
@@ -570,86 +572,95 @@ def validate_gz_transport_host_capability(
             raise failure from error
         raise failure
 
-    def run_json(command: list[str], reason: str) -> list[dict]:
+    try:
+        route_text = Path(proc_route_path).read_text(encoding="ascii")
+    except (OSError, UnicodeError) as error:
+        unavailable("PROC_NET_ROUTE_UNREADABLE", error)
+    routes = []
+    lines = route_text.splitlines()
+    if not lines or lines[0].split()[:2] != ["Iface", "Destination"]:
+        unavailable("PROC_NET_ROUTE_MALFORMED")
+    for line in lines[1:]:
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) < 11:
+            unavailable("PROC_NET_ROUTE_MALFORMED")
+        interface, destination, gateway, flags, _refcnt, _use, metric, mask = fields[:8]
+        if (not interface or interface in {".", ".."}
+                or not all(char.isalnum() or char in "_.:-" for char in interface)):
+            unavailable("PROC_NET_ROUTE_MALFORMED")
         try:
-            result = command_runner(command, env=dict(env), check=False, timeout=timeout)
-        except subprocess.TimeoutExpired as error:
-            unavailable(f"{reason}_TIMEOUT", error)
-        except (PermissionError, OSError) as error:
-            unavailable(f"{reason}_COMMAND_FAILED", error)
-        if getattr(result, "returncode", 1) != 0:
-            unavailable(f"{reason}_EXIT_NONZERO")
-        try:
-            value = json.loads(result.stdout)
-        except (TypeError, json.JSONDecodeError) as error:
-            unavailable(f"{reason}_JSON_INVALID", error)
-        if type(value) is not list:
-            unavailable(f"{reason}_JSON_INVALID")
-        return value
-
-    routes = run_json(["ip", "-j", "-4", "route", "show", "table", "main", "default"], "DEFAULT_ROUTE")
-    valid_routes = [row for row in routes if type(row) is dict and row.get("dst", "default") == "default"
-                    and isinstance(row.get("dev"), str) and row["dev"]]
-    if not valid_routes:
+            dest_ip = ipaddress.IPv4Address(struct.pack("<I", int(destination, 16)))
+            mask_ip = ipaddress.IPv4Address(struct.pack("<I", int(mask, 16)))
+            int(gateway, 16)
+            route_flags = int(flags, 16)
+            metric_value = int(metric, 10)
+            if metric_value < 0:
+                raise ValueError("negative metric")
+        except (ValueError, struct.error) as error:
+            unavailable("PROC_NET_ROUTE_MALFORMED", error)
+        if dest_ip == ipaddress.IPv4Address("0.0.0.0") and mask_ip == ipaddress.IPv4Address("0.0.0.0"):
+            if route_flags & 0x1 == 0:
+                unavailable("DEFAULT_ROUTE_NOT_UP")
+            routes.append((metric_value, interface))
+    if not routes:
         unavailable("DEFAULT_ROUTE_MISSING")
-    try:
-        route_metrics = [(int(row.get("metric", 0)), row) for row in valid_routes]
-    except (TypeError, ValueError) as error:
-        unavailable("DEFAULT_ROUTE_INVALID", error)
-    best_metric = min(metric for metric, _ in route_metrics)
-    best_routes = [row for metric, row in route_metrics if metric == best_metric]
-    if len(best_routes) != 1:
+    best_metric = min(metric for metric, _interface in routes)
+    selected = [(metric, interface) for metric, interface in routes if metric == best_metric]
+    if len(selected) != 1:
         unavailable("DEFAULT_ROUTE_AMBIGUOUS")
-    route = best_routes[0]
-    interface = route["dev"]
-    link_rows = run_json(["ip", "-j", "-d", "link", "show", "dev", interface], "ROUTE_INTERFACE")
-    if len(link_rows) != 1 or type(link_rows[0]) is not dict:
-        unavailable("ROUTE_INTERFACE_INVALID")
-    link = link_rows[0]
-    if "UP" not in link.get("flags", []) or link.get("operstate") != "UP":
-        unavailable("ROUTE_INTERFACE_DOWN")
-    device = root / "class" / "net" / interface / "device"
+    _metric, interface = selected[0]
+
+    root = Path(sysfs_root)
+    net_entry = root / "class" / "net" / interface
     try:
-        device_target = device.resolve(strict=True)
-        virtual_root = (root / "devices" / "virtual" / "net").resolve(strict=True)
-        device_target.relative_to(virtual_root)
+        net_real = net_entry.resolve(strict=True)
+        devices_root = (root / "devices").resolve(strict=True)
+        net_real.relative_to(devices_root)
+        flags = int((net_entry / "flags").read_text(encoding="ascii").strip(), 0)
+        operstate = (net_entry / "operstate").read_text(encoding="ascii").strip().lower()
+        device_target = (net_real / "device").resolve(strict=True)
+        device_target.relative_to(devices_root)
+    except (OSError, UnicodeError, ValueError) as error:
+        unavailable("ROUTE_INTERFACE_SYSFS_INVALID", error)
+    try:
+        device_target.relative_to((devices_root / "virtual").resolve(strict=True))
     except ValueError:
         pass
-    except OSError:
-        unavailable("ROUTE_INTERFACE_NOT_PHYSICAL")
+    except OSError as error:
+        unavailable("ROUTE_INTERFACE_SYSFS_INVALID", error)
     else:
         unavailable("ROUTE_INTERFACE_NOT_PHYSICAL")
-    addresses = run_json(["ip", "-j", "-4", "addr", "show", "dev", interface], "ROUTE_INTERFACE_ADDRESS")
-    if (len(addresses) != 1 or type(addresses[0]) is not dict
-            or addresses[0].get("ifname") != interface):
-        unavailable("ROUTE_INTERFACE_ADDRESS_INVALID")
-    candidates: list[ipaddress.IPv4Address] = []
-    for address in addresses[0].get("addr_info", []):
-        if type(address) is not dict or address.get("family") != "inet":
-            continue
-        try:
-            parsed = ipaddress.ip_address(address.get("local", ""))
-        except ValueError:
-            unavailable("ROUTE_INTERFACE_ADDRESS_INVALID")
-        if (isinstance(parsed, ipaddress.IPv4Address) and not parsed.is_loopback
-                and not parsed.is_link_local and not parsed.is_unspecified
-                and not parsed.is_multicast and not parsed.is_reserved):
-            candidates.append(parsed)
-    preferred = route.get("prefsrc")
-    if preferred:
-        try:
-            selected_ip = ipaddress.IPv4Address(preferred)
-        except ipaddress.AddressValueError as error:
-            unavailable("DEFAULT_ROUTE_SOURCE_INVALID", error)
-        if selected_ip not in candidates:
-            unavailable("DEFAULT_ROUTE_SOURCE_NOT_LOCAL")
-    elif len(candidates) == 1:
-        selected_ip = candidates[0]
-    else:
-        unavailable("ROUTE_INTERFACE_ADDRESS_AMBIGUOUS")
+    if flags & 0x1 == 0 or operstate != "up":
+        unavailable("ROUTE_INTERFACE_DOWN")
+
+    udp_factory = socket_factory or socket.socket
+    address_lookup = interface_address_lookup or _interface_ipv4_addresses
+    udp_socket = None
+    try:
+        udp_socket = udp_factory(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.connect(("192.0.2.1", 9))
+        source_text = udp_socket.getsockname()[0]
+        selected_ip = ipaddress.IPv4Address(source_text)
+        if not _is_usable_local_ipv4(selected_ip):
+            unavailable("DEFAULT_ROUTE_SOURCE_INVALID")
+        interface_addresses = {ipaddress.IPv4Address(value) for value in address_lookup(udp_socket, interface)}
+        if selected_ip not in interface_addresses:
+            unavailable("DEFAULT_ROUTE_SOURCE_NOT_ON_INTERFACE")
+    except RuntimeError:
+        raise
+    except (OSError, ValueError, TypeError) as error:
+        unavailable("UDP_SOURCE_RESOLUTION_FAILED", error)
+    finally:
+        if udp_socket is not None:
+            try:
+                udp_socket.close()
+            except OSError:
+                unavailable("UDP_SOCKET_CLOSE_FAILED")
 
     facts.update({"interface": interface, "ipv4": str(selected_ip), "partition": partition,
-             "default_route_metric": best_metric, "route_source": "LOCAL_INTERFACE_ADDRESS",
+             "route_source": "PROC_NET_ROUTE_AND_UDP_CONNECT",
              "probe": {"command": "gz topic -t <unique> -m gz.msgs.StringMsg -p <probe>",
                        "status": "PENDING"}, "status": "PENDING"})
     if record is not None:
@@ -688,6 +699,28 @@ def validate_gz_transport_host_capability(
     env["GZ_PARTITION"] = partition
     env["GZ_IP"] = str(selected_ip)
     return facts
+
+
+def _is_usable_local_ipv4(address: ipaddress.IPv4Address) -> bool:
+    reserved_networks = (
+        ipaddress.IPv4Network("0.0.0.0/8"),
+        ipaddress.IPv4Network("192.0.0.0/24"),
+        ipaddress.IPv4Network("192.0.2.0/24"),
+        ipaddress.IPv4Network("198.18.0.0/15"),
+        ipaddress.IPv4Network("198.51.100.0/24"),
+        ipaddress.IPv4Network("203.0.113.0/24"),
+        ipaddress.IPv4Network("240.0.0.0/4"),
+    )
+    return not (address.is_loopback or address.is_link_local or address.is_multicast
+                or address.is_unspecified or address.is_reserved
+                or any(address in network for network in reserved_networks))
+
+
+def _interface_ipv4_addresses(sock, interface: str) -> tuple[str, ...]:
+    """Read the interface's primary IPv4 address through Linux SIOCGIFADDR."""
+    request = struct.pack("256s", interface.encode("ascii")[:15])
+    response = fcntl.ioctl(sock.fileno(), 0x8915, request)  # SIOCGIFADDR
+    return (socket.inet_ntoa(response[20:24]),)
 
 
 ROS_DISCOVERY_ERROR_MARKERS = (

@@ -1132,3 +1132,12 @@ Offline verification: validator 15 tests; focused scope 9 tests; Step-7 tools 30
 ### Active corrective — Run005 attempt_002 GZ_IP transport / graceful teardown L2
 
 Base `f72ac2112e0d1545a72b6a9a12764664d508aaa8`, existing review branch; exact current direct set is 13 authorized paths. Source inventory remains 37 unique pins. Pre-acquire transport qualification derives and validates one local IPv4 from structured default-route/interface/address data, sets `GZ_IP` only in the verified campaign environment, and runs a bounded one-shot `gz topic` publish probe. PASS also requires graceful teardown; clean final state after escalation is FAIL. Invocation_007 remains immutable runtime failure (bootstrap ready, composite readiness timeout on multicast `Network is unreachable`, lifecycle_manager escalation). No runner/runtime/integration was executed by this offline corrective. Independent audit is next; a future runtime requires separate authorization.
+
+### Run005 attempt_002 — default-route resolver corrective (offline only)
+
+Active corrective trên base `e921b04e9ef8dc933a76966cf101613fab0f8062`, exact direct scope 11 paths. Loại bỏ external `ip -j` route dependency; pure-Python resolver dùng `/proc/net/route`, sysfs physical/UP checks, UDP connect source selection và interface address verification. Giữ `GZ_IP`, campaign `GZ_PARTITION` và bounded one-shot publish probe trước guard. Invocation_009 giữ nguyên là pre-acquire failure `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_EXIT_NONZERO`; không gán nguyên nhân sâu hơn và không retry.
+
+Evidence ceiling là source/offline test only. Guard chưa consume; runtime authorization chưa được cấp; không có Gate B hoặc runtime PASS. Next action: independent audit exact corrective commit; runtime cần Owner authorization riêng.
+
+
+Verification snapshot: focused runner/guard/scope 180 passed; full Step-7 tools 310 passed; `mecanum_nav_bringup/test` 251 passed; `mecanum_nav_rl/test` 715 passed with external install base; six-package external colcon build passed; observer 13 and ROSIDL 8 passed; `py_compile` passed; installed/source runtime artifact equality 15/15. Run005 keeps 37 unique pins. All evidence is offline-only; independent audit remains required.

@@ -1224,3 +1224,17 @@ Offline result: 37/37 source pins, full Step-7 tools 306, bringup 249, RL 715, e
 Base/sole parent `f72ac2112e0d1545a72b6a9a12764664d508aaa8`; exact direct scope 13 paths. Source pins remain 37 unique entries, membership unchanged; existing hashes/sizes are refreshed from current bytes. Gazebo Transport selects and validates a local IPv4 assigned to the selected IPv4 default-route interface, passes it as `GZ_IP` with the exact campaign `GZ_PARTITION`, and performs one bounded transport publish probe before guard acquisition. Runtime PASS requires teardown completed, clean, ordered, verified and graceful with no escalation history.
 
 Invocation_007 is immutable historical runtime failure: bootstrap READY; composite readiness timeout after multicast `Network is unreachable`; final snapshot was clean but `lifecycle_manager` required escalation, so teardown was not graceful. It is not a PASS. No historical runtime artifact was modified and no runtime was run for this corrective.
+
+### Run005 attempt_002 — pure-Python default-route resolver corrective
+
+Active base `e921b04e9ef8dc933a76966cf101613fab0f8062`; exact current direct diff: 11 paths. The current runtime source-pin inventory retains the same 37 unique entries. Active route resolution no longer depends on executable `ip`: it parses `/proc/net/route`, checks UP/physical interface facts in sysfs, selects a UDP-connect source, and verifies interface ownership via `SIOCGIFADDR`. It retains exact campaign GZ_IP/GZ_PARTITION inheritance and the pre-acquire bounded publish probe.
+
+Invocation_009 remains an immutable no-guard-consumed preflight failure: `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_EXIT_NONZERO`. The recorded result does not identify whether the external command failed due to syntax, permissions, or version. No historical runtime evidence was changed.
+
+Current source pin refreshes (SHA-256, byte size):
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `5eb0a1c12b2673a42d6db0f286d17e2fd3320a92fb7a25cd76f4d02f529f8c30` | 101060 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `bb1e73a47de3b726346a75512fb392a5718144b338ba07c1d4db7ef3f65f34eb` | 116357 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `723941c02064eead9839e6aba296be6bcf304ca1afc1d843e7d9b101d7ae0981` | 18086 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `7b9fbd5af7d79caeadaea293c30db71a386d98fe27292574fbc0276372d3d676` | 65816 |
+
+Current guard/evidence/manifest SHA-256: `6539bda341ace90f2c595572063b8c95ba41ea92017c6c803847722adf5097e5` / `e563268b209f8c96adbd25aa426cf2f15004a1d9ff799871320aaab5f5bd7789` / `5c147a1d58feaa1d3dd5571a6dbb4e7d377019284c4fc805b1587c645f9588e6`.

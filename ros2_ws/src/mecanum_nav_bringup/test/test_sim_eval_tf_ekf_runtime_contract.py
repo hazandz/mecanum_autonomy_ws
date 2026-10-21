@@ -637,6 +637,27 @@ RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
 }
 
+RUN005_DEFAULT_ROUTE_BASE = "e921b04e9ef8dc933a76966cf101613fab0f8062"
+RUN005_DEFAULT_ROUTE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_DEFAULT_ROUTE_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
+
 def _candidate_changed_paths():
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
@@ -651,6 +672,27 @@ def _candidate_changed_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
         capture_output=True, text=True,
     ).stdout.strip() if not dirty else None
+    if head == RUN005_DEFAULT_ROUTE_BASE or parent == RUN005_DEFAULT_ROUTE_BASE:
+        if dirty:
+            changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
+            if changed not in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS):
+                raise AssertionError(f"Run005 default-route corrective scope is not exact: {sorted(changed)}")
+        elif parent == RUN005_DEFAULT_ROUTE_BASE:
+            changed = set(subprocess.run(
+                ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+                check=True, capture_output=True, text=True,
+            ).stdout.splitlines())
+            assert changed == RUN005_DEFAULT_ROUTE_PATHS
+        else:
+            changed = set()
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert set(untracked) <= changed
+        assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
+                       or "/__pycache__/" in path for path in untracked), untracked
+        return changed, dirty
     if head == RUN005_GZ_IP_GRACEFUL_BASE or parent == RUN005_GZ_IP_GRACEFUL_BASE:
         if dirty:
             changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
@@ -800,6 +842,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
     )
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
@@ -824,7 +867,8 @@ def test_run005_validator_identity_corrective_scope_is_exact():
     assert subprocess.run(["git", "rev-parse", f"{RUN005_GZ_IP_GRACEFUL_BASE}^"], cwd=ROOT,
                           check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
     current, _dirty = _candidate_changed_paths()
-    assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS)
+    assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -1016,6 +1060,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -1039,4 +1084,10 @@ def test_historical_runtime_conservation_and_candidate_scope():
 
 def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
-    assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS)
+    assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)
+
+
+def test_run005_default_route_resolver_corrective_scope_is_exact():
+    changed, _dirty = _candidate_changed_paths()
+    assert changed in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)

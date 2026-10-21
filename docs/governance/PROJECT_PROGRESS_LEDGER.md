@@ -2110,3 +2110,23 @@ Focused validator tests: 15 passed; focused validator/scope tests: 9 passed. Ful
 | Build / observer / ROSIDL | Sáu package external build PASS; observer 13 và ROSIDL 8 PASS. |
 | Python / installed source | `py_compile` PASS; installed runtime artifacts 15/15 byte-equal. |
 | Runtime | Không chạy runner/runtime; invocation_007 giữ nguyên là historical failure, teardown không graceful. |
+
+
+### Run005 attempt_002 — default-route resolver corrective
+
+Base `e921b04e9ef8dc933a76966cf101613fab0f8062`; active exact scope 11 paths. Invocation_009 remains immutable pre-acquire failure `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_EXIT_NONZERO`, guard unconsumed and no retry. Resolver changes are offline only; no runtime/network probe was run by this corrective.
+
+Verification before final source-pin reconciliation: runner transport tests passed; bringup 251 passed; RL 715 passed with `/tmp/run005_composite_install` external install base; six-package external build passed; observer 13 and ROSIDL 8 passed; installed/source equality 15/15; py_compile passed. Full Step-7 tools had 308 passed and one expected stale existing source-pin mismatch for the modified runner; the guard pin entry was then refreshed without changing the 37-path inventory. Full Step-7 tools and final coherence are rerun after that refresh.
+
+Guard seed remains PENDING, capacity 1, acquisition count 0, runtime authorization `NOT_GRANTED`, no lock. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+
+### Run005 attempt_002 default-route resolver corrective — final offline verification
+
+This entry supersedes the interim verification snapshot immediately above; all earlier ledger bytes are preserved. Exact base `e921b04e9ef8dc933a76966cf101613fab0f8062`; direct corrective scope is the exact 11-path allowlist. The pure-Python resolver does not invoke `ip`; it parses `/proc/net/route`, verifies the lowest-metric route interface through sysfs, uses UDP `connect()` to TEST-NET without sending, and confirms the selected source via interface address lookup. Exact `GZ_PARTITION` and validated `GZ_IP` continue through the bounded publish probe and campaign child processes.
+
+Invocation_009 remains immutable: pre-acquire failure `GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_EXIT_NONZERO`, guard not consumed, no retry. The saved literal does not establish why the former command returned nonzero. This corrective did not modify invocation_009 evidence/runtime checkout/guard/lock and ran no runtime.
+
+Verification: focused runner/guard/scope 180 passed; full Step-7 tools 310 passed; bringup 251 passed; RL 715 passed with external install base `/tmp/run005_default_route_l1_install`; six-package external colcon build passed; observer 13/13 and ROSIDL 8/8 passed; `py_compile` passed for four Python files; installed/source runtime files 15/15 equal; source pins 37/37 SHA-256 and byte size; JSON canonical/duplicate-key/UTF-8, YAML duplicate-key parsing, XML parsing, historical preservation, exact scope, Ledger parent-byte-prefix, and diff checks passed.
+
+Current artifact hashes — guard `6539bda341ace90f2c595572063b8c95ba41ea92017c6c803847722adf5097e5`, evidence `e563268b209f8c96adbd25aa426cf2f15004a1d9ff799871320aaab5f5bd7789`, manifest `5c147a1d58feaa1d3dd5571a6dbb4e7d377019284c4fc805b1587c645f9588e6`. Guard remains PENDING, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, with no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`; next action is independent audit of the exact corrective commit.
