@@ -122,3 +122,28 @@ Cả bốn component dùng cùng owned-spawn helper: SIGTERM được latch tron
 Phase A PASS: focused runner 142, guard 15, historical guard 19; full Step-7 tools 299, bringup 244, RL 707; build sáu package ngoài worktree; observer 13 và ROSIDL 8; py_compile sáu file; installed/source equality 15/15; source pins 34/34 sau reconciliation, JSON/YAML/XML và history/scope/diff checks. Không official runtime invocation trong corrective này.
 
 Giữ lịch sử invocation_001–005, consumed guards/locks/evidence/runtime worktrees bất biến. Source seed còn PENDING, capacity 1, acquisition 0, runtime_authorization=NOT_GRANTED, không lock. Gate B NOT_STARTED; RUNTIME_APPROVED=NOT_APPROVED. Giới hạn: SIGKILL, mất điện hoặc filesystem không ghi được vẫn có thể ngăn terminal evidence. Evidence ceiling: SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. Bước tiếp theo: independent audit exact corrective commit; runtime cần authorization riêng.
+
+
+## Corrective L2 — composite lifecycle và Gate-B
+
+Base/sole parent: `bb5fc04fe8e309c52e468f766893ef60625e6821`; cùng Run005 attempt_002. Owner đã phê duyệt escalation L2 vì thay đổi orchestration lifecycle, đồng bộ clock/binding/TF, lifetime hai observer và scan validity. Tên decision có hậu tố L1 được giữ theo exact allowlist; active decision này là L2. Architecture DOCX, profile sim_eval + NAV2_BASELINE, 16-root V3 config/hash, public topics/interfaces, TF owners, sole /cmd_vel publisher, receipt QoS và guard capacity-one không đổi.
+
+SafetySupervisor và FinalTwistPublisher sử dụng use_sim_time đã được Jazzy Node khai báo và kiểm effective value phải boolean true. Policy lifecycle YAML không còn bị truyền như ROS parameter file: kiểm exact policy rồi tạo dictionary; Nav2 manager chỉ quản lý map_server, amcl, planner_server, controller_server, behavior_server, bt_navigator, bond_timeout=4.0. SafetyLifecycle là LifecycleNode riêng; handlers đăng ký trước node, configure sau process start rồi activate khi Inactive, mỗi handler một lần. Activation vẫn NON_READY. Runner đợi bảy ROS lifecycle Active id=3, clock/sensor freshness và TF thực trước đúng một rearm; không nhầm với custom PRIMARY_ACTIVE=2. Controller và BT navigator cùng dùng /odometry/filtered.
+
+Gate-B tạo node use_sim_time=true, Buffer(node=self.node), đăng ký tf2_geometry_msgs trước transform. ROS time dùng cho goal/freshness/TF, steady time dùng cho timer/deadline; chưa clock/TF/identity thì chờ, future stamp bị reject. Exact FixtureBindingClaims giữ topic/type provenance khi đi qua validator pure-core; validator không được nới. Kiểm thử generated messages và in-memory TF gọi thật adapters → validator → assembler đã bắt và sửa import RawLidarScan cục bộ sai phạm vi. Action readiness bất đồng bộ; hai action mỗi loại gửi đúng một lần; requested_once/exit status lấy từ calls và results thực.
+
+C++ observer thu 30 giây. Gate-B atomic-write một lần khi collection hoàn tất, giữ subscriptions sống tới runtime_observer.json cùng invocation parse đầy đủ và đúng config_hash. Peer chưa hoàn tất được chờ tới steady deadline 60 giây; sai hash/timeout/interruption không được PASS hoặc action retry. Giữ nguyên bốn lifecycle subscribers và raw graph/QoS acceptance. Scan +Inf là valid no-return với range metadata hợp lệ; NaN, -Inf, metadata sai, empty và stale scan vẫn fail closed/safe stop. Không nới command/odometry nonfinite checks, E-stop, limits hoặc collision ownership.
+
+Phase A: focused behavioral 46 PASS; Step-7 tools 301 PASS; bringup 248 PASS; RL 715 PASS trong process riêng và external install-base. Thử gộp ba suite có 1 pure-import isolation failure do bringup import ROS; kết quả verification dùng ba suite cô lập, không lượt gộp. Build sáu package ngoài worktree PASS; observer 13 và ROSIDL 8 PASS; py_compile 13 file; installed/source 19/19 (15 runtime artifacts + 3 Python modules + package.xml). Parser C Jazzy kiểm AMCL/Nav2/EKF parameter files và parameter dictionaries. Không chạy campaign runtime hay official runner. SOURCE_FREEZE được chốt trước reconciliation này.
+
+Direct scope là exact 23 path trong current_corrective_scope. Inventory là union 34 pin tại base với ba runtime source được Owner chỉ định: 37/37 SHA-256 + byte size, độc lập changed-path count. Historical pins luôn đọc exact Git blobs, không fallback worktree. Bảo toàn các scope lịch sử và guard mutation/process ownership tại base, WP06 và invocation_001–005; không sửa consumed guard, lock, runtime checkout hoặc external evidence lịch sử.
+
+Source seed còn PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION, capacity=1, acquisition_count=0, runtime_authorization=NOT_GRANTED, không lock. Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Evidence ceiling: SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. Không tuyên bố ROS graph, Gazebo/Nav2 runtime PASS hay readiness cho robot thật. Giới hạn chứng cứ terminal trước đây (SIGKILL, mất điện, filesystem không ghi được) vẫn giữ nguyên. Bước tiếp theo: independent audit exact corrective commit; runtime chỉ sau authorization riêng của Owner.
+
+Record hashes sau reconciliation:
+
+- `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`: `2442328059cfea2143ea3660ad578bf8a69a535493459f7aec510a725c12e6aa`, 24103 bytes.
+
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`, 38806 bytes.
+
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`, 36217 bytes.

@@ -22,7 +22,7 @@ from mecanum_nav_rl.observations.v3_snapshot_types import (
     FRAME_TF_CONTRACT_ID, LIFECYCLE_BARRIER_CONTRACT_ID,
     ActiveLifecycleConfigContext, FinalIssuedReceiptContext,
 )
-from mecanum_nav_rl.observations.v3_snapshot_validation import validate_observation_inputs
+from mecanum_nav_rl.observations.v3_snapshot_validation import FixtureBindingClaims, validate_observation_inputs
 
 
 LIFECYCLE_STATE_TOPIC = "/mecanum/safety_lifecycle_state"
@@ -84,8 +84,45 @@ def validate_vector_samples(samples: list[dict], *, minimum: int = 5) -> bool:
     return True
 
 
+BINDING_CLAIMS = FixtureBindingClaims(
+    lidar_topic="/scan", lidar_type="sensor_msgs/msg/LaserScan",
+    local_reference_topic=None, local_reference_type="nav_msgs/msg/Path",
+    measured_twist_topic="/odometry/filtered", measured_twist_type="nav_msgs/msg/Odometry",
+    receipt_topic="/mecanum/final_issued_command",
+    receipt_type="mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt",
+)
+
+
+def fresh_stamp(now, stamp, limit):
+    return stamp > 0 and 0 <= now - stamp <= limit
+
+
+def peer_evidence_ready(path, config_hash):
+    """File đang ghi/chưa đủ trường phải chờ; identity khác phải fail closed."""
+    def pairs(rows):
+        result = {}
+        for key, value in rows:
+            if key in result:
+                raise ValueError("PEER_DUPLICATE_KEY")
+            result[key] = value
+        return result
+    try:
+        document = json.loads(Path(path).read_bytes(), object_pairs_hook=pairs,
+                              parse_constant=lambda _: (_ for _ in ()).throw(ValueError("PEER_NONFINITE")))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(document, dict) or "config_hash" not in document:
+        return False
+    if document["config_hash"] != config_hash:
+        raise ValueError("GATE_B_PEER_CONFIG_HASH_MISMATCH")
+    acceptance = document.get("acceptance")
+    return (type(acceptance) is dict and bool(acceptance)
+            and all(type(value) is bool for value in acceptance.values()))
+
+
 def _features_from_path(path, tf_buffer, synchronized_stamp_ns):
     """Transform a successful map-frame ComputePathToPose result into base_link."""
+    importlib.import_module("tf2_geometry_msgs")
     PoseStamped = importlib.import_module("geometry_msgs.msg").PoseStamped
     TransformException = importlib.import_module("tf2_ros").TransformException
     if path.header.frame_id != "map" or len(path.poses) < 2:
@@ -135,7 +172,7 @@ class _Collector:
         tf2 = importlib.import_module("tf2_ros")
         Buffer = tf2.Buffer
         TransformListener = tf2.TransformListener
-        from mecanum_nav_rl.observations.lidar import LidarAngularBinner, RawLidarScan
+        from mecanum_nav_rl.observations.lidar import LidarAngularBinner
         from mecanum_nav_rl.config.models import ObservationConfig
         from mecanum_nav_rl.observations.v3_snapshot_types import (
             LIFECYCLE_BARRIER_CONTRACT_ID, LIDAR_CONTRACT_ID,
@@ -147,14 +184,21 @@ class _Collector:
         self.PoseStamped = PoseStamped
         self.ComputePathToPose = ComputePathToPose
         self.NavigateToPose = NavigateToPose
-        self.node = rclpy.create_node("step07_gate_b_observer")
+        Parameter = importlib.import_module("rclpy.parameter").Parameter
+        self.node = rclpy.create_node("step07_gate_b_observer",
+                                     parameter_overrides=[Parameter("use_sim_time", value=True)])
         self.args = args
         self.config_hash = args.config_hash
         self.goal = (args.goal_x, args.goal_y, args.goal_yaw)
-        self.tf_buffer = Buffer()
+        self.tf_buffer = Buffer(node=self.node)
         self.tf_listener = TransformListener(self.tf_buffer, self.node)
         self.path = None
         self._finished = False
+        self._closed = False
+        self._peer_verified = False
+        self._peer_deadline = None
+        self._compute_path_calls = 0
+        self._navigate_calls = 0
         self._compute_path_requested = False
         self._navigate_requested = False
         self.path_error = None
@@ -184,9 +228,10 @@ class _Collector:
         self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos)
         self.compute = ActionClient(self.node, ComputePathToPose, "/compute_path_to_pose")
         self.navigate = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
-        self.timer = self.node.create_timer(0.02, self._tick)
+        clock = importlib.import_module("rclpy.clock")
+        self.timer = self.node.create_timer(0.02, self._tick,
+            clock=clock.Clock(clock_type=clock.ClockType.STEADY_TIME))
         self.deadline = time.monotonic() + args.timeout_sec
-        self._request_path_once()
 
     def _goal_pose(self):
         pose = self.PoseStamped()
@@ -199,12 +244,13 @@ class _Collector:
         return pose
 
     def _request_path_once(self):
-        if not self.compute.wait_for_server(timeout_sec=30.0):
-            raise RuntimeError("COMPUTE_PATH_TO_POSE_SERVER_UNAVAILABLE")
+        if self._compute_path_requested or not self.compute.server_is_ready():
+            return
         goal = self.ComputePathToPose.Goal()
         goal.goal = self._goal_pose()
         goal.use_start = False
         self._compute_path_requested = True
+        self._compute_path_calls += 1
         future = self.compute.send_goal_async(goal)
         future.add_done_callback(self._path_goal_response)
 
@@ -233,7 +279,6 @@ class _Collector:
                            "z": pose.pose.position.z}
                           for pose in self.path.poses],
             }
-            self._navigate_once()
         except Exception as error:
             self.errors.append(f"COMPUTE_PATH_TO_POSE_FAILURE:{error}")
 
@@ -241,12 +286,12 @@ class _Collector:
         if self._navigate_requested:
             self.errors.append("NAVIGATE_TO_POSE_RETRY_FORBIDDEN")
             return
-        if not self.navigate.wait_for_server(timeout_sec=30.0):
-            self.errors.append("NAVIGATE_TO_POSE_SERVER_UNAVAILABLE")
+        if not self.navigate.server_is_ready():
             return
         goal = self.NavigateToPose.Goal()
         goal.pose = self._goal_pose()
         self._navigate_requested = True
+        self._navigate_calls += 1
         future = self.navigate.send_goal_async(goal)
         future.add_done_callback(self._navigate_goal_response)
 
@@ -269,6 +314,7 @@ class _Collector:
             self.errors.append(f"NAVIGATE_TO_POSE_FAILURE:{error}")
 
     def _sectorize(self, msg):
+        from mecanum_nav_rl.observations.lidar import RawLidarScan
         scan = RawLidarScan(timestamp_ns=msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec,
                             angle_min_rad=float(msg.angle_min), angle_increment_rad=float(msg.angle_increment),
                             range_min_m=float(msg.range_min), range_max_m=float(msg.range_max),
@@ -292,11 +338,25 @@ class _Collector:
         self.raw["receipt"].append({"episode_generation": msg.episode_generation, "reset_epoch": msg.reset_epoch, "runtime_generation": msg.runtime_generation, "sequence": msg.final_publish_sequence, "source": msg.source, "final_command": [msg.final_command.linear.x, msg.final_command.linear.y, msg.final_command.angular.z]})
 
     def _tick(self):
+        if self._finished:
+            self._wait_peer()
+            return
+        if self.errors:
+            self._finish()
+            return
         now = self.node.get_clock().now().nanoseconds
         if time.monotonic() >= self.deadline:
             self.errors.append("GATE_B_SAMPLE_TIMEOUT")
             self._finish()
             return
+        if now <= 0:
+            return
+        stamp_type = importlib.import_module("rclpy.time").Time
+        if not self._compute_path_requested:
+            if self.tf_buffer.can_transform("base_link", "map", stamp_type(nanoseconds=now)):
+                self._request_path_once()
+        if self.path is not None and not self._navigate_requested:
+            self._navigate_once()
         lifecycle, scan, odom, receipt = self.latest_lifecycle, self.latest_scan, self.latest_odom, self.latest_receipt
         if lifecycle is None or scan is None or odom is None or receipt is None or self.path is None:
             return
@@ -305,7 +365,6 @@ class _Collector:
         identity = (lifecycle.episode_generation, lifecycle.reset_epoch, lifecycle.runtime_generation)
         if (identity != (receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation)
                 or not self.config_hash or receipt.source not in (1, 2, 4)):
-            self.errors.append("LIFECYCLE_RECEIPT_IDENTITY_MISMATCH")
             return
         scan_stamp = scan.header.stamp.sec * 1_000_000_000 + scan.header.stamp.nanosec
         odom_stamp = odom.header.stamp.sec * 1_000_000_000 + odom.header.stamp.nanosec
@@ -315,7 +374,10 @@ class _Collector:
         if any(not math.isfinite(float(value)) for value in tuple(odom.pose.covariance) + tuple(odom.twist.covariance)):
             self.errors.append("GATE_B_FILTERED_ODOMETRY_COVARIANCE_INVALID")
             return
-        if scan_stamp <= 0 or odom_stamp <= 0 or now - scan_stamp > 500_000_000 or now - odom_stamp > 250_000_000:
+        if (not fresh_stamp(now, scan_stamp, 500_000_000)
+                or not fresh_stamp(now, odom_stamp, 250_000_000)
+                or not fresh_stamp(now, lifecycle.header.stamp.sec * 1_000_000_000 + lifecycle.header.stamp.nanosec, 500_000_000)
+                or not fresh_stamp(now, receipt.header.stamp.sec * 1_000_000_000 + receipt.header.stamp.nanosec, 500_000_000)):
             return
         measurement_key = (scan_stamp, odom_stamp, int(receipt.final_publish_sequence), int(lifecycle.sequence))
         if measurement_key == self._last_measurement_key:
@@ -329,8 +391,12 @@ class _Collector:
             path_binding = IngressMessageBinding(type(self.path), None, "nav_msgs/msg/Path", "map",
                 lambda _: path_features, None)
             local = adapt_local_reference_message(self.path, binding=path_binding, context=context)
-        except Exception:
-            local = None
+        except ValueError as error:
+            if str(error) == "LOCAL_REFERENCE_TF_TRANSFORM_FAILED":
+                return
+            self.errors.append(str(error))
+            self._finish()
+            return
         receipt_context = FinalIssuedReceiptContext(
             contract_id=LIFECYCLE_BARRIER_CONTRACT_ID, frame_contract_id=FRAME_TF_CONTRACT_ID,
             episode_generation=context.episode_generation, reset_epoch=context.reset_epoch,
@@ -343,7 +409,7 @@ class _Collector:
             self.errors.append("GATE_B_INPUT_ADAPTER_REJECTED")
             return
         admitted = validate_observation_inputs(context=context, lidar=lidar, local_reference=local,
-            measured_twist=twist, receipt=receipt_context)
+            measured_twist=twist, receipt=receipt_context, fixture_claims=BINDING_CLAIMS)
         assembly = assemble_observation(admitted) if admitted is not None else None
         if assembly is None or not assembly.ready:
             self.errors.append("GATE_B_OBSERVATION_ASSEMBLY_REJECTED")
@@ -362,7 +428,7 @@ class _Collector:
         if self._finished:
             return
         self._finished = True
-        self.timer.cancel()
+        self._peer_deadline = time.monotonic() + self.args.peer_timeout_sec
         document = {
             "schema_version": "1.0", "config_hash": self.config_hash,
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
@@ -370,21 +436,51 @@ class _Collector:
             "raw_transcripts": self.raw, "compute_path_to_pose": {"requested_once": self._compute_path_requested, "success": self.path is not None, "frame_id": getattr(getattr(self.path, "header", None), "frame_id", None), "transcript": self.path_transcript},
             "navigate_to_pose": {**(self.navigate_result or {"accepted": False, "status": "NO_RESULT"}), "requested_once": self._navigate_requested},
             "acceptance": {"five_immutable_observation81": validate_vector_samples(self.samples),
-                "compute_path_success_map_frame": self.path is not None and getattr(self.path.header, "frame_id", None) == "map",
-                "navigate_to_pose_requested_once": True,
+                "compute_path_success_map_frame": self._compute_path_calls == 1 and self.path is not None and getattr(self.path.header, "frame_id", None) == "map",
+                "navigate_to_pose_requested_once": self._navigate_calls == 1,
                 "navigate_to_pose_succeeded": bool(self.navigate_result and self.navigate_result.get("succeeded")),
                 "no_command_or_policy_publisher": True, "errors_absent": not self.errors},
             "errors": list(dict.fromkeys(self.errors)),
         }
         atomic_json(self.args.output, document)
-        self.node.destroy_node()
-        self.rclpy.shutdown()
+        self._wait_peer()
+
+    def _wait_peer(self):
+        try:
+            self._peer_verified = peer_evidence_ready(self.args.peer_evidence_path, self.config_hash)
+        except ValueError as error:
+            self.errors.append(str(error))
+            print(str(error), flush=True)
+            self._close()
+            return
+        if self._peer_verified:
+            self._close()
+        elif time.monotonic() >= self._peer_deadline:
+            self.errors.append("GATE_B_PEER_EVIDENCE_TIMEOUT")
+            print("GATE_B_PEER_EVIDENCE_TIMEOUT", flush=True)
+            self._close()
+
+    def _close(self):
+        if not self._closed:
+            self._closed = True
+            self.timer.cancel()
+            self.node.destroy_node()
+            if self.rclpy.ok():
+                self.rclpy.shutdown()
+
+    def passed(self):
+        return (self._finished and self._peer_verified and not self.errors
+                and self._compute_path_calls == self._navigate_calls == 1
+                and self.path is not None and bool(self.navigate_result and self.navigate_result.get("succeeded"))
+                and validate_vector_samples(self.samples))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--config-hash", required=True)
+    parser.add_argument("--peer-evidence-path", required=True)
+    parser.add_argument("--peer-timeout-sec", type=float, default=60.0)
     parser.add_argument("--goal-x", type=float, default=-4.0)
     parser.add_argument("--goal-y", type=float, default=0.0)
     parser.add_argument("--goal-yaw", type=float, default=0.0)
@@ -401,7 +497,9 @@ def main(argv=None):
         if rclpy.ok():
             collector.errors.append("OBSERVER_INTERRUPTED")
             collector._finish()
-    return 0 if validate_vector_samples(collector.samples) and not collector.errors else 2
+    finally:
+        collector._close()
+    return 0 if collector.passed() else 2
 
 
 if __name__ == "__main__":

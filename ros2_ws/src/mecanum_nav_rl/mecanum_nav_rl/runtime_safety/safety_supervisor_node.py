@@ -16,6 +16,15 @@ from mecanum_nav_rl.runtime_safety.safety_contract import (
 )
 
 
+def scan_values_valid(msg: LaserScan) -> bool:
+    """+Inf là no-return; metadata, NaN và -Inf vẫn fail closed."""
+    metadata = (msg.range_min, msg.range_max, msg.angle_min, msg.angle_increment)
+    return (bool(msg.ranges) and all(math.isfinite(value) for value in metadata)
+            and 0.0 <= msg.range_min < msg.range_max and msg.angle_increment != 0.0
+            and all((math.isfinite(value) and msg.range_min <= value <= msg.range_max)
+                    or value == math.inf for value in msg.ranges))
+
+
 class SafetySupervisorNode(Node):
     _POLICY_NAMES = (
         "freshness_ns.command_ttl", "freshness_ns.scan_max_age",
@@ -25,7 +34,8 @@ class SafetySupervisorNode(Node):
 
     def __init__(self) -> None:
         super().__init__("safety_supervisor")
-        self.declare_parameter("use_sim_time", True)
+        if self.get_parameter("use_sim_time").value is not True:
+            raise ValueError("SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE")
         for name in self._POLICY_NAMES:
             self.declare_parameter(name)
         self.declare_parameter("sim_estop_release_authorized", False)
@@ -86,7 +96,7 @@ class SafetySupervisorNode(Node):
     def _on_scan(self, msg: LaserScan) -> None:
         self._scan_stamp_ns = self._stamp(msg.header.stamp)
         self._scan_frame_valid = msg.header.frame_id == "lidar_frame"
-        self._scan_finite = bool(msg.ranges) and all(math.isfinite(value) for value in msg.ranges)
+        self._scan_finite = scan_values_valid(msg)
 
     def _on_odometry(self, msg: Odometry) -> None:
         self._odom_stamp_ns = self._stamp(msg.header.stamp)
@@ -145,7 +155,8 @@ class SafetySupervisorNode(Node):
         state.runtime_generation = envelope.runtime_generation
         state.active_command_source = envelope.source
         state.command_valid = result.accepted
-        state.scan_fresh = self._scan_frame_valid and self._scan_stamp_ns > 0
+        state.scan_fresh = (self._scan_frame_valid and self._scan_stamp_ns > 0
+                            and 0 <= now - self._scan_stamp_ns <= self._policy.scan_max_age_ns)
         state.odom_fresh = self._odom_frame_valid and self._odom_stamp_ns > 0
         state.tf_valid = tf_valid
         state.localization_valid = localization_valid

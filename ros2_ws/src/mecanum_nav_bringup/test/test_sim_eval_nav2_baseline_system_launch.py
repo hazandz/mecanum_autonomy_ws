@@ -191,3 +191,100 @@ def test_nav2_runtime_dependencies_cover_required_nodes_and_plugin_providers():
                    "nav2_costmap_2d::StaticLayer", "nav2_costmap_2d::ObstacleLayer",
                    "nav2_costmap_2d::InflationLayer"):
         assert plugin in nav or plugin in launch
+
+
+def _composite_module():
+    import importlib.util
+    path = ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py"
+    spec = importlib.util.spec_from_file_location("composite_lifecycle_contract", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_lifecycle_topology_real_launch_events_configure_then_activate_only():
+    from launch import LaunchContext
+    from launch.actions import RegisterEventHandler
+    from launch.events.process import ProcessStarted
+    from launch_ros.actions import LifecycleNode
+    from launch_ros.events.lifecycle import StateTransition
+    from lifecycle_msgs.msg import Transition, TransitionEvent
+    m = _composite_module()
+    configure, activate, node = m.safety_lifecycle_actions()
+    assert isinstance(node, LifecycleNode)
+    assert isinstance(configure, RegisterEventHandler) and isinstance(activate, RegisterEventHandler)
+    assert configure.event_handler.handle_once and activate.event_handler.handle_once
+    context = LaunchContext()
+    configure.execute(context); activate.execute(context)
+    start = ProcessStarted(action=node, name="safety_lifecycle", cmd=[], cwd=None, env={}, pid=12345)
+    assert configure.event_handler.matches(start)
+    events = configure.event_handler.handle(start, context)
+    assert [action.event.transition_id for action in events] == [Transition.TRANSITION_CONFIGURE]
+    msg = TransitionEvent(); msg.start_state.label="configuring"; msg.goal_state.label="inactive"
+    inactive = StateTransition(action=node, msg=msg)
+    assert activate.event_handler.matches(inactive)
+    assert [action.event.transition_id for action in activate.event_handler.handle(inactive, context)] == [Transition.TRANSITION_ACTIVATE]
+    msg.goal_state.label="active"
+    assert not activate.event_handler.matches(StateTransition(action=node, msg=msg))
+    policy = ROOT / "ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml"
+    params = m.lifecycle_manager_parameters(policy)
+    assert params["node_names"] == ["map_server", "amcl", "planner_server", "controller_server", "behavior_server", "bt_navigator"]
+    assert params["autostart"] is True and params["bond_timeout"] > 0
+    assert "safety_lifecycle" not in params["node_names"]
+
+
+def test_actual_node_parameter_files_parse_with_jazzy_c_parser_without_ros_graph(monkeypatch, tmp_path):
+    import ctypes as C
+    import yaml
+    from launch import LaunchContext
+    from launch_ros.actions import Node
+    from launch_ros.utilities import evaluate_parameters
+    m = _composite_module()
+    description = tmp_path / "description"; (description / "launch").mkdir(parents=True)
+    (description / "launch/sim_eval_nav2_baseline_bootstrap.launch.py").write_text("def validate_fuel_cache(*args): pass\n")
+    shares = {"ROBOT_URDF_final_description": description,
+              "mecanum_nav_bringup": ROOT / "ros2_ws/src/mecanum_nav_bringup",
+              "mecanum_nav_rl": ROOT / "ros2_ws/src/mecanum_nav_rl"}
+    monkeypatch.setattr(m, "get_package_share_directory", lambda name: str(shares[name]))
+    context = LaunchContext()
+    context.launch_configurations.update({"gz_partition":"fixture_partition", "start_bootstrap":"false",
+        "canonical_map_root":str(ROOT / "artifacts/maps/warehouse_map2"), "fuel_cache_root":"/unused",
+        "sim_estop_release_authorized":"false", "initial_pose_map_x":"0.0",
+        "initial_pose_map_y":"0.0", "initial_pose_map_yaw":"0.0"})
+    actions = m._actions(context)
+    import importlib.util
+    child_path = shares["mecanum_nav_bringup"] / "launch/sim_eval_tf_ekf_state_estimation.launch.py"
+    spec = importlib.util.spec_from_file_location("composite_child_parameter_parser", child_path)
+    child = importlib.util.module_from_spec(spec); spec.loader.exec_module(child)
+    monkeypatch.setattr(child, "get_package_share_directory", lambda _: str(ROOT / "ros2_ws/src/mecanum_base_bridge"))
+    monkeypatch.setattr(child, "EKF_CONFIG", str(shares["mecanum_nav_bringup"] / "config/state_estimation/ekf_sim.yaml"))
+    monkeypatch.setattr(child, "CLOCK_CONFIG", str(shares["mecanum_nav_bringup"] / "config/bridge/sim_eval_clock.runtime.yaml"))
+    context.launch_configurations["use_sim_time"] = "true"
+    actions += child._create_runtime_actions(context)
+    class Allocator(C.Structure):
+        _fields_ = [(name, C.c_void_p) for name in ("allocate", "deallocate", "reallocate", "zero_allocate", "state")]
+    rc = C.CDLL("librcutils.so"); rc.rcutils_get_default_allocator.restype=Allocator
+    parser = C.CDLL("librcl_yaml_param_parser.so")
+    parser.rcl_yaml_node_struct_init.argtypes=[Allocator]; parser.rcl_yaml_node_struct_init.restype=C.c_void_p
+    parser.rcl_parse_yaml_file.argtypes=[C.c_char_p,C.c_void_p]; parser.rcl_parse_yaml_file.restype=C.c_bool
+    parser.rcl_yaml_node_struct_fini.argtypes=[C.c_void_p]
+    checked = set()
+    for index, action in enumerate(actions):
+        if not isinstance(action, Node): continue
+        values = evaluate_parameters(context, action._Node__parameters)
+        for subindex, value in enumerate(values):
+            if isinstance(value, dict):
+                target=tmp_path / f"params-{index}-{subindex}.yaml"
+                target.write_text(yaml.safe_dump({"/**":{"ros__parameters":value}}))
+            else:
+                target=Path(value); checked.add(target)
+            handle=parser.rcl_yaml_node_struct_init(rc.rcutils_get_default_allocator())
+            assert handle
+            try: assert parser.rcl_parse_yaml_file(str(target).encode(),handle), str(target)
+            finally: parser.rcl_yaml_node_struct_fini(handle)
+    assert checked == {
+        shares["mecanum_nav_bringup"] / "config/localization/amcl_omni.yaml",
+        shares["mecanum_nav_bringup"] / "config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+        shares["mecanum_nav_bringup"] / "config/state_estimation/ekf_sim.yaml",
+    }
+    assert shares["mecanum_nav_bringup"] / "config/lifecycle/sim_eval_nav2_baseline.runtime.yaml" not in checked

@@ -554,6 +554,43 @@ RUN005_ATTEMPT_002_HOST_TRANSPORT_PHASE_A_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
 }
 
+RUN005_COMPOSITE_BASE = "bb5fc04fe8e309c52e468f766893ef60625e6821"
+RUN005_COMPOSITE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_static_contract.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
+    "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+    "ros2_ws/src/mecanum_nav_rl/package.xml",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_final_twist_publisher_static.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_COMPOSITE_GOVERNANCE_PATHS = {
+    path for path in RUN005_COMPOSITE_PATHS
+    if path.startswith("docs/governance/") or "/approval_guards/" in path
+}
+RUN005_COMPOSITE_PHASE_A_PATHS = RUN005_COMPOSITE_PATHS - RUN005_COMPOSITE_GOVERNANCE_PATHS
+RUN005_COMPOSITE_VALID_SCOPES = (
+    RUN005_COMPOSITE_PHASE_A_PATHS,
+    RUN005_COMPOSITE_PHASE_A_PATHS | {path for path in RUN005_COMPOSITE_GOVERNANCE_PATHS if "/approval_guards/" in path},
+    RUN005_COMPOSITE_PATHS,
+)
+
 def _candidate_changed_paths():
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
@@ -564,19 +601,18 @@ def _candidate_changed_paths():
         assert subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_OWNERSHIP_BASE
+        ).stdout.strip() == RUN005_COMPOSITE_BASE
         changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
     else:
         assert subprocess.run(
             ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
             capture_output=True, text=True,
-        ).stdout.strip() == RUN005_OWNERSHIP_BASE
+        ).stdout.strip() == RUN005_COMPOSITE_BASE
         changed = set(subprocess.run(
             ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.splitlines())
-    if changed not in (RUN005_OWNERSHIP_PHASE_A_PATHS,
-                       RUN005_OWNERSHIP_PATHS):
+    if changed not in RUN005_COMPOSITE_VALID_SCOPES:
         raise AssertionError(
             f"Run005 attempt_002 host transport corrective path set is not exact: {sorted(changed)}"
         )
@@ -633,6 +669,12 @@ def _assert_run005_attempt002_historical_scope():
                           cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip() == RUN005_ATTEMPT_002_SIGTERM_HANDOFF_BASE
 
 
+def test_guard_ownership_corrective_remains_exact_historical_scope():
+    paths = subprocess.run(["git", "diff", "--name-only", f"{RUN005_OWNERSHIP_BASE}..{RUN005_COMPOSITE_BASE}"],
+                           cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines()
+    assert set(paths) == RUN005_OWNERSHIP_PATHS
+
+
 def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not_relaxed():
     changed, _dirty = _candidate_changed_paths()
     _assert_run005_attempt002_historical_scope()
@@ -659,7 +701,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         ["git", "rev-parse", f"{RUN004_HOST_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN004_CORRECTIVE_BASE
-    assert changed in (RUN005_OWNERSHIP_PHASE_A_PATHS, RUN005_OWNERSHIP_PATHS)
+    assert changed in RUN005_COMPOSITE_VALID_SCOPES
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
         check=True, capture_output=True, text=True,
@@ -860,7 +902,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     assert set(run004_host_diff) == RUN004_HOST_CORRECTIVE_PATHS
-    assert changed in (RUN005_OWNERSHIP_PHASE_A_PATHS, RUN005_OWNERSHIP_PATHS)
+    assert changed in RUN005_COMPOSITE_VALID_SCOPES
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
         cwd=ROOT, check=True, capture_output=True, text=True,

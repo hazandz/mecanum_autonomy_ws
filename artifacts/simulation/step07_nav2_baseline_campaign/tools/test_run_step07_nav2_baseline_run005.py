@@ -2003,3 +2003,46 @@ def test_simulated_main_never_returns_without_consumed_terminal_bundle_after_han
         "runner":1,"bootstrap":0,"composite":0,"cpp_observer":0,"gate_b_observer":0}
     assert record["teardown"]["completed"] is True
     _assert_real_bundle(evidence)
+
+
+def test_pre_rearm_requires_ros_active_three_for_all_managed_nodes(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="active [3]\n")
+    monkeypatch.setattr(runner, "_run", run)
+    states = runner.active_lifecycle_states({})
+    assert states == {node: 3 for node in runner.COMPOSITE_LIFECYCLE_NODES}
+    assert len(calls) == 7
+    for invalid in ("active [2]", "inactive [2]", "active [3]\nerror", ""):
+        monkeypatch.setattr(runner, "_run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=invalid))
+        assert runner.active_lifecycle_states({}) is None
+
+
+def test_composite_readiness_checks_actual_data_before_exact_single_rearm(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    topics = ["/clock", "/scan", "/odometry/filtered", "/tf", "/tf_static"]
+    nodes = ["/robot_state_publisher", "/ekf_filter_node", *runner.COMPOSITE_LIFECYCLE_NODES,
+             "/safety_supervisor", "/final_twist_publisher"]
+    services = ["/mecanum/safety/rearm", "/mecanum/safety/request_reset"]
+    calls=[]
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1:3] == ["topic", "list"]: output="\n".join(topics)
+        elif command[1:3] == ["node", "list"]: output="\n".join(nodes)
+        elif command[1:3] == ["service", "list"]: output="\n".join(services)
+        elif command[1:3] == ["lifecycle", "get"]: output="active [3]"
+        else:
+            assert command[0] == runner.RUNTIME_PYTHON_PATH
+            output="COMPOSITE_DATA_READY"
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(runner,"_run",run)
+    result=runner._wait_ready({},tmp_path,SimpleNamespace(poll=lambda: None))
+    assert result["ready"] and result["data_readiness"] == "COMPOSITE_DATA_READY"
+    assert not any(command[1:3] == ["service", "call"] for command in calls)
+    source=RUNNER_PATH.read_text()
+    assert source.index('composite_member["readiness"] = _wait_ready') < source.index('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"')
+    assert source.count('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"') == 1
+    assert 'duration_sec:=30' in source and 'duration_sec:=1800' not in source
+    assert '"--peer-evidence-path", str(observer_path)' in source

@@ -1575,7 +1575,7 @@ def main():
         cpp_command = ["ros2", "run", "step07_nav2_baseline_runtime_observer",
                        "step07_nav2_baseline_runtime_observer", "--ros-args",
                        "-p", f"output_path:={observer_path}", "-p", f"config_hash:={record['config_hash']}",
-                       "-p", "duration_sec:=1800"]
+                       "-p", "duration_sec:=30"]
         cpp, cpp_member = _spawn_owned_process(
             cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "cpp_observer.log", processes=processes,
@@ -1584,7 +1584,7 @@ def main():
         cpp_calls = 1; record["call_counts"]["cpp_observer"] = 1
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
-                              "--config-hash", record["config_hash"], "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
+                              "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path), "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
         gate, gate_member = _spawn_owned_process(
             gate_command, name="gate_b_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "gate_b_observer.log", processes=processes,
@@ -1628,6 +1628,59 @@ def main():
     return terminal_exit_code(record)
 
 
+ROS_ACTIVE_STATE_ID = 3
+COMPOSITE_LIFECYCLE_NODES = (
+    "/map_server", "/amcl", "/planner_server", "/controller_server",
+    "/behavior_server", "/bt_navigator", "/safety_lifecycle",
+)
+
+
+def composite_readiness_command():
+    # Chỉ runner runtime gọi probe này sau source ROS/overlay, trước rearm.
+    script = r'''import time
+import rclpy
+from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+from tf2_ros import Buffer, TransformListener
+rclpy.init()
+node = rclpy.create_node("step07_pre_rearm_readiness", parameter_overrides=[Parameter("use_sim_time", value=True)])
+buffer = Buffer(node=node)
+listener = TransformListener(buffer, node)
+latest = {}
+node.create_subscription(LaserScan, "/scan", lambda msg: latest.update(scan=msg), qos_profile_sensor_data)
+node.create_subscription(Odometry, "/odometry/filtered", lambda msg: latest.update(odom=msg), qos_profile_sensor_data)
+deadline = time.monotonic() + 8.0
+ready = False
+try:
+    while time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+        now = node.get_clock().now().nanoseconds
+        fresh = now > 0 and all(key in latest and 0 <= now - (latest[key].header.stamp.sec * 1000000000 + latest[key].header.stamp.nanosec) <= limit for key, limit in (("scan", 500000000), ("odom", 250000000)))
+        if fresh and buffer.can_transform("map", "odom", rclpy.time.Time()) and buffer.can_transform("odom", "base_link", rclpy.time.Time()):
+            ready = True
+            break
+finally:
+    node.destroy_node()
+    rclpy.shutdown()
+print("COMPOSITE_DATA_READY" if ready else "COMPOSITE_DATA_NOT_READY")
+raise SystemExit(0 if ready else 2)
+'''
+    return [RUNTIME_PYTHON_PATH, "-c", script]
+
+
+def active_lifecycle_states(env):
+    import re
+    states = {}
+    for name in COMPOSITE_LIFECYCLE_NODES:
+        result = _run(["ros2", "lifecycle", "get", name], env=env, check=False, timeout=10)
+        if result.returncode != 0 or re.fullmatch(r"\s*active\s+\[3\]\s*", result.stdout) is None:
+            return None
+        states[name] = ROS_ACTIVE_STATE_ID
+    return states
+
+
 def _wait_ready(env, logdir, process):
     deadline = time.monotonic() + 300
     required = {"/clock", "/scan", "/odometry/filtered", "/tf", "/tf_static"}
@@ -1652,7 +1705,18 @@ def _wait_ready(env, logdir, process):
         if (topic_result.returncode == 0 and node_result.returncode == 0 and service_result.returncode == 0
                 and required.issubset(topics) and required_nodes.issubset(nodes)
                 and required_services.issubset(services)):
-            return {"ready": True, "topics": sorted(required), "nodes": sorted(required_nodes),
+            active = active_lifecycle_states(env)
+            if active is None:
+                time.sleep(2)
+                continue
+            data = _run(composite_readiness_command(), env=env, check=False, timeout=15)
+            (logdir / "pre_rearm_readiness.txt").write_text(data.stdout, encoding="utf-8")
+            if data.returncode != 0 or data.stdout.strip() != "COMPOSITE_DATA_READY":
+                time.sleep(2)
+                continue
+            return {"ready": True, "ros_lifecycle_states": active,
+                    "data_readiness": "COMPOSITE_DATA_READY",
+                    "topics": sorted(required), "nodes": sorted(required_nodes),
                     "services": sorted(required_services),
                     "topic_transcript": transcripts["topics"].name,
                     "node_transcript": transcripts["nodes"].name,

@@ -51,6 +51,14 @@ EXPECTED_SOURCE_PIN_PATHS = {
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
 }
 
+COMPOSITE_NEW_PIN_PATHS = {
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
+    "ros2_ws/src/mecanum_nav_rl/package.xml",
+}
+HISTORICAL_SOURCE_PIN_PATHS = EXPECTED_SOURCE_PIN_PATHS.copy()
+EXPECTED_SOURCE_PIN_PATHS |= COMPOSITE_NEW_PIN_PATHS
+
 NEW_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
     "ros2_ws/src/mecanum_nav_bringup/package.xml",
@@ -115,33 +123,14 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
         "source_pin_count": len(pins),
     }
     assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
-    assert len(EXPECTED_SOURCE_PIN_PATHS) == 34
-    assert len(set(EXPECTED_SOURCE_PIN_PATHS)) == 34
+    assert EXPECTED_SOURCE_PIN_PATHS == HISTORICAL_SOURCE_PIN_PATHS | COMPOSITE_NEW_PIN_PATHS
+    assert len(EXPECTED_SOURCE_PIN_PATHS) == len(HISTORICAL_SOURCE_PIN_PATHS) + len(COMPOSITE_NEW_PIN_PATHS)
     assert set(pins) <= EXPECTED_SOURCE_PIN_PATHS
     assert set(pins) | NEW_SOURCE_PIN_PATHS == EXPECTED_SOURCE_PIN_PATHS
     assert "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py" in pins
     assert not any("approval_guards/step07_nav2_baseline_run_00[123].json" in path.lower() for path in pins)
     assert set(pins) == EXPECTED_SOURCE_PIN_PATHS
-    import hashlib
-    prospective = dict(pins)
-    stale_current_sources = set()
-    for relative, expected in pins.items():
-        raw = (ROOT / relative).read_bytes()
-        actual = {"sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
-        if actual != expected:
-            stale_current_sources.add(relative)
-            prospective[relative] = actual
-    assert stale_current_sources <= {
-        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py",
-        "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py",
-        "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
-        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
-        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
-        "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
-    }
-    # During source stabilization, only the exact in-scope edited source pins
-    # can be prospective; final governance reconciliation must restore closure.
-    validate_source_pins(ROOT, prospective)
+    validate_source_pins(ROOT, pins)
 
 
 def test_attempt_002_source_seed_remains_pending_and_historical_invocations_are_not_retried():

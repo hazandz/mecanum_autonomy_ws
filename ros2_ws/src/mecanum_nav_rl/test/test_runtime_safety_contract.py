@@ -190,3 +190,88 @@ def test_control_time_regression_fails_closed() -> None:
     result = core.evaluate(_valid(1_040_000_000))
     assert not result.accepted
     assert result.reasons == ("CONTROL_TIMESTAMP_NOT_MONOTONIC",)
+
+
+def test_supervisor_predeclared_sim_clock_and_scan_validity_without_ros_graph(tmp_path):
+    import os
+    import subprocess
+    import sys
+    script = r'''
+from types import SimpleNamespace as NS
+import math
+import rclpy.node
+from sensor_msgs.msg import LaserScan
+class Node:
+    clock_value = True
+    def __init__(self, name):
+        self.parameters = {"use_sim_time": self.clock_value}
+    def declare_parameter(self, name, value=None):
+        assert name not in self.parameters, "PARAMETER_ALREADY_DECLARED"
+        if name.startswith("freshness_ns."):
+            value = 500000000
+        elif name.startswith("limits."):
+            value = [0.25, 0.20, 0.80]
+        self.parameters[name] = value
+    def get_parameter(self, name): return NS(value=self.parameters[name])
+    def create_publisher(self, *args): return NS(publish=lambda msg: None)
+    def create_subscription(self, *args): return NS()
+    def create_timer(self, *args): return NS()
+rclpy.node.Node = Node
+from mecanum_nav_rl.runtime_safety import safety_supervisor_node as module
+module.Buffer = lambda: NS()
+module.TransformListener = lambda *args: NS()
+n = module.SafetySupervisorNode()
+assert n.get_parameter("use_sim_time").value is True
+for invalid in (False, 1, "true"):
+    Node.clock_value = invalid
+    try: module.SafetySupervisorNode()
+    except ValueError as error: assert str(error) == "SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE"
+    else: raise AssertionError("clock sai vẫn được nhận")
+def scan(values):
+    msg = LaserScan()
+    msg.header.frame_id = "lidar_frame"
+    msg.header.stamp.sec = 1
+    msg.angle_min = -math.pi; msg.angle_increment = 0.1
+    msg.range_min = 0.1; msg.range_max = 10.0
+    msg.ranges = values
+    return msg
+for values, expected in (([1.0,2.0],True),([1.0,math.inf],True),([math.inf]*3,True),
+                         ([math.nan],False),([-math.inf],False),([],False)):
+    msg = scan(values)
+    module.SafetySupervisorNode._on_scan(n, msg)
+    assert n._scan_finite is expected
+for field, value in (("range_min",-1.0),("range_max",0.0),("range_max",math.inf),
+                     ("angle_increment",0.0),("angle_min",math.nan)):
+    msg = scan([math.inf]); setattr(msg,field,value)
+    assert not module.scan_values_valid(msg)
+from builtin_interfaces.msg import Time
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState, CommandEnvelope
+outputs=[]; states=[]
+n._accepted_pub=NS(publish=outputs.append); n._state_pub=NS(publish=states.append)
+n._tf_buffer=NS(can_transform=lambda *args: True)
+n._sim_estop_release_authorized=True
+barrier=SafetyLifecycleState(); barrier.barrier_state=1; barrier.motion_permitted=True
+barrier.barrier_stamp=Time(sec=1)
+n._barrier=barrier
+odom=Odometry(); odom.header.frame_id="odom"; odom.child_frame_id="base_link"; odom.header.stamp.sec=1
+n._on_odometry(odom); n._on_scan(scan([math.inf]*3))
+n._command=Twist(); n._command_stamp_ns=1000000000
+now=1000000000
+n.get_clock=lambda:NS(now=lambda:NS(nanoseconds=now,to_msg=lambda:Time(sec=now//1000000000)))
+n._evaluate_and_publish()
+assert "LIMITER_PRIMED" in states[-1].intervention_reasons
+now=1050000000
+n._evaluate_and_publish()
+assert outputs[-1].source==CommandEnvelope.SOURCE_NAV2 and states[-1].scan_fresh
+now=2000000000
+n._command_stamp_ns=n._odom_stamp_ns=now; barrier.barrier_stamp.sec=2
+n._evaluate_and_publish()
+assert outputs[-1].source==CommandEnvelope.SOURCE_SAFE_STOP and not states[-1].scan_fresh
+assert "SCAN_STALE_OR_INVALID" in states[-1].intervention_reasons
+'''
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -1194,3 +1194,14 @@ Giữ lịch sử invocation_001–005, consumed guards/locks/evidence/runtime w
 | `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `376bc411bb5983be062279e8c7f5696f1af448d4fea5d48b31048ec69eb5727a` | 52485 |
 
 Guard SHA-256 `47ba096c850081ff073cb54c66381a128a3ea2eca812ed650ddae939045548fa`; evidence `8e87e4fd9b5cf7fa08b3529a3448cd36418ad077432d27ed855edee6b5f9082e`; manifest `f0403ddb4d140937635972a8156c6eadcf677bd454d1cd0917fad8c3f539b759`.
+
+
+### Run005 attempt_002 — corrective L2 composite/Gate-B
+
+Base `bb5fc04fe8e309c52e468f766893ef60625e6821`; exact direct scope 23 path, union pins 37/37. Owner phê duyệt L2 cho lifecycle orchestration, clock/binding/TF, observer lifetime và scan validity; filename decision L1 giữ nguyên. SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. Focused 46, tools 301, bringup 248, RL 715 PASS; sáu-package external build, observer 13, ROSIDL 8, installed/source 19/19 PASS. Guard seed PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không official runner/runtime/integration; lịch sử và guard/ownership tại base bất biến. Next action: independent audit exact corrective commit; runtime cần authorization riêng.
+
+Decision: `docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md`; SHA-256 `e245967f9c5b324c4d67dae70ca046bc3b8d80252197411c3021ebca3856ed36`.
+
+- `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`: `2442328059cfea2143ea3660ad578bf8a69a535493459f7aec510a725c12e6aa`.
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`.
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`.

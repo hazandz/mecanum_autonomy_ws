@@ -16,6 +16,7 @@ planner_server:
 
 controller_server:
   ros__parameters:
+    odom_topic: /odometry/filtered
     use_sim_time: true
     controller_plugins: [FollowPath]
     FollowPath:

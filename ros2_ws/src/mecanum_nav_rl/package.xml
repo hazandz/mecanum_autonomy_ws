@@ -19,6 +19,9 @@
   <buildtool_depend>ament_python</buildtool_depend>
 
   <!-- Nền tảng ROS 2 cho Python -->
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
