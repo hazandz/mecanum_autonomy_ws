@@ -1120,3 +1120,10 @@ Decision: `docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAM
 - `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`: `2442328059cfea2143ea3660ad578bf8a69a535493459f7aec510a725c12e6aa`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`.
+
+
+### Active corrective — Run005 evidence-validator identity closure
+
+Base `c8e34ead42c9c3fa6d79bf73dc221a9cc599d42a`, branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; exact delivery set is the 10-path allowlist in the Run005 evidence and manifest. Scope is limited to validator run identity and verdict consistency. The source-pin inventory remains 37 unique entries; three existing hashes/sizes are refreshed. Historical Git-blob checks and the earlier 23-path L2 scope remain preserved.
+
+Offline verification: validator 15 tests; focused scope 9 tests; Step-7 tools 306; bringup 249; RL 715 with external install base; six-package external build; observer 13 and ROSIDL 8; `py_compile`; installed/source equality 15/15. No runtime was executed. Evidence ceiling is `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. Next action: independent audit of the exact corrective commit; runtime requires separate Owner authorization.

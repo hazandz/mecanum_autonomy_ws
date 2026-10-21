@@ -147,3 +147,14 @@ Record hashes sau reconciliation:
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`, 38806 bytes.
 
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`, 36217 bytes.
+
+
+## L1 corrective: Run005 evidence-validator identity and verdict contract
+
+Base: `c8e34ead42c9c3fa6d79bf73dc221a9cc599d42a`; direct corrective scope: exact 10-path set recorded in the current Run005 evidence JSON and guard manifest. This correction changes evidence validation only. It does not change runtime behavior, ROS topology, safety, authorization, guard state machine, source-pin inventory membership, or runtime policy.
+
+The validator now accepts only run ID `STEP07_NAV2_BASELINE_RUN_005` and the exact Run005 PASS/FAIL terminal outcome strings. PASS requires every acceptance value to be true, an exactly empty `failure_reason_literals` list, and teardown marked completed, clean, ordered, and verified. A FAIL terminal record requires at least one failure literal. Run001 identity or stale Run001 terminal strings fail closed. `validate_run_directory()` is covered by a complete canonical synthetic Run005 bundle including manifest and checksums.
+
+The active Run005 source-pin inventory remains 37 unique paths. Three existing entries were refreshed from current source bytes; no path was added. Historical Git-blob verification and prior historical scope records remain unchanged. Offline checks passed after pin refresh: Step-7 tools 306, bringup 249, RL 715, six-package external build, observer 13 and ROSIDL 8, Python compilation, and 15/15 installed/source runtime-artifact equality. No official runner or runtime was invoked.
+
+Guard seed: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.

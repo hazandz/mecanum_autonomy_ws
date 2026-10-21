@@ -100,7 +100,7 @@ def verify_artifacts(run_directory: str | Path) -> dict:
 
 
 def validate_run_record(record: dict) -> dict:
-    if record.get("schema_version") != "1.0" or record.get("run_id") != "STEP07_NAV2_BASELINE_RUN_001":
+    if record.get("schema_version") != "1.0" or record.get("run_id") != "STEP07_NAV2_BASELINE_RUN_005":
         raise ValueError("RUN_RECORD_IDENTITY_INVALID")
     acceptance = record.get("acceptance")
     if type(acceptance) is not dict or not acceptance:
@@ -143,15 +143,26 @@ def validate_run_record(record: dict) -> dict:
         raise ValueError("PROCESS_GROUP_ACCEPTANCE_RAW_MISMATCH")
     _finite_tree(record)
     teardown = record.get("teardown")
-    if type(teardown) is not dict or teardown.get("completed") is not True:
-        raise ValueError("TEARDOWN_NOT_COMPLETED")
-    final_pass = all(acceptance.values()) and teardown.get("clean") is True and teardown.get("order_correct") is True
-    expected_outcome = "STEP07_NAV2_BASELINE_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT" if final_pass else "STEP07_NAV2_BASELINE_RUN001_FAIL_NO_RETRY_GUARD_CONSUMED"
+    if type(teardown) is not dict:
+        raise ValueError("TEARDOWN_EVIDENCE_INVALID")
+    teardown_completed = teardown.get("completed") is True
+    teardown_clean = teardown.get("clean") is True
+    teardown_ordered = teardown.get("order_correct") is True
+    teardown_verified = teardown.get("verified") is True
+    failure_literals = record.get("failure_reason_literals")
+    if (type(failure_literals) is not list
+            or any(type(item) is not str or not item for item in failure_literals)):
+        raise ValueError("FAILURE_REASON_LITERALS_INVALID")
+    final_pass = (all(acceptance.values()) and failure_literals == []
+                  and teardown_completed and teardown_clean and teardown_ordered
+                  and teardown_verified)
+    expected_outcome = (
+        "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
+        if final_pass else "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    )
     if record.get("terminal_outcome") != expected_outcome:
         raise ValueError("TERMINAL_OUTCOME_ACCEPTANCE_INCONSISTENCY")
-    if final_pass and record.get("failure_reason_literals") != []:
-        raise ValueError("PASS_WITH_FAILURE_LITERALS")
-    if not final_pass and not record.get("failure_reason_literals"):
+    if not final_pass and not failure_literals:
         raise ValueError("FAIL_WITHOUT_REASON_LITERAL")
     return {"pass": final_pass, "terminal_outcome": expected_outcome}
 

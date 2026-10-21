@@ -2071,3 +2071,14 @@ Decision: `docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAM
 - `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`: `2442328059cfea2143ea3660ad578bf8a69a535493459f7aec510a725c12e6aa`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`.
+
+
+### 2026-10-21 — Run005 attempt_002 evidence-validator identity/verdict correction
+
+`supersedes`: chỉ metadata/active source state của candidate offline hiện hành; không sửa bất kỳ runtime invocation hoặc historical evidence nào.
+
+L1 corrective trên base `c8e34ead42c9c3fa6d79bf73dc221a9cc599d42a`, exact direct scope 10 path. Evidence validator nhận diện duy nhất `STEP07_NAV2_BASELINE_RUN_005` và đúng terminal verdict strings của Run005. PASS yêu cầu mọi acceptance=true, `failure_reason_literals=[]`, teardown completed/clean/order_correct/verified. FAIL terminal cần ít nhất một failure literal. Run001 identity và terminal strings cũ bị từ chối. Inventory giữ 37 source pins duy nhất; changed paths và runtime pins là các tập riêng.
+
+Focused validator tests: 15 passed; focused validator/scope tests: 9 passed. Full Step-7 tools sau pin refresh: 306 passed (trước refresh: 305 passed, 1 stale-pin failure; sau cập nhật entry hiện hữu đã chạy lại và xanh). `mecanum_nav_bringup/test`: 249 passed; `mecanum_nav_rl/test` với external install base: 715 passed; six-package external build PASS; observer 13 cases và ROSIDL 8 cases PASS; `py_compile` 3 Python files PASS; installed/source runtime artifact equality 15/15 PASS. Source pins 37/37 SHA-256/size; exact current scope 10 path; canonical JSON/duplicate-key/encoding, YAML/XML, historical Git-blob and Ledger prefix checks PASS.
+
+Đây chỉ là sửa identity/verdict của evidence validator. Không có official runner/runtime invocation; Run005 guard seed vẫn PENDING, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, không lock; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. Next action: independent audit exact corrective commit.

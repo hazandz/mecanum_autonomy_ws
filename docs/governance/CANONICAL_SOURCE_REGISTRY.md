@@ -1205,3 +1205,15 @@ Decision: `docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAM
 - `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`: `2442328059cfea2143ea3660ad578bf8a69a535493459f7aec510a725c12e6aa`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`: `1d206e32f5604ff425d30b3dbd8b2a377593a602d9e163e18a47065ce8995afe`.
 - `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`: `3c7ab3855df8fac785c21de85d1e3e522fffbb87aaf090b63a64fb81737f0b36`.
+
+
+### Run005 attempt_002 — evidence-validator identity/verdict corrective (2026-10-21)
+
+Base `c8e34ead42c9c3fa6d79bf73dc221a9cc599d42a`; direct corrective scope exact 10 paths. This is an offline validator-contract correction only. The validator now binds to Run005 identity/outcomes and rejects pass claims with missing teardown verification or non-empty failure literals. Current Run005 inventory remains 37 unique source pins; three existing entries refreshed, no membership change.
+
+Refreshed entries:
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py`: SHA-256 `42e24bfaa56f11eb93afdf1e51887342b00e199ab276927ac027eff68ab2fa43`, 23649 bytes.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py`: SHA-256 `10908be06fe118c7d0eafd49b1a0f16adec0f298e1c921f5bbe325b5c33e3308`, 23016 bytes.
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`: SHA-256 `9342e542ba6d500a47680730869a1d8f6367f0f39d362192b9ad2a10374c048c`, 59703 bytes.
+
+Offline result: 37/37 source pins, full Step-7 tools 306, bringup 249, RL 715, external six-package build PASS, observer 13 and ROSIDL 8 PASS, installed runtime-artifact equality 15/15 PASS. No runtime invocation.

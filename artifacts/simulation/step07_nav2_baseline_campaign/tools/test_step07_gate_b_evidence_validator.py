@@ -6,7 +6,7 @@ import pytest
 
 from step07_gate_b_evidence_validator import (
     load_json, validate_gate_b_document, validate_observer,
-    validate_run_record, validate_vector_samples,
+    validate_run_directory, validate_run_record, validate_vector_samples,
 )
 
 
@@ -19,8 +19,8 @@ def test_observer_json_duplicate_bom_nonstandard_and_bad_utf8_fail_closed(tmp_pa
             load_json(path)
 
 
-def test_terminal_record_requires_every_acceptance_boolean_and_final_teardown():
-    passed = {"schema_version": "1.0", "run_id": "STEP07_NAV2_BASELINE_RUN_001",
+def test_terminal_record_requires_run005_identity_acceptance_and_verified_final_teardown():
+    passed = {"schema_version": "1.0", "run_id": "STEP07_NAV2_BASELINE_RUN_005",
               "call_counts": {"bootstrap": 1, "composite": 1},
               "process_groups": {
                   "bootstrap": {"pid": 1001, "pgid": 1001,
@@ -34,18 +34,76 @@ def test_terminal_record_requires_every_acceptance_boolean_and_final_teardown():
                              "bootstrap_readiness": True, "composite_readiness": True,
                              "process_group_teardown_clean": True,
                              "teardown_order_and_count_correct": True},
-              "teardown": {"completed": True, "clean": True, "order_correct": True},
+              "teardown": {"completed": True, "clean": True, "order_correct": True, "verified": True},
               "failure_reason_literals": [],
-              "terminal_outcome": "STEP07_NAV2_BASELINE_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"}
+              "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"}
     assert validate_run_record(passed)["pass"]
     bad_groups = copy.deepcopy(passed)
     bad_groups["process_groups"]["composite"]["pgid"] = 1001
     with pytest.raises(ValueError, match="PROCESS_GROUP_ACCEPTANCE_RAW_MISMATCH"):
         validate_run_record(bad_groups)
     inconsistent = copy.deepcopy(passed)
-    inconsistent["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN001_FAIL_NO_RETRY_GUARD_CONSUMED"
+    inconsistent["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
     with pytest.raises(ValueError, match="TERMINAL_OUTCOME"):
         validate_run_record(inconsistent)
+
+
+def _run005_record():
+    return {"schema_version": "1.0", "run_id": "STEP07_NAV2_BASELINE_RUN_005",
+            "call_counts": {"bootstrap": 1, "composite": 1},
+            "process_groups": {
+                "bootstrap": {"pid": 1001, "pgid": 1001,
+                    "initial_snapshot": {"live_member_pids": [1001], "zombie_member_pids": []},
+                    "readiness": {"ready": True, "entity_creation_literal": True}},
+                "composite": {"pid": 1002, "pgid": 1002,
+                    "initial_snapshot": {"live_member_pids": [1002], "zombie_member_pids": []},
+                    "readiness": {"ready": True},
+                    "command": ["ros2", "launch", "mecanum_nav_bringup", "sim_eval_nav2_baseline_system.launch.py", "start_bootstrap:=false"]}},
+            "acceptance": {"runtime": True, "bootstrap_composite_process_groups_distinct": True,
+                           "bootstrap_readiness": True, "composite_readiness": True,
+                           "process_group_teardown_clean": True,
+                           "teardown_order_and_count_correct": True},
+            "teardown": {"completed": True, "clean": True, "order_correct": True, "verified": True},
+            "failure_reason_literals": [],
+            "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"}
+
+
+def test_run001_identity_and_stale_run001_terminal_outcomes_are_rejected():
+    record = _run005_record()
+    record["run_id"] = "STEP07_NAV2_BASELINE_RUN_001"
+    with pytest.raises(ValueError, match="RUN_RECORD_IDENTITY_INVALID"):
+        validate_run_record(record)
+
+    for stale in (
+        "STEP07_NAV2_BASELINE_RUN001_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT",
+        "STEP07_NAV2_BASELINE_RUN001_FAIL_NO_RETRY_GUARD_CONSUMED",
+    ):
+        record = _run005_record()
+        record["terminal_outcome"] = stale
+        with pytest.raises(ValueError, match="TERMINAL_OUTCOME_ACCEPTANCE_RAW_MISMATCH|TERMINAL_OUTCOME_ACCEPTANCE_INCONSISTENCY"):
+            validate_run_record(record)
+
+
+def test_valid_run005_fail_record_is_accepted_as_a_fail_verdict():
+    record = _run005_record()
+    record["acceptance"]["runtime"] = False
+    record["failure_reason_literals"] = ["SIMULATED_FAILURE"]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    assert validate_run_record(record) == {
+        "pass": False,
+        "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED",
+    }
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda record: record["teardown"].update(verified=False),
+    lambda record: record["failure_reason_literals"].append("SIGTERM"),
+])
+def test_claimed_run005_pass_with_unverified_teardown_or_failure_literal_is_rejected(mutation):
+    record = _run005_record()
+    mutation(record)
+    with pytest.raises(ValueError, match="TERMINAL_OUTCOME_ACCEPTANCE_INCONSISTENCY"):
+        validate_run_record(record)
 
 
 def test_gate_b_vector_validation_requires_five_finite_monotonic_81_float32_samples():
@@ -251,3 +309,64 @@ def test_lifecycle_endpoint_contract_rejects_qos_conflation_and_obsolete_topic()
     document["graph"]["/mecanum/safety/lifecycle_state"]["subscribers"].append({"node_name": "safety_lifecycle"})
     with pytest.raises(ValueError, match="LIFECYCLE_TOPIC_OBSOLETE_OR_IN_USE"):
         validate_observer(document, config_hash="a" * 64)
+
+
+def _gate_b_doc(config_hash="a" * 64):
+    samples = [{"stamp_ns": i, "dimension": 81, "dtype": "float32", "values": [0.0] * 81}
+               for i in range(1, 6)]
+    return {"schema_version": "1.0", "config_hash": config_hash,
+            "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
+            "sample_count": len(samples), "samples": samples,
+            "compute_path_to_pose": {"requested_once": True, "success": True, "frame_id": "map",
+                                      "transcript": {"path_frame_id": "map"}},
+            "navigate_to_pose": {"requested_once": True, "accepted": True, "succeeded": True},
+            "errors": [],
+            "acceptance": {"five_immutable_observation81": True,
+                           "compute_path_success_map_frame": True,
+                           "navigate_to_pose_requested_once": True,
+                           "navigate_to_pose_succeeded": True,
+                           "no_command_or_policy_publisher": True, "errors_absent": True}}
+
+
+def _write_canonical_json(path, value):
+    path.write_bytes(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+
+def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_path):
+    run_dir = tmp_path / "run005"
+    run_dir.mkdir()
+    config_hash = "a" * 64
+    record = _run005_record()
+    record["config_hash"] = config_hash
+    record["acceptance"].update({"observer_acceptance": True, "gate_b_vectors": True})
+    record["teardown"].update({"completed": True, "clean": True,
+                               "order_correct": True, "verified": True})
+    observer = observer_doc()
+    gate = _gate_b_doc(config_hash)
+    artifact_values = {
+        "run_record.json": record,
+        "runtime_observer.json": observer,
+        "gate_b_vectors.json": gate,
+    }
+    artifact_rows = []
+    for name, value in artifact_values.items():
+        target = run_dir / name
+        _write_canonical_json(target, value)
+        raw = target.read_bytes()
+        artifact_rows.append({"path": name,
+                              "sha256": __import__("hashlib").sha256(raw).hexdigest(),
+                              "size_bytes": len(raw)})
+    _write_canonical_json(run_dir / "artifact_manifest.json",
+                          {"schema_version": "1.0", "run_id": record["run_id"],
+                           "artifacts": artifact_rows})
+    checksum_rows = sorted((item["sha256"], item["path"]) for item in artifact_rows)
+    (run_dir / "SHA256SUMS.txt").write_text(
+        "".join(f"{digest}  {path}\n" for digest, path in checksum_rows), encoding="utf-8")
+
+    result = validate_run_directory(run_dir)
+    assert result["verdict"] == {
+        "pass": True,
+        "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT",
+    }
+    assert len(result["artifact_hashes"]) == 3
