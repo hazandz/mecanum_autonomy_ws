@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -489,7 +490,7 @@ env -0
 
 def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
                    partition: str, map_root: Path, fuel_root: Path, source_pins: dict,
-                   runtime_python: Path) -> dict:
+                   runtime_python: Path, record: dict | None = None) -> dict:
     if run_directory.exists():
         raise RuntimeError("EVIDENCE_DIRECTORY_ALREADY_EXISTS")
     map_path = validate_map_root(map_root)
@@ -535,7 +536,10 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     stale = stale_partition_processes(partition)
     if stale:
         raise RuntimeError("STALE_PARTITION_PROCESS_FOUND")
-    transport_facts = validate_gz_transport_host_capability(env, partition)
+    if record is None:
+        transport_facts = validate_gz_transport_host_capability(env, partition)
+    else:
+        transport_facts = validate_gz_transport_host_capability(env, partition, record=record)
     ros_discovery_facts = validate_ros_discovery_host_capability(env)
     return {"canonical_map_yaml": str(map_path / "map.yaml"), "fuel_cache": fuel,
             "package_prefixes": prefixes, "observer_executable": str(observer),
@@ -550,70 +554,140 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
 def validate_gz_transport_host_capability(
     env: dict[str, str], partition: str, *, interface_enumerator=None,
     socket_factory=None, command_runner=None, timeout: float = 15,
+    sysfs_root: Path = Path("/sys"), record: dict | None = None,
 ) -> dict:
-    """Fail closed unless host interface and Gazebo transport probes work."""
-    interface_enumerator = interface_enumerator or socket.if_nameindex
-    socket_factory = socket_factory or socket.socket
+    """Select the physical default-route IPv4 and prove bounded Gazebo transport."""
     command_runner = command_runner or _run
+    root = Path(sysfs_root)
+    facts: dict = {"partition": partition, "status": "PENDING"}
+
     def unavailable(reason: str, error: BaseException | None = None):
+        facts.update({"partition": partition, "status": "FAIL", "failure_reason": reason})
+        if record is not None:
+            record["gz_transport_host_capability"] = facts
         failure = RuntimeError(f"GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}")
         if error is not None:
             raise failure from error
         raise failure
 
-    try:
-        interfaces = interface_enumerator()
-    except PermissionError as error:
-        unavailable("INTERFACE_ENUMERATION_PERMISSION_DENIED", error)
-    except OSError as error:
-        unavailable("INTERFACE_ENUMERATION_OS_ERROR", error)
-    try:
-        valid_interfaces = [
-            (index, name) for index, name in interfaces
-            if isinstance(index, int) and index > 0 and isinstance(name, str) and name.strip()
-        ]
-    except (TypeError, ValueError) as error:
-        unavailable("INTERFACE_ENUMERATION_INVALID", error)
-    if not valid_interfaces:
-        unavailable("INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED")
-
-    probe_socket = None
-    socket_failure = None
-    try:
-        probe_socket = socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
-        probe_socket.bind(("127.0.0.1", 0))
-    except PermissionError as error:
-        socket_failure = ("UDP_LOOPBACK_PERMISSION_DENIED", error)
-    except OSError as error:
-        socket_failure = ("UDP_LOOPBACK_OS_ERROR", error)
-    if probe_socket is not None:
+    def run_json(command: list[str], reason: str) -> list[dict]:
         try:
-            probe_socket.close()
-        except PermissionError as error:
-            socket_failure = socket_failure or ("UDP_LOOPBACK_PERMISSION_DENIED", error)
-        except OSError as error:
-            socket_failure = socket_failure or ("UDP_LOOPBACK_OS_ERROR", error)
-    if socket_failure is not None:
-        unavailable(*socket_failure)
+            result = command_runner(command, env=dict(env), check=False, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            unavailable(f"{reason}_TIMEOUT", error)
+        except (PermissionError, OSError) as error:
+            unavailable(f"{reason}_COMMAND_FAILED", error)
+        if getattr(result, "returncode", 1) != 0:
+            unavailable(f"{reason}_EXIT_NONZERO")
+        try:
+            value = json.loads(result.stdout)
+        except (TypeError, json.JSONDecodeError) as error:
+            unavailable(f"{reason}_JSON_INVALID", error)
+        if type(value) is not list:
+            unavailable(f"{reason}_JSON_INVALID")
+        return value
 
+    routes = run_json(["ip", "-j", "-4", "route", "show", "table", "main", "default"], "DEFAULT_ROUTE")
+    valid_routes = [row for row in routes if type(row) is dict and row.get("dst", "default") == "default"
+                    and isinstance(row.get("dev"), str) and row["dev"]]
+    if not valid_routes:
+        unavailable("DEFAULT_ROUTE_MISSING")
+    try:
+        route_metrics = [(int(row.get("metric", 0)), row) for row in valid_routes]
+    except (TypeError, ValueError) as error:
+        unavailable("DEFAULT_ROUTE_INVALID", error)
+    best_metric = min(metric for metric, _ in route_metrics)
+    best_routes = [row for metric, row in route_metrics if metric == best_metric]
+    if len(best_routes) != 1:
+        unavailable("DEFAULT_ROUTE_AMBIGUOUS")
+    route = best_routes[0]
+    interface = route["dev"]
+    link_rows = run_json(["ip", "-j", "-d", "link", "show", "dev", interface], "ROUTE_INTERFACE")
+    if len(link_rows) != 1 or type(link_rows[0]) is not dict:
+        unavailable("ROUTE_INTERFACE_INVALID")
+    link = link_rows[0]
+    if "UP" not in link.get("flags", []) or link.get("operstate") != "UP":
+        unavailable("ROUTE_INTERFACE_DOWN")
+    device = root / "class" / "net" / interface / "device"
+    try:
+        device_target = device.resolve(strict=True)
+        virtual_root = (root / "devices" / "virtual" / "net").resolve(strict=True)
+        device_target.relative_to(virtual_root)
+    except ValueError:
+        pass
+    except OSError:
+        unavailable("ROUTE_INTERFACE_NOT_PHYSICAL")
+    else:
+        unavailable("ROUTE_INTERFACE_NOT_PHYSICAL")
+    addresses = run_json(["ip", "-j", "-4", "addr", "show", "dev", interface], "ROUTE_INTERFACE_ADDRESS")
+    if (len(addresses) != 1 or type(addresses[0]) is not dict
+            or addresses[0].get("ifname") != interface):
+        unavailable("ROUTE_INTERFACE_ADDRESS_INVALID")
+    candidates: list[ipaddress.IPv4Address] = []
+    for address in addresses[0].get("addr_info", []):
+        if type(address) is not dict or address.get("family") != "inet":
+            continue
+        try:
+            parsed = ipaddress.ip_address(address.get("local", ""))
+        except ValueError:
+            unavailable("ROUTE_INTERFACE_ADDRESS_INVALID")
+        if (isinstance(parsed, ipaddress.IPv4Address) and not parsed.is_loopback
+                and not parsed.is_link_local and not parsed.is_unspecified
+                and not parsed.is_multicast and not parsed.is_reserved):
+            candidates.append(parsed)
+    preferred = route.get("prefsrc")
+    if preferred:
+        try:
+            selected_ip = ipaddress.IPv4Address(preferred)
+        except ipaddress.AddressValueError as error:
+            unavailable("DEFAULT_ROUTE_SOURCE_INVALID", error)
+        if selected_ip not in candidates:
+            unavailable("DEFAULT_ROUTE_SOURCE_NOT_LOCAL")
+    elif len(candidates) == 1:
+        selected_ip = candidates[0]
+    else:
+        unavailable("ROUTE_INTERFACE_ADDRESS_AMBIGUOUS")
+
+    facts.update({"interface": interface, "ipv4": str(selected_ip), "partition": partition,
+             "default_route_metric": best_metric, "route_source": "LOCAL_INTERFACE_ADDRESS",
+             "probe": {"command": "gz topic -t <unique> -m gz.msgs.StringMsg -p <probe>",
+                       "status": "PENDING"}, "status": "PENDING"})
+    if record is not None:
+        record["gz_transport_host_capability"] = facts
     probe_env = dict(env)
     probe_env["GZ_PARTITION"] = partition
+    probe_env["GZ_IP"] = str(selected_ip)
+    topic = f"/step07/host_transport_probe/{uuid.uuid4().hex}"
+    command = ["gz", "topic", "-t", topic, "-m", "gz.msgs.StringMsg",
+               "-p", "data: 'step07_transport_probe'"]
     try:
-        result = command_runner(["gz", "topic", "-l"], env=probe_env,
-                                check=False, timeout=timeout)
+        result = command_runner(command, env=probe_env, check=False, timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        unavailable("GZ_TOPIC_TIMEOUT", error)
+        facts["probe"] = {"status": "FAIL", "reason": "GZ_TOPIC_PUBLISH_TIMEOUT"}
+        unavailable("GZ_TOPIC_PUBLISH_TIMEOUT", error)
     except PermissionError as error:
-        unavailable("GZ_TOPIC_PERMISSION_DENIED", error)
+        facts["probe"] = {"status": "FAIL", "reason": "GZ_TOPIC_PUBLISH_PERMISSION_DENIED"}
+        unavailable("GZ_TOPIC_PUBLISH_PERMISSION_DENIED", error)
     except OSError as error:
-        unavailable("GZ_TOPIC_OS_ERROR", error)
-    output = (getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")
-    if "getifaddrs:" in output or "Error creating socket:" in output:
-        unavailable("GZ_TOPIC_TRANSPORT_ERROR_OUTPUT")
+        facts["probe"] = {"status": "FAIL", "reason": "GZ_TOPIC_PUBLISH_OS_ERROR"}
+        unavailable("GZ_TOPIC_PUBLISH_OS_ERROR", error)
+    output = ((getattr(result, "stdout", "") or "") + "\n" +
+              (getattr(result, "stderr", "") or ""))
+    markers = ("getifaddrs:", "error creating socket:", "operation not permitted",
+               "network is unreachable", "failed to create", "transport error")
+    found = sorted(marker for marker in markers if marker in output.lower())
+    facts["probe"] = {"status": "PASS" if getattr(result, "returncode", 1) == 0 and not found else "FAIL",
+                       "returncode": getattr(result, "returncode", None),
+                       "output_bytes": len(output.encode("utf-8", errors="replace")),
+                       "output_sha256": hashlib.sha256(output.encode("utf-8", errors="replace")).hexdigest(),
+                       "recognized_error_markers": found}
     if getattr(result, "returncode", 1) != 0:
-        unavailable("GZ_TOPIC_EXIT_NONZERO")
-    return {"interface_count": len(valid_interfaces), "udp_loopback_bind": "PASS",
-            "gz_topic_list": "PASS", "partition": partition}
+        unavailable("GZ_TOPIC_PUBLISH_EXIT_NONZERO")
+    if found:
+        unavailable("GZ_TOPIC_PUBLISH_TRANSPORT_ERROR")
+    env["GZ_PARTITION"] = partition
+    env["GZ_IP"] = str(selected_ip)
+    return facts
 
 
 ROS_DISCOVERY_ERROR_MARKERS = (
@@ -909,7 +983,8 @@ def _stop_unverified_child(proc, member, timeout):
         member["returncode"] = getattr(proc, "returncode", None)
     return {"signal": "SIGINT", "signal_sent": False, "child_stop_attempted": True,
             "leader_returncode": getattr(proc, "returncode", None), **snapshot,
-            "errors": errors, "clean": False}
+            "errors": errors, "clean": False, "graceful": False,
+            "escalation_history": []}
 
 
 def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None:
@@ -925,7 +1000,8 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
     if proc is None or type(member) is not dict or type(member.get("pgid")) is not int or member["pgid"] <= 1:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
                 "live_member_pids": [], "zombie_member_pids": [], "verified": False,
-                "errors": ["PROCESS_GROUP_MISSING"], "clean": False}
+                "errors": ["PROCESS_GROUP_MISSING"], "clean": False,
+                "graceful": False, "escalation_history": []}
     try:
         leader_exited = proc.poll() is not None
         if not leader_exited and os.getpgid(proc.pid) != member["pgid"]:
@@ -970,7 +1046,8 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
              and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
     return {"signal": "SIGINT", "signal_sent": signal_sent, "leader_returncode": returncode,
             **snapshot, "verified": snapshot.get("verified") is True,
-            "errors": errors, "clean": clean}
+            "errors": errors, "clean": clean, "graceful": clean,
+            "escalation_history": []}
 
 
 def _safe_stop_owned_process(proc, member, timeout: float) -> dict:
@@ -988,14 +1065,15 @@ def _safe_stop_owned_process(proc, member, timeout: float) -> dict:
         return {"signal": "SIGINT", "signal_sent": False,
                 "leader_returncode": member.get("returncode") if isinstance(member, dict) else None,
                 **snapshot, "errors": [f"TEARDOWN_EXCEPTION:{type(error).__name__}:{error}"],
-                "clean": False}
+                "clean": False, "graceful": False, "escalation_history": []}
 
 
 def _stop_collector(proc, member, timeout: float = 20) -> dict:
     if proc is None and member is None:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
                 "live_member_pids": [], "zombie_member_pids": [], "verified": True,
-                "inspection_errors": [], "errors": [], "clean": True, "started": False}
+                "inspection_errors": [], "errors": [], "clean": True, "graceful": True,
+                "escalation_history": [], "started": False}
     return _safe_stop_owned_process(proc, member, timeout)
 
 
@@ -1003,8 +1081,9 @@ def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_p
                                 bootstrap_member, collector_procs, collector_members,
                                 bootstrap_calls: int, composite_calls: int) -> dict:
     """Best-effort ordered shutdown; every unverified operation makes teardown fail."""
-    teardown = {"completed": False, "clean": False, "order_correct": False,
-                "verified": False, "errors": []}
+    teardown = {"completed": False, "clean": False, "ordered": False,
+                "order_correct": False, "verified": False, "graceful": False,
+                "escalation_history": [], "errors": []}
     teardown["composite"] = _safe_stop_owned_process(composite_proc, composite_member, 30)
     teardown["bootstrap"] = _safe_stop_owned_process(bootstrap_proc, bootstrap_member, 30)
     teardown["order"] = ["composite", "bootstrap"]
@@ -1050,6 +1129,19 @@ def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_p
         and not teardown["bootstrap"].get("live_member_pids")
         and not teardown["bootstrap"].get("zombie_member_pids")
     )
+    teardown["ordered"] = teardown["order_correct"]
+    process_results = (teardown["composite"], teardown["bootstrap"],
+                       *teardown["collectors"].values())
+    teardown["escalation_history"] = [
+        {"process": name, **entry}
+        for name, result in (("composite", teardown["composite"]),
+                             ("bootstrap", teardown["bootstrap"]),
+                             *[(name, teardown["collectors"][name])
+                               for name in ("gate_b_observer", "cpp_observer")])
+        for entry in result.get("escalation_history", [])
+    ]
+    teardown["graceful"] = (all(item.get("graceful") is True for item in process_results)
+                             and teardown["escalation_history"] == [])
     teardown["completed"] = True
     return teardown
 
@@ -1230,7 +1322,7 @@ def preacquire_preflight(worktree: Path, dirs: dict[str, Path], run_directory: P
     try:
         env = prepare_ros_environment(worktree, dirs)
         preflight = host_preflight(env, worktree, run_directory, partition,
-                                   map_root, fuel_root, source_pins, runtime_python)
+                                   map_root, fuel_root, source_pins, runtime_python, record)
         if guard_lock.exists():
             raise RuntimeError("GUARD_LOCK_ALREADY_EXISTS")
         consumed = acquire_guard_with_sigterm_handoff(
@@ -1253,10 +1345,13 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
     if teardown.get("completed") is not True:
         raise ValueError("TEARDOWN_NOT_COMPLETED_BEFORE_FINALIZATION")
     record["teardown"] = dict(teardown)
-    teardown_ok = teardown.get("clean") is True and teardown.get("order_correct") is True
+    teardown_ok = (teardown.get("clean") is True and teardown.get("ordered") is True
+                   and teardown.get("verified") is True and teardown.get("graceful") is True
+                   and teardown.get("escalation_history") == [])
     record["acceptance"] = {**runtime_acceptance,
         "process_group_teardown_clean": teardown.get("clean") is True,
-        "teardown_order_and_count_correct": teardown.get("order_correct") is True}
+        "teardown_order_and_count_correct": teardown.get("ordered") is True,
+        "process_group_teardown_graceful": teardown.get("graceful") is True}
     failures = [f"RUNTIME_ACCEPTANCE_FAILED:{key}" for key, value in runtime_acceptance.items() if not value]
     pre_teardown_failure = record.get("pre_teardown_failure")
     if pre_teardown_failure:
@@ -1271,6 +1366,12 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
         failures.append("TEARDOWN_ORDER_OR_COUNT_FAILED")
     if teardown.get("verified") is not True:
         failures.append("PROCESS_GROUP_TEARDOWN_UNVERIFIED")
+    if teardown.get("ordered") is not True:
+        failures.append("PROCESS_GROUP_TEARDOWN_ORDER_UNVERIFIED")
+    if teardown.get("graceful") is not True:
+        failures.append("PROCESS_GROUP_TEARDOWN_NOT_GRACEFUL")
+    if teardown.get("escalation_history") != []:
+        failures.append("PROCESS_GROUP_TEARDOWN_ESCALATED")
     failures = list(dict.fromkeys(failures))
     passed = all(record["acceptance"].values()) and not failures
     record["failure_reason_literals"] = failures
@@ -1331,8 +1432,9 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                                         sigterm_handler, previous_sigterm_handler,
                                         ownership_ledger=None):
     """Run best-effort teardown and terminal persistence under a restored handler."""
-    teardown = {"completed": True, "clean": False, "order_correct": False,
-                "verified": False, "errors": ["TEARDOWN_NOT_VERIFIED"]}
+    teardown = {"completed": True, "clean": False, "ordered": False,
+                "order_correct": False, "verified": False, "graceful": False,
+                "escalation_history": [], "errors": ["TEARDOWN_NOT_VERIFIED"]}
     result = None
     try:
         sigterm_handler.begin_finalization()
@@ -1357,8 +1459,9 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                 collector_procs=collector_procs, collector_members=collector_members,
                 bootstrap_calls=bootstrap_calls, composite_calls=composite_calls)
         except BaseException as error:
-            teardown = {"completed": True, "clean": False, "order_correct": False,
-                        "verified": False,
+            teardown = {"completed": True, "clean": False, "ordered": False,
+                        "order_correct": False, "verified": False, "graceful": False,
+                        "escalation_history": [],
                         "errors": [f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}"]}
             record.setdefault("pre_teardown_failure", f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}")
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
@@ -1373,8 +1476,9 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
         else:
             reason = f"FINALIZATION_PATH_FAILED:{type(error).__name__}:{error}"
         record.setdefault("pre_teardown_failure", reason)
-        teardown.update({"completed": True, "clean": False, "order_correct": False,
-                         "verified": False, "finalization_path_error": reason})
+        teardown.update({"completed": True, "clean": False, "ordered": False,
+                         "order_correct": False, "verified": False, "graceful": False,
+                         "escalation_history": [], "finalization_path_error": reason})
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
         if sigterm_handler.interrupted:
@@ -1478,7 +1582,9 @@ def main():
                           "bootstrap_composite_process_groups_distinct": False,
                           "bootstrap_readiness": False, "composite_readiness": False}
     collector_members = {}
-    teardown = {"completed": False, "clean": False, "order_correct": False}
+    teardown = {"completed": False, "clean": False, "ordered": False,
+                "order_correct": False, "verified": False, "graceful": False,
+                "escalation_history": []}
     runtime_guard = args.runtime_worktree / args.guard_path.relative_to(source)
     guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
     sigterm_handler = SigtermHandler()

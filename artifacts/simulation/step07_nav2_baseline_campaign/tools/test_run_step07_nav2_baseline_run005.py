@@ -621,100 +621,178 @@ def test_read_only_evidence_parent_fails_with_stable_literal_before_clone_or_gua
     assert not list(evidence_parent.iterdir())
 
 
-def test_gz_transport_capability_pass_uses_exact_partition_and_fake_probes():
+def _fake_route_sysfs(tmp_path, interface="enp2s0", *, physical=True):
     from types import SimpleNamespace
 
-    class FakeSocket:
-        def __init__(self):
-            self.bound = None
-            self.closed = False
+    sysfs = tmp_path / "sys"
+    (sysfs / "devices/virtual/net").mkdir(parents=True)
+    net = sysfs / "class/net" / interface
+    net.mkdir(parents=True)
+    if physical:
+        device = sysfs / "devices/pci0000/0000:00:00.0"
+        device.mkdir(parents=True)
+        (net / "device").symlink_to(device)
 
-        def bind(self, address):
-            self.bound = address
+    def command(argv, **_kwargs):
+        if argv[:7] == ["ip", "-j", "-4", "route", "show", "table", "main"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([
+                {"dst": "default", "dev": interface, "metric": 100,
+                 "prefsrc": "192.168.50.23", "gateway": "192.168.50.1"}]), stderr="")
+        if argv[:4] == ["ip", "-j", "-d", "link"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([
+                {"ifname": interface, "flags": ["BROADCAST", "UP"], "operstate": "UP"}]), stderr="")
+        if argv[:4] == ["ip", "-j", "-4", "addr"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([
+                {"ifname": interface, "addr_info": [
+                    {"family": "inet", "local": "192.168.50.23", "prefixlen": 24}]}]), stderr="")
+        if argv[0:2] == ["gz", "topic"]:
+            return SimpleNamespace(returncode=0, stdout="published one message", stderr="")
+        raise AssertionError(f"unexpected command: {argv}")
+    return sysfs, command
 
-        def close(self):
-            self.closed = True
 
-    udp = FakeSocket()
+def test_gz_transport_capability_selects_local_default_route_and_sets_shared_environment(tmp_path):
+    sysfs, base_command = _fake_route_sysfs(tmp_path)
     commands = []
+    def command(argv, **kwargs):
+        commands.append((list(argv), kwargs))
+        return base_command(argv, **kwargs)
 
-    def fake_command(command, **kwargs):
-        commands.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout="/clock\n", stderr="")
-
+    env = {"PATH": "/fake/bin", "GZ_PARTITION": "wrong"}
+    record = {}
     facts = runner.validate_gz_transport_host_capability(
-        {"PATH": "/fake/bin", "GZ_PARTITION": "wrong"}, runner.PARTITION,
-        interface_enumerator=lambda: [(2, "lo")],
-        socket_factory=lambda *_args: udp, command_runner=fake_command,
-    )
-    assert facts["gz_topic_list"] == "PASS"
-    assert udp.bound == ("127.0.0.1", 0) and udp.closed
-    assert commands[0][0] == ["gz", "topic", "-l"]
-    assert commands[0][1]["env"]["GZ_PARTITION"] == runner.PARTITION
+        env, runner.PARTITION, command_runner=command, sysfs_root=sysfs, record=record)
+    assert facts["interface"] == "enp2s0" and facts["ipv4"] == "192.168.50.23"
+    assert facts["probe"]["status"] == "PASS"
+    assert env["GZ_IP"] == "192.168.50.23" and env["GZ_PARTITION"] == runner.PARTITION
+    probe_command, probe_kwargs = commands[-1]
+    assert probe_command[:2] == ["gz", "topic"] and "-p" in probe_command
+    assert probe_kwargs["env"]["GZ_IP"] == "192.168.50.23"
+    assert probe_kwargs["env"]["GZ_PARTITION"] == runner.PARTITION
+    assert record["gz_transport_host_capability"]["probe"]["output_sha256"]
+    assert "published one message" not in json.dumps(record)
 
 
-def test_gz_transport_capability_fails_if_udp_socket_close_fails():
-    class CloseFailureSocket:
-        def bind(self, _address):
-            pass
+def test_every_campaign_component_spawn_inherits_the_verified_partition_and_gz_ip(tmp_path, monkeypatch):
+    captured = []
+    class Child:
+        pid = 501
+    def popen(_command, *, env, **_kwargs):
+        captured.append(dict(env))
+        return Child()
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(runner, "_process_group_members", lambda pgid: {
+        "live_member_pids": [pgid], "zombie_member_pids": [], "verified": True,
+        "inspection_errors": []})
+    env = {"GZ_IP": "192.168.50.23", "GZ_PARTITION": runner.PARTITION}
+    ledger = {}
+    for name in ("bootstrap", "composite", "cpp_observer", "gate_b_observer"):
+        runner._spawn_owned_process(["fake", name], name=name, cwd=tmp_path, env=env,
+            log_path=tmp_path / f"{name}.log", processes=[], ownership_ledger=ledger)
+    assert len(captured) == 4
+    assert all(row["GZ_IP"] == "192.168.50.23" and row["GZ_PARTITION"] == runner.PARTITION
+               for row in captured)
 
-        def close(self):
-            raise PermissionError("close denied")
 
-    with pytest.raises(RuntimeError, match=(
-        "^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:UDP_LOOPBACK_PERMISSION_DENIED$"
-    )):
-        runner.validate_gz_transport_host_capability(
-            {}, runner.PARTITION, interface_enumerator=lambda: [(1, "lo")],
-            socket_factory=lambda *_args: CloseFailureSocket(),
-            command_runner=lambda *_a, **_k: pytest.fail("gz probe follows successful UDP close"),
-        )
-
-
-@pytest.mark.parametrize(("interfaces", "socket_error", "command_error", "returncode", "output", "reason"), [
-    (PermissionError(), None, None, 0, "", "INTERFACE_ENUMERATION_PERMISSION_DENIED"),
-    (OSError(), None, None, 0, "", "INTERFACE_ENUMERATION_OS_ERROR"),
-    ([], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
-    ([(0, "lo")], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
-    ([(1, "")], None, None, 0, "", "INTERFACE_ENUMERATION_EMPTY_OR_MALFORMED"),
-    ([(1, "lo", "extra")], None, None, 0, "", "INTERFACE_ENUMERATION_INVALID"),
-    ([(1, "lo")], PermissionError(), None, 0, "", "UDP_LOOPBACK_PERMISSION_DENIED"),
-    ([(1, "lo")], OSError(), None, 0, "", "UDP_LOOPBACK_OS_ERROR"),
-    ([(1, "lo")], None, subprocess.TimeoutExpired("gz topic -l", 1), 0, "", "GZ_TOPIC_TIMEOUT"),
-    ([(1, "lo")], None, PermissionError(), 0, "", "GZ_TOPIC_PERMISSION_DENIED"),
-    ([(1, "lo")], None, OSError(), 0, "", "GZ_TOPIC_OS_ERROR"),
-    ([(1, "lo")], None, None, 1, "", "GZ_TOPIC_EXIT_NONZERO"),
-    ([(1, "lo")], None, None, 0, "getifaddrs: Operation not permitted", "GZ_TOPIC_TRANSPORT_ERROR_OUTPUT"),
-    ([(1, "lo")], None, None, 0, "Error creating socket: Operation not permitted", "GZ_TOPIC_TRANSPORT_ERROR_OUTPUT"),
+@pytest.mark.parametrize(("mutation", "reason"), [
+    ("missing_route", "DEFAULT_ROUTE_MISSING"),
+    ("docker_interface", "ROUTE_INTERFACE_NOT_PHYSICAL"),
+    ("loopback_source", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
+    ("link_local_source", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
+    ("interface_down", "ROUTE_INTERFACE_DOWN"),
+    ("source_not_on_route_interface", "DEFAULT_ROUTE_SOURCE_NOT_LOCAL"),
+    ("address_interface_mismatch", "ROUTE_INTERFACE_ADDRESS_INVALID"),
 ])
-def test_gz_transport_capability_fails_closed_with_stable_literal(
-    interfaces, socket_error, command_error, returncode, output, reason,
-):
-    from types import SimpleNamespace
-
-    def enumerate_interfaces():
-        if isinstance(interfaces, BaseException):
-            raise interfaces
-        return interfaces
-
-    class FakeSocket:
-        def bind(self, _address):
-            if socket_error:
-                raise socket_error
-
-        def close(self):
-            pass
-
-    def command(_command, **_kwargs):
-        if command_error:
-            raise command_error
-        return SimpleNamespace(returncode=returncode, stdout=output, stderr="")
-
+def test_gz_default_route_selection_fails_closed(tmp_path, mutation, reason):
+    sysfs, base_command = _fake_route_sysfs(tmp_path, interface="docker0",
+                                            physical=mutation != "docker_interface")
+    def command(argv, **kwargs):
+        result = base_command(argv, **kwargs)
+        if mutation == "missing_route" and argv[3:5] == ["route", "show"]:
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        if mutation in {"loopback_source", "link_local_source"} and argv[0:4] == ["ip", "-j", "-4", "route"]:
+            from types import SimpleNamespace
+            source = "127.0.0.1" if mutation == "loopback_source" else "169.254.1.2"
+            return SimpleNamespace(returncode=0, stdout=json.dumps([{"dst":"default","dev":"docker0","metric":100,"prefsrc":source}]), stderr="")
+        if mutation == "interface_down" and argv[0:4] == ["ip", "-j", "-d", "link"]:
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"docker0","flags":[],"operstate":"DOWN"}]), stderr="")
+        if mutation == "source_not_on_route_interface" and argv[0:4] == ["ip", "-j", "-4", "addr"]:
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"docker0","addr_info":[{"family":"inet","local":"192.168.50.99"}]}]), stderr="")
+        if mutation == "address_interface_mismatch" and argv[0:4] == ["ip", "-j", "-4", "addr"]:
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout=json.dumps([{"ifname":"other0","addr_info":[{"family":"inet","local":"192.168.50.23"}]}]), stderr="")
+        return result
     with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
-        runner.validate_gz_transport_host_capability(
-            {}, runner.PARTITION, interface_enumerator=enumerate_interfaces,
-            socket_factory=lambda *_args: FakeSocket(), command_runner=command,
-        )
+        runner.validate_gz_transport_host_capability({}, runner.PARTITION,
+                                                      command_runner=command, sysfs_root=sysfs)
+
+
+@pytest.mark.parametrize(("mode", "reason"), [
+    ("timeout", "GZ_TOPIC_PUBLISH_TIMEOUT"),
+    ("nonzero", "GZ_TOPIC_PUBLISH_EXIT_NONZERO"),
+    ("unreachable", "GZ_TOPIC_PUBLISH_TRANSPORT_ERROR"),
+])
+def test_gz_publish_probe_fails_closed_and_records_sanitized_result(tmp_path, mode, reason):
+    from types import SimpleNamespace
+    sysfs, base_command = _fake_route_sysfs(tmp_path)
+    def command(argv, **kwargs):
+        if argv[:2] == ["gz", "topic"]:
+            if mode == "timeout":
+                raise subprocess.TimeoutExpired(argv, 1)
+            return SimpleNamespace(returncode=2 if mode == "nonzero" else 0,
+                                   stdout="", stderr="Network is unreachable" if mode == "unreachable" else "failed")
+        return base_command(argv, **kwargs)
+    record = {}
+    with pytest.raises(RuntimeError, match=f"^GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:{reason}$"):
+        runner.validate_gz_transport_host_capability({}, runner.PARTITION,
+                                                      command_runner=command, sysfs_root=sysfs, record=record)
+    facts = record["gz_transport_host_capability"]
+    assert facts["interface"] == "enp2s0" and facts["ipv4"] == "192.168.50.23"
+    assert facts["status"] == "FAIL"
+
+
+def test_preacquire_gz_probe_failure_persists_sanitized_route_and_probe_facts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    evidence = tmp_path / "evidence"
+    sysfs, base_command = _fake_route_sysfs(tmp_path)
+    def command(argv, **kwargs):
+        if argv[:2] == ["gz", "topic"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="Network is unreachable")
+        return base_command(argv, **kwargs)
+    monkeypatch.setattr(runner, "prepare_ros_environment", lambda *_args: {"PATH": "/fake"})
+    monkeypatch.setattr(runner, "host_preflight", lambda env, worktree, run_directory, partition,
+                        map_root, fuel_root, pins, runtime_python, record: _preflight_transport_probe(
+                            env, partition, record, command, sysfs))
+    guard_path = runtime / "guard.json"
+    guard = {"state": runner.PENDING, "capacity": 1, "acquisition_count": 0,
+             "runtime_authorization": "NOT_GRANTED"}
+    runner._atomic_write(guard_path, guard)
+    lock = guard_path.with_suffix(".json.lock")
+    record = {"run_id": runner.RUN_ID, "partition": runner.PARTITION,
+              "guard_state_before": runner.PENDING,
+              "call_counts": {"runner": 1, "bootstrap": 0, "composite": 0,
+                              "cpp_observer": 0, "gate_b_observer": 0}}
+    result = runner.preacquire_preflight(runtime, {}, evidence, runner.PARTITION,
+        tmp_path / "map", tmp_path / "fuel", {}, guard_path, lock, guard, {}, "a" * 40,
+        runner.INTEGRATION_BASE, Path(runner.RUNTIME_PYTHON_PATH), record)
+    assert result[2] is None and lock.exists() is False
+    stored = runner.load_canonical_json(evidence / "run_record.json")
+    capability = stored["gz_transport_host_capability"]
+    assert capability["interface"] == "enp2s0" and capability["ipv4"] == "192.168.50.23"
+    assert capability["partition"] == runner.PARTITION and capability["probe"]["status"] == "FAIL"
+    assert "Network is unreachable" not in json.dumps(stored)
+    assert (evidence / "preflight_failure.json").is_file()
+
+
+def _preflight_transport_probe(env, partition, record, command, sysfs):
+    return runner.validate_gz_transport_host_capability(
+        env, partition, command_runner=command, sysfs_root=sysfs, record=record)
 
 
 def test_ros_discovery_capability_accepts_empty_graph_and_uses_no_daemon_probe():
@@ -769,16 +847,20 @@ def test_ros_discovery_capability_fails_closed_with_stable_literal(mode, reason)
 
 @pytest.mark.parametrize(("acceptance", "record_extra", "teardown", "expected"), [
     ({"all": True}, {"pre_teardown_failure": "RunnerInterruptedBySignal:RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM"},
-     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+      "verified": True, "graceful": True, "escalation_history": []},
      "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
     ({"all": True}, {"pre_teardown_failure": "RuntimeError:campaign failed"},
-     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+      "verified": True, "graceful": True, "escalation_history": []},
      "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
     ({"all": True}, {},
-     {"completed": True, "clean": True, "order_correct": True, "verified": True},
+     {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+      "verified": True, "graceful": True, "escalation_history": []},
      "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"),
     ({"all": True}, {},
-     {"completed": True, "clean": False, "order_correct": True, "verified": False},
+     {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+      "verified": True, "graceful": False, "escalation_history": [{"signal": "SIGTERM"}]},
      "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"),
 ])
 def test_terminal_verdict_and_real_artifacts_include_all_failure_conditions(
@@ -819,7 +901,8 @@ def test_sigterm_during_finalization_rewrites_durable_fail_record(tmp_path, monk
     monkeypatch.setattr(runner, "_atomic_write", interrupt_first_write)
     result = runner.persist_terminal_evidence(
         {"call_counts": {"runner": 1}}, {"all": True},
-        {"completed": True, "clean": True, "order_correct": True, "verified": True},
+        {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+         "verified": True, "graceful": True, "escalation_history": []},
         run_directory, handler)
     assert result["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
     assert "RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM" in result["failure_reason_literals"]
@@ -852,7 +935,8 @@ def test_process_group_kill_wait_and_proc_errors_cannot_report_clean(tmp_path, m
     run_directory.mkdir()
     verdict = runner.persist_terminal_evidence(
         {"call_counts": {"runner": 1, "bootstrap": 1, "composite": 1}}, {"all": True},
-        {"completed": True, "clean": False, "order_correct": True, "verified": False,
+        {"completed": True, "clean": False, "ordered": True, "order_correct": True,
+         "verified": False, "graceful": False, "escalation_history": [{"signal": "SIGTERM"}],
          "errors": result["errors"]}, run_directory, runner.SigtermHandler())
     assert verdict["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
     assert runner.load_canonical_json(run_directory / "run_record.json")["terminal_outcome"].endswith(
@@ -961,9 +1045,8 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
     def host(*_args):
         calls.append("host")
         runner.validate_gz_transport_host_capability(
-            {}, runner.PARTITION, interface_enumerator=lambda: (_ for _ in ()).throw(PermissionError()),
-            socket_factory=lambda *_: pytest.fail("UDP probe must follow interfaces"),
-            command_runner=lambda *_a, **_k: pytest.fail("gz probe must follow UDP"),
+            {}, runner.PARTITION,
+            command_runner=lambda *_a, **_k: (_ for _ in ()).throw(PermissionError("route denied")),
         )
     monkeypatch.setattr(runner, "host_preflight", host)
     monkeypatch.setattr(runner, "acquire_guard", lambda *_a, **_k: pytest.fail("guard must remain pending"))
@@ -975,7 +1058,7 @@ def test_preacquire_transport_failure_writes_evidence_without_guard_or_process(
         Path(runner.RUNTIME_PYTHON_PATH), record,
     )
     assert calls == ["host"] and result[3]["failure_reason_literals"] == [
-        "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:INTERFACE_ENUMERATION_PERMISSION_DENIED"]
+        "GZ_TRANSPORT_HOST_CAPABILITY_UNAVAILABLE:DEFAULT_ROUTE_COMMAND_FAILED"]
     assert record["guard_state_after"] == runner.PENDING
     assert record["call_counts"] == {"runner": 1, "bootstrap": 0, "composite": 0,
                                       "cpp_observer": 0, "gate_b_observer": 0}
@@ -1256,7 +1339,8 @@ def test_success_path_acquires_guard_before_any_campaign_process_and_finalizes_a
     runner.validate_distinct_process_groups(bootstrap, composite)
     result = runner.finalise_after_teardown(
         {}, {"guard_acquired_once": True, "runtime_acceptance": True},
-        {"completed": True, "clean": True, "order_correct": True, "verified": True},
+        {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+         "verified": True, "graceful": True, "escalation_history": []},
     )
     assert result["terminal_outcome"].endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
     assert all(result["acceptance"].values())
@@ -1642,7 +1726,7 @@ def test_rclpy_import_failure_after_ros_overlay_source_is_preacquire_and_not_gua
     monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs: type("R", (), {
         "returncode": 0, "stdout": json.dumps(facts), "stderr": ""})())
 
-    def sourced_host_preflight(env, _worktree, _run_directory, _partition, _map, _fuel, _pins, runtime_python):
+    def sourced_host_preflight(env, _worktree, _run_directory, _partition, _map, _fuel, _pins, runtime_python, _record=None):
         assert "AMENT_PREFIX_PATH" in env
         phases.append("runtime_interpreter_probe_after_source")
         return runner.validate_runtime_python_environment(runtime_python, env, overlay)
@@ -1903,7 +1987,9 @@ def test_verified_ledger_all_acceptance_true_has_clean_ordered_pass_bundle(tmp_p
         previous_sigterm_handler=runner.signal.getsignal(runner.signal.SIGTERM), ownership_ledger=ledger)
     assert result["terminal_outcome"].endswith("PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
     assert runner.terminal_exit_code(result) == 0 and result["failure_reason_literals"] == []
-    assert all(result["teardown"][key] for key in ("completed", "clean", "order_correct", "verified"))
+    assert all(result["teardown"][key] for key in
+               ("completed", "clean", "ordered", "order_correct", "verified", "graceful"))
+    assert result["teardown"]["escalation_history"] == []
     assert order == [302, 301]
     assert result["call_counts"] == {"runner":1,"bootstrap":1,"composite":1,"cpp_observer":1,"gate_b_observer":1}
     _assert_real_bundle(directory)

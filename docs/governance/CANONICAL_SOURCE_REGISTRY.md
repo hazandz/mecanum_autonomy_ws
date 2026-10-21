@@ -1217,3 +1217,10 @@ Refreshed entries:
 - `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`: SHA-256 `9342e542ba6d500a47680730869a1d8f6367f0f39d362192b9ad2a10374c048c`, 59703 bytes.
 
 Offline result: 37/37 source pins, full Step-7 tools 306, bringup 249, RL 715, external six-package build PASS, observer 13 and ROSIDL 8 PASS, installed runtime-artifact equality 15/15 PASS. No runtime invocation.
+
+
+### Run005 attempt_002 — GZ_IP transport binding / graceful teardown corrective L2
+
+Base/sole parent `f72ac2112e0d1545a72b6a9a12764664d508aaa8`; exact direct scope 13 paths. Source pins remain 37 unique entries, membership unchanged; existing hashes/sizes are refreshed from current bytes. Gazebo Transport selects and validates a local IPv4 assigned to the selected IPv4 default-route interface, passes it as `GZ_IP` with the exact campaign `GZ_PARTITION`, and performs one bounded transport publish probe before guard acquisition. Runtime PASS requires teardown completed, clean, ordered, verified and graceful with no escalation history.
+
+Invocation_007 is immutable historical runtime failure: bootstrap READY; composite readiness timeout after multicast `Network is unreachable`; final snapshot was clean but `lifecycle_manager` required escalation, so teardown was not graceful. It is not a PASS. No historical runtime artifact was modified and no runtime was run for this corrective.

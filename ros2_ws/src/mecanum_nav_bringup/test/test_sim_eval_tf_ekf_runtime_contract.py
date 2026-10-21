@@ -613,6 +613,29 @@ RUN005_VALIDATOR_SOURCE_PATHS = RUN005_VALIDATOR_CORRECTIVE_PATHS - {
     "docs/governance/PROJECT_EXECUTION_PLAN.md",
     "docs/governance/PROJECT_PROGRESS_LEDGER.md",
 }
+RUN005_GZ_IP_GRACEFUL_BASE = "f72ac2112e0d1545a72b6a9a12764664d508aaa8"
+RUN005_GZ_IP_GRACEFUL_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
 
 def _candidate_changed_paths():
     status = subprocess.run(
@@ -628,6 +651,27 @@ def _candidate_changed_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
         capture_output=True, text=True,
     ).stdout.strip() if not dirty else None
+    if head == RUN005_GZ_IP_GRACEFUL_BASE or parent == RUN005_GZ_IP_GRACEFUL_BASE:
+        if dirty:
+            changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
+            if changed not in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS):
+                raise AssertionError(f"Run005 GZ_IP/graceful candidate scope is not exact: {sorted(changed)}")
+        elif parent == RUN005_GZ_IP_GRACEFUL_BASE:
+            changed = set(subprocess.run(
+                ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+                check=True, capture_output=True, text=True,
+            ).stdout.splitlines())
+            assert changed == RUN005_GZ_IP_GRACEFUL_PATHS
+        else:
+            changed = set()
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert set(untracked) <= changed
+        assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
+                       or "/__pycache__/" in path for path in untracked), untracked
+        return changed, dirty
     if head == RUN005_VALIDATOR_CORRECTIVE_BASE or parent == RUN005_VALIDATOR_CORRECTIVE_BASE:
         if dirty:
             changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
@@ -755,6 +799,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
     ).stdout.strip() == RUN004_CORRECTIVE_BASE
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
+        RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
     )
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
@@ -770,24 +815,16 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
 
 
 def test_run005_validator_identity_corrective_scope_is_exact():
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
+    historical = set(subprocess.run(
+        ["git", "diff", "--name-only",
+         f"{RUN005_VALIDATOR_CORRECTIVE_BASE}..{RUN005_GZ_IP_GRACEFUL_BASE}"], cwd=ROOT,
         check=True, capture_output=True, text=True,
-    ).stdout
-    if status.strip():
-        changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
-        assert changed == RUN005_VALIDATOR_SOURCE_PATHS or changed == RUN005_VALIDATOR_CORRECTIVE_PATHS
-        assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
-                              check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
-    else:
-        assert subprocess.run(["git", "rev-parse", "HEAD^"], cwd=ROOT,
-                              check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
-        changed = set(subprocess.run(
-            ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
-            check=True, capture_output=True, text=True,
-        ).stdout.splitlines())
-        assert changed == RUN005_VALIDATOR_CORRECTIVE_PATHS
-    assert not any(path.startswith(("build/", "install/", "log/")) for path in changed)
+    ).stdout.splitlines())
+    assert historical == RUN005_VALIDATOR_CORRECTIVE_PATHS
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_GZ_IP_GRACEFUL_BASE}^"], cwd=ROOT,
+                          check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
+    current, _dirty = _candidate_changed_paths()
+    assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS)
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -832,10 +869,10 @@ def test_run005_validator_identity_corrective_scope_is_exact():
         "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_00",
         "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/tools/run_wp06_6f_tf_ekf_run00",
     )
-    assert not any(any(path.startswith(fragment) for fragment in protected_fragments) for path in changed)
+    assert not any(any(path.startswith(fragment) for fragment in protected_fragments) for path in current)
     assert all(path.startswith("artifacts/simulation/step07_nav2_baseline_campaign/") or
                path.startswith("ros2_ws/src/") or path.startswith("docs/governance/")
-               for path in changed)
+               for path in current)
 
 
 def test_step07_lifecycle_endpoint_and_distinct_qos_contract_across_nodes():
@@ -978,6 +1015,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
     assert set(run004_host_diff) == RUN004_HOST_CORRECTIVE_PATHS
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
+        RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -997,3 +1035,8 @@ def test_historical_runtime_conservation_and_candidate_scope():
             check=True, capture_output=True,
         ).stdout
         assert (ROOT / relative).read_bytes() == original, relative
+
+
+def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
+    changed, _dirty = _candidate_changed_paths()
+    assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS)

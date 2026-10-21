@@ -2082,3 +2082,31 @@ L1 corrective trên base `c8e34ead42c9c3fa6d79bf73dc221a9cc599d42a`, exact direc
 Focused validator tests: 15 passed; focused validator/scope tests: 9 passed. Full Step-7 tools sau pin refresh: 306 passed (trước refresh: 305 passed, 1 stale-pin failure; sau cập nhật entry hiện hữu đã chạy lại và xanh). `mecanum_nav_bringup/test`: 249 passed; `mecanum_nav_rl/test` với external install base: 715 passed; six-package external build PASS; observer 13 cases và ROSIDL 8 cases PASS; `py_compile` 3 Python files PASS; installed/source runtime artifact equality 15/15 PASS. Source pins 37/37 SHA-256/size; exact current scope 10 path; canonical JSON/duplicate-key/encoding, YAML/XML, historical Git-blob and Ledger prefix checks PASS.
 
 Đây chỉ là sửa identity/verdict của evidence validator. Không có official runner/runtime invocation; Run005 guard seed vẫn PENDING, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, không lock; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. Next action: independent audit exact corrective commit.
+
+
+### 2026-10-21 — Run005 attempt_002 GZ_IP transport binding / graceful teardown L2 corrective
+
+| Field | Value |
+|---|---|
+| Work item | STEP07_RUN005_ATTEMPT_002_GZ_IP_TRANSPORT_BINDING_AND_GRACEFUL_TEARDOWN |
+| Parent / integration base | f72ac2112e0d1545a72b6a9a12764664d508aaa8 / f7f98c683d59cf4c62e462da9f37d4ffb2455c80 |
+| Scope | Exact 13-path current corrective set; existing 37 unique source pins, unchanged membership. |
+| Change | Validate one local IPv4 on the structured IPv4 default-route interface; bind campaign `GZ_IP` with exact `GZ_PARTITION` through all campaign children; bounded one-shot transport publish probe before guard; distinguish clean from graceful teardown and reject PASS after escalation. |
+| Historical invocation_007 | Immutable runtime failure: bootstrap ready; composite readiness timeout with multicast `Network is unreachable`; final snapshot clean but lifecycle_manager required escalation. Not graceful and not PASS. No historical artifact changed. |
+| Verification | Focused runner/validator 159 PASS; scope 4 PASS; bringup 250 PASS; RL 715 PASS; external six-package build PASS; observer 13 and ROSIDL 8 PASS; py_compile PASS; installed/source equality 15/15 PASS. Full Step-7 tools is rerun after one-time pin refresh. |
+| Guard / evidence ceiling | Seed PENDING, capacity 1, acquisition 0, runtime authorization NOT_GRANTED, no lock. No runtime executed in this corrective; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT. |
+| Next action | Independent audit exact corrective commit; any later runtime needs separate exact Owner authorization. |
+
+
+### Run005 GZ_IP/graceful corrective — verification correction
+
+`supersedes`: trường Verification của entry “2026-10-21 — Run005 attempt_002 GZ_IP transport binding / graceful teardown L2 corrective” ngay phía trên; parent-byte-prefix và lịch sử còn lại không đổi.
+
+| Check | Result |
+|---|---|
+| Scope / guard-contract focused | 35 passed; exact historical/current scope focused 4 passed. |
+| Full Step-7 tools | 307 passed sau làm mới pin và thêm guard regression test. |
+| Full bringup / RL | 250 / 715 passed; RL dùng `/tmp/run005_l2_colcon_install`. |
+| Build / observer / ROSIDL | Sáu package external build PASS; observer 13 và ROSIDL 8 PASS. |
+| Python / installed source | `py_compile` PASS; installed runtime artifacts 15/15 byte-equal. |
+| Runtime | Không chạy runner/runtime; invocation_007 giữ nguyên là historical failure, teardown không graceful. |

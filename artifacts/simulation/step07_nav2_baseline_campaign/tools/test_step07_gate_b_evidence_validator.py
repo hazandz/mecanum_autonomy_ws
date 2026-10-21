@@ -34,7 +34,9 @@ def test_terminal_record_requires_run005_identity_acceptance_and_verified_final_
                              "bootstrap_readiness": True, "composite_readiness": True,
                              "process_group_teardown_clean": True,
                              "teardown_order_and_count_correct": True},
-              "teardown": {"completed": True, "clean": True, "order_correct": True, "verified": True},
+              "teardown": {"completed": True, "clean": True, "ordered": True,
+                           "order_correct": True, "verified": True, "graceful": True,
+                           "escalation_history": []},
               "failure_reason_literals": [],
               "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"}
     assert validate_run_record(passed)["pass"]
@@ -63,7 +65,9 @@ def _run005_record():
                            "bootstrap_readiness": True, "composite_readiness": True,
                            "process_group_teardown_clean": True,
                            "teardown_order_and_count_correct": True},
-            "teardown": {"completed": True, "clean": True, "order_correct": True, "verified": True},
+            "teardown": {"completed": True, "clean": True, "ordered": True,
+                         "order_correct": True, "verified": True, "graceful": True,
+                         "escalation_history": []},
             "failure_reason_literals": [],
             "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"}
 
@@ -97,6 +101,9 @@ def test_valid_run005_fail_record_is_accepted_as_a_fail_verdict():
 
 @pytest.mark.parametrize("mutation", [
     lambda record: record["teardown"].update(verified=False),
+    lambda record: record["teardown"].update(graceful=False),
+    lambda record: record["teardown"].pop("graceful"),
+    lambda record: record["teardown"].update(escalation_history=[{"signal": "SIGTERM"}]),
     lambda record: record["failure_reason_literals"].append("SIGTERM"),
 ])
 def test_claimed_run005_pass_with_unverified_teardown_or_failure_literal_is_rejected(mutation):
@@ -341,7 +348,8 @@ def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_pat
     record["config_hash"] = config_hash
     record["acceptance"].update({"observer_acceptance": True, "gate_b_vectors": True})
     record["teardown"].update({"completed": True, "clean": True,
-                               "order_correct": True, "verified": True})
+                               "ordered": True, "order_correct": True, "verified": True,
+                               "graceful": True, "escalation_history": []})
     observer = observer_doc()
     gate = _gate_b_doc(config_hash)
     artifact_values = {

@@ -148,6 +148,29 @@ def test_attempt_002_source_seed_remains_pending_and_historical_invocations_are_
     assert historical["immutable"] is True
 
 
+def test_attempt_002_pass_requires_graceful_teardown_and_invocation_007_is_immutable_failure():
+    document = load_guard(GUARD)
+    verdict = document["terminal_verdict_contract"]
+    assert "graceful" in verdict["pass_requires"]
+    assert "no escalation history" in verdict["pass_requires"]
+    assert "any SIGTERM or SIGKILL escalation makes graceful=false" in verdict[
+        "graceful_definition"
+    ]
+
+    historical = document["run005_attempt_002_invocation_007_disposition"]
+    assert historical["immutable"] is True
+    assert historical["runtime_execution"] is True
+    assert historical["guard_consumed"] is True
+    assert historical["historical_terminal_classification"] == "RUNTIME_FAILURE_NOT_PASS"
+    assert historical["bootstrap"] == "READY"
+    assert historical["composite"] == "READINESS_TIMEOUT"
+    assert historical["raw_transport_failure"] == "multicast Network is unreachable"
+    assert historical["teardown_final_snapshot_clean"] is True
+    assert historical["lifecycle_manager_escalation_required"] is True
+    assert historical["teardown_graceful"] is False
+    assert historical["retry_performed"] is False
+
+
 def test_run005_historical_dispositions_match_the_immutable_parent_guard_blob():
     historical_raw = subprocess.run(
         ["git", "show", "bee34dd2d689fe585ae12000058b2f2903196659:" +

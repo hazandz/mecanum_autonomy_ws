@@ -158,3 +158,17 @@ The validator now accepts only run ID `STEP07_NAV2_BASELINE_RUN_005` and the exa
 The active Run005 source-pin inventory remains 37 unique paths. Three existing entries were refreshed from current source bytes; no path was added. Historical Git-blob verification and prior historical scope records remain unchanged. Offline checks passed after pin refresh: Step-7 tools 306, bringup 249, RL 715, six-package external build, observer 13 and ROSIDL 8, Python compilation, and 15/15 installed/source runtime-artifact equality. No official runner or runtime was invoked.
 
 Guard seed: `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, no lock. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+## Corrective L2 — IPv4 transport binding và graceful teardown
+
+Base / sole parent: `f72ac2112e0d1545a72b6a9a12764664d508aaa8`; tiếp tục Run005 attempt_002. Corrective này xử lý hai root cause: Gazebo Transport phải bind vào đúng một IPv4 local hợp lệ trên interface của default route qua `GZ_IP`, và kết quả cuối chỉ được PASS nếu mọi owned process group thoát graceful ngay ở stop stage đầu tiên, không có SIGTERM/SIGKILL escalation.
+
+Runner đọc structured IPv4 default-route, xác minh interface đang UP và địa chỉ local thuộc interface đó; loại route/IP thiếu hoặc mơ hồ, interface virtual/container, địa chỉ loopback/link-local và route/interface không khớp. Nó chạy bounded one-shot `gz topic` publish probe với `GZ_PARTITION` campaign chính xác và `GZ_IP` đã chọn. Probe không khởi chạy simulation. Cùng environment đã xác minh được truyền cho bootstrap, composite và hai observer. Interface/IP cùng kết quả probe đã sanitize được đưa vào pre-acquire evidence.
+
+Teardown record phân biệt `clean`, `verified`, `ordered`, `graceful` và escalation history. Snapshot cuối sạch sau escalation vẫn là `graceful=false`; validator từ chối PASS nếu thiếu cờ graceful hoặc có escalation.
+
+Run005 attempt_002 invocation_007 được ghi nhận là runtime failure bất biến: bootstrap READY, composite readiness timeout với multicast `Network is unreachable`; final teardown snapshot clean nhưng `lifecycle_manager` cần escalation nên teardown không graceful. Không diễn giải invocation này là PASS. Không sửa evidence, guard, lock hoặc runtime worktree lịch sử và không retry.
+
+Sau khi bổ sung regression test guard trong allowlist và làm mới entry pin hiện hữu, Phase A được chạy lại: focused guard/contract 35 PASS; focused scope 4 PASS; full Step-7 tools 307 PASS; full bringup 250 PASS; full RL 715 PASS với external install base; external six-package build PASS; observer 13 và ROSIDL 8 PASS; `py_compile` PASS; installed/source artifacts 15/15 PASS. Source pin inventory giữ 37 unique entries, không đổi membership. Direct scope exact 13 paths từ base nêu trên.
+
+Guard source vẫn `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, không lock. Không có runtime trong corrective này; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. Next action: independent audit exact corrective commit; runtime cần authorization riêng.

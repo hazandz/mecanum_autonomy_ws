@@ -147,15 +147,18 @@ def validate_run_record(record: dict) -> dict:
         raise ValueError("TEARDOWN_EVIDENCE_INVALID")
     teardown_completed = teardown.get("completed") is True
     teardown_clean = teardown.get("clean") is True
-    teardown_ordered = teardown.get("order_correct") is True
+    teardown_ordered = teardown.get("ordered") is True and teardown.get("order_correct") is True
     teardown_verified = teardown.get("verified") is True
+    teardown_graceful = teardown.get("graceful") is True
+    escalation_history = teardown.get("escalation_history")
     failure_literals = record.get("failure_reason_literals")
     if (type(failure_literals) is not list
             or any(type(item) is not str or not item for item in failure_literals)):
         raise ValueError("FAILURE_REASON_LITERALS_INVALID")
     final_pass = (all(acceptance.values()) and failure_literals == []
                   and teardown_completed and teardown_clean and teardown_ordered
-                  and teardown_verified)
+                  and teardown_verified and teardown_graceful
+                  and type(escalation_history) is list and escalation_history == [])
     expected_outcome = (
         "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
         if final_pass else "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
