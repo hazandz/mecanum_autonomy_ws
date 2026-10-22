@@ -1242,3 +1242,23 @@ Current guard/evidence/manifest SHA-256: `6539bda341ace90f2c595572063b8c95ba41ea
 ## Run005 attempt_002 — L1 costmap integer / teardown escalation corrective (2026-10-22)
 
 Review candidate source base is `a383f258b02a0f9a22b2dc72fb937dbcaba6973a` on `step07-integrated-nav2-gateb-campaign-f7f98c6`. The runtime YAML encodes required local costmap `width`/`height` as integer 4; global costmap defines neither. Runner evidence treats any launcher-recorded SIGTERM/SIGKILL escalation after SIGINT as non-graceful, independent of a clean final snapshot. This updates the existing Run005 source selection only; it does not authorize runtime. Invocation_010 remains immutable runtime FAIL from controller_server `InvalidParameterTypeException` on float `height: 4.0` and the subsequent composite readiness timeout. Actual direct diff is 11 paths; authorized allowlist is 12 and additionally permits the unchanged `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py`. Source pins remain 37 unique entries. After the owner-authorized removal of the exactly verified generated `log/`, final verification passed: Step-7 tools 311, bringup 253, RL 715, six-package external build, observer 13, ROSIDL 8, py_compile and installed/source equality 15/15. No runtime was performed. Evidence ceiling remains source/offline only; independent audit is required.
+
+
+### 2026-10-22 — Run005 attempt_002 L1 QoS evidence-chain source-pin closure
+
+Base `9fad09f333b93c8f63d9c4044af41d04d40be8c0`, branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. `SOURCE_FREEZE=TRUE` after offline checks. Inventory: 38 unique source pins, including the required runtime QoS implementation `safety_lifecycle_node.py`; observer test source is not pinned. Actual direct scope is 14 paths; authorized allowlist is 15, with only the decision path unchanged.
+
+Current pin values (SHA-256 / byte size):
+
+| Path | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `d2d5a723f1c536cb9bb355fbf84617819984dd5ba1aa3c0a99daea887de4e0df` | 106593 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `21282b5e7898debdec6f9295ba88b09a5f65a779cf84d2de6f88bca316ee6b55` | 35137 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `ad846d5656ed56a89b2a345f28f7c900b0691d7cb6483a88e7060e39fe3b4602` | 120106 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `81cd4981048e8750983661513a1c04d2730479d0a6b468d4f12e570d5a9d07fa` | 30062 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `c6077f7a8c74e9ec4bc5e3bdf93ef1185b6392496cc2e624dafcdea08db0819f` | 18452 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `ca2eb5aded5b4289f7418645bff5c1232aeaed40cc8d4b05391e11eb97c1c642` | 74595 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `327a3230d83499d549c6656df186562b7b209a348b42db7b26342882b2f21051` | 35278 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py` | `d4c7bdc19498052c32d859ccf727d12de4746cda09511ff18f822e695758609d` | 5318 |
+
+Offline verification: focused runner/validator/guard 181; Step-7 313; bringup 254; RL 715; six-package external build; observer 14 and ROSIDL 8; `py_compile` six files; installed/source equality 15 data artifacts plus 2 QoS modules; 38/38 pins and exact scope/history/canonical/diff checks PASS. No runtime. Invocation_011 remains historical FAIL, unchanged. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED/no lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Evidence remains offline-only.

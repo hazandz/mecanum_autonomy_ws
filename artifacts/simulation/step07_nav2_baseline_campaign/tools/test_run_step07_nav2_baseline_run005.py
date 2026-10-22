@@ -227,6 +227,21 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
               "observations/step07_gate_b_observer_node.py")
     module.parent.mkdir(parents=True)
     module.write_bytes(source_module.read_bytes())
+    qos_pin_paths = {
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py":
+            "mecanum_nav_rl.runtime_safety.safety_lifecycle_node",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py":
+            "mecanum_nav_rl.runtime_safety.final_twist_publisher_node",
+    }
+    qos_module_paths = {}
+    for relative, dotted in qos_pin_paths.items():
+        source = worktree / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("# profile source fixture\n")
+        installed = prefixes["mecanum_nav_rl"] / "lib/python3.12/site-packages" / Path(*dotted.split(".")).with_suffix(".py")
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_bytes(source.read_bytes())
+        qos_module_paths[dotted] = installed
     observer = (prefixes["step07_nav2_baseline_runtime_observer"] / "lib/"
                 "step07_nav2_baseline_runtime_observer/step07_nav2_baseline_runtime_observer")
     observer.parent.mkdir(parents=True)
@@ -260,6 +275,13 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
             package = args[3]
             prefix_requests.append(package)
             return SimpleNamespace(stdout=str(prefixes[package]), returncode=0)
+        if len(args) >= 3 and args[1] == "-c" and "print(m.__file__)" in args[2]:
+            dotted = next(name for name in qos_module_paths if name in args[2])
+            return SimpleNamespace(stdout=str(qos_module_paths[dotted]), returncode=0)
+        if args[:2] == ["git", "rev-parse"]:
+            return SimpleNamespace(stdout="c" * 40, returncode=0)
+        if args[:3] == ["git", "remote", "get-url"]:
+            return SimpleNamespace(stdout=runner.EXPECTED_ORIGIN, returncode=0)
         return SimpleNamespace(stdout="ROSIDL_IMPORT_PASS", returncode=0)
 
     original_read_bytes = Path.read_bytes
@@ -284,8 +306,12 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
     monkeypatch.setattr(runner, "stale_partition_processes", lambda _partition: [])
 
+    pins = {relative: {"sha256": "a" * 64, "size_bytes": 10}
+            for relative in qos_pin_paths}
+    pins["ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"] = {
+        "sha256": "a" * 64, "size_bytes": 10}
     result = runner.host_preflight(
-        env, worktree, run_directory, runner.PARTITION, map_root, tmp_path / "fuel", {},
+        env, worktree, run_directory, runner.PARTITION, map_root, tmp_path / "fuel", pins,
         Path(runner.RUNTIME_PYTHON_PATH),
     )
 
@@ -299,6 +325,8 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
         in runner.INSTALLED_FILE_ARTIFACTS
     }
     assert equality_started, "the full host preflight simulation must reach installed byte checks"
+    assert result["qos_implementation_pin_evidence"]["runtime_checkout_head"] == "c" * 40
+    assert all(result["qos_implementation_pin_evidence"]["installed_python_source_byte_equality"].values())
 
 
 @pytest.mark.parametrize("package", runner.NAV2_RUNTIME_PACKAGES)
@@ -2234,5 +2262,5 @@ def test_composite_readiness_checks_actual_data_before_exact_single_rearm(monkey
     source=RUNNER_PATH.read_text()
     assert source.index('composite_member["readiness"] = _wait_ready') < source.index('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"')
     assert source.count('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"') == 1
-    assert 'duration_sec:=30' in source and 'duration_sec:=1800' not in source
+    assert 'duration_sec:=1800' in source and 'os.killpg(cpp_member["pgid"], signal.SIGINT)' in source
     assert '"--peer-evidence-path", str(observer_path)' in source

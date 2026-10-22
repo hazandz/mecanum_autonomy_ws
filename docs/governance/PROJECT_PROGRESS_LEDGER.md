@@ -2154,3 +2154,37 @@ The Owner-authorized one-time cleanup precheck confirmed exactly the 11 reported
 After the scope correction, Phase A passed: bringup 253, RL 715 with external install base, focused scope-chain tests 5, full Step-7 tools 311 after pin refresh, six-package external build, observer 13, ROSIDL 8, `py_compile` four files, and installed/source equality 15/15. All generated build/test/log output remained under `/tmp`; no worktree `build/`, `install/`, or `log/` remains. Source pins retain 37 unique paths; membership is unchanged.
 
 Guard remains PENDING, capacity 1, acquisition 0, runtime authorization NOT_GRANTED, no lock. Gate B NOT_STARTED and RUNTIME_APPROVED NOT_APPROVED. No runtime invocation occurred. Evidence ceiling remains source/offline only.
+
+
+### 2026-10-22 — Run005 attempt_002 QoS evidence-chain L1 source-pin closure
+
+`supersedes`: current candidate pin/scope metadata only; invocation_011 and all earlier runtime outcomes remain immutable.
+
+| Item | Result |
+|---|---|
+| Branch / base | `step07-integrated-nav2-gateb-campaign-f7f98c6` / `9fad09f333b93c8f63d9c4044af41d04d40be8c0` |
+| Phase A | `SOURCE_FREEZE=TRUE`; offline-only |
+| Actual direct paths / authorized allowlist | 14 / 15; decision path is the sole authorized unchanged path |
+| Source pins | 38 unique, all SHA-256 and byte sizes verified |
+| Focused runner/validator/guard; Step-7 | 181; 313 PASS |
+| Bringup; RL | 254; 715 PASS (external install `/tmp/run005_qos_final_install`) |
+| Build / observer / ROSIDL | Six-package external build PASS; 14/14 observer; 8/8 ROSIDL |
+| Python / byte equality | `py_compile` 6 files PASS; 15/15 data artifacts and 2/2 QoS modules byte-equal |
+| Runtime | None invoked; invocation_011 remains historical runtime FAIL and unchanged |
+| Guard | PENDING, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`, no lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED |
+| Evidence ceiling | `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT` |
+
+No Safety, Nav2, controller, Gazebo, launch, or public interface semantics changed. The new pin is the existing runtime source `safety_lifecycle_node.py`; test-only observer source is not pinned. Decision wording remains unchanged. Parent Ledger bytes are an exact prefix.
+
+Governance hashes (SHA-256 / byte size): guard `77711360f20dfaf22bd2dd5f9f1a6b76cb7d630ea1b5f3e6d1618e4482dc0761` / 28563; evidence `d20cac642752803d7009a6610ce211d9eaec287c0a08d2fb0c4e1df3c365f1b5` / 48417; manifest `6ba081717bf1767dfa644b055e000398daf4c47788b2764caa61805cea4b63a4` / 44581; Registry `19ca00299aff85295bfd377f0b3759a14613624ef243d32ed61acc2b8d958555` / 191945; PEP `c551a9b6a0e3a514ad26615a0a31fe76c100e36ad56571709ac4c37e0cbafa75` / 148527.
+
+
+### Run005 L1 source-pin closure — hash-reference correction
+
+`supersedes`: only the guard/evidence/manifest hashes recorded in the immediately preceding 2026-10-22 QoS evidence-chain closure entry; no test result, scope, pin, or historical runtime disposition changes. This append-only correction synchronizes `guard_seed_sha256` after final scope metadata was written.
+
+- Guard: `77711360f20dfaf22bd2dd5f9f1a6b76cb7d630ea1b5f3e6d1618e4482dc0761` (28563 bytes)
+- Evidence: `2ebb6a8ec506c8f4c383b189600ea5b9f336e11975ed53faf5fec56084ce5593` (48417 bytes)
+- Manifest: `09ae1dea2f396caec042903bc14f1835c106259818ffaa05b8868e325c4c01cf` (44581 bytes)
+
+Actual scope remains 14 paths; authorized allowlist 15 with the decision document unchanged. `SOURCE_FREEZE=TRUE`; guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; no runtime.

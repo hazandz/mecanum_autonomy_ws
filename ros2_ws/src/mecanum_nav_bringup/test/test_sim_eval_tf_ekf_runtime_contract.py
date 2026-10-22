@@ -691,6 +691,41 @@ RUN005_NAV2_HEIGHT_TEARDOWN_PATHS = RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS | 
 RUN005_NAV2_HEIGHT_TEARDOWN_AUTHORIZED_ALLOWLIST = RUN005_NAV2_HEIGHT_TEARDOWN_PATHS | {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
 }
+RUN005_QOS_TRACE_BASE = "9fad09f333b93c8f63d9c4044af41d04d40be8c0"
+RUN005_QOS_TRACE_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
+RUN005_QOS_TRACE_PHASE_A5_PATHS = RUN005_QOS_TRACE_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+}
+RUN005_QOS_TRACE_PATHS = {
+    *RUN005_QOS_TRACE_PHASE_A5_PATHS,
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST = RUN005_QOS_TRACE_PATHS | {
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+}
+
+def test_run005_qos_trace_actual_scope_and_allowlist_are_distinct_and_exact():
+    assert len(RUN005_QOS_TRACE_PHASE_A_PATHS) == 7
+    assert len(RUN005_QOS_TRACE_PHASE_A5_PATHS) == 11
+    assert len(RUN005_QOS_TRACE_PATHS) == 14
+    assert len(RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST) == 15
+    assert RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST - RUN005_QOS_TRACE_PATHS == {
+        "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    }
+
 
 def _candidate_changed_paths():
     status = subprocess.run(
@@ -706,6 +741,27 @@ def _candidate_changed_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
         capture_output=True, text=True,
     ).stdout.strip() if not dirty else None
+    if head == RUN005_QOS_TRACE_BASE or parent == RUN005_QOS_TRACE_BASE:
+        if dirty:
+            changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
+            if changed not in (RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS):
+                raise AssertionError(f"Run005 QoS/trace corrective scope is not exact: {sorted(changed)}")
+        elif parent == RUN005_QOS_TRACE_BASE:
+            changed = set(subprocess.run(
+                ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+                check=True, capture_output=True, text=True,
+            ).stdout.splitlines())
+            assert changed in (RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS)
+        else:
+            changed = set()
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert set(untracked) <= changed
+        assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
+                       or "/__pycache__/" in path for path in untracked), untracked
+        return changed, dirty
     if head == RUN005_NAV2_HEIGHT_TEARDOWN_BASE or parent == RUN005_NAV2_HEIGHT_TEARDOWN_BASE:
         if dirty:
             changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
@@ -900,6 +956,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
         RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS, RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
+        RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS,
     )
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
@@ -915,7 +972,10 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
 
 
 def test_run005_nav2_height_corrective_distinguishes_actual_diff_from_authorized_allowlist():
-    changed, _dirty = _candidate_changed_paths()
+    changed = set(subprocess.run(
+        ["git", "diff", "--name-only", f"{RUN005_NAV2_HEIGHT_TEARDOWN_BASE}..{RUN005_QOS_TRACE_BASE}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines())
     assert changed == RUN005_NAV2_HEIGHT_TEARDOWN_PATHS
     assert len(changed) == 11
     assert len(RUN005_NAV2_HEIGHT_TEARDOWN_AUTHORIZED_ALLOWLIST) == 12
@@ -938,7 +998,8 @@ def test_run005_validator_identity_corrective_scope_is_exact():
     assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
                        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
-                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
+                       RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS)
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -1132,6 +1193,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
         RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS, RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
+        RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS,
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -1158,11 +1220,13 @@ def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
     assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
                        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
-                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
+                       RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS)
 
 
 def test_run005_default_route_resolver_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
     assert changed in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
-                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
+                       RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS)

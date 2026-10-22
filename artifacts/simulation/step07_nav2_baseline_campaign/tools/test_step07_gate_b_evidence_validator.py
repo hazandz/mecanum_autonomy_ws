@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from step07_gate_b_evidence_validator import (
+    QOS_PROFILE_SOURCE_PATHS, canonical_navigation_evidence_chain,
     load_json, validate_gate_b_document, validate_observer,
     validate_run_directory, validate_run_record, validate_vector_samples,
 )
@@ -138,6 +139,15 @@ def observer_doc():
         "lifecycle": [{"episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
                         "primary_state": 2, "barrier_state": 1, "motion_permitted": True}],
         "receipt": [{"episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3}],
+        "safety_state": [], "qos_history_depth_observability": [
+            {"topic": "/mecanum/safety_lifecycle_state", "node_name": name,
+             "endpoint_type": direction, "history_depth_status": "OBSERVED_MATCH"}
+            for name, direction in (("safety_lifecycle", "PUBLISHER"),
+                ("safety_supervisor", "SUBSCRIPTION"), ("final_twist_publisher", "SUBSCRIPTION"),
+                ("step07_nav2_baseline_runtime_observer", "SUBSCRIPTION"),
+                ("step07_gate_b_observer", "SUBSCRIPTION"))] + [
+            {"topic": "/mecanum/final_issued_command", "node_name": "final_twist_publisher",
+             "endpoint_type": "PUBLISHER", "history_depth_status": "OBSERVED_MATCH"}],
         "gate_b_vectors": [], "map_to_odom": [{"parent": "map", "child": "odom", "stamp_sec": 1, "stamp_nanosec": 1, "publisher_gid": "04"}],
         "map_to_odom_gids": ["04"], "world_to_map": [],
         "dynamic_tf_gids": ["01"], "static_tf_gids": ["02"],
@@ -177,6 +187,35 @@ def observer_doc():
             "final_receipt_observed": True, "lifecycle_receipt_identity": True},
         "errors": [],
     }
+
+
+def _pinned_qos_evidence():
+    return {"schema_version": "1.0", "runtime_checkout_head": "c" * 40,
+            "runtime_checkout_origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+            "source_pins": {path: {"sha256": "a" * 64, "size_bytes": 10}
+                            for path in QOS_PROFILE_SOURCE_PATHS},
+            "installed_python_source_byte_equality": {
+                path: True for path in QOS_PROFILE_SOURCE_PATHS if path.endswith(".py")},
+            "installed_observer_binary": {"sha256": "b" * 64, "size_bytes": 100}}
+
+
+def _mark_qos_unknown(document):
+    life = document["graph"]["/mecanum/safety_lifecycle_state"]
+    for row in life["publishers"] + life["subscribers"]:
+        row["history"], row["depth"] = 3, 0
+    rec = document["graph"]["/mecanum/final_issued_command"]["publishers"][0]
+    rec["history"], rec["depth"] = 3, 0
+    document["qos_history_depth_observability"] = [
+        {"topic": "/mecanum/safety_lifecycle_state", "node_name": row["node_name"],
+         "endpoint_type": row["endpoint_type"], "history_depth_status": "UNOBSERVABLE"}
+        for row in life["publishers"] + life["subscribers"]]
+    document["qos_history_depth_observability"].append(
+        {"topic": "/mecanum/final_issued_command", "node_name": "final_twist_publisher",
+         "endpoint_type": "PUBLISHER", "history_depth_status": "UNOBSERVABLE"})
+    document["acceptance"]["lifecycle_endpoint_qos_contract"] = False
+    document["acceptance"]["receipt_qos_contract"] = False
+    document["errors"] = ["QOS_METADATA_UNOBSERVABLE:lifecycle_endpoint_qos_contract",
+                          "QOS_METADATA_UNOBSERVABLE:receipt_qos_contract"]
 
 
 def _duplicate_rejecting_json(path):
@@ -251,7 +290,7 @@ def test_lifecycle_receipt_acceptance_mismatches_fail_closed(acceptance_id, muta
         with pytest.raises(ValueError, match=early_literal):
             validate_observer(document, config_hash="a" * 64)
         return
-    with pytest.raises(ValueError, match="OBSERVER_ACCEPTANCE_RAW_MISMATCH"):
+    with pytest.raises(ValueError, match="OBSERVER_ACCEPTANCE_RAW_MISMATCH|QOS_OBSERVABILITY_EVIDENCE_RAW_MISMATCH"):
         validate_observer(document, config_hash="a" * 64)
 
 
@@ -289,6 +328,60 @@ def test_cpp_observer_parser_recomputes_qos_gid_static_owner_and_boundary():
         mutation(changed)
         with pytest.raises(ValueError):
             validate_observer(changed, config_hash="a" * 64)
+
+
+def test_qos_unknown_fallback_requires_exact_pinned_source_and_installed_implementation():
+    doc = observer_doc()
+    _mark_qos_unknown(doc)
+    unresolved = validate_observer(doc, config_hash="a" * 64)
+    assert unresolved["qos_history_depth_resolution"] == "UNOBSERVABLE_NO_VALID_PIN"
+    assert unresolved["acceptance"]["lifecycle_endpoint_qos_contract"] is False
+    resolved = validate_observer(doc, config_hash="a" * 64,
+        qos_implementation_pin_evidence=_pinned_qos_evidence(), review_commit="c" * 40)
+    assert resolved["qos_history_depth_resolution"] == "PINNED_IMPLEMENTATION"
+    assert resolved["acceptance"]["lifecycle_endpoint_qos_contract"] is True
+    assert resolved["acceptance"]["receipt_qos_contract"] is True
+    for mutate in (
+        lambda pin: pin["source_pins"].pop(next(iter(QOS_PROFILE_SOURCE_PATHS))),
+        lambda pin: pin["installed_python_source_byte_equality"].update({
+            next(path for path in QOS_PROFILE_SOURCE_PATHS if path.endswith(".py")): False}),
+        lambda pin: pin.update(runtime_checkout_head="d" * 40),
+        lambda pin: pin.update(installed_observer_binary={"sha256": "invalid", "size_bytes": 1}),
+    ):
+        pin = copy.deepcopy(_pinned_qos_evidence())
+        mutate(pin)
+        result = validate_observer(doc, config_hash="a" * 64,
+            qos_implementation_pin_evidence=pin, review_commit="c" * 40)
+        assert result["acceptance"]["lifecycle_endpoint_qos_contract"] is False
+
+
+def test_navigation_evidence_chain_requires_every_existing_stream_and_is_canonical():
+    observer = observer_doc()
+    gate = _gate_b_doc()
+    start, end = gate["samples"][0]["stamp_ns"], gate["samples"][-1]["stamp_ns"]
+    observer["safety_state"] = [{"stamp_sec": 0, "stamp_nanosec": i,
+        "raw_command": {"vx": 0.1, "vy": 0.0, "wz": 0.0},
+        "intervention_reasons": ["LIMITER_PRIMED"], "command_valid": True,
+        "motion_permitted": True, "scan_fresh": True, "odom_fresh": True,
+        "tf_valid": True, "localization_valid": True} for i in range(start, end + 1)]
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "source": 2,
+        "vx": 0.1, "vy": 0.0, "wz": 0.0} for i in range(start, end + 1)]
+    observer["filtered_odometry"] = [{"frame_id": "odom", "child_frame_id": "base_link",
+        "stamp_sec": 0, "stamp_nanosec": i, "pose": [0.0] * 7, "twist": [0.0] * 6,
+        "pose_finite": True, "twist_finite": True} for i in range(start, end + 1)]
+    chain_a, bytes_a = canonical_navigation_evidence_chain(observer, gate)
+    chain_b, bytes_b = canonical_navigation_evidence_chain(observer, gate)
+    assert chain_a == chain_b and bytes_a == bytes_b
+    assert json.loads(bytes_a) == chain_a
+    for field in ("safety_state", "receipt", "filtered_odometry"):
+        changed = copy.deepcopy(observer)
+        changed[field] = []
+        with pytest.raises(ValueError, match="NAVIGATION_EVIDENCE_CHAIN_MISSING"):
+            canonical_navigation_evidence_chain(changed, gate)
+    changed = copy.deepcopy(observer)
+    changed["safety_state"][0].pop("raw_command")
+    with pytest.raises(ValueError, match="candidate_or_safety_reason"):
+        canonical_navigation_evidence_chain(changed, gate)
 
 
 def test_gate_b_document_requires_successful_nav2_actions_and_exact_vectors():
@@ -352,6 +445,18 @@ def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_pat
                                "graceful": True, "escalation_history": []})
     observer = observer_doc()
     gate = _gate_b_doc(config_hash)
+    for row in observer["filtered_odometry"]:
+        row.update(stamp_sec=0, pose=[0.0] * 7, twist=[0.0] * 6)
+    observer["safety_state"] = [{"stamp_sec": 0, "stamp_nanosec": i,
+        "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
+        "intervention_reasons": [], "command_valid": True, "motion_permitted": True}
+        for i in range(1, 6)]
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i,
+        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3}
+        for i in range(1, 6)]
+    observer["navigation_evidence_chain"], canonical = canonical_navigation_evidence_chain(observer, gate)
+    observer["navigation_evidence_chain_canonical"] = canonical.decode("utf-8")
+    observer["navigation_evidence_chain_sha256"] = __import__("hashlib").sha256(canonical).hexdigest()
     artifact_values = {
         "run_record.json": record,
         "runtime_observer.json": observer,

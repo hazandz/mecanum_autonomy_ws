@@ -44,6 +44,7 @@ EXPECTED_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
     "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
     "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
     "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
     "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
     "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
@@ -57,8 +58,11 @@ COMPOSITE_NEW_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
     "ros2_ws/src/mecanum_nav_rl/package.xml",
 }
+QOS_TRACE_NEW_PIN_PATHS = {
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
+}
 HISTORICAL_SOURCE_PIN_PATHS = EXPECTED_SOURCE_PIN_PATHS.copy()
-EXPECTED_SOURCE_PIN_PATHS |= COMPOSITE_NEW_PIN_PATHS
+EXPECTED_SOURCE_PIN_PATHS |= COMPOSITE_NEW_PIN_PATHS | QOS_TRACE_NEW_PIN_PATHS
 
 NEW_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
@@ -70,6 +74,7 @@ NEW_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
     "ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml",
     "ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
     "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
     "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
     "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
@@ -158,8 +163,8 @@ def test_default_route_corrective_preserves_exact_run005_pin_membership():
     historical = json.loads(historical_raw)
     current = load_guard(GUARD)
     expected = set(historical["source_pins"])
-    assert expected == EXPECTED_SOURCE_PIN_PATHS
-    assert set(current["source_pins"]) == expected
+    assert expected == EXPECTED_SOURCE_PIN_PATHS - QOS_TRACE_NEW_PIN_PATHS
+    assert set(current["source_pins"]) == EXPECTED_SOURCE_PIN_PATHS
 
 
 def test_attempt_002_pass_requires_graceful_teardown_and_invocation_007_is_immutable_failure():

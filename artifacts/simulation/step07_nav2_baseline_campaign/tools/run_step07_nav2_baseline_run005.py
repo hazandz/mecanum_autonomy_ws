@@ -524,6 +524,38 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     source_module = worktree / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py"
     if installed_module.read_bytes() != source_module.read_bytes():
         raise RuntimeError("GATE_B_OBSERVER_INSTALLED_SOURCE_MISMATCH")
+    qos_python_paths = {
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py": "mecanum_nav_rl.runtime_safety.safety_lifecycle_node",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py": "mecanum_nav_rl.runtime_safety.final_twist_publisher_node",
+    }
+    qos_python_equality = {}
+    for relative, module in qos_python_paths.items():
+        source_path = worktree / relative
+        installed_path = Path(_run([str(runtime_python), "-c",
+            f"import {module} as m; print(m.__file__)"] , env=env).stdout.strip()).resolve(strict=True)
+        same = source_path.read_bytes() == installed_path.read_bytes()
+        qos_python_equality[relative] = same
+        if not same:
+            raise RuntimeError(f"QOS_PROFILE_INSTALLED_SOURCE_MISMATCH:{relative}")
+    qos_pin_paths = {
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
+        "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
+    }
+    if not qos_pin_paths.issubset(source_pins):
+        raise RuntimeError("QOS_PROFILE_IMPLEMENTATION_SOURCE_PIN_MISSING")
+    runtime_head = _run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+    runtime_origin = _run(["git", "remote", "get-url", "origin"], cwd=worktree).stdout.strip()
+    if (record is not None and runtime_head != record.get("review_commit")) or runtime_origin != EXPECTED_ORIGIN:
+        raise RuntimeError("QOS_PROFILE_IMPLEMENTATION_RUNTIME_IDENTITY_INVALID")
+    qos_implementation_pin_evidence = {
+        "schema_version": "1.0", "runtime_checkout_head": runtime_head,
+        "runtime_checkout_origin": runtime_origin,
+        "source_pins": {path: source_pins[path] for path in sorted(qos_pin_paths)},
+        "installed_python_source_byte_equality": qos_python_equality,
+        "installed_observer_binary": {"sha256": sha256(observer),
+                                       "size_bytes": observer.stat().st_size},
+    }
     gate_script = Path(prefixes["mecanum_nav_rl"]) / "lib" / "mecanum_nav_rl" / "step07_gate_b_observer"
     if not gate_script.is_file() or not os.access(gate_script, os.X_OK):
         raise RuntimeError("GATE_B_OBSERVER_CONSOLE_SCRIPT_NOT_INSTALLED")
@@ -550,6 +582,7 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
             "gate_b_observer_console_script": str(gate_script),
             "runtime_python": str(runtime_python), "runtime_python_fingerprint": runtime_facts,
             "installed_source_byte_equality": equality, "rosidl_import": "PASS",
+            "qos_implementation_pin_evidence": qos_implementation_pin_evidence,
             "stale_processes": stale, "gz_transport_host_capability": transport_facts,
             "ros_discovery_host_capability": ros_discovery_facts}
 
@@ -1753,7 +1786,7 @@ def main():
         cpp_command = ["ros2", "run", "step07_nav2_baseline_runtime_observer",
                        "step07_nav2_baseline_runtime_observer", "--ros-args",
                        "-p", f"output_path:={observer_path}", "-p", f"config_hash:={record['config_hash']}",
-                       "-p", "duration_sec:=30"]
+                       "-p", "duration_sec:=1800"]
         cpp, cpp_member = _spawn_owned_process(
             cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "cpp_observer.log", processes=processes,
@@ -1769,18 +1802,37 @@ def main():
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         gate_b_calls = 1; record["call_counts"]["gate_b_observer"] = 1
         collector_members["gate_b_observer"] = gate_member
-        gate.wait(timeout=1800)
+        gate_vectors_path = args.run_directory / "gate_b_vectors.json"
+        gate_deadline = time.monotonic() + 1800
+        cpp_stop_sent = False
+        while gate.poll() is None and time.monotonic() < gate_deadline:
+            if gate_vectors_path.is_file() and cpp.poll() is None and not cpp_stop_sent:
+                if not _owned_group_verified(cpp, cpp_member):
+                    raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
+                os.killpg(cpp_member["pgid"], signal.SIGINT)
+                cpp_stop_sent = True
+            time.sleep(0.05)
+        if gate.poll() is None:
+            raise subprocess.TimeoutExpired(gate_command, 1800)
         if gate.returncode != 0:
             raise RuntimeError(f"GATE_B_OBSERVER_FAILED:{gate.returncode}")
         cpp.wait(timeout=1850)
         if cpp.returncode != 0:
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
-        from step07_gate_b_evidence_validator import load_json, validate_gate_b_document, validate_observer
+        from step07_gate_b_evidence_validator import (canonical_navigation_evidence_chain,
+            load_json, validate_gate_b_document, validate_observer)
         cpp_document, _ = load_json(observer_path)
         gate_document, _ = load_json(args.run_directory / "gate_b_vectors.json")
-        validate_observer(cpp_document, config_hash=record["config_hash"])
+        observer_validation = validate_observer(cpp_document, config_hash=record["config_hash"],
+            qos_implementation_pin_evidence=preflight["qos_implementation_pin_evidence"],
+            review_commit=head)
+        chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
+        cpp_document["navigation_evidence_chain"] = chain
+        cpp_document["navigation_evidence_chain_canonical"] = canonical_chain.decode("utf-8")
+        cpp_document["navigation_evidence_chain_sha256"] = hashlib.sha256(canonical_chain).hexdigest()
+        _atomic_write(observer_path, cpp_document)
         validate_gate_b_document(gate_document, config_hash=record["config_hash"])
-        runtime_acceptance["observer_acceptance"] = bool(cpp_document.get("acceptance")) and all(cpp_document["acceptance"].values())
+        runtime_acceptance["observer_acceptance"] = bool(observer_validation.get("acceptance")) and all(observer_validation["acceptance"].values())
         runtime_acceptance["gate_b_vectors"] = bool(gate_document.get("acceptance")) and all(gate_document["acceptance"].values())
         runtime_acceptance["runtime_graph_and_goal"] = runtime_acceptance["gate_b_vectors"]
         if not runtime_acceptance["observer_acceptance"] or not runtime_acceptance["gate_b_vectors"]:

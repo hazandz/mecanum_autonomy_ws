@@ -84,6 +84,24 @@ TEST(Step07Observer, LifecycleStateUsesDistinctReliableVolatileKeepLast10) {
   EXPECT_FALSE(step07_observer::receipt_publisher_contract(conflated_receipt));
 }
 
+TEST(Step07Observer, UnknownHistoryDepthIsUnobservableAndPolicyMismatchStillFails) {
+  step07_observer::Json endpoint = {{"reliability", RMW_QOS_POLICY_RELIABILITY_RELIABLE},
+    {"durability", RMW_QOS_POLICY_DURABILITY_VOLATILE},
+    {"history", RMW_QOS_POLICY_HISTORY_UNKNOWN}, {"depth", 0}};
+  EXPECT_EQ(step07_observer::endpoint_policy_status(endpoint,
+      RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_VOLATILE, 10),
+      step07_observer::EndpointPolicyStatus::Unobservable);
+  endpoint["reliability"] = RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+  EXPECT_EQ(step07_observer::endpoint_policy_status(endpoint,
+      RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_VOLATILE, 10),
+      step07_observer::EndpointPolicyStatus::Mismatch);
+  endpoint["reliability"] = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  endpoint["durability"] = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+  EXPECT_EQ(step07_observer::endpoint_policy_status(endpoint,
+      RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_VOLATILE, 10),
+      step07_observer::EndpointPolicyStatus::Mismatch);
+}
+
 TEST(Step07Observer, LifecyclePublisherRequiresExactOwnerTypeAndOfferedQos) {
   auto publisher = step07_observer::Json::array({{{"node_name", "safety_lifecycle"},
       {"node_namespace", "/"}, {"topic_type", "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"},

@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.15` Run005 attempt_002 L1 corrective review snapshot |
+| Revision | `0.10.16` Run005 attempt_002 QoS source-freeze review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -1145,3 +1145,11 @@ Verification snapshot: focused runner/guard/scope 180 passed; full Step-7 tools 
 ## Run005 attempt_002 L1 corrective — 2026-10-22
 
 The review candidate based on `a383f258b02a0f9a22b2dc72fb937dbcaba6973a` corrects required Nav2 costmap dimension YAML types and records post-SIGINT SIGTERM/SIGKILL escalation as non-graceful teardown. Historical invocation_010 remains FAIL and immutable. Phase A source checks passed before freeze, including Step-7 tools, RL, external build and installed/source equality; the Owner-authorized cleanup removed only the verified generated `log/` directory, after which bringup passed 253 tests. Actual direct diff is 11 paths; the authorized allowlist is 12 paths and contains one unchanged permitted path (`test_step07_run005_runtime_guard.py`). Full Step-7 tools passed 311 after the one-time pin refresh. Delivery checks are being completed before commit/push. Run005 guard stays PENDING/capacity 1/acquisition 0/NOT_GRANTED, Gate B NOT_STARTED, and runtime remains unapproved. Evidence ceiling: source/offline only; independent audit remains required.
+
+## Run005 attempt_002 — QoS evidence-chain source-freeze snapshot (2026-10-22)
+
+Review base `9fad09f333b93c8f63d9c4044af41d04d40be8c0`; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. `SOURCE_FREEZE=TRUE` is offline-only. No runtime authorization or acceptance transition is recorded.
+
+Run005 has 38 unique source pins. The added pin identifies the existing runtime QoS implementation `safety_lifecycle_node.py`; test-only observer source remains unpinned. Actual direct path set is 14; authorized allowlist is 15, with the decision document unchanged.
+
+Verification: focused runner/validator/guard 181; Step-7 313; bringup 254; RL 715; six-package external build; observer 14 and ROSIDL 8; Python compile; installed/source equality 15 data artifacts + 2 QoS modules; 38/38 pins; canonical parsing, historical scope/Git-blob preservation, exact path scope and diff checks PASS. Invocation_011 remains immutable historical FAIL. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED.

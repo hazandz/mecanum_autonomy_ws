@@ -16,6 +16,8 @@
 
 #include "mecanum_nav_rl_interfaces/msg/final_issued_command_receipt.hpp"
 #include "mecanum_nav_rl_interfaces/msg/safety_lifecycle_state.hpp"
+#include "mecanum_nav_rl_interfaces/msg/safety_state.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nlohmann/json.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -135,15 +137,27 @@ bool unique_topic_owner(const Json &rows, const std::string &name, const std::st
       rows.front().value("node_namespace", "") == "/" && rows.front().value("topic_type", "") == type;
 }
 
+enum class EndpointPolicyStatus { Match, Unobservable, Mismatch };
+
+EndpointPolicyStatus endpoint_policy_status(const Json &row, int reliability,
+                                            int durability, int depth) {
+  if (row.value("reliability", -1) != reliability ||
+      row.value("durability", -1) != durability) return EndpointPolicyStatus::Mismatch;
+  if (row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST &&
+      row.value("depth", -1) == depth) return EndpointPolicyStatus::Match;
+  if (row.value("history", -1) == RMW_QOS_POLICY_HISTORY_UNKNOWN &&
+      row.value("depth", -1) == 0) return EndpointPolicyStatus::Unobservable;
+  return EndpointPolicyStatus::Mismatch;
+}
+
 bool lifecycle_publisher_contract(const Json &rows) {
   if (!rows.is_array() || rows.size() != 1) return false;
   const auto &row = rows.front();
   return row.value("node_name", "") == "safety_lifecycle" && row.value("node_namespace", "") == "/" &&
       row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState" &&
       row.value("endpoint_type", "") == "PUBLISHER" &&
-      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
-      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
-      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 10;
+      endpoint_policy_status(row, RMW_QOS_POLICY_RELIABILITY_RELIABLE,
+        RMW_QOS_POLICY_DURABILITY_VOLATILE, 10) == EndpointPolicyStatus::Match;
 }
 
 bool receipt_publisher_contract(const Json &rows) {
@@ -152,9 +166,8 @@ bool receipt_publisher_contract(const Json &rows) {
   return row.value("node_name", "") == "final_twist_publisher" && row.value("node_namespace", "") == "/" &&
       row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt" &&
       row.value("endpoint_type", "") == "PUBLISHER" &&
-      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
-      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL &&
-      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 1;
+      endpoint_policy_status(row, RMW_QOS_POLICY_RELIABILITY_RELIABLE,
+        RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL, 1) == EndpointPolicyStatus::Match;
 }
 
 bool lifecycle_observer_subscriptions_contract(const Json &rows) {
@@ -163,9 +176,8 @@ bool lifecycle_observer_subscriptions_contract(const Json &rows) {
     return row.value("node_name", "") == node && row.value("node_namespace", "") == "/" &&
       row.value("topic_type", "") == "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState" &&
       row.value("endpoint_type", "") == "SUBSCRIPTION" &&
-      row.value("reliability", -1) == RMW_QOS_POLICY_RELIABILITY_RELIABLE &&
-      row.value("durability", -1) == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
-      row.value("history", -1) == RMW_QOS_POLICY_HISTORY_KEEP_LAST && row.value("depth", -1) == 10;
+      endpoint_policy_status(row, RMW_QOS_POLICY_RELIABILITY_RELIABLE,
+        RMW_QOS_POLICY_DURABILITY_VOLATILE, 10) == EndpointPolicyStatus::Match;
   };
   const std::vector<std::string> expected = {"safety_supervisor", "final_twist_publisher",
       "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"};
@@ -201,6 +213,7 @@ class Observer final : public rclcpp::Node {
     doc_["errors"] = Json::array();
     doc_["lifecycle"] = Json::array();
     doc_["receipt"] = Json::array();
+    doc_["safety_state"] = Json::array();
     doc_["gate_b_vectors"] = Json::array();
     doc_["map_to_odom"] = Json::array();
     doc_["map_to_odom_gids"] = Json::array();
@@ -235,7 +248,25 @@ class Observer final : public rclcpp::Node {
     lifecycle_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyLifecycleState>("/mecanum/safety_lifecycle_state", lifecycle_qos,
       [this](mecanum_nav_rl_interfaces::msg::SafetyLifecycleState::ConstSharedPtr msg) { doc_["lifecycle"].push_back({{"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"primary_state", msg->primary_state}, {"barrier_state", msg->barrier_state}, {"motion_permitted", msg->motion_permitted}, {"reason", msg->reason}}); });
     receipt_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt>("/mecanum/final_issued_command", receipt_subscription_qos,
-      [this](mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt::ConstSharedPtr msg) { doc_["receipt"].push_back({{"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"sequence", msg->final_publish_sequence}, {"source", msg->source}, {"vx", msg->final_command.linear.x}, {"vy", msg->final_command.linear.y}, {"wz", msg->final_command.angular.z}}); });
+      [this](mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt::ConstSharedPtr msg) { doc_["receipt"].push_back({{"stamp_sec", msg->header.stamp.sec}, {"stamp_nanosec", msg->header.stamp.nanosec}, {"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"sequence", msg->final_publish_sequence}, {"source", msg->source}, {"vx", msg->final_command.linear.x}, {"vy", msg->final_command.linear.y}, {"wz", msg->final_command.angular.z}}); });
+    safety_state_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyState>(
+      "/mecanum/safety_state", lifecycle_qos,
+      [this](mecanum_nav_rl_interfaces::msg::SafetyState::ConstSharedPtr msg) {
+        const auto twist = [](const geometry_msgs::msg::Twist &value) {
+          return Json{{"vx", value.linear.x}, {"vy", value.linear.y}, {"wz", value.angular.z}};
+        };
+        doc_["safety_state"].push_back({
+          {"stamp_sec", msg->header.stamp.sec}, {"stamp_nanosec", msg->header.stamp.nanosec},
+          {"state", msg->state}, {"active_command_source", msg->active_command_source},
+          {"command_valid", msg->command_valid}, {"motion_permitted", msg->motion_permitted},
+          {"intervention_reasons", msg->intervention_reasons}, {"raw_command", twist(msg->raw_command)},
+          {"limited_command", twist(msg->limited_command)}, {"final_command", twist(msg->final_command)},
+          {"scan_fresh", msg->scan_fresh}, {"odom_fresh", msg->odom_fresh},
+          {"tf_valid", msg->tf_valid}, {"localization_valid", msg->localization_valid},
+          {"navigation_state_fresh", msg->navigation_state_fresh}, {"path_valid", msg->path_valid},
+          {"scan_age_ms", msg->scan_age_ms}, {"odom_age_ms", msg->odom_age_ms},
+          {"command_age_ms", msg->command_age_ms}, {"navigation_state_age_ms", msg->navigation_state_age_ms}});
+      });
     started_ = std::chrono::steady_clock::now();
     timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
   }
@@ -265,7 +296,7 @@ class Observer final : public rclcpp::Node {
   void finish() {
     if (finished_) return;
     finished_ = true;
-    for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety_lifecycle_state", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command"}) {
+    for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety_lifecycle_state", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command", "/mecanum/safety_state"}) {
       Json pubs = endpoint_rows(*this, topic, true);
       Json subs = endpoint_rows(*this, topic, false);
       doc_["graph"][topic] = Json{{"publishers", pubs}, {"subscribers", subs}};
@@ -319,6 +350,38 @@ class Observer final : public rclcpp::Node {
     bool lifecycle_ready = std::any_of(doc_["lifecycle"].begin(), doc_["lifecycle"].end(), [](const Json &row) { return row.at("primary_state") == 2 && row.at("barrier_state") == 1 && row.at("motion_permitted").get<bool>(); });
     bool receipt_observed = !doc_["receipt"].empty();
     bool lifecycle_receipt_identity = lifecycle_receipts_match(doc_["lifecycle"], doc_["receipt"]);
+    const auto lifecycle_publishers = doc_["graph"]["/mecanum/safety_lifecycle_state"]["publishers"];
+    const auto lifecycle_subscribers = doc_["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"];
+    const auto receipt_publishers = doc_["graph"]["/mecanum/final_issued_command"]["publishers"];
+    auto qos_status_rows = Json::array();
+    const auto add_qos_status = [&](const std::string &topic, const Json &rows,
+                                    const std::string &expected_node, const std::string &type,
+                                    const std::string &direction, int reliability,
+                                    int durability, int depth) {
+      if (!rows.is_array()) return;
+      for (const auto &row : rows) {
+        if (row.value("node_name", "") != expected_node || row.value("topic_type", "") != type ||
+            row.value("endpoint_type", "") != direction) continue;
+        const auto status = endpoint_policy_status(row, reliability, durability, depth);
+        const char *label = status == EndpointPolicyStatus::Match ? "OBSERVED_MATCH" :
+          status == EndpointPolicyStatus::Unobservable ? "UNOBSERVABLE" : "MISMATCH";
+        qos_status_rows.push_back({{"topic", topic}, {"node_name", expected_node},
+          {"endpoint_type", direction}, {"history_depth_status", label}});
+      }
+    };
+    add_qos_status("/mecanum/safety_lifecycle_state", lifecycle_publishers, "safety_lifecycle",
+      "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState", "PUBLISHER",
+      RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_VOLATILE, 10);
+    for (const auto *name : {"safety_supervisor", "final_twist_publisher",
+                             "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"}) {
+      add_qos_status("/mecanum/safety_lifecycle_state", lifecycle_subscribers, name,
+        "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState", "SUBSCRIPTION",
+        RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_VOLATILE, 10);
+    }
+    add_qos_status("/mecanum/final_issued_command", receipt_publishers, "final_twist_publisher",
+      "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt", "PUBLISHER",
+      RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL, 1);
+    doc_["qos_history_depth_observability"] = qos_status_rows;
     doc_["acceptance"] = Json{
       {"clock_multisample", clock_ok}, {"filtered_odometry_multisample", odom_ok},
       {"tf_qos_contract", doc_["qos"]["/tf"]["reliability"] == "BEST_EFFORT" && doc_["qos"]["/tf"]["durability"] == "VOLATILE" && doc_["qos"]["/tf"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf"]["depth"] == 100 && doc_["qos"]["/tf_static"]["reliability"] == "RELIABLE" && doc_["qos"]["/tf_static"]["durability"] == "TRANSIENT_LOCAL" && doc_["qos"]["/tf_static"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf_static"]["depth"] == 1},
@@ -350,7 +413,25 @@ class Observer final : public rclcpp::Node {
       {"wheel_ingress_valid", wheel_ok}, {"imu_ingress_valid", imu_ok},
       {"lifecycle_ready_observed", lifecycle_ready}, {"final_receipt_observed", receipt_observed},
       {"lifecycle_receipt_identity", lifecycle_receipt_identity}};
-    for (const auto &[name, pass] : doc_["acceptance"].items()) if (!pass) doc_["errors"].push_back("ACCEPTANCE_FAILED:" + name);
+    for (const auto &[name, pass] : doc_["acceptance"].items()) if (!pass) {
+      const std::string qos_topic = name == "lifecycle_endpoint_qos_contract" ?
+        "/mecanum/safety_lifecycle_state" : "/mecanum/final_issued_command";
+      const size_t expected_qos_endpoints = name == "lifecycle_endpoint_qos_contract" ? 5 : 1;
+      const size_t topic_qos_count = static_cast<size_t>(std::count_if(
+        qos_status_rows.begin(), qos_status_rows.end(), [&](const Json &row) {
+          return row.value("topic", "") == qos_topic;
+        }));
+      const bool unknown_qos = (name == "lifecycle_endpoint_qos_contract" || name == "receipt_qos_contract") &&
+        topic_qos_count == expected_qos_endpoints &&
+        std::all_of(qos_status_rows.begin(), qos_status_rows.end(), [&](const Json &row) {
+          return row.value("topic", "") != qos_topic ||
+            row.value("history_depth_status", "") != "MISMATCH";
+        }) && std::any_of(qos_status_rows.begin(), qos_status_rows.end(), [&](const Json &row) {
+          return row.value("topic", "") == qos_topic &&
+            row.value("history_depth_status", "") == "UNOBSERVABLE";
+        });
+      doc_["errors"].push_back(unknown_qos ? "QOS_METADATA_UNOBSERVABLE:" + name : "ACCEPTANCE_FAILED:" + name);
+    }
     std::ofstream output(output_path_, std::ios::binary | std::ios::trunc);
     output << doc_.dump(-1, ' ', false, Json::error_handler_t::strict);
     output.flush();
@@ -374,6 +455,7 @@ class Observer final : public rclcpp::Node {
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_, tf_static_sub_;
   rclcpp::Subscription<mecanum_nav_rl_interfaces::msg::SafetyLifecycleState>::SharedPtr lifecycle_sub_;
   rclcpp::Subscription<mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt>::SharedPtr receipt_sub_;
+  rclcpp::Subscription<mecanum_nav_rl_interfaces::msg::SafetyState>::SharedPtr safety_state_sub_;
 };
 }  // namespace step07_observer
 
