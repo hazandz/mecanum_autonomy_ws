@@ -33,6 +33,7 @@ PACKAGE_XML = PACKAGE / "package.xml"
 MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007_GUARD_MANIFEST.json"
 GUARD_PATH = ROOT / "artifacts/simulation/sim_eval_scan_endpoint_probe_evidence/approval_guards/WP06_6F_TF_EKF_RUNTIME_INGRESS_RUN_007.json"
 PROFILE_PATH = PACKAGE / "config/profiles/sim_eval_nav2_baseline.static.yaml"
+NAV2_RUNTIME_CONFIG_PATH = PACKAGE / "config/navigation/sim_eval_nav2_baseline.runtime.yaml"
 PROFILE_CONTRACT_PATH = PACKAGE / "mecanum_nav_bringup/sim_eval_static_profile_contract.py"
 WP05_MANIFEST_PATH = ROOT / "docs/governance/evidence/WP-05_SIM_EVAL_NAV2_BASELINE_STATIC_PROFILE_MANIFEST.json"
 BASE = "8b73bcb0b026fe337c023f6a30205dbe89d31eb5"
@@ -254,6 +255,20 @@ def test_ekf_contract_has_only_approved_inputs_and_fusion():
     assert not validate_ekf_config(mutated)
 
 
+def test_nav2_costmap_dimensions_use_integer_parameter_types():
+    raw = NAV2_RUNTIME_CONFIG_PATH.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf")
+    document = yaml.load(raw.decode("utf-8"), Loader=UniqueLoader)
+    for costmap_name in ("global_costmap", "local_costmap"):
+        node = document.get(costmap_name, {})
+        nested = node.get(costmap_name, {}) if isinstance(node, dict) else {}
+        parameters = nested.get("ros__parameters", {}) if isinstance(nested, dict) else {}
+        for dimension in ("height", "width"):
+            if dimension in parameters:
+                assert type(parameters[dimension]) is int, (
+                    f"{costmap_name}.{dimension} must be a YAML integer, "
+                    f"got {parameters[dimension]!r} ({type(parameters[dimension]).__name__})"
+                )
 def test_composite_launch_has_only_ingress_clock_and_ekf_actions():
     source = LAUNCH_PATH.read_text(encoding="utf-8")
     tree = __import__("ast").parse(source)
@@ -657,6 +672,25 @@ RUN005_DEFAULT_ROUTE_PHASE_A_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
 }
+RUN005_NAV2_HEIGHT_TEARDOWN_BASE = "a383f258b02a0f9a22b2dc72fb937dbcaba6973a"
+RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS = {
+    "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+}
+RUN005_NAV2_HEIGHT_TEARDOWN_PATHS = RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_NAV2_HEIGHT_TEARDOWN_AUTHORIZED_ALLOWLIST = RUN005_NAV2_HEIGHT_TEARDOWN_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+}
 
 def _candidate_changed_paths():
     status = subprocess.run(
@@ -672,6 +706,28 @@ def _candidate_changed_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
         capture_output=True, text=True,
     ).stdout.strip() if not dirty else None
+    if head == RUN005_NAV2_HEIGHT_TEARDOWN_BASE or parent == RUN005_NAV2_HEIGHT_TEARDOWN_BASE:
+        if dirty:
+            changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
+            if changed not in (RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
+                               RUN005_NAV2_HEIGHT_TEARDOWN_PATHS):
+                raise AssertionError(f"Run005 Nav2-height/teardown corrective scope is not exact: {sorted(changed)}")
+        elif parent == RUN005_NAV2_HEIGHT_TEARDOWN_BASE:
+            changed = set(subprocess.run(
+                ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+                check=True, capture_output=True, text=True,
+            ).stdout.splitlines())
+            assert changed == RUN005_NAV2_HEIGHT_TEARDOWN_PATHS
+        else:
+            changed = set()
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert set(untracked) <= changed
+        assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
+                       or "/__pycache__/" in path for path in untracked), untracked
+        return changed, dirty
     if head == RUN005_DEFAULT_ROUTE_BASE or parent == RUN005_DEFAULT_ROUTE_BASE:
         if dirty:
             changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
@@ -843,6 +899,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS, RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
     )
     assert subprocess.run(
         ["git", "rev-parse", f"{RUN005_ATTEMPT_002_PREVIOUS_CORRECTIVE_COMMIT}^"], cwd=ROOT,
@@ -857,6 +914,17 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
                    or "/__pycache__/" in path for path in untracked), untracked
 
 
+def test_run005_nav2_height_corrective_distinguishes_actual_diff_from_authorized_allowlist():
+    changed, _dirty = _candidate_changed_paths()
+    assert changed == RUN005_NAV2_HEIGHT_TEARDOWN_PATHS
+    assert len(changed) == 11
+    assert len(RUN005_NAV2_HEIGHT_TEARDOWN_AUTHORIZED_ALLOWLIST) == 12
+    authorized_only = {
+        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    }
+    assert RUN005_NAV2_HEIGHT_TEARDOWN_AUTHORIZED_ALLOWLIST - changed == authorized_only
+
+
 def test_run005_validator_identity_corrective_scope_is_exact():
     historical = set(subprocess.run(
         ["git", "diff", "--name-only",
@@ -868,7 +936,9 @@ def test_run005_validator_identity_corrective_scope_is_exact():
                           check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
     current, _dirty = _candidate_changed_paths()
     assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
-                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)
+                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -1061,6 +1131,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS, RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -1085,9 +1156,13 @@ def test_historical_runtime_conservation_and_candidate_scope():
 def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
     assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
-                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)
+                       RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)
 
 
 def test_run005_default_route_resolver_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
-    assert changed in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS)
+    assert changed in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
+                       RUN005_NAV2_HEIGHT_TEARDOWN_PATHS)

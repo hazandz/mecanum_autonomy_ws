@@ -2130,3 +2130,27 @@ Invocation_009 remains immutable: pre-acquire failure `GZ_TRANSPORT_HOST_CAPABIL
 Verification: focused runner/guard/scope 180 passed; full Step-7 tools 310 passed; bringup 251 passed; RL 715 passed with external install base `/tmp/run005_default_route_l1_install`; six-package external colcon build passed; observer 13/13 and ROSIDL 8/8 passed; `py_compile` passed for four Python files; installed/source runtime files 15/15 equal; source pins 37/37 SHA-256 and byte size; JSON canonical/duplicate-key/UTF-8, YAML duplicate-key parsing, XML parsing, historical preservation, exact scope, Ledger parent-byte-prefix, and diff checks passed.
 
 Current artifact hashes — guard `6539bda341ace90f2c595572063b8c95ba41ea92017c6c803847722adf5097e5`, evidence `e563268b209f8c96adbd25aa426cf2f15004a1d9ff799871320aaab5f5bd7789`, manifest `5c147a1d58feaa1d3dd5571a6dbb4e7d377019284c4fc805b1587c645f9588e6`. Guard remains PENDING, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, with no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`; next action is independent audit of the exact corrective commit.
+
+
+### 2026-10-22 — Run005 attempt_002 L1 costmap integer / teardown escalation corrective
+
+`supersedes`: active source/offline candidate state only; no historical runtime verdict or evidence is superseded.
+
+Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; source base / intended sole parent `a383f258b02a0f9a22b2dc72fb937dbcaba6973a`; exact authorized corrective scope in evidence is 12 paths. The runtime YAML now represents required local costmap `width` and `height` as integer `4`; global costmap contains neither field. The focused contract parses YAML and requires exact integer scalar types for any existing global/local costmap width/height while retaining historical scope assertions. Runner teardown now marks `process_group_teardown_graceful=false` if launcher log/record has SIGTERM or SIGKILL escalation after SIGINT, even if the final snapshot is clean. Invocation_010 remains immutable historical runtime FAIL: controller_server `InvalidParameterTypeException` from YAML float `height: 4.0`, followed by composite readiness timeout. No historical evidence, consumed guard, lock or runtime checkout was modified; no runtime was invoked.
+
+Phase A freeze was recorded after source checks: focused regression tests PASS; full Step-7 tools 311 PASS; bringup full suite had 252 PASS in the clean-scope run; RL 715 PASS with external install base; six-package external build PASS; observer 13 and ROSIDL 8 PASS; `py_compile` PASS; installed/source equality 15/15 PASS. A final bringup rerun returned 247 passed / 5 failed because generated untracked colcon `log/` paths caused existing exact-scope assertions to fail. The directory was left untouched. Thus final worktree exact-allowlist verification fails and delivery checks are not all green. `git diff --check` and `git diff --cached --check` pass. No commit or push was made.
+
+Source pin inventory remains 37 unique paths with refreshed hashes and byte sizes; membership unchanged. Guard seed remains PENDING, capacity 1, acquisition count 0, `runtime_authorization=NOT_GRANTED`, no source lock; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+Final record hashes at ledger append: guard `b98e77c860522645e1830c287ae5dc6189d797b1a00027bd6ca15ec3841ab095`; evidence `4974523366b717f97ff520f256f26786ca4a83d48ad940d506b61205820c88b8`; manifest `0ba6417ab937973a3f39151ab92487b16fc2157898a4ec9edb7e2e5121f5d940`. Next action: resolve the untracked colcon log scope contamination under an explicit permitted workspace-hygiene action, rerun required exact-scope checks, then review the exact candidate commit before any separate runtime authorization.
+
+
+### 2026-10-22 — Run005 attempt_002 actual-scope reconciliation
+
+`supersedes`: exact-scope interpretation and interim final-test snapshot in the immediately preceding Run005 L1 corrective entry; it does not supersede any runtime verdict.
+
+The Owner-authorized one-time cleanup precheck confirmed exactly the 11 reported tracked candidate paths plus only `log/COLCON_IGNORE`, symlinks `log/latest` and `log/latest_test-result`, and `log/test-result_2026-10-22_08-55-51/logger_all.log`; no symlink was followed. Only the specified `log/` directory was removed. Actual direct diff against `a383f258b02a0f9a22b2dc72fb937dbcaba6973a` is 11 paths. The authorized allowlist has 12 paths and additionally permits unchanged `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py`. Guard, evidence, manifest and contract test now encode these as separate sets.
+
+After the scope correction, Phase A passed: bringup 253, RL 715 with external install base, focused scope-chain tests 5, full Step-7 tools 311 after pin refresh, six-package external build, observer 13, ROSIDL 8, `py_compile` four files, and installed/source equality 15/15. All generated build/test/log output remained under `/tmp`; no worktree `build/`, `install/`, or `log/` remains. Source pins retain 37 unique paths; membership is unchanged.
+
+Guard remains PENDING, capacity 1, acquisition 0, runtime authorization NOT_GRANTED, no lock. Gate B NOT_STARTED and RUNTIME_APPROVED NOT_APPROVED. No runtime invocation occurred. Evidence ceiling remains source/offline only.

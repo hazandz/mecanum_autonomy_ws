@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.14` Step-7 Gate B authority/input closure survey review snapshot |
+| Revision | `0.10.15` Run005 attempt_002 L1 corrective review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -1141,3 +1141,7 @@ Evidence ceiling là source/offline test only. Guard chưa consume; runtime auth
 
 
 Verification snapshot: focused runner/guard/scope 180 passed; full Step-7 tools 310 passed; `mecanum_nav_bringup/test` 251 passed; `mecanum_nav_rl/test` 715 passed with external install base; six-package external colcon build passed; observer 13 and ROSIDL 8 passed; `py_compile` passed; installed/source runtime artifact equality 15/15. Run005 keeps 37 unique pins. All evidence is offline-only; independent audit remains required.
+
+## Run005 attempt_002 L1 corrective — 2026-10-22
+
+The review candidate based on `a383f258b02a0f9a22b2dc72fb937dbcaba6973a` corrects required Nav2 costmap dimension YAML types and records post-SIGINT SIGTERM/SIGKILL escalation as non-graceful teardown. Historical invocation_010 remains FAIL and immutable. Phase A source checks passed before freeze, including Step-7 tools, RL, external build and installed/source equality; the Owner-authorized cleanup removed only the verified generated `log/` directory, after which bringup passed 253 tests. Actual direct diff is 11 paths; the authorized allowlist is 12 paths and contains one unchanged permitted path (`test_step07_run005_runtime_guard.py`). Full Step-7 tools passed 311 after the one-time pin refresh. Delivery checks are being completed before commit/push. Run005 guard stays PENDING/capacity 1/acquisition 0/NOT_GRANTED, Gate B NOT_STARTED, and runtime remains unapproved. Evidence ceiling: source/offline only; independent audit remains required.

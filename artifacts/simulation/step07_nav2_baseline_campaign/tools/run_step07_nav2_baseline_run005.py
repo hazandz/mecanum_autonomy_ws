@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import signal
 import stat
@@ -956,6 +957,7 @@ def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[
                                     stderr=subprocess.STDOUT, start_new_session=True)
             member = {"name": name, "pid": proc.pid, "pgid": None,
                       "command": list(command), "returncode": None, "readiness": None,
+                      "log_path": str(log_path),
                       "initial_snapshot": None, "final_snapshot": None,
                       "ownership_verified": False, "ownership_errors": []}
             ledger[name] = {"process": proc, "member": member}
@@ -1110,6 +1112,30 @@ def _stop_collector(proc, member, timeout: float = 20) -> dict:
     return _safe_stop_owned_process(proc, member, timeout)
 
 
+def _launcher_log_escalations(member: dict) -> list[dict]:
+    """Return launcher log escalation lines following its SIGINT shutdown marker."""
+    raw_path = member.get("log_path")
+    if not isinstance(raw_path, str) or not raw_path:
+        return []
+    try:
+        lines = Path(raw_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    shutdown_start = next((index for index, line in enumerate(lines)
+        if "sigint" in line.lower() and any(marker in line.lower()
+            for marker in ("ctrl-c", "receiving", "received", "interrupted"))), None)
+    if shutdown_start is None:
+        return []
+    escalations = []
+    for index, line in enumerate(lines[shutdown_start + 1:], start=shutdown_start + 2):
+        match = re.search(r"escalat(?:ing|ed|e)\s+to\s+['\"]?(SIGTERM|SIGKILL)\b", line, re.IGNORECASE)
+        if match is not None:
+            signal_name = match.group(1).upper()
+            escalations.append({"source": "launcher_log", "line": index,
+                                "signal": signal_name, "detail": line.strip()})
+    return escalations
+
+
 def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_proc,
                                 bootstrap_member, collector_procs, collector_members,
                                 bootstrap_calls: int, composite_calls: int) -> dict:
@@ -1165,6 +1191,19 @@ def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_p
     teardown["ordered"] = teardown["order_correct"]
     process_results = (teardown["composite"], teardown["bootstrap"],
                        *teardown["collectors"].values())
+    process_members = {"composite": composite_member, "bootstrap": bootstrap_member}
+    process_members.update({name: member for name, member in (collector_members or {}).items()})
+    for name, result in (("composite", teardown["composite"]),
+                         ("bootstrap", teardown["bootstrap"]),
+                         *[(name, teardown["collectors"][name])
+                           for name in ("gate_b_observer", "cpp_observer")]):
+        member = process_members.get(name)
+        launcher_escalations = _launcher_log_escalations(member) if isinstance(member, dict) else []
+        if launcher_escalations:
+            result["escalation_history"] = [*result.get("escalation_history", []),
+                                             *launcher_escalations]
+        if result.get("escalation_history"):
+            result["graceful"] = False
     teardown["escalation_history"] = [
         {"process": name, **entry}
         for name, result in (("composite", teardown["composite"]),

@@ -1439,6 +1439,41 @@ def test_best_effort_teardown_attempts_composite_before_bootstrap(tmp_path, monk
     assert teardown["order_correct"]
 
 
+def test_launcher_log_escalation_after_sigint_makes_teardown_not_graceful(tmp_path, monkeypatch):
+    composite_log = tmp_path / "composite.log"
+    composite_log.write_text(
+        "[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)\n"
+        "[ERROR] [launch]: process failed to terminate after receiving 'SIGINT', escalating to 'SIGTERM'\n"
+        "[ERROR] [launch]: process failed to terminate after receiving 'SIGTERM', escalating to 'SIGKILL'\n",
+        encoding="utf-8",
+    )
+    composite = {"name": "composite", "pid": 31, "pgid": 31,
+                 "ownership_verified": True, "log_path": str(composite_log)}
+    bootstrap = {"name": "bootstrap", "pid": 32, "pgid": 32,
+                 "ownership_verified": True}
+
+    def fake_stop(_proc, member, _timeout):
+        member["final_snapshot"] = {"live_member_pids": [], "zombie_member_pids": [],
+                                     "verified": True, "inspection_errors": []}
+        return {"signal": "SIGINT", "signal_sent": True, "leader_returncode": 0,
+                "clean": True, "graceful": True, "escalation_history": [],
+                "verified": True, "live_member_pids": [], "zombie_member_pids": [],
+                "errors": []}
+
+    monkeypatch.setattr(runner, "_stop_owned_process", fake_stop)
+    teardown = runner.teardown_campaign_processes(
+        composite_proc=object(), composite_member=composite,
+        bootstrap_proc=object(), bootstrap_member=bootstrap,
+        collector_procs={}, collector_members={}, bootstrap_calls=1, composite_calls=1)
+
+    assert teardown["clean"] is True
+    assert teardown["verified"] is True
+    assert teardown["composite"]["graceful"] is False
+    assert teardown["graceful"] is False
+    assert [entry["signal"] for entry in teardown["escalation_history"]] == ["SIGTERM", "SIGKILL"]
+    assert [entry["line"] for entry in teardown["escalation_history"]] == [2, 3]
+
+
 def test_process_groups_and_final_record_fail_closed():
     with pytest.raises(RuntimeError, match="CAMPAIGN_PROCESS_GROUP_MISSING"):
         runner.validate_distinct_process_groups(None, {})
