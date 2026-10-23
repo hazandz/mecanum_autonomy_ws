@@ -10,9 +10,11 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <system_error>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include "mecanum_nav_rl_interfaces/msg/final_issued_command_receipt.hpp"
 #include "mecanum_nav_rl_interfaces/msg/safety_lifecycle_state.hpp"
@@ -120,6 +122,25 @@ std::vector<Json> endpoint_rows(const rclcpp::Node &node, const std::string &top
   return rows;
 }
 
+bool write_json_atomic(const std::string &path, const Json &document) {
+  if (path.empty()) return false;
+  const std::filesystem::path target(path);
+  const auto temporary = target.string() + ".tmp." + std::to_string(::getpid());
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << document.dump(-1, ' ', false, Json::error_handler_t::strict);
+    output.flush();
+    if (!output) return false;
+  }
+  std::error_code error;
+  std::filesystem::rename(temporary, target, error);
+  if (error) {
+    std::filesystem::remove(temporary);
+    return false;
+  }
+  return true;
+}
+
 bool exact_owner_for_gid(const Json &rows, const std::string &gid, const std::string &name) {
   size_t matches = 0;
   bool owner = false;
@@ -202,9 +223,10 @@ class Observer final : public rclcpp::Node {
  public:
   Observer() : Node("step07_nav2_baseline_runtime_observer") {
     output_path_ = declare_parameter<std::string>("output_path", "");
+    ready_path_ = declare_parameter<std::string>("ready_path", "");
     config_hash_ = declare_parameter<std::string>("config_hash", "");
     duration_sec_ = declare_parameter<int>("duration_sec", 30);
-    if (output_path_.empty() || config_hash_.size() != 64 || duration_sec_ < 1 || duration_sec_ > 1800) {
+    if (output_path_.empty() || ready_path_.empty() || config_hash_.size() != 64 || duration_sec_ < 1 || duration_sec_ > 1800) {
       throw std::invalid_argument("OBSERVER_ARGUMENT_INVALID");
     }
     doc_ = empty_collection_document();
@@ -268,7 +290,35 @@ class Observer final : public rclcpp::Node {
           {"command_age_ms", msg->command_age_ms}, {"navigation_state_age_ms", msg->navigation_state_age_ms}});
       });
     started_ = std::chrono::steady_clock::now();
+    const bool context_valid = context_is_valid();
+    const bool subscriptions_created = clock_sub_ && scan_sub_ && wheel_sub_ && imu_sub_ &&
+      filtered_sub_ && tf_sub_ && tf_static_sub_ && lifecycle_sub_ && receipt_sub_ && safety_state_sub_;
+    ready_document_ = Json{{"schema_version", "1.0"}, {"collector", "step07_nav2_baseline_runtime_observer"},
+      {"config_hash", config_hash_}, {"pid", static_cast<int64_t>(::getpid())},
+      {"process_alive", true},
+      {"ros_context_valid", context_valid},
+      {"subscriptions_created", subscriptions_created ? Json::array({"/clock", "/scan",
+        "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/tf", "/tf_static",
+        "/mecanum/safety_lifecycle_state", "/mecanum/final_issued_command", "/mecanum/safety_state"}) : Json::array()},
+      {"state", context_valid && subscriptions_created ? "READY" : "NOT_READY"}};
+    if (!context_valid || !subscriptions_created) {
+      ready_document_["failure_literal"] = "OBSERVER_READINESS_HANDSHAKE_FAILED";
+    }
+    if (!context_valid || !subscriptions_created || !write_json_atomic(ready_path_, ready_document_)) {
+      doc_["errors"].push_back("OBSERVER_READINESS_HANDSHAKE_FAILED");
+      failed_closed_ = true;
+    }
     timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
+  }
+
+  bool context_is_valid() {
+    const auto context = get_node_base_interface()->get_context();
+    return context && context->is_valid();
+  }
+
+  bool finished() const { return finished_; }
+  int exit_code() const {
+    return failed_closed_ || !doc_.contains("errors") || !doc_["errors"].empty() ? 2 : 0;
   }
 
   void collect_tf(tf2_msgs::msg::TFMessage::ConstSharedPtr msg, const rclcpp::MessageInfo &info, bool is_static) {
@@ -296,7 +346,26 @@ class Observer final : public rclcpp::Node {
   void finish() {
     if (finished_) return;
     finished_ = true;
+    if (!context_is_valid()) {
+      failed_closed_ = true;
+      doc_["errors"].push_back("OBSERVER_CONTEXT_INVALID_BEFORE_FINISH");
+      doc_["observer_lifecycle"] = Json{{"state", "FAIL_CLOSED"},
+        {"failure_literal", "OBSERVER_CONTEXT_INVALID_BEFORE_FINISH"},
+        {"ros_context_valid", false}, {"partial_artifact", output_path_}};
+      write_json_atomic(output_path_, doc_);
+      return;
+    }
+    doc_["observer_lifecycle"] = Json{{"state", "FINALIZING"}, {"ros_context_valid", true}};
     for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety_lifecycle_state", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command", "/mecanum/safety_state"}) {
+      if (!context_is_valid()) {
+        failed_closed_ = true;
+        doc_["errors"].push_back("OBSERVER_CONTEXT_INVALID_DURING_ENDPOINT_SNAPSHOT");
+        doc_["observer_lifecycle"] = Json{{"state", "FAIL_CLOSED"},
+          {"failure_literal", "OBSERVER_CONTEXT_INVALID_DURING_ENDPOINT_SNAPSHOT"},
+          {"ros_context_valid", false}, {"partial_artifact", output_path_}};
+        write_json_atomic(output_path_, doc_);
+        return;
+      }
       Json pubs = endpoint_rows(*this, topic, true);
       Json subs = endpoint_rows(*this, topic, false);
       doc_["graph"][topic] = Json{{"publishers", pubs}, {"subscribers", subs}};
@@ -432,19 +501,18 @@ class Observer final : public rclcpp::Node {
         });
       doc_["errors"].push_back(unknown_qos ? "QOS_METADATA_UNOBSERVABLE:" + name : "ACCEPTANCE_FAILED:" + name);
     }
-    std::ofstream output(output_path_, std::ios::binary | std::ios::trunc);
-    output << doc_.dump(-1, ' ', false, Json::error_handler_t::strict);
-    output.flush();
-    if (!output) RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");
-    rclcpp::shutdown();
+    doc_["observer_lifecycle"] = Json{{"state", "FINALIZED"}, {"ros_context_valid", true}};
+    if (!write_json_atomic(output_path_, doc_)) RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");
   }
 
  private:
-  std::string output_path_, config_hash_;
+  std::string output_path_, ready_path_, config_hash_;
   int duration_sec_{30};
   bool finished_{false};
+  bool failed_closed_{false};
   std::chrono::steady_clock::time_point started_;
   Json doc_ = Json::object();
+  Json ready_document_ = Json::object();
   std::set<std::string> dynamic_gids_, static_gids_;
   std::set<std::string> map_to_odom_gids_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -460,14 +528,27 @@ class Observer final : public rclcpp::Node {
 }  // namespace step07_observer
 
 #ifndef STEP07_OBSERVER_TEST
+#include <csignal>
+namespace { volatile std::sig_atomic_t step07_observer_stop_requested = 0;
+void step07_observer_signal_handler(int) { step07_observer_stop_requested = 1; } }
 int main(int argc, char **argv) {
-  rclcpp::init(argc, argv);
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  std::signal(SIGINT, step07_observer_signal_handler);
+  std::signal(SIGTERM, step07_observer_signal_handler);
   try {
     auto node = std::make_shared<step07_observer::Observer>();
-    rclcpp::spin(node);
-    node->finish();
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    while (rclcpp::ok() && !node->finished() && !step07_observer_stop_requested) {
+      executor.spin_some(std::chrono::milliseconds(50));
+    }
+    if (!node->finished()) node->finish();
+    executor.remove_node(node);
+    const int observer_exit_code = node->exit_code();
+    if (rclcpp::ok()) rclcpp::shutdown();
+    if (observer_exit_code != 0) return observer_exit_code;
   }
-  catch (const std::exception &error) { RCLCPP_FATAL(rclcpp::get_logger("step07_observer"), "%s", error.what()); rclcpp::shutdown(); return 2; }
+  catch (const std::exception &error) { RCLCPP_FATAL(rclcpp::get_logger("step07_observer"), "%s", error.what()); if (rclcpp::ok()) rclcpp::shutdown(); return 2; }
   return 0;
 }
 #endif

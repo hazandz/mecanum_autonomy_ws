@@ -2188,3 +2188,29 @@ Governance hashes (SHA-256 / byte size): guard `77711360f20dfaf22bd2dd5f9f1a6b76
 - Manifest: `09ae1dea2f396caec042903bc14f1835c106259818ffaa05b8868e325c4c01cf` (44581 bytes)
 
 Actual scope remains 14 paths; authorized allowlist 15 with the decision document unchanged. `SOURCE_FREEZE=TRUE`; guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; no runtime.
+
+
+### 2026-10-23 — Run005 attempt_002 Gate-B evidence collector lifecycle/order L1 corrective
+
+`supersedes`: active source/offline candidate metadata only. Invocation_014 and earlier runtime outcomes/evidence remain immutable.
+
+Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base/intended parent `a04ec4d317830e01a4613fc5251f2152b9e9946e`; official `origin`. Direct scope 16 paths; authorized allowlist 17. `SOURCE_FREEZE=TRUE` means offline-only source freeze.
+
+Both ROS collectors and the runner-owned evidence-chain readiness artifact are checked before the exact action-server check and one config-bound goal trigger. Runner waits for Gate-B artifact, stops and awaits C++ collection, records chain outcome/failure, then settles collectors before composite/bootstrap teardown. C++ validates context before endpoint queries and records fail-closed partial evidence. Exactly five valid 81D samples remain mandatory; missing correlation is a structured failure. Source pending and runtime-checkout consumed guards are distinct.
+
+Verification: focused runner/validator/collector 182; Step-7 318; bringup 254; RL 716 (646 + 70 separate processes; external install `/tmp/step07-run005-l1-corrective/install`); six-package external build; observer 16/16 and ROSIDL 8/8; py_compile 7; installed/source equality 15 artifacts + 3 modules; 38/38 pins; canonical JSON/YAML/XML; exact scope and invocation_014 preservation. Preservation inventory 2,404 entries, SHA-256 `cf9bf612b2ec886acb1465ae3230c1de232e80140f83ff8eb682790cb7fb132d`. Parent Ledger bytes are an exact prefix.
+
+Invocation_014 remains `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`, evidence untouched. Source guard PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime invocation, Gate-B PASS, or real readiness claim. Evidence ceiling `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+Guard/evidence/manifest hashes: `886adc9908e0ec778c38c904f1e40eb81bbe64b637d505ab7feedd82fe1d6350` / `01da0c2f85bbe160a01003130d5bfd4fbc01b022d5ffd3525957da8a3c944965` / `2252ff0c4f83457a23d5a0c8eb85b0f86fd48ce606b2c2c9cc4b0f49a4f2c437`.
+
+
+### 2026-10-23 — Run005 L1 final scope-test and pin closure correction
+
+`supersedes`: only the final scope-test verification line in the immediately preceding Run005 L1 collector corrective entry; all other source/test results and all historical runtime dispositions remain as recorded.
+
+Final coherence exposed five older bringup scope assertions that did not include the new exact L1 reconciled set. The contract test now accepts that exact set while preserving equality checks. Full `mecanum_nav_bringup/test` passed 254/254; `py_compile` passed. The existing pin for `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` was refreshed; the inventory remains 38 entries.
+
+Guard remains PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime invocation.
+
+Updated hashes: guard `034b40893d24a26c449892088ccd0c3c0c0b365867721240f031dc0c9abb4533` (28883 bytes); evidence `d3e02fa5a5fc63a5c3efc49b9b5fa10814b0a55ea7d789731351e35cd8d1c6b9` (49383 bytes); manifest `957dcc1cf75a0547ccfa4ec49f6150eaf35cd7561fd30834b6b2e7bbbe929a9d` (44929 bytes). Parent Ledger bytes remain an exact prefix.

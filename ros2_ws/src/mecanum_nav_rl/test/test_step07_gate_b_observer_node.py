@@ -18,6 +18,7 @@ def test_accepts_five_immutable_finite_observation81_samples():
 def test_rejects_partial_nonfinite_and_nonmonotonic_vectors():
     row = {"stamp_ns": 1, "dimension": 81, "dtype": "float32", "values": [0.0] * 81}
     assert not validate_vector_samples([row] * 4)
+    assert not validate_vector_samples([dict(row, stamp_ns=i) for i in range(1, 7)])
     bad = [dict(row, stamp_ns=i, values=[0.0] * 80) for i in range(1, 6)]
     assert not validate_vector_samples(bad)
     bad = [dict(row, stamp_ns=i, values=[float("nan")] + [0.0] * 80) for i in range(1, 6)]
@@ -129,6 +130,7 @@ c.tf_buffer=buffer; c.path=path; c.config_hash="a"*64
 c._compute_path_requested=c._navigate_requested=True
 c._compute_path_calls=c._navigate_calls=1
 c._finished=False; c._last_measurement_key=None; c.samples=[]; c.errors=[]
+c.args=NS()
 c.deadline=m.time.monotonic()+10
 c.binner=LidarAngularBinner(ObservationConfig())
 c.lidar_binding=m.IngressMessageBinding(LaserScan,"/scan","sensor_msgs/msg/LaserScan","lidar_frame",c._sectorize,None)
@@ -208,6 +210,23 @@ def test_async_actions_sent_once_and_completion_verdict_uses_actual_results():
     assert not c.passed()
 
 
+def test_goal_trigger_is_config_bound_and_required_before_action_start(tmp_path):
+    import json
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    c = m._Collector.__new__(m._Collector)
+    c.args = SimpleNamespace(start_path=tmp_path / "trigger.json")
+    c.config_hash = "a" * 64
+    assert not c._read_goal_trigger()
+    c.args.start_path.write_text(json.dumps({"state": "TRIGGER_GOAL", "config_hash": "b" * 64,
+                                            "collector_ready": True}), encoding="utf-8")
+    assert not c._read_goal_trigger()
+    c.args.start_path.write_text(json.dumps({"state": "TRIGGER_GOAL", "config_hash": "a" * 64,
+        "collector_ready": True, "navigate_to_pose_action_server_ready": True,
+        "ready_collectors": ["step07_nav2_baseline_runtime_observer", "step07_gate_b_observer",
+                             "navigation_evidence_chain_collector"]}), encoding="utf-8")
+    assert c._read_goal_trigger()
+
+
 def test_peer_lifetime_atomic_once_early_and_late_goal_and_failures(tmp_path, monkeypatch):
     import json
     import pytest
@@ -278,6 +297,8 @@ assert len(subscriptions)==4 and not sends
 c._tick(); assert not sends and not c.samples
 finished=[]; c._finish=lambda:finished.append(True)
 c.deadline=0
+c._tick(); assert not finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
+c.navigate_result={"accepted":False,"status":"REJECTED"}
 c._tick(); assert finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
 ''')
 
@@ -285,9 +306,12 @@ c._tick(); assert finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
 def test_interruption_writes_rejected_result_once_and_closes_without_action_retry(tmp_path, monkeypatch):
     import json
     import sys
+    import signal
+    from types import ModuleType
     from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
     c=m._Collector.__new__(m._Collector)
-    c.args=SimpleNamespace(output=tmp_path/"gate.json",peer_evidence_path=tmp_path/"peer.json",peer_timeout_sec=10)
+    c.args=SimpleNamespace(output=tmp_path/"gate.json",peer_evidence_path=tmp_path/"peer.json",
+        peer_timeout_sec=10,ready_path=tmp_path/"ready.json",start_path=tmp_path/"start.json")
     c.config_hash="a"*64; c._finished=c._closed=c._peer_verified=False
     c.samples=[]; c.raw={}; c.errors=[]; c.path=None; c.path_transcript=None
     c._compute_path_requested=c._navigate_requested=False; c._compute_path_calls=c._navigate_calls=0
@@ -295,15 +319,35 @@ def test_interruption_writes_rejected_result_once_and_closes_without_action_retr
     events=[]
     c.node=SimpleNamespace(destroy_node=lambda:events.append("destroy"))
     c.timer=SimpleNamespace(cancel=lambda:events.append("cancel"))
-    def interrupt(node): raise KeyboardInterrupt()
-    ros=SimpleNamespace(init=lambda:None,spin=interrupt,ok=lambda:True,shutdown=lambda:events.append("shutdown"))
+    c._peer_deadline=0
+    c.navigate_result=None
+    c.GoalStatus=SimpleNamespace()
+    c.rclpy=SimpleNamespace(ok=lambda:True)
+    c.node.destroy_node=lambda:events.append("destroy")
+    signals=ModuleType("rclpy.signals"); signals.SignalHandlerOptions=SimpleNamespace(NO="NO")
+    ros_state={"ok":True}
+    def shutdown():
+        events.append("shutdown"); ros_state["ok"]=False
+    ros=SimpleNamespace(init=lambda **kwargs:None,spin_once=lambda *args,**kwargs:None,
+        create_node=lambda *args,**kwargs:c.node,ok=lambda:ros_state["ok"],shutdown=shutdown)
     c.rclpy=ros
+    previous=signal.getsignal(signal.SIGINT)
+    fired={"value":False}
+    def fake_signal(signum, handler):
+        old=previous
+        if signum == signal.SIGINT and callable(handler) and not fired["value"]:
+            fired["value"]=True
+            handler(signum,None)
+        return old
+    monkeypatch.setattr(signal,"signal",fake_signal)
     monkeypatch.setitem(sys.modules,"rclpy",ros)
+    monkeypatch.setitem(sys.modules,"rclpy.signals",signals)
     monkeypatch.setattr(m,"_Collector",lambda args:c)
     assert m.main(["--output",str(c.args.output),"--config-hash",c.config_hash,
-                   "--peer-evidence-path",str(c.args.peer_evidence_path)]) == 2
+                   "--peer-evidence-path",str(c.args.peer_evidence_path),
+                   "--ready-path",str(c.args.ready_path),"--start-path",str(c.args.start_path)]) == 2
     doc=json.loads(c.args.output.read_bytes())
-    assert doc["errors"] == ["OBSERVER_INTERRUPTED"]
+    assert doc["errors"] == ["GATE_B_COLLECTOR_INTERRUPTED"]
     assert not doc["acceptance"]["navigate_to_pose_requested_once"]
     assert events == ["cancel","destroy","shutdown"]
     assert c._navigate_calls == c._compute_path_calls == 0

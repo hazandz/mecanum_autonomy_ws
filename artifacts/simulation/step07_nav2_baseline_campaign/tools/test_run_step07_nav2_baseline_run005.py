@@ -1513,6 +1513,57 @@ def test_process_groups_and_final_record_fail_closed():
         runner.finalise_after_teardown({}, {"all": True}, {"completed": False})
 
 
+def test_collector_ready_handshake_requires_live_matching_process_context_and_subscriptions(tmp_path):
+    from types import SimpleNamespace
+    path = tmp_path / "gate.ready.json"
+    subscriptions = ["/scan", "/odometry/filtered"]
+    process = SimpleNamespace(pid=1234, returncode=None, poll=lambda: None)
+    runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
+        "config_hash": "a" * 64, "pid": 1234, "state": "READY",
+        "ros_context_valid": True, "subscriptions_created": subscriptions})
+    ready = runner.wait_collector_ready(path, process, collector="gate",
+        config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1)
+    assert ready["ready"] is True and ready["ros_context_valid"] is True
+    runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
+        "config_hash": "a" * 64, "pid": 1234, "state": "READY",
+        "ros_context_valid": False, "subscriptions_created": subscriptions})
+    with pytest.raises(RuntimeError, match="GATE_READINESS_TIMEOUT"):
+        runner.wait_collector_ready(path, process, collector="gate",
+            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.05)
+    runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
+        "config_hash": "a" * 64, "pid": 1234, "state": "NOT_READY",
+        "failure_literal": "OBSERVER_READINESS_HANDSHAKE_FAILED",
+        "ros_context_valid": False, "subscriptions_created": []})
+    with pytest.raises(RuntimeError,
+                       match="GATE_READINESS_FAILED:OBSERVER_READINESS_HANDSHAKE_FAILED"):
+        runner.wait_collector_ready(path, process, collector="gate",
+            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1)
+
+
+def test_navigate_action_probe_requires_exactly_one_server(monkeypatch):
+    from types import SimpleNamespace
+    responses = [SimpleNamespace(returncode=0, stdout="Action servers: 2\n", stderr=""),
+                 SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr="")]
+    monkeypatch.setattr(runner, "_run", lambda *args, **kwargs: responses.pop(0))
+    assert not runner.navigate_to_pose_action_server_ready({})["ready"]
+    assert runner.navigate_to_pose_action_server_ready({})["ready"]
+
+
+def test_collector_failure_forces_teardown_clean_and_graceful_false():
+    teardown = {"clean": True, "graceful": True, "errors": []}
+    runner.mark_collector_failures(teardown, {"gate_b_observer": {"exit_code": 2}})
+    assert teardown["clean"] is False and teardown["graceful"] is False
+    assert teardown["collector_failures"] == ["COLLECTOR_FAILED:gate_b_observer:2"]
+
+
+def test_run_record_names_source_and_runtime_checkout_guards_separately():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    assert '"source_guard": {"path": str(args.guard_path)' in source
+    assert '"runtime_guard": {"path": str(runtime_guard)' in source
+    assert 'record["source_guard"]["state_after"] = guard.get("state")' in source
+    assert '"state_after": consumed["state"]' in source
+
+
 def test_fuel_cache_accepts_exact_lowercase_owner_model_layout(tmp_path):
     root = _valid_fuel_cache(tmp_path / "fuel")
     resolved = _validate_layout(root)

@@ -66,7 +66,7 @@ def atomic_json(path: str | Path, document: dict) -> None:
 
 
 def validate_vector_samples(samples: list[dict], *, minimum: int = 5) -> bool:
-    if type(samples) is not list or len(samples) < minimum:
+    if type(samples) is not list or len(samples) != minimum:
         return False
     previous = None
     for row in samples:
@@ -222,16 +222,61 @@ class _Collector:
         receipt_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                                  reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.node.create_subscription(LaserScan, "/scan", self._scan, sensor_qos)
-        self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, sensor_qos)
-        self.node.create_subscription(SafetyLifecycleState, LIFECYCLE_STATE_TOPIC, self._lifecycle, lifecycle_qos)
-        self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos)
+        self.subscriptions = [
+            self.node.create_subscription(LaserScan, "/scan", self._scan, sensor_qos),
+            self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, sensor_qos),
+            self.node.create_subscription(SafetyLifecycleState, LIFECYCLE_STATE_TOPIC, self._lifecycle, lifecycle_qos),
+            self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos),
+        ]
         self.compute = ActionClient(self.node, ComputePathToPose, "/compute_path_to_pose")
         self.navigate = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
         clock = importlib.import_module("rclpy.clock")
         self.timer = self.node.create_timer(0.02, self._tick,
             clock=clock.Clock(clock_type=clock.ClockType.STEADY_TIME))
         self.deadline = time.monotonic() + args.timeout_sec
+        self._goal_triggered = False
+        self._ready_written = False
+
+    def _ready_document(self):
+        context_valid = bool(self.rclpy.ok() and self.node.context.ok())
+        subscriptions = ["/scan", "/odometry/filtered", LIFECYCLE_STATE_TOPIC,
+                         "/mecanum/final_issued_command"]
+        return {"schema_version": "1.0", "collector": "step07_gate_b_observer",
+                "config_hash": self.config_hash, "pid": os.getpid(),
+                "ros_context_valid": context_valid,
+                "subscriptions_created": subscriptions if len(self.subscriptions) == 4 else [],
+                "navigate_to_pose_action_server_ready": bool(self.navigate.server_is_ready()),
+                "state": "READY" if context_valid and len(self.subscriptions) == 4
+                    and self.navigate.server_is_ready() else "NOT_READY"}
+
+    def _publish_ready_when_complete(self):
+        if getattr(self, "_ready_written", False) or not hasattr(self, "navigate"):
+            return
+        ready = self._ready_document()
+        if ready["state"] == "READY":
+            ready_path = getattr(self.args, "ready_path", None)
+            if ready_path:
+                atomic_json(ready_path, ready)
+            self._ready_written = True
+
+    def _read_goal_trigger(self):
+        if getattr(self, "_goal_triggered", False):
+            return True
+        trigger_path = getattr(getattr(self, "args", None), "start_path", None)
+        if not trigger_path:
+            return True
+        try:
+            trigger = json.loads(Path(trigger_path).read_bytes())
+        except (OSError, ValueError):
+            return False
+        if (type(trigger) is dict and trigger.get("state") == "TRIGGER_GOAL"
+                and trigger.get("config_hash") == self.config_hash
+                and trigger.get("collector_ready") is True
+                and trigger.get("navigate_to_pose_action_server_ready") is True
+                and trigger.get("ready_collectors") == ["step07_nav2_baseline_runtime_observer",
+                    "step07_gate_b_observer", "navigation_evidence_chain_collector"]):
+            self._goal_triggered = True
+        return getattr(self, "_goal_triggered", False)
 
     def _goal_pose(self):
         pose = self.PoseStamped()
@@ -331,25 +376,43 @@ class _Collector:
 
     def _lifecycle(self, msg):
         self.latest_lifecycle = msg
-        self.raw["lifecycle"].append({"episode_generation": msg.episode_generation, "reset_epoch": msg.reset_epoch, "runtime_generation": msg.runtime_generation, "primary_state": msg.primary_state, "barrier_state": msg.barrier_state, "motion_permitted": msg.motion_permitted, "reason": msg.reason})
+        self.raw["lifecycle"].append({"stamp_ns": msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec,
+            "episode_generation": msg.episode_generation, "reset_epoch": msg.reset_epoch,
+            "runtime_generation": msg.runtime_generation, "sequence": msg.sequence,
+            "primary_state": msg.primary_state, "barrier_state": msg.barrier_state,
+            "motion_permitted": msg.motion_permitted, "reason": msg.reason})
 
     def _receipt(self, msg):
         self.latest_receipt = msg
-        self.raw["receipt"].append({"episode_generation": msg.episode_generation, "reset_epoch": msg.reset_epoch, "runtime_generation": msg.runtime_generation, "sequence": msg.final_publish_sequence, "source": msg.source, "final_command": [msg.final_command.linear.x, msg.final_command.linear.y, msg.final_command.angular.z]})
+        self.raw["receipt"].append({"stamp_ns": msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec,
+            "episode_generation": msg.episode_generation, "reset_epoch": msg.reset_epoch,
+            "runtime_generation": msg.runtime_generation, "sequence": msg.final_publish_sequence,
+            "source": msg.source, "final_command": [msg.final_command.linear.x,
+                msg.final_command.linear.y, msg.final_command.angular.z]})
 
     def _tick(self):
         if self._finished:
             self._wait_peer()
             return
+        self._publish_ready_when_complete()
         if self.errors:
+            if self.navigate_result is not None:
+                self._finish()
+                return
+        if self.navigate_result is not None and self.navigate_result.get("succeeded") is not True:
+            self.errors.append("GATE_B_NAVIGATION_TERMINAL_FAILURE")
             self._finish()
             return
         now = self.node.get_clock().now().nanoseconds
         if time.monotonic() >= self.deadline:
-            self.errors.append("GATE_B_SAMPLE_TIMEOUT")
-            self._finish()
+            if "GATE_B_SAMPLE_TIMEOUT" not in self.errors:
+                self.errors.append("GATE_B_SAMPLE_TIMEOUT")
+            if self.navigate_result is not None:
+                self._finish()
             return
         if now <= 0:
+            return
+        if not self._read_goal_trigger():
             return
         stamp_type = importlib.import_module("rclpy.time").Time
         if not self._compute_path_requested:
@@ -419,9 +482,17 @@ class _Collector:
             self.errors.append("GATE_B_SAMPLE_TIMESTAMP_NOT_MONOTONIC")
             return
         values = [float(value) for value in assembly.vector.tolist()]
-        self.samples.append({"stamp_ns": int(stamp), "dimension": 81, "dtype": "float32", "values": values})
+        if len(self.samples) >= 5:
+            return
+        self.samples.append({"stamp_ns": int(stamp), "dimension": 81, "dtype": "float32", "values": values,
+            "correlation": {"episode_generation": int(lifecycle.episode_generation),
+                "reset_epoch": int(lifecycle.reset_epoch), "runtime_generation": int(lifecycle.runtime_generation),
+                "lifecycle_sequence": int(lifecycle.sequence),
+                "receipt_sequence": int(receipt.final_publish_sequence),
+                "scan_stamp_ns": int(scan_stamp), "odometry_stamp_ns": int(odom_stamp),
+                "receipt_stamp_ns": int(receipt.header.stamp.sec * 1_000_000_000 + receipt.header.stamp.nanosec)}})
         self._last_measurement_key = measurement_key
-        if len(self.samples) >= 5 and self.navigate_result is not None:
+        if len(self.samples) == 5 and self.navigate_result is not None:
             self._finish()
 
     def _finish(self):
@@ -441,6 +512,15 @@ class _Collector:
                 "navigate_to_pose_succeeded": bool(self.navigate_result and self.navigate_result.get("succeeded")),
                 "no_command_or_policy_publisher": True, "errors_absent": not self.errors},
             "errors": list(dict.fromkeys(self.errors)),
+            "collector_failure": ({"literal": self.errors[0], "exit_code": 2,
+                "lifecycle_state": self.raw.get("lifecycle", [])[-1] if self.raw.get("lifecycle") else
+                    {"state": "UNOBSERVED", "reason": "NO_LIFECYCLE_SAMPLE_IN_GATE_WINDOW"},
+                "partial_artifact": "gate_b_vectors.json", "valid_sample_count": len(self.samples)}
+                if self.errors else None),
+            "collector_terminal_state": ("FIVE_VALID_SAMPLES_AND_ACTION_TERMINAL"
+                if len(self.samples) == 5 and self.navigate_result is not None else
+                "ACTION_TERMINAL_RESULT_WITH_PARTIAL_EVIDENCE" if self.navigate_result is not None else
+                "COLLECTOR_INTERRUPTED_BEFORE_ACTION_TERMINAL"),
         }
         atomic_json(self.args.output, document)
         self._wait_peer()
@@ -480,6 +560,8 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--config-hash", required=True)
     parser.add_argument("--peer-evidence-path", required=True)
+    parser.add_argument("--ready-path", required=True)
+    parser.add_argument("--start-path", required=True)
     parser.add_argument("--peer-timeout-sec", type=float, default=60.0)
     parser.add_argument("--goal-x", type=float, default=-4.0)
     parser.add_argument("--goal-y", type=float, default=0.0)
@@ -488,17 +570,30 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if len(args.config_hash) != 64 or not all(ch in "0123456789abcdef" for ch in args.config_hash):
         raise SystemExit("CONFIG_HASH_INVALID")
+    import signal
     rclpy = importlib.import_module("rclpy")
-    rclpy.init()
+    signal_options = importlib.import_module("rclpy.signals").SignalHandlerOptions
+    rclpy.init(signal_handler_options=signal_options.NO)
+    stop_requested = {"value": False}
+    previous_handlers = {}
+    def request_stop(_signum, _frame):
+        stop_requested["value"] = True
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, request_stop)
     collector = _Collector(args)
     try:
-        rclpy.spin(collector.node)
-    except KeyboardInterrupt:
-        if rclpy.ok():
-            collector.errors.append("OBSERVER_INTERRUPTED")
+        while rclpy.ok() and not collector._closed and not stop_requested["value"]:
+            rclpy.spin_once(collector.node, timeout_sec=0.1)
+        if stop_requested["value"] and not collector._finished:
+            collector.errors.append("GATE_B_COLLECTOR_INTERRUPTED")
             collector._finish()
     finally:
         collector._close()
+        if rclpy.ok():
+            rclpy.shutdown()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     return 0 if collector.passed() else 2
 
 

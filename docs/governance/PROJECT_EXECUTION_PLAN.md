@@ -1153,3 +1153,13 @@ Review base `9fad09f333b93c8f63d9c4044af41d04d40be8c0`; branch `step07-integrate
 Run005 has 38 unique source pins. The added pin identifies the existing runtime QoS implementation `safety_lifecycle_node.py`; test-only observer source remains unpinned. Actual direct path set is 14; authorized allowlist is 15, with the decision document unchanged.
 
 Verification: focused runner/validator/guard 181; Step-7 313; bringup 254; RL 715; six-package external build; observer 14 and ROSIDL 8; Python compile; installed/source equality 15 data artifacts + 2 QoS modules; 38/38 pins; canonical parsing, historical scope/Git-blob preservation, exact path scope and diff checks PASS. Invocation_011 remains immutable historical FAIL. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED.
+
+
+## 2026-10-23 — Run005 L1 collector corrective plan note
+
+The evidence-collection ordering correction on base `a04ec4d317830e01a4613fc5251f2152b9e9946e` is source-frozen for independent review after offline verification. This note does not advance Gate B, runtime approval, or integration. Next action: independent audit of the exact candidate commit; runtime requires separate explicit one-run authorization.
+
+
+### Verification correction
+
+The five legacy-scope dispatch assertions were extended to recognize the current exact L1 reconciled path set. Full bringup verification now passes; this remains offline source/test evidence only. Gate B, runtime approval, and integration status are unchanged.

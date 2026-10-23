@@ -136,14 +136,46 @@ def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:safety_decision_candidate")
     if not all(type(row.get("raw_command")) is dict and type(row.get("intervention_reasons")) is list for row in safety):
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:candidate_or_safety_reason")
+    if not all(type(row.get("command_valid")) is bool and type(row.get("motion_permitted")) is bool
+               and type(row.get("intervention_reasons")) is list for row in safety):
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:safety_decision_reason")
     if not receipts:
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:final_receipt")
+    if not all(type(row.get("sequence")) is int and
+               all(type(row.get(key)) in (int, float) and math.isfinite(row[key]) for key in ("vx", "vy", "wz"))
+               for row in receipts):
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:final_receipt_command_or_sequence")
     if not odometry or any(type(row.get("pose")) is not list or len(row["pose"]) != 7
                            or type(row.get("twist")) is not list or len(row["twist"]) != 6
                            for row in odometry):
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:odometry_pose_twist")
     if any(row.get("pose_finite") is not True or row.get("twist_finite") is not True for row in odometry):
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_ODOMETRY_INVALID")
+    for sample in samples:
+        correlation = sample.get("correlation")
+        required = {"episode_generation", "reset_epoch", "runtime_generation", "lifecycle_sequence",
+                    "receipt_sequence", "scan_stamp_ns", "odometry_stamp_ns", "receipt_stamp_ns"}
+        if (type(correlation) is not dict or not required.issubset(correlation)
+                or any(type(correlation[key]) is not int for key in required)
+                or correlation["episode_generation"] <= 0 or correlation["reset_epoch"] < 0
+                or correlation["runtime_generation"] <= 0 or correlation["lifecycle_sequence"] <= 0
+                or correlation["receipt_sequence"] <= 0
+                or any(correlation[key] <= 0 for key in ("scan_stamp_ns", "odometry_stamp_ns", "receipt_stamp_ns"))):
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:sample_correlation")
+        receipt_match = any(
+            int(row.get("stamp_sec", -1)) * 1_000_000_000 + int(row.get("stamp_nanosec", -1)) == correlation["receipt_stamp_ns"]
+            and row.get("episode_generation") == correlation["episode_generation"]
+            and row.get("reset_epoch") == correlation["reset_epoch"]
+            and row.get("runtime_generation") == correlation["runtime_generation"]
+            and row.get("sequence") == correlation["receipt_sequence"]
+            for row in receipts)
+        odometry_match = any(
+            int(row.get("stamp_sec", -1)) * 1_000_000_000 + int(row.get("stamp_nanosec", -1)) == correlation["odometry_stamp_ns"]
+            for row in odometry)
+        if not receipt_match:
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_final_receipt")
+        if not odometry_match:
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_odometry")
     navigate = gate_document.get("navigate_to_pose")
     if type(navigate) is not dict or navigate.get("requested_once") is not True:
         raise ValueError("NAVIGATION_EVIDENCE_WINDOW_NAVIGATION_MISSING")
@@ -167,6 +199,7 @@ def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict
             "odometry_pose_twist": [
                 {key: row[key] for key in ("stamp_sec", "stamp_nanosec", "pose", "twist", "pose_finite", "twist_finite")}
                 for row in odometry],
+            "sample_correlation": [sample["correlation"] for sample in samples],
         },
     }
 
@@ -174,6 +207,42 @@ def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict
 def canonical_navigation_evidence_chain(observer: dict, gate_document: dict) -> tuple[dict, bytes]:
     chain = build_navigation_evidence_chain(observer, gate_document)
     return chain, semantic_canonical_bytes(chain)
+
+
+def navigation_evidence_chain_failure(observer: dict, gate_document: dict,
+                                      failure_literal: str) -> dict:
+    """Represent absent or incomplete evidence as explicit structured failure."""
+    samples = gate_document.get("samples")
+    samples = samples if type(samples) is list else []
+    valid_samples = [row for row in samples if type(row) is dict and type(row.get("stamp_ns")) is int]
+    start = valid_samples[0]["stamp_ns"] if valid_samples else 0
+    end = valid_samples[-1]["stamp_ns"] if valid_samples else 0
+    links = {}
+    for name, rows, required in (
+        ("candidate_command_before_safety", observer.get("safety_state"), "raw_command_and_intervention_reasons"),
+        ("safety_decision_and_reason", observer.get("safety_state"), "command_valid_motion_and_reason"),
+        ("final_receipt", observer.get("receipt"), "timestamp_identity_sequence_and_final_command"),
+        ("odometry_pose_twist", observer.get("filtered_odometry"), "timestamp_pose_twist_and_finite_values"),
+    ):
+        in_window = [row for row in rows if type(row) is dict and
+                     type(row.get("stamp_sec")) is int and type(row.get("stamp_nanosec")) is int and
+                     start > 0 and start <= row["stamp_sec"] * 1_000_000_000 + row["stamp_nanosec"] <= end] if type(rows) is list else []
+        correlation_failure = ((name == "final_receipt" and "correlated_final_receipt" in failure_literal)
+            or (name == "odometry_pose_twist" and "correlated_odometry" in failure_literal)
+            or (name == "candidate_command_before_safety" and "candidate_or_safety_reason" in failure_literal)
+            or (name == "safety_decision_and_reason" and "safety_decision_reason" in failure_literal))
+        links[name] = {"state": "CORRELATION_FAILURE" if correlation_failure else
+                           "PRESENT" if in_window else "MISSING",
+                       "required_fields": required, "records_in_gate_window": len(in_window),
+                       "failure_reason": ("RECORDS_NOT_CORRELATED_TO_GATE_SAMPLE_IDENTITY" if correlation_failure else
+                           "" if in_window else "NO_CORRELATED_RECORD_IN_GATE_WINDOW")}
+    return {"schema_version": "1.0", "state": "FAILURE",
+            "failure_literal": failure_literal if type(failure_literal) is str and failure_literal else "EVIDENCE_CHAIN_FAILURE_REASON_REQUIRED",
+            "window": {"source": "gate_b_vectors.samples", "start_stamp_ns": start,
+                       "end_stamp_ns": end, "sample_count": len(valid_samples)},
+            "links": links, "observer_lifecycle_state": observer.get("observer_lifecycle", {}).get("state", "UNRECORDED") if type(observer.get("observer_lifecycle")) is dict else "UNRECORDED",
+            "gate_b_terminal_state": gate_document.get("collector_terminal_state", "UNRECORDED"),
+            "partial_artifact_paths": ["runtime_observer.json", "gate_b_vectors.json"]}
 
 
 def verify_artifacts(run_directory: str | Path) -> dict:

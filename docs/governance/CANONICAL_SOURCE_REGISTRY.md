@@ -1262,3 +1262,26 @@ Current pin values (SHA-256 / byte size):
 | `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py` | `d4c7bdc19498052c32d859ccf727d12de4746cda09511ff18f822e695758609d` | 5318 |
 
 Offline verification: focused runner/validator/guard 181; Step-7 313; bringup 254; RL 715; six-package external build; observer 14 and ROSIDL 8; `py_compile` six files; installed/source equality 15 data artifacts plus 2 QoS modules; 38/38 pins and exact scope/history/canonical/diff checks PASS. No runtime. Invocation_011 remains historical FAIL, unchanged. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED/no lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Evidence remains offline-only.
+
+
+### 2026-10-23 — Run005 attempt_002 L1 Gate-B collector lifecycle/order corrective
+
+Base/intended parent `a04ec4d317830e01a4613fc5251f2152b9e9946e`, branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. Direct scope 16 paths; authorized allowlist 17, runtime-guard test allowed but unchanged. Pin inventory remains 38, with eight existing entries refreshed.
+
+Offline verification: Step-7 318; bringup 254; RL 716 (646 + 70 separate processes); six-package external build; observer 16 C++ cases; ROSIDL 8; py_compile 7 files; byte equality 15 runtime artifacts + 3 Python modules; canonical JSON/YAML/XML; exact scope and invocation_014 preservation. No runtime. Gate B `NOT_STARTED`; runtime unapproved; source seed pending/capacity 1/acquisition 0/NOT_GRANTED/no lock. Independent audit remains required.
+
+| Refreshed pin | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `bdd741cc91ba5dd6816ce7a794e683df61ef9ef5cd64a9cf4d99743f0bc96905` | 124015 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `5b501bc4a31790f282666f78c995494fa4525e7aa03af8e5f5f32c3143765279` | 40556 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `489b003fff714a8f30bd2ab3879a7c4caf3658cd2fd7d4d10fb34ca3db06e3fe` | 123160 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `ed0f060f88d25452d89c0e52bd70ce06d2682cfcdb72fa87e88bb54a631b061e` | 31940 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `97208221adb8eddf1e1a117082c082ddaf333e528125c6dee652d3314a148ec9` | 78449 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `d381af74c6b158b34e9c25a29437d5d829925fedfe4a36e772edc01782aab4be` | 30507 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `9ecb75ed2e5486d399bd8d9836568585f7bf9e372bca06d4f103c00d60d14c6b` | 19514 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `5188a8ad974954f169d852c1007f4a63883098ace9d011f9b1721f7fd7f01629` | 39328 |
+
+
+### Run005 L1 scope-test pin correction (2026-10-23)
+
+The final bringup scope dispatch now recognizes the exact current 16-path reconciled scope. Full bringup is 254/254. One existing source pin was refreshed without membership change (38 total): `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` — SHA-256 `a7d6aaa047a877d32c4663cfbbc726b8242edd42b47a6b6a2905a7d12468fc21`, 78674 bytes. Guard/evidence/manifest coherence below; no runtime occurred.

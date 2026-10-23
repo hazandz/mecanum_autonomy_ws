@@ -190,3 +190,17 @@ Exact source base / required parent: `a383f258b02a0f9a22b2dc72fb937dbcaba6973a`;
 The runtime YAML changes only required-integer local costmap `width` and `height` scalars from `4.0` to integer `4`; global costmap has no width/height entries. The focused contract parses YAML and checks every existing global/local costmap dimension has exact Python integer type, while retaining historical scope assertions. The runner now records launcher log SIGTERM/SIGKILL escalation after SIGINT and reports `process_group_teardown_graceful=false` even when the final process snapshot is clean; regression coverage exercises that case. Other runtime acceptance semantics are unchanged.
 
 Phase A source freeze was recorded after focused checks, Step-7 tools (311), bringup (252 in the pre-existing clean-scope run), RL (715), six-package external build, observer (13) / ROSIDL (8), `py_compile`, and installed/source byte equality (15/15) passed. A later full bringup rerun returned 247 passed / 5 failed because untracked colcon `log/` entries were included by existing exact-scope checks. These generated paths are outside the allowlist and were left untouched; the final exact-worktree-scope condition therefore does not pass. No commit or push was made. The corrective remains source/offline only; no runtime was invoked. Guard remains pending, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. Evidence ceiling: `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+
+## Run005 attempt_002 — Gate-B collector lifecycle/order corrective (2026-10-23)
+
+Invocation_014 remains immutable and failed with `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`. Evidence recorded `NavigateToPose accepted=false/NO_RESULT`, one 81D vector, Gate-B sample timeout, C++ observer exit 2 after invalid ROS context, missing evidence chain, and `clean=false/graceful=false`. Its runtime checkout guard was consumed; source seed is a separate pending object.
+
+This L1 evidence-collection corrective adds pre-goal action-server readiness, explicit READY artifacts for both ROS collectors and runner-owned evidence-chain collection, a config-bound trigger, collector settlement before composite/bootstrap teardown, and timestamp/correlation-bound structured chain failures. The C++ observer checks context before graph queries and persists fail-closed partial evidence. Five valid 81D samples remain mandatory. No safety/controller thresholds, map, Gazebo/TF/launch semantics, or public ROS interface changed.
+
+Phase A `SOURCE_FREEZE=TRUE` is offline-only. Base/intended parent `a04ec4d317830e01a4613fc5251f2152b9e9946e`; direct scope 16; authorized paths 17. Pins remain 38 with eight existing hashes refreshed. Guard PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no lock; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. No runtime was run; independent audit remains required.
+
+
+### Final scope-test closure (2026-10-23)
+
+The bringup contract test now includes the current 16-path reconciled scope in its historical scope dispatch while retaining exact set equality. Full `mecanum_nav_bringup/test` passed 254/254. The existing pin for `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` was refreshed; source-pin membership remains 38. The source guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED with no lock. This test-only correction grants no runtime or Gate-B status.

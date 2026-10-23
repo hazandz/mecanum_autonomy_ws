@@ -6,6 +6,7 @@ import pytest
 
 from step07_gate_b_evidence_validator import (
     QOS_PROFILE_SOURCE_PATHS, canonical_navigation_evidence_chain,
+    navigation_evidence_chain_failure,
     load_json, validate_gate_b_document, validate_observer,
     validate_run_directory, validate_run_record, validate_vector_samples,
 )
@@ -364,7 +365,8 @@ def test_navigation_evidence_chain_requires_every_existing_stream_and_is_canonic
         "intervention_reasons": ["LIMITER_PRIMED"], "command_valid": True,
         "motion_permitted": True, "scan_fresh": True, "odom_fresh": True,
         "tf_valid": True, "localization_valid": True} for i in range(start, end + 1)]
-    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "source": 2,
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "source": 2, "sequence": i,
+        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
         "vx": 0.1, "vy": 0.0, "wz": 0.0} for i in range(start, end + 1)]
     observer["filtered_odometry"] = [{"frame_id": "odom", "child_frame_id": "base_link",
         "stamp_sec": 0, "stamp_nanosec": i, "pose": [0.0] * 7, "twist": [0.0] * 6,
@@ -382,6 +384,30 @@ def test_navigation_evidence_chain_requires_every_existing_stream_and_is_canonic
     changed["safety_state"][0].pop("raw_command")
     with pytest.raises(ValueError, match="candidate_or_safety_reason"):
         canonical_navigation_evidence_chain(changed, gate)
+
+
+def test_navigation_evidence_chain_rejects_uncorrelated_receipt_and_has_structured_failure():
+    observer = observer_doc()
+    gate = _gate_b_doc()
+    observer["safety_state"] = [{"stamp_sec": 0, "stamp_nanosec": i,
+        "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
+        "intervention_reasons": [], "command_valid": True, "motion_permitted": True}
+        for i in range(1, 6)]
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "sequence": i,
+        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+        "vx": 0.0, "vy": 0.0, "wz": 0.0} for i in range(1, 6)]
+    observer["filtered_odometry"] = [{"frame_id": "odom", "child_frame_id": "base_link",
+        "stamp_sec": 0, "stamp_nanosec": i, "pose": [0.0] * 7, "twist": [0.0] * 6,
+        "pose_finite": True, "twist_finite": True} for i in range(1, 6)]
+    observer["receipt"][0]["sequence"] = 99
+    with pytest.raises(ValueError, match="correlated_final_receipt"):
+        canonical_navigation_evidence_chain(observer, gate)
+    failure = navigation_evidence_chain_failure(observer, gate,
+        "NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_final_receipt")
+    assert failure["state"] == "FAILURE"
+    assert failure["failure_literal"] == "NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_final_receipt"
+    assert failure["links"]["final_receipt"]["state"] == "CORRELATION_FAILURE"
+    assert failure["window"]["sample_count"] == 5
 
 
 def test_gate_b_document_requires_successful_nav2_actions_and_exact_vectors():
@@ -412,7 +438,10 @@ def test_lifecycle_endpoint_contract_rejects_qos_conflation_and_obsolete_topic()
 
 
 def _gate_b_doc(config_hash="a" * 64):
-    samples = [{"stamp_ns": i, "dimension": 81, "dtype": "float32", "values": [0.0] * 81}
+    samples = [{"stamp_ns": i, "dimension": 81, "dtype": "float32", "values": [0.0] * 81,
+                "correlation": {"episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+                    "lifecycle_sequence": i, "receipt_sequence": i, "scan_stamp_ns": i,
+                    "odometry_stamp_ns": i, "receipt_stamp_ns": i}}
                for i in range(1, 6)]
     return {"schema_version": "1.0", "config_hash": config_hash,
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
@@ -451,8 +480,9 @@ def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_pat
         "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
         "intervention_reasons": [], "command_valid": True, "motion_permitted": True}
         for i in range(1, 6)]
-    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i,
-        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3}
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "sequence": i,
+        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+        "vx": 0.0, "vy": 0.0, "wz": 0.0}
         for i in range(1, 6)]
     observer["navigation_evidence_chain"], canonical = canonical_navigation_evidence_chain(observer, gate)
     observer["navigation_evidence_chain_canonical"] = canonical.decode("utf-8")

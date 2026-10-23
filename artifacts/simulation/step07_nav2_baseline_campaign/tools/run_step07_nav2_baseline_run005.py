@@ -1486,6 +1486,19 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
     return record
 
 
+def mark_collector_failures(teardown: dict, outcomes: dict) -> dict:
+    failed = {name: row for name, row in outcomes.items()
+              if type(row) is dict and row.get("exit_code") != 0}
+    if failed:
+        literals = [f"COLLECTOR_FAILED:{name}:{row.get('exit_code')}"
+                    for name, row in sorted(failed.items())]
+        teardown["collector_failures"] = literals
+        teardown["errors"] = list(dict.fromkeys([*teardown.get("errors", []), *literals]))
+        teardown["clean"] = False
+        teardown["graceful"] = False
+    return teardown
+
+
 def terminal_exit_code(record: dict) -> int:
     """Map the persisted terminal verdict to the runner's process status."""
     return 0 if record.get("terminal_outcome", "").endswith(
@@ -1563,6 +1576,7 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                 bootstrap_proc=bootstrap_proc, bootstrap_member=bootstrap_member,
                 collector_procs=collector_procs, collector_members=collector_members,
                 bootstrap_calls=bootstrap_calls, composite_calls=composite_calls)
+            mark_collector_failures(teardown, record.get("collector_outcomes", {}))
         except BaseException as error:
             teardown = {"completed": True, "clean": False, "ordered": False,
                         "order_correct": False, "verified": False, "graceful": False,
@@ -1662,10 +1676,18 @@ def main():
     bootstrap_proc = composite_proc = cpp = gate = None
     bootstrap_member = composite_member = None
     bootstrap_calls = composite_calls = cpp_calls = gate_b_calls = 0
+    runtime_guard = args.runtime_worktree / args.guard_path.relative_to(source)
+    guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
+    observer_path = args.run_directory / "runtime_observer.json"
+    gate_vectors_path = args.run_directory / "gate_b_vectors.json"
     record = {"schema_version": "1.0", "run_id": RUN_ID, "review_commit": head,
               "integration_base": args.expected_integration_base, "partition": PARTITION,
               "guard_path": str(args.guard_path), "guard_capacity": guard["capacity"],
               "guard_acquisition_count": guard["acquisition_count"],
+              "source_guard": {"path": str(args.guard_path), "state_before": guard.get("state"),
+                               "state_after": guard.get("state")},
+              "runtime_guard": {"path": str(runtime_guard), "lock_path": str(guard_lock),
+                                "state_before": "NOT_ACQUIRED", "state_after": "NOT_ACQUIRED"},
               "run004_historical_disposition": {
                   "terminal_outcome": "STEP07_NAV2_BASELINE_RUN004_PREACQUIRE_PREFLIGHT_FAILED_NO_GUARD_CONSUMED",
                   "root_cause": "PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION",
@@ -1685,13 +1707,13 @@ def main():
                           "runtime_graph_and_goal": False, "observer_acceptance": False,
                           "gate_b_vectors": False,
                           "bootstrap_composite_process_groups_distinct": False,
-                          "bootstrap_readiness": False, "composite_readiness": False}
+                          "bootstrap_readiness": False, "composite_readiness": False,
+                          "navigate_to_pose_action_server_ready": False,
+                          "all_collectors_ready_before_goal": False}
     collector_members = {}
     teardown = {"completed": False, "clean": False, "ordered": False,
                 "order_correct": False, "verified": False, "graceful": False,
                 "escalation_history": []}
-    runtime_guard = args.runtime_worktree / args.guard_path.relative_to(source)
-    guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
     sigterm_handler = SigtermHandler()
     previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, sigterm_handler)
@@ -1724,6 +1746,11 @@ def main():
         record["preflight"] = preflight
         record["guard_state_after_acquire"] = consumed["state"]
         record["guard_state_after"] = consumed["state"]
+        record["source_guard"]["state_after"] = guard.get("state")
+        record["runtime_guard"].update({"state_before": PENDING,
+                                         "state_after": consumed["state"],
+                                         "acquisition_count": consumed["acquisition_count"],
+                                         "lock_present": guard_lock.exists()})
         record["guard_acquired"] = True
         record["guard_acquisition_count"] = consumed["acquisition_count"]
         record["authorization_acquisition_count"] = consumed["acquisition_count"]
@@ -1783,9 +1810,13 @@ def main():
         if "success=true" not in response.stdout.replace(" ", "").lower():
             raise RuntimeError("SAFETY_LIFECYCLE_REARM_NOT_CONFIRMED")
         observer_path = args.run_directory / "runtime_observer.json"
+        cpp_ready_path = args.run_directory / "runtime_observer.ready.json"
+        gate_ready_path = args.run_directory / "gate_b_observer.ready.json"
+        goal_trigger_path = args.run_directory / "gate_b_goal.trigger.json"
         cpp_command = ["ros2", "run", "step07_nav2_baseline_runtime_observer",
                        "step07_nav2_baseline_runtime_observer", "--ros-args",
-                       "-p", f"output_path:={observer_path}", "-p", f"config_hash:={record['config_hash']}",
+                       "-p", f"output_path:={observer_path}", "-p", f"ready_path:={cpp_ready_path}",
+                       "-p", f"config_hash:={record['config_hash']}",
                        "-p", "duration_sec:=1800"]
         cpp, cpp_member = _spawn_owned_process(
             cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
@@ -1793,15 +1824,65 @@ def main():
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         collector_members["cpp_observer"] = cpp_member
         cpp_calls = 1; record["call_counts"]["cpp_observer"] = 1
+        cpp_required_subscriptions = ["/clock", "/scan", "/wheel/odometry_raw", "/imu/data",
+            "/odometry/filtered", "/tf", "/tf_static", "/mecanum/safety_lifecycle_state",
+            "/mecanum/final_issued_command", "/mecanum/safety_state"]
+        record["process_groups"]["cpp_observer"]["readiness"] = wait_collector_ready(
+            cpp_ready_path, cpp, collector="step07_nav2_baseline_runtime_observer",
+            config_hash=record["config_hash"], required_subscriptions=cpp_required_subscriptions)
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
-                              "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path), "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
+                              "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path),
+                              "--ready-path", str(gate_ready_path), "--start-path", str(goal_trigger_path),
+                              "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
         gate, gate_member = _spawn_owned_process(
             gate_command, name="gate_b_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "gate_b_observer.log", processes=processes,
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         gate_b_calls = 1; record["call_counts"]["gate_b_observer"] = 1
         collector_members["gate_b_observer"] = gate_member
+        gate_required_subscriptions = ["/scan", "/odometry/filtered", "/mecanum/safety_lifecycle_state",
+                                       "/mecanum/final_issued_command"]
+        record["process_groups"]["gate_b_observer"]["readiness"] = wait_collector_ready(
+            gate_ready_path, gate, collector="step07_gate_b_observer",
+            config_hash=record["config_hash"], required_subscriptions=gate_required_subscriptions)
+        action_server = wait_navigate_to_pose_action_server(env)
+        record["process_groups"]["gate_b_observer"]["readiness"]["navigate_to_pose_action_server"] = action_server
+        runtime_acceptance["navigate_to_pose_action_server_ready"] = action_server["ready"] is True
+        chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
+        chain_required_subscriptions = ["/mecanum/safety_state", "/mecanum/final_issued_command",
+                                        "/odometry/filtered"]
+        chain_ready = {"schema_version": "1.0", "collector": "navigation_evidence_chain_collector",
+            "state": "READY", "config_hash": record["config_hash"], "pid": os.getpid(),
+            "process_alive": True,
+            "ros_context_valid": record["process_groups"]["cpp_observer"]["readiness"]["ros_context_valid"],
+            "context_owner": "step07_nav2_baseline_runtime_observer",
+            "subscriptions_created": chain_required_subscriptions,
+            "source_observer_ready_artifact": cpp_ready_path.name}
+        _atomic_write(chain_ready_path, chain_ready)
+        chain_ready_readback = load_canonical_json(chain_ready_path)
+        record["collector_outcomes"] = {"navigation_evidence_chain_collector": {
+            "exit_code": None, "terminal_state": "READY_AWAITING_ARTIFACTS",
+            "artifact_written": chain_ready_readback.get("state") == "READY",
+            "readiness_artifact": chain_ready_path.name}}
+        all_ready = (record["process_groups"]["cpp_observer"]["readiness"].get("ready") is True
+                     and record["process_groups"]["gate_b_observer"]["readiness"].get("ready") is True
+                     and chain_ready_readback.get("state") == "READY"
+                     and chain_ready_readback.get("config_hash") == record["config_hash"]
+                     and chain_ready_readback.get("pid") == os.getpid()
+                     and chain_ready_readback.get("process_alive") is True
+                     and chain_ready_readback.get("ros_context_valid") is True
+                     and chain_ready_readback.get("subscriptions_created") == chain_required_subscriptions
+                     and action_server["ready"] is True
+                     and cpp.poll() is None and gate.poll() is None)
+        if not all_ready:
+            raise RuntimeError("GATE_B_COLLECTOR_READINESS_HANDSHAKE_FAILED")
+        runtime_acceptance["all_collectors_ready_before_goal"] = True
+        _atomic_write(goal_trigger_path, {"schema_version": "1.0", "state": "TRIGGER_GOAL",
+            "config_hash": record["config_hash"], "collector_ready": True,
+            "ready_collectors": ["step07_nav2_baseline_runtime_observer", "step07_gate_b_observer",
+                                 "navigation_evidence_chain_collector"],
+            "navigate_to_pose_action_server_ready": True})
         gate_vectors_path = args.run_directory / "gate_b_vectors.json"
         gate_deadline = time.monotonic() + 1800
         cpp_stop_sent = False
@@ -1814,23 +1895,84 @@ def main():
             time.sleep(0.05)
         if gate.poll() is None:
             raise subprocess.TimeoutExpired(gate_command, 1800)
-        if gate.returncode != 0:
-            raise RuntimeError(f"GATE_B_OBSERVER_FAILED:{gate.returncode}")
+        if cpp.poll() is None:
+            if not _owned_group_verified(cpp, cpp_member):
+                raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
+            os.killpg(cpp_member["pgid"], signal.SIGINT)
         cpp.wait(timeout=1850)
+        record["collector_outcomes"] = {
+            "gate_b_observer": {"exit_code": gate.returncode,
+                "terminal_state": "EXITED" if gate.returncode == 0 else "FAILED",
+                "artifact_written": gate_vectors_path.is_file()},
+            "cpp_observer": {"exit_code": cpp.returncode,
+                "terminal_state": "EXITED" if cpp.returncode == 0 else "FAILED",
+                "artifact_written": observer_path.is_file()},
+            "navigation_evidence_chain_collector": {"exit_code": None,
+                "terminal_state": "READY_AWAITING_ARTIFACTS",
+                "artifact_written": chain_ready_path.is_file(),
+                "readiness_artifact": chain_ready_path.name},
+        }
+        if gate.returncode != 0 or cpp.returncode != 0:
+            from step07_gate_b_evidence_validator import navigation_evidence_chain_failure, load_json
+            gate_doc = load_json(gate_vectors_path)[0] if gate_vectors_path.is_file() else {}
+            cpp_doc = load_json(observer_path)[0] if observer_path.is_file() else {
+                "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
+            failure_literal = (f"GATE_B_OBSERVER_FAILED:{gate.returncode}" if gate.returncode != 0
+                               else f"CPP_OBSERVER_FAILED:{cpp.returncode}")
+            failure = navigation_evidence_chain_failure(cpp_doc, gate_doc, failure_literal)
+            failure_bytes = json.dumps(failure, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False).encode("utf-8")
+            record["collector_failure"] = {"failure_literal": failure_literal,
+                "exit_code": gate.returncode if gate.returncode != 0 else cpp.returncode,
+                "lifecycle_state": failure["observer_lifecycle_state"],
+                "partial_artifacts": [name for name, exists in (
+                    ("gate_b_vectors.json", gate_vectors_path.is_file()),
+                    ("runtime_observer.json", observer_path.is_file())) if exists],
+                "evidence_chain_failure": failure,
+                "evidence_chain_failure_sha256": hashlib.sha256(failure_bytes).hexdigest()}
+            record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
+                "exit_code": 2, "terminal_state": "FAILED_UPSTREAM_COLLECTOR",
+                "artifact_written": True, "failure_literal": failure_literal}
+            if observer_path.is_file():
+                cpp_doc["navigation_evidence_chain_failure"] = failure
+                cpp_doc["navigation_evidence_chain_failure_canonical"] = failure_bytes.decode("utf-8")
+                cpp_doc["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(failure_bytes).hexdigest()
+                cpp_doc["navigation_evidence_chain_failure_literal"] = failure_literal
+                _atomic_write(observer_path, cpp_doc)
+            raise RuntimeError(failure_literal)
         if cpp.returncode != 0:
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
         from step07_gate_b_evidence_validator import (canonical_navigation_evidence_chain,
+            navigation_evidence_chain_failure,
             load_json, validate_gate_b_document, validate_observer)
         cpp_document, _ = load_json(observer_path)
         gate_document, _ = load_json(args.run_directory / "gate_b_vectors.json")
         observer_validation = validate_observer(cpp_document, config_hash=record["config_hash"],
             qos_implementation_pin_evidence=preflight["qos_implementation_pin_evidence"],
             review_commit=head)
-        chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
-        cpp_document["navigation_evidence_chain"] = chain
-        cpp_document["navigation_evidence_chain_canonical"] = canonical_chain.decode("utf-8")
-        cpp_document["navigation_evidence_chain_sha256"] = hashlib.sha256(canonical_chain).hexdigest()
+        try:
+            chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
+            cpp_document["navigation_evidence_chain"] = chain
+            cpp_document["navigation_evidence_chain_canonical"] = canonical_chain.decode("utf-8")
+            cpp_document["navigation_evidence_chain_sha256"] = hashlib.sha256(canonical_chain).hexdigest()
+        except ValueError as error:
+            failure_chain = navigation_evidence_chain_failure(cpp_document, gate_document, str(error))
+            canonical_failure = json.dumps(failure_chain, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False).encode("utf-8")
+            cpp_document["navigation_evidence_chain_failure"] = failure_chain
+            cpp_document["navigation_evidence_chain_failure_canonical"] = canonical_failure.decode("utf-8")
+            cpp_document["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical_failure).hexdigest()
+            cpp_document["navigation_evidence_chain_failure_literal"] = str(error)
+            _atomic_write(observer_path, cpp_document)
+            record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
+                "exit_code": 2, "terminal_state": "FAILED_INCOMPLETE_EVIDENCE_CHAIN",
+                "artifact_written": True, "failure_literal": str(error),
+                "failure_artifact": "runtime_observer.json"}
+            raise RuntimeError(f"NAVIGATION_EVIDENCE_CHAIN_INCOMPLETE:{error}") from error
         _atomic_write(observer_path, cpp_document)
+        record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
+            "exit_code": 0, "terminal_state": "COMPLETE",
+            "artifact_written": True, "artifact": "runtime_observer.json"}
         validate_gate_b_document(gate_document, config_hash=record["config_hash"])
         runtime_acceptance["observer_acceptance"] = bool(observer_validation.get("acceptance")) and all(observer_validation["acceptance"].values())
         runtime_acceptance["gate_b_vectors"] = bool(gate_document.get("acceptance")) and all(gate_document["acceptance"].values())
@@ -1839,6 +1981,31 @@ def main():
             raise RuntimeError("RAW_OBSERVER_ACCEPTANCE_FAILED")
         record["goal_result"] = gate_document["navigate_to_pose"]
     except BaseException as error:
+        if gate is not None or cpp is not None:
+            settlement_literal = f"RUNNER_COLLECTOR_SETTLEMENT:{type(error).__name__}:{error}"
+            try:
+                record["collector_outcomes"] = settle_collectors_before_teardown(
+                    gate=gate, cpp=cpp, gate_member=collector_members.get("gate_b_observer"),
+                    cpp_member=collector_members.get("cpp_observer"), gate_path=gate_vectors_path,
+                    observer_path=observer_path, config_hash=record["config_hash"],
+                    failure_literal=settlement_literal)
+                chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
+                if chain_ready_path.is_file() and record["collector_outcomes"].get(
+                        "navigation_evidence_chain_collector", {}).get("terminal_state") != "COMPLETE":
+                    record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
+                        "exit_code": 2, "terminal_state": "FAILED_RUNNER_POSTPROCESSING",
+                        "artifact_written": observer_path.is_file(), "failure_literal": settlement_literal}
+                failed = {name: row for name, row in record["collector_outcomes"].items()
+                          if type(row) is dict and row.get("exit_code") != 0}
+                if failed or not all(row.get("artifact_written") is True
+                                     for row in record["collector_outcomes"].values()):
+                    record["collector_failure"] = {"failure_literal": settlement_literal,
+                        "exit_codes": {name: row.get("exit_code") for name, row in record["collector_outcomes"].items()},
+                        "lifecycle_state": {"state": "SEE_PARTIAL_COLLECTOR_ARTIFACTS"},
+                        "partial_artifacts": [path.name for path in (gate_vectors_path, observer_path) if path.is_file()]}
+            except BaseException as settlement_error:
+                record["collector_settlement_failure"] = (
+                    f"{type(settlement_error).__name__}:{settlement_error}")
         record["pre_teardown_failure"] = f"{type(error).__name__}:{error}"
         record["traceback"] = traceback.format_exc()
     finally:
@@ -1909,6 +2076,94 @@ def active_lifecycle_states(env):
             return None
         states[name] = ROS_ACTIVE_STATE_ID
     return states
+
+
+def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: str,
+                        config_hash: str, required_subscriptions, timeout: float = 120) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"{collector.upper()}_EXITED_BEFORE_READY:{process.returncode}")
+        try:
+            ready = load_canonical_json(path)
+        except (OSError, ValueError):
+            time.sleep(0.05)
+            continue
+        if (ready.get("state") == "READY" and ready.get("collector") == collector
+                and ready.get("config_hash") == config_hash
+                and ready.get("pid") == process.pid
+                and ready.get("ros_context_valid") is True
+                and ready.get("subscriptions_created") == required_subscriptions):
+            return {"ready": True, "artifact": path.name, "pid": process.pid,
+                    "subscriptions_created": list(required_subscriptions),
+                    "ros_context_valid": True}
+        if ready.get("state") == "NOT_READY" and ready.get("failure_literal"):
+            raise RuntimeError(
+                f"{collector.upper()}_READINESS_FAILED:{ready['failure_literal']}"
+            )
+        if ready.get("state") not in ("READY", "NOT_READY"):
+            raise RuntimeError(f"{collector.upper()}_READINESS_FAILED:{ready.get('failure_literal', 'UNKNOWN')}")
+        time.sleep(0.05)
+    raise RuntimeError(f"{collector.upper()}_READINESS_TIMEOUT")
+
+
+def navigate_to_pose_action_server_ready(env: dict[str, str]) -> dict:
+    result = _run(["ros2", "action", "info", "/navigate_to_pose"], env=env,
+                  check=False, timeout=15)
+    text = result.stdout + result.stderr
+    match = re.search(r"Action servers:\s*(\d+)", text, re.IGNORECASE)
+    return {"ready": result.returncode == 0 and match is not None and int(match.group(1)) == 1,
+            "server_count": int(match.group(1)) if match else None,
+            "transcript": text}
+
+
+def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float = 120) -> dict:
+    deadline = time.monotonic() + timeout
+    last = {"ready": False, "server_count": None, "transcript": ""}
+    while time.monotonic() < deadline:
+        last = navigate_to_pose_action_server_ready(env)
+        if last["ready"]:
+            return last
+        time.sleep(0.5)
+    raise RuntimeError("NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+
+
+def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
+                                     gate_path: Path, observer_path: Path,
+                                     config_hash: str, failure_literal: str) -> dict:
+    """Stop owned collectors first and preserve explicit partial evidence."""
+    for process, member in ((gate, gate_member), (cpp, cpp_member)):
+        if process is not None and process.poll() is None:
+            if not _owned_group_verified(process, member):
+                raise RuntimeError("COLLECTOR_PROCESS_GROUP_NOT_OWNED")
+            os.killpg(member["pgid"], signal.SIGINT)
+    outcomes = {}
+    for name, process, path in (("gate_b_observer", gate, gate_path),
+                                ("cpp_observer", cpp, observer_path)):
+        if process is None:
+            outcomes[name] = {"exit_code": None, "terminal_state": "NOT_STARTED",
+                              "artifact_written": path.is_file()}
+            continue
+        process.wait()
+        outcomes[name] = {"exit_code": process.returncode,
+                          "terminal_state": "EXITED" if process.returncode == 0 else "FAILED",
+                          "artifact_written": path.is_file()}
+    if not gate_path.exists():
+        _atomic_write(gate_path, {"schema_version": "1.0", "config_hash": config_hash,
+            "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
+            "sample_count": 0, "samples": [], "errors": [failure_literal],
+            "collector_terminal_state": "FAILURE_ARTIFACT_WRITTEN_BY_RUNNER",
+            "collector_failure": {"literal": failure_literal, "exit_code": outcomes["gate_b_observer"]["exit_code"],
+                "lifecycle_state": {"state": "UNOBSERVED", "reason": "COLLECTOR_ARTIFACT_MISSING"},
+                "partial_artifact": "gate_b_vectors.json", "valid_sample_count": 0}})
+    if not observer_path.exists():
+        _atomic_write(observer_path, {"schema_version": "1.0", "config_hash": config_hash,
+            "errors": [failure_literal], "observer_lifecycle": {"state": "FAIL_CLOSED",
+                "failure_literal": failure_literal, "ros_context_valid": "UNVERIFIED",
+                "partial_artifact": "runtime_observer.json"}})
+    for name, path in (("gate_b_observer", gate_path), ("cpp_observer", observer_path)):
+        outcomes[name]["artifact_written"] = path.is_file()
+    return outcomes
 
 
 def _wait_ready(env, logdir, process):

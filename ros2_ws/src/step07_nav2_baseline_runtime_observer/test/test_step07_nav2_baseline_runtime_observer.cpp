@@ -1,6 +1,8 @@
 #define STEP07_OBSERVER_TEST
 #include "../src/step07_nav2_baseline_runtime_observer.cpp"
 #include <gtest/gtest.h>
+#include <fstream>
+#include <filesystem>
 
 TEST(Step07Observer, CollectionsAreEmptyArraysNotNestedArrays) {
   const auto document = step07_observer::empty_collection_document();
@@ -9,6 +11,38 @@ TEST(Step07Observer, CollectionsAreEmptyArraysNotNestedArrays) {
     ASSERT_TRUE(document.at(name).is_array());
     EXPECT_TRUE(document.at(name).empty());
   }
+}
+
+TEST(Step07Observer, ReadinessArtifactWriteIsAtomicAndReadable) {
+  const auto path = std::filesystem::temp_directory_path() /
+      ("step07-observer-ready-" + std::to_string(::getpid()) + ".json");
+  const auto document = step07_observer::Json{{"state", "READY"},
+      {"ros_context_valid", true}, {"subscriptions_created", {"/scan"}}};
+  ASSERT_TRUE(step07_observer::write_json_atomic(path.string(), document));
+  std::ifstream input(path);
+  step07_observer::Json readback;
+  input >> readback;
+  EXPECT_EQ(readback, document);
+  std::filesystem::remove(path);
+}
+
+TEST(Step07Observer, FinishChecksContextBeforeEndpointQueriesAndShutdownFollowsFinish) {
+  const auto source_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+      "src/step07_nav2_baseline_runtime_observer.cpp";
+  std::ifstream input(source_path);
+  const std::string source((std::istreambuf_iterator<char>(input)), {});
+  const auto finish = source.find("void finish() {");
+  const auto finish_end = source.find("\n private:", finish);
+  ASSERT_NE(finish, std::string::npos);
+  ASSERT_NE(finish_end, std::string::npos);
+  const auto finish_body = source.substr(finish, finish_end - finish);
+  const auto endpoint_query = source.find("endpoint_rows(*this", finish);
+  const auto context_guard = source.find("if (!context_is_valid())", finish);
+  ASSERT_NE(endpoint_query, std::string::npos);
+  ASSERT_NE(context_guard, std::string::npos);
+  EXPECT_LT(context_guard, endpoint_query);
+  EXPECT_EQ(finish_body.find("rclcpp::shutdown();"), std::string::npos);
+  EXPECT_NE(source.find("SignalHandlerOptions::None"), std::string::npos);
 }
 
 TEST(Step07Observer, CanonicalGidIsFullLowercaseHex) {

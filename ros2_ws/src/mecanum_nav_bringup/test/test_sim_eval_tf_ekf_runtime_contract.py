@@ -700,6 +700,8 @@ RUN005_QOS_TRACE_PHASE_A_PATHS = {
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
     "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
     "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
 }
 RUN005_QOS_TRACE_PHASE_A5_PATHS = RUN005_QOS_TRACE_PHASE_A_PATHS | {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
@@ -717,11 +719,43 @@ RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST = RUN005_QOS_TRACE_PATHS | {
     "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
 }
 
+RUN005_L1_REVIEW_BASE = "a04ec4d317830e01a4613fc5251f2152b9e9946e"
+RUN005_L1_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_step07_nav2_baseline_runtime_observer.cpp",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+}
+RUN005_L1_AUTHORIZED_PATHS = RUN005_L1_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_L1_RECONCILED_PATHS = RUN005_L1_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+
 def test_run005_qos_trace_actual_scope_and_allowlist_are_distinct_and_exact():
-    assert len(RUN005_QOS_TRACE_PHASE_A_PATHS) == 7
-    assert len(RUN005_QOS_TRACE_PHASE_A5_PATHS) == 11
-    assert len(RUN005_QOS_TRACE_PATHS) == 14
-    assert len(RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST) == 15
+    assert len(RUN005_QOS_TRACE_PHASE_A_PATHS) == 9
+    assert len(RUN005_QOS_TRACE_PHASE_A5_PATHS) == 13
+    assert len(RUN005_QOS_TRACE_PATHS) == 16
+    assert len(RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST) == 17
     assert RUN005_QOS_TRACE_AUTHORIZED_ALLOWLIST - RUN005_QOS_TRACE_PATHS == {
         "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
     }
@@ -741,6 +775,30 @@ def _candidate_changed_paths():
         ["git", "rev-parse", "HEAD^"], cwd=ROOT, check=True,
         capture_output=True, text=True,
     ).stdout.strip() if not dirty else None
+    if head == RUN005_L1_REVIEW_BASE or parent == RUN005_L1_REVIEW_BASE:
+        if dirty:
+            changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
+            allowed = (RUN005_L1_PHASE_A_PATHS, RUN005_L1_RECONCILED_PATHS,
+                       RUN005_L1_AUTHORIZED_PATHS)
+            if changed not in allowed:
+                raise AssertionError(f"Run005 L1 evidence collector corrective scope is not exact: {sorted(changed)}")
+        elif parent == RUN005_L1_REVIEW_BASE:
+            changed = set(subprocess.run(
+                ["git", "diff", "--name-only", "HEAD^", "HEAD"], cwd=ROOT,
+                check=True, capture_output=True, text=True,
+            ).stdout.splitlines())
+            assert changed in (RUN005_L1_PHASE_A_PATHS, RUN005_L1_RECONCILED_PATHS,
+                               RUN005_L1_AUTHORIZED_PATHS)
+        else:
+            changed = set()
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert set(untracked) <= changed
+        assert not any(path.startswith(("build/", "install/", "log/", ".pytest_cache/"))
+                       or "/__pycache__/" in path for path in untracked), untracked
+        return changed, dirty
     if head == RUN005_QOS_TRACE_BASE or parent == RUN005_QOS_TRACE_BASE:
         if dirty:
             changed = {line[3:] for line in status.splitlines() if len(line) >= 4}
@@ -952,6 +1010,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         check=True, capture_output=True, text=True,
     ).stdout.strip() == RUN004_CORRECTIVE_BASE
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
+        RUN005_L1_RECONCILED_PATHS,
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
@@ -996,6 +1055,7 @@ def test_run005_validator_identity_corrective_scope_is_exact():
                           check=True, capture_output=True, text=True).stdout.strip() == RUN005_VALIDATOR_CORRECTIVE_BASE
     current, _dirty = _candidate_changed_paths()
     assert current in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+                       RUN005_L1_RECONCILED_PATHS,
                        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
@@ -1189,6 +1249,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
     ).stdout.splitlines()
     assert set(run004_host_diff) == RUN004_HOST_CORRECTIVE_PATHS
     assert changed in RUN005_COMPOSITE_VALID_SCOPES or changed in (
+        RUN005_L1_RECONCILED_PATHS,
         RUN005_VALIDATOR_SOURCE_PATHS, RUN005_VALIDATOR_CORRECTIVE_PATHS,
         RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
         RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
@@ -1218,6 +1279,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
 def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
     assert changed in (RUN005_GZ_IP_GRACEFUL_PHASE_A_PATHS, RUN005_GZ_IP_GRACEFUL_PATHS,
+                       RUN005_L1_RECONCILED_PATHS,
                        RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
@@ -1227,6 +1289,7 @@ def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
 def test_run005_default_route_resolver_corrective_scope_is_exact():
     changed, _dirty = _candidate_changed_paths()
     assert changed in (RUN005_DEFAULT_ROUTE_PHASE_A_PATHS, RUN005_DEFAULT_ROUTE_PATHS,
+                       RUN005_L1_RECONCILED_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PHASE_A_PATHS,
                        RUN005_NAV2_HEIGHT_TEARDOWN_PATHS,
                        RUN005_QOS_TRACE_PHASE_A_PATHS, RUN005_QOS_TRACE_PHASE_A5_PATHS, RUN005_QOS_TRACE_PATHS)
