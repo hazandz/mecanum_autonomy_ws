@@ -2442,15 +2442,43 @@ def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: st
 def navigate_to_pose_action_server_ready(env: dict[str, str]) -> dict:
     result = _run(["ros2", "action", "info", "/navigate_to_pose"], env=env,
                   check=False, timeout=15)
-    stdout = result.stdout if isinstance(result.stdout, str) else ""
-    stderr = result.stderr if isinstance(result.stderr, str) else ""
-    output_valid = isinstance(result.stdout, str) and isinstance(result.stderr, str)
-    text = stdout + stderr
-    match = re.search(r"Action servers:\s*(\d+)", text, re.IGNORECASE)
-    return {"ready": output_valid and result.returncode == 0 and match is not None and int(match.group(1)) == 1,
-            "server_count": int(match.group(1)) if match else None,
-            "transcript": text,
-            "failure_literal": None if output_valid else "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"}
+    # _run() redirects stderr to STDOUT. CompletedProcess.stderr is therefore
+    # normally None; stdout is the one merged transcript and the only source
+    # used for the readiness decision.
+    transcript = result.stdout
+    output_valid = isinstance(transcript, str)
+    server_count = None
+    if output_valid:
+        try:
+            transcript.encode("utf-8", errors="strict")
+            if "\x00" in transcript:
+                output_valid = False
+            else:
+                server_lines = [line for line in transcript.splitlines()
+                                if re.search(r"\bAction\s+servers\s*:", line, re.IGNORECASE)]
+                if len(server_lines) != 1:
+                    output_valid = False
+                else:
+                    match = re.fullmatch(r"\s*Action\s+servers\s*:\s*(\d+)\s*",
+                                         server_lines[0], re.IGNORECASE)
+                    if match is None:
+                        output_valid = False
+                    else:
+                        try:
+                            server_count = int(match.group(1))
+                        except ValueError:
+                            output_valid = False
+        except UnicodeEncodeError:
+            output_valid = False
+    returncode = getattr(result, "returncode", None)
+    ready = (output_valid and type(returncode) is int and returncode == 0
+             and server_count == 1)
+    failure_literal = ("NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"
+                       if not output_valid else
+                       None if ready else "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+    return {"ready": ready, "server_count": server_count,
+            "transcript": transcript if output_valid else "",
+            "failure_literal": failure_literal}
 
 
 def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float = 120) -> dict:

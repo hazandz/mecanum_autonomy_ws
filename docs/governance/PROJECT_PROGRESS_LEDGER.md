@@ -2258,3 +2258,39 @@ Guard/evidence/manifest SHA-256: `847901e6316e36d52752e772741212236bc734a8b39a67
 ### Canonical JSON hash-chain correction (2026-10-23)
 
 This append-only correction supersedes the previous metadata digest triplet after the guard was serialized with the Run005 canonical writer. Guard/evidence/manifest SHA-256: `ab863631b73bc6b2f7f004d380d785e9e108680789917fb91748cf930f935a3f` / `655551928c5a1a15ccb3d88f7adab22944c75dbe5596b0227dc0ebe1038a030e` / `795960653705336e22ee2e07cb850ff89aac7d622211182a8f0f382582601f77`. The guard semantic object was unchanged; seed, capacity, acquisition count, authorization scope, integration base, allowlist and historical fields were preserved.
+
+
+## 2026-10-23 — Consolidated corrective L1 Invocation_019, OFFLINE
+
+`supersedes`: phần metadata Invocation_019 chưa delivery trong candidate hiện hữu; không thay outcome hoặc artifact lịch sử. Base/sole-parent target `9a92b94b6f0d0d9a0f4ebdc8133ebecb34e6129f`, branch `step07-integrated-nav2-gateb-campaign-f7f98c6`.
+
+Đóng lỗi stdout hợp nhất của action-server probe và Class C `SCOPE_CONTRACT_NOT_PHASE_AWARE`. Scope validation dùng diff từ base cố định, chọn đúng phase metadata và so sánh exact path set; reject thiếu governance path, path lạ/historical, untracked và phase mâu thuẫn. Contract JSON helper reject NaN/Infinity; fixture owned collector mô phỏng launcher/child cùng PGID. Readiness order giữ `cpp_initial_ready → action_server_ready → cpp_pre_gate_b_recheck → gate_b_start`; không đổi acceptance hoặc semantics runtime.
+
+`SOURCE_FREEZE=TRUE` chỉ là offline source freeze. Phase A 3 paths; Phase A.5 6 paths; Phase B và final verification đúng 10 paths. Inventory 38/38 members không đổi; 3 pin thay đổi so với base, trong đó continuation này refresh 2 pin.
+
+Phase A/A.5: Step-7 tools 342 PASS; bringup 277 PASS; RL 718 PASS với Python 3.12.3/Pydantic 2.10.6; six-package external build PASS; observer/ROSIDL colcon result 32 tests, 0 failures; py_compile 3; installed/source equality 15 artifacts + 3 modules; parsing JSON/YAML/XML và diff checks PASS. Các regression scope/JSON mới 21 PASS và readiness/preservation 15 PASS. Final post-reconciliation verification là điều kiện delivery riêng, không được suy thành runtime evidence.
+
+Guard/evidence/manifest SHA-256: `18abe5ceae3f57779e2cefe854f6fcdd755778f83a07cf1a5bb3eb607f4398fc` / `221be36378ba26902f97b30c80a273b51f8c43b107995fac8470f6a6bc7b45a4` / `598ed75330969b8da0fd7828d39f265daa73ca45e7705976d3e0ca9ef2cc2907`.
+
+| Pin đã đổi từ base | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `4c47430805da4a8a2a4603615751c70293e355386d0722655ff605e7f7fe2966` | 151394 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `f857d2dd3657c0396b91ad738d8bb57ac74a7f5a241628eabd8d1ffd07fee062` | 144126 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `83443026621379bbd36f82dd9fc67b3b2c195f5b4be38feadfe9cef99f42650d` | 107315 |
+
+Exact changed paths:
+
+- `artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json`
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py`
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py`
+- `docs/governance/CANONICAL_SOURCE_REGISTRY.md`
+- `docs/governance/PROJECT_EXECUTION_PLAN.md`
+- `docs/governance/PROJECT_PROGRESS_LEDGER.md`
+- `docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md`
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json`
+- `docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json`
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`
+
+Historical evidence và runtime checkout 018/019 được đối chiếu inventory read-only; các target 014–017 đã vắng mặt khi bắt đầu, historical metadata Git được giữ. Không sửa evidence/guard/lock lịch sử. Guard seed PENDING, capacity 1, acquisition 0, runtime_authorization NOT_GRANTED, không source lock; Gate B NOT_STARTED, RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry Invocation_019 hoặc integration. Evidence `IMPLEMENTED_OFFLINE_ONLY`; không có runtime approval từ record này.
+
+`PLAN_UPDATE_PROPOSAL`: Run005 attempt_002 consolidated L1; branch/base như trên; commit pending final checks. Dependency offline source/build/test đã được kiểm; blocker delivery: final coherence. Next action: một commit và một review-branch push chỉ khi toàn bộ final checks PASS; review độc lập trước bất kỳ runtime authorization riêng nào. Không đổi milestone/dependency status.

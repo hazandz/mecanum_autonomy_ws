@@ -23,6 +23,7 @@ RUN005_ATTEMPT_001_SHA = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
 RUN005_ATTEMPT_002_OUTPUT_BASE = "99d5c29c1c302260a8971e19e46f93d778a52f86"
 RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
 INVOCATION_018_MANIFEST_SHA256 = "0c98f6853acce52af37d9ba202dafdd072c4ca7018d68efbcd1da825c053de98"
+INVOCATION_019_MANIFEST_SHA256 = "781627623d5c06eeebf5dc3db0ae63c7c69f3cb7ac8dd783eb9ff60f31f056dc"
 
 
 def _acquired_campaign_handler():
@@ -1599,7 +1600,7 @@ def test_navigate_action_probe_requires_exactly_one_server(monkeypatch):
 
 def test_action_server_wait_returns_explicit_pass_or_fail(monkeypatch):
     from types import SimpleNamespace
-    responses = [SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr="")]
+    responses = [SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr=None)]
     monkeypatch.setattr(runner, "_run", lambda *args, **kwargs: responses.pop(0))
     passed = runner.wait_navigate_to_pose_action_server({}, timeout=0.1)
     assert passed["status"] == "PASS" and passed["attempted"] is True
@@ -1609,11 +1610,39 @@ def test_action_server_wait_returns_explicit_pass_or_fail(monkeypatch):
     assert failed["status"] == "FAIL" and failed["attempted"] is True
 
 
+@pytest.mark.parametrize("returncode,stdout,expected_literal", [
+    (0, "not an action-info transcript\n", "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"),
+    (0, "Action servers: one\n", "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"),
+    (0, "Action servers: 1\nAction servers: 1\n", "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"),
+    (0, "Action servers: 0\n", "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"),
+    (0, "Action servers: 2\n", "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"),
+    (1, "Action servers: 1\n", "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"),
+])
+def test_action_server_probe_malformed_count_and_nonzero_fail_closed(
+    monkeypatch, returncode, stdout, expected_literal
+):
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs:
+        SimpleNamespace(returncode=returncode, stdout=stdout, stderr=None))
+    result = runner.navigate_to_pose_action_server_ready({})
+    assert result["ready"] is False
+    assert result["failure_literal"] == expected_literal
+
+
+def test_action_server_probe_accepts_merged_stdout_when_stderr_is_none(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs:
+        SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr=None))
+    result = runner.navigate_to_pose_action_server_ready({})
+    assert result == {"ready": True, "server_count": 1,
+        "transcript": "Action servers: 1\n", "failure_literal": None}
+
+
 def test_nullable_action_probe_output_fails_closed_and_finalizes_failure_bundle(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs:
-        SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr=None))
+        SimpleNamespace(returncode=0, stdout=None, stderr=None))
     monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
     action = runner.wait_navigate_to_pose_action_server({}, timeout=0.01)
     assert action["status"] == "FAIL"
@@ -1678,10 +1707,13 @@ def test_collector_teardown_exception_keeps_fail_closed_state_fields(monkeypatch
         "shutdown_requested_by_runner", "exit_code", "terminal_state"))
 
 
-def test_cpp_ready_without_action_server_proof_blocks_gate_b_with_exact_stage_reason(tmp_path):
+def test_cpp_ready_without_action_server_proof_blocks_gate_b_with_exact_stage_reason(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs:
+        SimpleNamespace(returncode=0, stdout="Action servers: 0\n", stderr=None))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
     cpp_readiness = {"ready": True, "pid": 913, "ros_context_valid": True}
-    action_server = {"status": "FAIL", "attempted": True, "ready": False,
-                     "failure_literal": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"}
+    action_server = runner.wait_navigate_to_pose_action_server({}, timeout=0.01)
     blocker = runner.gate_b_start_blocking_reason(cpp_readiness, action_server)
     gate_start_count = 0
     if blocker is None:
@@ -2566,7 +2598,7 @@ def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tm
     cpp_member = {"name": "cpp_observer", "pid": 812, "launcher_pid": 812,
                   "child_pid": 913, "pgid": 812, "ownership_verified": True,
                   "ownership_relation": "CHILD_IN_LAUNCHER_PROCESS_GROUP"}
-    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: {812: 812, 913: 812}[pid])
     monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
         "live_member_pids": [], "zombie_member_pids": [], "verified": True,
         "inspection_errors": []})
@@ -2616,14 +2648,13 @@ def test_runner_orders_cpp_readiness_then_action_server_then_gate_b_before_trigg
     assert "\"navigate_to_pose_action_server_ready\": False" not in source[source.index("runtime_acceptance ="):source.index("collector_members =")]
 
 
-def test_invocation_018_evidence_bundle_remains_immutable():
-    configured_root = os.environ.get("STEP07_INVOCATION_018_EVIDENCE_ROOT")
+def _assert_immutable_invocation_bundle(configured_root, manifest_sha256):
     if not configured_root:
-        pytest.skip("external immutable Invocation_018 evidence root not configured")
+        pytest.skip("external immutable invocation evidence root not configured")
     root = Path(configured_root)
     assert root.is_absolute() and root.is_dir() and not root.is_symlink()
     raw_manifest = (root / "artifact_manifest.json").read_bytes()
-    assert hashlib.sha256(raw_manifest).hexdigest() == INVOCATION_018_MANIFEST_SHA256
+    assert hashlib.sha256(raw_manifest).hexdigest() == manifest_sha256
     manifest = json.loads(raw_manifest.decode("utf-8"))
     assert manifest["artifact_count"] == len(manifest["artifacts"])
     for entry in manifest["artifacts"]:
@@ -2634,3 +2665,13 @@ def test_invocation_018_evidence_bundle_remains_immutable():
         content = artifact.read_bytes()
         assert len(content) == entry["size_bytes"]
         assert hashlib.sha256(content).hexdigest() == entry["sha256"]
+
+
+def test_invocation_018_evidence_bundle_remains_immutable():
+    _assert_immutable_invocation_bundle(os.environ.get("STEP07_INVOCATION_018_EVIDENCE_ROOT"),
+                                      INVOCATION_018_MANIFEST_SHA256)
+
+
+def test_invocation_019_evidence_bundle_remains_immutable():
+    _assert_immutable_invocation_bundle(os.environ.get("STEP07_INVOCATION_019_EVIDENCE_ROOT"),
+                                      INVOCATION_019_MANIFEST_SHA256)
