@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 from step07_gate_b_evidence_validator import (
     QOS_PROFILE_SOURCE_PATHS, canonical_navigation_evidence_chain,
+    build_navigation_evidence_chain, semantic_canonical_bytes,
     navigation_evidence_chain_failure,
     load_json, validate_gate_b_document, validate_observer,
     validate_run_directory, validate_run_record, validate_vector_samples,
@@ -587,3 +589,91 @@ def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_pat
         "terminal_outcome": "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT",
     }
     assert len(result["artifact_hashes"]) == 3
+
+
+def _fresh_pre_vector_chain():
+    observer=observer_doc();gate=_gate_b_doc()
+    observer['safety_state']=[];observer['receipt']=[];observer['filtered_odometry']=[]
+    for i,sample in enumerate(gate['samples'],1):
+        stamp=10_000_000_000+(i-1)*10_000_000;measurement=stamp-20_000_000
+        sample['stamp_ns']=stamp
+        sample['correlation'].update(scan_stamp_ns=measurement,odometry_stamp_ns=measurement,
+            receipt_stamp_ns=measurement,receipt_sequence=i)
+        sec,ns=divmod(measurement,1_000_000_000)
+        observer['receipt'].append({'stamp_sec':sec,'stamp_nanosec':ns,'sequence':i,
+            'episode_generation':1,'reset_epoch':2,'runtime_generation':3,'vx':0.,'vy':0.,'wz':0.})
+        observer['filtered_odometry'].append({'stamp_sec':sec,'stamp_nanosec':ns,
+            'pose':[0.]*7,'twist':[0.]*6,'pose_finite':True,'twist_finite':True})
+        sec,ns=divmod(stamp,1_000_000_000)
+        observer['safety_state'].append({'stamp_sec':sec,'stamp_nanosec':ns,'raw_command':{'vx':0.,'vy':0.,'wz':0.},
+            'intervention_reasons':[],'command_valid':True,'motion_permitted':True})
+    return observer,gate
+
+
+def test_exact_fresh_records_before_first_vector_are_kept_without_widening_window():
+    observer,gate=_fresh_pre_vector_chain()
+    chain=build_navigation_evidence_chain(observer,gate)
+    assert chain['window']['start_stamp_ns']==10_000_000_000
+    first=chain['links']['final_receipt'][0]
+    assert first['stamp_sec']*1_000_000_000+first['stamp_nanosec']==9_980_000_000
+    unrelated=copy.deepcopy(first);unrelated.update(stamp_sec=9,stamp_nanosec=0,sequence=999)
+    observer['receipt'].append(unrelated)
+    assert build_navigation_evidence_chain(observer,gate)==chain
+
+
+@pytest.mark.parametrize('fault',['stale_receipt','stale_odometry','future','wrong_sequence','wrong_generation','missing_receipt','missing_odometry'])
+def test_pre_vector_correlation_rejects_stale_future_wrong_identity_or_missing_exact_record(fault):
+    observer,gate=_fresh_pre_vector_chain();correlation=gate['samples'][0]['correlation']
+    if fault in ('stale_receipt','stale_odometry','future'):
+        key='odometry_stamp_ns' if fault=='stale_odometry' else 'receipt_stamp_ns'
+        age=250_000_001 if fault=='stale_odometry' else 500_000_001 if fault=='stale_receipt' else -1
+        stamp=gate['samples'][0]['stamp_ns']-age;correlation[key]=stamp
+        row=observer['filtered_odometry' if fault=='stale_odometry' else 'receipt'][0]
+        row['stamp_sec'],row['stamp_nanosec']=divmod(stamp,1_000_000_000)
+    elif fault=='wrong_sequence':observer['receipt'][0]['sequence']=999
+    elif fault=='wrong_generation':observer['receipt'][0]['runtime_generation']=99
+    else:observer['receipt' if fault=='missing_receipt' else 'filtered_odometry'].pop(0)
+    with pytest.raises(ValueError,match='FRESHNESS_INVALID|correlated_final_receipt|correlated_odometry'):
+        build_navigation_evidence_chain(observer,gate)
+
+
+def test_terminal_handshake_verifies_collection_and_peer_hash_and_exact_byte_size():
+    from step07_gate_b_evidence_validator import validate_gate_b_terminal
+    collection=_gate_b_doc();collection.update(handshake_protocol='2.0',invocation_id='fixture',
+        protocol_phase='COLLECTION_COMPLETE_AWAITING_PEER')
+    raw=semantic_canonical_bytes(collection)
+    peer=semantic_canonical_bytes({'schema_version':'1.0','invocation_id':'fixture',
+        'config_hash':'a'*64,'snapshot_complete':True})
+    terminal={'schema_version':'1.0','collector':'step07_gate_b_observer','protocol_phase':'TERMINAL',
+        'config_hash':'a'*64,'invocation_id':'fixture','status':'PASS','errors':[],'peer_verified':True,
+        'collection_artifact':{'path':'gate_b_vectors.json','sha256':hashlib.sha256(raw).hexdigest(),'size_bytes':len(raw)},
+        'peer_artifact':{'path':'runtime_observer.json','sha256':hashlib.sha256(peer).hexdigest(),'size_bytes':len(peer)}}
+    kwargs=dict(collection_raw=raw,peer_raw=peer,config_hash='a'*64,invocation_id='fixture')
+    assert validate_gate_b_terminal(terminal,**kwargs)['terminal_pass']
+    for field in ('size_bytes','sha256'):
+        bad=copy.deepcopy(terminal);bad['collection_artifact'][field]=0
+        with pytest.raises(ValueError,match='HASH_OR_SIZE_MISMATCH'):validate_gate_b_terminal(bad,**kwargs)
+
+
+@pytest.mark.parametrize('literal',['GATE_B_PEER_EVIDENCE_TIMEOUT','GATE_B_PEER_CONFIG_HASH_MISMATCH'])
+def test_peer_failure_after_vector_write_round_trips_as_failure_not_collection_pass(tmp_path,literal):
+    record=_run005_record();record.update(config_hash='a'*64,invocation_id='fixture',collector_handshake_protocol='2.0')
+    record['acceptance'].update(observer_acceptance=False,gate_b_vectors=False)
+    record['failure_reason_literals']=[literal];record['terminal_outcome']='STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED'
+    state={'protocol':'2.0','status':'FAIL','events':['GATE_B_COLLECTION_VERIFIED'],'failure_literal':literal}
+    record['collector_handshake']=state
+    gate=_gate_b_doc();gate.update(handshake_protocol='2.0',invocation_id='fixture',protocol_phase='COLLECTION_COMPLETE_AWAITING_PEER')
+    collection=semantic_canonical_bytes(gate)
+    terminal={'schema_version':'1.0','collector':'step07_gate_b_observer','protocol_phase':'TERMINAL',
+        'config_hash':'a'*64,'invocation_id':'fixture','status':'FAIL','errors':[literal],'peer_verified':False,
+        'collection_artifact':{'path':'gate_b_vectors.json','sha256':hashlib.sha256(collection).hexdigest(),'size_bytes':len(collection)},'peer_artifact':None}
+    artifacts={'run_record.json':record,'gate_b_vectors.json':gate,'runtime_observer.json':{'config_hash':'a'*64},
+        'gate_b_terminal.json':terminal,'collector_handshake.failure.json':{'schema_version':'1.0','invocation_id':'fixture','config_hash':'a'*64,**state}}
+    rows=[]
+    for name,doc in artifacts.items():
+        p=tmp_path/name;_write_canonical_json(p,doc);raw=p.read_bytes();rows.append({'path':name,'sha256':hashlib.sha256(raw).hexdigest(),'size_bytes':len(raw)})
+    _write_canonical_json(tmp_path/'artifact_manifest.json',{'schema_version':'1.0','run_id':record['run_id'],'artifacts':rows})
+    (tmp_path/'SHA256SUMS.txt').write_text(''.join(f"{row['sha256']}  {row['path']}\n" for row in rows))
+    result=validate_run_directory(tmp_path)
+    assert not result['verdict']['pass'] and not result['gate_b_terminal']['terminal_pass']
+    assert all(gate['acceptance'].values()) # Collection local xanh không được nâng terminal.

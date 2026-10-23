@@ -97,7 +97,7 @@ def fresh_stamp(now, stamp, limit):
     return stamp > 0 and 0 <= now - stamp <= limit
 
 
-def peer_evidence_ready(path, config_hash):
+def peer_evidence_ready(path, config_hash, invocation_id=None):
     """File đang ghi/chưa đủ trường phải chờ; identity khác phải fail closed."""
     def pairs(rows):
         result = {}
@@ -109,12 +109,18 @@ def peer_evidence_ready(path, config_hash):
     try:
         document = json.loads(Path(path).read_bytes(), object_pairs_hook=pairs,
                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError("PEER_NONFINITE")))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return False
-    if not isinstance(document, dict) or "config_hash" not in document:
-        return False
-    if document["config_hash"] != config_hash:
+    except (OSError, ValueError) as error:
+        raise ValueError("GATE_B_PEER_ARTIFACT_INVALID") from error
+    if not isinstance(document, dict) or document.get("schema_version") != "1.0":
+        raise ValueError("GATE_B_PEER_SCHEMA_INVALID")
+    if document.get("config_hash") != config_hash:
         raise ValueError("GATE_B_PEER_CONFIG_HASH_MISMATCH")
+    if invocation_id is not None and document.get("invocation_id") != invocation_id:
+        raise ValueError("GATE_B_PEER_INVOCATION_MISMATCH")
+    if invocation_id is not None and document.get("snapshot_complete") is not True:
+        raise ValueError("GATE_B_PEER_SNAPSHOT_INCOMPLETE")
     acceptance = document.get("acceptance")
     return (type(acceptance) is dict and bool(acceptance)
             and all(type(value) is bool for value in acceptance.values()))
@@ -396,6 +402,9 @@ class _Collector:
             self._wait_peer()
             return
         self._publish_ready_when_complete()
+        if len(self.samples) == 5 and self.navigate_result is not None:
+            self._finish()
+            return
         if self.errors:
             if self.navigate_result is not None:
                 self._finish()
@@ -408,8 +417,7 @@ class _Collector:
         if time.monotonic() >= self.deadline:
             if "GATE_B_SAMPLE_TIMEOUT" not in self.errors:
                 self.errors.append("GATE_B_SAMPLE_TIMEOUT")
-            if self.navigate_result is not None:
-                self._finish()
+            self._finish()
             return
         if now <= 0:
             return
@@ -504,6 +512,9 @@ class _Collector:
         self._peer_deadline = time.monotonic() + self.args.peer_timeout_sec
         document = {
             "schema_version": "1.0", "config_hash": self.config_hash,
+            "handshake_protocol": "2.0",
+            "invocation_id": getattr(self.args, "invocation_id", ""),
+            "protocol_phase": "COLLECTION_COMPLETE_AWAITING_PEER",
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
             "sample_count": len(self.samples), "samples": self.samples,
             "raw_transcripts": self.raw, "compute_path_to_pose": {"requested_once": self._compute_path_requested, "success": self.path is not None, "frame_id": getattr(getattr(self.path, "header", None), "frame_id", None), "transcript": self.path_transcript},
@@ -525,11 +536,13 @@ class _Collector:
                 "COLLECTOR_INTERRUPTED_BEFORE_ACTION_TERMINAL"),
         }
         atomic_json(self.args.output, document)
+        self._collection_document = document
         self._wait_peer()
 
     def _wait_peer(self):
         try:
-            self._peer_verified = peer_evidence_ready(self.args.peer_evidence_path, self.config_hash)
+            self._peer_verified = peer_evidence_ready(self.args.peer_evidence_path, self.config_hash,
+                getattr(self.args, "invocation_id", None))
         except ValueError as error:
             self.errors.append(str(error))
             print(str(error), flush=True)
@@ -544,11 +557,36 @@ class _Collector:
 
     def _close(self):
         if not self._closed:
+            if self._finished and not getattr(self, "_terminal_written", False):
+                if not self._peer_verified and not self.errors:
+                    self.errors.append("GATE_B_PEER_HANDSHAKE_INCOMPLETE")
+                self._write_terminal()
             self._closed = True
             self.timer.cancel()
             self.node.destroy_node()
             if self.rclpy.ok():
                 self.rclpy.shutdown()
+
+    def _write_terminal(self):
+        """Collection bất biến; terminal handshake ghi riêng đúng một lần."""
+        if getattr(self, "_terminal_written", False):
+            return
+        raw = Path(self.args.output).read_bytes()
+        peer = None
+        if self._peer_verified:
+            content = Path(self.args.peer_evidence_path).read_bytes()
+            peer = {"path": Path(self.args.peer_evidence_path).name,
+                    "sha256": hashlib.sha256(content).hexdigest(), "size_bytes": len(content)}
+        document = {"schema_version": "1.0", "collector": "step07_gate_b_observer",
+            "protocol_phase": "TERMINAL", "invocation_id": getattr(self.args, "invocation_id", ""),
+            "config_hash": self.config_hash, "peer_verified": self._peer_verified,
+            "status": "PASS" if self.passed() else "FAIL", "errors": list(dict.fromkeys(self.errors)),
+            "collection_artifact": {"path": Path(self.args.output).name,
+                "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)},
+            "peer_artifact": peer}
+        terminal = getattr(self.args, "terminal_output", None) or Path(self.args.output).with_name("gate_b_terminal.json")
+        atomic_json(terminal, document)
+        self._terminal_written = True
 
     def passed(self):
         return (self._finished and self._peer_verified and not self.errors
@@ -564,6 +602,8 @@ def main(argv=None):
     parser.add_argument("--peer-evidence-path", required=True)
     parser.add_argument("--ready-path", required=True)
     parser.add_argument("--start-path", required=True)
+    parser.add_argument("--invocation-id", required=True)
+    parser.add_argument("--terminal-output")
     parser.add_argument("--peer-timeout-sec", type=float, default=60.0)
     parser.add_argument("--goal-x", type=float, default=-4.0)
     parser.add_argument("--goal-y", type=float, default=0.0)
@@ -587,8 +627,13 @@ def main(argv=None):
     try:
         while rclpy.ok() and not collector._closed and not stop_requested["value"]:
             rclpy.spin_once(collector.node, timeout_sec=0.1)
-        if stop_requested["value"] and not collector._finished:
+        if stop_requested["value"]:
             collector.errors.append("GATE_B_COLLECTOR_INTERRUPTED")
+            if not collector._finished:
+                collector._finish()
+    except Exception as error:
+        collector.errors.append(f"GATE_B_COLLECTOR_EXCEPTION:{type(error).__name__}:{error}")
+        if not collector._finished:
             collector._finish()
     finally:
         collector._close()

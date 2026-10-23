@@ -253,3 +253,15 @@ TEST(Step07Observer, RunnerControlledModeDisablesObserverSelfFinalizationTimer) 
   EXPECT_NE(main_body.find("std::signal(SIGTERM, step07_observer_signal_handler)"), std::string::npos);
   EXPECT_LT(main_body.find("while (rclcpp::ok()"), main_body.find("if (!node->finished()) node->finish();"));
 }
+
+TEST(Step07Observer, FinalSnapshotIdentityPreservesObservedGateBEndpoint) {
+  auto document = step07_observer::Json::object();
+  document["graph"]["/mecanum/safety_lifecycle_state"]["subscribers"] =
+    step07_observer::Json::array({{{"node_name", "step07_gate_b_observer"}}});
+  document["qos_verdict"] = {{"lifecycle_endpoint_qos_contract", "PASS"}};
+  const auto graph = document["graph"];
+  step07_observer::mark_snapshot_complete(document, "offline-fixture");
+  EXPECT_EQ(document["invocation_id"], "offline-fixture");
+  EXPECT_EQ(document["snapshot_complete"], true);
+  EXPECT_EQ(document["graph"], graph);
+}

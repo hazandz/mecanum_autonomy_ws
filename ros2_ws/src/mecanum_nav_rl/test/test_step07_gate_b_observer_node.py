@@ -35,14 +35,15 @@ def test_runtime_observer_source_has_no_with_info_or_command_publisher():
     assert "cmd_vel" not in source
 
 
-def test_collector_does_not_finalize_failure_before_action_terminal_result():
-    path = Path(__file__).parents[1] / "mecanum_nav_rl" / "observations" / "step07_gate_b_observer_node.py"
-    source = path.read_text(encoding="utf-8")
-    block = source.split("except ValueError as error:", 1)[1].split("receipt_context =", 1)[0]
-    assert "LOCAL_REFERENCE_TF_TRANSFORM_FAILED" in block
-    assert "self.errors.append(str(error))" in block
-    assert "self._finish()" not in block
-    assert "len(self.samples) == 5 and self.navigate_result is not None" in source
+def test_collector_error_waits_for_result_only_until_existing_deadline(monkeypatch):
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    c=m._Collector.__new__(m._Collector)
+    c._finished=False;c.samples=[];c.errors=["LOCAL_REFERENCE_INVALID"];c.navigate_result=None
+    c.node=SimpleNamespace(get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(nanoseconds=0)))
+    c.deadline=10;done=[];c._finish=lambda:done.append(True)
+    monkeypatch.setattr(m.time,'monotonic',lambda:1)
+    c._tick();assert not done
+    c.deadline=0;c._tick();assert done and 'GATE_B_SAMPLE_TIMEOUT' in c.errors
 
 
 def test_local_reference_adapter_uses_successful_compute_path_result_only():
@@ -257,19 +258,17 @@ def test_peer_lifetime_atomic_once_early_and_late_goal_and_failures(tmp_path, mo
         c.timer=SimpleNamespace(cancel=lambda: events.append("cancel"))
         c.rclpy=SimpleNamespace(ok=lambda: True, shutdown=lambda: events.append("shutdown"))
         if not early:
-            peer.write_text(json.dumps({"config_hash": c.config_hash, "acceptance": {"graph": True}}))
+            peer.write_text(json.dumps({"schema_version":"1.0","config_hash": c.config_hash, "acceptance": {"graph": True}}))
         c._finish()
         original = output.read_bytes()
         assert all(json.loads(original)["acceptance"].values())
         assert c._closed is (not early)
         if early:
-            for raw in ('{', '{}', '{"config_hash":"' + c.config_hash + '","acceptance":'):
-                peer.write_text(raw); c._wait_peer(); assert not c._closed
-            peer.write_text(json.dumps({"config_hash": c.config_hash, "acceptance": {"graph": True}}))
+            peer.write_text(json.dumps({"schema_version":"1.0","config_hash": c.config_hash, "acceptance": {"graph": True}}))
             c._wait_peer()
         assert c._peer_verified and c._closed and events == ["cancel", "destroy", "shutdown"]
         c._finish(); assert output.read_bytes() == original
-    peer.write_text(json.dumps({"config_hash": "b"*64, "acceptance": {"graph": True}}))
+    peer.write_text(json.dumps({"schema_version":"1.0","config_hash": "b"*64, "acceptance": {"graph": True}}))
     with pytest.raises(ValueError, match="GATE_B_PEER_CONFIG_HASH_MISMATCH"):
         m.peer_evidence_ready(peer, "a"*64)
     c._closed=False; c._peer_verified=False; c.errors=[]
@@ -307,7 +306,7 @@ assert len(subscriptions)==4 and not sends
 c._tick(); assert not sends and not c.samples
 finished=[]; c._finish=lambda:finished.append(True)
 c.deadline=0
-c._tick(); assert not finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
+c._tick(); assert finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
 c.navigate_result={"accepted":False,"status":"REJECTED"}
 c._tick(); assert finished and c.errors==["GATE_B_SAMPLE_TIMEOUT"]
 ''')
@@ -354,7 +353,7 @@ def test_interruption_writes_rejected_result_once_and_closes_without_action_retr
     monkeypatch.setitem(sys.modules,"rclpy.signals",signals)
     monkeypatch.setattr(m,"_Collector",lambda args:c)
     assert m.main(["--output",str(c.args.output),"--config-hash",c.config_hash,
-                   "--peer-evidence-path",str(c.args.peer_evidence_path),
+                   "--peer-evidence-path",str(c.args.peer_evidence_path),"--invocation-id","offline-fixture",
                    "--ready-path",str(c.args.ready_path),"--start-path",str(c.args.start_path)]) == 2
     doc=json.loads(c.args.output.read_bytes())
     assert doc["errors"] == ["GATE_B_COLLECTOR_INTERRUPTED"]
@@ -379,3 +378,56 @@ def test_gate_b_readiness_explicitly_records_live_process_context_and_subscripti
     assert ready["ros_context_valid"] is True
     assert len(ready["subscriptions_created"]) == 4
     assert ready["navigate_to_pose_action_server_ready"] is True
+
+
+def _peer_pending_collector(tmp_path, finish=True):
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    c=m._Collector.__new__(m._Collector)
+    c.args=SimpleNamespace(output=tmp_path/'gate_b_vectors.json',peer_evidence_path=tmp_path/'runtime_observer.json',
+        terminal_output=tmp_path/'gate_b_terminal.json',peer_timeout_sec=60,invocation_id='offline-fixture')
+    c.config_hash='a'*64;c._finished=c._closed=c._peer_verified=False
+    c.samples=[{'stamp_ns':i,'dimension':81,'dtype':'float32','values':[0.0]*81} for i in range(1,6)]
+    c.raw={};c.errors=[];c.path=SimpleNamespace(header=SimpleNamespace(frame_id='map'));c.path_transcript={}
+    c._compute_path_requested=c._navigate_requested=True;c._compute_path_calls=c._navigate_calls=1
+    c.navigate_result={'accepted':True,'succeeded':True,'status':4}
+    events=[];c.node=SimpleNamespace(destroy_node=lambda:events.append('destroy'))
+    c.timer=SimpleNamespace(cancel=lambda:None);c.rclpy=SimpleNamespace(ok=lambda:True,shutdown=lambda:None)
+    if finish:c._finish()
+    return c,m,events
+
+
+def test_peer_failures_after_collection_have_distinct_immutable_terminal_evidence(tmp_path,monkeypatch):
+    import json
+    for failure in ('timeout','config','invocation','malformed','snapshot'):
+        target=tmp_path/failure;target.mkdir()
+        c,m,events=_peer_pending_collector(target);original=c.args.output.read_bytes()
+        assert not c.args.terminal_output.exists() and not c._closed
+        if failure=='timeout':c._peer_deadline=0
+        elif failure=='malformed':c.args.peer_evidence_path.write_bytes(b'{')
+        else:
+            peer={'schema_version':'1.0','config_hash':c.config_hash,'invocation_id':c.args.invocation_id,
+                'snapshot_complete':True,'acceptance':{'graph':True}}
+            peer[{'config':'config_hash','invocation':'invocation_id','snapshot':'snapshot_complete'}[failure]]='wrong'
+            c.args.peer_evidence_path.write_text(json.dumps(peer))
+        c._wait_peer()
+        assert c._closed and events==['destroy'] and not c.passed()
+        terminal=json.loads(c.args.terminal_output.read_bytes())
+        assert terminal['status']=='FAIL' and terminal['errors'] and not terminal['peer_verified']
+        assert c.args.output.read_bytes()==original
+        assert json.loads(original)['protocol_phase']=='COLLECTION_COMPLETE_AWAITING_PEER'
+        final=c.args.terminal_output.read_bytes();c._close();assert c.args.terminal_output.read_bytes()==final
+
+
+def test_missing_action_result_deadline_finishes_without_fabricating_navigation(tmp_path,monkeypatch):
+    import json
+    c,m,events=_peer_pending_collector(tmp_path,finish=False)
+    c.samples=[];c.navigate_result=None
+    c._publish_ready_when_complete=lambda:None
+    c.node.get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(nanoseconds=0))
+    c.deadline=0;c._tick()
+    doc=json.loads(c.args.output.read_bytes())
+    assert doc['navigate_to_pose']['status']=='NO_RESULT'
+    assert not doc['acceptance']['navigate_to_pose_succeeded'] and 'GATE_B_SAMPLE_TIMEOUT' in doc['errors']
+    c._peer_deadline=0;c._tick()
+    terminal=json.loads(c.args.terminal_output.read_bytes())
+    assert terminal['status']=='FAIL' and 'GATE_B_SAMPLE_TIMEOUT' in terminal['errors']

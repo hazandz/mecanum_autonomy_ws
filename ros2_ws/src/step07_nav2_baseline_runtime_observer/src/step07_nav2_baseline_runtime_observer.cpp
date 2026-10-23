@@ -31,6 +31,11 @@
 namespace step07_observer {
 using Json = nlohmann::json;
 
+void mark_snapshot_complete(Json &document, const std::string &invocation) {
+  document["invocation_id"] = invocation;
+  document["snapshot_complete"] = true;
+}
+
 rclcpp::QoS dynamic_tf_qos() {
   return rclcpp::QoS(rclcpp::KeepLast(100)).best_effort().durability_volatile();
 }
@@ -231,14 +236,19 @@ class Observer final : public rclcpp::Node {
     output_path_ = declare_parameter<std::string>("output_path", "");
     ready_path_ = declare_parameter<std::string>("ready_path", "");
     config_hash_ = declare_parameter<std::string>("config_hash", "");
+    invocation_id_ = declare_parameter<std::string>("invocation_id", "");
     duration_sec_ = declare_parameter<int>("duration_sec", 30);
     runner_controlled_shutdown_ = declare_parameter<bool>("runner_controlled_shutdown", false);
+    if (runner_controlled_shutdown_ && invocation_id_.empty()) {
+      throw std::invalid_argument("OBSERVER_INVOCATION_ID_REQUIRED");
+    }
     if (output_path_.empty() || ready_path_.empty() || config_hash_.size() != 64 || duration_sec_ < 1 || duration_sec_ > 1800) {
       throw std::invalid_argument("OBSERVER_ARGUMENT_INVALID");
     }
     doc_ = empty_collection_document();
     doc_["schema_version"] = "1.0";
     doc_["config_hash"] = config_hash_;
+    doc_["invocation_id"] = invocation_id_;
     doc_["errors"] = Json::array();
     doc_["lifecycle"] = Json::array();
     doc_["receipt"] = Json::array();
@@ -581,6 +591,7 @@ class Observer final : public rclcpp::Node {
       if (!unknown_qos) doc_["errors"].push_back("ACCEPTANCE_FAILED:" + name);
     }
     doc_["observer_lifecycle"] = Json{{"state", "FINALIZED"}, {"ros_context_valid", true}};
+    mark_snapshot_complete(doc_, invocation_id_);
     if (!write_json_atomic(output_path_, doc_)) {
       failed_closed_ = true;
       RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");
@@ -588,7 +599,7 @@ class Observer final : public rclcpp::Node {
   }
 
  private:
-  std::string output_path_, ready_path_, config_hash_;
+  std::string output_path_, ready_path_, config_hash_, invocation_id_;
   int duration_sec_{30};
   bool finished_{false};
   bool failed_closed_{false};

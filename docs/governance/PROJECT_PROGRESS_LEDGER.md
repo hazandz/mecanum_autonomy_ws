@@ -2294,3 +2294,24 @@ Exact changed paths:
 Historical evidence và runtime checkout 018/019 được đối chiếu inventory read-only; các target 014–017 đã vắng mặt khi bắt đầu, historical metadata Git được giữ. Không sửa evidence/guard/lock lịch sử. Guard seed PENDING, capacity 1, acquisition 0, runtime_authorization NOT_GRANTED, không source lock; Gate B NOT_STARTED, RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry Invocation_019 hoặc integration. Evidence `IMPLEMENTED_OFFLINE_ONLY`; không có runtime approval từ record này.
 
 `PLAN_UPDATE_PROPOSAL`: Run005 attempt_002 consolidated L1; branch/base như trên; commit pending final checks. Dependency offline source/build/test đã được kiểm; blocker delivery: final coherence. Next action: một commit và một review-branch push chỉ khi toàn bộ final checks PASS; review độc lập trước bất kỳ runtime authorization riêng nào. Không đổi milestone/dependency status.
+
+
+## 2026-10-23 — Corrective L1 gộp F1–F5 trên commit 21eab358 (OFFLINE)
+
+`supersedes`: metadata candidate hiện hành cho các finding F1–F5; không sửa outcome/artifact lịch sử. Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`, base/sole-parent target `21eab3580be48de9f00585cba904445dae7ce62f`.
+
+F1/F3: runner nhận collection artifact đúng schema/config/invocation khi Gate-B còn sống, yêu cầu C++ finalize một lần với PGID đã verified. C++ chụp graph/QoS và ghi peer artifact trước khi Gate-B destroy subscriptions. Runner thu terminal/exit codes, validate artifacts/acceptance, rồi teardown composite trước bootstrap. Regression fake liên component chạy chính block main mới; block cũ ở commit base tái tạo timeout. Không giảm endpoint requirements.
+
+F2: generator pin SHA-256 và byte size từ exact UTF-8 bytes sau final serialization. Regression multibyte và final coherence kiểm cả hai. F4: collection là provisional handoff; terminal handshake/error ghi artifact riêng, bind collection/peer bằng hash và size. Navigation chain cũng ghi sidecar để không sửa raw artifacts đã finalized. Timeout, mismatch, exception/SIGTERM và action-result deadline phải fail closed có evidence.
+
+F5: exact receipt/odometry được vector tham chiếu có thể nằm trước first-vector stamp khi vẫn fresh; giữ receipt/scan 500 ms và odometry 250 ms hiện hữu, timestamps/sequence/generation thật. Regression 10.00 s → 9.98 s PASS; stale/future/wrong identity/sequence/missing exact record FAIL. Không mở cửa sổ tùy ý hoặc fabricate metadata.
+
+SOURCE_FREEZE=TRUE là offline freeze. Phase A 9 paths; A.5 12; Phase B actual 16; authorized allowlist 17 (runtime guard test không đổi). Source pins 38 membership giữ nguyên, 8 hash/size refreshed. Không có path source runtime mới.
+
+Phase A/A.5 evidence: full Step-7 377 passed; bringup 289; RL 720; six-package external build PASS; observer/ROSIDL 33 tests, 0 failures; py_compile 7; installed/source equality 15 artifacts + 3 modules; JSON/YAML/XML/canonical/duplicate/nonfinite checks và diff checks PASS. Hai lỗi test implementation đã xử lý trước closure: thiếu import ở regression F5 và thiếu ngoặc initializer C++ test. Post-Phase-B verification là điều kiện delivery riêng, chưa ghi PASS trước khi chạy.
+
+Guard/evidence/manifest SHA-256: `fc5b8de7d681e29f130490181705c1b0bf86da8eed939c26cea02de939b81c9c` / `a5a867a91383d95c7609d7da9e9161cfa0955b29d47637b8146a33f83519295d` / `95a6afedcceb7384e0ec1756d35f0061e962fcec33bc116c2a98a574a0c5489b`; exact evidence byte size `73921`.
+
+Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime checkout 018/019; targets 014–017 ghi UNAVAILABLE, không tính preservation PASS. Guard source PENDING/capacity 1/acquisition 0/NOT_GRANTED, không lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry, HIL/hardware, Fuel provisioning hoặc integration; public ROS/QoS/Safety/Nav2/map/TF/launch contracts không đổi. Evidence IMPLEMENTED_OFFLINE_ONLY.
+
+`PLAN_UPDATE_PROPOSAL`: Run005 attempt_002 corrective L1 F1–F5; branch/base như trên; commit pending required final checks. Dependencies offline source/test/build/pin closure đã kiểm; blocker delivery: post-reconciliation full tools/bringup/coherence. Next action: một commit/review push chỉ khi mọi final checks PASS, sau đó review độc lập; runtime cần Owner authorization riêng. Không chuyển milestone hoặc dependency status.

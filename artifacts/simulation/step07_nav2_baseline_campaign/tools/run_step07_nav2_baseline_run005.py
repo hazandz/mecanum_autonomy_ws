@@ -892,6 +892,95 @@ def _atomic_write(path: Path, document: dict):
                 pass
 
 
+def write_metadata_evidence_manifest(evidence_path: Path, evidence: dict,
+                                      manifest_path: Path, manifest: dict) -> dict:
+    """Pin chính exact UTF-8 bytes cuối, bao gồm nội dung đa byte."""
+    _atomic_write(evidence_path, evidence)
+    raw = evidence_path.read_bytes()
+    identity = {"sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+    manifest.update(evidence_sha256=identity["sha256"], evidence_size_bytes=identity["size_bytes"])
+    _atomic_write(manifest_path, manifest)
+    return identity
+
+
+def write_navigation_chain(run_directory: Path, chain: dict) -> None:
+    raw = json.dumps(chain, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":"), allow_nan=False).encode("utf-8")
+    _atomic_write(run_directory / "navigation_evidence_chain.json", {
+        "schema_version": "1.0", "chain": chain, "canonical": raw.decode("utf-8"),
+        "sha256": hashlib.sha256(raw).hexdigest()})
+
+
+def complete_collector_handshake(*, gate, cpp, cpp_member, gate_path: Path,
+                                 observer_path: Path, config_hash: str, invocation_id: str,
+                                 record: dict, collection_timeout=1800, finalize_timeout=60):
+    """Collection -> C++ finalize khi Gate-B sống -> terminal peer -> exit."""
+    from step07_gate_b_evidence_validator import validate_gate_b_collection, validate_gate_b_terminal, load_json
+    state = {"protocol": "2.0", "events": [], "status": "PENDING"}
+    record["collector_handshake"] = state
+    try:
+        deadline = time.monotonic() + collection_timeout
+        while not gate_path.is_file():
+            if cpp.poll() is not None:
+                raise RuntimeError("CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN")
+            if gate.poll() is not None:
+                raise RuntimeError("GATE_B_EXITED_BEFORE_COLLECTION_ARTIFACT")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("GATE_B_COLLECTION_ARTIFACT_TIMEOUT")
+            time.sleep(0.05)
+        collection = load_canonical_json(gate_path)
+        validate_gate_b_collection(collection, config_hash=config_hash, invocation_id=invocation_id)
+        state["events"].append("GATE_B_COLLECTION_VERIFIED")
+        if gate.poll() is not None:
+            raise RuntimeError("GATE_B_EXITED_BEFORE_CPP_SNAPSHOT")
+        if cpp.poll() is not None:
+            raise RuntimeError("CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN")
+        if not _owned_group_verified(cpp, cpp_member):
+            raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
+        if cpp_member.get("finalize_request_issued") is True:
+            raise RuntimeError("CPP_FINALIZE_REQUEST_ALREADY_ISSUED")
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            if os.getpgid(cpp.pid) != cpp_member["pgid"]:
+                raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
+            cpp_member.update(finalize_request_issued=True, shutdown_requested_by_runner=True,
+                shutdown_signal="SIGINT", shutdown_request={"requested": True, "by": "runner",
+                "reason": "GATE_B_COLLECTION_VERIFIED", "signal": "SIGINT"})
+            os.killpg(cpp_member["pgid"], signal.SIGINT)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        state["events"].append("CPP_FINALIZE_REQUESTED")
+        cpp.wait(timeout=finalize_timeout)
+        if cpp.returncode != 0:
+            raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
+        if not observer_path.is_file():
+            raise RuntimeError("CPP_OBSERVER_ARTIFACT_MISSING")
+        peer = load_json(observer_path)[0]
+        if (peer.get("schema_version") != "1.0" or peer.get("config_hash") != config_hash
+                or peer.get("invocation_id") != invocation_id or peer.get("snapshot_complete") is not True
+                or type(peer.get("graph")) is not dict or type(peer.get("qos_verdict")) is not dict):
+            raise RuntimeError("CPP_OBSERVER_FINAL_ARTIFACT_INVALID")
+        state["events"].append("CPP_SNAPSHOT_COMPLETE")
+        gate.wait(timeout=finalize_timeout + 5)
+        terminal_path = gate_path.with_name("gate_b_terminal.json")
+        if not terminal_path.is_file():
+            raise RuntimeError("GATE_B_TERMINAL_EVIDENCE_MISSING")
+        terminal = load_canonical_json(terminal_path)
+        verdict = validate_gate_b_terminal(terminal, collection_raw=gate_path.read_bytes(),
+            peer_raw=observer_path.read_bytes(), config_hash=config_hash, invocation_id=invocation_id)
+        state["events"].append("GATE_B_TERMINAL_VERIFIED")
+        if gate.returncode != 0 or not verdict["terminal_pass"]:
+            raise RuntimeError("GATE_B_TERMINAL_FAILED:" + ";".join(verdict["errors"]))
+        state["status"] = "COMPLETE"
+        return terminal
+    except BaseException as error:
+        state.update(status="FAIL", failure_literal=f"{type(error).__name__}:{_safe_error_message(error)}")
+        _atomic_write(gate_path.with_name("collector_handshake.failure.json"), {
+            "schema_version": "1.0", "invocation_id": invocation_id,
+            "config_hash": config_hash, **state})
+        raise
+
+
 def load_canonical_json(path: Path) -> dict:
     raw = path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
@@ -1184,7 +1273,7 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
     signal_sent = False
     errors = []
     try:
-        if not leader_exited:
+        if not leader_exited and member.get("finalize_request_issued") is not True:
             os.killpg(member["pgid"], signal.SIGINT)
             signal_sent = True
     except ProcessLookupError:
@@ -1212,7 +1301,7 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
     except BaseException as error:
         returncode = None
         errors.append(f"PROCESS_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
-    clean = ((signal_sent or leader_exited) and not errors and returncode == 0
+    clean = ((signal_sent or leader_exited or member.get("finalize_request_issued") is True) and not errors and returncode == 0
              and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
     verified = snapshot.get("verified") is True
     graceful = clean and not result["escalation_history"]
@@ -1844,6 +1933,7 @@ def main():
     gate_vectors_path = args.run_directory / "gate_b_vectors.json"
     record = {"schema_version": "1.0", "process_group_schema_version": "2.0",
               "run_id": RUN_ID, "review_commit": head,
+              "invocation_id": args.run_directory.name, "collector_handshake_protocol": "2.0",
               "integration_base": args.expected_integration_base, "partition": PARTITION,
               "guard_path": str(args.guard_path), "guard_capacity": guard["capacity"],
               "guard_acquisition_count": guard["acquisition_count"],
@@ -1985,6 +2075,7 @@ def main():
                        "step07_nav2_baseline_runtime_observer", "--ros-args",
                        "-p", f"output_path:={observer_path}", "-p", f"ready_path:={cpp_ready_path}",
                        "-p", f"config_hash:={record['config_hash']}",
+                       "-p", f"invocation_id:={record['invocation_id']}",
                        "-p", "duration_sec:=1800", "-p", "runner_controlled_shutdown:=true"]
         record["collector_stage"] = "CPP_OBSERVER_STARTING"
         cpp, cpp_member = _spawn_owned_process(
@@ -2024,6 +2115,8 @@ def main():
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
                               "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path),
+                              "--invocation-id", record["invocation_id"],
+                              "--terminal-output", str(args.run_directory / "gate_b_terminal.json"),
                               "--ready-path", str(gate_ready_path), "--start-path", str(goal_trigger_path),
                               "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
         record["collector_stage"] = "GATE_B_OBSERVER_STARTING"
@@ -2085,20 +2178,9 @@ def main():
                                  "navigation_evidence_chain_collector"],
             "navigate_to_pose_action_server_ready": True})
         gate_vectors_path = args.run_directory / "gate_b_vectors.json"
-        gate_deadline = time.monotonic() + 1800
-        while gate.poll() is None and time.monotonic() < gate_deadline:
-            time.sleep(0.05)
-        if gate.poll() is None:
-            raise subprocess.TimeoutExpired(gate_command, 1800)
-        if cpp.poll() is not None:
-            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN"
-            raise RuntimeError("CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN")
-        if not _owned_group_verified(cpp, cpp_member):
-            raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
-        cpp_member["shutdown_request"] = {"requested": True, "by": "runner",
-            "reason": "GATE_B_TERMINAL_ARTIFACT_OBSERVED", "signal": "SIGINT"}
-        os.killpg(cpp_member["pgid"], signal.SIGINT)
-        cpp.wait(timeout=1850)
+        complete_collector_handshake(gate=gate, cpp=cpp, cpp_member=cpp_member,
+            gate_path=gate_vectors_path, observer_path=observer_path,
+            config_hash=record["config_hash"], invocation_id=record["invocation_id"], record=record)
         cpp_member["exit_code"] = cpp.returncode
         cpp_member["terminal_state"] = "RUNNER_SHUTDOWN_COMPLETE" if cpp.returncode == 0 else "RUNNER_SHUTDOWN_FAILED"
         record["collector_outcomes"] = {
@@ -2136,12 +2218,7 @@ def main():
             record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                 "exit_code": 2, "terminal_state": "FAILED_UPSTREAM_COLLECTOR",
                 "artifact_written": True, "failure_literal": failure_literal}
-            if observer_path.is_file():
-                cpp_doc["navigation_evidence_chain_failure"] = failure
-                cpp_doc["navigation_evidence_chain_failure_canonical"] = failure_bytes.decode("utf-8")
-                cpp_doc["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(failure_bytes).hexdigest()
-                cpp_doc["navigation_evidence_chain_failure_literal"] = failure_literal
-                _atomic_write(observer_path, cpp_doc)
+            write_navigation_chain(args.run_directory, failure)
             raise RuntimeError(failure_literal)
         if cpp.returncode != 0:
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
@@ -2170,30 +2247,26 @@ def main():
         cpp_member["terminal_state"] = record["cpp_observer_terminal_state"]
         try:
             chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
-            cpp_document["navigation_evidence_chain"] = chain
-            cpp_document["navigation_evidence_chain_canonical"] = canonical_chain.decode("utf-8")
-            cpp_document["navigation_evidence_chain_sha256"] = hashlib.sha256(canonical_chain).hexdigest()
+            write_navigation_chain(args.run_directory, chain)
         except ValueError as error:
             failure_chain = navigation_evidence_chain_failure(cpp_document, gate_document, str(error))
             canonical_failure = json.dumps(failure_chain, ensure_ascii=False, sort_keys=True,
                 separators=(",", ":"), allow_nan=False).encode("utf-8")
-            cpp_document["navigation_evidence_chain_failure"] = failure_chain
-            cpp_document["navigation_evidence_chain_failure_canonical"] = canonical_failure.decode("utf-8")
-            cpp_document["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical_failure).hexdigest()
-            cpp_document["navigation_evidence_chain_failure_literal"] = str(error)
-            _atomic_write(observer_path, cpp_document)
+            write_navigation_chain(args.run_directory, failure_chain)
             record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                 "exit_code": 2, "terminal_state": "FAILED_INCOMPLETE_EVIDENCE_CHAIN",
                 "artifact_written": True, "failure_literal": str(error),
-                "failure_artifact": "runtime_observer.json"}
+                "failure_artifact": "navigation_evidence_chain.json"}
             raise RuntimeError(f"NAVIGATION_EVIDENCE_CHAIN_INCOMPLETE:{error}") from error
-        _atomic_write(observer_path, cpp_document)
         record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
             "exit_code": 0, "terminal_state": "COMPLETE",
-            "artifact_written": True, "artifact": "runtime_observer.json"}
-        validate_gate_b_document(gate_document, config_hash=record["config_hash"])
+            "artifact_written": True, "artifact": "navigation_evidence_chain.json"}
+        gate_validation = validate_gate_b_document(gate_document, config_hash=record["config_hash"],
+            terminal=load_canonical_json(args.run_directory / "gate_b_terminal.json"),
+            collection_raw=gate_vectors_path.read_bytes(), peer_raw=observer_path.read_bytes(),
+            invocation_id=record["invocation_id"])
         runtime_acceptance["observer_acceptance"] = bool(observer_validation.get("acceptance")) and all(observer_validation["acceptance"].values())
-        runtime_acceptance["gate_b_vectors"] = bool(gate_document.get("acceptance")) and all(gate_document["acceptance"].values())
+        runtime_acceptance["gate_b_vectors"] = bool(gate_validation.get("acceptance")) and all(gate_validation["acceptance"].values())
         runtime_acceptance["runtime_graph_and_goal"] = runtime_acceptance["gate_b_vectors"]
         if not runtime_acceptance["observer_acceptance"] or not runtime_acceptance["gate_b_vectors"]:
             raise RuntimeError("RAW_OBSERVER_ACCEPTANCE_FAILED")
@@ -2287,11 +2360,7 @@ def main():
                         separators=(",", ":"), allow_nan=False).encode("utf-8")
                     record["navigation_evidence_chain_failure"] = chain_failure
                     record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(chain_bytes).hexdigest()
-                    cpp_doc["navigation_evidence_chain_failure"] = chain_failure
-                    cpp_doc["navigation_evidence_chain_failure_canonical"] = chain_bytes.decode("utf-8")
-                    cpp_doc["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(chain_bytes).hexdigest()
-                    cpp_doc["navigation_evidence_chain_failure_literal"] = f"EVIDENCE_WINDOW_NOT_FORMED:{blocking_reason}"
-                    _atomic_write(observer_path, cpp_doc)
+                    write_navigation_chain(args.run_directory, chain_failure)
                     record.setdefault("collector_outcomes", {})["navigation_evidence_chain_collector"] = {
                         "process_exit_status": "NOT_STARTED", "terminal_state": "NOT_STARTED",
                         "artifact_written": observer_path.is_file(),
@@ -2565,10 +2634,12 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
             except BaseException:
                 requested = False
         if isinstance(member, dict):
+            requested = requested or member.get("shutdown_requested_by_runner") is True
             member["shutdown_requested_by_runner"] = requested
-            member["shutdown_signal"] = "SIGINT" if requested else None
-            member["shutdown_request"] = {"requested": requested, "by": "runner",
-                "reason": blocker, "signal": "SIGINT"}
+            if not member.get("finalize_request_issued"):
+                member["shutdown_signal"] = "SIGINT" if requested else None
+                member["shutdown_request"] = {"requested": requested, "by": "runner",
+                    "reason": blocker, "signal": "SIGINT"}
         stop_result = _stop_collector(process, member) if started else _stop_collector(None, None)
         exit_code = stop_result.get("exit_code", stop_result.get("leader_returncode"))
         status = ("NOT_STARTED" if not started else

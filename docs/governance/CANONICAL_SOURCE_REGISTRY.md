@@ -1418,3 +1418,33 @@ Exact changed paths:
 - `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py`
 
 Historical evidence và runtime checkout 018/019 được đối chiếu inventory read-only; các target 014–017 đã vắng mặt khi bắt đầu, historical metadata Git được giữ. Không sửa evidence/guard/lock lịch sử. Guard seed PENDING, capacity 1, acquisition 0, runtime_authorization NOT_GRANTED, không source lock; Gate B NOT_STARTED, RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry Invocation_019 hoặc integration. Evidence `IMPLEMENTED_OFFLINE_ONLY`; không có runtime approval từ record này.
+
+
+## 2026-10-23 — Corrective L1 gộp F1–F5 trên commit 21eab358 (OFFLINE)
+
+`supersedes`: metadata candidate hiện hành cho các finding F1–F5; không sửa outcome/artifact lịch sử. Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`, base/sole-parent target `21eab3580be48de9f00585cba904445dae7ce62f`.
+
+F1/F3: runner nhận collection artifact đúng schema/config/invocation khi Gate-B còn sống, yêu cầu C++ finalize một lần với PGID đã verified. C++ chụp graph/QoS và ghi peer artifact trước khi Gate-B destroy subscriptions. Runner thu terminal/exit codes, validate artifacts/acceptance, rồi teardown composite trước bootstrap. Regression fake liên component chạy chính block main mới; block cũ ở commit base tái tạo timeout. Không giảm endpoint requirements.
+
+F2: generator pin SHA-256 và byte size từ exact UTF-8 bytes sau final serialization. Regression multibyte và final coherence kiểm cả hai. F4: collection là provisional handoff; terminal handshake/error ghi artifact riêng, bind collection/peer bằng hash và size. Navigation chain cũng ghi sidecar để không sửa raw artifacts đã finalized. Timeout, mismatch, exception/SIGTERM và action-result deadline phải fail closed có evidence.
+
+F5: exact receipt/odometry được vector tham chiếu có thể nằm trước first-vector stamp khi vẫn fresh; giữ receipt/scan 500 ms và odometry 250 ms hiện hữu, timestamps/sequence/generation thật. Regression 10.00 s → 9.98 s PASS; stale/future/wrong identity/sequence/missing exact record FAIL. Không mở cửa sổ tùy ý hoặc fabricate metadata.
+
+SOURCE_FREEZE=TRUE là offline freeze. Phase A 9 paths; A.5 12; Phase B actual 16; authorized allowlist 17 (runtime guard test không đổi). Source pins 38 membership giữ nguyên, 8 hash/size refreshed. Không có path source runtime mới.
+
+Phase A/A.5 evidence: full Step-7 377 passed; bringup 289; RL 720; six-package external build PASS; observer/ROSIDL 33 tests, 0 failures; py_compile 7; installed/source equality 15 artifacts + 3 modules; JSON/YAML/XML/canonical/duplicate/nonfinite checks và diff checks PASS. Hai lỗi test implementation đã xử lý trước closure: thiếu import ở regression F5 và thiếu ngoặc initializer C++ test. Post-Phase-B verification là điều kiện delivery riêng, chưa ghi PASS trước khi chạy.
+
+Guard/evidence/manifest SHA-256: `fc5b8de7d681e29f130490181705c1b0bf86da8eed939c26cea02de939b81c9c` / `a5a867a91383d95c7609d7da9e9161cfa0955b29d47637b8146a33f83519295d` / `95a6afedcceb7384e0ec1756d35f0061e962fcec33bc116c2a98a574a0c5489b`; exact evidence byte size `73921`.
+
+Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime checkout 018/019; targets 014–017 ghi UNAVAILABLE, không tính preservation PASS. Guard source PENDING/capacity 1/acquisition 0/NOT_GRANTED, không lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry, HIL/hardware, Fuel provisioning hoặc integration; public ROS/QoS/Safety/Nav2/map/TF/launch contracts không đổi. Evidence IMPLEMENTED_OFFLINE_ONLY.
+
+| Existing pin refreshed | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `73057dfc72af96a79eb2e71fdba1269881586a77162dfc5e6e6996817101dfe2` | 155507 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `0ca1f3b8b7eed25089b4e2cfa8a01dd3dae100ed84f9cdf7e82a3d6e95d504ff` | 54765 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `807621ee6b0eef7505a8012f9c4db997455c1771871e729d5453a46fa0497a4b` | 158506 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `b69da6f14f1b17f645594fddb2869459c92a7929425345b791056a5d13e2c30e` | 42815 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `6f07d2402e591aed4ccbed8edfd2e9b9e632c8b83a0eab92be9b000ca7216af4` | 113662 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `9d67b0db0c80f776fc27e84f60d80b5d924bb180c403339d7c636c1e1f7f2db0` | 33340 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `18e6ac472aafd77f761e8a05053cb93213f1cdce3164ebdf1332679d781fadd0` | 24139 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `413e496ca02621a8b2b90c41d6260c74233e9d1715aa1d1c4fac3f14640de5a5` | 44911 |

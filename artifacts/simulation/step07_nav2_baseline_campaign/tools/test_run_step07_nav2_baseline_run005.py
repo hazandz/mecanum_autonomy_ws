@@ -2675,3 +2675,229 @@ def test_invocation_018_evidence_bundle_remains_immutable():
 def test_invocation_019_evidence_bundle_remains_immutable():
     _assert_immutable_invocation_bundle(os.environ.get("STEP07_INVOCATION_019_EVIDENCE_ROOT"),
                                       INVOCATION_019_MANIFEST_SHA256)
+
+
+def _handoff_model(tmp_path, monkeypatch):
+    """Filesystem và hai process giả chạy chính Gate-B state machine, không ROS."""
+    from types import SimpleNamespace as NS
+    spec = importlib.util.spec_from_file_location('gate_b_handoff_model', ROOT /
+        'ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    c = module._Collector.__new__(module._Collector)
+    c.args = NS(output=tmp_path/'gate_b_vectors.json', peer_evidence_path=tmp_path/'runtime_observer.json',
+        terminal_output=tmp_path/'gate_b_terminal.json', peer_timeout_sec=60, invocation_id='offline-fixture')
+    c.config_hash='a'*64; c._finished=c._closed=c._peer_verified=False
+    c.samples=[{'stamp_ns':i,'dtype':'float32','dimension':81,'values':[0.0]*81} for i in range(1,6)]
+    c.raw={};c.errors=[];c.path=NS(header=NS(frame_id='map'));c.path_transcript={}
+    c._compute_path_calls=c._navigate_calls=1;c._compute_path_requested=c._navigate_requested=True
+    c.navigate_result={'accepted':True,'succeeded':True,'status':4}
+    events=[]; c.subscriptions=[object()]*4
+    c.node=NS(destroy_node=lambda:events.append('gate_destroy'))
+    c.timer=NS(cancel=lambda:None);c.rclpy=NS(ok=lambda:True,shutdown=lambda:None)
+    c._finish(); original=c.args.output.read_bytes()
+    class Gate:
+        pid=102
+        @property
+        def returncode(self): return (0 if c.passed() else 2) if c._closed else None
+        def poll(self): return self.returncode
+        def wait(self,timeout=None):
+            assert c._closed, 'Gate-B exit cannot precede C++ snapshot'
+            events.append('gate_exit');return self.returncode
+    class Cpp:
+        pid=101;returncode=None
+        def poll(self):return self.returncode
+        def wait(self,timeout=None):
+            if self.returncode is None:
+                assert not c._closed and len(c.subscriptions)==4
+                events.append('cpp_snapshot_with_gate_endpoint')
+                runner._atomic_write(c.args.peer_evidence_path, {'schema_version':'1.0','config_hash':c.config_hash,
+                    'invocation_id':c.args.invocation_id,'snapshot_complete':True,
+                    'graph':{'gate_b_endpoint':True},'qos_verdict':{'lifecycle_endpoint_qos_contract':'PASS'},
+                    'acceptance':{'graph':True}})
+                c._wait_peer(); self.returncode=0
+            return self.returncode
+    member={'name':'cpp_observer','pid':101,'launcher_pid':101,'pgid':101,'ownership_verified':True}
+    signals=[]
+    def killpg(pgid,sig):
+        assert pgid==101 and not c._closed
+        signals.append((pgid,sig));events.append('cpp_finalize_signal')
+    monkeypatch.setattr(runner.os,'killpg',killpg)
+    monkeypatch.setattr(runner.os,'getpgid',lambda pid:pid)
+    monkeypatch.setattr(runner.signal,'pthread_sigmask',lambda *_:set())
+    gate,cpp=Gate(),Cpp()
+    kwargs=dict(gate=gate,cpp=cpp,cpp_member=member,gate_path=c.args.output,
+        observer_path=c.args.peer_evidence_path,config_hash=c.config_hash,invocation_id=c.args.invocation_id,record={})
+    return c,kwargs,events,signals,original
+
+
+def test_cross_component_collection_finalize_peer_exit_keeps_qos_endpoint_alive(tmp_path,monkeypatch):
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    assert kwargs['gate'].poll() is None and not c._closed
+    terminal=runner.complete_collector_handshake(**kwargs)
+    assert terminal['peer_verified'] and terminal['status']=='PASS'
+    assert events==['cpp_finalize_signal','cpp_snapshot_with_gate_endpoint','gate_destroy','gate_exit']
+    assert signals==[(101,runner.signal.SIGINT)]
+    assert c.args.output.read_bytes()==original
+    terminal_bytes=Path(c.args.terminal_output).read_bytes();c._close()
+    assert Path(c.args.terminal_output).read_bytes()==terminal_bytes
+    with pytest.raises(RuntimeError,match='EXITED_BEFORE'):
+        runner.complete_collector_handshake(**kwargs)
+    assert len(signals)==1
+
+
+@pytest.mark.parametrize('fault', ['no_output','malformed','wrong_config','wrong_invocation','wrong_schema','wrong_pgid','early_cpp','missing_cpp','malformed_cpp','unowned'])
+def test_handoff_failures_are_structured_and_never_claim_pass(tmp_path,monkeypatch,fault):
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    clock=[0.0];monkeypatch.setattr(runner.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(runner.time,'sleep',lambda dt:clock.__setitem__(0,clock[0]+dt))
+    kwargs['collection_timeout']=0.1
+    if fault=='no_output':c.args.output.unlink()
+    elif fault=='malformed':c.args.output.write_bytes(b'{')
+    elif fault in ('wrong_config','wrong_invocation','wrong_schema'):
+        d=runner.load_canonical_json(c.args.output)
+        d[{'wrong_config':'config_hash','wrong_invocation':'invocation_id','wrong_schema':'schema_version'}[fault]]='invalid'
+        runner._atomic_write(c.args.output,d)
+    elif fault=='wrong_pgid':monkeypatch.setattr(runner.os,'getpgid',lambda _:999)
+    elif fault=='early_cpp':kwargs['cpp'].returncode=2
+    elif fault=='unowned':kwargs['cpp_member']['ownership_verified']=False
+    elif fault in ('missing_cpp','malformed_cpp'):
+        def finish(timeout=None):
+            kwargs['cpp'].returncode=0
+            if fault=='malformed_cpp':c.args.peer_evidence_path.write_bytes(b'{')
+        kwargs['cpp'].wait=finish
+    with pytest.raises((RuntimeError,ValueError)):
+        runner.complete_collector_handshake(**kwargs)
+    state=runner.load_canonical_json(tmp_path/'collector_handshake.failure.json')
+    assert state['status']=='FAIL' and state['failure_literal']
+    assert kwargs['record']['collector_handshake']['status']=='FAIL'
+    assert len(signals)==(1 if fault in ('missing_cpp','malformed_cpp') else 0)
+    assert not c._closed
+
+
+@pytest.mark.parametrize('boundary',['signal','cpp_wait','gate_wait'])
+@pytest.mark.parametrize('exception',[RuntimeError('offline handoff failure'),KeyboardInterrupt('RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM')])
+def test_handoff_exception_or_sigterm_persists_failure_and_finalize_is_not_signalled_twice(
+    tmp_path,monkeypatch,boundary,exception
+):
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    def fail(*args,**kw):raise exception
+    if boundary=='signal':monkeypatch.setattr(runner.os,'killpg',fail)
+    else:setattr(kwargs['cpp' if boundary=='cpp_wait' else 'gate'],'wait',fail)
+    with pytest.raises(type(exception)):
+        runner.complete_collector_handshake(**kwargs)
+    assert runner.load_canonical_json(tmp_path/'collector_handshake.failure.json')['status']=='FAIL'
+    assert kwargs['cpp_member']['finalize_request_issued'] is True
+    # Cleanup dùng wait/snapshot, không phát lại SIGINT sau handoff đã issued.
+    monkeypatch.setattr(runner.os,'killpg',lambda *_:pytest.fail('duplicate finalize SIGINT'))
+    kwargs['cpp'].wait=lambda timeout=None:0
+    kwargs['cpp'].returncode=0
+    monkeypatch.setattr(runner,'_process_group_members',lambda _:{'live_member_pids':[],
+        'zombie_member_pids':[],'verified':True,'inspection_errors':[]})
+    result=runner._stop_collector(kwargs['cpp'],kwargs['cpp_member'])
+    assert result['clean'] is True and result['signal_sent'] is False
+    assert c.args.output.read_bytes()==original
+
+
+def test_metadata_manifest_uses_final_utf8_bytes_not_character_count(tmp_path):
+    evidence=tmp_path/'evidence.json';manifest=tmp_path/'manifest.json'
+    doc={'tiếng Việt':'đúng bytes cuối','stage':'final'}
+    runner.write_metadata_evidence_manifest(evidence,doc,manifest,{})
+    raw=evidence.read_bytes();m=runner.load_canonical_json(manifest)
+    assert len(raw)>len(raw.decode('utf-8'))
+    assert m['evidence_size_bytes']==len(raw)
+    assert m['evidence_sha256']==hashlib.sha256(raw).hexdigest()
+
+
+@pytest.mark.parametrize('boundary',['collection','signal','cpp_wait','gate_wait'])
+def test_handoff_sigterm_or_exception_still_runs_owned_ordered_teardown(tmp_path,monkeypatch,boundary):
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    def fail(*a,**k):raise RuntimeError('RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM')
+    if boundary=='collection':monkeypatch.setattr(runner,'load_canonical_json',fail)
+    elif boundary=='signal':monkeypatch.setattr(runner.os,'killpg',fail)
+    else:setattr(kwargs['cpp' if boundary=='cpp_wait' else 'gate'],'wait',fail)
+    with pytest.raises(RuntimeError):runner.complete_collector_handshake(**kwargs)
+    sent=[]
+    monkeypatch.setattr(runner.os,'killpg',lambda pgid,sig:sent.append((pgid,sig)))
+    monkeypatch.setattr(runner,'_process_group_members',lambda _:{'live_member_pids':[],
+        'zombie_member_pids':[],'verified':True,'inspection_errors':[]})
+    class Process:
+        def __init__(self,pid):self.pid=pid;self.returncode=None
+        def poll(self):return self.returncode
+        def wait(self,timeout=None):self.returncode=0;return 0
+    def member(pid,name):return {'name':name,'pid':pid,'pgid':pid,'ownership_verified':True,
+        'initial_snapshot':{'verified':True,'live_member_pids':[pid],'zombie_member_pids':[]}}
+    composite,bootstrap=Process(201),Process(202)
+    def cpp_wait(timeout=None):kwargs['cpp'].returncode=0;return 0
+    kwargs['cpp'].wait=cpp_wait
+    def gate_wait(timeout=None):
+        if not c._closed:c.errors.append('GATE_B_COLLECTOR_INTERRUPTED');c._close()
+        return kwargs['gate'].returncode
+    kwargs['gate'].wait=gate_wait
+    teardown=runner.teardown_campaign_processes(composite_proc=composite,composite_member=member(201,'composite'),
+        bootstrap_proc=bootstrap,bootstrap_member=member(202,'bootstrap'),
+        collector_procs={'cpp_observer':kwargs['cpp'],'gate_b_observer':kwargs['gate']},
+        collector_members={'cpp_observer':kwargs['cpp_member'],'gate_b_observer':member(102,'gate_b_observer')},
+        bootstrap_calls=1,composite_calls=1)
+    assert teardown['completed'] and teardown['ordered'] and teardown['order']==['composite','bootstrap']
+    assert [p for p,_ in sent][:2]==[201,202]
+    assert sum(p==101 for p,_ in sent)==(1 if boundary=='collection' else 0)
+    runner.record_campaign_failure(kwargs['record'],'COLLECTOR_HANDOFF',RuntimeError('RUNNER_INTERRUPTED_BY_SIGNAL:SIGTERM'))
+    result=runner.finalise_after_teardown(kwargs['record'],{'handoff':False},teardown)
+    assert 'FAIL_NO_RETRY' in result['terminal_outcome']
+
+
+def test_main_handoff_block_drives_collection_before_peer_exit(tmp_path,monkeypatch):
+    """Chạy chính block orchestration trong main trên hai process model có dependency thật."""
+    import ast
+    from types import SimpleNamespace as NS
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    tree=ast.parse(RUNNER_PATH.read_text())
+    main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    candidates=[]
+    for block in ast.walk(main):
+        body=getattr(block,'body',None)
+        if not isinstance(body,list):continue
+        starts=[i for i,n in enumerate(body) if isinstance(n,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='gate_vectors_path' for t in n.targets)]
+        for start in starts:
+            stops=[i for i in range(start+1,len(body)) if isinstance(body[i],ast.Assign)
+                and any(isinstance(t,ast.Subscript) and isinstance(t.value,ast.Name) and t.value.id=='record'
+                    and isinstance(t.slice,ast.Constant) and t.slice.value=='collector_outcomes' for t in body[i].targets)]
+            if stops:candidates.append(body[start:stops[0]])
+    assert len(candidates)==1
+    clock=[0.0];monkeypatch.setattr(runner.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(runner.time,'sleep',lambda dt:clock.__setitem__(0,clock[0]+dt))
+    record={'config_hash':c.config_hash,'invocation_id':c.args.invocation_id}
+    context=dict(runner.__dict__,args=NS(run_directory=tmp_path),gate=kwargs['gate'],cpp=kwargs['cpp'],
+        cpp_member=kwargs['cpp_member'],gate_command=['offline-fake'],observer_path=c.args.peer_evidence_path,record=record)
+    code=compile(ast.fix_missing_locations(ast.Module(body=candidates[0],type_ignores=[])),str(RUNNER_PATH),'exec')
+    exec(code,context)
+    assert events==['cpp_finalize_signal','cpp_snapshot_with_gate_endpoint','gate_destroy','gate_exit']
+    assert record['collector_handshake']['status']=='COMPLETE'
+    assert c.args.output.read_bytes()==original and signals==[(101,runner.signal.SIGINT)]
+
+
+def test_old_committed_exit_before_finalize_protocol_times_out_in_same_process_model(tmp_path,monkeypatch):
+    import ast
+    from types import SimpleNamespace as NS
+    c,kwargs,events,signals,original=_handoff_model(tmp_path,monkeypatch)
+    source=_git_blob(ROOT,'21eab3580be48de9f00585cba904445dae7ce62f',str(RUNNER_PATH.relative_to(ROOT))).decode()
+    main=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    blocks=[]
+    for block in ast.walk(main):
+        body=getattr(block,'body',None)
+        if not isinstance(body,list):continue
+        for start,n in enumerate(body):
+            if not isinstance(n,ast.Assign) or not any(isinstance(t,ast.Name) and t.id=='gate_vectors_path' for t in n.targets):continue
+            stop=next((i for i in range(start+1,len(body)) if isinstance(body[i],ast.Assign)
+                and any(isinstance(t,ast.Subscript) and isinstance(t.value,ast.Name) and t.value.id=='record'
+                    and isinstance(t.slice,ast.Constant) and t.slice.value=='collector_outcomes' for t in body[i].targets)),None)
+            if stop is not None:blocks.append(body[start:stop])
+    assert len(blocks)==1
+    clock=[0.0];monkeypatch.setattr(runner.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(runner.time,'sleep',lambda dt:clock.__setitem__(0,clock[0]+dt))
+    context=dict(runner.__dict__,args=NS(run_directory=tmp_path),gate=kwargs['gate'],cpp=kwargs['cpp'],
+        cpp_member=kwargs['cpp_member'],gate_command=['offline-fake'],observer_path=c.args.peer_evidence_path,record={})
+    code=compile(ast.fix_missing_locations(ast.Module(body=blocks[0],type_ignores=[])),'old_offline_protocol','exec')
+    with pytest.raises(subprocess.TimeoutExpired):exec(code,context)
+    assert not signals and not events and not c._closed and not c.args.peer_evidence_path.exists()

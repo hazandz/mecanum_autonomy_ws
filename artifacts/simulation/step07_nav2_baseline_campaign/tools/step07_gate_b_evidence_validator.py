@@ -39,6 +39,54 @@ def semantic_canonical_bytes(document: dict) -> bytes:
                       separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
+def validate_gate_b_collection(document: dict, *, config_hash: str, invocation_id: str) -> dict:
+    """Collection là handoff, chưa phải terminal acceptance."""
+    if (document.get("schema_version") != "1.0" or document.get("handshake_protocol") != "2.0"
+            or document.get("protocol_phase") != "COLLECTION_COMPLETE_AWAITING_PEER"
+            or document.get("config_hash") != config_hash
+            or document.get("invocation_id") != invocation_id or not invocation_id):
+        raise ValueError("GATE_B_COLLECTION_IDENTITY_INVALID")
+    samples, acceptance = document.get("samples"), document.get("acceptance")
+    if (type(samples) is not list or len(samples) > 5 or document.get("sample_count") != len(samples)
+            or (samples and not validate_vector_samples(samples, minimum=1))
+            or type(acceptance) is not dict or not acceptance
+            or any(type(v) is not bool for v in acceptance.values())
+            or type(document.get("errors")) is not list
+            or document.get("source_contract") != "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3"):
+        raise ValueError("GATE_B_COLLECTION_SCHEMA_INVALID")
+    return document
+
+
+def validate_gate_b_terminal(terminal: dict, *, collection_raw: bytes, peer_raw: bytes | None,
+                             config_hash: str, invocation_id: str) -> dict:
+    collection = json.loads(collection_raw, object_pairs_hook=_pairs, parse_constant=_constant)
+    validate_gate_b_collection(collection, config_hash=config_hash, invocation_id=invocation_id)
+    if (terminal.get("schema_version") != "1.0" or terminal.get("collector") != "step07_gate_b_observer"
+            or terminal.get("protocol_phase") != "TERMINAL"
+            or terminal.get("config_hash") != config_hash or terminal.get("invocation_id") != invocation_id):
+        raise ValueError("GATE_B_TERMINAL_IDENTITY_INVALID")
+    def identity(raw, name):
+        return {"path": name, "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+    if terminal.get("collection_artifact") != identity(collection_raw, "gate_b_vectors.json"):
+        raise ValueError("GATE_B_TERMINAL_COLLECTION_HASH_OR_SIZE_MISMATCH")
+    verified, errors = terminal.get("peer_verified"), terminal.get("errors")
+    if type(verified) is not bool or type(errors) is not list or any(type(e) is not str for e in errors):
+        raise ValueError("GATE_B_TERMINAL_SCHEMA_INVALID")
+    if verified:
+        if peer_raw is None or terminal.get("peer_artifact") != identity(peer_raw, "runtime_observer.json"):
+            raise ValueError("GATE_B_TERMINAL_PEER_HASH_OR_SIZE_MISMATCH")
+        peer = json.loads(peer_raw, object_pairs_hook=_pairs, parse_constant=_constant)
+        if (peer.get("schema_version") != "1.0" or peer.get("config_hash") != config_hash
+                or peer.get("invocation_id") != invocation_id or peer.get("snapshot_complete") is not True):
+            raise ValueError("GATE_B_TERMINAL_PEER_IDENTITY_INVALID")
+    elif not errors or terminal.get("peer_artifact") is not None:
+        raise ValueError("GATE_B_TERMINAL_FAILURE_REASON_MISSING")
+    passed = verified and not errors and not collection["errors"] and all(collection["acceptance"].values())
+    if terminal.get("status") != ("PASS" if passed else "FAIL"):
+        raise ValueError("GATE_B_TERMINAL_VERDICT_MISMATCH")
+    return {"terminal_pass": passed, "peer_verified": verified, "errors": errors}
+
+
 def _finite_tree(value, where="$" ):
     if type(value) is float and not math.isfinite(value):
         raise ValueError(f"NONFINITE_NUMBER:{where}")
@@ -134,8 +182,15 @@ def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict
         return start_ns <= ns <= end_ns
 
     safety = [row for row in observer.get("safety_state", []) if in_window(row)]
-    receipts = [row for row in observer.get("receipt", []) if in_window(row)]
-    odometry = [row for row in observer.get("filtered_odometry", []) if in_window(row)]
+    # Chỉ bổ sung record trước first vector khi chính sample tham chiếu stamp đó.
+    correlations = [s["correlation"] for s in samples if type(s.get("correlation")) is dict]
+    referenced_receipts = {c["receipt_stamp_ns"] for c in correlations if type(c.get("receipt_stamp_ns")) is int}
+    referenced_odometry = {c["odometry_stamp_ns"] for c in correlations if type(c.get("odometry_stamp_ns")) is int}
+    def referenced(row, stamps):
+        sec, ns = row.get("stamp_sec"), row.get("stamp_nanosec")
+        return type(sec) is int and type(ns) is int and sec * 1_000_000_000 + ns in stamps
+    receipts = [row for row in observer.get("receipt", []) if in_window(row) or referenced(row, referenced_receipts)]
+    odometry = [row for row in observer.get("filtered_odometry", []) if in_window(row) or referenced(row, referenced_odometry)]
     if not safety:
         raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:safety_decision_candidate")
     if not all(type(row.get("raw_command")) is dict and type(row.get("intervention_reasons")) is list for row in safety):
@@ -166,6 +221,11 @@ def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict
                 or correlation["receipt_sequence"] <= 0
                 or any(correlation[key] <= 0 for key in ("scan_stamp_ns", "odometry_stamp_ns", "receipt_stamp_ns"))):
             raise ValueError("NAVIGATION_EVIDENCE_CHAIN_MISSING:sample_correlation")
+        # Các giới hạn đã dùng trong Gate-B _tick(); không mở rộng age window.
+        for key, limit in (("scan_stamp_ns", 500_000_000),
+                           ("odometry_stamp_ns", 250_000_000), ("receipt_stamp_ns", 500_000_000)):
+            if not 0 <= sample["stamp_ns"] - correlation[key] <= limit:
+                raise ValueError(f"NAVIGATION_EVIDENCE_CHAIN_FRESHNESS_INVALID:{key}")
         receipt_match = any(
             int(row.get("stamp_sec", -1)) * 1_000_000_000 + int(row.get("stamp_nanosec", -1)) == correlation["receipt_stamp_ns"]
             and row.get("episode_generation") == correlation["episode_generation"]
@@ -629,7 +689,8 @@ def validate_observer(document: dict, *, config_hash: str, minimum_samples: int 
             "qos_history_depth_resolution": "PINNED_IMPLEMENTATION" if fallback_used else "OBSERVED_RUNTIME"}
 
 
-def validate_gate_b_document(document: dict, *, config_hash: str, minimum_samples: int = 5) -> dict:
+def validate_gate_b_document(document: dict, *, config_hash: str, minimum_samples: int = 5,
+                             terminal=None, collection_raw=None, peer_raw=None, invocation_id=None) -> dict:
     if document.get("schema_version") != "1.0" or document.get("config_hash") != config_hash:
         raise ValueError("GATE_B_SCHEMA_OR_CONFIG_HASH_INVALID")
     samples = document.get("samples")
@@ -651,6 +712,13 @@ def validate_gate_b_document(document: dict, *, config_hash: str, minimum_sample
                 "errors_absent": document.get("errors") == []}
     if document.get("acceptance") != expected:
         raise ValueError("GATE_B_ACCEPTANCE_RAW_MISMATCH")
+    if document.get("handshake_protocol") == "2.0":
+        if terminal is None or collection_raw is None or invocation_id is None:
+            raise ValueError("GATE_B_TERMINAL_EVIDENCE_MISSING")
+        status = validate_gate_b_terminal(terminal, collection_raw=collection_raw, peer_raw=peer_raw,
+            config_hash=config_hash, invocation_id=invocation_id)
+        if not status["terminal_pass"]:
+            expected["errors_absent"] = False
     return {"acceptance": expected}
 
 
@@ -661,6 +729,27 @@ def validate_run_directory(run_directory: str | Path) -> dict:
     observer, _ = load_json(observer_path)
     gate_path = Path(run_directory) / "gate_b_vectors.json"
     gate_doc, _ = load_json(gate_path)
+    protocol2 = result["run_record"].get("collector_handshake_protocol") == "2.0"
+    if protocol2 and not result["verdict"]["pass"] and result["run_record"].get(
+            "collector_handshake", {}).get("status") == "FAIL":
+        failure, _ = load_json(Path(run_directory) / "collector_handshake.failure.json")
+        state = result["run_record"]["collector_handshake"]
+        if (failure.get("schema_version") != "1.0" or failure.get("protocol") != "2.0"
+                or failure.get("config_hash") != result["run_record"]["config_hash"]
+                or failure.get("invocation_id") != result["run_record"]["invocation_id"]
+                or any(failure.get(k) != state.get(k) for k in ("status", "events", "failure_literal"))
+                or not failure.get("failure_literal")
+                or result["run_record"]["acceptance"].get("gate_b_vectors") is not False
+                or result["run_record"]["acceptance"].get("observer_acceptance") is not False):
+            raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
+        terminal_path = Path(run_directory) / "gate_b_terminal.json"
+        if terminal_path.is_file():
+            terminal, _ = load_json(terminal_path)
+            result["gate_b_terminal"] = validate_gate_b_terminal(terminal,
+                collection_raw=gate_path.read_bytes(), peer_raw=observer_path.read_bytes(),
+                config_hash=result["run_record"]["config_hash"], invocation_id=result["run_record"]["invocation_id"])
+        result["collector_handshake_failure"] = failure
+        return result
     if gate_doc.get("collector_terminal_state") == "NOT_STARTED":
         required_observer = {"clock", "scan", "wheel_odometry_raw", "imu_data", "filtered_odometry",
             "tf", "tf_static", "lifecycle", "receipt", "graph", "cmd_vel_ownership",
@@ -672,10 +761,12 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                 review_commit=result["run_record"].get("review_commit"))
         else:
             failure_chain = result["run_record"].get("navigation_evidence_chain_failure")
-            if (type(failure_chain) is not dict
-                    or observer.get("navigation_evidence_chain_failure") != failure_chain
-                    or observer.get("navigation_evidence_chain_failure_sha256") !=
-                       result["run_record"].get("navigation_evidence_chain_failure_sha256")):
+            chain_doc = (load_json(Path(run_directory) / "navigation_evidence_chain.json")[0]
+                         if protocol2 else None)
+            recorded_chain = chain_doc.get("chain") if protocol2 else observer.get("navigation_evidence_chain_failure")
+            recorded_sha = chain_doc.get("sha256") if protocol2 else observer.get("navigation_evidence_chain_failure_sha256")
+            if (type(failure_chain) is not dict or recorded_chain != failure_chain
+                    or recorded_sha != result["run_record"].get("navigation_evidence_chain_failure_sha256")):
                 raise ValueError("CPP_OBSERVER_MISSING_WITHOUT_STRUCTURED_STAGE_FAILURE")
             result["observer"] = {"state": "INCOMPLETE_FAILURE_ARTIFACT",
                 "failure_chain": failure_chain,
@@ -698,11 +789,17 @@ def validate_run_directory(run_directory: str | Path) -> dict:
         result["observer"] = validate_observer(observer, config_hash=result["run_record"]["config_hash"],
             qos_implementation_pin_evidence=result["run_record"].get("preflight", {}).get("qos_implementation_pin_evidence"),
             review_commit=result["run_record"].get("review_commit"))
-        result["gate_b"] = validate_gate_b_document(gate_doc, config_hash=result["run_record"]["config_hash"])
+        terminal = load_json(Path(run_directory) / "gate_b_terminal.json")[0] if protocol2 else None
+        result["gate_b"] = validate_gate_b_document(gate_doc, config_hash=result["run_record"]["config_hash"],
+            terminal=terminal, collection_raw=gate_path.read_bytes(), peer_raw=observer_path.read_bytes(),
+            invocation_id=result["run_record"].get("invocation_id"))
         chain, canonical_chain = canonical_navigation_evidence_chain(observer, gate_doc)
-        if (observer.get("navigation_evidence_chain") != chain
-                or observer.get("navigation_evidence_chain_canonical") != canonical_chain.decode("utf-8")
-                or observer.get("navigation_evidence_chain_sha256") != hashlib.sha256(canonical_chain).hexdigest()):
+        chain_doc = load_json(Path(run_directory) / "navigation_evidence_chain.json")[0] if protocol2 else {
+            "chain": observer.get("navigation_evidence_chain"), "canonical": observer.get("navigation_evidence_chain_canonical"),
+            "sha256": observer.get("navigation_evidence_chain_sha256")}
+        if (chain_doc.get("chain") != chain
+                or chain_doc.get("canonical") != canonical_chain.decode("utf-8")
+                or chain_doc.get("sha256") != hashlib.sha256(canonical_chain).hexdigest()):
             raise ValueError("NAVIGATION_EVIDENCE_CHAIN_CANONICAL_MISMATCH")
     if result["run_record"].get("acceptance", {}).get("observer_acceptance") is not all(result["observer"]["acceptance"].values()):
         raise ValueError("RUN_RECORD_OBSERVER_ACCEPTANCE_MISMATCH")
