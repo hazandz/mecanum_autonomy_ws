@@ -110,7 +110,11 @@ def _qos_pin_evidence_valid(evidence: dict | None, *, review_commit: str | None 
     return (type(binary) is dict and type(binary.get("sha256")) is str
             and len(binary["sha256"]) == 64
             and all(ch in "0123456789abcdef" for ch in binary["sha256"])
-            and type(binary.get("size_bytes")) is int and binary["size_bytes"] > 0)
+            and type(binary.get("size_bytes")) is int and binary["size_bytes"] > 0
+            and binary.get("source_sha256") == pins[
+                "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"]["sha256"]
+            and binary.get("source_size_bytes") == pins[
+                "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"]["size_bytes"])
 
 
 def build_navigation_evidence_chain(observer: dict, gate_document: dict) -> dict:
@@ -333,7 +337,12 @@ def validate_run_record(record: dict) -> dict:
     if (type(failure_literals) is not list
             or any(type(item) is not str or not item for item in failure_literals)):
         raise ValueError("FAILURE_REASON_LITERALS_INVALID")
-    final_pass = (all(acceptance.values()) and failure_literals == []
+    action_readiness = record.get("action_server_readiness")
+    action_ready = (type(action_readiness) is dict
+        and action_readiness.get("status") == "PASS"
+        and action_readiness.get("attempted") is True
+        and action_readiness.get("ready") is True)
+    final_pass = (all(acceptance.values()) and failure_literals == [] and action_ready
                   and teardown_completed and teardown_clean and teardown_ordered
                   and teardown_verified and teardown_graceful
                   and type(escalation_history) is list and escalation_history == [])
@@ -475,8 +484,14 @@ def validate_observer(document: dict, *, config_hash: str, minimum_samples: int 
         and receipt_publishers[0].get("topic_type") ==
         "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt"
         and receipt_publishers[0].get("endpoint_type") == "PUBLISHER")
-    receipt_status = (_qos_history_depth_status(receipt_publishers[0], reliability=1,
-        durability=1, depth=1) if receipt_identity else "MISMATCH")
+    receipt_qos_candidate = (type(receipt_publishers) is list and len(receipt_publishers) == 1
+        and type(receipt_publishers[0]) is dict
+        and receipt_publishers[0].get("node_name") == "final_twist_publisher"
+        and receipt_publishers[0].get("endpoint_type") == "PUBLISHER")
+    receipt_status = (("MISMATCH" if receipt_publishers[0].get("topic_type") !=
+        "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt" else
+        _qos_history_depth_status(receipt_publishers[0], reliability=1, durability=1, depth=1))
+        if receipt_qos_candidate else "MISMATCH")
     receipt_eligible = receipt_identity and receipt_status != "MISMATCH"
     receipt_unobservable = receipt_eligible and receipt_status == "UNOBSERVABLE"
     reported_qos_status = document.get("qos_history_depth_observability")
@@ -485,19 +500,37 @@ def validate_observer(document: dict, *, config_hash: str, minimum_samples: int 
     expected_qos_status = []
     for row, endpoint_type, durability, depth in lifecycle_expected:
         if row.get("node_name") in {"safety_lifecycle", "safety_supervisor", "final_twist_publisher",
-                                     "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"} and row.get("topic_type") == "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState" and row.get("endpoint_type") == endpoint_type:
-            status = _qos_history_depth_status(row, reliability=1, durability=durability, depth=depth)
+                                     "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"} and row.get("endpoint_type") == endpoint_type:
+            status = ("MISMATCH" if row.get("topic_type") != "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"
+                      else _qos_history_depth_status(row, reliability=1, durability=durability, depth=depth))
             label = {"MATCH": "OBSERVED_MATCH", "UNOBSERVABLE": "UNOBSERVABLE", "MISMATCH": "MISMATCH"}[status]
             expected_qos_status.append({"topic": lifecycle_topic, "node_name": row["node_name"],
                                         "endpoint_type": endpoint_type, "history_depth_status": label})
-    if receipt_identity:
-        status = _qos_history_depth_status(receipt_publishers[0], reliability=1, durability=1, depth=1)
+    if receipt_qos_candidate:
+        status = ("MISMATCH" if receipt_publishers[0].get("topic_type") !=
+                  "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt" else
+                  _qos_history_depth_status(receipt_publishers[0], reliability=1, durability=1, depth=1))
         expected_qos_status.append({"topic": "/mecanum/final_issued_command",
             "node_name": "final_twist_publisher", "endpoint_type": "PUBLISHER",
             "history_depth_status": {"MATCH": "OBSERVED_MATCH", "UNOBSERVABLE": "UNOBSERVABLE",
                                      "MISMATCH": "MISMATCH"}[status]})
     if reported_qos_status != expected_qos_status:
         raise ValueError("QOS_OBSERVABILITY_EVIDENCE_RAW_MISMATCH")
+    lifecycle_status_rows = [row for row in expected_qos_status if row["topic"] == lifecycle_topic]
+    receipt_status_rows = [row for row in expected_qos_status
+                           if row["topic"] == "/mecanum/final_issued_command"]
+    expected_qos_verdict = {
+        "lifecycle_endpoint_qos_contract": ("FAIL" if len(lifecycle_status_rows) != 5
+            or any(row["history_depth_status"] == "MISMATCH" for row in lifecycle_status_rows) else
+            "UNOBSERVABLE" if any(row["history_depth_status"] == "UNOBSERVABLE"
+            for row in lifecycle_status_rows) else "PASS"),
+        "receipt_qos_contract": ("FAIL" if len(receipt_status_rows) != 1
+            or any(row["history_depth_status"] == "MISMATCH" for row in receipt_status_rows) else
+            "UNOBSERVABLE" if any(row["history_depth_status"] == "UNOBSERVABLE"
+            for row in receipt_status_rows) else "PASS"),
+    }
+    if document.get("qos_verdict") != expected_qos_verdict:
+        raise ValueError("QOS_RAW_VERDICT_MISMATCH")
     scan_ok = bool(document["scan"]) and all(row.get("frame_id") == "lidar_frame" and row.get("ranges_valid") is True and row.get("range_count", 0) > 0 for row in document["scan"])
     wheel_ok = bool(document["wheel_odometry_raw"]) and all(row.get("frame_id") == "odom" and row.get("child_frame_id") == "base_link" and row.get("twist_finite") is True for row in document["wheel_odometry_raw"])
     imu_ok = bool(document["imu_data"]) and all(row.get("frame_id") == "base_link" and row.get("quaternion_finite") is True and abs(float(row.get("quaternion_norm", 0.0)) - 1.0) <= 1e-3 for row in document["imu_data"])
@@ -550,10 +583,13 @@ def validate_observer(document: dict, *, config_hash: str, minimum_samples: int 
     errors = document.get("errors")
     if type(errors) is not list or any(type(item) is not str for item in errors):
         raise ValueError("OBSERVER_ERRORS_SHAPE_INVALID")
-    if all(recomputed.values()) and errors:
-        raise ValueError("OBSERVER_PASS_WITH_ERRORS")
-    if not all(recomputed.values()) and not errors:
-        raise ValueError("OBSERVER_FAILURE_WITHOUT_ERROR_LITERAL")
+    unobservable_acceptance = {
+        name for name, verdict in expected_qos_verdict.items() if verdict == "UNOBSERVABLE"
+    }
+    expected_errors = {f"ACCEPTANCE_FAILED:{name}" for name, passed in recomputed.items()
+                       if not passed and name not in unobservable_acceptance}
+    if set(errors) != expected_errors or len(errors) != len(expected_errors):
+        raise ValueError("OBSERVER_FAILURE_LITERAL_MISMATCH")
     effective = dict(recomputed)
     fallback_used = False
     if lifecycle_unobservable or receipt_unobservable:
@@ -599,17 +635,51 @@ def validate_run_directory(run_directory: str | Path) -> dict:
     result["verdict"] = validate_run_record(result["run_record"])
     observer_path = Path(run_directory) / "runtime_observer.json"
     observer, _ = load_json(observer_path)
-    result["observer"] = validate_observer(observer, config_hash=result["run_record"]["config_hash"],
-        qos_implementation_pin_evidence=result["run_record"].get("preflight", {}).get("qos_implementation_pin_evidence"),
-        review_commit=result["run_record"].get("review_commit"))
     gate_path = Path(run_directory) / "gate_b_vectors.json"
     gate_doc, _ = load_json(gate_path)
-    result["gate_b"] = validate_gate_b_document(gate_doc, config_hash=result["run_record"]["config_hash"])
-    chain, canonical_chain = canonical_navigation_evidence_chain(observer, gate_doc)
-    if (observer.get("navigation_evidence_chain") != chain
-            or observer.get("navigation_evidence_chain_canonical") != canonical_chain.decode("utf-8")
-            or observer.get("navigation_evidence_chain_sha256") != hashlib.sha256(canonical_chain).hexdigest()):
-        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_CANONICAL_MISMATCH")
+    if gate_doc.get("collector_terminal_state") == "NOT_STARTED":
+        required_observer = {"clock", "scan", "wheel_odometry_raw", "imu_data", "filtered_odometry",
+            "tf", "tf_static", "lifecycle", "receipt", "graph", "cmd_vel_ownership",
+            "map_to_odom", "map_to_odom_gids", "world_to_map", "safety_state",
+            "qos_history_depth_observability"}
+        if required_observer.issubset(observer):
+            result["observer"] = validate_observer(observer, config_hash=result["run_record"]["config_hash"],
+                qos_implementation_pin_evidence=result["run_record"].get("preflight", {}).get("qos_implementation_pin_evidence"),
+                review_commit=result["run_record"].get("review_commit"))
+        else:
+            failure_chain = result["run_record"].get("navigation_evidence_chain_failure")
+            if (type(failure_chain) is not dict
+                    or observer.get("navigation_evidence_chain_failure") != failure_chain
+                    or observer.get("navigation_evidence_chain_failure_sha256") !=
+                       result["run_record"].get("navigation_evidence_chain_failure_sha256")):
+                raise ValueError("CPP_OBSERVER_MISSING_WITHOUT_STRUCTURED_STAGE_FAILURE")
+            result["observer"] = {"state": "INCOMPLETE_FAILURE_ARTIFACT",
+                "failure_chain": failure_chain,
+                "acceptance": {"failure_artifact_only": False}}
+        stage = gate_doc.get("stage_failure")
+        failure_chain = result["run_record"].get("navigation_evidence_chain_failure")
+        if (result["verdict"]["pass"] or type(stage) is not dict
+                or stage.get("status") != "NOT_STARTED"
+                or stage.get("gate_b_observer_started") is not False
+                or type(stage.get("blocking_reason")) is not str or not stage["blocking_reason"]
+                or gate_doc.get("samples") != [] or gate_doc.get("sample_count") != 0
+                or type(failure_chain) is not dict
+                or failure_chain.get("window", {}).get("sample_count") != 0):
+            raise ValueError("GATE_B_NOT_STARTED_FAILURE_RECORD_INVALID")
+        result["gate_b"] = {"acceptance": {"five_immutable_observation81": False,
+            "compute_path_success_map_frame": False, "navigate_to_pose_requested_once": False,
+            "navigate_to_pose_succeeded": False, "no_command_or_policy_publisher": False,
+            "errors_absent": False}, "stage_failure": stage}
+    else:
+        result["observer"] = validate_observer(observer, config_hash=result["run_record"]["config_hash"],
+            qos_implementation_pin_evidence=result["run_record"].get("preflight", {}).get("qos_implementation_pin_evidence"),
+            review_commit=result["run_record"].get("review_commit"))
+        result["gate_b"] = validate_gate_b_document(gate_doc, config_hash=result["run_record"]["config_hash"])
+        chain, canonical_chain = canonical_navigation_evidence_chain(observer, gate_doc)
+        if (observer.get("navigation_evidence_chain") != chain
+                or observer.get("navigation_evidence_chain_canonical") != canonical_chain.decode("utf-8")
+                or observer.get("navigation_evidence_chain_sha256") != hashlib.sha256(canonical_chain).hexdigest()):
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_CANONICAL_MISMATCH")
     if result["run_record"].get("acceptance", {}).get("observer_acceptance") is not all(result["observer"]["acceptance"].values()):
         raise ValueError("RUN_RECORD_OBSERVER_ACCEPTANCE_MISMATCH")
     if result["run_record"].get("acceptance", {}).get("gate_b_vectors") is not all(result["gate_b"]["acceptance"].values()):

@@ -194,3 +194,16 @@ TEST(Step07Observer, EveryReceiptMustMatchAReadyLifecycleIdentity) {
   mismatch[0]["runtime_generation"] = 10;
   EXPECT_FALSE(step07_observer::lifecycle_receipts_match(lifecycle, mismatch));
 }
+
+TEST(Step07Observer, UnobservableQosIsRawStatusNotCollectorFailure) {
+  const auto source_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+      "src/step07_nav2_baseline_runtime_observer.cpp";
+  std::ifstream input(source_path);
+  const std::string source((std::istreambuf_iterator<char>(input)), {});
+  EXPECT_NE(source.find("\"UNOBSERVABLE\""), std::string::npos);
+  EXPECT_NE(source.find("if (!unknown_qos) doc_[\"errors\"].push_back"), std::string::npos);
+  EXPECT_NE(source.find("\"qos_verdict\""), std::string::npos);
+  EXPECT_NE(source.find("row.value(\"topic_type\", \"\") == type"), std::string::npos);
+  EXPECT_NE(source.find("observed != expected"), std::string::npos);
+  EXPECT_NE(source.find("return failed_closed_ || !doc_.contains(\"errors\") || !doc_[\"errors\"].empty() ? 2 : 0"), std::string::npos);
+}

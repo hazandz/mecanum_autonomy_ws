@@ -2214,3 +2214,13 @@ Final coherence exposed five older bringup scope assertions that did not include
 Guard remains PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no lock. Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime invocation.
 
 Updated hashes: guard `034b40893d24a26c449892088ccd0c3c0c0b365867721240f031dc0c9abb4533` (28883 bytes); evidence `d3e02fa5a5fc63a5c3efc49b9b5fa10814b0a55ea7d789731351e35cd8d1c6b9` (49383 bytes); manifest `957dcc1cf75a0547ccfa4ec49f6150eaf35cd7561fd30834b6b2e7bbbe929a9d` (44929 bytes). Parent Ledger bytes remain an exact prefix.
+
+
+## 2026-10-23 — Run005 attempt_002 collector verdict/lifecycle L1 candidate
+
+- `supersedes`: active source/offline Run005 L1 corrective candidate metadata only; it does not supersede or alter Invocation_014/015 runtime history.
+- Branch/base: `step07-integrated-nav2-gateb-campaign-f7f98c6` / `7f5d16ffa4edca34672b5af82397df9bde186829`. Candidate `STEP07_RUN005_ATTEMPT_002_COLLECTOR_VERDICT_LIFECYCLE_L1_CANDIDATE_PENDING_INDEPENDENT_AUDIT`. Exact changed-path set 16; authorized set 17 with only `test_step07_run005_runtime_guard.py` unchanged.
+- Invocation_015 is immutable `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`: C++ observer READY artifact then exit 2 for `QOS_METADATA_UNOBSERVABLE:receipt_qos_contract`; action server not probed, Gate-B not started, no goal, zero vectors, no evidence window, teardown clean/graceful false. Source seed PENDING and runtime checkout guard CONSUMED are distinct objects.
+- Phase A/A.5: focused 209; Step-7 321; bringup 254; RL 717; six-package external build PASS; observer 17 and ROSIDL 8; py_compile 7; installed/source byte equality 15 runtime artifacts + 3 Python modules; 38/38 current source pins. Historical Invocation_014/015 inventory: 4,021 entries, SHA-256 `e936cdd3fa38a1aa4f6c25e9114fb01eadb2b1ab7d89e21f0775202244cecbb4`.
+- Governance hashes: guard `9d38ab512d026f5e2824a1f4742a61b87e41836967e96bf99230f189d0d2c02e`, evidence `24c513375de0225bdd1235ccfa0479255b7ddeee2e6516c3af497a7fd6e716a3`, manifest `12594c1093aabab8f210d89f20508b42ef9167f6532815589166b8a67c6c03c7`, decision `01db420b913e77d304176a23c43f9f36ba142013c80373e8970a76d8178e002a`. Parent Ledger byte prefix: `6354f918bc8b98f15203249cb1b30adf79e1704e8b40c22fffb04e145d60f607` (275590 bytes).
+- `SOURCE_FREEZE=TRUE` is source/offline only. Guard PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no source lock; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime, integration, commit or push has occurred at this entry. Independent audit is the next action.

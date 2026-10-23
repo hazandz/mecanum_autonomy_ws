@@ -24,6 +24,7 @@ def test_observer_json_duplicate_bom_nonstandard_and_bad_utf8_fail_closed(tmp_pa
 def test_terminal_record_requires_run005_identity_acceptance_and_verified_final_teardown():
     passed = {"schema_version": "1.0", "run_id": "STEP07_NAV2_BASELINE_RUN_005",
               "call_counts": {"bootstrap": 1, "composite": 1},
+              "action_server_readiness": {"status": "PASS", "attempted": True, "ready": True},
               "process_groups": {
                   "bootstrap": {"pid": 1001, "pgid": 1001,
                       "initial_snapshot": {"live_member_pids": [1001], "zombie_member_pids": []},
@@ -55,6 +56,7 @@ def test_terminal_record_requires_run005_identity_acceptance_and_verified_final_
 def _run005_record():
     return {"schema_version": "1.0", "run_id": "STEP07_NAV2_BASELINE_RUN_005",
             "call_counts": {"bootstrap": 1, "composite": 1},
+            "action_server_readiness": {"status": "PASS", "attempted": True, "ready": True},
             "process_groups": {
                 "bootstrap": {"pid": 1001, "pgid": 1001,
                     "initial_snapshot": {"live_member_pids": [1001], "zombie_member_pids": []},
@@ -186,6 +188,7 @@ def observer_doc():
             "scan_valid_frame": True, "wheel_ingress_valid": True,
             "imu_ingress_valid": True, "lifecycle_ready_observed": True,
             "final_receipt_observed": True, "lifecycle_receipt_identity": True},
+        "qos_verdict": {"lifecycle_endpoint_qos_contract": "PASS", "receipt_qos_contract": "PASS"},
         "errors": [],
     }
 
@@ -197,7 +200,8 @@ def _pinned_qos_evidence():
                             for path in QOS_PROFILE_SOURCE_PATHS},
             "installed_python_source_byte_equality": {
                 path: True for path in QOS_PROFILE_SOURCE_PATHS if path.endswith(".py")},
-            "installed_observer_binary": {"sha256": "b" * 64, "size_bytes": 100}}
+            "installed_observer_binary": {"sha256": "b" * 64, "size_bytes": 100,
+                "source_sha256": "a" * 64, "source_size_bytes": 10}}
 
 
 def _mark_qos_unknown(document):
@@ -215,8 +219,9 @@ def _mark_qos_unknown(document):
          "endpoint_type": "PUBLISHER", "history_depth_status": "UNOBSERVABLE"})
     document["acceptance"]["lifecycle_endpoint_qos_contract"] = False
     document["acceptance"]["receipt_qos_contract"] = False
-    document["errors"] = ["QOS_METADATA_UNOBSERVABLE:lifecycle_endpoint_qos_contract",
-                          "QOS_METADATA_UNOBSERVABLE:receipt_qos_contract"]
+    document["qos_verdict"] = {"lifecycle_endpoint_qos_contract": "UNOBSERVABLE",
+                               "receipt_qos_contract": "UNOBSERVABLE"}
+    document["errors"] = []
 
 
 def _duplicate_rejecting_json(path):

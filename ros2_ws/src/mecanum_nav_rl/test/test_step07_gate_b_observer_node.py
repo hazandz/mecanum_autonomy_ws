@@ -351,3 +351,21 @@ def test_interruption_writes_rejected_result_once_and_closes_without_action_retr
     assert not doc["acceptance"]["navigate_to_pose_requested_once"]
     assert events == ["cancel","destroy","shutdown"]
     assert c._navigate_calls == c._compute_path_calls == 0
+
+
+def test_gate_b_readiness_explicitly_records_live_process_context_and_subscriptions():
+    from types import SimpleNamespace as NS
+    from mecanum_nav_rl.observations.step07_gate_b_observer_node import _Collector
+
+    collector = _Collector.__new__(_Collector)
+    collector.rclpy = NS(ok=lambda: True)
+    collector.node = NS(context=NS(ok=lambda: True))
+    collector.subscriptions = [object()] * 4
+    collector.navigate = NS(server_is_ready=lambda: True)
+    collector.config_hash = "a" * 64
+    ready = collector._ready_document()
+    assert ready["state"] == "READY"
+    assert ready["process_alive"] is True
+    assert ready["ros_context_valid"] is True
+    assert len(ready["subscriptions_created"]) == 4
+    assert ready["navigate_to_pose_action_server_ready"] is True

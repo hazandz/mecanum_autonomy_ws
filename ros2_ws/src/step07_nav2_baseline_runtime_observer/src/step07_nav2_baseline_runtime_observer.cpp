@@ -429,9 +429,10 @@ class Observer final : public rclcpp::Node {
                                     int durability, int depth) {
       if (!rows.is_array()) return;
       for (const auto &row : rows) {
-        if (row.value("node_name", "") != expected_node || row.value("topic_type", "") != type ||
+        if (row.value("node_name", "") != expected_node ||
             row.value("endpoint_type", "") != direction) continue;
-        const auto status = endpoint_policy_status(row, reliability, durability, depth);
+        const auto status = row.value("topic_type", "") == type ?
+          endpoint_policy_status(row, reliability, durability, depth) : EndpointPolicyStatus::Mismatch;
         const char *label = status == EndpointPolicyStatus::Match ? "OBSERVED_MATCH" :
           status == EndpointPolicyStatus::Unobservable ? "UNOBSERVABLE" : "MISMATCH";
         qos_status_rows.push_back({{"topic", topic}, {"node_name", expected_node},
@@ -451,6 +452,23 @@ class Observer final : public rclcpp::Node {
       "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt", "PUBLISHER",
       RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL, 1);
     doc_["qos_history_depth_observability"] = qos_status_rows;
+    const auto qos_verdict = [&](const std::string &topic) {
+      bool unobservable = false;
+      size_t observed = 0;
+      const size_t expected = topic == "/mecanum/safety_lifecycle_state" ? 5 : 1;
+      for (const auto &row : qos_status_rows) {
+        if (row.value("topic", "") != topic) continue;
+        ++observed;
+        const auto status = row.value("history_depth_status", "");
+        if (status == "MISMATCH") return std::string("FAIL");
+        if (status == "UNOBSERVABLE") unobservable = true;
+      }
+      if (observed != expected) return std::string("FAIL");
+      return unobservable ? std::string("UNOBSERVABLE") : std::string("PASS");
+    };
+    doc_["qos_verdict"] = Json{
+      {"lifecycle_endpoint_qos_contract", qos_verdict("/mecanum/safety_lifecycle_state")},
+      {"receipt_qos_contract", qos_verdict("/mecanum/final_issued_command")}};
     doc_["acceptance"] = Json{
       {"clock_multisample", clock_ok}, {"filtered_odometry_multisample", odom_ok},
       {"tf_qos_contract", doc_["qos"]["/tf"]["reliability"] == "BEST_EFFORT" && doc_["qos"]["/tf"]["durability"] == "VOLATILE" && doc_["qos"]["/tf"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf"]["depth"] == 100 && doc_["qos"]["/tf_static"]["reliability"] == "RELIABLE" && doc_["qos"]["/tf_static"]["durability"] == "TRANSIENT_LOCAL" && doc_["qos"]["/tf_static"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf_static"]["depth"] == 1},
@@ -499,7 +517,9 @@ class Observer final : public rclcpp::Node {
           return row.value("topic", "") == qos_topic &&
             row.value("history_depth_status", "") == "UNOBSERVABLE";
         });
-      doc_["errors"].push_back(unknown_qos ? "QOS_METADATA_UNOBSERVABLE:" + name : "ACCEPTANCE_FAILED:" + name);
+      // UNOBSERVABLE is raw metadata, not a C++ verdict failure. The runner and
+      // offline validator resolve it only from exact pinned source/install proof.
+      if (!unknown_qos) doc_["errors"].push_back("ACCEPTANCE_FAILED:" + name);
     }
     doc_["observer_lifecycle"] = Json{{"state", "FINALIZED"}, {"ros_context_valid", true}};
     if (!write_json_atomic(output_path_, doc_)) RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");

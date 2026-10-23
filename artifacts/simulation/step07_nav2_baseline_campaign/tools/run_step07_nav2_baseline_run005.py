@@ -554,7 +554,9 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
         "source_pins": {path: source_pins[path] for path in sorted(qos_pin_paths)},
         "installed_python_source_byte_equality": qos_python_equality,
         "installed_observer_binary": {"sha256": sha256(observer),
-                                       "size_bytes": observer.stat().st_size},
+                                       "size_bytes": observer.stat().st_size,
+                                       "source_sha256": source_pins["ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"]["sha256"],
+                                       "source_size_bytes": source_pins["ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp"]["size_bytes"]},
     }
     gate_script = Path(prefixes["mecanum_nav_rl"]) / "lib" / "mecanum_nav_rl" / "step07_gate_b_observer"
     if not gate_script.is_file() or not os.access(gate_script, os.X_OK):
@@ -1458,6 +1460,11 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
         "teardown_order_and_count_correct": teardown.get("ordered") is True,
         "process_group_teardown_graceful": teardown.get("graceful") is True}
     failures = [f"RUNTIME_ACCEPTANCE_FAILED:{key}" for key, value in runtime_acceptance.items() if not value]
+    action_readiness = record.get("action_server_readiness")
+    if ("gate_b_vectors" in runtime_acceptance and
+            (type(action_readiness) is not dict or action_readiness.get("status") != "PASS"
+             or action_readiness.get("attempted") is not True or action_readiness.get("ready") is not True)):
+        failures.append("ACTION_SERVER_READINESS_NOT_PROVEN")
     pre_teardown_failure = record.get("pre_teardown_failure")
     if pre_teardown_failure:
         literal = str(pre_teardown_failure)
@@ -1488,7 +1495,8 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
 
 def mark_collector_failures(teardown: dict, outcomes: dict) -> dict:
     failed = {name: row for name, row in outcomes.items()
-              if type(row) is dict and row.get("exit_code") != 0}
+              if type(row) is dict and row.get("terminal_state") not in ("NOT_STARTED", "READY_AWAITING_ARTIFACTS")
+              and row.get("exit_code") is not None and row.get("exit_code") != 0}
     if failed:
         literals = [f"COLLECTOR_FAILED:{name}:{row.get('exit_code')}"
                     for name, row in sorted(failed.items())]
@@ -1708,9 +1716,12 @@ def main():
                           "gate_b_vectors": False,
                           "bootstrap_composite_process_groups_distinct": False,
                           "bootstrap_readiness": False, "composite_readiness": False,
-                          "navigate_to_pose_action_server_ready": False,
                           "all_collectors_ready_before_goal": False}
     collector_members = {}
+    record["collector_stage"] = "PRE_BOOTSTRAP"
+    record["action_server_readiness"] = {
+        "status": "NOT_ATTEMPTED_DUE_TO_COMPOSITE_READINESS",
+        "attempted": False, "ready": "NOT_ATTEMPTED"}
     teardown = {"completed": False, "clean": False, "ordered": False,
                 "order_correct": False, "verified": False, "graceful": False,
                 "escalation_history": []}
@@ -1804,6 +1815,10 @@ def main():
             composite_member["readiness"] = {"ready": False, "failure": f"{type(error).__name__}:{error}"}
             raise
         runtime_acceptance["composite_readiness"] = True
+        record["collector_stage"] = "COMPOSITE_READY"
+        record["action_server_readiness"] = {
+            "status": "NOT_ATTEMPTED_DUE_TO_CPP_OBSERVER_READINESS",
+            "attempted": False, "ready": "NOT_ATTEMPTED"}
         response = _run(["ros2", "service", "call", "/mecanum/safety/rearm", "std_srvs/srv/Trigger", "{}"],
                         cwd=args.runtime_worktree, env=env, timeout=30)
         record["rearm_service_transcript"] = response.stdout
@@ -1818,6 +1833,7 @@ def main():
                        "-p", f"output_path:={observer_path}", "-p", f"ready_path:={cpp_ready_path}",
                        "-p", f"config_hash:={record['config_hash']}",
                        "-p", "duration_sec:=1800"]
+        record["collector_stage"] = "CPP_OBSERVER_STARTING"
         cpp, cpp_member = _spawn_owned_process(
             cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "cpp_observer.log", processes=processes,
@@ -1830,11 +1846,21 @@ def main():
         record["process_groups"]["cpp_observer"]["readiness"] = wait_collector_ready(
             cpp_ready_path, cpp, collector="step07_nav2_baseline_runtime_observer",
             config_hash=record["config_hash"], required_subscriptions=cpp_required_subscriptions)
+        record["collector_stage"] = "CPP_OBSERVER_READY"
+        record["action_server_readiness"] = {
+            "status": "CHECKING", "attempted": True, "ready": "NOT_RESOLVED"}
+        action_server = wait_navigate_to_pose_action_server(env)
+        record["action_server_readiness"] = action_server
+        runtime_acceptance["navigate_to_pose_action_server_ready"] = action_server["ready"] is True
+        if action_server["ready"] is not True:
+            raise RuntimeError("NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+        record["collector_stage"] = "ACTION_SERVER_READY"
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
                               "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path),
                               "--ready-path", str(gate_ready_path), "--start-path", str(goal_trigger_path),
                               "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
+        record["collector_stage"] = "GATE_B_OBSERVER_STARTING"
         gate, gate_member = _spawn_owned_process(
             gate_command, name="gate_b_observer", cwd=args.runtime_worktree, env=env,
             log_path=logdir / "gate_b_observer.log", processes=processes,
@@ -1843,12 +1869,12 @@ def main():
         collector_members["gate_b_observer"] = gate_member
         gate_required_subscriptions = ["/scan", "/odometry/filtered", "/mecanum/safety_lifecycle_state",
                                        "/mecanum/final_issued_command"]
+        record["collector_stage"] = "GATE_B_OBSERVER_STARTING_READINESS"
         record["process_groups"]["gate_b_observer"]["readiness"] = wait_collector_ready(
             gate_ready_path, gate, collector="step07_gate_b_observer",
             config_hash=record["config_hash"], required_subscriptions=gate_required_subscriptions)
-        action_server = wait_navigate_to_pose_action_server(env)
+        record["collector_stage"] = "GATE_B_OBSERVER_READY"
         record["process_groups"]["gate_b_observer"]["readiness"]["navigate_to_pose_action_server"] = action_server
-        runtime_acceptance["navigate_to_pose_action_server_ready"] = action_server["ready"] is True
         chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
         chain_required_subscriptions = ["/mecanum/safety_state", "/mecanum/final_issued_command",
                                         "/odometry/filtered"]
@@ -1877,7 +1903,9 @@ def main():
                      and cpp.poll() is None and gate.poll() is None)
         if not all_ready:
             raise RuntimeError("GATE_B_COLLECTOR_READINESS_HANDSHAKE_FAILED")
+        record["collector_stage"] = "ALL_COLLECTORS_READY"
         runtime_acceptance["all_collectors_ready_before_goal"] = True
+        record["collector_stage"] = "GOAL_TRIGGERED"
         _atomic_write(goal_trigger_path, {"schema_version": "1.0", "state": "TRIGGER_GOAL",
             "config_hash": record["config_hash"], "collector_ready": True,
             "ready_collectors": ["step07_nav2_baseline_runtime_observer", "step07_gate_b_observer",
@@ -1988,19 +2016,51 @@ def main():
                     gate=gate, cpp=cpp, gate_member=collector_members.get("gate_b_observer"),
                     cpp_member=collector_members.get("cpp_observer"), gate_path=gate_vectors_path,
                     observer_path=observer_path, config_hash=record["config_hash"],
-                    failure_literal=settlement_literal)
+                    failure_literal=settlement_literal,
+                    blocking_reason=(record.get("action_server_readiness", {}).get("failure_literal")
+                        if record.get("action_server_readiness", {}).get("status") == "FAIL"
+                        else record.get("pre_teardown_failure") or record.get("collector_stage")
+                        or "COLLECTOR_PREREQUISITE_FAILED"))
                 chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
                 if chain_ready_path.is_file() and record["collector_outcomes"].get(
                         "navigation_evidence_chain_collector", {}).get("terminal_state") != "COMPLETE":
                     record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                         "exit_code": 2, "terminal_state": "FAILED_RUNNER_POSTPROCESSING",
                         "artifact_written": observer_path.is_file(), "failure_literal": settlement_literal}
+                if gate is None:
+                    from step07_gate_b_evidence_validator import navigation_evidence_chain_failure, load_json
+                    cpp_doc = load_json(observer_path)[0] if observer_path.is_file() else {
+                        "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
+                    gate_doc = load_json(gate_vectors_path)[0] if gate_vectors_path.is_file() else {
+                        "stage_failure": {"status": "NOT_STARTED", "blocking_reason": settlement_literal}}
+                    blocking_reason = (gate_doc.get("stage_failure", {}).get("blocking_reason")
+                        if type(gate_doc.get("stage_failure")) is dict else None) or record.get("collector_stage", "UNRECORDED")
+                    chain_failure = navigation_evidence_chain_failure(
+                        cpp_doc, gate_doc, f"EVIDENCE_WINDOW_NOT_FORMED:{blocking_reason}")
+                    chain_bytes = json.dumps(chain_failure, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False).encode("utf-8")
+                    record["navigation_evidence_chain_failure"] = chain_failure
+                    record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(chain_bytes).hexdigest()
+                    cpp_doc["navigation_evidence_chain_failure"] = chain_failure
+                    cpp_doc["navigation_evidence_chain_failure_canonical"] = chain_bytes.decode("utf-8")
+                    cpp_doc["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(chain_bytes).hexdigest()
+                    cpp_doc["navigation_evidence_chain_failure_literal"] = f"EVIDENCE_WINDOW_NOT_FORMED:{blocking_reason}"
+                    _atomic_write(observer_path, cpp_doc)
+                    record.setdefault("collector_outcomes", {})["navigation_evidence_chain_collector"] = {
+                        "process_exit_status": "NOT_STARTED", "terminal_state": "NOT_STARTED",
+                        "artifact_written": observer_path.is_file(),
+                        "failure_literal": chain_failure["failure_literal"],
+                        "stage": record.get("collector_stage", "UNRECORDED")}
                 failed = {name: row for name, row in record["collector_outcomes"].items()
-                          if type(row) is dict and row.get("exit_code") != 0}
+                          if type(row) is dict and row.get("exit_code") not in (0, None)}
                 if failed or not all(row.get("artifact_written") is True
                                      for row in record["collector_outcomes"].values()):
                     record["collector_failure"] = {"failure_literal": settlement_literal,
-                        "exit_codes": {name: row.get("exit_code") for name, row in record["collector_outcomes"].items()},
+                        "exit_codes": {name: row["exit_code"] for name, row in record["collector_outcomes"].items()
+                                       if type(row) is dict and "exit_code" in row},
+                        "process_exit_statuses": {name: row.get("process_exit_status", "UNKNOWN")
+                                       for name, row in record["collector_outcomes"].items()
+                                       if type(row) is dict},
                         "lifecycle_state": {"state": "SEE_PARTIAL_COLLECTOR_ARTIFACTS"},
                         "partial_artifacts": [path.name for path in (gate_vectors_path, observer_path) if path.is_file()]}
             except BaseException as settlement_error:
@@ -2092,6 +2152,7 @@ def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: st
         if (ready.get("state") == "READY" and ready.get("collector") == collector
                 and ready.get("config_hash") == config_hash
                 and ready.get("pid") == process.pid
+                and ready.get("process_alive") is True
                 and ready.get("ros_context_valid") is True
                 and ready.get("subscriptions_created") == required_subscriptions):
             return {"ready": True, "artifact": path.name, "pid": process.pid,
@@ -2120,17 +2181,25 @@ def navigate_to_pose_action_server_ready(env: dict[str, str]) -> dict:
 def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float = 120) -> dict:
     deadline = time.monotonic() + timeout
     last = {"ready": False, "server_count": None, "transcript": ""}
+    attempts = 0
     while time.monotonic() < deadline:
-        last = navigate_to_pose_action_server_ready(env)
+        attempts += 1
+        try:
+            last = navigate_to_pose_action_server_ready(env)
+        except (OSError, subprocess.SubprocessError) as error:
+            last = {"ready": False, "server_count": None,
+                    "transcript": f"{type(error).__name__}:{error}"}
         if last["ready"]:
-            return last
+            return {"status": "PASS", "attempted": True, "attempt_count": attempts, **last}
         time.sleep(0.5)
-    raise RuntimeError("NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+    return {"status": "FAIL", "attempted": attempts > 0, "attempt_count": attempts,
+            "failure_literal": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY", **last}
 
 
 def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
                                      gate_path: Path, observer_path: Path,
-                                     config_hash: str, failure_literal: str) -> dict:
+                                     config_hash: str, failure_literal: str,
+                                     blocking_reason: str | None = None) -> dict:
     """Stop owned collectors first and preserve explicit partial evidence."""
     for process, member in ((gate, gate_member), (cpp, cpp_member)):
         if process is not None and process.poll() is None:
@@ -2141,21 +2210,28 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
     for name, process, path in (("gate_b_observer", gate, gate_path),
                                 ("cpp_observer", cpp, observer_path)):
         if process is None:
-            outcomes[name] = {"exit_code": None, "terminal_state": "NOT_STARTED",
-                              "artifact_written": path.is_file()}
+            outcomes[name] = {"process_exit_status": "NOT_STARTED",
+                              "terminal_state": "NOT_STARTED", "artifact_written": path.is_file()}
             continue
         process.wait()
         outcomes[name] = {"exit_code": process.returncode,
+                          "process_exit_status": "EXITED" if process.returncode == 0 else "FAILED",
                           "terminal_state": "EXITED" if process.returncode == 0 else "FAILED",
                           "artifact_written": path.is_file()}
     if not gate_path.exists():
+        not_started = gate is None
+        blocker = blocking_reason or failure_literal
         _atomic_write(gate_path, {"schema_version": "1.0", "config_hash": config_hash,
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
             "sample_count": 0, "samples": [], "errors": [failure_literal],
-            "collector_terminal_state": "FAILURE_ARTIFACT_WRITTEN_BY_RUNNER",
-            "collector_failure": {"literal": failure_literal, "exit_code": outcomes["gate_b_observer"]["exit_code"],
-                "lifecycle_state": {"state": "UNOBSERVED", "reason": "COLLECTOR_ARTIFACT_MISSING"},
-                "partial_artifact": "gate_b_vectors.json", "valid_sample_count": 0}})
+            "collector_terminal_state": "NOT_STARTED" if not_started else "FAILURE_ARTIFACT_WRITTEN_BY_RUNNER",
+            "stage_failure": {"status": "NOT_STARTED" if not_started else "FAILED",
+                "blocking_reason": blocker, "gate_b_observer_started": not not_started},
+            "collector_failure": {"literal": failure_literal,
+                "process_exit_status": "NOT_STARTED" if not_started else outcomes["gate_b_observer"].get("process_exit_status", "UNKNOWN"),
+                "lifecycle_state": {"state": "NOT_STARTED" if not_started else "FAIL_CLOSED",
+                    "reason": blocker}, "partial_artifact": "gate_b_vectors.json",
+                "valid_sample_count": 0}})
     if not observer_path.exists():
         _atomic_write(observer_path, {"schema_version": "1.0", "config_hash": config_hash,
             "errors": [failure_literal], "observer_lifecycle": {"state": "FAIL_CLOSED",

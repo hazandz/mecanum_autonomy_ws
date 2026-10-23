@@ -204,3 +204,16 @@ Phase A `SOURCE_FREEZE=TRUE` is offline-only. Base/intended parent `a04ec4d31783
 ### Final scope-test closure (2026-10-23)
 
 The bringup contract test now includes the current 16-path reconciled scope in its historical scope dispatch while retaining exact set equality. Full `mecanum_nav_bringup/test` passed 254/254. The existing pin for `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` was refreshed; source-pin membership remains 38. The source guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED with no lock. This test-only correction grants no runtime or Gate-B status.
+
+
+## Corrective L1 — Invocation_015 QoS verdict và collector/action readiness
+
+Base / intended parent: `7f5d16ffa4edca34672b5af82397df9bde186829` trên branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. Exact direct scope: 16 paths; authorized allowlist: 17 paths (runtime-guard regression test được phép nhưng không đổi). Candidate: `STEP07_RUN005_ATTEMPT_002_COLLECTOR_VERDICT_LIFECYCLE_L1_CANDIDATE_PENDING_INDEPENDENT_AUDIT`.
+
+Invocation_015 là runtime failure lịch sử bất biến. Run record `b9392c3eddd07a3b90c0d1383a61e99ba14f46a890f7c73219474fb749babe0c` ghi runner exit do `STEP07_NAV2_BASELINE_RUNTIME_OBSERVER_READINESS_TIMEOUT`; C++ observer đã ghi READY rồi exit 2 vì `QOS_METADATA_UNOBSERVABLE:receipt_qos_contract`. Gate-B không start, action-server readiness không được thử, NavigateToPose không attempt, không có năm vector 81D hoặc evidence chain. Teardown completed/verified/ordered nhưng clean/graceful là false. Source seed PENDING và runtime checkout guard CONSUMED là hai object khác nhau.
+
+Corrective phân tách readiness khỏi verdict QoS; C++ chỉ ghi raw `PASS`/`FAIL`/`UNOBSERVABLE`, còn runner/validator resolve UNOBSERVABLE chỉ bằng source/install proof có SHA-256, byte size và pin hiện hành. Topic/type/reliability/durability/count mismatch vẫn FAIL. Sau composite readiness, runner chờ C++ READY, ghi kết quả action server PASS/FAIL/NOT_ATTEMPTED, rồi mới start Gate-B; goal chỉ trigger khi tất cả collector READY. Gate-B không-start và evidence-chain thiếu có stage failure canonical. Acceptance vẫn bắt buộc đúng năm vector 81D hợp lệ, goal hợp lệ, chain đủ Candidate → Safety decision/reason → final receipt → odometry và teardown clean/graceful. Safety/Nav2/map/Gazebo/TF/public interface không đổi.
+
+Phase A/A.5 offline verification: focused 209; full Step-7 tools 321; bringup 254; RL 717; six-package external build PASS; observer 17 C++ cases; ROSIDL 8 cases; Python compile 7 files; installed/source equality 15 runtime artifacts + 3 Python modules; 38/38 source pins. Preservation inventory Invocation_014/015: 4,021 entries, SHA-256 `e936cdd3fa38a1aa4f6c25e9114fb01eadb2b1ab7d89e21f0775202244cecbb4`. No runner, live ROS/Gazebo, Nav2 runtime, HIL, hardware, Fuel provisioning or integration.
+
+`SOURCE_FREEZE=TRUE` chỉ nghĩa source/offline candidate. Guard remains PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no source lock. `GATE_B=NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; independent audit required.

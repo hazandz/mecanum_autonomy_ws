@@ -1285,3 +1285,55 @@ Offline verification: Step-7 318; bringup 254; RL 716 (646 + 70 separate process
 ### Run005 L1 scope-test pin correction (2026-10-23)
 
 The final bringup scope dispatch now recognizes the exact current 16-path reconciled scope. Full bringup is 254/254. One existing source pin was refreshed without membership change (38 total): `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` — SHA-256 `a7d6aaa047a877d32c4663cfbbc726b8242edd42b47a6b6a2905a7d12468fc21`, 78674 bytes. Guard/evidence/manifest coherence below; no runtime occurred.
+
+
+### 2026-10-23 — Run005 attempt_002 collector verdict/lifecycle L1 candidate
+
+Base `7f5d16ffa4edca34672b5af82397df9bde186829`; exact direct scope 16/16; authorized set 17/17 with `test_step07_run005_runtime_guard.py` unchanged. Source pins remain 38 unique paths; eight existing pins refreshed, no membership addition.
+
+Invocation_015 remains immutable runtime FAIL: C++ readiness artifact READY, C++ exit 2 due `QOS_METADATA_UNOBSERVABLE:receipt_qos_contract`, Gate-B call count 0, action server not probed, no goal/vectors/evidence window; teardown clean/graceful false. Source guard pending and runtime checkout consumed guard are separate artifacts. Current candidate records QoS raw statuses and requires proof-backed resolution; action-server probe precedes Gate-B start; Gate-B still needs exactly five valid vectors and the full correlated chain. No runtime/integration.
+
+Offline checks: focused 209; Step-7 321; bringup 254; RL 717; six-package external build; observer 17 / ROSIDL 8; `py_compile` 7; installed/source 15 artifacts + 3 modules; 38/38 pins; exact scope and historical preservation 4,021 inventory entries, SHA-256 `e936cdd3fa38a1aa4f6c25e9114fb01eadb2b1ab7d89e21f0775202244cecbb4`.
+
+Decision SHA-256 `01db420b913e77d304176a23c43f9f36ba142013c80373e8970a76d8178e002a`; evidence `24c513375de0225bdd1235ccfa0479255b7ddeee2e6516c3af497a7fd6e716a3` (55837 bytes); manifest `12594c1093aabab8f210d89f20508b42ef9167f6532815589166b8a67c6c03c7` (45649 bytes); source guard `9d38ab512d026f5e2824a1f4742a61b87e41836967e96bf99230f189d0d2c02e`. Evidence ceiling `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`. `SOURCE_FREEZE=TRUE`; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED; source guard PENDING/capacity 1/acquisition 0/NOT_GRANTED/no lock.
+
+| Source pin | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/maps/warehouse_map2/map.yaml` | `5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68` | 125 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/prepare_step07_runtime_python_environment.py` | `01f09ddf82d61f239bbee9e002868f9c3d027526b02ddfe1e0c0e0b31fb7b79e` | 5330 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `60a7bfd3c37dc09e477d4b7e9a88be32dcb74c75a606a8a86de3e9a2d42b45e8` | 130011 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` | `098143ca39d80027518ce2736a7be1bbb2502e34f298f34c70fa8afd46b0ffa7` | 45606 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_run005_runtime_guard.py` | `325889d73bfcb4eb5b33a8373a6fc22b73fa5571893adb7626e6d8caed963dce` | 9843 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_runtime_python_requirements.txt` | `6560f131b6d82cef455b70cd8952a814dd3811dec73108d69b3d9206c95c9573` | 17 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `dd50f32eda34e58f0381c04c26f5845894c23a19b20dfe56dcbc54b3910fdb82` | 126548 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `4136eea558563fd1ebf181e95485d7d4a607c076283d83a3c53458fbbcbea5a8` | 32314 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run003_runtime_guard.py` | `d36d809d9174ec17d9e3df9771176c42d4c351aee890ae13668828194763af82` | 7036 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run004_runtime_guard.py` | `0f938eedd91eecae4b91a1fbf3b3b1749c0f498a4f1f1eee889ea378ef0d853f` | 7785 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_run005_runtime_guard.py` | `c6077f7a8c74e9ec4bc5e3bdf93ef1185b6392496cc2e624dafcdea08db0819f` | 18452 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_runtime_guard.py` | `120f24891f6c39eb5af814393c879e479f4736cadd14a2bb35821a6a546ce28b` | 12752 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py` | `4067d6efe3782d7687e237603803d8a1b3ebc3fda4927f8233a50951ae856456` | 7054 |
+| `ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf` | `a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d` | 12364 |
+| `ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml` | `2dafb19da5daeeb91c451ae57055caa389a0353900525fb9a5861e1c670c6547` | 506 |
+| `ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py` | `1612ce773eb0b7cb05e4d081eee441418dea32314c3685adcdcd96dd569069b8` | 1795 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_clock.runtime.yaml` | `89220ef78125348776575b1a14fa1727c9cb098d9c46d84a74e27e5e8715f0b1` | 143 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml` | `6577ad07506be16666fc11095cfab07e75b6fb2b3fb72d697e634c97417b373f` | 147 |
+| `ros2_ws/src/mecanum_nav_bringup/config/bridge/sim_eval_lidar_scan_bridge.runtime.yaml` | `fbfcf29e197ea94622b5e86858ffef6b5fee05a5d9bcf6ab58bf110d9c5561c2` | 214 |
+| `ros2_ws/src/mecanum_nav_bringup/config/lifecycle/sim_eval_nav2_baseline.runtime.yaml` | `cf1c942f76f4e432c1716e82f759a1d17012866714e8a958d59585585694102f` | 352 |
+| `ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml` | `c6e58320aa1b35f4c74ca7442bf00357266ad51428522ca93d4565c1d6617e60` | 891 |
+| `ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml` | `585a3dc78616de1d0eaf2477bb65c3f5fbb91dddae88c3faf2480fb067a6bfbb` | 3002 |
+| `ros2_ws/src/mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml` | `6aaacd93181eb3cbfc1bd25067ebdc441bad40998ccb486fea1c51f3ffe8a755` | 776 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py` | `5b6bd09b0d6051a23d5928cfec8e5cbdc7ac461d77a2fa022e9c2ee6a12f332b` | 10780 |
+| `ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py` | `1bf0098b9534257cb57b7f69e47179f2a61b0340745a8f68be7c24254d32a061` | 2753 |
+| `ros2_ws/src/mecanum_nav_bringup/package.xml` | `0e82b208575f11a46d12f1053f6721092f5e4f69af0da77abda28cd40ccc33fd` | 1737 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py` | `266566013926a3cced99e08cf1dbb9784ddee042f2d9541f2a2500c47637187d` | 16773 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `d711fa5613a537ca0b6b232d408b99712be3a362accd5daa0beacaaaa0e23acc` | 83026 |
+| `ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml` | `d96998c05efad4b65eb9ed116de2ee57a1bccd7e51e09c0a7bd3de5aa10cb636` | 1095 |
+| `ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json` | `3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84` | 5326 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `f90c5d9ae9d4e96fcf01b67bfb432f0b5ed6cc3f7654f73163d088ae873ecfb2` | 30546 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py` | `74e9aac189df0f9031b43089c68f0ee96d852ae751cf457aa6f2c8e2ea0d52ba` | 4605 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py` | `d4c7bdc19498052c32d859ccf727d12de4746cda09511ff18f822e695758609d` | 5318 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py` | `0f4f48612d91b276af90ade4fe1200caa4f6aac1c22b1d02fc96fd1ce06b0a6b` | 9006 |
+| `ros2_ws/src/mecanum_nav_rl/package.xml` | `0017f5e98c2b0e654a87ada37652f57ab0079b36dbf9d124c546138b94728ff1` | 2227 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `6adc61fee62b8900faac420421ce3b999b11954ef4db8e18885a5781431a7116` | 20295 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml` | `ec322d9068526ba43b878e7ebb249d0587fb9189f49fcb8999e38eea2b68791b` | 733 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `2991f9ae9f9937cff103d60763a5a6865ff7be73ad541ef2e1c6055c26152275` | 40370 |

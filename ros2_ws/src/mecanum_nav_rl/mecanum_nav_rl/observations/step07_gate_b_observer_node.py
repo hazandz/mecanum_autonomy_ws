@@ -244,6 +244,7 @@ class _Collector:
         return {"schema_version": "1.0", "collector": "step07_gate_b_observer",
                 "config_hash": self.config_hash, "pid": os.getpid(),
                 "ros_context_valid": context_valid,
+                "process_alive": True,
                 "subscriptions_created": subscriptions if len(self.subscriptions) == 4 else [],
                 "navigate_to_pose_action_server_ready": bool(self.navigate.server_is_ready()),
                 "state": "READY" if context_valid and len(self.subscriptions) == 4

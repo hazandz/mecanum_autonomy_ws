@@ -1163,3 +1163,12 @@ The evidence-collection ordering correction on base `a04ec4d317830e01a4613fc5251
 ### Verification correction
 
 The five legacy-scope dispatch assertions were extended to recognize the current exact L1 reconciled path set. Full bringup verification now passes; this remains offline source/test evidence only. Gate B, runtime approval, and integration status are unchanged.
+
+
+### Run005 attempt_002 — collector verdict/lifecycle corrective candidate (2026-10-23)
+
+Review base `7f5d16ffa4edca34672b5af82397df9bde186829`; candidate `STEP07_RUN005_ATTEMPT_002_COLLECTOR_VERDICT_LIFECYCLE_L1_CANDIDATE_PENDING_INDEPENDENT_AUDIT`; exact scope 16 paths, authorized allowlist 17. This source/offline note does not update package status, plan dependencies, Gate B, runtime approval, or integration. Invocation_015 remains immutable FAIL from observer READY followed by exit 2 on unobservable receipt QoS; action readiness was not attempted and Gate-B did not start.
+
+Phase A/A.5 checks passed: focused 209, Step-7 321, bringup 254, RL 717, six-package external build, observer 17/ROSIDL 8, py_compile 7, installed/source 15+3, and 38/38 pins. Historical Invocation_014/015 preservation inventory is 4,021 entries, SHA-256 `e936cdd3fa38a1aa4f6c25e9114fb01eadb2b1ab7d89e21f0775202244cecbb4`. No runtime or integration was executed. `SOURCE_FREEZE=TRUE` is offline only; independent audit is next.
+
+Guard/evidence/manifest SHA-256: `9d38ab512d026f5e2824a1f4742a61b87e41836967e96bf99230f189d0d2c02e` / `24c513375de0225bdd1235ccfa0479255b7ddeee2e6516c3af497a7fd6e716a3` / `12594c1093aabab8f210d89f20508b42ef9167f6532815589166b8a67c6c03c7`. Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED/no source lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED.
