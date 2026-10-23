@@ -986,6 +986,8 @@ def _empty_process_group_member(name: str) -> dict:
             "returncode": None, "exit_code": None, "readiness": None,
             "qos_observation": None, "qos_verdict": None,
             "shutdown_request": None, "terminal_state": "NOT_STARTED",
+            "clean": False, "verified": False, "graceful": False, "ordered": False,
+            "shutdown_requested_by_runner": False, "shutdown_signal": None,
             "log_path": None, "initial_snapshot": None, "final_snapshot": None,
             "ownership_verified": False, "ownership_errors": []}
 
@@ -1015,7 +1017,7 @@ def _record_collector_readiness(member: dict, readiness: dict) -> None:
         member["ownership_relation"] = (
             "LAUNCHER_IS_COLLECTOR" if child_pid == member.get("launcher_pid")
             else "CHILD_IN_LAUNCHER_PROCESS_GROUP")
-    if readiness.get("ready") is True:
+    if type(readiness) is dict and readiness.get("ready") is True:
         member["terminal_state"] = "READY_AWAITING_RUNNER_SHUTDOWN"
 
 
@@ -1039,6 +1041,9 @@ def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[
                       "command": list(command), "returncode": None, "exit_code": None,
                       "readiness": None, "qos_observation": None, "qos_verdict": None,
                       "shutdown_request": None, "terminal_state": "STARTING",
+                      "clean": False, "verified": False, "graceful": False,
+                      "ordered": False, "shutdown_requested_by_runner": False,
+                      "shutdown_signal": None,
                       "log_path": str(log_path),
                       "initial_snapshot": None, "final_snapshot": None,
                       "ownership_verified": False, "ownership_errors": []}
@@ -1098,10 +1103,50 @@ def _stop_unverified_child(proc, member, timeout):
     if isinstance(member, dict):
         member["final_snapshot"] = snapshot
         member["returncode"] = getattr(proc, "returncode", None)
+        member.update({"exit_code": member["returncode"], "clean": False,
+                       "verified": False, "graceful": False, "ordered": False,
+                       "terminal_state": "TEARDOWN_UNVERIFIED"})
     return {"signal": "SIGINT", "signal_sent": False, "child_stop_attempted": True,
-            "leader_returncode": getattr(proc, "returncode", None), **snapshot,
+            "leader_returncode": getattr(proc, "returncode", None),
+            "exit_code": getattr(proc, "returncode", None), **snapshot,
             "errors": errors, "clean": False, "graceful": False,
-            "escalation_history": []}
+            "verified": False, "ordered": False,
+            "shutdown_requested_by_runner": (isinstance(member, dict) and
+                member.get("shutdown_requested_by_runner") is True),
+            "shutdown_signal": None,
+            "terminal_state": "TEARDOWN_UNVERIFIED", "escalation_history": []}
+
+
+def _safe_error_message(error: BaseException) -> str:
+    try:
+        message = str(error)
+    except BaseException:
+        message = "ERROR_MESSAGE_UNAVAILABLE"
+    return message if isinstance(message, str) and message else type(error).__name__
+
+
+def _safe_failure_text(value, fallback: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if type(value) is dict:
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                              separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            return fallback
+    return fallback
+
+
+def record_campaign_failure(record: dict, phase: str, error: BaseException) -> dict:
+    """Persist nullable-prone exception details as structured data and a safe literal."""
+    message = _safe_error_message(error)
+    literal = f"{type(error).__name__}:{message}"
+    details = {"phase": _safe_failure_text(phase, "CAMPAIGN"),
+               "exception_type": type(error).__name__, "message": message,
+               "literal": literal}
+    record["failure_details"] = details
+    record["pre_teardown_failure"] = literal
+    return details
 
 
 def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None:
@@ -1112,13 +1157,23 @@ def validate_started_process_group(proc: subprocess.Popen, member: dict) -> None
 
 
 def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, timeout: float) -> dict:
+    request = member.get("shutdown_request") if type(member) is dict else None
+    shutdown_requested = (type(member) is dict and
+        (member.get("shutdown_requested_by_runner") is True or
+         (type(request) is dict and request.get("requested") is True and request.get("by") == "runner")))
+    if type(member) is dict:
+        member["shutdown_requested_by_runner"] = shutdown_requested
+    result = {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
+              "exit_code": None, "live_member_pids": [], "zombie_member_pids": [],
+              "verified": False, "errors": [], "clean": False, "graceful": False,
+              "ordered": False, "shutdown_requested_by_runner": shutdown_requested,
+              "shutdown_signal": None,
+              "terminal_state": "TEARDOWN_UNVERIFIED", "escalation_history": []}
     if proc is not None and not _owned_group_verified(proc, member):
         return _stop_unverified_child(proc, member, timeout)
     if proc is None or type(member) is not dict or type(member.get("pgid")) is not int or member["pgid"] <= 1:
-        return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
-                "live_member_pids": [], "zombie_member_pids": [], "verified": False,
-                "errors": ["PROCESS_GROUP_MISSING"], "clean": False,
-                "graceful": False, "escalation_history": []}
+        result["errors"] = ["PROCESS_GROUP_MISSING"]
+        return result
     try:
         leader_exited = proc.poll() is not None
         if not leader_exited and os.getpgid(proc.pid) != member["pgid"]:
@@ -1157,45 +1212,62 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
     except BaseException as error:
         returncode = None
         errors.append(f"PROCESS_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
-    member["returncode"] = returncode
-    member["exit_code"] = returncode
-    if member.get("shutdown_request") is not None:
-        member["terminal_state"] = "RUNNER_SHUTDOWN_COMPLETE" if clean else "RUNNER_SHUTDOWN_FAILED"
-    elif member.get("terminal_state") != "READY_AWAITING_RUNNER_SHUTDOWN":
-        member["terminal_state"] = "EXITED" if returncode == 0 else "FAILED"
-    member["final_snapshot"] = snapshot
     clean = ((signal_sent or leader_exited) and not errors and returncode == 0
              and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
-    return {"signal": "SIGINT", "signal_sent": signal_sent, "leader_returncode": returncode,
-            **snapshot, "verified": snapshot.get("verified") is True,
-            "errors": errors, "clean": clean, "graceful": clean,
-            "escalation_history": []}
+    verified = snapshot.get("verified") is True
+    graceful = clean and not result["escalation_history"]
+    terminal_state = ("RUNNER_SHUTDOWN_COMPLETE" if clean else "RUNNER_SHUTDOWN_FAILED") \
+        if shutdown_requested else ("EXITED" if returncode == 0 else "FAILED")
+    member.update({"returncode": returncode, "exit_code": returncode,
+                   "final_snapshot": snapshot, "clean": clean, "verified": verified,
+                   "graceful": graceful, "ordered": False,
+                   "shutdown_requested_by_runner": shutdown_requested,
+                   "shutdown_signal": "SIGINT" if signal_sent else member.get("shutdown_signal"),
+                   "terminal_state": terminal_state})
+    result.update(snapshot)
+    result.update({"signal_sent": signal_sent, "leader_returncode": returncode,
+                   "exit_code": returncode, "verified": verified, "errors": errors,
+                   "clean": clean, "graceful": graceful,
+                   "shutdown_signal": "SIGINT" if signal_sent else None,
+                   "terminal_state": terminal_state})
+    return result
 
 
 def _safe_stop_owned_process(proc, member, timeout: float) -> dict:
     try:
         return _stop_owned_process(proc, member, timeout)
     except BaseException as error:
+        literal = f"TEARDOWN_EXCEPTION:{type(error).__name__}:{_safe_error_message(error)}"
         snapshot = {"live_member_pids": [], "zombie_member_pids": [], "verified": False,
-                    "inspection_errors": [f"TEARDOWN_EXCEPTION:{type(error).__name__}:{error}"]}
+                    "inspection_errors": [literal]}
         if isinstance(member, dict):
             member["final_snapshot"] = snapshot
             try:
                 member["returncode"] = proc.returncode if proc is not None else None
             except BaseException:
                 member["returncode"] = None
+            member.update({"exit_code": member["returncode"], "clean": False,
+                           "verified": False, "graceful": False, "ordered": False,
+                           "terminal_state": "TEARDOWN_FAILED"})
         return {"signal": "SIGINT", "signal_sent": False,
                 "leader_returncode": member.get("returncode") if isinstance(member, dict) else None,
-                **snapshot, "errors": [f"TEARDOWN_EXCEPTION:{type(error).__name__}:{error}"],
-                "clean": False, "graceful": False, "escalation_history": []}
+                "exit_code": member.get("returncode") if isinstance(member, dict) else None,
+                **snapshot, "errors": [literal], "clean": False, "verified": False,
+                "graceful": False, "ordered": False,
+                "shutdown_requested_by_runner": (isinstance(member, dict) and
+                    member.get("shutdown_requested_by_runner") is True),
+                "shutdown_signal": None,
+                "terminal_state": "TEARDOWN_FAILED", "escalation_history": []}
 
 
 def _stop_collector(proc, member, timeout: float = 20) -> dict:
     if proc is None and member is None:
         return {"signal": "SIGINT", "signal_sent": False, "leader_returncode": None,
-                "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+                "exit_code": None, "live_member_pids": [], "zombie_member_pids": [], "verified": True,
                 "inspection_errors": [], "errors": [], "clean": True, "graceful": True,
-                "escalation_history": [], "started": False}
+                "ordered": False, "shutdown_requested_by_runner": False,
+                "shutdown_signal": None,
+                "terminal_state": "NOT_STARTED", "escalation_history": [], "started": False}
     return _safe_stop_owned_process(proc, member, timeout)
 
 
@@ -1229,6 +1301,8 @@ def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_p
     """Best-effort ordered shutdown; every unverified operation makes teardown fail."""
     teardown = {"completed": False, "clean": False, "ordered": False,
                 "order_correct": False, "verified": False, "graceful": False,
+                "shutdown_requested_by_runner": False, "exit_code": None,
+                "terminal_state": "TEARDOWN_NOT_STARTED",
                 "escalation_history": [], "errors": []}
     teardown["composite"] = _safe_stop_owned_process(composite_proc, composite_member, 30)
     teardown["bootstrap"] = _safe_stop_owned_process(bootstrap_proc, bootstrap_member, 30)
@@ -1302,6 +1376,23 @@ def teardown_campaign_processes(*, composite_proc, composite_member, bootstrap_p
     teardown["graceful"] = (all(item.get("graceful") is True for item in process_results)
                              and teardown["escalation_history"] == [])
     teardown["completed"] = True
+    teardown["shutdown_requested_by_runner"] = any(
+        item.get("shutdown_requested_by_runner") is True for item in process_results)
+    teardown["terminal_state"] = "TEARDOWN_COMPLETE" if teardown["verified"] else "TEARDOWN_UNVERIFIED"
+    for name, result in (("composite", teardown["composite"]),
+                         ("bootstrap", teardown["bootstrap"]),
+                         *[(name, teardown["collectors"][name])
+                           for name in ("gate_b_observer", "cpp_observer")]):
+        member = process_members.get(name)
+        if isinstance(member, dict):
+            member.update({"clean": result.get("clean") is True,
+                           "verified": result.get("verified") is True,
+                           "graceful": result.get("graceful") is True,
+                           "ordered": teardown["ordered"] is True,
+                           "shutdown_requested_by_runner": result.get(
+                               "shutdown_requested_by_runner") is True,
+                           "exit_code": result.get("exit_code", result.get("leader_returncode")),
+                           "terminal_state": result.get("terminal_state", "TEARDOWN_UNVERIFIED")})
     return teardown
 
 
@@ -1612,6 +1703,8 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
     """Run best-effort teardown and terminal persistence under a restored handler."""
     teardown = {"completed": True, "clean": False, "ordered": False,
                 "order_correct": False, "verified": False, "graceful": False,
+                "shutdown_requested_by_runner": False, "exit_code": None,
+                "terminal_state": "TEARDOWN_NOT_VERIFIED",
                 "escalation_history": [], "errors": ["TEARDOWN_NOT_VERIFIED"]}
     result = None
     try:
@@ -1644,9 +1737,12 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
         except BaseException as error:
             teardown = {"completed": True, "clean": False, "ordered": False,
                         "order_correct": False, "verified": False, "graceful": False,
+                        "shutdown_requested_by_runner": False, "exit_code": None,
+                        "terminal_state": "TEARDOWN_FAILED",
                         "escalation_history": [],
-                        "errors": [f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}"]}
-            record.setdefault("pre_teardown_failure", f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{error}")
+                        "errors": [f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{_safe_error_message(error)}"]}
+            record.setdefault("pre_teardown_failure",
+                f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{_safe_error_message(error)}")
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
         if sigterm_handler.interrupted:
@@ -1661,6 +1757,8 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
         record.setdefault("pre_teardown_failure", reason)
         teardown.update({"completed": True, "clean": False, "ordered": False,
                          "order_correct": False, "verified": False, "graceful": False,
+                         "shutdown_requested_by_runner": False, "exit_code": None,
+                         "terminal_state": "FINALIZATION_PATH_FAILED",
                          "escalation_history": [], "finalization_path_error": reason})
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
@@ -1905,15 +2003,23 @@ def main():
             process_group=cpp_member)
         _record_collector_readiness(cpp_group, cpp_readiness)
         record["collector_stage"] = "CPP_OBSERVER_READY"
+        record_gate_b_readiness_transition(record, "cpp_initial_ready", "PASS")
         record["action_server_readiness"] = not_attempted_action_server("CPP_OBSERVER_READY_HANDSHAKE_COMPLETED")
         action_server = wait_navigate_to_pose_action_server(env)
         record["action_server_readiness"] = action_server
         runtime_acceptance["navigate_to_pose_action_server_ready"] = action_server["ready"] is True
-        if action_server["ready"] is not True:
-            raise RuntimeError("NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+        gate_blocker = gate_b_start_blocking_reason(cpp_group.get("readiness"), action_server)
+        record_gate_b_readiness_transition(record, "action_server_ready",
+            "PASS" if gate_blocker is None else "FAIL", gate_blocker)
+        if gate_blocker is not None:
+            raise RuntimeError(gate_blocker)
+        record["collector_stage"] = "CPP_PRE_GATE_B_RECHECK"
         if cpp.poll() is not None:
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
-            raise RuntimeError("CPP_OBSERVER_READY_BUT_TERMINATED")
+            cpp_blocker = "CPP_OBSERVER_READY_BUT_TERMINATED_BEFORE_GATE_B"
+            record_gate_b_readiness_transition(record, "cpp_pre_gate_b_recheck", "FAIL", cpp_blocker)
+            raise RuntimeError(cpp_blocker)
+        record_gate_b_readiness_transition(record, "cpp_pre_gate_b_recheck", "PASS")
         record["collector_stage"] = "ACTION_SERVER_READY"
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
@@ -1926,6 +2032,7 @@ def main():
             log_path=logdir / "gate_b_observer.log", processes=processes,
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         gate_b_calls = 1; record["call_counts"]["gate_b_observer"] = 1
+        record_gate_b_readiness_transition(record, "gate_b_start", "PASS")
         collector_members["gate_b_observer"] = gate_member
         gate_group = _record_spawned_process_group(record, "gate_b_observer", gate_member)
         gate_required_subscriptions = ["/scan", "/odometry/filtered", "/mecanum/safety_lifecycle_state",
@@ -2092,7 +2199,26 @@ def main():
             raise RuntimeError("RAW_OBSERVER_ACCEPTANCE_FAILED")
         record["goal_result"] = gate_document["navigate_to_pose"]
     except BaseException as error:
-        error_text = f"{type(error).__name__}:{error}"
+        failure_details = record_campaign_failure(
+            record, record.get("collector_stage", "CAMPAIGN"), error)
+        error_message = failure_details["message"]
+        error_text = failure_details["literal"]
+        try:
+            events = record.get("gate_b_readiness_state_machine", [])
+            next_stage = (GATE_B_READINESS_STAGES[len(events)]
+                          if type(events) is list and len(events) < len(GATE_B_READINESS_STAGES)
+                          else None)
+            expected_failure_stage = {
+                "CPP_OBSERVER_STARTING": "cpp_initial_ready",
+                "CPP_OBSERVER_READY": "action_server_ready",
+                "CPP_PRE_GATE_B_RECHECK": "cpp_pre_gate_b_recheck",
+            }.get(record.get("collector_stage"))
+            if (next_stage == expected_failure_stage
+                    and (not events or events[-1].get("status") == "PASS")):
+                record_gate_b_readiness_transition(record, next_stage, "FAIL", error_text)
+        except BaseException as transition_error:
+            record["gate_b_readiness_state_machine_failure"] = (
+                f"{type(transition_error).__name__}:{_safe_error_message(transition_error)}")
         groups = record.get("process_groups")
         if type(groups) is dict and record.get("collector_stage") in (
                 "CPP_OBSERVER_STARTING", "GATE_B_OBSERVER_STARTING",
@@ -2108,23 +2234,39 @@ def main():
         elif ("CPP_NOT_READY" in error_text or "CPP_READINESS" in error_text
               or record.get("collector_stage") == "CPP_OBSERVER_STARTING"):
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_NOT_READY"
-        if (cpp is not None and record.get("process_groups", {}).get("cpp_observer", {}).get(
-                "readiness", {}).get("ready") is True and cpp.poll() is not None):
+        process_groups = record.get("process_groups")
+        cpp_group_state = (process_groups.get("cpp_observer")
+                           if type(process_groups) is dict else None)
+        cpp_readiness_state = (cpp_group_state.get("readiness")
+                               if type(cpp_group_state) is dict else None)
+        if (cpp is not None and type(cpp_readiness_state) is dict
+                and cpp_readiness_state.get("ready") is True and cpp.poll() is not None):
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
-        if record.get("action_server_readiness", {}).get("attempted") is not True:
+        action_readiness_state = record.get("action_server_readiness")
+        if type(action_readiness_state) is not dict:
+            action_readiness_state = {}
+            record["action_server_readiness"] = action_readiness_state
+        if action_readiness_state.get("attempted") is not True:
             record["action_server_readiness"] = not_attempted_action_server(error_text)
         if gate is not None or cpp is not None:
-            settlement_literal = f"RUNNER_COLLECTOR_SETTLEMENT:{type(error).__name__}:{error}"
+            settlement_literal = f"RUNNER_COLLECTOR_SETTLEMENT:{type(error).__name__}:{error_message}"
+            action_readiness_state = record.get("action_server_readiness")
+            action_readiness_state = (action_readiness_state
+                if type(action_readiness_state) is dict else {})
+            if record.get("gate_b_start_blocking_reason"):
+                settlement_blocking_reason = record["gate_b_start_blocking_reason"]
+            elif action_readiness_state.get("status") == "FAIL":
+                settlement_blocking_reason = _safe_failure_text(
+                    action_readiness_state.get("failure_literal"), error_text)
+            else:
+                settlement_blocking_reason = error_text or record.get("collector_stage") or "COLLECTOR_PREREQUISITE_FAILED"
             try:
                 record["collector_outcomes"] = settle_collectors_before_teardown(
                     gate=gate, cpp=cpp, gate_member=collector_members.get("gate_b_observer"),
                     cpp_member=collector_members.get("cpp_observer"), gate_path=gate_vectors_path,
                     observer_path=observer_path, config_hash=record["config_hash"],
                     failure_literal=settlement_literal,
-                    blocking_reason=(record.get("action_server_readiness", {}).get("failure_literal")
-                        if record.get("action_server_readiness", {}).get("status") == "FAIL"
-                        else str(error) or record.get("pre_teardown_failure") or record.get("collector_stage")
-                        or "COLLECTOR_PREREQUISITE_FAILED"))
+                    blocking_reason=settlement_blocking_reason)
                 chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
                 if chain_ready_path.is_file() and record["collector_outcomes"].get(
                         "navigation_evidence_chain_collector", {}).get("terminal_state") != "COMPLETE":
@@ -2170,7 +2312,6 @@ def main():
             except BaseException as settlement_error:
                 record["collector_settlement_failure"] = (
                     f"{type(settlement_error).__name__}:{settlement_error}")
-        record["pre_teardown_failure"] = f"{type(error).__name__}:{error}"
         record["traceback"] = traceback.format_exc()
     finally:
         if runtime_acceptance:
@@ -2301,11 +2442,15 @@ def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: st
 def navigate_to_pose_action_server_ready(env: dict[str, str]) -> dict:
     result = _run(["ros2", "action", "info", "/navigate_to_pose"], env=env,
                   check=False, timeout=15)
-    text = result.stdout + result.stderr
+    stdout = result.stdout if isinstance(result.stdout, str) else ""
+    stderr = result.stderr if isinstance(result.stderr, str) else ""
+    output_valid = isinstance(result.stdout, str) and isinstance(result.stderr, str)
+    text = stdout + stderr
     match = re.search(r"Action servers:\s*(\d+)", text, re.IGNORECASE)
-    return {"ready": result.returncode == 0 and match is not None and int(match.group(1)) == 1,
+    return {"ready": output_valid and result.returncode == 0 and match is not None and int(match.group(1)) == 1,
             "server_count": int(match.group(1)) if match else None,
-            "transcript": text}
+            "transcript": text,
+            "failure_literal": None if output_valid else "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"}
 
 
 def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float = 120) -> dict:
@@ -2323,14 +2468,55 @@ def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float =
             return {"status": "PASS", "attempted": True, "attempt_count": attempts, **last}
         time.sleep(0.5)
     return {"status": "FAIL", "attempted": attempts > 0, "attempt_count": attempts,
-            "failure_literal": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY", **last}
+            "failure_literal": (last.get("failure_literal") or
+                "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"), **last}
+
+
+def gate_b_start_blocking_reason(cpp_readiness, action_server) -> str | None:
+    """Require proven C++ readiness and a successful action-server probe before Gate-B."""
+    if type(cpp_readiness) is not dict or cpp_readiness.get("ready") is not True:
+        return "CPP_OBSERVER_READINESS_NOT_PROVEN"
+    if (type(action_server) is dict and action_server.get("status") == "PASS"
+            and action_server.get("attempted") is True and action_server.get("ready") is True):
+        return None
+    if type(action_server) is dict:
+        return _safe_failure_text(action_server.get("failure_literal"),
+            _safe_failure_text(action_server.get("blocking_reason"),
+                               "ACTION_SERVER_READINESS_NOT_PROVEN"))
+    return "ACTION_SERVER_READINESS_NOT_PROVEN"
+
+
+GATE_B_READINESS_STAGES = (
+    "cpp_initial_ready", "action_server_ready", "cpp_pre_gate_b_recheck", "gate_b_start")
+
+
+def record_gate_b_readiness_transition(record: dict, stage: str, status: str,
+                                       reason: str | None = None) -> dict:
+    """Append the next fail-closed Gate-B prerequisite transition."""
+    events = record.setdefault("gate_b_readiness_state_machine", [])
+    if type(events) is not list or len(events) >= len(GATE_B_READINESS_STAGES):
+        raise RuntimeError("GATE_B_READINESS_STATE_MACHINE_INVALID")
+    expected = GATE_B_READINESS_STAGES[len(events)]
+    if stage != expected:
+        raise RuntimeError(f"GATE_B_READINESS_TRANSITION_OUT_OF_ORDER:{expected}:{stage}")
+    if events and events[-1].get("status") != "PASS":
+        raise RuntimeError(f"GATE_B_READINESS_PREREQUISITE_FAILED:{events[-1].get('stage')}")
+    if status not in ("PASS", "FAIL"):
+        raise RuntimeError("GATE_B_READINESS_STATUS_INVALID")
+    event = {"stage": stage, "status": status}
+    if status == "FAIL":
+        event["blocking_reason"] = _safe_failure_text(reason, f"{stage.upper()}_NOT_PROVEN")
+        record["gate_b_start_blocking_reason"] = event["blocking_reason"]
+    events.append(event)
+    return event
 
 
 def not_attempted_action_server(blocking_reason: str) -> dict:
-    reason = re.sub(r"[^A-Z0-9_]+", "_", str(blocking_reason).upper()).strip("_")
+    blocking_reason = _safe_failure_text(blocking_reason, "ACTION_SERVER_READINESS_NOT_PROVEN")
+    reason = re.sub(r"[^A-Z0-9_]+", "_", blocking_reason.upper()).strip("_")
     return {"status": f"NOT_ATTEMPTED_DUE_TO_{reason or 'UNKNOWN'}",
             "attempted": False, "ready": "NOT_ATTEMPTED",
-            "blocking_reason": str(blocking_reason)}
+            "blocking_reason": blocking_reason}
 
 
 def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
@@ -2338,35 +2524,40 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
                                      config_hash: str, failure_literal: str,
                                      blocking_reason: str | None = None) -> dict:
     """Stop owned collectors first and preserve explicit partial evidence."""
-    for name, process, member in (("gate_b_observer", gate, gate_member),
-                                  ("cpp_observer", cpp, cpp_member)):
-        if isinstance(member, dict):
-            member["shutdown_request"] = {"requested": process is not None and process.poll() is None,
-                "by": "runner", "reason": blocking_reason or failure_literal,
-                "signal": "SIGINT"}
-        if process is not None and process.poll() is None:
-            if not _owned_group_verified(process, member):
-                raise RuntimeError("COLLECTOR_PROCESS_GROUP_NOT_OWNED")
-            os.killpg(member["pgid"], signal.SIGINT)
+    failure_literal = _safe_failure_text(failure_literal, "COLLECTOR_SETTLEMENT_FAILED")
+    blocker = _safe_failure_text(blocking_reason, failure_literal)
     outcomes = {}
-    for name, process, path in (("gate_b_observer", gate, gate_path),
-                                ("cpp_observer", cpp, observer_path)):
-        if process is None:
-            outcomes[name] = {"process_exit_status": "NOT_STARTED",
-                              "terminal_state": "NOT_STARTED", "artifact_written": path.is_file()}
-            continue
-        process.wait()
+    for name, process, member, path in (("gate_b_observer", gate, gate_member, gate_path),
+                                        ("cpp_observer", cpp, cpp_member, observer_path)):
+        started = process is not None or isinstance(member, dict)
+        requested = False
+        if process is not None:
+            try:
+                requested = process.poll() is None
+            except BaseException:
+                requested = False
         if isinstance(member, dict):
-            member["exit_code"] = process.returncode
-            member["terminal_state"] = ("RUNNER_SHUTDOWN_COMPLETE" if process.returncode == 0
-                                        else "RUNNER_SHUTDOWN_FAILED")
-        outcomes[name] = {"exit_code": process.returncode,
-                          "process_exit_status": "EXITED" if process.returncode == 0 else "FAILED",
-                          "terminal_state": "EXITED" if process.returncode == 0 else "FAILED",
-                          "artifact_written": path.is_file()}
+            member["shutdown_requested_by_runner"] = requested
+            member["shutdown_signal"] = "SIGINT" if requested else None
+            member["shutdown_request"] = {"requested": requested, "by": "runner",
+                "reason": blocker, "signal": "SIGINT"}
+        stop_result = _stop_collector(process, member) if started else _stop_collector(None, None)
+        exit_code = stop_result.get("exit_code", stop_result.get("leader_returncode"))
+        status = ("NOT_STARTED" if not started else
+                  "EXITED" if exit_code == 0 else
+                  "FAILED" if exit_code is not None else "UNKNOWN")
+        outcomes[name] = {"exit_code": exit_code,
+            "process_exit_status": status,
+            "terminal_state": stop_result.get("terminal_state", "TEARDOWN_UNVERIFIED"),
+            "artifact_written": path.is_file(),
+            "clean": stop_result.get("clean") is True,
+            "verified": stop_result.get("verified") is True,
+            "graceful": stop_result.get("graceful") is True,
+            "ordered": False, "shutdown_requested_by_runner": requested,
+            "shutdown_signal": "SIGINT" if stop_result.get("signal_sent") is True else None,
+            "teardown_errors": list(stop_result.get("errors", []))}
     if not gate_path.exists():
         not_started = gate is None
-        blocker = blocking_reason or failure_literal
         _atomic_write(gate_path, {"schema_version": "1.0", "config_hash": config_hash,
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
             "sample_count": 0, "samples": [], "errors": [failure_literal],

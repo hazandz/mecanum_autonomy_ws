@@ -1363,3 +1363,24 @@ Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `31555b8ff247281199
 Offline checks: focused runner/validator 179; bringup 256; RL 718 (canonical Python, external install `/tmp/step07_inv017_behavioral_verification_20261023/install`); six-package build PASS; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; historical Git-blob tests 4. Runtime evidence is not created.
 
 Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` / `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` / `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3`. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+
+## 2026-10-23 — Run005 Invocation_018 nullable-failure teardown corrective closure
+
+Review branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; delivery parent `711c06d146e596b4ec74b8a3d546bcf71fcba5ef`. The cumulative Run005 corrective scope remains exactly 13 paths from `31555b8ff2472811994907791f0d9b8d7f56498f`; this delivery's exact direct set is 9 paths from `711c06d146e596b4ec74b8a3d546bcf71fcba5ef`. The 14-path allowlist is unchanged; `test_step07_run005_runtime_guard.py` is not changed.
+
+Invocation_018 remains an immutable historical failure with `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`. The two recorded failure sources were nullable output concatenation during failure recording and teardown's uninitialized `clean` local. The runner corrective makes nullable failure data structured/safe, initializes all teardown fields before error branches, fails closed when collector/action-server state is unproven, and blocks Gate-B until readiness is proven. No acceptance, safety, Nav2, TF, map, Gazebo, launch, or public ROS interface semantics changed.
+
+Phase A passed: focused runner/validator 185; Step-7 tools 334 before Phase B; bringup 256; RL 718 on Python 3.12.3/Pydantic 2.10.6; external six-package build; observer 20 and ROSIDL 8; `py_compile`; installed/source equality 18/18. Phase A.5 retained 38/38 pin membership and refreshed two existing entries:
+
+| Current source pin | SHA-256 | Size (bytes) |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `c300021df784bf4452b5ca4c62465f5cfbe6ce566b0732aeeed644e99d963614` | 150233 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `34872314c61763ec2beddcf9dd42e05c1b294701d57bc8ff3ba0c273b4d475df` | 141940 |
+
+Guard/evidence/manifest SHA-256: `847901e6316e36d52752e772741212236bc734a8b39a67144af7efc10cf2abd9` / `18f3987120ec7192b15440cc2f4351304f52a1d50e7d79398d62f0415c15d777` / `eb992557721c9badbb1a663d3c57508b0719c67a1c5ea89d8f05ae5fa3fb278d`. Source seed stays PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, no lock; Gate B `NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. No runtime or integration was executed; independent audit remains required.
+
+
+### Canonical JSON hash-chain correction (2026-10-23)
+
+This append-only correction supersedes the previous metadata digest triplet after the guard was serialized with the Run005 canonical writer. Guard/evidence/manifest SHA-256: `ab863631b73bc6b2f7f004d380d785e9e108680789917fb91748cf930f935a3f` / `655551928c5a1a15ccb3d88f7adab22944c75dbe5596b0227dc0ebe1038a030e` / `795960653705336e22ee2e07cb850ff89aac7d622211182a8f0f382582601f77`. The guard semantic object was unchanged; seed, capacity, acquisition count, authorization scope, integration base, allowlist and historical fields were preserved.

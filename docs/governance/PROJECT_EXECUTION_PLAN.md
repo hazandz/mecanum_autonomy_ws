@@ -1184,3 +1184,15 @@ Guard/evidence/manifest SHA-256: `9d38ab512d026f5e2824a1f4742a61b87e41836967e96b
 Candidate base `31555b8ff2472811994907791f0d9b8d7f56498f`; exact source/offline path scope 13; closure allowlist 14. `SOURCE_FREEZE=TRUE` is offline-only. Phase A/A.5 results: focused 179; bringup scope 6/full 256; RL 718; six-package external build; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; Git-blob checks 4; source pins 38/38 with five refreshed.
 
 No plan status/dependency transition occurs. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; no runtime authorization is granted. Post-reconciliation Step-7/coherence checks remain required delivery conditions.
+
+
+### 2026-10-23 — Run005 Invocation_018 corrective closure note
+
+`SOURCE_FREEZE=TRUE` records the source/offline freeze only. The exact direct delivery scope is 9 paths from `711c06d146e596b4ec74b8a3d546bcf71fcba5ef` within the existing 14-path allowlist; cumulative scope remains 13 paths from `31555b8ff2472811994907791f0d9b8d7f56498f`. Phase A suites and build passed before this one metadata reconciliation; Phase A.5 retained 38 pin members and refreshed two existing hashes/sizes. Phase B records metadata hashes `847901e6316e36d52752e772741212236bc734a8b39a67144af7efc10cf2abd9`, `18f3987120ec7192b15440cc2f4351304f52a1d50e7d79398d62f0415c15d777`, `eb992557721c9badbb1a663d3c57508b0719c67a1c5ea89d8f05ae5fa3fb278d`.
+
+No execution-plan dependency or completion transition is made. Gate B remains `NOT_STARTED`; runtime remains `NOT_APPROVED`; independent audit is the next action. No runtime or integration is authorized by this note.
+
+
+### Canonical JSON hash-chain correction (2026-10-23)
+
+This append-only correction supersedes the previous metadata digest triplet after the guard was serialized with the Run005 canonical writer. Guard/evidence/manifest SHA-256: `ab863631b73bc6b2f7f004d380d785e9e108680789917fb91748cf930f935a3f` / `655551928c5a1a15ccb3d88f7adab22944c75dbe5596b0227dc0ebe1038a030e` / `795960653705336e22ee2e07cb850ff89aac7d622211182a8f0f382582601f77`. The guard semantic object was unchanged; seed, capacity, acquisition count, authorization scope, integration base, allowlist and historical fields were preserved.

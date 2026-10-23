@@ -247,3 +247,19 @@ Phase A results: focused runner/validator 179 passed; bringup scope 6 and full b
 Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` (35051 bytes), `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` (58730 bytes), `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3` (47920 bytes).
 
 Guard seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime, integration, HIL, hardware or Fuel provisioning; no runtime PASS, Gate-B PASS or `REAL_READY` claim.
+
+
+## 2026-10-23 — Invocation_018 failure-recording and collector teardown corrective closure
+
+This offline corrective is based on `711c06d146e596b4ec74b8a3d546bcf71fcba5ef` and continues Run005 attempt_002; no new Run or invocation is created. Invocation_018 remains immutable and failed with `STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED`. The source issues were unsafe concatenation when a failure field was `None` and a teardown branch that referenced `clean` before initialization.
+
+The runner now records nullable failures safely, initializes teardown evidence fields before all branches, emits explicit fail-closed state when collector/action-server readiness or teardown cannot be proven, and does not treat collector exit code zero as acceptance. Gate-B remains blocked until collector and action-server readiness are established. Valid goal, full evidence chain, and exactly five valid 81D vectors remain required. Safety, Nav2, map, TF, Gazebo, launch, and public ROS interface contracts are unchanged.
+
+Offline-only verification passed before metadata reconciliation: focused runner/validator 185; Step-7 334; bringup 256; RL 718; external six-package build; C++ observer 20; ROSIDL 8; py_compile; installed/source equality 18/18. The 38-pin membership is unchanged and two existing pins were refreshed. Exact direct delivery scope is 9 paths from `711c06d146e596b4ec74b8a3d546bcf71fcba5ef`; cumulative scope is 13 from `31555b8ff2472811994907791f0d9b8d7f56498f`.
+
+Guard/evidence/manifest SHA-256: `847901e6316e36d52752e772741212236bc734a8b39a67144af7efc10cf2abd9` / `18f3987120ec7192b15440cc2f4351304f52a1d50e7d79398d62f0415c15d777` / `eb992557721c9badbb1a663d3c57508b0719c67a1c5ea89d8f05ae5fa3fb278d`. This record grants no runtime authorization and makes no Gate-B PASS, runtime PASS, or `REAL_READY` claim. Guard remains PENDING/capacity one/acquisition zero/NOT_GRANTED with no source lock; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`.
+
+
+### Canonical JSON hash-chain correction (2026-10-23)
+
+This append-only correction supersedes the previous metadata digest triplet after the guard was serialized with the Run005 canonical writer. Guard/evidence/manifest SHA-256: `ab863631b73bc6b2f7f004d380d785e9e108680789917fb91748cf930f935a3f` / `655551928c5a1a15ccb3d88f7adab22944c75dbe5596b0227dc0ebe1038a030e` / `795960653705336e22ee2e07cb850ff89aac7d622211182a8f0f382582601f77`. The guard semantic object was unchanged; seed, capacity, acquisition count, authorization scope, integration base, allowlist and historical fields were preserved.

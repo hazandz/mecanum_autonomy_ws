@@ -22,6 +22,7 @@ FUEL_URIS = [DEPOT_URI, TUGBOT_URI]
 RUN005_ATTEMPT_001_SHA = "71ca32471f8e042a0048d319ca39cb9deff0c6f4"
 RUN005_ATTEMPT_002_OUTPUT_BASE = "99d5c29c1c302260a8971e19e46f93d778a52f86"
 RUN005_GUARD_REL = "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"
+INVOCATION_018_MANIFEST_SHA256 = "0c98f6853acce52af37d9ba202dafdd072c4ca7018d68efbcd1da825c053de98"
 
 
 def _acquired_campaign_handler():
@@ -1608,6 +1609,149 @@ def test_action_server_wait_returns_explicit_pass_or_fail(monkeypatch):
     assert failed["status"] == "FAIL" and failed["attempted"] is True
 
 
+def test_nullable_action_probe_output_fails_closed_and_finalizes_failure_bundle(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(runner, "_run", lambda *_args, **_kwargs:
+        SimpleNamespace(returncode=0, stdout="Action servers: 1\n", stderr=None))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    action = runner.wait_navigate_to_pose_action_server({}, timeout=0.01)
+    assert action["status"] == "FAIL"
+    assert action["failure_literal"] == "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"
+    blocker = runner.gate_b_start_blocking_reason({"ready": True}, action)
+    assert blocker == "NAVIGATE_TO_POSE_ACTION_SERVER_PROBE_OUTPUT_INVALID"
+
+    gate_path, observer_path = tmp_path / "gate_b_vectors.json", tmp_path / "runtime_observer.json"
+    outcomes = runner.settle_collectors_before_teardown(
+        gate=None, cpp=None, gate_member=None, cpp_member=None,
+        gate_path=gate_path, observer_path=observer_path, config_hash="a" * 64,
+        failure_literal=None, blocking_reason=blocker)
+    gate = runner.load_canonical_json(gate_path)
+    assert outcomes["gate_b_observer"]["terminal_state"] == "NOT_STARTED"
+    assert gate["stage_failure"] == {"status": "NOT_STARTED",
+        "blocking_reason": blocker, "gate_b_observer_started": False}
+
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    record = {"call_counts": {"runner": 1, "bootstrap": 1, "composite": 1,
+                              "cpp_observer": 1, "gate_b_observer": 0},
+              "action_server_readiness": action}
+    runner.record_campaign_failure(record, "ACTION_SERVER_READINESS", RuntimeError(blocker))
+    result = runner.persist_terminal_evidence(record,
+        {"observer_acceptance": False, "gate_b_vectors": False},
+        {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+         "verified": True, "graceful": True, "escalation_history": []},
+        run_directory, runner.SigtermHandler())
+    assert result["failure_details"] == {"phase": "ACTION_SERVER_READINESS",
+        "exception_type": "RuntimeError", "message": blocker, "literal": f"RuntimeError:{blocker}"}
+    stored = runner.load_canonical_json(run_directory / "run_record.json")
+    manifest = runner.load_canonical_json(run_directory / "artifact_manifest.json")
+    rows = {row["path"]: row for row in manifest["artifacts"]}
+    record_bytes = (run_directory / "run_record.json").read_bytes()
+    assert rows["run_record.json"]["sha256"] == hashlib.sha256(record_bytes).hexdigest()
+    assert rows["run_record.json"]["size_bytes"] == len(record_bytes)
+    sums = (run_directory / "SHA256SUMS.txt").read_text(encoding="utf-8")
+    assert "run_record.json" in sums and "artifact_manifest.json" not in sums
+    assert stored["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+
+
+def test_collector_teardown_exception_keeps_fail_closed_state_fields(monkeypatch):
+    class ExitedProcess:
+        pid = 812
+        returncode = 0
+        def poll(self): return 0
+        def wait(self, timeout): return 0
+
+    member = {"name": "cpp_observer", "pid": 812, "launcher_pid": 812,
+        "pgid": 812, "ownership_verified": True, "shutdown_requested_by_runner": True,
+        "shutdown_request": {"requested": True, "by": "runner", "signal": "SIGINT"}}
+    monkeypatch.setattr(runner, "_process_group_members", lambda *_args, **_kwargs:
+        (_ for _ in ()).throw(OSError("snapshot unavailable")))
+    result = runner._stop_collector(ExitedProcess(), member)
+    assert result["exit_code"] == 0
+    assert result["clean"] is False and result["verified"] is False
+    assert result["graceful"] is False
+    assert result["shutdown_requested_by_runner"] is True
+    assert result["terminal_state"] == "RUNNER_SHUTDOWN_FAILED"
+    assert any(item.startswith("PROC_SNAPSHOT_FAILED:OSError") for item in result["errors"])
+    assert all(key in member for key in ("clean", "verified", "graceful", "ordered",
+        "shutdown_requested_by_runner", "exit_code", "terminal_state"))
+
+
+def test_cpp_ready_without_action_server_proof_blocks_gate_b_with_exact_stage_reason(tmp_path):
+    cpp_readiness = {"ready": True, "pid": 913, "ros_context_valid": True}
+    action_server = {"status": "FAIL", "attempted": True, "ready": False,
+                     "failure_literal": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY"}
+    blocker = runner.gate_b_start_blocking_reason(cpp_readiness, action_server)
+    gate_start_count = 0
+    if blocker is None:
+        gate_start_count += 1
+    assert gate_start_count == 0
+
+    gate_path, observer_path = tmp_path / "gate_b_vectors.json", tmp_path / "runtime_observer.json"
+    runner.settle_collectors_before_teardown(gate=None, cpp=None,
+        gate_member=None, cpp_member=None, gate_path=gate_path, observer_path=observer_path,
+        config_hash="b" * 64, failure_literal="ACTION_SERVER_READINESS_NOT_PROVEN",
+        blocking_reason=blocker)
+    gate = runner.load_canonical_json(gate_path)
+    assert gate["stage_failure"] == {"status": "NOT_STARTED",
+        "blocking_reason": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY",
+        "gate_b_observer_started": False}
+
+
+def test_gate_b_readiness_state_machine_stops_after_each_failed_prerequisite():
+    failed_initial = {}
+    runner.record_gate_b_readiness_transition(
+        failed_initial, "cpp_initial_ready", "FAIL", "CPP_OBSERVER_NOT_READY")
+    with pytest.raises(RuntimeError, match="GATE_B_READINESS_PREREQUISITE_FAILED:cpp_initial_ready"):
+        runner.record_gate_b_readiness_transition(
+            failed_initial, "action_server_ready", "PASS")
+    assert [event["stage"] for event in failed_initial["gate_b_readiness_state_machine"]] == [
+        "cpp_initial_ready"]
+
+    failed_action = {}
+    runner.record_gate_b_readiness_transition(failed_action, "cpp_initial_ready", "PASS")
+    runner.record_gate_b_readiness_transition(
+        failed_action, "action_server_ready", "FAIL", "ACTION_SERVER_NOT_READY")
+    with pytest.raises(RuntimeError, match="GATE_B_READINESS_PREREQUISITE_FAILED:action_server_ready"):
+        runner.record_gate_b_readiness_transition(
+            failed_action, "cpp_pre_gate_b_recheck", "PASS")
+    assert [event["stage"] for event in failed_action["gate_b_readiness_state_machine"]] == [
+        "cpp_initial_ready", "action_server_ready"]
+
+    failed_recheck = {}
+    runner.record_gate_b_readiness_transition(failed_recheck, "cpp_initial_ready", "PASS")
+    runner.record_gate_b_readiness_transition(failed_recheck, "action_server_ready", "PASS")
+    runner.record_gate_b_readiness_transition(
+        failed_recheck, "cpp_pre_gate_b_recheck", "FAIL", "CPP_OBSERVER_EXITED")
+    with pytest.raises(RuntimeError, match="GATE_B_READINESS_PREREQUISITE_FAILED:cpp_pre_gate_b_recheck"):
+        runner.record_gate_b_readiness_transition(failed_recheck, "gate_b_start", "PASS")
+    assert [event["stage"] for event in failed_recheck["gate_b_readiness_state_machine"]] == [
+        "cpp_initial_ready", "action_server_ready", "cpp_pre_gate_b_recheck"]
+
+
+def test_zero_collector_exit_code_does_not_imply_observer_or_qos_acceptance(tmp_path):
+    outcomes = {"cpp_observer": {"exit_code": 0, "terminal_state": "EXITED",
+                                 "artifact_written": True}}
+    teardown = {"clean": True, "graceful": True, "errors": []}
+    runner.mark_collector_failures(teardown, outcomes)
+    assert teardown["clean"] is True
+    assert outcomes["cpp_observer"]["exit_code"] == 0
+
+    run_directory = tmp_path / "evidence"
+    run_directory.mkdir()
+    record = {"call_counts": {"runner": 1}, "collector_outcomes": outcomes,
+              "action_server_readiness": {"status": "FAIL", "attempted": True, "ready": False}}
+    verdict = runner.persist_terminal_evidence(record,
+        {"observer_acceptance": False, "gate_b_vectors": False},
+        {"completed": True, "clean": True, "ordered": True, "order_correct": True,
+         "verified": True, "graceful": True, "escalation_history": []},
+        run_directory, runner.SigtermHandler())
+    assert verdict["acceptance"]["observer_acceptance"] is False
+    assert verdict["acceptance"]["gate_b_vectors"] is False
+    assert verdict["terminal_outcome"].endswith("FAIL_NO_RETRY_GUARD_CONSUMED")
+
+
 def test_collector_failure_forces_teardown_clean_and_graceful_false():
     teardown = {"clean": True, "graceful": True, "errors": []}
     runner.mark_collector_failures(teardown, {"gate_b_observer": {"exit_code": 2}})
@@ -2414,7 +2558,7 @@ def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tm
         pid = 812
         returncode = None
         def poll(self): return self.returncode
-        def wait(self):
+        def wait(self, timeout=None):
             self.returncode = 0
             return 0
 
@@ -2422,7 +2566,10 @@ def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tm
     cpp_member = {"name": "cpp_observer", "pid": 812, "launcher_pid": 812,
                   "child_pid": 913, "pgid": 812, "ownership_verified": True,
                   "ownership_relation": "CHILD_IN_LAUNCHER_PROCESS_GROUP"}
-    monkeypatch.setattr(runner, "_owned_group_verified", lambda process, member: True)
+    monkeypatch.setattr(runner.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(runner, "_process_group_members", lambda _pgid: {
+        "live_member_pids": [], "zombie_member_pids": [], "verified": True,
+        "inspection_errors": []})
     signals = []
     monkeypatch.setattr(runner.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
     gate_path = tmp_path / "gate_b_vectors.json"
@@ -2438,6 +2585,11 @@ def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tm
     assert cpp_member["shutdown_request"] == {"requested": True, "by": "runner",
         "reason": blocker, "signal": "SIGINT"}
     assert cpp_member["exit_code"] == 0
+    assert cpp_member["shutdown_requested_by_runner"] is True
+    assert cpp_member["shutdown_signal"] == "SIGINT"
+    assert outcomes["cpp_observer"]["shutdown_requested_by_runner"] is True
+    assert outcomes["cpp_observer"]["shutdown_signal"] == "SIGINT"
+    assert signals == [(812, runner.signal.SIGINT)]
     assert outcomes["gate_b_observer"]["terminal_state"] == "NOT_STARTED"
     assert gate_doc["collector_terminal_state"] == "NOT_STARTED"
     assert gate_doc["stage_failure"] == {"status": "NOT_STARTED",
@@ -2447,12 +2599,38 @@ def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tm
 
 def test_runner_orders_cpp_readiness_then_action_server_then_gate_b_before_trigger():
     source = RUNNER_PATH.read_text(encoding="utf-8")
-    cpp_ready = source.index("cpp_ready_path, cpp, collector=\"step07_nav2_baseline_runtime_observer\"")
+    cpp_initial_ready = source.index('record_gate_b_readiness_transition(record, "cpp_initial_ready"')
     action_probe = source.index("action_server = wait_navigate_to_pose_action_server(env)")
-    cpp_recheck = source.index('if cpp.poll() is not None:', action_probe)
+    gate_blocker = source.index("gate_blocker = gate_b_start_blocking_reason", action_probe)
+    action_ready = source.index('record_gate_b_readiness_transition(record, "action_server_ready"', gate_blocker)
+    cpp_recheck = source.index('record["collector_stage"] = "CPP_PRE_GATE_B_RECHECK"', action_ready)
+    cpp_recheck_result = source.index('record_gate_b_readiness_transition(record, "cpp_pre_gate_b_recheck"', cpp_recheck)
     gate_start = source.index("gate_command = [str(args.runtime_python)")
     gate_ready = source.index("gate_ready_path, gate, collector=\"step07_gate_b_observer\"")
     chain_ready = source.index("chain_ready_readback = load_canonical_json(chain_ready_path)")
+    gate_started = source.index('record_gate_b_readiness_transition(record, "gate_b_start", "PASS")', gate_start)
     goal_trigger = source.index("state\": \"TRIGGER_GOAL\"")
-    assert cpp_ready < action_probe < cpp_recheck < gate_start < gate_ready < chain_ready < goal_trigger
+    assert cpp_initial_ready < action_probe < gate_blocker < action_ready < cpp_recheck < cpp_recheck_result
+    assert cpp_recheck_result < gate_start < gate_started < gate_ready < chain_ready < goal_trigger
+    assert "if gate_blocker is not None:" in source[gate_blocker:cpp_recheck]
     assert "\"navigate_to_pose_action_server_ready\": False" not in source[source.index("runtime_acceptance ="):source.index("collector_members =")]
+
+
+def test_invocation_018_evidence_bundle_remains_immutable():
+    configured_root = os.environ.get("STEP07_INVOCATION_018_EVIDENCE_ROOT")
+    if not configured_root:
+        pytest.skip("external immutable Invocation_018 evidence root not configured")
+    root = Path(configured_root)
+    assert root.is_absolute() and root.is_dir() and not root.is_symlink()
+    raw_manifest = (root / "artifact_manifest.json").read_bytes()
+    assert hashlib.sha256(raw_manifest).hexdigest() == INVOCATION_018_MANIFEST_SHA256
+    manifest = json.loads(raw_manifest.decode("utf-8"))
+    assert manifest["artifact_count"] == len(manifest["artifacts"])
+    for entry in manifest["artifacts"]:
+        relative = Path(entry["path"])
+        assert not relative.is_absolute() and ".." not in relative.parts
+        artifact = root / relative
+        assert not artifact.is_symlink() and artifact.is_file()
+        content = artifact.read_bytes()
+        assert len(content) == entry["size_bytes"]
+        assert hashlib.sha256(content).hexdigest() == entry["sha256"]

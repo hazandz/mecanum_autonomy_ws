@@ -2244,3 +2244,17 @@ Updated hashes: guard `034b40893d24a26c449892088ccd0c3c0c0b365867721240f031dc0c9
 - Pre-Phase-B offline checks: focused runner/validator 179; bringup scope 6/full 256; RL 718; six-package build; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; historical Git-blob checks 4 — PASS. Post-reconciliation Step-7/coherence results follow their checks.
 - Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` / `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` / `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3`. Decision `69337b9db5d70b4c70cf36a12f3818148791ce08f2ee88640cf7abe715e77aca`; Registry `9e3f20c87f5a2f73582b4fd3d5625610bacc027203a6d406a495d3fc53cf6f06`; Plan `0dde728c9f50aa97642d339e669a26fc695f2235a15d797840b108ef68579725`. Parent Ledger bytes remain exact prefix.
 - Guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, runtime authorization NOT_GRANTED; Gate B NOT_STARTED; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime/integration/HIL/hardware/Fuel provisioning. Evidence ceiling `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+
+### 2026-10-23 — Run005 Invocation_018 nullable-failure teardown corrective closure
+
+`PLAN_UPDATE_PROPOSAL`: Work package Run005 attempt_002 corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base/sole-parent target `711c06d146e596b4ec74b8a3d546bcf71fcba5ef`. Exact direct scope is 9 paths; cumulative scope is 13 paths from `31555b8ff2472811994907791f0d9b8d7f56498f`; allowlist is 14 paths. Phase A evidence: focused runner/validator 185; Step-7 tools 334 pre-Phase B; bringup 256; RL 718; six-package external build PASS; observer 20; ROSIDL 8; py_compile PASS; installed/source equality 18/18. Phase A.5: 38/38 pins, two existing entries refreshed, membership unchanged.
+
+Invocation_018 historical failure and artifacts remain immutable. Evidence status `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; no runtime authorization. Dependency: independent audit of the exact committed candidate. Blocker: final post-reconciliation verification and independent audit. Next action: complete final offline coherence checks, then independent audit. No plan status transition, runtime, or integration claim is made.
+
+Guard/evidence/manifest SHA-256: `847901e6316e36d52752e772741212236bc734a8b39a67144af7efc10cf2abd9` / `18f3987120ec7192b15440cc2f4351304f52a1d50e7d79398d62f0415c15d777` / `eb992557721c9badbb1a663d3c57508b0719c67a1c5ea89d8f05ae5fa3fb278d`.
+
+
+### Canonical JSON hash-chain correction (2026-10-23)
+
+This append-only correction supersedes the previous metadata digest triplet after the guard was serialized with the Run005 canonical writer. Guard/evidence/manifest SHA-256: `ab863631b73bc6b2f7f004d380d785e9e108680789917fb91748cf930f935a3f` / `655551928c5a1a15ccb3d88f7adab22944c75dbe5596b0227dc0ebe1038a030e` / `795960653705336e22ee2e07cb850ff89aac7d622211182a8f0f382582601f77`. The guard semantic object was unchanged; seed, capacity, acquisition count, authorization scope, integration base, allowlist and historical fields were preserved.
