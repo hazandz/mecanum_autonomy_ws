@@ -459,7 +459,8 @@ class _Collector:
             if str(error) == "LOCAL_REFERENCE_TF_TRANSFORM_FAILED":
                 return
             self.errors.append(str(error))
-            self._finish()
+            # Preserve the collector until five valid samples or an action
+            # terminal result lets us write complete failure evidence.
             return
         receipt_context = FinalIssuedReceiptContext(
             contract_id=LIFECYCLE_BARRIER_CONTRACT_ID, frame_contract_id=FRAME_TF_CONTRACT_ID,

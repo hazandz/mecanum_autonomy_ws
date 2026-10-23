@@ -1172,3 +1172,8 @@ Review base `7f5d16ffa4edca34672b5af82397df9bde186829`; candidate `STEP07_RUN005
 Phase A/A.5 checks passed: focused 209, Step-7 321, bringup 254, RL 717, six-package external build, observer 17/ROSIDL 8, py_compile 7, installed/source 15+3, and 38/38 pins. Historical Invocation_014/015 preservation inventory is 4,021 entries, SHA-256 `e936cdd3fa38a1aa4f6c25e9114fb01eadb2b1ab7d89e21f0775202244cecbb4`. No runtime or integration was executed. `SOURCE_FREEZE=TRUE` is offline only; independent audit is next.
 
 Guard/evidence/manifest SHA-256: `9d38ab512d026f5e2824a1f4742a61b87e41836967e96bf99230f189d0d2c02e` / `24c513375de0225bdd1235ccfa0479255b7ddeee2e6516c3af497a7fd6e716a3` / `12594c1093aabab8f210d89f20508b42ef9167f6532815589166b8a67c6c03c7`. Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED/no source lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED.
+
+
+### Run005 attempt_002 — lifecycle/QoS observer corrective proposal
+
+`PLAN_UPDATE_PROPOSAL`: Step-7 Run005 attempt_002 L1 collector-verdict/lifetime corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `09014a320cd8dedb242c99d70cd24ffa0d8cd980`; candidate commit pending the one authorized commit after final checks. Evidence state `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`; offline suites/build and source-pin closure passed. Dependency: independent evidence audit of the exact candidate. Blocker: independent audit has not approved a runtime packet. Next action: independent audit; any runtime needs separate explicit authorization. This proposal does not advance plan completion, Gate B, runtime approval, or integration.

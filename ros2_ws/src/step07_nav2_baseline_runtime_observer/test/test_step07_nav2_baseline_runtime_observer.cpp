@@ -205,5 +205,43 @@ TEST(Step07Observer, UnobservableQosIsRawStatusNotCollectorFailure) {
   EXPECT_NE(source.find("\"qos_verdict\""), std::string::npos);
   EXPECT_NE(source.find("row.value(\"topic_type\", \"\") == type"), std::string::npos);
   EXPECT_NE(source.find("observed != expected"), std::string::npos);
-  EXPECT_NE(source.find("return failed_closed_ || !doc_.contains(\"errors\") || !doc_[\"errors\"].empty() ? 2 : 0"), std::string::npos);
+  EXPECT_NE(source.find("return failed_closed_ ? 2 : 0"), std::string::npos);
+  EXPECT_NE(source.find("qos_verdict_details"), std::string::npos);
+  EXPECT_NE(source.find("RMW_HISTORY_DEPTH_METADATA_UNAVAILABLE"), std::string::npos);
+}
+
+TEST(Step07Observer, RawEndpointEvidenceIncludesDirectionIdentityPolicyAndDiscoveryTime) {
+  const auto source_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+      "src/step07_nav2_baseline_runtime_observer.cpp";
+  std::ifstream input(source_path);
+  const std::string source((std::istreambuf_iterator<char>(input)), {});
+  for (const auto *field : {"topic_name", "endpoint_type", "topic_type", "reliability",
+                            "durability", "history", "depth", "gid",
+                            "discovery_monotonic_ns", "ENDPOINT_NOT_DISCOVERED_AT_FINAL_SNAPSHOT"}) {
+    EXPECT_NE(source.find(field), std::string::npos) << field;
+  }
+}
+
+TEST(Step07Observer, QosVerdictDoesNotControlCollectorExitStatus) {
+  const auto source_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+      "src/step07_nav2_baseline_runtime_observer.cpp";
+  std::ifstream input(source_path);
+  const std::string source((std::istreambuf_iterator<char>(input)), {});
+  const auto exit_start = source.find("int exit_code() const {");
+  const auto exit_end = source.find("\n  }", exit_start);
+  ASSERT_NE(exit_start, std::string::npos);
+  ASSERT_NE(exit_end, std::string::npos);
+  const auto body = source.substr(exit_start, exit_end - exit_start);
+  EXPECT_NE(body.find("return failed_closed_ ? 2 : 0"), std::string::npos);
+  EXPECT_EQ(body.find("doc_[\"errors\"]"), std::string::npos);
+}
+
+TEST(Step07Observer, RunnerControlledModeDisablesObserverSelfFinalizationTimer) {
+  const auto source_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+      "src/step07_nav2_baseline_runtime_observer.cpp";
+  std::ifstream input(source_path);
+  const std::string source((std::istreambuf_iterator<char>(input)), {});
+  EXPECT_NE(source.find("runner_controlled_shutdown_ = declare_parameter<bool>(\"runner_controlled_shutdown\", false)"), std::string::npos);
+  EXPECT_NE(source.find("if (!runner_controlled_shutdown_)"), std::string::npos);
+  EXPECT_NE(source.find("if (!node->finished()) node->finish();"), std::string::npos);
 }

@@ -119,6 +119,12 @@ std::vector<Json> endpoint_rows(const rclcpp::Node &node, const std::string &top
   } else {
     for (const auto &endpoint : node.get_subscriptions_info_by_topic(topic)) rows.push_back(endpoint_json(endpoint));
   }
+  const auto discovered = std::chrono::steady_clock::now().time_since_epoch();
+  const auto discovered_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(discovered).count();
+  for (auto &row : rows) {
+    row["topic_name"] = topic;
+    row["discovery_monotonic_ns"] = discovered_ns;
+  }
   return rows;
 }
 
@@ -226,6 +232,7 @@ class Observer final : public rclcpp::Node {
     ready_path_ = declare_parameter<std::string>("ready_path", "");
     config_hash_ = declare_parameter<std::string>("config_hash", "");
     duration_sec_ = declare_parameter<int>("duration_sec", 30);
+    runner_controlled_shutdown_ = declare_parameter<bool>("runner_controlled_shutdown", false);
     if (output_path_.empty() || ready_path_.empty() || config_hash_.size() != 64 || duration_sec_ < 1 || duration_sec_ > 1800) {
       throw std::invalid_argument("OBSERVER_ARGUMENT_INVALID");
     }
@@ -308,7 +315,9 @@ class Observer final : public rclcpp::Node {
       doc_["errors"].push_back("OBSERVER_READINESS_HANDSHAKE_FAILED");
       failed_closed_ = true;
     }
-    timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
+    if (!runner_controlled_shutdown_) {
+      timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
+    }
   }
 
   bool context_is_valid() {
@@ -318,7 +327,9 @@ class Observer final : public rclcpp::Node {
 
   bool finished() const { return finished_; }
   int exit_code() const {
-    return failed_closed_ || !doc_.contains("errors") || !doc_["errors"].empty() ? 2 : 0;
+    // QoS and runtime acceptance are verdict data for the runner/validator.
+    // Only actual collection/readiness/artifact failures affect process status.
+    return failed_closed_ ? 2 : 0;
   }
 
   void collect_tf(tf2_msgs::msg::TFMessage::ConstSharedPtr msg, const rclcpp::MessageInfo &info, bool is_static) {
@@ -452,6 +463,18 @@ class Observer final : public rclcpp::Node {
       "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt", "PUBLISHER",
       RMW_QOS_POLICY_RELIABILITY_RELIABLE, RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL, 1);
     doc_["qos_history_depth_observability"] = qos_status_rows;
+    doc_["qos_endpoint_absence"] = Json::array();
+    for (const auto *expected_node : {"safety_supervisor", "final_twist_publisher",
+                                      "step07_nav2_baseline_runtime_observer", "step07_gate_b_observer"}) {
+      const bool observed = std::any_of(lifecycle_subscribers.begin(), lifecycle_subscribers.end(),
+        [&](const Json &row) { return row.value("node_name", "") == expected_node; });
+      if (!observed) doc_["qos_endpoint_absence"].push_back({
+        {"topic", "/mecanum/safety_lifecycle_state"}, {"node_name", expected_node},
+        {"endpoint_type", "SUBSCRIPTION"}, {"status", "UNOBSERVABLE"},
+        {"reason", "ENDPOINT_NOT_DISCOVERED_AT_FINAL_SNAPSHOT"},
+        {"discovery_monotonic_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count()}});
+    }
     const auto qos_verdict = [&](const std::string &topic) {
       bool unobservable = false;
       size_t observed = 0;
@@ -469,6 +492,42 @@ class Observer final : public rclcpp::Node {
     doc_["qos_verdict"] = Json{
       {"lifecycle_endpoint_qos_contract", qos_verdict("/mecanum/safety_lifecycle_state")},
       {"receipt_qos_contract", qos_verdict("/mecanum/final_issued_command")}};
+    doc_["qos_verdict_details"] = Json::object();
+    for (const auto &row : qos_status_rows) {
+      const auto topic = row.value("topic", "");
+      const auto node_name = row.value("node_name", "");
+      const auto &endpoints = row.value("endpoint_type", "") == "PUBLISHER"
+        ? (topic == "/mecanum/safety_lifecycle_state" ? lifecycle_publishers : receipt_publishers)
+        : lifecycle_subscribers;
+      const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [&](const Json &candidate) {
+        return candidate.value("node_name", "") == node_name &&
+          candidate.value("endpoint_type", "") == row.value("endpoint_type", "");
+      });
+      if (endpoint == endpoints.end()) continue;
+      std::string reason = "POLICY_MATCH";
+      const auto expected_type = topic == "/mecanum/safety_lifecycle_state"
+        ? "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"
+        : "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt";
+      if (endpoint->value("topic_type", "") != expected_type) reason = "TOPIC_TYPE_MISMATCH";
+      else if (endpoint->value("reliability", -1) != RMW_QOS_POLICY_RELIABILITY_RELIABLE) reason = "RELIABILITY_MISMATCH";
+      else if (endpoint->value("durability", -1) != (topic == "/mecanum/safety_lifecycle_state"
+          ? RMW_QOS_POLICY_DURABILITY_VOLATILE : RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL)) reason = "DURABILITY_MISMATCH";
+      else if (endpoint->value("history", -1) == RMW_QOS_POLICY_HISTORY_UNKNOWN && endpoint->value("depth", -1) == 0)
+        reason = "RMW_HISTORY_DEPTH_METADATA_UNAVAILABLE";
+      else if (endpoint->value("history", -1) != RMW_QOS_POLICY_HISTORY_KEEP_LAST ||
+               endpoint->value("depth", -1) != (topic == "/mecanum/safety_lifecycle_state" ? 10 : 1))
+        reason = "HISTORY_DEPTH_MISMATCH";
+      doc_["qos_verdict_details"][topic].push_back({
+        {"endpoint_name", node_name}, {"endpoint_type", row.value("endpoint_type", "")},
+        {"topic_name", topic}, {"gid", endpoint->value("gid", "")},
+        {"node_namespace", endpoint->value("node_namespace", "")},
+        {"topic_type", endpoint->value("topic_type", "")},
+        {"reliability", endpoint->value("reliability", -1)},
+        {"durability", endpoint->value("durability", -1)},
+        {"history", endpoint->value("history", -1)}, {"depth", endpoint->value("depth", -1)},
+        {"discovery_monotonic_ns", endpoint->value("discovery_monotonic_ns", int64_t{0})},
+        {"status", row.value("history_depth_status", "")}, {"reason", reason}});
+    }
     doc_["acceptance"] = Json{
       {"clock_multisample", clock_ok}, {"filtered_odometry_multisample", odom_ok},
       {"tf_qos_contract", doc_["qos"]["/tf"]["reliability"] == "BEST_EFFORT" && doc_["qos"]["/tf"]["durability"] == "VOLATILE" && doc_["qos"]["/tf"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf"]["depth"] == 100 && doc_["qos"]["/tf_static"]["reliability"] == "RELIABLE" && doc_["qos"]["/tf_static"]["durability"] == "TRANSIENT_LOCAL" && doc_["qos"]["/tf_static"]["history"] == "KEEP_LAST" && doc_["qos"]["/tf_static"]["depth"] == 1},
@@ -522,7 +581,10 @@ class Observer final : public rclcpp::Node {
       if (!unknown_qos) doc_["errors"].push_back("ACCEPTANCE_FAILED:" + name);
     }
     doc_["observer_lifecycle"] = Json{{"state", "FINALIZED"}, {"ros_context_valid", true}};
-    if (!write_json_atomic(output_path_, doc_)) RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");
+    if (!write_json_atomic(output_path_, doc_)) {
+      failed_closed_ = true;
+      RCLCPP_ERROR(get_logger(), "OBSERVER_JSON_WRITE_FAILED");
+    }
   }
 
  private:
@@ -530,6 +592,7 @@ class Observer final : public rclcpp::Node {
   int duration_sec_{30};
   bool finished_{false};
   bool failed_closed_{false};
+  bool runner_controlled_shutdown_{false};
   std::chrono::steady_clock::time_point started_;
   Json doc_ = Json::object();
   Json ready_document_ = Json::object();

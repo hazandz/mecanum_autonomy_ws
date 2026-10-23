@@ -1513,31 +1513,58 @@ def test_process_groups_and_final_record_fail_closed():
         runner.finalise_after_teardown({}, {"all": True}, {"completed": False})
 
 
-def test_collector_ready_handshake_requires_live_matching_process_context_and_subscriptions(tmp_path):
+def test_collector_ready_handshake_accepts_owned_ros2_run_child_pid(monkeypatch, tmp_path):
     from types import SimpleNamespace
     path = tmp_path / "gate.ready.json"
     subscriptions = ["/scan", "/odometry/filtered"]
     process = SimpleNamespace(pid=1234, returncode=None, poll=lambda: None)
+    member = {"pid": 1234, "pgid": 1234}
+    monkeypatch.setattr(runner, "_ready_pid_belongs_to_owned_group", lambda pid, proc, group:
+        pid == 4321 and proc is process and group is member)
     runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
-        "config_hash": "a" * 64, "pid": 1234, "state": "READY",
+        "config_hash": "a" * 64, "pid": 4321, "state": "READY",
         "process_alive": True, "ros_context_valid": True, "subscriptions_created": subscriptions})
     ready = runner.wait_collector_ready(path, process, collector="gate",
-        config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1)
+        config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1,
+        process_group=member)
     assert ready["ready"] is True and ready["ros_context_valid"] is True
+    assert ready["pid"] == 4321 and ready["launcher_pid"] == 1234
     runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
         "config_hash": "a" * 64, "pid": 1234, "state": "READY",
         "process_alive": True, "ros_context_valid": False, "subscriptions_created": subscriptions})
-    with pytest.raises(RuntimeError, match="GATE_READINESS_TIMEOUT"):
+    with pytest.raises(RuntimeError, match="GATE_NOT_READY:READINESS_DEADLINE"):
         runner.wait_collector_ready(path, process, collector="gate",
-            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.05)
+            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.05,
+            process_group=member)
     runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
         "config_hash": "a" * 64, "pid": 1234, "state": "NOT_READY",
         "failure_literal": "OBSERVER_READINESS_HANDSHAKE_FAILED", "process_alive": True,
         "ros_context_valid": False, "subscriptions_created": []})
     with pytest.raises(RuntimeError,
-                       match="GATE_READINESS_FAILED:OBSERVER_READINESS_HANDSHAKE_FAILED"):
+                       match="GATE_NOT_READY:OBSERVER_READINESS_HANDSHAKE_FAILED"):
         runner.wait_collector_ready(path, process, collector="gate",
-            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1)
+            config_hash="a" * 64, required_subscriptions=subscriptions, timeout=0.1,
+            process_group=member)
+
+
+def test_collector_ready_then_launcher_exit_is_not_misreported_as_timeout(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    path = tmp_path / "cpp.ready.json"
+    subscriptions = ["/scan"]
+    process = SimpleNamespace(pid=111, returncode=2, poll=lambda: 2)
+    runner._atomic_write(path, {"schema_version": "1.0", "collector": "cpp",
+        "config_hash": "b" * 64, "pid": 222, "state": "READY",
+        "process_alive": True, "ros_context_valid": True, "subscriptions_created": subscriptions})
+    with pytest.raises(RuntimeError, match="CPP_READY_BUT_TERMINATED:2"):
+        runner.wait_collector_ready(path, process, collector="cpp", config_hash="b" * 64,
+            required_subscriptions=subscriptions, timeout=0.1)
+
+
+def test_action_server_not_attempted_result_is_explicit():
+    result = runner.not_attempted_action_server("CPP_OBSERVER_READY_BUT_TERMINATED")
+    assert result == {"status": "NOT_ATTEMPTED_DUE_TO_CPP_OBSERVER_READY_BUT_TERMINATED",
+        "attempted": False, "ready": "NOT_ATTEMPTED",
+        "blocking_reason": "CPP_OBSERVER_READY_BUT_TERMINATED"}
 
 
 def test_navigate_action_probe_requires_exactly_one_server(monkeypatch):
@@ -2329,8 +2356,10 @@ def test_composite_readiness_checks_actual_data_before_exact_single_rearm(monkey
     source=RUNNER_PATH.read_text()
     assert source.index('composite_member["readiness"] = _wait_ready') < source.index('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"')
     assert source.count('"/mecanum/safety/rearm", "std_srvs/srv/Trigger"') == 1
-    assert 'duration_sec:=1800' in source and 'os.killpg(cpp_member["pgid"], signal.SIGINT)' in source
+    assert 'duration_sec:=1800' in source and 'runner_controlled_shutdown:=true' in source
+    assert 'os.killpg(cpp_member["pgid"], signal.SIGINT)' in source
     assert '"--peer-evidence-path", str(observer_path)' in source
+    assert "gate_vectors_path.is_file() and cpp.poll() is None" not in source
 
 
 def test_prestart_gate_artifact_is_structured_and_not_started_is_not_collector_failure(tmp_path):
@@ -2362,9 +2391,10 @@ def test_runner_orders_cpp_readiness_then_action_server_then_gate_b_before_trigg
     source = RUNNER_PATH.read_text(encoding="utf-8")
     cpp_ready = source.index("cpp_ready_path, cpp, collector=\"step07_nav2_baseline_runtime_observer\"")
     action_probe = source.index("action_server = wait_navigate_to_pose_action_server(env)")
+    cpp_recheck = source.index('if cpp.poll() is not None:', action_probe)
     gate_start = source.index("gate_command = [str(args.runtime_python)")
     gate_ready = source.index("gate_ready_path, gate, collector=\"step07_gate_b_observer\"")
     chain_ready = source.index("chain_ready_readback = load_canonical_json(chain_ready_path)")
     goal_trigger = source.index("state\": \"TRIGGER_GOAL\"")
-    assert cpp_ready < action_probe < gate_start < gate_ready < chain_ready < goal_trigger
+    assert cpp_ready < action_probe < cpp_recheck < gate_start < gate_ready < chain_ready < goal_trigger
     assert "\"navigate_to_pose_action_server_ready\": False" not in source[source.index("runtime_acceptance ="):source.index("collector_members =")]

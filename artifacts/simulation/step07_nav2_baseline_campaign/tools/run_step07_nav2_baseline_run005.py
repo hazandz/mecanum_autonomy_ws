@@ -1816,9 +1816,7 @@ def main():
             raise
         runtime_acceptance["composite_readiness"] = True
         record["collector_stage"] = "COMPOSITE_READY"
-        record["action_server_readiness"] = {
-            "status": "NOT_ATTEMPTED_DUE_TO_CPP_OBSERVER_READINESS",
-            "attempted": False, "ready": "NOT_ATTEMPTED"}
+        record["action_server_readiness"] = not_attempted_action_server("CPP_OBSERVER_NOT_READY")
         response = _run(["ros2", "service", "call", "/mecanum/safety/rearm", "std_srvs/srv/Trigger", "{}"],
                         cwd=args.runtime_worktree, env=env, timeout=30)
         record["rearm_service_transcript"] = response.stdout
@@ -1832,7 +1830,7 @@ def main():
                        "step07_nav2_baseline_runtime_observer", "--ros-args",
                        "-p", f"output_path:={observer_path}", "-p", f"ready_path:={cpp_ready_path}",
                        "-p", f"config_hash:={record['config_hash']}",
-                       "-p", "duration_sec:=1800"]
+                       "-p", "duration_sec:=1800", "-p", "runner_controlled_shutdown:=true"]
         record["collector_stage"] = "CPP_OBSERVER_STARTING"
         cpp, cpp_member = _spawn_owned_process(
             cpp_command, name="cpp_observer", cwd=args.runtime_worktree, env=env,
@@ -1845,15 +1843,18 @@ def main():
             "/mecanum/final_issued_command", "/mecanum/safety_state"]
         record["process_groups"]["cpp_observer"]["readiness"] = wait_collector_ready(
             cpp_ready_path, cpp, collector="step07_nav2_baseline_runtime_observer",
-            config_hash=record["config_hash"], required_subscriptions=cpp_required_subscriptions)
+            config_hash=record["config_hash"], required_subscriptions=cpp_required_subscriptions,
+            process_group=cpp_member)
         record["collector_stage"] = "CPP_OBSERVER_READY"
-        record["action_server_readiness"] = {
-            "status": "CHECKING", "attempted": True, "ready": "NOT_RESOLVED"}
+        record["action_server_readiness"] = not_attempted_action_server("CPP_OBSERVER_READY_HANDSHAKE_COMPLETED")
         action_server = wait_navigate_to_pose_action_server(env)
         record["action_server_readiness"] = action_server
         runtime_acceptance["navigate_to_pose_action_server_ready"] = action_server["ready"] is True
         if action_server["ready"] is not True:
             raise RuntimeError("NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY")
+        if cpp.poll() is not None:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
+            raise RuntimeError("CPP_OBSERVER_READY_BUT_TERMINATED")
         record["collector_stage"] = "ACTION_SERVER_READY"
         gate_command = [str(args.runtime_python), "-m", "mecanum_nav_rl.observations.step07_gate_b_observer_node",
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
@@ -1872,7 +1873,8 @@ def main():
         record["collector_stage"] = "GATE_B_OBSERVER_STARTING_READINESS"
         record["process_groups"]["gate_b_observer"]["readiness"] = wait_collector_ready(
             gate_ready_path, gate, collector="step07_gate_b_observer",
-            config_hash=record["config_hash"], required_subscriptions=gate_required_subscriptions)
+            config_hash=record["config_hash"], required_subscriptions=gate_required_subscriptions,
+            process_group=gate_member)
         record["collector_stage"] = "GATE_B_OBSERVER_READY"
         record["process_groups"]["gate_b_observer"]["readiness"]["navigate_to_pose_action_server"] = action_server
         chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
@@ -1891,6 +1893,9 @@ def main():
             "exit_code": None, "terminal_state": "READY_AWAITING_ARTIFACTS",
             "artifact_written": chain_ready_readback.get("state") == "READY",
             "readiness_artifact": chain_ready_path.name}}
+        if cpp.poll() is not None:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
+            raise RuntimeError("CPP_OBSERVER_READY_BUT_TERMINATED")
         all_ready = (record["process_groups"]["cpp_observer"]["readiness"].get("ready") is True
                      and record["process_groups"]["gate_b_observer"]["readiness"].get("ready") is True
                      and chain_ready_readback.get("state") == "READY"
@@ -1913,13 +1918,7 @@ def main():
             "navigate_to_pose_action_server_ready": True})
         gate_vectors_path = args.run_directory / "gate_b_vectors.json"
         gate_deadline = time.monotonic() + 1800
-        cpp_stop_sent = False
         while gate.poll() is None and time.monotonic() < gate_deadline:
-            if gate_vectors_path.is_file() and cpp.poll() is None and not cpp_stop_sent:
-                if not _owned_group_verified(cpp, cpp_member):
-                    raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
-                os.killpg(cpp_member["pgid"], signal.SIGINT)
-                cpp_stop_sent = True
             time.sleep(0.05)
         if gate.poll() is None:
             raise subprocess.TimeoutExpired(gate_command, 1800)
@@ -1975,9 +1974,21 @@ def main():
             load_json, validate_gate_b_document, validate_observer)
         cpp_document, _ = load_json(observer_path)
         gate_document, _ = load_json(args.run_directory / "gate_b_vectors.json")
+        raw_qos = cpp_document.get("qos_verdict", {})
+        qos_values = (raw_qos.get("lifecycle_endpoint_qos_contract"),
+                      raw_qos.get("receipt_qos_contract"))
+        if "FAIL" in qos_values:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_RAW_QOS_FAILURE"
         observer_validation = validate_observer(cpp_document, config_hash=record["config_hash"],
             qos_implementation_pin_evidence=preflight["qos_implementation_pin_evidence"],
             review_commit=head)
+        resolution = observer_validation.get("qos_history_depth_resolution")
+        if "FAIL" not in qos_values and resolution == "UNOBSERVABLE_NO_VALID_PIN":
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_QOS_PROOF_FAILURE"
+        elif "FAIL" not in qos_values and resolution == "PINNED_IMPLEMENTATION":
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_QOS_UNOBSERVABLE_WITH_VALID_PROOF"
+        elif "FAIL" not in qos_values:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_QOS_OBSERVED"
         try:
             chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
             cpp_document["navigation_evidence_chain"] = chain
@@ -2009,6 +2020,17 @@ def main():
             raise RuntimeError("RAW_OBSERVER_ACCEPTANCE_FAILED")
         record["goal_result"] = gate_document["navigate_to_pose"]
     except BaseException as error:
+        error_text = f"{type(error).__name__}:{error}"
+        if "CPP_READY_BUT_TERMINATED" in error_text:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
+        elif ("CPP_NOT_READY" in error_text or "CPP_READINESS" in error_text
+              or record.get("collector_stage") == "CPP_OBSERVER_STARTING"):
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_NOT_READY"
+        if (cpp is not None and record.get("process_groups", {}).get("cpp_observer", {}).get(
+                "readiness", {}).get("ready") is True and cpp.poll() is not None):
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
+        if record.get("action_server_readiness", {}).get("attempted") is not True:
+            record["action_server_readiness"] = not_attempted_action_server(error_text)
         if gate is not None or cpp is not None:
             settlement_literal = f"RUNNER_COLLECTOR_SETTLEMENT:{type(error).__name__}:{error}"
             try:
@@ -2138,34 +2160,57 @@ def active_lifecycle_states(env):
     return states
 
 
+def _ready_pid_belongs_to_owned_group(pid: int, process: subprocess.Popen,
+                                      member: dict | None) -> bool:
+    """Accept a ros2-run child PID only when it remains in its owned PGID."""
+    if type(pid) is not int or pid <= 0 or process.poll() is not None or type(member) is not dict:
+        return False
+    pgid = member.get("pgid")
+    if type(pgid) is not int or pgid <= 0:
+        return False
+    try:
+        return os.getpgid(pid) == pgid and _owned_group_verified(process, member)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
 def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: str,
-                        config_hash: str, required_subscriptions, timeout: float = 120) -> dict:
+                        config_hash: str, required_subscriptions, timeout: float = 120,
+                        process_group: dict | None = None) -> dict:
     deadline = time.monotonic() + timeout
+    saw_ready = False
     while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"{collector.upper()}_EXITED_BEFORE_READY:{process.returncode}")
         try:
             ready = load_canonical_json(path)
         except (OSError, ValueError):
+            if process.poll() is not None:
+                raise RuntimeError(f"{collector.upper()}_NOT_READY:PROCESS_EXITED:{process.returncode}")
             time.sleep(0.05)
             continue
+        if ready.get("state") == "READY":
+            saw_ready = True
+            if process.poll() is not None or ready.get("process_alive") is not True:
+                raise RuntimeError(f"{collector.upper()}_READY_BUT_TERMINATED:{process.returncode}")
         if (ready.get("state") == "READY" and ready.get("collector") == collector
                 and ready.get("config_hash") == config_hash
-                and ready.get("pid") == process.pid
+                and _ready_pid_belongs_to_owned_group(ready.get("pid"), process, process_group)
                 and ready.get("process_alive") is True
                 and ready.get("ros_context_valid") is True
                 and ready.get("subscriptions_created") == required_subscriptions):
-            return {"ready": True, "artifact": path.name, "pid": process.pid,
+            return {"ready": True, "artifact": path.name, "pid": ready["pid"],
+                    "launcher_pid": process.pid,
                     "subscriptions_created": list(required_subscriptions),
                     "ros_context_valid": True}
         if ready.get("state") == "NOT_READY" and ready.get("failure_literal"):
-            raise RuntimeError(
-                f"{collector.upper()}_READINESS_FAILED:{ready['failure_literal']}"
-            )
+            raise RuntimeError(f"{collector.upper()}_NOT_READY:{ready['failure_literal']}")
         if ready.get("state") not in ("READY", "NOT_READY"):
-            raise RuntimeError(f"{collector.upper()}_READINESS_FAILED:{ready.get('failure_literal', 'UNKNOWN')}")
+            raise RuntimeError(f"{collector.upper()}_NOT_READY:{ready.get('failure_literal', 'UNKNOWN')}")
+        if process.poll() is not None:
+            label = "READY_BUT_TERMINATED" if saw_ready else "NOT_READY"
+            raise RuntimeError(f"{collector.upper()}_{label}:PROCESS_EXITED:{process.returncode}")
         time.sleep(0.05)
-    raise RuntimeError(f"{collector.upper()}_READINESS_TIMEOUT")
+    label = "READY_BUT_TERMINATED" if saw_ready and process.poll() is not None else "NOT_READY"
+    raise RuntimeError(f"{collector.upper()}_{label}:READINESS_DEADLINE")
 
 
 def navigate_to_pose_action_server_ready(env: dict[str, str]) -> dict:
@@ -2194,6 +2239,13 @@ def wait_navigate_to_pose_action_server(env: dict[str, str], *, timeout: float =
         time.sleep(0.5)
     return {"status": "FAIL", "attempted": attempts > 0, "attempt_count": attempts,
             "failure_literal": "NAVIGATE_TO_POSE_ACTION_SERVER_NOT_READY", **last}
+
+
+def not_attempted_action_server(blocking_reason: str) -> dict:
+    reason = re.sub(r"[^A-Z0-9_]+", "_", str(blocking_reason).upper()).strip("_")
+    return {"status": f"NOT_ATTEMPTED_DUE_TO_{reason or 'UNKNOWN'}",
+            "attempted": False, "ready": "NOT_ATTEMPTED",
+            "blocking_reason": str(blocking_reason)}
 
 
 def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,

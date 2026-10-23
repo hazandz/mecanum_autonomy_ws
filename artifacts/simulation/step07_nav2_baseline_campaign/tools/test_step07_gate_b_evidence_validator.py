@@ -361,6 +361,39 @@ def test_qos_unknown_fallback_requires_exact_pinned_source_and_installed_impleme
         assert result["acceptance"]["lifecycle_endpoint_qos_contract"] is False
 
 
+def test_valid_source_install_proof_never_upgrades_observed_qos_mismatch():
+    doc = observer_doc()
+    _mark_qos_unknown(doc)
+    lifecycle = doc["graph"]["/mecanum/safety_lifecycle_state"]
+    lifecycle["subscribers"][0]["reliability"] = 2
+    row = next(row for row in doc["qos_history_depth_observability"]
+               if row["topic"] == "/mecanum/safety_lifecycle_state"
+               and row["node_name"] == lifecycle["subscribers"][0]["node_name"])
+    row["history_depth_status"] = "MISMATCH"
+    doc["qos_verdict"]["lifecycle_endpoint_qos_contract"] = "FAIL"
+    doc["errors"] = ["ACCEPTANCE_FAILED:lifecycle_endpoint_qos_contract"]
+    resolved = validate_observer(doc, config_hash="a" * 64,
+        qos_implementation_pin_evidence=_pinned_qos_evidence(), review_commit="c" * 40)
+    assert resolved["acceptance"]["lifecycle_endpoint_qos_contract"] is False
+    assert resolved["qos_history_depth_resolution"] == "PINNED_IMPLEMENTATION"
+
+
+def test_missing_gate_b_endpoint_is_not_resolved_by_valid_source_install_proof():
+    doc = observer_doc()
+    _mark_qos_unknown(doc)
+    lifecycle = doc["graph"]["/mecanum/safety_lifecycle_state"]
+    lifecycle["subscribers"] = [row for row in lifecycle["subscribers"]
+                                  if row["node_name"] != "step07_gate_b_observer"]
+    doc["qos_history_depth_observability"] = [row for row in doc["qos_history_depth_observability"]
+        if row["node_name"] != "step07_gate_b_observer"]
+    doc["qos_verdict"]["lifecycle_endpoint_qos_contract"] = "FAIL"
+    doc["errors"] = ["ACCEPTANCE_FAILED:lifecycle_endpoint_qos_contract"]
+    result = validate_observer(doc, config_hash="a" * 64,
+        qos_implementation_pin_evidence=_pinned_qos_evidence(), review_commit="c" * 40)
+    assert result["acceptance"]["lifecycle_endpoint_qos_contract"] is False
+    assert result["qos_history_depth_resolution"] == "PINNED_IMPLEMENTATION"
+
+
 def test_navigation_evidence_chain_requires_every_existing_stream_and_is_canonical():
     observer = observer_doc()
     gate = _gate_b_doc()

@@ -1337,3 +1337,20 @@ Decision SHA-256 `01db420b913e77d304176a23c43f9f36ba142013c80373e8970a76d8178e00
 | `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `6adc61fee62b8900faac420421ce3b999b11954ef4db8e18885a5781431a7116` | 20295 |
 | `ros2_ws/src/step07_nav2_baseline_runtime_observer/package.xml` | `ec322d9068526ba43b878e7ebb249d0587fb9189f49fcb8999e38eea2b68791b` | 733 |
 | `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `2991f9ae9f9937cff103d60763a5a6865ff7be73ad541ef2e1c6055c26152275` | 40370 |
+
+
+### 2026-10-23 — Run005 attempt_002 Invocation_016 lifecycle/QoS L1 candidate
+
+Base/parent `09014a320cd8dedb242c99d70cd24ffa0d8cd980`; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. Candidate `STEP07_RUN005_ATTEMPT_002_LIFECYCLE_QOS_OBSERVER_LIFETIME_L1_CANDIDATE_PENDING_INDEPENDENT_AUDIT` is pending independent audit and remains source/offline only. Actual exact path set is 15; authorized set is 17 with two unused paths. Invocation_016 history remains immutable; source seed is PENDING and runtime-checkout guard CONSUMED is a separate object. No runtime was invoked.
+
+Guard `a1cace23adbafa80e40bfd7a0965e85e0d58b9a16c1b536028b81ed018c3a42b`; evidence `b0d684bf86f3dc4c98bf73fb6c009cce6c858a39f5ee6fbea6f2e84813848530`; manifest `286f06372abaaf73317ed2ec45c6d3e415fd605dbf4176f13ce46403aef3795b`; decision `069b7328f29dd5bbec531fba46dbcc5656f6f632019f96a86db8b50f118081e4`. Source pins remain 38; 7 existing pins were refreshed. Refreshed pins:
+
+| Path | SHA-256 | Bytes |
+|---|---|---:|
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py` | `5a812651de389ebd571e5e75021fe66bb8ca39157515d15d6e00ef78806c6b12` | 133451 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py` | `dd9e041bebbe190f9641edc42ab48e046de8d95817dc5b8bdce06aeb20609787` | 128220 |
+| `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` | `9b37f21b9f4b58981393ff7275c139257f0aa47dbb17767a5f7ea2f1092c1866` | 34220 |
+| `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` | `0d78137b20c1f829a6ebe08e53eae1eb84903a01e4b3419979f804a71fec2775` | 89336 |
+| `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `fc818f417e0d9987d00e10af2920506c3c0f09f3f26c202993e7ad05b44d936f` | 30665 |
+| `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `293827284722385c2d74b368dd708e5648563eab5a6cf7e0571d7fb251a44cc6` | 20859 |
+| `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `b86151602001b3b495f981ba3a95a284877b6081ff4d9f27e9d1b4641c06d69c` | 44424 |

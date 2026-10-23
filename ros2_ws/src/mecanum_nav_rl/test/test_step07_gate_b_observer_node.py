@@ -35,6 +35,16 @@ def test_runtime_observer_source_has_no_with_info_or_command_publisher():
     assert "cmd_vel" not in source
 
 
+def test_collector_does_not_finalize_failure_before_action_terminal_result():
+    path = Path(__file__).parents[1] / "mecanum_nav_rl" / "observations" / "step07_gate_b_observer_node.py"
+    source = path.read_text(encoding="utf-8")
+    block = source.split("except ValueError as error:", 1)[1].split("receipt_context =", 1)[0]
+    assert "LOCAL_REFERENCE_TF_TRANSFORM_FAILED" in block
+    assert "self.errors.append(str(error))" in block
+    assert "self._finish()" not in block
+    assert "len(self.samples) == 5 and self.navigate_result is not None" in source
+
+
 def test_local_reference_adapter_uses_successful_compute_path_result_only():
     source = (Path(__file__).parents[1] / "mecanum_nav_rl" / "observations" / "step07_gate_b_observer_node.py").read_text(encoding="utf-8")
     assert "STATUS_SUCCEEDED" in source
