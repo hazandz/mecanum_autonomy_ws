@@ -293,6 +293,30 @@ def validate_run_record(record: dict) -> dict:
     groups = record.get("process_groups")
     if type(calls) is not dict or type(groups) is not dict:
         raise ValueError("PROCESS_GROUP_EVIDENCE_MISSING")
+    if record.get("process_group_schema_version") == "2.0":
+        expected_names = ("bootstrap", "composite", "cpp_observer", "gate_b_observer")
+        required_member_fields = {"name", "pid", "launcher_pid", "child_pid", "pgid",
+            "ownership_relation", "command", "returncode", "exit_code", "readiness",
+            "qos_observation", "qos_verdict", "shutdown_request", "terminal_state",
+            "initial_snapshot", "final_snapshot", "ownership_verified", "ownership_errors"}
+        if set(groups) != set(expected_names):
+            raise ValueError("PROCESS_GROUP_SCHEMA_KEYS_INVALID")
+        for name in expected_names:
+            member = groups[name]
+            if (type(member) is not dict or member.get("name") != name
+                    or not required_member_fields.issubset(member)):
+                raise ValueError(f"PROCESS_GROUP_SCHEMA_MEMBER_INVALID:{name}")
+            if member.get("pid") is not None:
+                if (member.get("launcher_pid") != member.get("pid")
+                        or member.get("pgid") != member.get("pid")
+                        or member.get("ownership_verified") is not True):
+                    raise ValueError(f"PROCESS_GROUP_LAUNCHER_OWNERSHIP_INVALID:{name}")
+                child_pid = member.get("child_pid")
+                if child_pid is not None and type(child_pid) is not int:
+                    raise ValueError(f"PROCESS_GROUP_CHILD_PID_INVALID:{name}")
+                if (type(child_pid) is int and child_pid != member["launcher_pid"]
+                        and member.get("ownership_relation") != "CHILD_IN_LAUNCHER_PROCESS_GROUP"):
+                    raise ValueError(f"PROCESS_GROUP_CHILD_RELATION_INVALID:{name}")
     bootstrap, composite = groups.get("bootstrap"), groups.get("composite")
 
     def started_once(member, name):

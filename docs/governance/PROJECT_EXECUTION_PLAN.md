@@ -1177,3 +1177,10 @@ Guard/evidence/manifest SHA-256: `9d38ab512d026f5e2824a1f4742a61b87e41836967e96b
 ### Run005 attempt_002 — lifecycle/QoS observer corrective proposal
 
 `PLAN_UPDATE_PROPOSAL`: Step-7 Run005 attempt_002 L1 collector-verdict/lifetime corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `09014a320cd8dedb242c99d70cd24ffa0d8cd980`; candidate commit pending the one authorized commit after final checks. Evidence state `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`; offline suites/build and source-pin closure passed. Dependency: independent evidence audit of the exact candidate. Blocker: independent audit has not approved a runtime packet. Next action: independent audit; any runtime needs separate explicit authorization. This proposal does not advance plan completion, Gate B, runtime approval, or integration.
+
+
+### 2026-10-23 — Run005 Invocation_017 corrective closure note
+
+Candidate base `31555b8ff2472811994907791f0d9b8d7f56498f`; exact source/offline path scope 13; closure allowlist 14. `SOURCE_FREEZE=TRUE` is offline-only. Phase A/A.5 results: focused 179; bringup scope 6/full 256; RL 718; six-package external build; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; Git-blob checks 4; source pins 38/38 with five refreshed.
+
+No plan status/dependency transition occurs. Gate B remains `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`; no runtime authorization is granted. Post-reconciliation Step-7/coherence checks remain required delivery conditions.

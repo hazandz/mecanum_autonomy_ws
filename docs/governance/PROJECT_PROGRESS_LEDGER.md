@@ -2234,3 +2234,13 @@ Updated hashes: guard `034b40893d24a26c449892088ccd0c3c0c0b365867721240f031dc0c9
 - Scope: exact 15 changed paths from `09014a320cd8dedb242c99d70cd24ffa0d8cd980`; authorized set 17. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED, no source lock. Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. No runtime, integration, HIL, hardware or Fuel provisioning.
 - Blocker: independent audit. Next action: independent audit; runtime needs separate approval.
 - Record hashes: guard `a1cace23adbafa80e40bfd7a0965e85e0d58b9a16c1b536028b81ed018c3a42b`, evidence `b0d684bf86f3dc4c98bf73fb6c009cce6c858a39f5ee6fbea6f2e84813848530`, manifest `286f06372abaaf73317ed2ec45c6d3e415fd605dbf4176f13ce46403aef3795b`, decision `069b7328f29dd5bbec531fba46dbcc5656f6f632019f96a86db8b50f118081e4`.
+
+
+### 2026-10-23 — Run005 Invocation_017 corrective consolidated closure
+
+`supersedes`: active candidate scope/pin metadata only; no historical invocation outcome is superseded.
+
+- Branch/base: `step07-integrated-nav2-gateb-campaign-f7f98c6` / `31555b8ff2472811994907791f0d9b8d7f56498f`. Phase A source scope 6; Phase A.5 refreshed five existing hashes/sizes and retained 38/38 membership; Phase B actual scope 13; closure allowlist 14 with `test_step07_run005_runtime_guard.py` unchanged.
+- Pre-Phase-B offline checks: focused runner/validator 179; bringup scope 6/full 256; RL 718; six-package build; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; historical Git-blob checks 4 — PASS. Post-reconciliation Step-7/coherence results follow their checks.
+- Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` / `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` / `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3`. Decision `69337b9db5d70b4c70cf36a12f3818148791ce08f2ee88640cf7abe715e77aca`; Registry `9e3f20c87f5a2f73582b4fd3d5625610bacc027203a6d406a495d3fc53cf6f06`; Plan `0dde728c9f50aa97642d339e669a26fc695f2235a15d797840b108ef68579725`. Parent Ledger bytes remain exact prefix.
+- Guard remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, runtime authorization NOT_GRANTED; Gate B NOT_STARTED; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime/integration/HIL/hardware/Fuel provisioning. Evidence ceiling `SOURCE_OFFLINE_TEST_ONLY_PENDING_INDEPENDENT_AUDIT`.

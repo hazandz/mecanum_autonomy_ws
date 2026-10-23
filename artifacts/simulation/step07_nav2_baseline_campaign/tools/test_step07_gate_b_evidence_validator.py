@@ -103,6 +103,42 @@ def test_valid_run005_fail_record_is_accepted_as_a_fail_verdict():
     }
 
 
+def test_versioned_process_group_schema_requires_all_roles_and_child_group_proof():
+    record = _run005_record()
+    record["process_group_schema_version"] = "2.0"
+    member_defaults = {"launcher_pid": None, "child_pid": None, "ownership_relation": "NOT_STARTED",
+        "command": [], "returncode": None, "exit_code": None, "qos_observation": None,
+        "qos_verdict": None, "shutdown_request": None, "terminal_state": "NOT_STARTED",
+        "log_path": None, "final_snapshot": None, "ownership_verified": False,
+        "ownership_errors": []}
+    for name in ("bootstrap", "composite"):
+        member = record["process_groups"][name]
+        member.update({key: value for key, value in member_defaults.items() if key not in member})
+        member["name"] = name
+        member["launcher_pid"] = member["pid"]
+        member["ownership_relation"] = "LAUNCHER_IS_PROCESS_GROUP_LEADER"
+        member["ownership_verified"] = True
+    assert record["process_groups"]["composite"]["command"] == [
+        "ros2", "launch", "mecanum_nav_bringup",
+        "sim_eval_nav2_baseline_system.launch.py", "start_bootstrap:=false"]
+    for name in ("cpp_observer", "gate_b_observer"):
+        record["process_groups"][name] = {**member_defaults, "name": name, "pid": None,
+            "pgid": None, "readiness": None, "initial_snapshot": None}
+    assert validate_run_record(record)["pass"] is True
+
+    missing = copy.deepcopy(record)
+    del missing["process_groups"]["cpp_observer"]
+    with pytest.raises(ValueError, match="PROCESS_GROUP_SCHEMA_KEYS_INVALID"):
+        validate_run_record(missing)
+
+    unproven_child = copy.deepcopy(record)
+    cpp = unproven_child["process_groups"]["cpp_observer"]
+    cpp.update(pid=2001, launcher_pid=2001, pgid=2001, ownership_verified=True,
+               child_pid=3001, ownership_relation="LAUNCHER_IS_PROCESS_GROUP_LEADER")
+    with pytest.raises(ValueError, match="PROCESS_GROUP_CHILD_RELATION_INVALID:cpp_observer"):
+        validate_run_record(unproven_child)
+
+
 @pytest.mark.parametrize("mutation", [
     lambda record: record["teardown"].update(verified=False),
     lambda record: record["teardown"].update(graceful=False),

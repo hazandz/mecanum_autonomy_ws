@@ -1513,12 +1513,27 @@ def test_process_groups_and_final_record_fail_closed():
         runner.finalise_after_teardown({}, {"all": True}, {"completed": False})
 
 
+def test_process_group_schema_is_fixed_and_complete_before_guard_handoff():
+    record = {}
+    groups = runner._initialize_process_group_schema(record)
+    assert tuple(groups) == ("bootstrap", "composite", "cpp_observer", "gate_b_observer")
+    assert all({"launcher_pid", "child_pid", "pgid", "ownership_relation", "readiness",
+                "qos_observation", "qos_verdict", "exit_code", "shutdown_request",
+                "terminal_state"}.issubset(member) for member in groups.values())
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    main = source[source.index("def main("):]
+    assert main.index("_initialize_process_group_schema(record)") < main.index("preacquire_preflight(")
+    del record["process_groups"]["cpp_observer"]
+    with pytest.raises(RuntimeError, match="^PROCESS_GROUP_SCHEMA_INVALID$"):
+        runner._record_spawned_process_group(record, "cpp_observer", {"name": "cpp_observer"})
+
+
 def test_collector_ready_handshake_accepts_owned_ros2_run_child_pid(monkeypatch, tmp_path):
     from types import SimpleNamespace
     path = tmp_path / "gate.ready.json"
     subscriptions = ["/scan", "/odometry/filtered"]
     process = SimpleNamespace(pid=1234, returncode=None, poll=lambda: None)
-    member = {"pid": 1234, "pgid": 1234}
+    member = {"pid": 1234, "launcher_pid": 1234, "pgid": 1234}
     monkeypatch.setattr(runner, "_ready_pid_belongs_to_owned_group", lambda pid, proc, group:
         pid == 4321 and proc is process and group is member)
     runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
@@ -1529,6 +1544,11 @@ def test_collector_ready_handshake_accepts_owned_ros2_run_child_pid(monkeypatch,
         process_group=member)
     assert ready["ready"] is True and ready["ros_context_valid"] is True
     assert ready["pid"] == 4321 and ready["launcher_pid"] == 1234
+    runner._record_collector_readiness(member, ready)
+    assert member["child_pid"] == 4321 and member["launcher_pid"] == 1234
+    assert member["pgid"] == 1234
+    assert member["ownership_relation"] == "CHILD_IN_LAUNCHER_PROCESS_GROUP"
+    assert member["terminal_state"] == "READY_AWAITING_RUNNER_SHUTDOWN"
     runner._atomic_write(path, {"schema_version": "1.0", "collector": "gate",
         "config_hash": "a" * 64, "pid": 1234, "state": "READY",
         "process_alive": True, "ros_context_valid": False, "subscriptions_created": subscriptions})
@@ -2385,6 +2405,44 @@ def test_prestart_gate_artifact_is_structured_and_not_started_is_not_collector_f
     runner.mark_collector_failures(teardown, {"gate_b_observer": {
         "exit_code": None, "terminal_state": "NOT_STARTED"}})
     assert teardown["clean"] is True and teardown["graceful"] is True
+
+
+def test_cpp_readiness_failure_blocks_gate_b_and_persists_exact_stage_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class CollectorProcess:
+        pid = 812
+        returncode = None
+        def poll(self): return self.returncode
+        def wait(self):
+            self.returncode = 0
+            return 0
+
+    cpp = CollectorProcess()
+    cpp_member = {"name": "cpp_observer", "pid": 812, "launcher_pid": 812,
+                  "child_pid": 913, "pgid": 812, "ownership_verified": True,
+                  "ownership_relation": "CHILD_IN_LAUNCHER_PROCESS_GROUP"}
+    monkeypatch.setattr(runner, "_owned_group_verified", lambda process, member: True)
+    signals = []
+    monkeypatch.setattr(runner.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+    gate_path = tmp_path / "gate_b_vectors.json"
+    observer_path = tmp_path / "runtime_observer.json"
+    blocker = "STEP07_NAV2_BASELINE_RUNTIME_OBSERVER_NOT_READY:PROCESS_EXITED:2"
+    outcomes = runner.settle_collectors_before_teardown(
+        gate=None, cpp=cpp, gate_member=None, cpp_member=cpp_member,
+        gate_path=gate_path, observer_path=observer_path, config_hash="d" * 64,
+        failure_literal=f"RUNNER_COLLECTOR_SETTLEMENT:RuntimeError:{blocker}",
+        blocking_reason=blocker)
+    gate_doc = runner.load_canonical_json(gate_path)
+    assert signals == [(812, runner.signal.SIGINT)]
+    assert cpp_member["shutdown_request"] == {"requested": True, "by": "runner",
+        "reason": blocker, "signal": "SIGINT"}
+    assert cpp_member["exit_code"] == 0
+    assert outcomes["gate_b_observer"]["terminal_state"] == "NOT_STARTED"
+    assert gate_doc["collector_terminal_state"] == "NOT_STARTED"
+    assert gate_doc["stage_failure"] == {"status": "NOT_STARTED",
+        "blocking_reason": blocker, "gate_b_observer_started": False}
+    assert gate_doc["samples"] == [] and gate_doc["sample_count"] == 0
 
 
 def test_runner_orders_cpp_readiness_then_action_server_then_gate_b_before_trigger():

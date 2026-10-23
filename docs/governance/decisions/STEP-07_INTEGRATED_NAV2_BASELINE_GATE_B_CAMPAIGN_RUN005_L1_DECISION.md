@@ -232,3 +232,18 @@ Offline verification: Step-7 tools 325; bringup 255; RL 718 with external instal
 `SOURCE_FREEZE=TRUE` is offline-only. Source seed remains PENDING/capacity 1/acquisition 0/`runtime_authorization=NOT_GRANTED`, with no lock. `GATE_B=NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No official runner or live ROS/Gazebo/Nav2, HIL, hardware, Fuel provisioning or integration was run. Independent audit is required.
 
 Guard/evidence/manifest SHA-256: `a1cace23adbafa80e40bfd7a0965e85e0d58b9a16c1b536028b81ed018c3a42b` / `b0d684bf86f3dc4c98bf73fb6c009cce6c858a39f5ee6fbea6f2e84813848530` / `286f06372abaaf73317ed2ec45c6d3e415fd605dbf4176f13ce46403aef3795b`.
+
+
+## 2026-10-23 — Run005 Invocation_017 corrective closure
+
+Candidate branch `step07-integrated-nav2-gateb-campaign-f7f98c6`, base/intended sole parent `31555b8ff2472811994907791f0d9b8d7f56498f`. Corrective source/offline; historical Invocation_014–017 artifacts and runtime checkout/guard/lock were not modified.
+
+Root cause handled in the source candidate: process-group roles are initialized before guard acquisition; launcher PID is distinct from child PID/PGID and ownership proof; readiness, raw QoS, QoS verdict and terminal outcome are separate; C++ collector stays alive until runner-controlled shutdown; QoS `UNOBSERVABLE` resolves only with valid source/install proof and mismatch/invalid proof fails closed; Gate-B is blocked if the C++ observer is not READY and a stage-failure artifact records the blocking reason.
+
+`SOURCE_FREEZE=TRUE` is source/offline freeze. Phase A has 6 source/test paths; Phase A.5 keeps 38 pin members and refreshes 5 stale SHA-256/byte-size entries; Phase B actual scope is exactly 13 paths. Closure allowlist has 14 paths, with `test_step07_run005_runtime_guard.py` unchanged.
+
+Phase A results: focused runner/validator 179 passed; bringup scope 6 and full bringup 256 passed; RL 718 passed with Python 3.12.3/Pydantic 2.10.6; six-package external build PASS; observer 20 and ROSIDL 8 passed; `py_compile` 5 files; Run005 equality harness 2 passed; parser/canonicality tests 25 passed; historical Git-blob checks 4 passed. Full Step-7 suite/final coherence are post-reconciliation checks, not runtime evidence.
+
+Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` (35051 bytes), `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` (58730 bytes), `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3` (47920 bytes).
+
+Guard seed remains `PENDING_EXACT_INTEGRATION_AND_USER_AUTHORIZATION`, capacity 1, acquisition 0, `runtime_authorization=NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. No runtime, integration, HIL, hardware or Fuel provisioning; no runtime PASS, Gate-B PASS or `REAL_READY` claim.

@@ -1354,3 +1354,12 @@ Guard `a1cace23adbafa80e40bfd7a0965e85e0d58b9a16c1b536028b81ed018c3a42b`; eviden
 | `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `fc818f417e0d9987d00e10af2920506c3c0f09f3f26c202993e7ad05b44d936f` | 30665 |
 | `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `293827284722385c2d74b368dd708e5648563eab5a6cf7e0571d7fb251a44cc6` | 20859 |
 | `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `b86151602001b3b495f981ba3a95a284877b6081ff4d9f27e9d1b4641c06d69c` | 44424 |
+
+
+## 2026-10-23 — Run005 Invocation_017 corrective closure
+
+Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `31555b8ff2472811994907791f0d9b8d7f56498f`. Exact final source/offline scope 13; closure allowlist 14, with `test_step07_run005_runtime_guard.py` unchanged. Phase A source scope is 6; Phase A.5 retained 38 pins and refreshed five stale hashes/sizes.
+
+Offline checks: focused runner/validator 179; bringup 256; RL 718 (canonical Python, external install `/tmp/step07_inv017_behavioral_verification_20261023/install`); six-package build PASS; observer 20; ROSIDL 8; py_compile 5; equality harness 2; parser/canonicality 25; historical Git-blob tests 4. Runtime evidence is not created.
+
+Guard/evidence/manifest SHA-256: `030e8d66a44bc13eea2c40ef5643908aaa89ffe43a26edd64b853c1bac5a2016` / `64a64924215adeab8272c6aac7e3b69b0a2845f157815050521bdeb620ded9a0` / `0340916536b696dcb052d11ea79ab6b8cc246af77918bbce23b386f3febe1db3`. Guard PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; `RUNTIME_APPROVED=NOT_APPROVED`.

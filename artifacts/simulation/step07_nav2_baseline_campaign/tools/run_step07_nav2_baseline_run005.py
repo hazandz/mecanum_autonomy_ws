@@ -976,6 +976,49 @@ def validate_distinct_process_groups(bootstrap: dict | None, composite: dict | N
         raise RuntimeError("CAMPAIGN_PROCESS_GROUPS_NOT_DISTINCT")
 
 
+PROCESS_GROUP_NAMES = ("bootstrap", "composite", "cpp_observer", "gate_b_observer")
+
+
+def _empty_process_group_member(name: str) -> dict:
+    """Return the complete, stable evidence shape before any child is spawned."""
+    return {"name": name, "pid": None, "launcher_pid": None, "child_pid": None,
+            "pgid": None, "ownership_relation": "NOT_STARTED", "command": [],
+            "returncode": None, "exit_code": None, "readiness": None,
+            "qos_observation": None, "qos_verdict": None,
+            "shutdown_request": None, "terminal_state": "NOT_STARTED",
+            "log_path": None, "initial_snapshot": None, "final_snapshot": None,
+            "ownership_verified": False, "ownership_errors": []}
+
+
+def _initialize_process_group_schema(record: dict) -> dict:
+    """Install all fixed process-group entries before guard acquisition."""
+    groups = {name: _empty_process_group_member(name) for name in PROCESS_GROUP_NAMES}
+    record["process_groups"] = groups
+    return groups
+
+
+def _record_spawned_process_group(record: dict, name: str, member: dict) -> dict:
+    groups = record.get("process_groups")
+    if type(groups) is not dict or tuple(groups) != PROCESS_GROUP_NAMES:
+        raise RuntimeError("PROCESS_GROUP_SCHEMA_INVALID")
+    if name not in groups or member.get("name") != name:
+        raise RuntimeError(f"PROCESS_GROUP_SCHEMA_MEMBER_INVALID:{name}")
+    groups[name].update(member)
+    return groups[name]
+
+
+def _record_collector_readiness(member: dict, readiness: dict) -> None:
+    member["readiness"] = readiness
+    child_pid = readiness.get("pid") if type(readiness) is dict else None
+    if type(child_pid) is int and child_pid > 1:
+        member["child_pid"] = child_pid
+        member["ownership_relation"] = (
+            "LAUNCHER_IS_COLLECTOR" if child_pid == member.get("launcher_pid")
+            else "CHILD_IN_LAUNCHER_PROCESS_GROUP")
+    if readiness.get("ready") is True:
+        member["terminal_state"] = "READY_AWAITING_RUNNER_SHUTDOWN"
+
+
 def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[str, str],
                          log_path: Path, processes: list[dict],
                          ownership_ledger: dict | None = None,
@@ -990,8 +1033,12 @@ def _spawn_owned_process(command: list[str], *, name: str, cwd: Path, env: dict[
         with open(log_path, "wb") as log:
             proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
                                     stderr=subprocess.STDOUT, start_new_session=True)
-            member = {"name": name, "pid": proc.pid, "pgid": None,
-                      "command": list(command), "returncode": None, "readiness": None,
+            member = {"name": name, "pid": proc.pid, "launcher_pid": proc.pid,
+                      "child_pid": None, "pgid": None,
+                      "ownership_relation": "LAUNCHER_IS_PROCESS_GROUP_LEADER",
+                      "command": list(command), "returncode": None, "exit_code": None,
+                      "readiness": None, "qos_observation": None, "qos_verdict": None,
+                      "shutdown_request": None, "terminal_state": "STARTING",
                       "log_path": str(log_path),
                       "initial_snapshot": None, "final_snapshot": None,
                       "ownership_verified": False, "ownership_errors": []}
@@ -1111,6 +1158,11 @@ def _stop_owned_process(proc: subprocess.Popen | None, member: dict | None, time
         returncode = None
         errors.append(f"PROCESS_RETURN_CODE_UNAVAILABLE:{type(error).__name__}")
     member["returncode"] = returncode
+    member["exit_code"] = returncode
+    if member.get("shutdown_request") is not None:
+        member["terminal_state"] = "RUNNER_SHUTDOWN_COMPLETE" if clean else "RUNNER_SHUTDOWN_FAILED"
+    elif member.get("terminal_state") != "READY_AWAITING_RUNNER_SHUTDOWN":
+        member["terminal_state"] = "EXITED" if returncode == 0 else "FAILED"
     member["final_snapshot"] = snapshot
     clean = ((signal_sent or leader_exited) and not errors and returncode == 0
              and not snapshot["live_member_pids"] and not snapshot["zombie_member_pids"])
@@ -1576,7 +1628,11 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
             composite_calls = int("composite" in ownership_ledger)
             cpp_calls = int("cpp_observer" in ownership_ledger)
             gate_b_calls = int("gate_b_observer" in ownership_ledger)
-            record["process_groups"] = {name: row["member"] for name, row in ownership_ledger.items()}
+            groups = record.get("process_groups")
+            if type(groups) is dict:
+                for name, row in ownership_ledger.items():
+                    if name in groups and type(row) is dict and type(row.get("member")) is dict:
+                        groups[name].update(row["member"])
             record["runtime_execution"] = bool(ownership_ledger)
         try:
             teardown = teardown_campaign_processes(
@@ -1688,7 +1744,8 @@ def main():
     guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
     observer_path = args.run_directory / "runtime_observer.json"
     gate_vectors_path = args.run_directory / "gate_b_vectors.json"
-    record = {"schema_version": "1.0", "run_id": RUN_ID, "review_commit": head,
+    record = {"schema_version": "1.0", "process_group_schema_version": "2.0",
+              "run_id": RUN_ID, "review_commit": head,
               "integration_base": args.expected_integration_base, "partition": PARTITION,
               "guard_path": str(args.guard_path), "guard_capacity": guard["capacity"],
               "guard_acquisition_count": guard["acquisition_count"],
@@ -1709,6 +1766,7 @@ def main():
               "guard_state_after": guard.get("state"), "guard_acquired": False,
               "runner_invoked": True, "runtime_execution": False,
               "teardown_applicable": False}
+    _initialize_process_group_schema(record)
     processes = []
     ownership_ledger = {}
     runtime_acceptance = {"guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
@@ -1772,7 +1830,6 @@ def main():
                                    "gate_b_vectors": False,
                                    "bootstrap_composite_process_groups_distinct": False,
                                    "bootstrap_readiness": False, "composite_readiness": False})
-        record["process_groups"] = {}
         sigterm_handler.begin_campaign()
         if preacquire_failure is not None:
             raise preacquire_failure
@@ -1789,7 +1846,7 @@ def main():
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         bootstrap_calls = 1
         record["call_counts"]["bootstrap"] = bootstrap_calls
-        record["process_groups"]["bootstrap"] = bootstrap_member
+        _record_spawned_process_group(record, "bootstrap", bootstrap_member)
         validate_started_process_group(bootstrap_proc, bootstrap_member)
         try:
             bootstrap_member["readiness"] = _wait_bootstrap_ready(env, logdir, bootstrap_proc)
@@ -1804,7 +1861,7 @@ def main():
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         composite_calls = 1
         record["call_counts"]["composite"] = composite_calls
-        record["process_groups"]["composite"] = composite_member
+        _record_spawned_process_group(record, "composite", composite_member)
         validate_started_process_group(composite_proc, composite_member)
         validate_started_process_group(bootstrap_proc, bootstrap_member)
         validate_distinct_process_groups(bootstrap_member, composite_member)
@@ -1837,14 +1894,16 @@ def main():
             log_path=logdir / "cpp_observer.log", processes=processes,
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         collector_members["cpp_observer"] = cpp_member
+        cpp_group = _record_spawned_process_group(record, "cpp_observer", cpp_member)
         cpp_calls = 1; record["call_counts"]["cpp_observer"] = 1
         cpp_required_subscriptions = ["/clock", "/scan", "/wheel/odometry_raw", "/imu/data",
             "/odometry/filtered", "/tf", "/tf_static", "/mecanum/safety_lifecycle_state",
             "/mecanum/final_issued_command", "/mecanum/safety_state"]
-        record["process_groups"]["cpp_observer"]["readiness"] = wait_collector_ready(
+        cpp_readiness = wait_collector_ready(
             cpp_ready_path, cpp, collector="step07_nav2_baseline_runtime_observer",
             config_hash=record["config_hash"], required_subscriptions=cpp_required_subscriptions,
             process_group=cpp_member)
+        _record_collector_readiness(cpp_group, cpp_readiness)
         record["collector_stage"] = "CPP_OBSERVER_READY"
         record["action_server_readiness"] = not_attempted_action_server("CPP_OBSERVER_READY_HANDSHAKE_COMPLETED")
         action_server = wait_navigate_to_pose_action_server(env)
@@ -1868,13 +1927,15 @@ def main():
             ownership_ledger=ownership_ledger, sigterm_handler=sigterm_handler)
         gate_b_calls = 1; record["call_counts"]["gate_b_observer"] = 1
         collector_members["gate_b_observer"] = gate_member
+        gate_group = _record_spawned_process_group(record, "gate_b_observer", gate_member)
         gate_required_subscriptions = ["/scan", "/odometry/filtered", "/mecanum/safety_lifecycle_state",
                                        "/mecanum/final_issued_command"]
         record["collector_stage"] = "GATE_B_OBSERVER_STARTING_READINESS"
-        record["process_groups"]["gate_b_observer"]["readiness"] = wait_collector_ready(
+        gate_readiness = wait_collector_ready(
             gate_ready_path, gate, collector="step07_gate_b_observer",
             config_hash=record["config_hash"], required_subscriptions=gate_required_subscriptions,
             process_group=gate_member)
+        _record_collector_readiness(gate_group, gate_readiness)
         record["collector_stage"] = "GATE_B_OBSERVER_READY"
         record["process_groups"]["gate_b_observer"]["readiness"]["navigate_to_pose_action_server"] = action_server
         chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
@@ -1922,11 +1983,17 @@ def main():
             time.sleep(0.05)
         if gate.poll() is None:
             raise subprocess.TimeoutExpired(gate_command, 1800)
-        if cpp.poll() is None:
-            if not _owned_group_verified(cpp, cpp_member):
-                raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
-            os.killpg(cpp_member["pgid"], signal.SIGINT)
+        if cpp.poll() is not None:
+            record["cpp_observer_terminal_state"] = "CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN"
+            raise RuntimeError("CPP_OBSERVER_EXITED_BEFORE_RUNNER_SHUTDOWN")
+        if not _owned_group_verified(cpp, cpp_member):
+            raise RuntimeError("CPP_OBSERVER_PROCESS_GROUP_NOT_OWNED")
+        cpp_member["shutdown_request"] = {"requested": True, "by": "runner",
+            "reason": "GATE_B_TERMINAL_ARTIFACT_OBSERVED", "signal": "SIGINT"}
+        os.killpg(cpp_member["pgid"], signal.SIGINT)
         cpp.wait(timeout=1850)
+        cpp_member["exit_code"] = cpp.returncode
+        cpp_member["terminal_state"] = "RUNNER_SHUTDOWN_COMPLETE" if cpp.returncode == 0 else "RUNNER_SHUTDOWN_FAILED"
         record["collector_outcomes"] = {
             "gate_b_observer": {"exit_code": gate.returncode,
                 "terminal_state": "EXITED" if gate.returncode == 0 else "FAILED",
@@ -1939,6 +2006,8 @@ def main():
                 "artifact_written": chain_ready_path.is_file(),
                 "readiness_artifact": chain_ready_path.name},
         }
+        gate_member["exit_code"] = gate.returncode
+        gate_member["terminal_state"] = "TERMINAL_ARTIFACT_EXITED" if gate.returncode == 0 else "TERMINAL_ARTIFACT_FAILED"
         if gate.returncode != 0 or cpp.returncode != 0:
             from step07_gate_b_evidence_validator import navigation_evidence_chain_failure, load_json
             gate_doc = load_json(gate_vectors_path)[0] if gate_vectors_path.is_file() else {}
@@ -1975,6 +2044,8 @@ def main():
         cpp_document, _ = load_json(observer_path)
         gate_document, _ = load_json(args.run_directory / "gate_b_vectors.json")
         raw_qos = cpp_document.get("qos_verdict", {})
+        cpp_member["qos_observation"] = cpp_document.get("qos_history_depth_observability")
+        cpp_member["qos_verdict"] = raw_qos
         qos_values = (raw_qos.get("lifecycle_endpoint_qos_contract"),
                       raw_qos.get("receipt_qos_contract"))
         if "FAIL" in qos_values:
@@ -1989,6 +2060,7 @@ def main():
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_QOS_UNOBSERVABLE_WITH_VALID_PROOF"
         elif "FAIL" not in qos_values:
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_QOS_OBSERVED"
+        cpp_member["terminal_state"] = record["cpp_observer_terminal_state"]
         try:
             chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
             cpp_document["navigation_evidence_chain"] = chain
@@ -2021,6 +2093,16 @@ def main():
         record["goal_result"] = gate_document["navigate_to_pose"]
     except BaseException as error:
         error_text = f"{type(error).__name__}:{error}"
+        groups = record.get("process_groups")
+        if type(groups) is dict and record.get("collector_stage") in (
+                "CPP_OBSERVER_STARTING", "GATE_B_OBSERVER_STARTING",
+                "GATE_B_OBSERVER_STARTING_READINESS"):
+            group_name = ("cpp_observer" if record["collector_stage"] == "CPP_OBSERVER_STARTING"
+                          else "gate_b_observer")
+            member_record = groups.get(group_name)
+            if type(member_record) is dict and member_record.get("readiness") is None:
+                member_record["readiness"] = {"ready": False, "failure": str(error)}
+                member_record["terminal_state"] = "NOT_READY"
         if "CPP_READY_BUT_TERMINATED" in error_text:
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
         elif ("CPP_NOT_READY" in error_text or "CPP_READINESS" in error_text
@@ -2041,7 +2123,7 @@ def main():
                     failure_literal=settlement_literal,
                     blocking_reason=(record.get("action_server_readiness", {}).get("failure_literal")
                         if record.get("action_server_readiness", {}).get("status") == "FAIL"
-                        else record.get("pre_teardown_failure") or record.get("collector_stage")
+                        else str(error) or record.get("pre_teardown_failure") or record.get("collector_stage")
                         or "COLLECTOR_PREREQUISITE_FAILED"))
                 chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
                 if chain_ready_path.is_file() and record["collector_outcomes"].get(
@@ -2199,6 +2281,9 @@ def wait_collector_ready(path: Path, process: subprocess.Popen, *, collector: st
                 and ready.get("subscriptions_created") == required_subscriptions):
             return {"ready": True, "artifact": path.name, "pid": ready["pid"],
                     "launcher_pid": process.pid,
+                    "pgid": process_group.get("pgid") if type(process_group) is dict else None,
+                    "ownership_relation": ("LAUNCHER_IS_COLLECTOR" if ready["pid"] == process.pid
+                        else "CHILD_IN_LAUNCHER_PROCESS_GROUP"),
                     "subscriptions_created": list(required_subscriptions),
                     "ros_context_valid": True}
         if ready.get("state") == "NOT_READY" and ready.get("failure_literal"):
@@ -2253,7 +2338,12 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
                                      config_hash: str, failure_literal: str,
                                      blocking_reason: str | None = None) -> dict:
     """Stop owned collectors first and preserve explicit partial evidence."""
-    for process, member in ((gate, gate_member), (cpp, cpp_member)):
+    for name, process, member in (("gate_b_observer", gate, gate_member),
+                                  ("cpp_observer", cpp, cpp_member)):
+        if isinstance(member, dict):
+            member["shutdown_request"] = {"requested": process is not None and process.poll() is None,
+                "by": "runner", "reason": blocking_reason or failure_literal,
+                "signal": "SIGINT"}
         if process is not None and process.poll() is None:
             if not _owned_group_verified(process, member):
                 raise RuntimeError("COLLECTOR_PROCESS_GROUP_NOT_OWNED")
@@ -2266,6 +2356,10 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
                               "terminal_state": "NOT_STARTED", "artifact_written": path.is_file()}
             continue
         process.wait()
+        if isinstance(member, dict):
+            member["exit_code"] = process.returncode
+            member["terminal_state"] = ("RUNNER_SHUTDOWN_COMPLETE" if process.returncode == 0
+                                        else "RUNNER_SHUTDOWN_FAILED")
         outcomes[name] = {"exit_code": process.returncode,
                           "process_exit_status": "EXITED" if process.returncode == 0 else "FAILED",
                           "terminal_state": "EXITED" if process.returncode == 0 else "FAILED",

@@ -244,4 +244,12 @@ TEST(Step07Observer, RunnerControlledModeDisablesObserverSelfFinalizationTimer) 
   EXPECT_NE(source.find("runner_controlled_shutdown_ = declare_parameter<bool>(\"runner_controlled_shutdown\", false)"), std::string::npos);
   EXPECT_NE(source.find("if (!runner_controlled_shutdown_)"), std::string::npos);
   EXPECT_NE(source.find("if (!node->finished()) node->finish();"), std::string::npos);
+  const auto main_start = source.find("int main(int argc, char **argv)");
+  ASSERT_NE(main_start, std::string::npos);
+  const auto main_body = source.substr(main_start);
+  EXPECT_NE(main_body.find("while (rclcpp::ok() && !node->finished() && !step07_observer_stop_requested)"),
+            std::string::npos);
+  EXPECT_NE(main_body.find("std::signal(SIGINT, step07_observer_signal_handler)"), std::string::npos);
+  EXPECT_NE(main_body.find("std::signal(SIGTERM, step07_observer_signal_handler)"), std::string::npos);
+  EXPECT_LT(main_body.find("while (rclcpp::ok()"), main_body.find("if (!node->finished()) node->finish();"));
 }
