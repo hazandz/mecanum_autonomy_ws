@@ -1,0 +1,286 @@
+{
+  "active": false,
+  "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+  "base_commit": "c6495dc0ebb036b298c9da04a32db6ede3eb9289",
+  "contract_id_proposed": "mecanum.step07-run005-temporal-coherence/v1",
+  "draft_status": "DRAFT_L2_PENDING_INDEPENDENT_REVIEW_AND_OWNER_APPROVAL",
+  "production_implementation_authorized": false,
+  "runtime_authorized": false,
+  "scope": {
+    "allowed_context": [
+      "Run005 sim_eval collector",
+      "NAV2_BASELINE"
+    ],
+    "excluded_context": [
+      "deploy_real",
+      "training",
+      "public ROS interface"
+    ],
+    "invocation_021_status": "ROOT_CAUSE_UNRESOLVED",
+    "model_commit_is_limited_evidence": true
+  },
+  "source_fingerprints": [
+    {
+      "kind": "architecture_authority",
+      "path": "docs/MECANUM_NAV_DRL_Architecture.docx",
+      "sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+      "size_bytes": 84141,
+      "symbols_or_sections": ["§45 GlobalPath and LocalReference"]
+    },
+    {
+      "kind": "approved_contract_reference",
+      "path": "docs/OBSERVATION_INPUT_CONTRACT_V3.md",
+      "sha256": "d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc",
+      "size_bytes": 13096,
+      "symbols_or_sections": ["§3.2 LocalReference snapshot", "§3.5 lifecycle/barrier and receipt", "§4 adapter/core boundary"]
+    },
+    {
+      "kind": "approved_contract_reference",
+      "path": "docs/OBSERVATION_V3_SPECIFICATION.md",
+      "sha256": "ac87ba8a81fb8bc55a812d06278433343a025ea779a4162ead1fb35335a947af",
+      "size_bytes": 27654,
+      "symbols_or_sections": ["§3.1 lifecycle tuple", "§4 pending measured/profile values"]
+    },
+    {
+      "kind": "approved_contract_reference",
+      "path": "docs/OBSERVATION_RUNTIME_BINDING_V3.md",
+      "sha256": "ce2c979788658b45facbabdc3f7063f8663bf71380ab839531afcf7e204173b1",
+      "size_bytes": 8316,
+      "symbols_or_sections": ["Lifecycle tuple and ingress binding"]
+    },
+    {
+      "kind": "change_control_reference",
+      "path": "docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md",
+      "sha256": "a80427e18725c5f67b6da82961a68774bcd1cfa67dfbb7de044e5341cef87669",
+      "size_bytes": 26015,
+      "symbols_or_sections": ["Static profile/global configuration hash boundary"]
+    },
+    {
+      "kind": "current_production_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+      "sha256": "39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f",
+      "size_bytes": 46181,
+      "symbols_or_sections": ["_Collector._tick", "_request_path_once", "_path_result", "_features_from_path"]
+    },
+    {
+      "kind": "current_test_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+      "sha256": "601b7b3b1ecbfdafec81c746e424939bfa6637e44e01fa1bd7d76475e21eeef5",
+      "size_bytes": 27029,
+      "symbols_or_sections": ["existing observer and collector source-contract tests"]
+    },
+    {
+      "kind": "current_production_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py",
+      "sha256": "f9661060d222ffb1a89255f6a75548885be22e0be2f14bbb9a6d5caae6e91301",
+      "size_bytes": 11122,
+      "symbols_or_sections": ["SafetyLifecycleCore._set", "SafetyLifecycleCore.refresh", "SafetyPolicy.filtered_odometry_max_age_ns", "SafetySupervisorCore.evaluate"]
+    },
+    {
+      "kind": "current_production_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
+      "sha256": "d4c7bdc19498052c32d859ccf727d12de4746cda09511ff18f822e695758609d",
+      "size_bytes": 5318,
+      "symbols_or_sections": ["SafetyLifecycleNode.__init__", "_publish_current", "_publish_barrier"]
+    },
+    {
+      "kind": "current_interface_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl_interfaces/msg/SafetyLifecycleState.msg",
+      "sha256": "cb1c277b30efe09f09300f1075ac4c10b21cbfd23b6a19b57224aad7e50984d5",
+      "size_bytes": 459,
+      "symbols_or_sections": ["episode_generation", "reset_epoch", "runtime_generation", "sequence", "barrier_stamp", "motion_permitted"]
+    },
+    {
+      "kind": "current_configuration_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+      "sha256": "d96998c05efad4b65eb9ed116de2ee57a1bccd7e51e09c0a7bd3de5aa10cb636",
+      "size_bytes": 1095,
+      "symbols_or_sections": ["freshness_ns.filtered_odometry_max_age: 250000000"]
+    },
+    {
+      "kind": "current_test_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
+      "sha256": "ba35ee551e97879e155ae05079a87cb6b8f98cf42ebb77e6cdcc408495891e38",
+      "size_bytes": 14074,
+      "symbols_or_sections": ["lifecycle sequence/refresh and configured freshness tests"]
+    },
+    {
+      "kind": "current_profile_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_bringup/config/profiles/sim_eval_nav2_baseline.static.yaml",
+      "sha256": "4b1953e9ff161f610ba6eaeb97dccc9a8a7eba90a1a73ddf4addbb7f6d418d93",
+      "size_bytes": 4490,
+      "symbols_or_sections": ["Run005 static sim-eval profile source"]
+    },
+    {
+      "kind": "current_profile_source_fact",
+      "path": "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+      "sha256": "3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84",
+      "size_bytes": 5326,
+      "symbols_or_sections": ["existing global resolved configuration; not modified"]
+    },
+    {
+      "kind": "current_orchestration_source_fact",
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+      "sha256": "4b24599b89de3d301f89bacac60847ded24dd3c0f2d9c13e18a56e8f0ab99a40",
+      "size_bytes": 165042,
+      "symbols_or_sections": ["Run005 collector orchestration and existing steady campaign deadline"]
+    },
+    {
+      "kind": "limited_offline_model_source",
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_model.py",
+      "sha256": "adfdc005a19cf787bfe93200cf425dc3045f2b81189abf4f83bb4e0534d7e92b",
+      "size_bytes": 41981,
+      "source_commit": "c6495dc0ebb036b298c9da04a32db6ede3eb9289",
+      "symbols_or_sections": ["baseline source-origin/hash verification", "fake temporal state-machine cases"]
+    },
+    {
+      "kind": "limited_offline_model_result",
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_validation_results.json",
+      "sha256": "6f82288c38ea954486dd7125247ae4ca7c79db82f1f63201e6c488a39e090774",
+      "size_bytes": 9945,
+      "source_commit": "c6495dc0ebb036b298c9da04a32db6ede3eb9289",
+      "symbols_or_sections": ["22 named behavioral cases", "coverage matrix", "NOT_EVALUATED boundaries"]
+    }
+  ],
+  "field_mappings": [
+    {
+      "field": "t_A",
+      "current_source": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py::_Collector._tick and _read_goal_trigger",
+      "current_fact": "The collector samples ROS time in its timer path and consumes a JSON trigger without a ROS header.",
+      "proposed_capture": "At first valid-trigger consumption, read positive ROS time; pin once. If zero/unavailable/invalid, leave unpinned and send no action while the existing steady deadline runs.",
+      "identity_and_invalidation": "Pinned to the attempt's goal intent, lifecycle/config identity, map identity, and barrier event context. Clock rollback or any identity/context invalidation terminates the attempt.",
+      "evidence_to_check": ["trigger JSON bytes/schema", "ROS clock value at first valid consume", "steady deadline source", "attempt identity snapshot", "fixed exact-time query trace"]
+    },
+    {
+      "field": "AttemptContext",
+      "current_source": "Run005 observer _Collector.__init__/_tick; sim-eval static profile and global resolved-config contract",
+      "current_fact": "The collector holds goal arguments and config_hash; lifecycle message exposes tuple and state; the Run005 profile supplies map identity.",
+      "proposed_capture": "Pin goal intent, active lifecycle/config identity, map identity, and barrier revision/event context at Phase A admission. No path fields are required yet.",
+      "identity_and_invalidation": "Exact immutable comparison on every poll and before action. Any lifecycle/config/map/barrier change invalidates; no implicit rebinding.",
+      "evidence_to_check": ["goal intent", "config_hash and selected profile source pin", "map_id/map_content_hash", "lifecycle tuple", "barrier revision and approved source provenance"]
+    },
+    {
+      "field": "planner_request_identity_and_stamp",
+      "current_source": "step07_gate_b_observer_node.py::_request_path_once and _path_goal_response",
+      "current_fact": "The ComputePathToPose call is guarded by _compute_path_requested and samples ROS time at send; action response is asynchronous.",
+      "proposed_capture": "Use request-send ROS stamp as today; capture the exact request/action goal identity and bind it to the attempt goal intent.",
+      "identity_and_invalidation": "At most one planner action per attempt. UUID belongs to ComputePathToPose and is not equated with the NavigateToPose UUID.",
+      "evidence_to_check": ["request UUID", "goal intent binding", "send-time ROS stamp", "response/result callback identity", "one-request counter"]
+    },
+    {
+      "field": "returned GlobalPathSnapshot",
+      "current_source": "step07_gate_b_observer_node.py::_path_result; Architecture §45",
+      "current_fact": "Current collector stores the successful map-frame result path; the ROS action result does not supply Architecture path_sequence as an assumed field.",
+      "proposed_capture": "After matched SUCCEEDED result only, copy immutable path; admission adapter increments path_sequence and records steady receipt time.",
+      "identity_and_invalidation": "Bind to exact planner request/action goal, attempt goal intent, lifecycle/config identity, and map identity. Invalidate on expiry at existing steady campaign deadline or earlier goal end, lifecycle/config/map change, path replacement, cancel/preemption, or attempt failure.",
+      "evidence_to_check": ["request/result correlation", "path frame and ROS stamp", "map_id/map_content_hash", "path_sequence admission event", "steady receipt time", "immutable pose bytes/value"]
+    },
+    {
+      "field": "barrier_revision",
+      "current_source": "safety_contract.py::SafetyLifecycleCore._set/refresh; SafetyLifecycleNode._publish_current; SafetyLifecycleState.msg",
+      "current_fact": "_set increments sequence; ordinary monotonic refresh does not. Message carries the lifecycle tuple and sequence but no source_instance_id; node publishes on /mecanum/safety_lifecycle_state.",
+      "proposed_capture": "Pin sequence with episode_generation/reset_epoch/runtime_generation and an independently approved, verified publisher/source binding. Do not use header.stamp or barrier_stamp as the revision.",
+      "identity_and_invalidation": "Counter regression, tuple change, source change, or unverifiable correspondence fails closed; sequence/event change-and-return still invalidates.",
+      "evidence_to_check": ["message fields", "publisher endpoint/source binding selected by future authority", "monotonic sequence trace", "_set transition versus refresh behavior", "exact lifecycle tuple"]
+    },
+    {
+      "field": "t_vector_and_pinned_inputs",
+      "current_source": "Run005 _Collector._tick callbacks _scan/_odom/_lifecycle/_receipt; Observation Input Contract V3",
+      "current_fact": "The collector retains latest received records and timestamps; V3 requires exact lifecycle identity, cutoff ordering, provenance, and immutable typed inputs at its boundary.",
+      "proposed_capture": "At acquisition, pin t_vector and exact scan, odometry, receipt, lifecycle, returned-path and identity records eligible at that cutoff; later inputs cannot replace them.",
+      "identity_and_invalidation": "Exact lifecycle tuple/config/map/path/barrier context; post-cutoff or future records reject. Pending snapshot replacement is forbidden.",
+      "evidence_to_check": ["t_vector", "original record stamps and steady receipt times", "measurement identity", "generation/epoch", "barrier order", "path identity", "no post-cutoff substitution"]
+    },
+    {
+      "field": "t_tf_and_LocalReference",
+      "current_source": "step07_gate_b_observer_node.py::_features_from_path; SafetyPolicy.filtered_odometry_max_age_ns; current sim Safety YAML",
+      "current_fact": "The current transform helper transforms a selected map path pose to base_link; Safety source bounds filtered odometry age at 250000000 ns, but current V3 contract leaves LocalReference provider/freshness unselected.",
+      "proposed_capture": "Set t_tf equal to the pinned odometry record's exact ROS stamp. Deep-copy transform input; preserve path and measurement timestamps.",
+      "identity_and_invalidation": "Require matched path context, odometry identity, frames, lifecycle/map/barrier context, and successful exact lookup. A lookup exception cannot commit.",
+      "evidence_to_check": ["pinned odometry stamp t_odom", "exact lookup target t_tf", "map/base_link frames", "TF ownership proof", "original exception cause", "unchanged raw path/pose"]
+    },
+    {
+      "field": "t_commit_and_proposed_LocalReference_age",
+      "current_source": "safety_contract.py::SafetyPolicy.from_mapping/SafetySupervisorCore.evaluate; sim_eval_nav2_baseline_safety.yaml freshness_ns.filtered_odometry_max_age",
+      "current_fact": "The current source value 250000000 ns applies to filtered odometry age only; it does not define TF publisher freshness or LocalReference age.",
+      "proposed_capture": "After lookup/transform, re-read ROS time as t_commit and re-read steady time and active identity/context. Proposed sim-only bound: 0 <= t_commit - t_tf <= pinned filtered_odometry_max_age_ns (250000000 ns). Missing/invalid value rejects.",
+      "identity_and_invalidation": "Recheck deadline, age, cutoff order, generation/epoch, barrier revision/source, path identity, and all existing admission predicates immediately before commit. Rollback latches terminal failure.",
+      "evidence_to_check": ["t_commit and steady read", "source-pinned configured age value", "freshness calculation", "final identity comparison", "commit or structured discard reason"]
+    },
+    {
+      "field": "temporal_contract_and_global_config_hash",
+      "current_source": "Observation Input Contract V3; ACR Observation Input Profile V3; resolved sim-eval configuration",
+      "current_fact": "No Gate-B-only hash or seventeenth resolved-config root is authorized; existing profile/global hash rules remain authoritative.",
+      "proposed_capture": "Before activation, select immutable source/version/digest for contract mecanum.step07-run005-temporal-coherence/v1. If a static binding changes, validate it and recompute global config_hash.",
+      "identity_and_invalidation": "Reject missing, invalid, or stale binding; never reuse old config_hash for changed temporal semantics.",
+      "evidence_to_check": ["approved contract source/version/digest", "compiler validation", "resolved-config projection", "new global config_hash", "no Gate-B-only hash/root"]
+    }
+  ],
+  "proposed_sim_only_temporal_policy": {
+    "classification": "NEW_L2_POLICY_PROPOSAL",
+    "active": false,
+    "reference_odometry_skew_ns": 0,
+    "reason": "t_tf equals the exact timestamp of the pinned odometry record",
+    "local_reference_ros_age_at_commit": {
+      "formula": "0 <= t_commit - t_tf <= filtered_odometry_max_age_ns",
+      "current_source_path": "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+      "current_source_key": "freshness_ns.filtered_odometry_max_age",
+      "current_source_value_ns": 250000000,
+      "interpreted_by": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py::SafetyPolicy.from_mapping and SafetySupervisorCore.evaluate",
+      "value_is_current_authority_for_local_reference_or_tf": false,
+      "missing_or_invalid_source_behavior": "REJECT_NO_FALLBACK"
+    },
+    "limits": [
+      "The query-age bound does not prove freshness of every TF publisher.",
+      "Successful exact lookup, compatible frames/timestamp, verified TF ownership, and all existing health/acceptance predicates remain required.",
+      "The scan-odometry admission predicate is unchanged.",
+      "Independent freshness is not equivalent to exact synchronization.",
+      "Do not apply this sim-only value to a real robot."
+    ],
+    "other_new_tf_age_skew_or_expiry_limits": "NONE_SELECTED"
+  },
+  "requirement_to_existing_model_case_matrix": [
+    {"requirement": "No returned path prerequisite before planner", "cases": ["startup_without_path_sends_planner_once", "phase_a_attempt_context_change_before_action"]},
+    {"requirement": "Only matched successful planner result binds path", "cases": ["wrong_request_result_rejected", "stale_generation_result_rejected", "planner_non_success_result_does_not_bind_path", "planner_success_correct_request_binds_path_after_result"]},
+    {"requirement": "JSON trigger, positive ROS time, steady deadline", "cases": ["json_trigger_no_header_clock_zero_steady_deadline"]},
+    {"requirement": "Pin t_A and rearm exact query without action retry", "cases": ["fixed_ta_late_tf_send_once", "rollback_entrypoint_invalidates_and_latches_attempt"]},
+    {"requirement": "Single pending immutable snapshot", "cases": ["capture_second_snapshot_rejected_without_overwrite"]},
+    {"requirement": "Rollback terminal invalidation", "cases": ["rollback_entrypoint_invalidates_and_latches_attempt"]},
+    {"requirement": "Final freshness/deadline/context recheck", "cases": ["lookup_advances_ros_past_freshness_final_check_rejects", "lookup_advances_steady_to_deadline_no_commit", "lookup_context_change_context", "lookup_context_change_barrier", "lookup_context_change_path"]},
+    {"requirement": "Revision-based barrier/path invalidation", "cases": ["barrier_changed_then_values_return_revision_invalidates", "path_sequence_changed_then_restored_payload_not_resurrected"]},
+    {"requirement": "Cutoff, duplicate identity, immutable transform input", "cases": ["phase_b_cutoff_rejects_future_and_post_cutoff_receipt", "same_measurements_new_snapshot_id_cutoff_duplicate", "transform_request_does_not_mutate_raw_path"]},
+    {"requirement": "Lookup exception and executor progress", "cases": ["can_transform_true_lookup_exception_no_commit", "callbacks_progress_between_nonblocking_polls"]}
+  ],
+  "post_approval_implementation_acceptance_tests": [
+    "Trigger JSON without header; clock zero/unavailable waits without action while existing steady deadline expires.",
+    "Pin positive t_A once; exact TF polls retain it; late TF sends planner once; re-arm does not resend.",
+    "Active attempt identity changes before action and blocks action.",
+    "Planner request uses send-time ROS stamp distinct from t_A.",
+    "Only exact matched SUCCEEDED planner result creates path context; stale/wrong/canceled results reject.",
+    "Adapter path_sequence increments at path admission and steady receipt is recorded; path is immutable and invalidated on replacement/cancel/preempt/end/failure.",
+    "SafetyLifecycle _set increments revision; ordinary refresh does not; source/tuple/counter/event mismatch fails closed.",
+    "Phase B pins t_vector, t_tf=t_odom, records and correlations; future/post-cutoff records and pending replacement reject.",
+    "Freshness/deadline/context are checked at acquisition and after transform at commit; rollback/context events cannot resurrect pending data.",
+    "can_transform true plus lookup exception cannot commit and retains the original cause; raw path is unchanged.",
+    "Missing temporal source pin or configured age rejects without fallback; changed static binding requires compiler validation and a recomputed global config_hash.",
+    "Existing five-vector 81D, navigation-success, QoS, Safety, and complete evidence acceptance remains unchanged."
+  ],
+  "unresolved_mappings_blocking_activation": [
+    "Approved immutable source/version/digest for the temporal contract and its static binding point.",
+    "An approved method to verify SafetyLifecycle publisher/source provenance: current SafetyLifecycleState.msg has no source_instance_id.",
+    "Concrete compiler/schema/profile path and validation rule if the new binding changes the resolved global config hash.",
+    "Production adapter locations that own immutable typed snapshot acquisition and final commit recheck."
+  ],
+  "model_evidence_limits": {
+    "model_commit": "c6495dc0ebb036b298c9da04a32db6ede3eb9289",
+    "model_status": "PROPOSAL_ONLY_NOT_PRODUCTION",
+    "model_evaluates": "Temporal state-machine and LocalReference fake cases only.",
+    "not_evaluated": ["81D_acceptance", "QoS", "evidence_chain", "campaign_acceptance", "Nav2_runtime", "tf2_runtime"],
+    "invocation_021": "ROOT_CAUSE_UNRESOLVED"
+  },
+  "activation_conditions": [
+    "Independent review",
+    "Explicit Owner approval of L2 semantics and unresolved mappings",
+    "Separate implementation packet with exact immutable source/version/digest, paths, config-hash impact, and acceptance tests"
+  ]
+}
