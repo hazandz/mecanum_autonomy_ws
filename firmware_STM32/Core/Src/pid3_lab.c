@@ -53,8 +53,8 @@ static const Pid3Feedforward feedforward[PID3_WHEEL_COUNT][2] = {
 static const float wheel_command_sign[PID3_WHEEL_COUNT] = {
   +1.0f,  /* FL forward */
   -1.0f,  /* FR reverse */
-  -1.0f,  /* RL reverse */
-  +1.0f   /* RR forward */
+  +1.0f,  /* RL forward */
+  -1.0f   /* RR reverse */
 };
 static const uint32_t pwm_channel[PID3_WHEEL_COUNT] = {
   TIM_CHANNEL_4, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_2
