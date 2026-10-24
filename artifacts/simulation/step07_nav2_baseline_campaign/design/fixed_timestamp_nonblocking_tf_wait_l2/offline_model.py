@@ -1,63 +1,129 @@
-"""Offline design model; production baseline calls the source _Collector._tick and _features_from_path.
-No ROS node, graph, Gazebo, Nav2, campaign process, or source edits are performed.
+"""Offline-only temporal state model for review; never a production implementation.
+
+The production baseline below calls the pinned source methods with fake objects.
+The proposed model is a separate deterministic state machine. No ROS graph,
+node, action server, Gazebo, Nav2, campaign process, or runtime evidence is used.
 """
 from __future__ import annotations
-import copy, importlib, json, math, sys
-from dataclasses import replace
+
+import copy
+import hashlib
+import importlib
+import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
-REPO = Path('/home/hazan/step07-integrated-nav2-gateb-campaign-f7f98c6')
+REPO = Path('/home/hazan/step07-integrated-nav2-gateb-campaign-f7f98c6').resolve()
+OBSERVER_REL = Path('ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py')
+OBSERVER_SHA256 = '39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f'
+OBSERVER_SOURCE = (REPO / OBSERVER_REL).resolve()
+assert OBSERVER_SOURCE.is_file(), 'PINNED_PRODUCTION_SOURCE_MISSING'
+assert hashlib.sha256(OBSERVER_SOURCE.read_bytes()).hexdigest() == OBSERVER_SHA256, 'PINNED_PRODUCTION_SOURCE_HASH_MISMATCH'
 sys.path.insert(0, str(REPO / 'ros2_ws/src/mecanum_nav_rl'))
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path as NavPath
-from tf2_ros import ExtrapolationException, ConnectivityException
-from action_msgs.msg import GoalStatus
+from tf2_ros import ConnectivityException, ExtrapolationException
 from mecanum_nav_rl.observations import step07_gate_b_observer_node as production
+assert Path(production.__file__).resolve() == OBSERVER_SOURCE, 'PRODUCTION_IMPORT_ORIGIN_MISMATCH'
+assert hashlib.sha256(Path(production.__file__).resolve().read_bytes()).hexdigest() == OBSERVER_SHA256, 'PRODUCTION_IMPORT_HASH_MISMATCH'
 
-# Keep imports real except the pure Time(nanoseconds=...) factory used by _tick.
-_original_import = importlib.import_module
+ORIGINAL_IMPORT = importlib.import_module
+ORIGINAL_MONOTONIC = production.time.monotonic
+
+
 class FakeTime:
-    def __init__(self, *, nanoseconds: int): self.nanoseconds = nanoseconds
-production.importlib.import_module = lambda name, *a, **kw: NS(Time=FakeTime) if name == 'rclpy.time' else _original_import(name, *a, **kw)
-production.time.monotonic = lambda: 1.0
+    def __init__(self, *, nanoseconds: int):
+        self.nanoseconds = nanoseconds
+
 
 class Clock:
-    def __init__(self, ns): self.ns = ns
-    def now(self): return NS(nanoseconds=self.ns, to_msg=lambda: NS(sec=self.ns//10**9, nanosec=self.ns%10**9))
+    def __init__(self, ns: int):
+        self.ns = ns
+
+    def now(self):
+        return NS(nanoseconds=self.ns, to_msg=lambda: NS(sec=self.ns // 10**9, nanosec=self.ns % 10**9))
+
+
 class Node:
-    def __init__(self, ns): self.clock = Clock(ns)
-    def get_clock(self): return self.clock
+    def __init__(self, ns: int):
+        self.clock = Clock(ns)
+
+    def get_clock(self):
+        return self.clock
+
+
 class FakeTF:
-    def __init__(self, lower=0, upper=0, connected=True):
+    def __init__(self, lower=0, upper=0, connected=True, transform_error=None):
         self.lower, self.upper, self.connected = lower, upper, connected
+        self.transform_error = transform_error
         self.queries, self.lookups = [], []
+
     def can_transform(self, target, source, stamp):
-        t=stamp.nanoseconds; self.queries.append((target, source, t))
+        t = stamp.nanoseconds
+        self.queries.append((target, source, t))
         return self.connected and self.lower <= t <= self.upper
+
     def transform(self, pose, target):
-        t=pose.header.stamp.sec*10**9+pose.header.stamp.nanosec
+        t = pose.header.stamp.sec * 10**9 + pose.header.stamp.nanosec
         self.lookups.append((target, pose.header.frame_id, t))
-        if not self.connected: raise ConnectivityException('fake: graph edge unavailable')
-        if t > self.upper: raise ExtrapolationException('fake: future extrapolation')
-        if t < self.lower: raise ExtrapolationException('fake: past extrapolation')
-        out=copy.deepcopy(pose); out.header.frame_id=target; return out
+        if self.transform_error is not None:
+            raise self.transform_error
+        if not self.connected:
+            raise ConnectivityException('fake: graph edge unavailable')
+        if t > self.upper:
+            raise ExtrapolationException('fake: future extrapolation')
+        if t < self.lower:
+            raise ExtrapolationException('fake: past extrapolation')
+        result = copy.deepcopy(pose)
+        result.header.frame_id = target
+        return result
+
 
 def make_path():
-    p=NavPath(); p.header.frame_id='map'
+    path = NavPath()
+    path.header.frame_id = 'map'
     for x in (0.0, 1.0):
-        q=PoseStamped(); q.header.frame_id='map'; q.pose.position.x=x; q.pose.orientation.w=1.0; p.poses.append(q)
-    return p
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.pose.position.x = x
+        pose.pose.orientation.w = 1.0
+        path.poses.append(pose)
+    return path
 
-def production_collector(now, tf):
-    c=production._Collector.__new__(production._Collector)
-    c.node=Node(now); c.tf_buffer=tf; c._finished=False; c.samples=[]; c.errors=[]; c.navigate_result=None
-    c.diagnostics=production._new_collector_diagnostics(); c.deadline=10**99
-    c._publish_ready_when_complete=lambda:None; c._read_goal_trigger=lambda:True
-    c._compute_path_requested=False; c._navigate_requested=False; c.path=None
-    c.latest_lifecycle=c.latest_scan=c.latest_odom=c.latest_receipt=None
-    return c
+
+def run_production_tick(collector):
+    """Isolate all monkeypatches so no test or imported module sees them later."""
+    def isolated_import(name, *args, **kwargs):
+        if name == 'rclpy.time':
+            return NS(Time=FakeTime)
+        return ORIGINAL_IMPORT(name, *args, **kwargs)
+
+    with patch.object(production.importlib, 'import_module', side_effect=isolated_import):
+        with patch.object(production.time, 'monotonic', return_value=1.0):
+            collector._tick()
+
+
+def production_collector(now_ns, tf_buffer):
+    collector = production._Collector.__new__(production._Collector)
+    collector.node = Node(now_ns)
+    collector.tf_buffer = tf_buffer
+    collector._finished = False
+    collector.samples = []
+    collector.errors = []
+    collector.navigate_result = None
+    collector.diagnostics = production._new_collector_diagnostics()
+    collector.deadline = 10**99
+    collector._publish_ready_when_complete = lambda: None
+    collector._read_goal_trigger = lambda: True  # fake JSON trigger; no ROS header
+    collector._compute_path_requested = False
+    collector._navigate_requested = False
+    collector.path = None
+    collector.latest_lifecycle = collector.latest_scan = collector.latest_odom = collector.latest_receipt = None
+    return collector
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -65,16 +131,39 @@ class Identity:
     reset_epoch: int
     runtime_generation: int
     config_hash: str
+
+
+@dataclass(frozen=True)
+class PathContext:
+    goal_id: str
+    path_sequence: int
+    reset_epoch: int
+    runtime_generation: int
+    map_id: str
+    map_content_hash: str
+    path_stamp_ns: int
+    received_steady_ns: int
+    expiry_steady_ns: int
+    revision: int
+
+
+@dataclass(frozen=True)
+class TriggerJson:
+    """The current trigger is JSON and intentionally has no ROS header."""
+    valid: bool = True
+    goal_id: str = 'goal-1'
+
+
 @dataclass(frozen=True)
 class InputSnapshot:
     snapshot_id: str
     identity: Identity
-    cutoff_ros_ns: int
     scan_stamp_ns: int
     odom_stamp_ns: int
     lifecycle_stamp_ns: int
     receipt_stamp_ns: int
     receipt_sequence: int
+    scan_record_id: str
     odom_record_id: str
     lifecycle_sequence: int
     action_barrier_ns: int
@@ -83,276 +172,518 @@ class InputSnapshot:
     odom_received_steady_ns: int
     lifecycle_received_steady_ns: int
     receipt_received_steady_ns: int
-    path_id: str
+    path_context: PathContext
     path: object
-    path_version: int = 1
-    barrier_revision: int = 0
+
 
 class FixedTimestampModel:
-    """Proposal-only controller: pin timestamps/snapshot; poll in timer; never block."""
-    LIMITS={'scan':500_000_000,'odom':250_000_000,'lifecycle':500_000_000,'receipt':500_000_000}
+    """Design model: immutable t_A and pending sample, nonblocking timer polls."""
+    LIMITS = {'scan': 500_000_000, 'odom': 250_000_000, 'lifecycle': 500_000_000, 'receipt': 500_000_000}
+
     def __init__(self, run_deadline_steady_ns):
-        self.run_deadline=run_deadline_steady_ns; self.phase_a_stamp=None; self.pending=None
-        self.state='IDLE'; self.last_ros_now=None; self.committed=[]; self.discards=[]
-        self.action_callbacks=0; self.nav='PENDING'; self.planner='NOT_REQUESTED'
-        self.planner_request_count=0; self.phase_a_poll_stamps=[]
-    def trigger_phase_a(self, ros_now_ns, identity):
-        if ros_now_ns <= 0: self.state='WAIT_CLOCK'; return False
-        if self.phase_a_stamp is not None: return False
-        self.phase_a_stamp=ros_now_ns; self.phase_a_identity=identity; self.state='PHASE_A_WAIT_TF'; return True
-    def rearm_phase_a_query(self):
-        # Re-arm only the asynchronous poll; preserve t_A and the once-only goal latch.
-        if self.phase_a_stamp is None or self.planner_request_count:
-            return False
-        self.state='PHASE_A_WAIT_TF'
-        return True
-    def poll_phase_a(self, ros_now_ns, steady_ns, tf):
-        if ros_now_ns <= 0: return 'WAIT_CLOCK'
-        if self.last_ros_now is not None and ros_now_ns < self.last_ros_now: self.state='FAILED_CLOCK_ROLLBACK'; return self.state
-        self.last_ros_now=ros_now_ns
-        if steady_ns >= self.run_deadline: self.state='FAIL_EXISTING_RUN_DEADLINE'; return self.state
-        self.phase_a_poll_stamps.append(self.phase_a_stamp)
-        if tf.can_transform('base_link','map',FakeTime(nanoseconds=self.phase_a_stamp)):
-            self.state='PHASE_A_READY'
-            if self.planner_request_count == 0:
-                self.planner_request_count=1; self.planner='REQUESTED_ONCE'
-            return self.state
-        return self.state
-    def capture_sample(self, snapshot: InputSnapshot, ros_now_ns, steady_ns, active_identity):
-        if ros_now_ns <= 0: self.discards.append({'snapshot_id':snapshot.snapshot_id,'reason':'CLOCK_NOT_STARTED'}); return False
-        if self.last_ros_now is not None and ros_now_ns < self.last_ros_now:
-            self.pending=None; self.discards.append({'snapshot_id':snapshot.snapshot_id,'reason':'CLOCK_ROLLBACK'}); return False
-        self.last_ros_now=ros_now_ns
-        if steady_ns >= self.run_deadline: self.discards.append({'snapshot_id':snapshot.snapshot_id,'reason':'RUN_DEADLINE'}); return False
-        if snapshot.identity != active_identity: self.discards.append({'snapshot_id':snapshot.snapshot_id,'reason':'IDENTITY_MISMATCH_AT_CAPTURE'}); return False
-        if not self._eligible(snapshot, ros_now_ns): self.discards.append({'snapshot_id':snapshot.snapshot_id,'reason':'INPUT_NOT_ELIGIBLE_AT_CAPTURE'}); return False
-        # The proposed Phase B transform timestamp is the exact odometry stamp.
-        # No message/header/path object is rewritten; identity and bytes stay pinned.
-        self.pending={'snapshot':copy.deepcopy(snapshot),'tf_stamp_ns':snapshot.odom_stamp_ns,
-                      'captured_identity':snapshot.identity,'captured_steady_ns':steady_ns,
-                      'barrier_revision':snapshot.barrier_revision,'path_version':snapshot.path_version}
-        return True
-    def action_callback(self, name, state):
-        # Models executor callback progress while a timer poll returns immediately.
-        self.action_callbacks += 1
-        if name=='navigate': self.nav=state
-        elif name=='planner': self.planner=state
-    def poll_sample(self, ros_now_ns, steady_ns, tf, active_identity, active_lifecycle_ok=True, active_barrier_revision=None, active_path_version=None):
-        if self.pending is None: return 'NO_PENDING'
-        snap=self.pending['snapshot']
-        if ros_now_ns <= 0: return 'WAIT_CLOCK'
-        if self.last_ros_now is not None and ros_now_ns < self.last_ros_now:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'CLOCK_ROLLBACK'}); self.pending=None; return 'DISCARDED_CLOCK_ROLLBACK'
-        self.last_ros_now=ros_now_ns
-        if snap.identity != active_identity:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'GENERATION_EPOCH_CONFIG_CHANGED'}); self.pending=None; return 'DISCARDED_IDENTITY'
-        if not active_lifecycle_ok:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'LIFECYCLE_OR_BARRIER_CHANGED'}); self.pending=None; return 'DISCARDED_LIFECYCLE'
-        if active_barrier_revision is not None and active_barrier_revision != self.pending['barrier_revision']:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'BARRIER_REVISION_CHANGED'}); self.pending=None; return 'DISCARDED_BARRIER'
-        if active_path_version is not None and active_path_version != self.pending['path_version']:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'PATH_VERSION_CHANGED'}); self.pending=None; return 'DISCARDED_PATH_VERSION'
-        if not self._eligible(snap, ros_now_ns):
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'INPUT_STALE_OR_FUTURE_AT_COMMIT'}); self.pending=None; return 'DISCARDED_FRESHNESS'
+        self.run_deadline = run_deadline_steady_ns
+        self.phase_a_stamp = None
+        self.phase_a_context = None
+        self.phase_a_identity = None
+        self.phase_a_state = 'IDLE'
+        self.phase_a_last_ros = None
+        self.phase_a_queries = []
+        self.planner_request_count = 0
+        self.planner_request_stamp_ns = None
+        self.pending = None
+        self.last_ros = None
+        self.committed = []
+        self.used_measurement_identities = set()
+        self.discards = []
+        self.action_callbacks = 0
+        self.lookup_failures = []
+
+    @staticmethod
+    def valid_context(identity, context):
+        return (identity is not None and context is not None
+                and bool(context.goal_id) and context.path_sequence >= 0
+                and context.reset_epoch == identity.reset_epoch
+                and context.runtime_generation == identity.runtime_generation
+                and bool(context.map_id) and len(context.map_content_hash) == 64
+                and all(c in '0123456789abcdef' for c in context.map_content_hash)
+                and context.path_stamp_ns > 0
+                and context.expiry_steady_ns > context.received_steady_ns)
+
+    def consume_trigger_json(self, trigger, ros_now_ns, steady_ns, active_identity, active_context):
+        if self.phase_a_state.startswith('FAILED_'):
+            return self.phase_a_state
         if steady_ns >= self.run_deadline:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'EXISTING_RUN_DEADLINE'}); self.pending=None; return 'FAIL_EXISTING_RUN_DEADLINE'
-        stamp=FakeTime(nanoseconds=self.pending['tf_stamp_ns'])
-        if not tf.can_transform('base_link','map',stamp): return 'WAIT_TF_SAME_STAMP'
-        # Production helper constructs a transformed copy and preserves input Path.
-        features=production._features_from_path(copy.deepcopy(snap.path),tf,self.pending['tf_stamp_ns'])
-        key=(snap.snapshot_id,snap.scan_stamp_ns,snap.odom_stamp_ns,snap.receipt_sequence,snap.lifecycle_sequence)
-        vector_stamp=snap.cutoff_ros_ns
-        if self.committed and vector_stamp <= self.committed[-1]['vector_stamp_ns']:
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'NONMONOTONIC_VECTOR_STAMP'}); self.pending=None; return 'DISCARDED_NONMONOTONIC'
-        if any(row['key']==key for row in self.committed):
-            self.discards.append({'snapshot_id':snap.snapshot_id,'reason':'DUPLICATE_SNAPSHOT'}); self.pending=None; return 'DISCARDED_DUPLICATE'
-        self.committed.append({'key':key,'t_vector_ns':vector_stamp,'t_tf_ns':self.pending['tf_stamp_ns'],'t_odom_ns':snap.odom_stamp_ns,'t_commit_ros_ns':ros_now_ns,'vector_stamp_ns':vector_stamp,'tf_stamp_ns':self.pending['tf_stamp_ns'],
-                               'receipt_sequence':snap.receipt_sequence,'odom_record_id':snap.odom_record_id,
-                               'path_id':snap.path_id,'features':features,'dimension_contract':81})
-        self.pending=None
-        return 'COMMITTED'
-    def _eligible(self,s,now):
-        pairs=(('scan',s.scan_stamp_ns),('odom',s.odom_stamp_ns),('lifecycle',s.lifecycle_stamp_ns),('receipt',s.receipt_stamp_ns))
-        for name,stamp in pairs:
-            age=now-stamp
-            if age < 0 or age > self.LIMITS[name]: return False
-        if not (s.receipt_stamp_ns > s.action_barrier_ns and s.receipt_stamp_ns > s.reset_barrier_ns): return False
-        if s.receipt_stamp_ns > s.cutoff_ros_ns: return False
-        if s.identity.episode_generation < 0: return False
+            self.phase_a_state = 'FAILED_STEADY_DEADLINE'
+            return self.phase_a_state
+        if not trigger or not trigger.valid:
+            return 'TRIGGER_NOT_VALID'
+        if self.phase_a_stamp is not None:
+            return self.phase_a_state
+        if ros_now_ns <= 0:
+            self.phase_a_state = 'WAIT_VALID_ROS_CLOCK'
+            return self.phase_a_state
+        if not self.valid_context(active_identity, active_context):
+            self.phase_a_state = 'FAILED_CONTEXT_MISSING_OR_INVALID'
+            return self.phase_a_state
+        if active_context.goal_id != trigger.goal_id:
+            self.phase_a_state = 'FAILED_TRIGGER_CONTEXT_MISMATCH'
+            return self.phase_a_state
+        # JSON carries no ROS stamp: pin the positive ROS clock at first consumption.
+        self.phase_a_stamp = ros_now_ns
+        self.phase_a_last_ros = ros_now_ns
+        self.phase_a_identity = active_identity
+        self.phase_a_context = active_context
+        self.phase_a_state = 'WAIT_EXACT_TF'
+        return self.phase_a_state
+
+    def rearm_phase_a_query(self):
+        if self.phase_a_stamp is None or self.phase_a_state.startswith('FAILED_') or self.planner_request_count:
+            return False
+        self.phase_a_state = 'WAIT_EXACT_TF'
         return True
-    def campaign_pass(self):
-        return len(self.committed)==5 and self.nav=='SUCCEEDED' and self.planner=='SUCCEEDED'
 
-def snapshot(i, stamp, *, identity=None, receipt_sequence=None, odom_id=None, path=None, odom_stamp=None, receipt_stamp=None, barrier_revision=0, path_version=1):
-    identity=identity or Identity(3,2,7,'a'*64)
-    path=path or make_path()
-    return InputSnapshot(f'snap-{i}',identity,stamp,stamp,stamp if odom_stamp is None else odom_stamp,stamp,stamp if receipt_stamp is None else receipt_stamp,i if receipt_sequence is None else receipt_sequence,
-                         f'odom-{i}' if odom_id is None else odom_id,i,0,0,stamp,stamp,stamp,stamp,'path-1',path,path_version,barrier_revision)
+    def poll_phase_a(self, ros_now_ns, steady_ns, tf_buffer, active_identity, active_context):
+        if self.phase_a_state.startswith('FAILED_'):
+            return self.phase_a_state
+        if steady_ns >= self.run_deadline:
+            self.phase_a_state = 'FAILED_STEADY_DEADLINE'
+            return self.phase_a_state
+        if self.phase_a_stamp is None:
+            return 'WAIT_VALID_ROS_CLOCK'
+        if self.phase_a_last_ros is not None and ros_now_ns < self.phase_a_last_ros:
+            self.phase_a_state = 'FAILED_CLOCK_ROLLBACK'
+            return self.phase_a_state
+        if ros_now_ns > 0:
+            self.phase_a_last_ros = ros_now_ns
+        if active_identity != self.phase_a_identity or active_context != self.phase_a_context:
+            self.phase_a_state = 'FAILED_ACTIVE_CONTEXT_CHANGED'
+            return self.phase_a_state
+        self.phase_a_queries.append(self.phase_a_stamp)
+        if not tf_buffer.can_transform('base_link', 'map', FakeTime(nanoseconds=self.phase_a_stamp)):
+            self.phase_a_state = 'WAIT_EXACT_TF'
+            return self.phase_a_state
+        try:
+            # A positive can_transform answer is followed by a real exact lookup.
+            pose = PoseStamped()
+            pose.header.frame_id = 'map'
+            pose.header.stamp.sec, pose.header.stamp.nanosec = divmod(self.phase_a_stamp, 10**9)
+            tf_buffer.transform(pose, 'base_link')
+        except Exception as exc:  # keep original failure as structured offline outcome
+            self.lookup_failures.append({'phase': 'A', 'type': type(exc).__name__, 'message': str(exc)})
+            self.phase_a_state = 'WAIT_TF_LOOKUP_EXCEPTION'
+            return self.phase_a_state
+        if active_identity != self.phase_a_identity or active_context != self.phase_a_context:
+            self.phase_a_state = 'FAILED_ACTIVE_CONTEXT_CHANGED'
+            return self.phase_a_state
+        if self.planner_request_count == 0:
+            self.planner_request_count = 1
+            # Preserve production behavior: goal uses request-send ROS time, not t_A.
+            self.planner_request_stamp_ns = ros_now_ns
+            self.phase_a_state = 'PLANNER_REQUESTED_ONCE'
+        else:
+            self.phase_a_state = 'PLANNER_REQUESTED_ONCE'
+        return self.phase_a_state
 
-results=[]
-def record(name, baseline, proposed, **details): results.append({'case':name,'baseline':baseline,'proposed':proposed,**details})
+    def capture_sample(self, snapshot, ros_now_ns, steady_ns, active_identity, active_barrier_revision, active_path_context):
+        if snapshot is None or active_identity is None or active_barrier_revision is None or active_path_context is None:
+            self.discards.append({'reason': 'ACTIVE_CONTEXT_REQUIRED_AT_ACQUISITION'})
+            return False
+        if not self.valid_context(snapshot.identity, snapshot.path_context) or not self.valid_context(active_identity, active_path_context):
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'IDENTITY_OR_PATH_CONTEXT_INVALID'})
+            return False
+        if snapshot.identity != active_identity or snapshot.path_context != active_path_context:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'ACTIVE_CONTEXT_MISMATCH_AT_ACQUISITION'})
+            return False
+        if ros_now_ns <= 0:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'CLOCK_NOT_STARTED'})
+            return False
+        if self.last_ros is not None and ros_now_ns < self.last_ros:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'CLOCK_ROLLBACK'})
+            return False
+        self.last_ros = ros_now_ns
+        if steady_ns >= self.run_deadline:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'RUN_DEADLINE'})
+            return False
+        if not self._eligible(snapshot, t_vector_ns=ros_now_ns, now_ros_ns=ros_now_ns, steady_ns=steady_ns):
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'INPUT_NOT_ELIGIBLE_AT_ACQUISITION'})
+            return False
+        self.pending = {'snapshot': copy.deepcopy(snapshot), 't_vector_ns': ros_now_ns,
+                        't_tf_ns': snapshot.odom_stamp_ns, 'identity': active_identity,
+                        'barrier_revision': active_barrier_revision,
+                        'path_context': copy.deepcopy(active_path_context), 'captured_steady_ns': steady_ns}
+        return True
 
-# 1. Production baseline: moving now misses a transform that arrives only after each query time.
-base_counts=[]; tf=FakeTF()
-for now,upper in ((10_000_000_000,9_980_000_000),(10_050_000_000,10_030_000_000),(10_100_000_000,10_080_000_000)):
-    tf.upper=upper; c=production_collector(now,tf); c._tick()
-    base_counts.append({'query_ns':tf.queries[-1][2],'tf_available':c.diagnostics['tf']['state']=='AVAILABLE','planner_requested':c._compute_path_requested})
-model=FixedTimestampModel(20_000_000_000); ident=Identity(3,2,7,'a'*64); model.trigger_phase_a(10_000_000_000,ident)
-phase_a=[]
-for now,upper in ((10_000_000_000,9_980_000_000),(10_050_000_000,10_000_000_000),(10_100_000_000,10_080_000_000)):
-    tf.upper=upper; phase_a.append({'now_ns':now,'fixed_query_ns':model.phase_a_stamp,'state':model.poll_phase_a(now,now,tf)})
-record('phase_a_late_tf_within_existing_window',base_counts,phase_a,planner_request_once=model.planner=='REQUESTED_ONCE')
+    def poll_sample(self, ros_now_ns, steady_ns, tf_buffer, active_identity, active_barrier_revision, active_path_context, latest_snapshot=None):
+        if self.pending is None:
+            return 'NO_PENDING'
+        pending = self.pending
+        snapshot = pending['snapshot']
+        # Missing active context is itself a rejection, never a skipped predicate.
+        if active_identity is None or active_barrier_revision is None or active_path_context is None:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'ACTIVE_CONTEXT_REQUIRED_AT_COMMIT'})
+            self.pending = None
+            return 'DISCARDED_MISSING_CONTEXT'
+        if self.last_ros is not None and ros_now_ns < self.last_ros:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'CLOCK_ROLLBACK'})
+            self.pending = None
+            return 'DISCARDED_CLOCK_ROLLBACK'
+        if ros_now_ns <= 0:
+            return 'WAIT_VALID_ROS_CLOCK'
+        self.last_ros = ros_now_ns
+        if steady_ns >= self.run_deadline:
+            self.discards.append({'snapshot_id': snapshot.snapshot_id, 'reason': 'EXISTING_RUN_DEADLINE'})
+            self.pending = None
+            return 'FAIL_EXISTING_RUN_DEADLINE'
+        if active_identity != pending['identity']:
+            return self._discard('IDENTITY_CHANGED')
+        if active_barrier_revision != pending['barrier_revision']:
+            return self._discard('BARRIER_REVISION_CHANGED')
+        if active_path_context != pending['path_context']:
+            return self._discard('PATH_CONTEXT_CHANGED')
+        if not self._eligible(snapshot, t_vector_ns=pending['t_vector_ns'], now_ros_ns=ros_now_ns, steady_ns=steady_ns):
+            return self._discard('INPUT_STALE_FUTURE_OR_AFTER_CUTOFF')
+        # latest_snapshot is deliberately not consulted; the pending immutable snapshot is authoritative.
+        del latest_snapshot
+        query = FakeTime(nanoseconds=pending['t_tf_ns'])
+        if not tf_buffer.can_transform('base_link', 'map', query):
+            return 'WAIT_EXACT_TF_SAME_STAMP'
+        try:
+            # Transform only a deep copy. Preserve failure cause and do not commit on lookup exception.
+            local_reference = production._features_from_path(copy.deepcopy(snapshot.path), tf_buffer, pending['t_tf_ns'])
+        except Exception as exc:
+            outcome = {'phase': 'B', 'type': type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
+                       'message': str(exc.__cause__ or exc), 'wrapper_type': type(exc).__name__}
+            self.lookup_failures.append(outcome)
+            return 'WAIT_TF_LOOKUP_EXCEPTION'
+        if not self._eligible(snapshot, t_vector_ns=pending['t_vector_ns'], now_ros_ns=ros_now_ns, steady_ns=steady_ns):
+            return self._discard('INPUT_INVALIDATED_AT_COMMIT')
+        measurement_identity = self.measurement_identity(snapshot)
+        if measurement_identity in self.used_measurement_identities:
+            return self._discard('DUPLICATE_MEASUREMENT_IDENTITY')
+        self.used_measurement_identities.add(measurement_identity)
+        # Commit marker records temporal/link provenance and LocalReference only; no vector is built.
+        self.committed.append({'measurement_identity': measurement_identity,
+                               't_vector_ns': pending['t_vector_ns'], 't_tf_ns': pending['t_tf_ns'],
+                               't_odom_ns': snapshot.odom_stamp_ns, 't_commit_ros_ns': ros_now_ns,
+                               'receipt_stamp_ns': snapshot.receipt_stamp_ns,
+                               'receipt_sequence': snapshot.receipt_sequence,
+                               'scan_record_id': snapshot.scan_record_id,
+                               'odom_record_id': snapshot.odom_record_id,
+                               'lifecycle_sequence': snapshot.lifecycle_sequence,
+                               'path_sequence': snapshot.path_context.path_sequence,
+                               'map_id': snapshot.path_context.map_id,
+                               'local_reference': local_reference})
+        self.pending = None
+        return 'LOCAL_REFERENCE_COMMITTED'
 
-# 2. Phase B late TF: baseline production uses moving now and fails; proposal pins odom stamp.
-path=make_path(); tf=FakeTF(upper=10_000_000_000)
-production_fail=[]
-for now,upper in ((10_050_000_000,10_000_000_000),(10_100_000_000,10_050_000_000)):
-    tf.upper=upper
-    try: production._features_from_path(path,tf,now); production_fail.append('PASS')
-    except ValueError as e: production_fail.append(str(e))
-model=FixedTimestampModel(20_000_000_000); s=snapshot(1,10_000_000_000,path=path); model.capture_sample(s,10_000_000_000,10_000_000_000,s.identity)
-late=[]
-for now,upper in ((10_050_000_000,9_980_000_000),(10_100_000_000,10_000_000_000)):
-    tf.upper=upper; late.append(model.poll_sample(now,now,tf,s.identity))
-record('phase_b_tf_arrives_after_selection_but_data_fresh',production_fail,late,committed=model.committed)
+    def _discard(self, reason):
+        self.discards.append({'snapshot_id': self.pending['snapshot'].snapshot_id, 'reason': reason})
+        self.pending = None
+        return 'DISCARDED_' + reason
 
-# 2b. Production helper mutates the selected input pose header; proposal transforms a deep copy.
-path_input=make_path(); path_input.poses[1].header.stamp.sec=2; before=(path_input.poses[1].header.stamp.sec,path_input.poses[1].header.stamp.nanosec)
-exact_tf=FakeTF(lower=0,upper=4_000_000_000); production._features_from_path(path_input,exact_tf,3_000_000_004)
-after=(path_input.poses[1].header.stamp.sec,path_input.poses[1].header.stamp.nanosec)
-proposal_input=make_path(); proposal_input.poses[1].header.stamp.sec=2; proposal_before=(proposal_input.poses[1].header.stamp.sec,proposal_input.poses[1].header.stamp.nanosec)
-production._features_from_path(copy.deepcopy(proposal_input),exact_tf,3_000_000_004)
-proposal_after=(proposal_input.poses[1].header.stamp.sec,proposal_input.poses[1].header.stamp.nanosec)
-record('path_pose_input_immutability',{'input_mutated':before!=after,'before':before,'after':after},{'input_mutated':proposal_before!=proposal_after,'before':proposal_before,'after':proposal_after})
+    @staticmethod
+    def measurement_identity(s):
+        # Stable source identities plus lifecycle/path context; excludes model-generated snapshot IDs and cutoff.
+        return ((s.identity.episode_generation, s.identity.reset_epoch,
+                 s.identity.runtime_generation, s.identity.config_hash),
+                s.scan_record_id, s.odom_record_id, s.receipt_sequence,
+                s.lifecycle_sequence, s.path_context.goal_id, s.path_context.path_sequence,
+                s.path_context.reset_epoch, s.path_context.runtime_generation,
+                s.path_context.map_id, s.path_context.map_content_hash)
 
-# 3. Never arrives: wait is bounded by the existing whole-run steady deadline, no new TF budget.
-model=FixedTimestampModel(30); s=snapshot(1,10_000_000_000); model.capture_sample(s,10_000_000_000,10, s.identity); tf=FakeTF(upper=0)
-states=[model.poll_sample(10_020_000_000,20,tf,s.identity),model.poll_sample(10_030_000_000,30,tf,s.identity)]
-record('tf_never_arrives',None,states,discard=model.discards,run_deadline_steady_ns=model.run_deadline)
+    def _eligible(self, s, t_vector_ns, now_ros_ns, steady_ns):
+        stamps = (('scan', s.scan_stamp_ns), ('odom', s.odom_stamp_ns),
+                  ('lifecycle', s.lifecycle_stamp_ns), ('receipt', s.receipt_stamp_ns),
+                  ('path', s.path_context.path_stamp_ns))
+        for name, stamp in stamps:
+            if stamp > t_vector_ns:  # no future input relative to the applicable observation cutoff
+                return False
+            age = now_ros_ns - stamp
+            if age < 0 or (name in self.LIMITS and age > self.LIMITS[name]):
+                return False
+        if s.receipt_stamp_ns <= s.action_barrier_ns or s.receipt_stamp_ns <= s.reset_barrier_ns:
+            return False
+        if s.path_context.expiry_steady_ns <= steady_ns:
+            return False
+        return True
 
-# 4. TF arrives only after odometry freshness (250 ms) expires: no commit.
-model=FixedTimestampModel(2_000_000_000); s=snapshot(1,10_000_000_000); model.capture_sample(s,10_000_000_000,10,s.identity); tf=FakeTF(upper=10_000_000_000)
-state=model.poll_sample(10_300_000_001,20,tf,s.identity)
-record('tf_after_input_expiry',None,state,discard=model.discards,existing_odom_limit_ns=model.LIMITS['odom'])
 
-# 5. Future, past and disconnected conditions never get converted into data; wait ends at existing deadline.
-for label,lower,upper,connected,t in [('future',0,9_000_000_000,True,10_000_000_000),('past',11_000_000_000,20_000_000_000,True,10_000_000_000),('missing_connectivity',0,20_000_000_000,False,10_000_000_000)]:
-    f=FakeTF(lower,upper,connected); m2=FixedTimestampModel(100); ss=snapshot(1,t); m2.capture_sample(ss,t,1,ss.identity)
-    state=m2.poll_sample(t+10,2,f,ss.identity)
+def make_context(identity, *, sequence=7, revision=3, path_stamp=10_000_000_000, received=1, expiry=10**15):
+    return PathContext('goal-1', sequence, identity.reset_epoch, identity.runtime_generation,
+                       'map-1', 'a' * 64, path_stamp, received, expiry, revision)
 
+
+def make_snapshot(name, cutoff, *, identity=None, context=None, scan_stamp=None, odom_stamp=None,
+                  lifecycle_stamp=None, receipt_stamp=None, scan_id='scan-1', odom_id='odom-1',
+                  receipt_seq=11, lifecycle_seq=4, path=None):
+    identity = identity or Identity(3, 2, 7, 'b' * 64)
+    context = context or make_context(identity, path_stamp=cutoff)
+    return InputSnapshot(name, identity, cutoff if scan_stamp is None else scan_stamp,
+                         cutoff if odom_stamp is None else odom_stamp,
+                         cutoff if lifecycle_stamp is None else lifecycle_stamp,
+                         cutoff if receipt_stamp is None else receipt_stamp, receipt_seq,
+                         scan_id, odom_id, lifecycle_seq, 0, 0, cutoff, cutoff, cutoff, cutoff,
+                         context, path or make_path())
+
+
+RESULTS = []
+def record(name, baseline, proposed, **details):
+    RESULTS.append({'case': name, 'baseline_production': baseline,
+                    'proposed_model': proposed, **details})
+
+
+identity = Identity(3, 2, 7, 'b' * 64)
+context = make_context(identity)
+
+# Production Phase-A baseline calls the current _tick(): each tick queries its moving ROS now.
+baseline_rows = []
+for now_ns, tf_upper in ((10_000_000_000, 9_980_000_000),
+                         (10_050_000_000, 10_030_000_000),
+                         (10_100_000_000, 10_080_000_000)):
+    tf = FakeTF(upper=tf_upper)
+    collector = production_collector(now_ns, tf)
+    run_production_tick(collector)
+    baseline_rows.append({'query_ns': tf.queries[-1][2], 'planner_requested': collector._compute_path_requested})
+model = FixedTimestampModel(10**12)
+model.consume_trigger_json(TriggerJson(), 10_000_000_000, 1, identity, context)
+late_tf = FakeTF(upper=9_980_000_000)
+phase_a_states = [model.poll_phase_a(10_000_000_000, 2, late_tf, identity, context)]
+late_tf.upper = 10_000_000_000
+phase_a_states.append(model.poll_phase_a(10_050_000_000, 3, late_tf, identity, context))
+phase_a_states.append(model.poll_phase_a(10_100_000_000, 4, late_tf, identity, context))
+record('phase_a_late_tf_fixed_trigger_consumption_time', baseline_rows, phase_a_states,
+       trigger_format='JSON_NO_ROS_HEADER', t_a_ns=model.phase_a_stamp,
+       planner_request_count=model.planner_request_count, planner_request_stamp_ns=model.planner_request_stamp_ns,
+       phase_a_query_stamps=model.phase_a_queries)
+
+# Production Phase-B baseline invokes the current path-feature helper at moving now.
+path = make_path()
+production_failures = []
+for now_ns, tf_upper in ((10_050_000_000, 10_000_000_000), (10_100_000_000, 10_050_000_000)):
     try:
-        production._features_from_path(make_path(),f,t); wrapped='NO_ERROR'
-    except ValueError as e:
-        wrapped=f'{e};cause={type(e.__cause__).__name__}'
-    record(label,None,state,tf_query_calls=len(f.queries),tf_lookup_calls=len(f.lookups),no_commit=len(m2.committed)==0,production_wrapped_failure=wrapped)
+        production._features_from_path(path, FakeTF(upper=tf_upper), now_ns)
+        production_failures.append('RETURNED')
+    except ValueError as exc:
+        production_failures.append({'wrapper': str(exc), 'cause': type(exc.__cause__).__name__ if exc.__cause__ else None})
+snapshot = make_snapshot('snap-1', 10_000_000_000, path=path)
+model = FixedTimestampModel(10**12)
+model.capture_sample(snapshot, 10_000_000_000, 1, identity, context.revision, context)
+tf = FakeTF(upper=9_980_000_000)
+b_wait = model.poll_sample(10_050_000_000, 2, tf, identity, context.revision, context)
+tf.upper = 10_000_000_000
+b_commit = model.poll_sample(10_100_000_000, 3, tf, identity, context.revision, context)
+record('phase_b_fixed_odom_transform_time', production_failures, [b_wait, b_commit],
+       committed_records=model.committed)
 
-# 6. Clock zero, rollback, forward jump.
-for label,first,second in [('clock_zero',0,10_000_000_000),('clock_rollback',10_000_000_000,9_900_000_000),('clock_forward_stales_inputs',10_000_000_000,10_300_000_001)]:
-    m2=FixedTimestampModel(10**12); ss=snapshot(1,10_000_000_000); captured=m2.capture_sample(ss,first,1,ss.identity) if first>0 else m2.capture_sample(ss,first,1,ss.identity)
-    f=FakeTF(upper=20_000_000_000); state=m2.poll_sample(second,2,f,ss.identity) if captured else 'NO_PENDING_CLOCK_ZERO'
-    record(label,None,state,captured=captured,discards=m2.discards)
+# Trigger JSON contains no ROS header. Clock zero does not pin or send; steady deadline still terminates.
+model = FixedTimestampModel(5)
+clock_zero = model.consume_trigger_json(TriggerJson(), 0, 1, identity, context)
+clock_zero_poll = model.consume_trigger_json(TriggerJson(), 0, 5, identity, context)
+record('json_trigger_clock_invalid_steady_deadline', None, [clock_zero, clock_zero_poll],
+       trigger_has_ros_header=False, t_a_ns=model.phase_a_stamp, action_count=model.planner_request_count)
 
-# 7. Lifecycle identity change and input updates while waiting: never mix latest records.
-old=Identity(3,2,7,'a'*64); new=Identity(3,3,8,'a'*64); ss=snapshot(1,10_000_000_000,identity=old,receipt_sequence=91,odom_id='odom-exact-77')
-m2=FixedTimestampModel(10**12); m2.capture_sample(ss,10_000_000_000,1,old); latest={'receipt_sequence':92,'odom_record_id':'odom-new-78','identity':new}; f=FakeTF(upper=20_000_000_000)
-state=m2.poll_sample(10_010_000_000,2,f,latest['identity'])
-record('generation_epoch_change_during_wait',None,state,latest_not_used=True,discards=m2.discards)
-old=Identity(3,2,7,'a'*64); ss=snapshot(1,10_000_000_000,identity=old,receipt_sequence=91,odom_id='odom-exact-77')
-m2=FixedTimestampModel(10**12); m2.capture_sample(ss,10_000_000_000,1,old); latest={'receipt_sequence':92,'odom_record_id':'odom-new-78'}; f=FakeTF(upper=10_000_000_000)
-state=m2.poll_sample(10_010_000_000,2,f,old)
-record('receipt_odom_update_while_pending',None,state,latest=latest,committed=m2.committed,assert_pinned=(m2.committed[0]['receipt_sequence']==91 and m2.committed[0]['odom_record_id']=='odom-exact-77'))
+# Missing/changed active context before sending the planner goal fails closed.
+model = FixedTimestampModel(100)
+model.consume_trigger_json(TriggerJson(), 20_000_000_000, 1, identity, context)
+changed_identity = Identity(3, 3, 8, identity.config_hash)
+state = model.poll_phase_a(20_000_000_001, 2, FakeTF(upper=30_000_000_000), changed_identity,
+                           make_context(changed_identity))
+record('phase_a_identity_changed_before_action', None, state, action_count=model.planner_request_count)
 
-# 8. Action callbacks run between nonblocking polls; navigation states do not imply sample acceptance.
-m2=FixedTimestampModel(10**12); ss=snapshot(1,10_000_000_000); m2.capture_sample(ss,10_000_000_000,1,ss.identity); m2.action_callback('navigate','PENDING'); f=FakeTF(upper=10_000_000_000); state=m2.poll_sample(10_010_000_000,2,f,ss.identity)
-record('action_callback_during_tf_wait',None,state,callback_count=m2.action_callbacks,navigate=m2.nav)
+# Rollback is terminal for this attempt; a later clock increase cannot restore readiness.
+model = FixedTimestampModel(100)
+model.consume_trigger_json(TriggerJson(), 30_000_000_000, 1, identity, context)
+rollback = model.poll_phase_a(29_000_000_000, 2, FakeTF(upper=40_000_000_000), identity, context)
+recovered_clock = model.poll_phase_a(31_000_000_000, 3, FakeTF(upper=40_000_000_000), identity, context)
+record('phase_a_rollback_terminal_no_resurrection', None, [rollback, recovered_clock],
+       action_count=model.planner_request_count)
 
-# 9. Exact sample time, duplicates, increasing stamps, five samples, navigation terminal outcomes.
-m2=FixedTimestampModel(10**12); f=FakeTF(upper=20_000_000_000); commit_states=[]
-for i in range(1,6):
-    t=10_000_000_000+i*10_000_000; ss=snapshot(i,t); m2.capture_sample(ss,t,t,ss.identity); commit_states.append(m2.poll_sample(t,t,f,ss.identity))
-# Duplicate last exact snapshot rejected without a sixth sample.
-last=replace(snapshot(5,10_050_000_000),cutoff_ros_ns=10_060_000_000); m2.capture_sample(last,10_050_000_000,10_050_000_000,last.identity); duplicate=m2.poll_sample(10_051_000_000,10_051_000_000,f,last.identity)
-m2.planner='SUCCEEDED'; m2.nav='PENDING'; pending_pass=m2.campaign_pass(); m2.action_callback('navigate','ABORTED'); failed_pass=m2.campaign_pass()
-m3=FixedTimestampModel(10**12); f3=FakeTF(upper=21_000_000_000)
-for i in range(1,6):
-    t=20_000_000_000+i*10_000_000; ss=snapshot(i,t); m3.capture_sample(ss,t,t,ss.identity); m3.poll_sample(t,t,f3,ss.identity)
-m3.planner='SUCCEEDED'; m3.nav='SUCCEEDED'; success_pass=m3.campaign_pass()
-record('five_monotonic_samples_and_navigation_gating',None,commit_states,duplicate=duplicate,sample_count=len(m2.committed),vector_stamps=[x['vector_stamp_ns'] for x in m2.committed],pending_nav_campaign_pass=pending_pass,terminal_fail_campaign_pass=failed_pass,nav_success_campaign_pass=success_pass)
+# Re-arm keeps t_A/context and sends the planner request once, with send-time stamp distinct from t_A.
+model = FixedTimestampModel(100)
+model.consume_trigger_json(TriggerJson(), 40_000_000_000, 1, identity, context)
+model.poll_phase_a(40_000_000_000, 2, FakeTF(upper=39_000_000_000), identity, context)
+rearmed = model.rearm_phase_a_query()
+model.poll_phase_a(40_020_000_000, 3, FakeTF(upper=40_000_000_000), identity, context)
+model.poll_phase_a(40_030_000_000, 4, FakeTF(upper=40_000_000_000), identity, context)
+record('phase_a_rearm_one_action_preserve_ta', None, model.phase_a_state,
+       rearm_accepted=rearmed, query_stamps=model.phase_a_queries, t_a_ns=model.phase_a_stamp,
+       planner_request_count=model.planner_request_count, planner_request_stamp_ns=model.planner_request_stamp_ns,
+       pinned_context_unchanged=(model.phase_a_context == context))
 
-# Additional design cases required for the review packet.
-# A. Trigger precedes the first buffered TF; target later falls outside/behind buffer.
-ident=Identity(3,2,7,'a'*64); t_trigger=40_000_000_000
-m=FixedTimestampModel(steady_ns:=100); assert m.trigger_phase_a(t_trigger,ident)
-tf_evicted=FakeTF(lower=t_trigger+20_000_000,upper=t_trigger+100_000_000)
-first=m.poll_phase_a(t_trigger,1,tf_evicted); second=m.poll_phase_a(t_trigger+30_000_000,2,tf_evicted)
-record('trigger_before_first_tf_and_target_evicted',None,{'first':first,'second':second,'query_stamps':m.phase_a_poll_stamps,'deadline':m.poll_phase_a(t_trigger+50_000_000,steady_ns,tf_evicted)},target_stamp_ns=t_trigger)
+# Trigger arrives before any transform; false availability does not imply permanent failure or retarget.
+model = FixedTimestampModel(10)
+model.consume_trigger_json(TriggerJson(), 50_000_000_000, 1, identity, context)
+never = FakeTF(lower=50_020_000_000, upper=50_100_000_000)
+wait1 = model.poll_phase_a(50_000_000_000, 2, never, identity, context)
+wait2 = model.poll_phase_a(50_050_000_000, 3, never, identity, context)
+deadline = model.poll_phase_a(50_060_000_000, 10, never, identity, context)
+record('phase_a_target_outside_buffer_until_steady_deadline', None, [wait1, wait2, deadline],
+       query_stamps=model.phase_a_queries, t_a_ns=model.phase_a_stamp)
 
-# Re-arming a pending exact-time poll never changes the query or resends an action.
-m=FixedTimestampModel(10**12); m.trigger_phase_a(50_000_000_000,ident); tf_late=FakeTF(upper=49_000_000_000)
-states=[m.poll_phase_a(50_000_000_000+i*10_000_000, i+1, tf_late) for i in range(2)]
-assert m.rearm_phase_a_query()  # poll re-arm preserves the pinned target
-states.append(m.poll_phase_a(50_020_000_000,3,FakeTF(upper=50_000_000_000)))
-record('phase_a_query_rearm_does_not_retry_action',None,states,query_stamps=m.phase_a_poll_stamps,planner_request_count=m.planner_request_count)
+# Phase-B cutoff: no future input and no receipt later than t_vector.
+base = 60_000_000_000
+future_input = make_snapshot('future-input', base, identity=identity, context=make_context(identity, path_stamp=base),
+                             scan_stamp=base + 1, receipt_stamp=base)
+model = FixedTimestampModel(10**12)
+future_accepted = model.capture_sample(future_input, base, 1, identity, context.revision, future_input.path_context)
+late_receipt = make_snapshot('late-receipt', base, identity=identity, context=make_context(identity, path_stamp=base),
+                             receipt_stamp=base + 1)
+late_receipt_accepted = model.capture_sample(late_receipt, base, 1, identity, context.revision, late_receipt.path_context)
+record('phase_b_cutoff_rejects_future_and_post_cutoff_inputs', None,
+       {'future_input_accepted': future_accepted, 'post_cutoff_receipt_accepted': late_receipt_accepted})
 
-# Receipt can be newer than odom and vector cutoff only if it is still <= cutoff.
-base=60_000_000_000; ss=snapshot(11,base,odom_stamp=base-20_000_000,receipt_stamp=base-10_000_000)
-m=FixedTimestampModel(10**12); cap=m.capture_sample(ss,base,1,ss.identity); tf_ok=FakeTF(upper=base)
-state=m.poll_sample(base+1_000_000,2,tf_ok,ss.identity)
-record('receipt_newer_than_odom_but_not_after_vector_cutoff',None,state,captured=cap,t_vector_ns=base,t_odom_ns=ss.odom_stamp_ns,t_receipt_ns=ss.receipt_stamp_ns,committed=len(m.committed)==1)
+# Required active barrier/path context cannot be omitted at acquisition or commit.
+valid = make_snapshot('missing-context', base, identity=identity, context=make_context(identity, path_stamp=base))
+model = FixedTimestampModel(10**12)
+missing_barrier_acq = model.capture_sample(valid, base, 1, identity, None, valid.path_context)
+missing_path_acq = model.capture_sample(valid, base, 1, identity, valid.path_context.revision, None)
+model.capture_sample(valid, base, 1, identity, valid.path_context.revision, valid.path_context)
+missing_barrier_commit = model.poll_sample(base + 1, 2, FakeTF(upper=base + 1), identity, None, valid.path_context)
+model.capture_sample(valid, base + 1, 3, identity, valid.path_context.revision, valid.path_context)
+missing_path_commit = model.poll_sample(base + 2, 4, FakeTF(upper=base + 2), identity, valid.path_context.revision, None)
+record('phase_b_missing_active_context_rejected', None, {'missing_barrier_at_acquisition': missing_barrier_acq,
+       'missing_path_at_acquisition': missing_path_acq, 'missing_barrier_at_commit': missing_barrier_commit,
+       'missing_path_at_commit': missing_path_commit})
 
-# Fresh at acquisition, stale by commit: exact old snapshot is discarded, never replaced.
-base=70_000_000_000; ss=snapshot(12,base); m=FixedTimestampModel(10**12); captured=m.capture_sample(ss,base,1,ss.identity)
-state=m.poll_sample(base+250_000_001,2,FakeTF(upper=base),ss.identity)
-record('fresh_at_acquisition_stale_at_commit',None,state,captured=captured,committed=len(m.committed),discards=m.discards)
+# Pending snapshot is immutable: later latest records cannot replace pinned members.
+old = make_snapshot('old-snapshot', base, identity=identity, context=make_context(identity, path_stamp=base),
+                    scan_id='scan-exact-1', odom_id='odom-exact-1', receipt_seq=91)
+latest = make_snapshot('latest-snapshot', base + 10_000_000, identity=identity,
+                       context=make_context(identity, path_stamp=base + 10_000_000),
+                       scan_id='scan-new-2', odom_id='odom-new-2', receipt_seq=92)
+model = FixedTimestampModel(10**12)
+model.capture_sample(old, base, 1, identity, old.path_context.revision, old.path_context)
+pending_before = copy.deepcopy(model.pending['snapshot'])
+waiting = model.poll_sample(base + 1, 2, FakeTF(upper=base - 1), identity,
+                            old.path_context.revision, old.path_context, latest_snapshot=latest)
+pending_unchanged = model.pending['snapshot'] == pending_before
+commit = model.poll_sample(base + 2, 3, FakeTF(upper=base + 2), identity,
+                           old.path_context.revision, old.path_context, latest_snapshot=latest)
+record('pending_snapshot_not_replaced_by_latest', None, [waiting, commit], pending_unchanged=pending_unchanged,
+       committed_records=model.committed)
 
-# Path identity/version is pinned. Replan version change invalidates pending sample.
-base=80_000_000_000; ss=snapshot(13,base,path_version=4); m=FixedTimestampModel(10**12); m.capture_sample(ss,base,1,ss.identity)
-state=m.poll_sample(base+1,2,FakeTF(upper=base),ss.identity,active_path_version=5)
-record('path_version_changes_while_waiting',None,state,pinned_path_version=4,active_path_version=5,committed=len(m.committed))
+# Duplicate detection is measurement/lifecycle identity, not model snapshot ID or cutoff.
+first = make_snapshot('id-a', base, identity=identity, context=make_context(identity, path_stamp=base),
+                      scan_id='scan-same', odom_id='odom-same', receipt_seq=77)
+second = make_snapshot('id-b', base + 5_000_000, identity=identity, context=make_context(identity, path_stamp=base),
+                       scan_id='scan-same', odom_id='odom-same', receipt_seq=77)
+model = FixedTimestampModel(10**12)
+model.capture_sample(first, base, 1, identity, first.path_context.revision, first.path_context)
+model.poll_sample(base + 1, 2, FakeTF(upper=base + 1), identity, first.path_context.revision, first.path_context)
+model.capture_sample(second, base + 5_000_000, 3, identity, second.path_context.revision, second.path_context)
+duplicate = model.poll_sample(base + 5_000_001, 4, FakeTF(upper=base + 5_000_001), identity,
+                              second.path_context.revision, second.path_context)
+record('same_measurements_different_snapshot_id_and_cutoff', None, duplicate,
+       committed_count=len(model.committed), discarded=model.discards)
 
-# Barrier revision is monotonic; a change and restoration of values still changes revision.
-base=90_000_000_000; ss=snapshot(14,base,barrier_revision=8); m=FixedTimestampModel(10**12); m.capture_sample(ss,base,1,ss.identity)
-barrier_values_restored=True; state=m.poll_sample(base+1,2,FakeTF(upper=base),ss.identity,active_barrier_revision=10)
-record('barrier_changed_then_values_returned',None,state,values_look_equal=barrier_values_restored,pinned_revision=8,current_revision=10,committed=len(m.committed))
+# Inputs fresh at acquisition may be stale at commit; no latest substitution.
+model = FixedTimestampModel(10**12)
+snapshot = make_snapshot('fresh-then-stale', base, identity=identity, context=make_context(identity, path_stamp=base))
+acquired = model.capture_sample(snapshot, base, 1, identity, snapshot.path_context.revision, snapshot.path_context)
+stale = model.poll_sample(base + FixedTimestampModel.LIMITS['odom'] + 1, 2,
+                          FakeTF(upper=base + FixedTimestampModel.LIMITS['odom'] + 1), identity,
+                          snapshot.path_context.revision, snapshot.path_context)
+record('fresh_at_acquisition_stale_at_commit', None, stale, acquired=acquired, commits=len(model.committed))
 
-# Non-mutating transform request: production helper changes the copied pose only.
-source_path=make_path(); source_path.poses[1].header.stamp.sec=2; source_before=copy.deepcopy(source_path)
-production._features_from_path(copy.deepcopy(source_path),FakeTF(upper=4_000_000_000),3_000_000_004)
-record('transform_request_does_not_mutate_raw_path',{'unchanged':source_path==source_before},{'unchanged':source_path==source_before},production_helper_used=True)
+# Barrier/path context ABA is caught by authoritative monotonic revisions/sequences.
+ctx_old = make_context(identity, sequence=12, revision=4, path_stamp=base)
+ctx_new = make_context(identity, sequence=14, revision=6, path_stamp=base)
+snapshot = make_snapshot('aba', base, identity=identity, context=ctx_old)
+model = FixedTimestampModel(10**12)
+model.capture_sample(snapshot, base, 1, identity, 4, ctx_old)
+barrier_aba = model.poll_sample(base + 1, 2, FakeTF(upper=base + 1), identity, 6, ctx_old)
+model = FixedTimestampModel(10**12)
+model.capture_sample(snapshot, base, 1, identity, 4, ctx_old)
+path_aba = model.poll_sample(base + 1, 2, FakeTF(upper=base + 1), identity, 4, ctx_new)
+record('barrier_and_path_change_then_return_invalidate', None, {'barrier': barrier_aba, 'path': path_aba,
+       'current_values_equal_old_payload': True, 'revision_or_sequence_advanced': True})
 
-# Timer polling returns without blocking, allowing action callback completion.
-base=100_000_000_000; ss=snapshot(15,base); m=FixedTimestampModel(10**12); m.capture_sample(ss,base,1,ss.identity)
-waiting=m.poll_sample(base+1,2,FakeTF(upper=base-1),ss.identity); m.action_callback('navigate','SUCCEEDED')
-after_callback=m.poll_sample(base+2,3,FakeTF(upper=base),ss.identity)
-record('callbacks_progress_while_nonblocking_tf_wait',None,{'first_poll':waiting,'callback_count':m.action_callbacks,'navigate':m.nav,'next_poll':after_callback})
+# can_transform true is not enough: transform exceptions are preserved and never committed.
+model = FixedTimestampModel(10**12)
+snapshot = make_snapshot('lookup-throws', base, identity=identity, context=make_context(identity, path_stamp=base))
+model.capture_sample(snapshot, base, 1, identity, snapshot.path_context.revision, snapshot.path_context)
+throws = FakeTF(upper=base + 1, transform_error=ExtrapolationException('fake lookup cause'))
+lookup_outcome = model.poll_sample(base + 1, 2, throws, identity, snapshot.path_context.revision, snapshot.path_context)
+record('can_transform_true_lookup_exception', None, lookup_outcome, can_transform_result=True,
+       lookup_failures=model.lookup_failures, commits=len(model.committed))
 
-# Recheck identity after arrival: future/past/missing connectivity fail without commit.
-for label,lo,hi,connected in [('tf_future',0,base-1,True),('tf_past',base+1,base+10,True),('tf_missing_connectivity',0,base+10,False)]:
-    ss=snapshot(16,base); m=FixedTimestampModel(10**12); m.capture_sample(ss,base,1,ss.identity)
-    state=m.poll_sample(base+1,2,FakeTF(lo,hi,connected),ss.identity)
-    record(label,None,state,committed=len(m.committed),failure_is_fail_closed=len(m.committed)==0)
+# Path transform uses a copied request; production helper mutation is separately shown as baseline evidence.
+source_path = make_path()
+source_path.poses[1].header.stamp.sec = 2
+before = (source_path.poses[1].header.stamp.sec, source_path.poses[1].header.stamp.nanosec)
+try:
+    production._features_from_path(source_path, FakeTF(upper=4_000_000_000), 3_000_000_004)
+    baseline_mutation = (source_path.poses[1].header.stamp.sec, source_path.poses[1].header.stamp.nanosec)
+except Exception as exc:
+    baseline_mutation = {'error': type(exc).__name__, 'message': str(exc)}
+proposed_path = make_path()
+proposed_path.poses[1].header.stamp.sec = 2
+proposed_before = (proposed_path.poses[1].header.stamp.sec, proposed_path.poses[1].header.stamp.nanosec)
+production._features_from_path(copy.deepcopy(proposed_path), FakeTF(upper=4_000_000_000), 3_000_000_004)
+proposed_after = (proposed_path.poses[1].header.stamp.sec, proposed_path.poses[1].header.stamp.nanosec)
+record('raw_path_immutability', {'before': before, 'after': baseline_mutation},
+       {'before': proposed_before, 'after': proposed_after, 'unchanged': proposed_before == proposed_after})
 
-# Stable explicit assertions for the proposal matrix.
-assert all(not x['planner_requested'] for x in base_counts)
-assert model is not None
-assert results[0]['proposed'][-1]['state']=='PHASE_A_READY'
-assert 'COMMITTED' in next(x for x in results if x['case']=='phase_b_tf_arrives_after_selection_but_data_fresh')['proposed'] and next(x for x in results if x['case']=='phase_b_tf_arrives_after_selection_but_data_fresh')['committed'][0]['tf_stamp_ns']==10_000_000_000
-assert next(x for x in results if x['case']=='tf_never_arrives')['proposed'][-1]=='FAIL_EXISTING_RUN_DEADLINE'
-assert next(x for x in results if x['case']=='path_pose_input_immutability')['proposed']['input_mutated'] is False
-assert next(x for x in results if x['case']=='tf_after_input_expiry')['proposed']=='DISCARDED_FRESHNESS'
-assert next(x for x in results if x['case']=='receipt_odom_update_while_pending')['assert_pinned'] is True
-assert next(x for x in results if x['case']=='action_callback_during_tf_wait')['callback_count']==1
-assert next(x for x in results if x['case']=='trigger_before_first_tf_and_target_evicted')['proposed']['deadline']=='FAIL_EXISTING_RUN_DEADLINE'
-assert next(x for x in results if x['case']=='phase_a_query_rearm_does_not_retry_action')['planner_request_count']==1
-assert next(x for x in results if x['case']=='receipt_newer_than_odom_but_not_after_vector_cutoff')['committed'] is True
-assert next(x for x in results if x['case']=='fresh_at_acquisition_stale_at_commit')['proposed']=='DISCARDED_FRESHNESS'
-assert next(x for x in results if x['case']=='path_version_changes_while_waiting')['proposed']=='DISCARDED_PATH_VERSION'
-assert next(x for x in results if x['case']=='barrier_changed_then_values_returned')['proposed']=='DISCARDED_BARRIER'
-assert next(x for x in results if x['case']=='transform_request_does_not_mutate_raw_path')['proposed']['unchanged'] is True
-assert next(x for x in results if x['case']=='callbacks_progress_while_nonblocking_tf_wait')['proposed']['callback_count']==1
-assert all(next(x for x in results if x['case']==name)['failure_is_fail_closed'] for name in ('tf_future','tf_past','tf_missing_connectivity'))
-five=next(x for x in results if x['case']=='five_monotonic_samples_and_navigation_gating')
-assert five['sample_count']==5 and five['pending_nav_campaign_pass'] is False and five['terminal_fail_campaign_pass'] is False and five['nav_success_campaign_pass'] is True
-out=Path(__file__).with_name('offline_validation_results.json')
-out.write_text(json.dumps({'model':'PROPOSAL_ONLY_NOT_PRODUCTION','production_baseline':{'executed_separately':True,'methods':['source _Collector._tick()','source _features_from_path()'],'purpose':'fake-object baseline only; not a running ROS node'},'runtime_or_campaign':False,'freshness_limits_ns':FixedTimestampModel.LIMITS,'tf_wait_budget':'none added; all waits end at existing whole-run steady deadline','case_count':len(results),'cases':results},indent=2,sort_keys=True)+'\n')
-print(json.dumps(results,indent=2)); print('RESULT_JSON',out)
+# Executor/action callback remains processable while the model performs nonblocking timer polls.
+model = FixedTimestampModel(10**12)
+snapshot = make_snapshot('callback', base, identity=identity, context=make_context(identity, path_stamp=base))
+model.capture_sample(snapshot, base, 1, identity, snapshot.path_context.revision, snapshot.path_context)
+first_poll = model.poll_sample(base + 1, 2, FakeTF(upper=base - 1), identity,
+                              snapshot.path_context.revision, snapshot.path_context)
+model.action_callbacks += 1  # fake executor callback runs between timer invocations
+second_poll = model.poll_sample(base + 2, 3, FakeTF(upper=base + 2), identity,
+                               snapshot.path_context.revision, snapshot.path_context)
+record('callbacks_progress_while_nonblocking_wait', None, {'first_poll': first_poll,
+       'callbacks_processed': model.action_callbacks, 'next_poll': second_poll})
+
+# Existing source-input freshness limit is rechecked; no new bound is introduced here.
+record('freshness_limits_used_by_model', None, FixedTimestampModel.LIMITS,
+       authority_note='existing collector source values only; not TF-age/skew/expiry authority')
+
+assert production.importlib.import_module is ORIGINAL_IMPORT
+assert production.time.monotonic is ORIGINAL_MONOTONIC
+assert len(RESULTS) == 17
+assert RESULTS[0]['proposed_model'][-1] == 'PLANNER_REQUESTED_ONCE'
+assert RESULTS[0]['t_a_ns'] != RESULTS[0]['planner_request_stamp_ns']
+assert RESULTS[2]['proposed_model'][-1] == 'FAILED_STEADY_DEADLINE' and RESULTS[2]['t_a_ns'] is None
+assert RESULTS[3]['proposed_model'] == 'FAILED_ACTIVE_CONTEXT_CHANGED'
+assert RESULTS[4]['proposed_model'] == ['FAILED_CLOCK_ROLLBACK', 'FAILED_CLOCK_ROLLBACK']
+assert RESULTS[5]['pinned_context_unchanged'] is True and RESULTS[5]['planner_request_count'] == 1
+assert RESULTS[6]['proposed_model'][-1] == 'FAILED_STEADY_DEADLINE'
+assert RESULTS[7]['proposed_model']['future_input_accepted'] is False
+assert RESULTS[7]['proposed_model']['post_cutoff_receipt_accepted'] is False
+assert RESULTS[8]['proposed_model']['missing_barrier_at_acquisition'] is False
+assert RESULTS[8]['proposed_model']['missing_path_at_acquisition'] is False
+assert RESULTS[8]['proposed_model']['missing_barrier_at_commit'] == 'DISCARDED_MISSING_CONTEXT'
+assert RESULTS[8]['proposed_model']['missing_path_at_commit'] == 'DISCARDED_MISSING_CONTEXT'
+assert RESULTS[9]['pending_unchanged'] is True and RESULTS[9]['committed_records'][0]['receipt_sequence'] == 91
+assert RESULTS[10]['proposed_model'] == 'DISCARDED_DUPLICATE_MEASUREMENT_IDENTITY'
+assert RESULTS[11]['proposed_model'] == 'DISCARDED_INPUT_STALE_FUTURE_OR_AFTER_CUTOFF'
+assert RESULTS[12]['proposed_model'] == {'barrier': 'DISCARDED_BARRIER_REVISION_CHANGED', 'path': 'DISCARDED_PATH_CONTEXT_CHANGED', 'current_values_equal_old_payload': True, 'revision_or_sequence_advanced': True}
+assert RESULTS[13]['proposed_model'] == 'WAIT_TF_LOOKUP_EXCEPTION' and RESULTS[13]['commits'] == 0
+assert RESULTS[14]['proposed_model']['unchanged'] is True
+assert RESULTS[15]['proposed_model']['callbacks_processed'] == 1
+
+OUT = Path(__file__).with_name('offline_validation_results.json')
+RESULT_DOC = {
+    'model_status': 'PROPOSAL_ONLY_NOT_PRODUCTION',
+    'production_baseline': {
+        'executed_separately': True,
+        'executed_separately': True,
+        'source_path': str(OBSERVER_REL),
+        'source_sha256': OBSERVER_SHA256,
+        'methods': ['_Collector._tick()', '_features_from_path()'],
+        'fake_objects_only': True,
+    },
+    'runtime_or_campaign': False,
+    'not_evaluated': ['81D_vector_acceptance', 'QoS_acceptance', 'evidence_chain_acceptance',
+                      'campaign_pass', 'Nav2_runtime', 'TF2_runtime_buffer_behavior'],
+    'freshness_limits_ns': FixedTimestampModel.LIMITS,
+    'tf_wait_budget': 'none added; steady deadline is the existing whole-run deadline',
+    'case_count': len(RESULTS),
+    'cases': RESULTS,
+}
+OUT.write_text(json.dumps(RESULT_DOC, ensure_ascii=False, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+print(json.dumps({'case_count': len(RESULTS), 'model_status': RESULT_DOC['model_status'],
+                  'production_source': str(OBSERVER_SOURCE), 'source_sha256': OBSERVER_SHA256,
+                  'not_evaluated': RESULT_DOC['not_evaluated']}, sort_keys=True))

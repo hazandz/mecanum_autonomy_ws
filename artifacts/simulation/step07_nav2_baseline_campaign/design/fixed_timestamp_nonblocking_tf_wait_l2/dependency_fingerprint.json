@@ -33,6 +33,7 @@
     }
   ],
   "packet_type": "REVIEW_ONLY_L2_DESIGN_DEPENDENCY_FINGERPRINT",
+  "production_baseline_commit": "4e83ce6cffdd9910c288f90454ab747497d7a4a6",
   "source_and_authority_inputs": [
     {
       "byte_size": 84141,
@@ -135,15 +136,20 @@
       "sha256": "631b6d28fdf42ceb4867da953d4a3586c9e6e2d804fa4f35f3a18f90dcc13cd9"
     },
     {
-      "byte_size": 27664,
-      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_model.py",
-      "sha256": "482a8926241f1963cd7f895d80b149e3dbe0873f0410b2783676f828d75dc38e"
+      "byte_size": 16899,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/TF_EXACT_TIME_WAIT_PROPOSAL.md",
+      "sha256": "8c9bb61be4f5aae006a654fdbfeef7eb9925f9d35b1dcb55e3605326b63f485c"
     },
     {
-      "byte_size": 17675,
-      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/TF_EXACT_TIME_WAIT_PROPOSAL.md",
-      "sha256": "e49a01d465ec08a899ae3f56e5c52a1af169aa7d3a335338700f6a2e30119a45"
+      "byte_size": 38250,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_model.py",
+      "sha256": "9e9d6b0a23bbf2206344cb716ed0a0bb6dc3301aca3699678019faafd188aeb2"
+    },
+    {
+      "byte_size": 8794,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_validation_results.json",
+      "sha256": "f427eb0cda4aea219deae463079afe3d8841d82cd6eb1385ac77db3d11324bde"
     }
   ],
-  "source_base": "4e83ce6cffdd9910c288f90454ab747497d7a4a6"
+  "source_base": "ae620c57f396f593a39aafb589f4f69b3daf37c2"
 }
