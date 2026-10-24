@@ -768,6 +768,18 @@ def test_protocol2_pass_fixture_is_accepted_by_validate_run_directory(tmp_path):
         "gate_b_vectors.json", "gate_b_terminal.json", "navigation_evidence_chain.json"}
 
 
+def test_protocol2_pass_rejects_resealed_contradictory_handshake_failure(tmp_path):
+    root = _protocol2_pass_bundle(tmp_path / "pass_with_failure")
+    _write_canonical_json(root / "collector_handshake.failure.json", {
+        "schema_version": "1.0", "protocol": "2.0",
+        "invocation_id": "INVOCATION_PROTOCOL2_FIXTURE", "config_hash": "a" * 64,
+        "status": "FAIL", "events": PROTOCOL2_EVENTS[:-1],
+        "failure_literal": "CONTRADICTORY_FAILURE"})
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH"):
+        validate_run_directory(root)
+
+
 @pytest.mark.parametrize("mutation", [
     "collection_missing_protocol", "collection_old_protocol", "collection_unknown_protocol",
     "run_record_protocol_mismatch", "terminal_fail", "terminal_wrong_config",
@@ -869,6 +881,102 @@ def test_protocol2_pre_gate_failure_requires_only_sealed_run_record(tmp_path):
     result = validate_run_directory(root)
     assert result["verdict"]["pass"] is False
     assert result["gate_b"]["state"] == "NOT_STARTED"
+
+
+def test_protocol2_pre_gate_producer_not_started_artifact_is_a_sealed_failure(tmp_path, monkeypatch):
+    from run_step07_nav2_baseline_run005 import settle_collectors_before_teardown
+
+    root = tmp_path / "pre_gate_settlement"
+    root.mkdir()
+    config_hash, blocker, literal = "a" * 64, "CPP_INITIAL_READY_FAILED", "RUNNER_SETTLEMENT_FIXTURE"
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id="PRE_GATE_SETTLEMENT",
+        collector_handshake_protocol="2.0", collector_stage="CPP_OBSERVER_STARTING",
+        collector_settlement={"failure_literal": literal, "blocking_reason": blocker,
+                              "stage": "CPP_OBSERVER_STARTING"})
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = [blocker]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    gate_path, observer_path = root / "gate_b_vectors.json", root / "runtime_observer.json"
+    outcomes = settle_collectors_before_teardown(gate=None, cpp=None, gate_member=None,
+        cpp_member=None, gate_path=gate_path, observer_path=observer_path,
+        config_hash=config_hash, failure_literal=literal, blocking_reason=blocker)
+    record["collector_outcomes"] = outcomes
+    _write_canonical_json(root / "run_record.json", record)
+    _seal_bundle(root)
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b"]["state"] == "NOT_STARTED"
+    assert result["gate_b"]["blocking_reason"] == blocker
+
+
+@pytest.mark.parametrize("mutation", ["wrong_invocation", "wrong_config", "wrong_events", "wrong_literal"])
+def test_protocol2_handshake_failure_sidecar_must_match_run_record(tmp_path, mutation):
+    root = tmp_path / mutation
+    root.mkdir()
+    config_hash, invocation_id = "a" * 64, "EARLY_HANDSHAKE_FAILURE"
+    state = {"protocol": "2.0", "status": "FAIL", "events": [],
+             "failure_literal": "GATE_B_COLLECTION_TIMEOUT"}
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id=invocation_id,
+        collector_handshake_protocol="2.0", collector_handshake=copy.deepcopy(state))
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = [state["failure_literal"]]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    failure = {"schema_version": "1.0", "invocation_id": invocation_id,
+               "config_hash": config_hash, **state}
+    if mutation == "wrong_invocation":
+        failure["invocation_id"] = "OTHER"
+    elif mutation == "wrong_config":
+        failure["config_hash"] = "b" * 64
+    elif mutation == "wrong_events":
+        failure["events"] = ["CPP_FINALIZE_REQUESTED"]
+    else:
+        failure["failure_literal"] = "OTHER_FAILURE"
+    _write_canonical_json(root / "run_record.json", record)
+    _write_canonical_json(root / "collector_handshake.failure.json", failure)
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="COLLECTOR_HANDSHAKE_FAILURE_IDENTITY_INVALID|COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH"):
+        validate_run_directory(root)
+
+
+def test_protocol2_gate_started_without_collection_accepts_only_runner_stage_failure(tmp_path, monkeypatch):
+    from run_step07_nav2_baseline_run005 import settle_collectors_before_teardown
+
+    class ExitedProcess:
+        returncode = 2
+        def poll(self):
+            return self.returncode
+
+    root = tmp_path / "gate_started_no_collection"
+    root.mkdir()
+    config_hash, blocker, literal = "a" * 64, "GATE_B_COLLECTION_TIMEOUT", "RUNNER_GATE_SETTLEMENT"
+    monkeypatch.setattr("run_step07_nav2_baseline_run005._safe_stop_owned_process",
+        lambda proc, member, timeout: {"exit_code": 2, "leader_returncode": 2,
+            "terminal_state": "EXITED", "clean": True, "verified": True,
+            "graceful": True, "signal_sent": False, "errors": []})
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id="GATE_STARTED_NO_COLLECTION",
+        collector_handshake_protocol="2.0", collector_stage="GATE_B_COLLECTION",
+        collector_settlement={
+            "failure_literal": literal, "blocking_reason": blocker, "stage": "GATE_B_COLLECTION"})
+    record["call_counts"]["gate_b_observer"] = 1
+    record["process_groups"]["gate_b_observer"] = {"pid": 4040, "pgid": 4040}
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = [blocker]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    gate_path, observer_path = root / "gate_b_vectors.json", root / "runtime_observer.json"
+    outcomes = settle_collectors_before_teardown(gate=ExitedProcess(), cpp=None,
+        gate_member={"name": "gate_b_observer", "pgid": 4040}, cpp_member=None,
+        gate_path=gate_path, observer_path=observer_path, config_hash=config_hash,
+        failure_literal=literal, blocking_reason=blocker)
+    record["collector_outcomes"] = outcomes
+    _write_canonical_json(root / "run_record.json", record)
+    _seal_bundle(root)
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b"]["state"] == "FAILED"
+    assert result["gate_b"]["blocking_reason"] == blocker
 
 
 def test_protocol2_handshake_failure_accepts_sealed_partial_bundle(tmp_path):

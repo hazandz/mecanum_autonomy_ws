@@ -2333,6 +2333,13 @@ def main():
                     action_readiness_state.get("failure_literal"), error_text)
             else:
                 settlement_blocking_reason = error_text or record.get("collector_stage") or "COLLECTOR_PREREQUISITE_FAILED"
+            # Bind a runner-authored stage artifact to the run record even when
+            # collector teardown itself completes without an error.
+            record["collector_settlement"] = {
+                "failure_literal": settlement_literal,
+                "blocking_reason": settlement_blocking_reason,
+                "stage": record.get("collector_stage", "UNRECORDED"),
+            }
             try:
                 record["collector_outcomes"] = settle_collectors_before_teardown(
                     gate=gate, cpp=cpp, gate_member=collector_members.get("gate_b_observer"),

@@ -327,3 +327,22 @@ R1 was a protocol downgrade gap: the run record selected protocol 2.0 while the 
 R2 was an incomplete integrity-coverage gap: a verdict artifact omitted from both manifest and `SHA256SUMS.txt` could escape the equality check. The validator now requires manifest schema/run identity/count, SHA-256 and exact byte size, exact checksum path/hash equality, sealed coverage for every verdict artifact actually read, all five required files for protocol-2 PASS, and safe in-root regular paths without symlinks or traversal. The manifest does not hash itself. Existing five-vector and acceptance requirements are unchanged.
 
 Offline regressions exercise complete PASS via `validate_run_directory()`, protocol/event/terminal mutations, stage-specific failures, missing or unsealed artifacts, tampered bytes, symlink/path rejection, and fixed-base exact phase scopes. Phase A: Step-7 tools 408 passed/2 skipped, bringup 303 passed, RL 720 passed, validator 68 passed; source-pin drift encountered during source edits was closed in Phase A.5. Final post-Phase-B verification remains a separate required check. No runtime or authorization claim is made.
+
+
+## 2026-10-24 — Run005 R3/R4 offline validator corrective
+
+Base/sole parent `71713d0a79b006580510169924732d6791c87858`; corrective base `bbac7448be59cc4afa54902744f1d4cf14fdf66c`; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`. R3 separates sealed runner stage-failure artifacts from Gate-B protocol-2 collections and requires snapshot evidence only after `CPP_SNAPSHOT_COMPLETE`. R4 validates any present `collector_handshake.failure.json` against the run record before early returns and rejects contradictory failure sidecars in COMPLETE/PASS bundles. Collection acceptance, exactly five 81D vectors, navigation chain, legacy evidence, and protocol markers remain fail-closed.
+
+Phase A: focused runner/validator 266 passed, 2 skipped; bringup 316 passed after R3 lineage scope correction; RL 720 passed using Python 3.12.3 / Pydantic 2.10.6 and external install base /tmp/step07_audit21_corrective/install; `py_compile` 4 paths PASS. Pre-pin full Step-7 was 414 passed/2 skipped with only expected runner pin drift. Phase A.5 preserves 38/38 pin membership and refreshes 4 existing entries. Phase A source scope is 4 paths; A.5 is 7; final Phase B scope is 11; allowlist is 12 with runner test unchanged. Post-reconciliation verification is not preclaimed.
+
+Guard/evidence/manifest SHA-256: `12b8a61a2a4320cb035aea50ee045bc0bd2860d7babaece3a72504e0784f95b5` / `d1e68ca5e1677504f3163c3cb53765ce8d8a544ddc27c20e93fdc954c35c333d` (81268 bytes) / `6aef5ef3cd5a6f93c806f64d841b1d708f3bb80cb4d8bc5a32327492f13d0121`. Guard remains PENDING, capacity 1, acquisition 0, runtime authorization NOT_GRANTED, Gate B NOT_STARTED, RUNTIME_APPROVED NOT_APPROVED. No runtime or integration was run.
+
+
+### 2026-10-24 — R3/R4 allowlist/scope metadata correction
+
+Final coherence detected that the actual 11-path Phase B scope had been copied into the allowlist field. Corrected the authorized allowlist to the exact 12 permitted paths, retaining the unchanged runner test as authorized-only. Actual changed-path set remains exactly 11; no additional source path was introduced. The R3 scope regression now checks actual scope separately from allowlist membership. This metadata correction refreshed source pins from the final four changed source/test files; post-correction test results are pending and not preclaimed.
+
+Current metadata hashes: guard `30945fa6f806af2ab511b998980e0a9776d5db04c76c656a90b50708921a2469`, evidence `f9737b59162be1ad8dddf512cb226edef93fd97caed565d1fef0f9a6e761b761` (81454 bytes), manifest `57bc5f58427b40fb630972eb72ebbbef98ee97625a3023796273a8a8f77514f4`.
+
+
+Final verification addendum (2026-10-24): after the allowlist correction, Step-7 tools 415 passed/2 skipped, bringup 316 passed, RL 720 passed, six-package external build 6 packages, observer/ROSIDL 33 tests with zero failures, py_compile 4 paths, 38/38 pins and final coherence PASS. No runtime/integration. Final guard/evidence/manifest SHA-256: `30945fa6f806af2ab511b998980e0a9776d5db04c76c656a90b50708921a2469` / `14adeff6614d7a90bb435f0b3b67fa72974019ffc742ed5162241f4776b17600` (81910 bytes) / `d3ccfa90434799667eced082553b35b68e90ae960a9cf9fdf4837019119e102c`.

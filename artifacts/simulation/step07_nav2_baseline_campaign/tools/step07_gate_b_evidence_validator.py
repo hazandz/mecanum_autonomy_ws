@@ -458,11 +458,12 @@ def _required_sealed_artifacts(record: dict, *, protocol2: bool) -> set[str]:
         events = events if type(events) is list else []
         if "GATE_B_COLLECTION_VERIFIED" in events:
             required.add("gate_b_vectors.json")
-        if "CPP_FINALIZE_REQUESTED" in events or "CPP_SNAPSHOT_COMPLETE" in events:
+        # A request is not proof that the peer snapshot was produced.
+        if "CPP_SNAPSHOT_COMPLETE" in events:
             required.add("runtime_observer.json")
         if "GATE_B_TERMINAL_VERIFIED" in events:
             required.add("gate_b_terminal.json")
-        if handshake.get("status") == "FAIL" and events:
+        if handshake.get("status") == "FAIL":
             required.add("collector_handshake.failure.json")
     outcomes = record.get("collector_outcomes")
     if type(outcomes) is dict:
@@ -487,6 +488,70 @@ def _require_sealed(path_name: str, *, root: Path, verified: set[str]) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"VERDICT_ARTIFACT_PATH_INVALID:{path_name}")
     return path
+
+
+def _validate_handshake_failure_artifact(failure: dict, record: dict,
+                                         handshake: dict | None) -> None:
+    """Bind a sealed producer failure sidecar to the run's exact failed handshake."""
+    if (type(failure) is not dict or failure.get("schema_version") != "1.0"
+            or failure.get("protocol") != "2.0"
+            or failure.get("config_hash") != record.get("config_hash")
+            or failure.get("invocation_id") != record.get("invocation_id")
+            or type(record.get("invocation_id")) is not str or not record["invocation_id"]):
+        raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_IDENTITY_INVALID")
+    if type(handshake) is not dict or handshake.get("status") != "FAIL":
+        raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
+    if any(failure.get(key) != handshake.get(key)
+           for key in ("protocol", "status", "events", "failure_literal")):
+        raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
+    if (type(failure.get("events")) is not list
+            or type(failure.get("failure_literal")) is not str
+            or not failure["failure_literal"]):
+        raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_SCHEMA_INVALID")
+
+
+def _validate_runner_stage_failure(document: dict, record: dict, *, config_hash: str) -> dict:
+    """Validate runner settlement output without interpreting it as Gate-B collection."""
+    stage = document.get("stage_failure")
+    collector_failure = document.get("collector_failure")
+    terminal_state = document.get("collector_terminal_state")
+    expected_status = "NOT_STARTED" if terminal_state == "NOT_STARTED" else "FAILED"
+    blocking_reason = stage.get("blocking_reason") if type(stage) is dict else None
+    literal = collector_failure.get("literal") if type(collector_failure) is dict else None
+    reasons = record.get("failure_reason_literals")
+    failure_details = record.get("failure_details")
+    recorded_literals = set(reasons) if type(reasons) is list and all(
+        type(value) is str for value in reasons) else set()
+    if type(failure_details) is dict and type(failure_details.get("literal")) is str:
+        recorded_literals.add(failure_details["literal"])
+    if type(record.get("pre_teardown_failure")) is str:
+        recorded_literals.add(record["pre_teardown_failure"])
+    settlement = record.get("collector_settlement")
+    if (type(settlement) is not dict or type(settlement.get("failure_literal")) is not str
+            or settlement.get("blocking_reason") != blocking_reason
+            or settlement.get("stage") != record.get("collector_stage")):
+        raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_INVALID")
+    recorded_literals.add(settlement["failure_literal"])
+    if (record.get("terminal_outcome", "").endswith("_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT")
+            or document.get("schema_version") != "1.0"
+            or document.get("config_hash") != config_hash
+            or terminal_state not in ("NOT_STARTED", "FAILURE_ARTIFACT_WRITTEN_BY_RUNNER")
+            or type(stage) is not dict or stage.get("status") != expected_status
+            or stage.get("gate_b_observer_started") is not (terminal_state != "NOT_STARTED")
+            or type(blocking_reason) is not str or not blocking_reason
+            or type(literal) is not str or not literal
+            or literal not in recorded_literals
+            or document.get("samples") != [] or document.get("sample_count") != 0
+            or type(document.get("errors")) is not list
+            or literal not in document["errors"]):
+        raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_INVALID")
+    lifecycle = collector_failure.get("lifecycle_state")
+    if (type(lifecycle) is not dict or type(lifecycle.get("state")) is not str
+            or not lifecycle["state"] or lifecycle.get("reason") != blocking_reason
+            or collector_failure.get("partial_artifact") != "gate_b_vectors.json"):
+        raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_INVALID")
+    return {"state": expected_status, "blocking_reason": blocking_reason,
+            "failure_literal": literal}
 
 
 def validate_run_record(record: dict) -> dict:
@@ -900,11 +965,36 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                                                 verified=verified))[0]
     protocol2 = _protocol2_state(record, gate_doc, terminal, failure_doc)
     handshake = _validate_handshake_events(record, protocol2=protocol2)
-    if protocol2 and handshake is None and gate_doc is not None:
+    if failure_doc is not None:
+        _validate_handshake_failure_artifact(failure_doc, record, handshake)
+    if (protocol2 and handshake is None and gate_doc is not None
+            and gate_doc.get("protocol_phase") == "COLLECTION_COMPLETE_AWAITING_PEER"):
         raise ValueError("COLLECTOR_HANDSHAKE_MISSING_AFTER_COLLECTION")
     missing = _required_sealed_artifacts(record, protocol2=protocol2) - verified
     if missing:
         raise ValueError(f"VERDICT_ARTIFACT_COVERAGE_INCOMPLETE:{','.join(sorted(missing))}")
+
+    if protocol2 and gate_doc is not None and gate_doc.get("protocol_phase") != "COLLECTION_COMPLETE_AWAITING_PEER":
+        stage_result = _validate_runner_stage_failure(
+            gate_doc, record, config_hash=record.get("config_hash"))
+        events = handshake.get("events", []) if handshake is not None else []
+        if (events or record.get("call_counts", {}).get("gate_b_observer", 0)
+                != (1 if stage_result["state"] == "FAILED" else 0)):
+            raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_STAGE_MISMATCH")
+        if handshake is not None and handshake.get("status") != "FAIL":
+            raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_STAGE_MISMATCH")
+        if (record.get("acceptance", {}).get("observer_acceptance") is not False
+                or record.get("acceptance", {}).get("gate_b_vectors") is not False):
+            raise ValueError("GATE_B_RUNNER_STAGE_FAILURE_ACCEPTANCE_MISMATCH")
+        result["observer"] = {"state": "NOT_REQUIRED_WITHOUT_CPP_SNAPSHOT"}
+        result["gate_b"] = {"state": stage_result["state"], "acceptance": {
+            "five_immutable_observation81": False, "compute_path_success_map_frame": False,
+            "navigate_to_pose_requested_once": False, "navigate_to_pose_succeeded": False,
+            "no_command_or_policy_publisher": False, "errors_absent": False},
+            "stage_failure": gate_doc["stage_failure"],
+            "blocking_reason": stage_result["blocking_reason"]}
+        return result
+
     if protocol2 and not result["verdict"]["pass"] and not gate_exists:
         calls = record.get("call_counts", {})
         gate_member = record.get("process_groups", {}).get("gate_b_observer", {})
@@ -936,16 +1026,6 @@ def validate_run_directory(run_directory: str | Path) -> dict:
         if (result["verdict"]["pass"] and (handshake is None or handshake.get("status") != "COMPLETE"
                 or handshake.get("events") != PROTOCOL2_EVENTS)):
             raise ValueError("COLLECTOR_HANDSHAKE_INCOMPLETE_FOR_PASS")
-        if handshake is not None and handshake.get("status") == "FAIL":
-            failure_path = _require_sealed("collector_handshake.failure.json", root=root,
-                                           verified=verified)
-            failure, _ = load_json(failure_path)
-            if (failure.get("schema_version") != "1.0" or failure.get("protocol") != "2.0"
-                    or failure.get("config_hash") != record.get("config_hash")
-                    or failure.get("invocation_id") != record.get("invocation_id")
-                    or any(failure.get(key) != handshake.get(key)
-                           for key in ("status", "events", "failure_literal"))):
-                raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
         if terminal is not None:
             result["gate_b_terminal"] = validate_gate_b_terminal(
                 terminal, collection_raw=gate_path.read_bytes(),
@@ -953,6 +1033,28 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                 config_hash=record.get("config_hash"), invocation_id=record.get("invocation_id"))
         if handshake is not None and handshake.get("status") == "COMPLETE" and terminal is None:
             raise ValueError("GATE_B_TERMINAL_EVIDENCE_MISSING")
+        if handshake is not None and handshake.get("status") == "FAIL":
+            if (record.get("acceptance", {}).get("gate_b_vectors") is not False
+                    or record.get("acceptance", {}).get("observer_acceptance") is not False):
+                raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
+            events = handshake["events"]
+            snapshot_complete = "CPP_SNAPSHOT_COMPLETE" in events
+            if snapshot_complete:
+                if observer is None:
+                    raise ValueError("VERDICT_ARTIFACT_REQUIRED_BUT_MISSING:runtime_observer.json")
+                result["observer"] = validate_observer(observer, config_hash=record.get("config_hash"),
+                    qos_implementation_pin_evidence=record.get("preflight", {}).get("qos_implementation_pin_evidence"),
+                    review_commit=record.get("review_commit"))
+            else:
+                result["observer"] = {"state": "NOT_REQUIRED_BEFORE_CPP_SNAPSHOT"}
+            result["gate_b"] = {"state": "HANDSHAKE_FAILED",
+                "blocking_reason": handshake["failure_literal"],
+                "acceptance": {"five_immutable_observation81": False,
+                    "compute_path_success_map_frame": False, "navigate_to_pose_requested_once": False,
+                    "navigate_to_pose_succeeded": False, "no_command_or_policy_publisher": False,
+                    "errors_absent": False}}
+            result["collector_handshake_failure"] = failure_doc
+            return result
     else:
         if not observer_exists:
             raise ValueError("OBSERVER_ARTIFACT_REQUIRED_BUT_MISSING")
@@ -962,21 +1064,6 @@ def validate_run_directory(run_directory: str | Path) -> dict:
     if not protocol2:
         observer, _ = load_json(observer_path)
     assert gate_doc is not None
-    if protocol2 and not result["verdict"]["pass"] and result["run_record"].get(
-            "collector_handshake", {}).get("status") == "FAIL":
-        failure, _ = load_json(_require_sealed("collector_handshake.failure.json", root=root,
-                                               verified=verified))
-        state = result["run_record"]["collector_handshake"]
-        if (failure.get("schema_version") != "1.0" or failure.get("protocol") != "2.0"
-                or failure.get("config_hash") != result["run_record"]["config_hash"]
-                or failure.get("invocation_id") != result["run_record"]["invocation_id"]
-                or any(failure.get(k) != state.get(k) for k in ("status", "events", "failure_literal"))
-                or not failure.get("failure_literal")
-                or result["run_record"]["acceptance"].get("gate_b_vectors") is not False
-                or result["run_record"]["acceptance"].get("observer_acceptance") is not False):
-            raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
-        result["collector_handshake_failure"] = failure
-        return result
     if gate_doc.get("collector_terminal_state") == "NOT_STARTED":
         required_observer = {"clock", "scan", "wheel_odometry_raw", "imu_data", "filtered_odometry",
             "tf", "tf_static", "lifecycle", "receipt", "graph", "cmd_vel_ownership",

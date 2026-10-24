@@ -2328,3 +2328,24 @@ R2: all files read for verdict are sealed. Protocol2 PASS requires the sealed ru
 Phase A: focused validator 68 passed; full Step-7 408 passed/2 skipped; full bringup 303 passed; full RL 720 passed; Python 3.12.3/Pydantic 2.10.6; `py_compile` and diff checks passed. The first source-pin mismatch was expected Phase-A.5 drift; final inventory retained 38/38 membership and refreshed three existing pin records for the validator, validator tests and scope contract test. External build/observer/ROSIDL evidence is inherited from base because no runtime source, build input or dependency changed. Phase B final re-verification is required and is not pre-claimed here.
 
 Exact Phase B changed set: 10 paths; authorized allowlist: 12. `SOURCE_FREEZE=TRUE` denotes offline source/pin closure only. Source guard remains pending, capacity 1, acquisition count 0, runtime authorization `NOT_GRANTED`; `GATE_B=NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. No runtime, retry, integration, HIL, hardware or Fuel provisioning.
+
+
+### 2026-10-24 — Run005 R3/R4 offline corrective
+
+Work package: Run005 R3/R4; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `bbac7448be59cc4afa54902744f1d4cf14fdf66c`; intended sole parent `71713d0a79b006580510169924732d6791c87858`.
+
+Evidence: R3/R4 implementation and regression tests are offline only. Phase A source checks run before metadata reconciliation: focused runner/validator 266 passed/2 skipped; bringup 316 passed; RL 720 passed; py_compile 4 paths; diff check PASS. Pre-pin full Step-7 had 414 passed/2 skipped and only the expected stale runner pin mismatch. Phase A.5 preserved 38 pin members and refreshed the stale hashes/sizes listed in the evidence record. Full post-reconciliation checks are pending execution and are not claimed here.
+
+State: source guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; runtime not approved. Invocation_014–019 evidence, runtime checkouts, consumed guards and locks were not modified. No runtime, integration, hardware, or Fuel operation was performed.
+
+PLAN_UPDATE_PROPOSAL: Run005 R3/R4; offline corrective candidate on the existing review branch; dependencies for source verification are met, post-reconciliation verification and independent review remain; blocker is no post-reconciliation result yet; next action is full offline final verification, then conditional single-commit review delivery.
+
+
+### 2026-10-24 — R3/R4 exact allowlist correction
+
+Correction: the final current scope is 11 paths; its authorized allowlist is 12 paths and includes unchanged `test_run_step07_nav2_baseline_run005.py`. Added a contract assertion distinguishing the two sets. Source-pin membership remains 38/38. Post-correction final verification is pending; no runtime or integration was performed.
+
+
+### 2026-10-24 — R3/R4 post-correction verification results
+
+After correcting the authorized allowlist to 12 paths (actual scope 11), final checks passed: Step-7 415/2 skipped, bringup 316, RL 720, six-package external build 6 packages, observer/ROSIDL 33 tests with zero errors/failures/skips, py_compile 4 files, 38/38 source pins, canonical/hash/scope/ledger/diff coherence. No runtime or integration was run.
