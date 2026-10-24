@@ -768,6 +768,180 @@ def test_protocol2_pass_fixture_is_accepted_by_validate_run_directory(tmp_path):
         "gate_b_vectors.json", "gate_b_terminal.json", "navigation_evidence_chain.json"}
 
 
+def _production_late_chain_failure_bundle(root, *, missing_record, sidecar_preexists, monkeypatch):
+    from run_step07_nav2_baseline_run005 import (
+        bind_navigation_chain_failure, record_campaign_failure,
+        settle_collectors_before_teardown, settle_navigation_chain_failure,
+        write_navigation_chain)
+
+    root = _protocol2_pass_bundle(root)
+    record_path, observer_path = root / "run_record.json", root / "runtime_observer.json"
+    gate_path, terminal_path = root / "gate_b_vectors.json", root / "gate_b_terminal.json"
+    # The PASS fixture's success-chain artifact must not shadow the failure
+    # sidecar whose absence/presence is the behavior under test.
+    (root / "navigation_evidence_chain.json").unlink()
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    observer = json.loads(observer_path.read_text(encoding="utf-8"))
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    # Keep five valid vectors and action success. Move the correlated stream
+    # to a realistic clock window, then omit only the exact referenced row.
+    receipt_rows, odometry_rows, safety_rows = [], [], []
+    for index, sample in enumerate(gate["samples"], 1):
+        stamp = 1_000_000_000 + index * 10_000_000
+        measurement = stamp - 20_000_000
+        sample["stamp_ns"] = stamp
+        sample["correlation"].update(scan_stamp_ns=measurement,
+            odometry_stamp_ns=measurement, receipt_stamp_ns=measurement,
+            receipt_sequence=index)
+        sec, nsec = divmod(measurement, 1_000_000_000)
+        receipt_rows.append({"stamp_sec": sec, "stamp_nanosec": nsec,
+            "sequence": index, "episode_generation": 1, "reset_epoch": 2,
+            "runtime_generation": 3, "vx": 0.0, "vy": 0.0, "wz": 0.0})
+        odometry_rows.append({"frame_id": "odom", "child_frame_id": "base_link",
+            "stamp_sec": sec, "stamp_nanosec": nsec, "pose": [0.0] * 7,
+            "twist": [0.0] * 6, "pose_finite": True, "twist_finite": True,
+            "pose_covariance_finite": True, "twist_covariance_finite": True,
+            "pose_covariance_count": 36, "twist_covariance_count": 36})
+        sec, nsec = divmod(stamp, 1_000_000_000)
+        safety_rows.append({"stamp_sec": sec, "stamp_nanosec": nsec,
+            "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
+            "intervention_reasons": [], "command_valid": True, "motion_permitted": True,
+            "scan_fresh": True, "odom_fresh": True, "tf_valid": True,
+            "localization_valid": True})
+    observer["receipt"] = receipt_rows
+    observer["filtered_odometry"] = odometry_rows
+    observer["safety_state"] = safety_rows
+    observer.pop("navigation_evidence_chain", None)
+    observer.pop("navigation_evidence_chain_canonical", None)
+    observer.pop("navigation_evidence_chain_sha256", None)
+    sample = gate["samples"][0]
+    missing_stamp = sample["stamp_ns"] - 30_000_000
+    if missing_record == "receipt":
+        sample["correlation"]["receipt_stamp_ns"] = missing_stamp
+    else:
+        sample["correlation"]["odometry_stamp_ns"] = missing_stamp
+    _write_canonical_json(observer_path, observer)
+    _write_canonical_json(gate_path, gate)
+    _refresh_protocol2_terminal_binding(root)
+    observer = json.loads(observer_path.read_text(encoding="utf-8"))
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match=f"NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_{'final_receipt' if missing_record == 'receipt' else 'odometry'}") as captured:
+        canonical_navigation_evidence_chain(observer, gate)
+    root_reason = str(captured.value)
+    from step07_gate_b_evidence_validator import navigation_evidence_chain_failure
+    failure_chain = navigation_evidence_chain_failure(observer, gate, root_reason,
+        stage="EVIDENCE_CHAIN", blocking_reason=root_reason)
+    record.update(collector_stage="EVIDENCE_CHAIN", collector_handshake_protocol="2.0")
+    record["acceptance"].update(observer_acceptance=True, gate_b_vectors=False)
+    record["failure_reason_literals"] = [root_reason]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    record["navigation_evidence_chain_failure"] = failure_chain
+    record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(
+        semantic_canonical_bytes(failure_chain)).hexdigest()
+    if sidecar_preexists:
+        identity = write_navigation_chain(root, failure_chain)
+        bind_navigation_chain_failure(record, failure_chain, identity)
+
+    wrapper_literal = f"NAVIGATION_EVIDENCE_CHAIN_INCOMPLETE:{root_reason}"
+    details = record_campaign_failure(record, "EVIDENCE_CHAIN", RuntimeError(wrapper_literal))
+    settlement_literal = f"RUNNER_COLLECTOR_SETTLEMENT:RuntimeError:{details['message']}"
+    record["failure_reason_literals"] = [root_reason, details["literal"], settlement_literal]
+    record["collector_settlement"] = {"failure_literal": settlement_literal,
+        "blocking_reason": settlement_literal, "stage": "EVIDENCE_CHAIN"}
+
+    class FakeExitedProcess:
+        def __init__(self, pid):
+            self.pid = pid
+            self.returncode = 0
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr("run_step07_nav2_baseline_run005._safe_stop_owned_process",
+        lambda proc, member, timeout: {"exit_code": 0, "leader_returncode": 0,
+            "terminal_state": "EXITED", "clean": True, "verified": True,
+            "graceful": True, "signal_sent": False, "errors": []})
+    record["collector_outcomes"] = settle_collectors_before_teardown(
+        gate=FakeExitedProcess(4401), cpp=FakeExitedProcess(4402),
+        gate_member={"name": "gate_b_observer", "pgid": 4401},
+        cpp_member={"name": "cpp_observer", "pgid": 4402},
+        gate_path=gate_path, observer_path=observer_path, config_hash=record["config_hash"],
+        failure_literal=settlement_literal, blocking_reason=settlement_literal)
+    settle_navigation_chain_failure(root, record, gate_path=gate_path,
+        observer_path=observer_path, failure_literal=settlement_literal,
+        blocking_reason=settlement_literal, stage="EVIDENCE_CHAIN")
+    _write_canonical_json(record_path, record)
+    _seal_bundle(root)
+    return root, root_reason
+
+
+@pytest.mark.parametrize("missing_record", ["receipt", "odometry"])
+@pytest.mark.parametrize("sidecar_preexists", [False, True])
+def test_protocol2_late_correlation_failure_production_settlement_is_structured_fail(
+        tmp_path, monkeypatch, missing_record, sidecar_preexists):
+    root, root_reason = _production_late_chain_failure_bundle(
+        tmp_path / f"late_{missing_record}_{sidecar_preexists}",
+        missing_record=missing_record, sidecar_preexists=sidecar_preexists,
+        monkeypatch=monkeypatch)
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["navigation_evidence_chain"]["state"] == "FAILURE"
+    assert result["navigation_evidence_chain"]["chain"]["failure_literal"] == root_reason
+    assert result["navigation_evidence_chain"]["chain"]["blocking_reason"] == root_reason
+    assert result["gate_b"]["state"] == "FAILED_NAVIGATION_EVIDENCE_CHAIN"
+    assert all(result["gate_b"]["collection_acceptance"].values())
+    assert not any(result["gate_b"]["acceptance"].values())
+
+
+@pytest.mark.parametrize("mutation", ["stage", "context", "binding_hash", "sidecar"])
+def test_protocol2_late_failure_chain_binding_mutations_reject_after_reseal(
+        tmp_path, monkeypatch, mutation):
+    root, _ = _production_late_chain_failure_bundle(
+        tmp_path / mutation, missing_record="receipt", sidecar_preexists=True,
+        monkeypatch=monkeypatch)
+    record_path = root / "run_record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    chain_path = root / "navigation_evidence_chain.json"
+    if mutation == "stage":
+        record["navigation_evidence_chain_failure_binding"]["failure_stage"] = "OTHER_STAGE"
+        record["collector_settlement"]["navigation_evidence_chain_failure_binding"]["failure_stage"] = "OTHER_STAGE"
+    elif mutation == "context":
+        record["collector_settlement"]["blocking_reason"] = "OTHER_SETTLEMENT_CONTEXT"
+    elif mutation == "binding_hash":
+        record["navigation_evidence_chain_failure_binding"]["artifact_sha256"] = "0" * 64
+        record["collector_settlement"]["navigation_evidence_chain_failure_binding"]["artifact_sha256"] = "0" * 64
+        record["failure_details"]["navigation_evidence_chain_failure_binding"]["artifact_sha256"] = "0" * 64
+        record["collector_outcomes"]["navigation_evidence_chain_collector"]["failure_binding"]["artifact_sha256"] = "0" * 64
+    else:
+        envelope = json.loads(chain_path.read_text(encoding="utf-8"))
+        envelope["chain"]["failure_literal"] = "OTHER_ROOT_FAILURE"
+        raw = semantic_canonical_bytes(envelope["chain"])
+        envelope["canonical"] = raw.decode("utf-8")
+        envelope["sha256"] = hashlib.sha256(raw).hexdigest()
+        _write_canonical_json(chain_path, envelope)
+    _write_canonical_json(record_path, record)
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="NAVIGATION_EVIDENCE_CHAIN_FAILURE_(RECORD_MISMATCH|SETTLEMENT_BINDING_INVALID|LINKS_MISMATCH)"):
+        validate_run_directory(root)
+
+
+def test_protocol2_late_failure_chain_cannot_be_relabelled_pass(tmp_path, monkeypatch):
+    root, _ = _production_late_chain_failure_bundle(
+        tmp_path / "failure_to_pass", missing_record="receipt", sidecar_preexists=True,
+        monkeypatch=monkeypatch)
+    record_path = root / "run_record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["acceptance"]["gate_b_vectors"] = True
+    record["failure_reason_literals"] = []
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
+    record["teardown"].update(completed=True, clean=True, ordered=True,
+        order_correct=True, verified=True, graceful=True, escalation_history=[])
+    _write_canonical_json(record_path, record)
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="PASS_WITH_FAILURE_EVIDENCE_CHAIN"):
+        validate_run_directory(root)
+
+
 def test_protocol2_pass_rejects_resealed_contradictory_handshake_failure(tmp_path):
     root = _protocol2_pass_bundle(tmp_path / "pass_with_failure")
     _write_canonical_json(root / "collector_handshake.failure.json", {
@@ -884,7 +1058,7 @@ def test_protocol2_pre_gate_failure_requires_only_sealed_run_record(tmp_path):
 
 
 def test_protocol2_pre_gate_producer_not_started_artifact_is_a_sealed_failure(tmp_path, monkeypatch):
-    from run_step07_nav2_baseline_run005 import settle_collectors_before_teardown
+    from run_step07_nav2_baseline_run005 import record_campaign_failure, settle_collectors_before_teardown
 
     root = tmp_path / "pre_gate_settlement"
     root.mkdir()
@@ -897,6 +1071,7 @@ def test_protocol2_pre_gate_producer_not_started_artifact_is_a_sealed_failure(tm
     record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
     record["failure_reason_literals"] = [blocker]
     record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    record_campaign_failure(record, "CPP_OBSERVER_STARTING", RuntimeError(blocker))
     gate_path, observer_path = root / "gate_b_vectors.json", root / "runtime_observer.json"
     outcomes = settle_collectors_before_teardown(gate=None, cpp=None, gate_member=None,
         cpp_member=None, gate_path=gate_path, observer_path=observer_path,
@@ -912,7 +1087,8 @@ def test_protocol2_pre_gate_producer_not_started_artifact_is_a_sealed_failure(tm
 
 def test_runner_failure_chain_sidecar_is_sealed_and_validate_run_directory_returns_fail(tmp_path):
     from run_step07_nav2_baseline_run005 import (
-        settle_collectors_before_teardown, settle_navigation_chain_failure)
+        record_campaign_failure, settle_collectors_before_teardown,
+        settle_navigation_chain_failure)
 
     root = tmp_path / "pre_gate_failure_chain"
     root.mkdir()
@@ -925,6 +1101,7 @@ def test_runner_failure_chain_sidecar_is_sealed_and_validate_run_directory_retur
     record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
     record["failure_reason_literals"] = [blocker]
     record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    record_campaign_failure(record, stage, RuntimeError("ROOT_CPP_NOT_READY"))
     gate_path, observer_path = root / "gate_b_vectors.json", root / "runtime_observer.json"
     outcomes = settle_collectors_before_teardown(gate=None, cpp=None,
         gate_member=None, cpp_member=None, gate_path=gate_path, observer_path=observer_path,

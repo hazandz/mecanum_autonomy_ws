@@ -939,6 +939,59 @@ def read_navigation_chain_artifact(path: Path) -> tuple[dict, dict]:
                       "size_bytes": path.stat().st_size}
 
 
+def bind_navigation_chain_failure(record: dict, chain: dict, identity: dict) -> dict:
+    """Bind the root chain failure to the sealed sidecar identity."""
+    binding = {
+        "schema_version": "1.0",
+        "artifact": identity.get("path"),
+        "artifact_sha256": identity.get("sha256"),
+        "artifact_size_bytes": identity.get("size_bytes"),
+        "failure_literal": chain.get("failure_literal"),
+        "failure_stage": chain.get("failure_stage"),
+        "blocking_reason": chain.get("blocking_reason"),
+    }
+    record["navigation_evidence_chain_failure"] = chain
+    record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(
+        json.dumps(chain, ensure_ascii=False, sort_keys=True,
+                   separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    record["navigation_evidence_chain_failure_binding"] = binding
+    outcome = record.setdefault("collector_outcomes", {}).setdefault(
+        "navigation_evidence_chain_collector", {})
+    outcome.update({"artifact_written": True, "artifact": identity.get("path"),
+        "artifact_sha256": identity.get("sha256"),
+        "artifact_size_bytes": identity.get("size_bytes"),
+        "failure_binding": binding})
+    return binding
+
+
+def bind_navigation_chain_settlement_context(record: dict) -> None:
+    """Record wrapper settlement separately from the failure sidecar's root cause."""
+    binding = record.get("navigation_evidence_chain_failure_binding")
+    if type(binding) is not dict:
+        return
+    details = record.get("failure_details")
+    details = details if type(details) is dict else {}
+    settlement = record.get("collector_settlement")
+    settlement = settlement if type(settlement) is dict else {}
+    context = {
+        "failure_details_literal": details.get("literal"),
+        "pre_teardown_failure": record.get("pre_teardown_failure"),
+        "collector_settlement_failure_literal": settlement.get("failure_literal"),
+        "collector_settlement_blocking_reason": settlement.get("blocking_reason"),
+        "collector_settlement_stage": settlement.get("stage"),
+    }
+    binding = {**binding, "settlement_context": context}
+    record["navigation_evidence_chain_failure_binding"] = binding
+    if type(record.get("collector_outcomes")) is dict:
+        outcome = record["collector_outcomes"].get("navigation_evidence_chain_collector")
+        if type(outcome) is dict:
+            outcome["failure_binding"] = binding
+    if type(record.get("failure_details")) is dict:
+        record["failure_details"]["navigation_evidence_chain_failure_binding"] = binding
+    if type(record.get("collector_settlement")) is dict:
+        record["collector_settlement"]["navigation_evidence_chain_failure_binding"] = binding
+
+
 def settle_navigation_chain_failure(run_directory: Path, record: dict, *, gate_path: Path,
                                     observer_path: Path, failure_literal: str,
                                     blocking_reason: str, stage: str) -> dict:
@@ -953,10 +1006,8 @@ def settle_navigation_chain_failure(run_directory: Path, record: dict, *, gate_p
         outcome.update({"artifact_written": True, "artifact": identity["path"],
             "artifact_sha256": identity["sha256"], "artifact_size_bytes": identity["size_bytes"]})
         if type(chain) is dict and chain.get("state") == "FAILURE":
-            canonical = json.dumps(chain, ensure_ascii=False, sort_keys=True,
-                separators=(",", ":"), allow_nan=False).encode("utf-8")
-            record["navigation_evidence_chain_failure"] = chain
-            record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical).hexdigest()
+            bind_navigation_chain_failure(record, chain, identity)
+            bind_navigation_chain_settlement_context(record)
         return identity
     observer = load_json(observer_path)[0] if observer_path.is_file() and not observer_path.is_symlink() else {
         "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
@@ -966,13 +1017,22 @@ def settle_navigation_chain_failure(run_directory: Path, record: dict, *, gate_p
         "stage_failure": {"status": "NOT_STARTED", "blocking_reason": blocking_reason,
             "gate_b_observer_started": False},
         "collector_failure": {"literal": failure_literal, "valid_sample_count": 0}}
-    chain = navigation_evidence_chain_failure(observer, gate, failure_literal,
-        stage=stage, blocking_reason=blocking_reason)
+    existing_failure = record.get("navigation_evidence_chain_failure")
+    if type(existing_failure) is dict and existing_failure.get("state") == "FAILURE":
+        # The canonical-chain exception path records its root reason before
+        # attempting the sidecar write. Settlement must not replace it with
+        # the later wrapper/teardown exception.
+        chain = existing_failure
+    else:
+        chain = navigation_evidence_chain_failure(observer, gate, failure_literal,
+            stage=stage, blocking_reason=blocking_reason)
     canonical = json.dumps(chain, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode("utf-8")
     record["navigation_evidence_chain_failure"] = chain
     record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical).hexdigest()
     identity = write_navigation_chain(run_directory, chain)
+    bind_navigation_chain_failure(record, chain, identity)
+    bind_navigation_chain_settlement_context(record)
     outcome.update({"exit_code": 2, "terminal_state": "FAILED_WITH_SEALED_CHAIN",
         "artifact_written": True, "artifact": identity["path"],
         "artifact_sha256": identity["sha256"], "artifact_size_bytes": identity["size_bytes"],
@@ -2297,6 +2357,7 @@ def main():
             record["collector_outcomes"]["navigation_evidence_chain_collector"].update(
                 artifact_written=True, artifact=chain_identity["path"],
                 artifact_sha256=chain_identity["sha256"], artifact_size_bytes=chain_identity["size_bytes"])
+            bind_navigation_chain_failure(record, failure, chain_identity)
             raise RuntimeError(failure_literal)
         if cpp.returncode != 0:
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
@@ -2335,6 +2396,7 @@ def main():
             record["navigation_evidence_chain_failure"] = failure_chain
             record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical_failure).hexdigest()
             failure_identity = write_navigation_chain(args.run_directory, failure_chain)
+            bind_navigation_chain_failure(record, failure_chain, failure_identity)
             record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                 "exit_code": 2, "terminal_state": "FAILED_INCOMPLETE_EVIDENCE_CHAIN",
                 "artifact_written": True, "failure_literal": str(error),
@@ -2450,6 +2512,7 @@ def main():
                                        if type(row) is dict},
                         "lifecycle_state": {"state": "SEE_PARTIAL_COLLECTOR_ARTIFACTS"},
                         "partial_artifacts": [path.name for path in (gate_vectors_path, observer_path) if path.is_file()]}
+                bind_navigation_chain_settlement_context(record)
             except BaseException as settlement_error:
                 record["collector_settlement_failure"] = (
                     f"{type(settlement_error).__name__}:{settlement_error}")
