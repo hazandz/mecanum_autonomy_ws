@@ -51,10 +51,10 @@ static const Pid3Feedforward feedforward[PID3_WHEEL_COUNT][2] = {
   }
 };
 static const float wheel_command_sign[PID3_WHEEL_COUNT] = {
-  -1.0f,  /* FL reverse */
-  +1.0f,  /* FR forward */
-  +1.0f,  /* RL forward */
-  -1.0f   /* RR reverse */
+  +1.0f,  /* FL forward */
+  -1.0f,  /* FR reverse */
+  -1.0f,  /* RL reverse */
+  +1.0f   /* RR forward */
 };
 static const uint32_t pwm_channel[PID3_WHEEL_COUNT] = {
   TIM_CHANNEL_4, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_2
@@ -549,7 +549,7 @@ void pid3_lab_step(uint32_t now_ms)
 
   float current_target_magnitude_cps =
       target_cps_for_run_elapsed(g_pid3.run_elapsed_ms);
-  float signed_target_cps = -current_target_magnitude_cps;
+  float signed_target_cps = current_target_magnitude_cps;
   g_pid3.target_cps = signed_target_cps;
   {
     EncoderRaw current = read_all_encoders();
