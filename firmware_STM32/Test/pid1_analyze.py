@@ -145,26 +145,82 @@ def analyze(rows: list[Row]) -> tuple[list[dict], list[str]]:
         stddev = statistics.pstdev(tail) if len(tail) > 1 else 0.0
         error = target - mean if math.isfinite(mean) else float("inf")
         maximum = max(signed_speeds) if signed_speeds else float("nan")
-        overshoot = max(0.0, (maximum - target) * 100.0 / target)
+        minimum = min(signed_speeds) if signed_speeds else float("nan")
+
+        previous_target = 0 if index == 0 else round(abs(groups[index - 1][0].target))
+
+        if target >= previous_target:
+            transition = "STEP_UP"
+            transient_peak = maximum
+            transient_pct = max(
+                0.0,
+                (maximum - target) * 100.0 / target
+            )
+        else:
+            transition = "STEP_DOWN"
+            transient_peak = minimum
+            transient_pct = max(
+                0.0,
+                (target - minimum) * 100.0 / target
+            )
         tail_rows = group[max(0, int(count * 0.70)):]
         means = {name: statistics.fmean(getattr(r, attr) for r in tail_rows) if tail_rows else float("nan")
                  for name, attr in (("pwm", "pwm"), ("u_ff", "ff"), ("u_p", "up"), ("u_i", "ui"))}
         allowed = max(0.05 * target, 50.0)
         saturated = [r for r in group if r.pwm >= 399.5]
         saturation_ms = sum(r.dt_ms for r in saturated)
+
+        # Encoder speed is quantized. At 20 ms, one encoder count
+        # corresponds to about 50 counts/s. Do not classify normal
+        # +/-1-count toggling around the target as sustained oscillation.
+        median_dt_ms = statistics.median(r.dt_ms for r in group)
+        cps_per_count = 1000.0 / median_dt_ms
+
         errors = [target - v for v in tail]
-        crossings = sum(1 for a, b in zip(errors, errors[1:]) if (a < 0 <= b) or (a >= 0 > b))
-        oscillation = len(tail) >= 10 and crossings >= 4 and stddev > max(0.05 * target, 25.0)
+        crossings = sum(
+            1
+            for a, b in zip(errors, errors[1:])
+            if (a < 0 <= b) or (a >= 0 > b)
+        )
+
+        oscillation_stddev_limit = max(
+            0.05 * target,
+            1.5 * cps_per_count,
+        )
+
+        oscillation = (
+            len(tail) >= 10
+            and crossings >= 4
+            and stddev > oscillation_stddev_limit
+        )
         ok = count >= 50 and len(tail) >= 10
         local_reasons = []
         if not ok: local_reasons.append("insufficient samples (need >=50 per plateau)")
         if abs(error) > allowed: local_reasons.append("steady-state error exceeds limit")
-        if overshoot >= 15.0: local_reasons.append("overshoot is >=15%")
+        transient_abs = abs(transient_peak - target)
+        transient_abs_limit = max(
+            0.15 * target,
+            2.0 * cps_per_count,
+        )
+
+        if transient_abs > transient_abs_limit:
+            if transition == "STEP_UP":
+                local_reasons.append(
+                    "step-up overshoot exceeds quantization-aware limit"
+                )
+            else:
+                local_reasons.append(
+                    "step-down undershoot exceeds quantization-aware limit"
+                )
         if oscillation: local_reasons.append("obvious sustained oscillation heuristic triggered")
         if saturation_ms > 250: local_reasons.append("output saturation exceeds 250 ms")
         report.append({"target": target, "mean": mean, "error": error,
                        "error_pct": abs(error) * 100.0 / target,
-                       "maximum": maximum, "overshoot": overshoot,
+                       "maximum": maximum,
+                       "minimum": minimum,
+                       "transition": transition,
+                       "transient_peak": transient_peak,
+                       "transient_pct": transient_pct,
                        "stddev": stddev, "count": count, "means": means,
                        "pass": not local_reasons, "reasons": local_reasons})
     if not report:
@@ -177,10 +233,10 @@ def format_report(rows: list[Row]) -> tuple[str, bool]:
     wheel = plateaus and rows[0].wheel or "unknown"
     direction = plateaus and rows[0].direction or "unknown"
     lines = [f"PID-1A analysis: {wheel} {direction}",
-             "target_cps | mean_cps | steady_error_cps | steady_error_pct | max_cps | overshoot_pct | mean_pwm | mean_ff | mean_up | mean_ui | pop_stddev | n | result"]
+             "target_cps | transition | mean_cps | steady_error_cps | steady_error_pct | transient_peak_cps | transient_pct | mean_pwm | mean_ff | mean_up | mean_ui | pop_stddev | n | result"]
     for p in plateaus:
         m = p["means"]
-        lines.append(f"{p['target']:>10} | {p['mean']:>8.1f} | {p['error']:>16.1f} | {p['error_pct']:>16.2f} | {p['maximum']:>7.1f} | {p['overshoot']:>12.2f} | {m['pwm']:>8.1f} | {m['u_ff']:>7.1f} | {m['u_p']:>6.1f} | {m['u_i']:>6.1f} | {p['stddev']:>10.1f} | {p['count']:>3} | {'PASS' if p['pass'] else 'FAIL'}")
+        lines.append(f"{p['target']:>10} | {p['transition']:>10} | {p['mean']:>8.1f} | {p['error']:>16.1f} | {p['error_pct']:>16.2f} | {p['transient_peak']:>18.1f} | {p['transient_pct']:>13.2f} | {m['pwm']:>8.1f} | {m['u_ff']:>7.1f} | {m['u_p']:>6.1f} | {m['u_i']:>6.1f} | {p['stddev']:>10.1f} | {p['count']:>3} | {'PASS' if p['pass'] else 'FAIL'}")
         for reason in p["reasons"]:
             lines.append("  - " + reason)
     passed = bool(plateaus) and not global_reasons and all(p["pass"] for p in plateaus)
@@ -207,10 +263,24 @@ def self_test() -> None:
     perfect = parse_csv(io.StringIO(_fixture()))
     text, passed = format_report(perfect)
     assert passed and "Overall: PASS" in text, text
+    plateau_report, _ = analyze(perfect)
+    assert [p["transition"] for p in plateau_report] == [
+        "STEP_UP", "STEP_UP", "STEP_UP", "STEP_DOWN", "STEP_DOWN"
+    ]
+    quantized_lines = _fixture().splitlines()
+    for row_index in range(1, 61):
+        columns = quantized_lines[row_index].split(",")
+        target = int(columns[4])
+        measured = target + (50 if row_index % 2 else -50)
+        columns[5] = str(measured)
+        columns[6] = str(target - measured)
+        quantized_lines[row_index] = ",".join(columns)
+    _, passed = format_report(parse_csv(io.StringIO("\n".join(quantized_lines) + "\n")))
+    assert passed, "quantization-like +/-1-count tracking must not false-fail"
     bad_error = _fixture().replace(",500,500,0,150,", ",500,300,200,150,")
     _, passed = format_report(parse_csv(io.StringIO(bad_error)))
     assert not passed, "steady error violation must fail"
-    bad_overshoot = _fixture().replace(",500,500,0,150,", ",500,600,-100,150,", 1)
+    bad_overshoot = _fixture().replace(",500,500,0,150,", ",500,700,-200,150,", 1)
     _, passed = format_report(parse_csv(io.StringIO(bad_overshoot)))
     assert not passed, "overshoot violation must fail"
     for invalid in ("", "timestamp_ms,state\n1,2\n", _fixture().replace(",150,0,0,150,10,20,0", ",NaN,0,0,150,10,20,0", 1)):

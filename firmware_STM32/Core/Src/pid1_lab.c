@@ -25,7 +25,7 @@ extern TIM_HandleTypeDef htim1, htim2, htim3, htim4, htim5;
 typedef struct { float u0; float kv; } Pid1Feedforward;
 static const Pid1Feedforward feedforward[4][2] = {
   {{40.330665f, 0.217819026f}, {36.253577f, 0.225076821f}},
-  {{60.921738f, 0.215377795f}, {34.233335f, 0.226312521f}},
+  {{32.415574f, 0.231811480f}, {34.233335f, 0.226312521f}},
   {{61.698998f, 0.212679580f}, {54.760209f, 0.223609266f}},
   {{37.521999f, 0.223981830f}, {32.707200f, 0.229221684f}}
 };
