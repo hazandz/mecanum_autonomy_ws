@@ -2349,3 +2349,25 @@ Correction: the final current scope is 11 paths; its authorized allowlist is 12 
 ### 2026-10-24 — R3/R4 post-correction verification results
 
 After correcting the authorized allowlist to 12 paths (actual scope 11), final checks passed: Step-7 415/2 skipped, bringup 316, RL 720, six-package external build 6 packages, observer/ROSIDL 33 tests with zero errors/failures/skips, py_compile 4 files, 38/38 source pins, canonical/hash/scope/ledger/diff coherence. No runtime or integration was run.
+
+
+### 2026-10-24 — Run005 R5 lineage metadata correction
+
+`supersedes`: the R3/R4 ledger entry parent-lineage field and R3/R4 current-scope metadata only; no R3/R4 source behavior, verification result, or Invocation_014–019 outcome is superseded.
+
+Current candidate: branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base/required sole parent `dcc36a39f410651f5e7a142fa52eeda5daa50012`. Historical R3/R4 delivery is `dcc36a39f410651f5e7a142fa52eeda5daa50012` with actual sole parent `bbac7448be59cc4afa54902744f1d4cf14fdf66c`. R1/R2 retains actual historical parent `71713d0a79b006580510169924732d6791c87858`.
+
+Current Phase A scope is the contract test only; Phase A.5 adds the guard/evidence/manifest; Phase B exact changed scope and authorized allowlist are the same 8 paths recorded in current JSON metadata. Source pins retain 38/38 membership and refresh the changed contract-test SHA-256/byte size. `SOURCE_FREEZE=TRUE` is offline only. Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B remains NOT_STARTED; runtime is not approved.
+
+PLAN_UPDATE_PROPOSAL: Run005 R5 lineage metadata correction; branch as above; base `dcc36a39f410651f5e7a142fa52eeda5daa50012`; commit pending final checks; evidence is offline source/test only; no runtime dependency is satisfied; next action is complete requested offline verification and conditional single review delivery.
+
+
+### 2026-10-24 — Run005 R5 offline verification results
+
+`supersedes`: only the pending-verification statement in the immediately preceding R5 candidate entry; historical R3/R4 and Invocation_014–019 facts remain unchanged.
+
+Base/required sole parent: `dcc36a39f410651f5e7a142fa52eeda5daa50012`; exact current scope and allowlist: 8 paths. Focused R5 lineage/scope regressions passed (15 selected in final focused pass; earlier combined R1/R2 and R3/R4 preservation selection passed 33). Full Step-7 tools: 415 passed, 2 skipped (the two environment-root preservation tests were then run separately with the configured persistent roots and both passed). Full bringup: 331 passed. Python 3.12.3 / Pydantic 2.10.6; changed contract test `py_compile` passed. Source-pin membership 38/38 with SHA-256 and byte size; guard/evidence/manifest hash chain and exact evidence byte size passed; ledger parent byte-prefix, canonical JSON rejection cases, exact scope, and staged/unstaged diff checks passed. Invocation_018/019 artifacts were read-only and their manifest/hash/size preservation tests passed. RL, external build, observer/ROSIDL and installed/source equality are inherited from base `dcc36a39...`; runtime source and build inputs are unchanged.
+
+Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; runtime not approved. No runtime, invocation retry, integration, HIL, hardware or Fuel operation was performed.
+
+PLAN_UPDATE_PROPOSAL: Run005 R5 lineage metadata correction; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `dcc36a39f410651f5e7a142fa52eeda5daa50012`; commit pending required final delivery checks; evidence is IMPLEMENTED_OFFLINE_ONLY; runtime authorization remains separate and NOT_GRANTED; next action is conditional single review delivery and independent review.
