@@ -1854,6 +1854,28 @@ def finalise_after_teardown(record: dict, runtime_acceptance: dict, teardown: di
     return record
 
 
+def validate_and_persist_observer_acceptance(runtime_acceptance: dict,
+                                             observer_document: dict, *,
+                                             config_hash: str,
+                                             qos_implementation_pin_evidence: dict | None,
+                                             review_commit: str) -> dict:
+    """Validate raw observer evidence and persist its derived acceptance immediately."""
+    if (type(runtime_acceptance) is not dict
+            or type(runtime_acceptance.get("observer_acceptance")) is not bool):
+        raise ValueError("OBSERVER_ACCEPTANCE_STATE_INVALID")
+    from step07_gate_b_evidence_validator import validate_observer
+
+    validation = validate_observer(observer_document, config_hash=config_hash,
+        qos_implementation_pin_evidence=qos_implementation_pin_evidence,
+        review_commit=review_commit)
+    acceptance = validation.get("acceptance") if type(validation) is dict else None
+    if (type(acceptance) is not dict or not acceptance
+            or any(type(value) is not bool for value in acceptance.values())):
+        raise ValueError("OBSERVER_ACCEPTANCE_RESULT_INVALID")
+    runtime_acceptance["observer_acceptance"] = all(acceptance.values())
+    return validation
+
+
 def mark_collector_failures(teardown: dict, outcomes: dict) -> dict:
     failed = {name: row for name, row in outcomes.items()
               if type(row) is dict and row.get("terminal_state") not in ("NOT_STARTED", "READY_AWAITING_ARTIFACTS")
@@ -2363,7 +2385,7 @@ def main():
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
         from step07_gate_b_evidence_validator import (canonical_navigation_evidence_chain,
             navigation_evidence_chain_failure,
-            load_json, validate_gate_b_document, validate_observer)
+            load_json, validate_gate_b_document)
         cpp_document, _ = load_json(observer_path)
         gate_document, _ = load_json(args.run_directory / "gate_b_vectors.json")
         raw_qos = cpp_document.get("qos_verdict", {})
@@ -2373,7 +2395,8 @@ def main():
                       raw_qos.get("receipt_qos_contract"))
         if "FAIL" in qos_values:
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_FINAL_RAW_QOS_FAILURE"
-        observer_validation = validate_observer(cpp_document, config_hash=record["config_hash"],
+        observer_validation = validate_and_persist_observer_acceptance(
+            runtime_acceptance, cpp_document, config_hash=record["config_hash"],
             qos_implementation_pin_evidence=preflight["qos_implementation_pin_evidence"],
             review_commit=head)
         resolution = observer_validation.get("qos_history_depth_resolution")
@@ -2413,7 +2436,6 @@ def main():
             terminal=load_canonical_json(args.run_directory / "gate_b_terminal.json"),
             collection_raw=gate_vectors_path.read_bytes(), peer_raw=observer_path.read_bytes(),
             invocation_id=record["invocation_id"])
-        runtime_acceptance["observer_acceptance"] = bool(observer_validation.get("acceptance")) and all(observer_validation["acceptance"].values())
         runtime_acceptance["gate_b_vectors"] = bool(gate_validation.get("acceptance")) and all(gate_validation["acceptance"].values())
         runtime_acceptance["runtime_graph_and_goal"] = runtime_acceptance["gate_b_vectors"]
         if not runtime_acceptance["observer_acceptance"] or not runtime_acceptance["gate_b_vectors"]:

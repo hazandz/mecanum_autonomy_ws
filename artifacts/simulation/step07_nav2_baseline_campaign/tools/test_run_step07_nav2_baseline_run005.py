@@ -1515,6 +1515,43 @@ def test_process_groups_and_final_record_fail_closed():
         runner.finalise_after_teardown({}, {"all": True}, {"completed": False})
 
 
+def test_observer_acceptance_is_derived_and_persisted_from_validated_result(monkeypatch):
+    import step07_gate_b_evidence_validator as validator
+
+    runtime_acceptance = {"observer_acceptance": False}
+    monkeypatch.setattr(validator, "validate_observer", lambda *_args, **_kwargs:
+        {"acceptance": {"checked_a": True, "checked_b": True}})
+    result = runner.validate_and_persist_observer_acceptance(runtime_acceptance, {},
+        config_hash="a" * 64, qos_implementation_pin_evidence={}, review_commit="b" * 40)
+    assert result["acceptance"] == {"checked_a": True, "checked_b": True}
+    assert runtime_acceptance["observer_acceptance"] is True
+
+    runtime_acceptance["observer_acceptance"] = False
+    monkeypatch.setattr(validator, "validate_observer", lambda *_args, **_kwargs:
+        {"acceptance": {"checked_a": True, "checked_b": False}})
+    runner.validate_and_persist_observer_acceptance(runtime_acceptance, {},
+        config_hash="a" * 64, qos_implementation_pin_evidence={}, review_commit="b" * 40)
+    assert runtime_acceptance["observer_acceptance"] is False
+
+
+def test_observer_acceptance_stays_false_when_validation_raises_or_is_unavailable():
+    runtime_acceptance = {"observer_acceptance": False}
+    with pytest.raises(ValueError, match="CPP_OBSERVER_SCHEMA_OR_REQUIRED_SECTION_INVALID"):
+        runner.validate_and_persist_observer_acceptance(runtime_acceptance, {},
+            config_hash="a" * 64, qos_implementation_pin_evidence={}, review_commit="b" * 40)
+    assert runtime_acceptance["observer_acceptance"] is False
+    assert runtime_acceptance["observer_acceptance"] is False  # no validation call means no PASS claim
+
+
+def test_main_persists_observer_acceptance_before_chain_and_gate_validation():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    main = source[source.index("def main():"):]
+    persisted = main.index("validate_and_persist_observer_acceptance(")
+    assert persisted < main.index("canonical_navigation_evidence_chain(")
+    assert persisted < main.index("validate_gate_b_document(")
+    assert main.index('"observer_acceptance": False') < persisted
+
+
 def test_process_group_schema_is_fixed_and_complete_before_guard_handoff():
     record = {}
     groups = runner._initialize_process_group_schema(record)

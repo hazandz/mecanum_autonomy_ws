@@ -983,6 +983,7 @@ RUN005_R5_PHASE_SCOPES = {"PHASE_A": RUN005_R5_SOURCE_PATHS,
 # Invocation_020 offline corrective starts from its delivered, clean source
 # endpoint. Keep this separate from every historical corrective scope above.
 RUN005_INVOCATION_020_BASE = "d123c708bb3b0fd80c8096daa9836da50440db85"
+RUN005_INVOCATION_020_COMMIT = "dee7d5dec565e51252f6a851c5959f07b8b8b512"
 RUN005_R5_COMMIT = RUN005_INVOCATION_020_BASE
 RUN005_INVOCATION_020_PHASE_A_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
@@ -1019,6 +1020,7 @@ RUN005_INVOCATION_020_PHASE_SCOPES = {
 # delivered endpoint; it has distinct phase metadata and does not rewrite the
 # historical Invocation_020 scope above.
 RUN005_INVOCATION_021_BASE = "dee7d5dec565e51252f6a851c5959f07b8b8b512"
+RUN005_INVOCATION_021_COMMIT = "50fd738de91283c2c879f58fa6286ce5e15fc4bf"
 RUN005_INVOCATION_021_PHASE_A_PATHS = {
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
     "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
@@ -1043,6 +1045,35 @@ RUN005_INVOCATION_021_PHASE_SCOPES = {
     "PHASE_A": RUN005_INVOCATION_021_PHASE_A_PATHS,
     "PHASE_A5": RUN005_INVOCATION_021_PHASE_A5_PATHS,
     "PHASE_B": RUN005_INVOCATION_021_PHASE_B_PATHS,
+}
+
+# Observer acceptance persistence corrective starts at Invocation_021's exact
+# delivered endpoint and has separate phase scopes.
+RUN005_INVOCATION_022_BASE = RUN005_INVOCATION_021_COMMIT
+RUN005_INVOCATION_022_PHASE_A_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
+RUN005_INVOCATION_022_PHASE_A5_PATHS = RUN005_INVOCATION_022_PHASE_A_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+}
+RUN005_INVOCATION_022_PHASE_B_PATHS = RUN005_INVOCATION_022_PHASE_A5_PATHS | {
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_INVOCATION_022_AUTHORIZED_PATHS = RUN005_INVOCATION_022_PHASE_B_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+}
+RUN005_INVOCATION_022_PHASE_SCOPES = {
+    "PHASE_A": RUN005_INVOCATION_022_PHASE_A_PATHS,
+    "PHASE_A5": RUN005_INVOCATION_022_PHASE_A5_PATHS,
+    "PHASE_B": RUN005_INVOCATION_022_PHASE_B_PATHS,
 }
 
 
@@ -1222,6 +1253,64 @@ def _invocation021_current_scope_document(actual):
     if head == RUN005_INVOCATION_021_BASE and actual == RUN005_INVOCATION_021_PHASE_A_PATHS:
         return _invocation021_scope_document("PHASE_A")
     raise AssertionError("INVOCATION021_CURRENT_PHASE_METADATA_MISSING")
+
+
+def _invocation022_scope_document(phase):
+    paths = RUN005_INVOCATION_022_PHASE_SCOPES[phase]
+    return {"current_candidate_base_commit": RUN005_INVOCATION_022_BASE,
+        "corrective_commit_parent": RUN005_INVOCATION_022_BASE,
+        "SOURCE_FREEZE": "FALSE" if phase == "PHASE_A" else "TRUE",
+        "current_corrective_scope": {"base_commit": RUN005_INVOCATION_022_BASE,
+            "phase": phase, "path_count": len(paths), "paths": sorted(paths)},
+        "authorized_allowlist": {"base_commit": RUN005_INVOCATION_022_BASE,
+            "path_count": len(RUN005_INVOCATION_022_AUTHORIZED_PATHS),
+            "paths": sorted(RUN005_INVOCATION_022_AUTHORIZED_PATHS)}}
+
+
+def _validate_invocation022_scope(actual, document, untracked=()):
+    scope = document.get("current_corrective_scope", {})
+    phase = scope.get("phase")
+    if (phase not in RUN005_INVOCATION_022_PHASE_SCOPES
+            or document.get("current_candidate_base_commit") != RUN005_INVOCATION_022_BASE
+            or document.get("corrective_commit_parent") != RUN005_INVOCATION_022_BASE
+            or scope.get("base_commit") != RUN005_INVOCATION_022_BASE):
+        raise AssertionError("INVOCATION022_PHASE_OR_LINEAGE_INVALID")
+    expected = RUN005_INVOCATION_022_PHASE_SCOPES[phase]
+    if scope.get("paths") != sorted(expected) or scope.get("path_count") != len(expected):
+        raise AssertionError("INVOCATION022_METADATA_SCOPE_MISMATCH")
+    authorized = document.get("authorized_allowlist", {})
+    if (authorized.get("base_commit") != RUN005_INVOCATION_022_BASE
+            or authorized.get("paths") != sorted(RUN005_INVOCATION_022_AUTHORIZED_PATHS)
+            or authorized.get("path_count") != len(RUN005_INVOCATION_022_AUTHORIZED_PATHS)):
+        raise AssertionError("INVOCATION022_AUTHORIZED_ALLOWLIST_MISMATCH")
+    if document.get("SOURCE_FREEZE") != ("FALSE" if phase == "PHASE_A" else "TRUE"):
+        raise AssertionError("INVOCATION022_SOURCE_FREEZE_INVALID")
+    if set(actual) != expected or untracked:
+        raise AssertionError(f"INVOCATION022_EXACT_SCOPE_MISMATCH:{sorted(actual)}:{sorted(untracked)}")
+    if set(actual) - RUN005_INVOCATION_022_AUTHORIZED_PATHS:
+        raise AssertionError("INVOCATION022_PATH_OUTSIDE_AUTHORIZATION")
+    return phase
+
+
+def _invocation022_git_changed_paths(root=ROOT):
+    base = RUN005_INVOCATION_022_BASE
+    actual = set(subprocess.run(["git", "diff", "--name-only", base], cwd=root,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    untracked = set(subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=root,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    return actual, untracked
+
+
+def _invocation022_current_scope_document(actual):
+    path = ROOT / "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json"
+    document = _load_json(path)
+    if document.get("current_candidate_base_commit") == RUN005_INVOCATION_022_BASE:
+        return document
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+        capture_output=True, text=True).stdout.strip()
+    if head == RUN005_INVOCATION_022_BASE and actual == RUN005_INVOCATION_022_PHASE_A_PATHS:
+        return _invocation022_scope_document("PHASE_A")
+    raise AssertionError("INVOCATION022_CURRENT_PHASE_METADATA_MISSING")
 
 
 def _invocation020_current_scope_document(actual):
@@ -1658,6 +1747,11 @@ def _candidate_changed_paths():
         check=True, capture_output=True, text=True,
     ).stdout
     dirty = bool(status.strip())
+    if head == RUN005_INVOCATION_022_BASE or parent == RUN005_INVOCATION_022_BASE:
+        actual, untracked = _invocation022_git_changed_paths()
+        document = _invocation022_current_scope_document(actual)
+        _validate_invocation022_scope(actual, document, untracked)
+        return actual, dirty
     if head == RUN005_INVOCATION_021_BASE or parent == RUN005_INVOCATION_021_BASE:
         actual, untracked = _invocation021_git_changed_paths()
         document = _invocation021_current_scope_document(actual)
@@ -2047,11 +2141,12 @@ def test_run005_invocation020_current_lineage_has_exact_phase_scopes():
         f"{RUN005_INVOCATION_020_BASE}^..{RUN005_INVOCATION_020_BASE}"], cwd=ROOT,
         check=True, capture_output=True, text=True).stdout.splitlines())
     assert historical == RUN005_R5_PHASE_B_PATHS
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
-        capture_output=True, text=True).stdout.strip()
-    if head != RUN005_INVOCATION_020_BASE:
-        assert subprocess.run(["git", "rev-parse", f"{head}^"], cwd=ROOT, check=True,
-            capture_output=True, text=True).stdout.strip() == RUN005_INVOCATION_020_BASE
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_INVOCATION_020_COMMIT}^"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip() == RUN005_INVOCATION_020_BASE
+    delivered = set(subprocess.run(["git", "diff", "--name-only",
+        f"{RUN005_INVOCATION_020_BASE}..{RUN005_INVOCATION_020_COMMIT}"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    assert delivered == RUN005_INVOCATION_020_PHASE_B_PATHS
 
 
 @pytest.mark.parametrize("phase", ["PHASE_A", "PHASE_A5", "PHASE_B"])
@@ -2084,7 +2179,7 @@ def test_invocation020_phase_metadata_rejects_scope_and_lineage_mismatch(fault):
         _validate_invocation020_scope(actual, document, untracked)
 
 
-def test_run005_invocation021_current_lineage_has_exact_phase_scopes():
+def test_run005_invocation021_historical_delivery_keeps_exact_phase_scope():
     assert RUN005_INVOCATION_021_BASE == "dee7d5dec565e51252f6a851c5959f07b8b8b512"
     assert subprocess.run(["git", "rev-parse", f"{RUN005_INVOCATION_021_BASE}^"], cwd=ROOT,
         check=True, capture_output=True, text=True).stdout.strip() == "d123c708bb3b0fd80c8096daa9836da50440db85"
@@ -2098,9 +2193,59 @@ def test_run005_invocation021_current_lineage_has_exact_phase_scopes():
         "d123c708bb3b0fd80c8096daa9836da50440db85..dee7d5dec565e51252f6a851c5959f07b8b8b512"],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines())
     assert prior == RUN005_INVOCATION_020_PHASE_B_PATHS
-    current, untracked = _invocation021_git_changed_paths()
-    document = _invocation021_current_scope_document(current)
-    assert _validate_invocation021_scope(current, document, untracked) in RUN005_INVOCATION_021_PHASE_SCOPES
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_INVOCATION_021_COMMIT}^"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip() == RUN005_INVOCATION_021_BASE
+    delivered = set(subprocess.run(["git", "diff", "--name-only",
+        f"{RUN005_INVOCATION_021_BASE}..{RUN005_INVOCATION_021_COMMIT}"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    assert delivered == RUN005_INVOCATION_021_PHASE_B_PATHS
+
+
+def test_run005_invocation022_current_lineage_has_exact_phase_scopes():
+    assert RUN005_INVOCATION_022_BASE == "50fd738de91283c2c879f58fa6286ce5e15fc4bf"
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_INVOCATION_022_BASE}^"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip() == "dee7d5dec565e51252f6a851c5959f07b8b8b512"
+    assert len(RUN005_INVOCATION_022_PHASE_A_PATHS) == 4
+    assert len(RUN005_INVOCATION_022_PHASE_A5_PATHS) == 7
+    assert len(RUN005_INVOCATION_022_PHASE_B_PATHS) == 11
+    assert len(RUN005_INVOCATION_022_AUTHORIZED_PATHS) == 12
+    historical = set(subprocess.run(["git", "diff", "--name-only",
+        f"{RUN005_INVOCATION_021_BASE}..{RUN005_INVOCATION_021_COMMIT}"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    assert historical == RUN005_INVOCATION_021_PHASE_B_PATHS
+    actual, untracked = _invocation022_git_changed_paths()
+    document = _invocation022_current_scope_document(actual)
+    assert _validate_invocation022_scope(actual, document, untracked) in RUN005_INVOCATION_022_PHASE_SCOPES
+
+
+@pytest.mark.parametrize("phase", ["PHASE_A", "PHASE_A5", "PHASE_B"])
+def test_invocation022_declared_phase_accepts_only_exact_scope(phase):
+    assert _validate_invocation022_scope(
+        RUN005_INVOCATION_022_PHASE_SCOPES[phase], _invocation022_scope_document(phase)) == phase
+
+
+@pytest.mark.parametrize("fault", ["missing", "extra", "wrong_phase", "wrong_base",
+                                    "scope_metadata", "allowlist", "untracked"])
+def test_invocation022_phase_metadata_rejects_inexact_scope_and_lineage(fault):
+    document = _invocation022_scope_document("PHASE_B")
+    actual = set(RUN005_INVOCATION_022_PHASE_B_PATHS)
+    untracked = set()
+    if fault == "missing":
+        actual.remove("docs/governance/PROJECT_PROGRESS_LEDGER.md")
+    elif fault == "extra":
+        actual.add("unexpected.py")
+    elif fault == "wrong_phase":
+        document["current_corrective_scope"]["phase"] = "PHASE_A"
+    elif fault == "wrong_base":
+        document["corrective_commit_parent"] = RUN005_INVOCATION_021_BASE
+    elif fault == "scope_metadata":
+        document["current_corrective_scope"]["paths"].pop()
+    elif fault == "allowlist":
+        document["authorized_allowlist"]["paths"].pop()
+    else:
+        untracked.add("scratch.txt")
+    with pytest.raises(AssertionError, match="INVOCATION022_"):
+        _validate_invocation022_scope(actual, document, untracked)
 
 
 @pytest.mark.parametrize("phase", ["PHASE_A", "PHASE_A5", "PHASE_B"])
@@ -2271,6 +2416,8 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
         *RUN005_R3_PHASE_SCOPES.values(), *RUN005_R5_PHASE_SCOPES.values(),
         *RUN005_INVOCATION_020_PHASE_SCOPES.values(),
+        *RUN005_INVOCATION_021_PHASE_SCOPES.values(),
+        *RUN005_INVOCATION_022_PHASE_SCOPES.values(),
     )
 
     assert subprocess.run(
@@ -2344,7 +2491,9 @@ def test_run005_validator_identity_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
                        *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
                        *RUN005_R3_PHASE_SCOPES.values(), *RUN005_R5_PHASE_SCOPES.values(),
-                       *RUN005_INVOCATION_020_PHASE_SCOPES.values())
+                       *RUN005_INVOCATION_020_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_021_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_022_PHASE_SCOPES.values())
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -2555,6 +2704,8 @@ def test_historical_runtime_conservation_and_candidate_scope():
         *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
         *RUN005_R3_PHASE_SCOPES.values(), *RUN005_R5_PHASE_SCOPES.values(),
         *RUN005_INVOCATION_020_PHASE_SCOPES.values(),
+        *RUN005_INVOCATION_021_PHASE_SCOPES.values(),
+        *RUN005_INVOCATION_022_PHASE_SCOPES.values(),
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -2598,7 +2749,9 @@ def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
                        *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
                        *RUN005_R3_PHASE_SCOPES.values(), *RUN005_R5_PHASE_SCOPES.values(),
-                       *RUN005_INVOCATION_020_PHASE_SCOPES.values())
+                       *RUN005_INVOCATION_020_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_021_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_022_PHASE_SCOPES.values())
 
 
 def test_run005_default_route_resolver_corrective_scope_is_exact():
@@ -2622,7 +2775,9 @@ def test_run005_default_route_resolver_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
                        *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
                        *RUN005_R3_PHASE_SCOPES.values(), *RUN005_R5_PHASE_SCOPES.values(),
-                       *RUN005_INVOCATION_020_PHASE_SCOPES.values())
+                       *RUN005_INVOCATION_020_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_021_PHASE_SCOPES.values(),
+                       *RUN005_INVOCATION_022_PHASE_SCOPES.values())
 
 
 @pytest.mark.parametrize('phase',['PHASE_A','PHASE_A5','PHASE_B'])

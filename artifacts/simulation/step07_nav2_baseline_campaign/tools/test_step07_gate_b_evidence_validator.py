@@ -768,19 +768,78 @@ def test_protocol2_pass_fixture_is_accepted_by_validate_run_directory(tmp_path):
         "gate_b_vectors.json", "gate_b_terminal.json", "navigation_evidence_chain.json"}
 
 
+def test_real_observer_failure_is_persisted_as_false_not_inferred_from_process_status():
+    from run_step07_nav2_baseline_run005 import validate_and_persist_observer_acceptance
+
+    observer = observer_doc()
+    observer["clock"] = observer["clock"][:4]
+    observer["acceptance"]["clock_multisample"] = False
+    observer["errors"].append("ACCEPTANCE_FAILED:clock_multisample")
+    runtime_acceptance = {"observer_acceptance": False}
+    result = validate_and_persist_observer_acceptance(runtime_acceptance, observer,
+        config_hash="a" * 64, qos_implementation_pin_evidence=None,
+        review_commit="b" * 40)
+    assert result["acceptance"]["clock_multisample"] is False
+    assert runtime_acceptance["observer_acceptance"] is False
+
+
+def test_observer_acceptance_survives_success_chain_then_later_gate_validation_failure(tmp_path):
+    from run_step07_nav2_baseline_run005 import (
+        finalise_after_teardown, record_campaign_failure,
+        validate_and_persist_observer_acceptance)
+
+    root = _protocol2_pass_bundle(tmp_path / "chain_success_later_gate_failure")
+    record = json.loads((root / "run_record.json").read_text(encoding="utf-8"))
+    observer = json.loads((root / "runtime_observer.json").read_text(encoding="utf-8"))
+    gate = json.loads((root / "gate_b_vectors.json").read_text(encoding="utf-8"))
+    terminal = json.loads((root / "gate_b_terminal.json").read_text(encoding="utf-8"))
+    runtime_acceptance = {"observer_acceptance": False, "gate_b_vectors": False,
+                          "runtime_graph_and_goal": False}
+    observer_validation = validate_and_persist_observer_acceptance(runtime_acceptance,
+        observer, config_hash=record["config_hash"],
+        qos_implementation_pin_evidence=None, review_commit="b" * 40)
+    assert all(observer_validation["acceptance"].values())
+    canonical_navigation_evidence_chain(observer, gate)
+    gate["acceptance"]["errors_absent"] = False
+    with pytest.raises(ValueError, match="GATE_B_ACCEPTANCE_RAW_MISMATCH"):
+        validate_gate_b_document(gate, config_hash=record["config_hash"],
+            terminal=terminal, collection_raw=semantic_canonical_bytes(gate),
+            peer_raw=semantic_canonical_bytes(observer), invocation_id=record["invocation_id"])
+    record_campaign_failure(record, "GATE_B_TERMINAL", RuntimeError("GATE_B_ACCEPTANCE_RAW_MISMATCH"))
+    finalise_after_teardown(record, runtime_acceptance, {
+        "completed": True, "clean": True, "ordered": True,
+        "order_correct": True, "verified": True, "graceful": True,
+        "escalation_history": []})
+    assert record["acceptance"]["observer_acceptance"] is True
+    assert record["acceptance"]["gate_b_vectors"] is False
+    assert record["terminal_outcome"] == "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+
+
 def _production_late_chain_failure_bundle(root, *, missing_record, sidecar_preexists, monkeypatch):
     from run_step07_nav2_baseline_run005 import (
-        bind_navigation_chain_failure, record_campaign_failure,
+        bind_navigation_chain_failure, bind_navigation_chain_settlement_context,
+        finalise_after_teardown, record_campaign_failure,
+        validate_and_persist_observer_acceptance,
         settle_collectors_before_teardown, settle_navigation_chain_failure,
         write_navigation_chain)
 
     root = _protocol2_pass_bundle(root)
     record_path, observer_path = root / "run_record.json", root / "runtime_observer.json"
     gate_path, terminal_path = root / "gate_b_vectors.json", root / "gate_b_terminal.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    # Match main(): begin with observer acceptance false; only the completed
+    # production validation below may update the runtime acceptance matrix.
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    runtime_acceptance = {
+        "guard_acquired_once": True, "canonical_map_and_fuel_preflight": True,
+        "runtime_graph_and_goal": False, "observer_acceptance": False,
+        "gate_b_vectors": False, "bootstrap_composite_process_groups_distinct": True,
+        "bootstrap_readiness": True, "composite_readiness": True,
+        "all_collectors_ready_before_goal": True,
+    }
     # The PASS fixture's success-chain artifact must not shadow the failure
     # sidecar whose absence/presence is the behavior under test.
     (root / "navigation_evidence_chain.json").unlink()
-    record = json.loads(record_path.read_text(encoding="utf-8"))
     observer = json.loads(observer_path.read_text(encoding="utf-8"))
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
     # Keep five valid vectors and action success. Move the correlated stream
@@ -825,6 +884,13 @@ def _production_late_chain_failure_bundle(root, *, missing_record, sidecar_preex
     _refresh_protocol2_terminal_binding(root)
     observer = json.loads(observer_path.read_text(encoding="utf-8"))
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    validation = validate_and_persist_observer_acceptance(runtime_acceptance, observer,
+        config_hash=record["config_hash"],
+        qos_implementation_pin_evidence=record.get("preflight", {}).get(
+            "qos_implementation_pin_evidence"),
+        review_commit=record.get("review_commit", "a" * 40))
+    assert all(validation["acceptance"].values())
+    assert runtime_acceptance["observer_acceptance"] is True
 
     with pytest.raises(ValueError, match=f"NAVIGATION_EVIDENCE_CHAIN_MISSING:correlated_{'final_receipt' if missing_record == 'receipt' else 'odometry'}") as captured:
         canonical_navigation_evidence_chain(observer, gate)
@@ -833,7 +899,6 @@ def _production_late_chain_failure_bundle(root, *, missing_record, sidecar_preex
     failure_chain = navigation_evidence_chain_failure(observer, gate, root_reason,
         stage="EVIDENCE_CHAIN", blocking_reason=root_reason)
     record.update(collector_stage="EVIDENCE_CHAIN", collector_handshake_protocol="2.0")
-    record["acceptance"].update(observer_acceptance=True, gate_b_vectors=False)
     record["failure_reason_literals"] = [root_reason]
     record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
     record["navigation_evidence_chain_failure"] = failure_chain
@@ -870,8 +935,16 @@ def _production_late_chain_failure_bundle(root, *, missing_record, sidecar_preex
     settle_navigation_chain_failure(root, record, gate_path=gate_path,
         observer_path=observer_path, failure_literal=settlement_literal,
         blocking_reason=settlement_literal, stage="EVIDENCE_CHAIN")
+    bind_navigation_chain_settlement_context(record)
+    finalise_after_teardown(record, runtime_acceptance, {
+        "completed": True, "clean": True, "ordered": True,
+        "order_correct": True, "verified": True, "graceful": True,
+        "shutdown_requested_by_runner": True, "exit_code": 0,
+        "terminal_state": "STOPPED_AND_VERIFIED", "escalation_history": [],
+    })
     _write_canonical_json(record_path, record)
     _seal_bundle(root)
+    assert record["acceptance"]["observer_acceptance"] is True
     return root, root_reason
 
 
@@ -889,6 +962,9 @@ def test_protocol2_late_correlation_failure_production_settlement_is_structured_
     assert result["navigation_evidence_chain"]["chain"]["failure_literal"] == root_reason
     assert result["navigation_evidence_chain"]["chain"]["blocking_reason"] == root_reason
     assert result["gate_b"]["state"] == "FAILED_NAVIGATION_EVIDENCE_CHAIN"
+    assert result["observer"]["acceptance"] and all(result["observer"]["acceptance"].values())
+    assert result["run_record"]["acceptance"]["observer_acceptance"] is True
+    assert result["run_record"]["acceptance"]["gate_b_vectors"] is False
     assert all(result["gate_b"]["collection_acceptance"].values())
     assert not any(result["gate_b"]["acceptance"].values())
 
@@ -931,7 +1007,7 @@ def test_protocol2_late_failure_chain_cannot_be_relabelled_pass(tmp_path, monkey
         monkeypatch=monkeypatch)
     record_path = root / "run_record.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    record["acceptance"]["gate_b_vectors"] = True
+    record["acceptance"].update(gate_b_vectors=True, runtime_graph_and_goal=True)
     record["failure_reason_literals"] = []
     record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"
     record["teardown"].update(completed=True, clean=True, ordered=True,
@@ -939,6 +1015,20 @@ def test_protocol2_late_failure_chain_cannot_be_relabelled_pass(tmp_path, monkey
     _write_canonical_json(record_path, record)
     _seal_bundle(root)
     with pytest.raises(ValueError, match="PASS_WITH_FAILURE_EVIDENCE_CHAIN"):
+        validate_run_directory(root)
+
+
+def test_protocol2_late_failure_rejects_resealed_observer_acceptance_drift(tmp_path, monkeypatch):
+    root, _ = _production_late_chain_failure_bundle(
+        tmp_path / "observer_acceptance_drift", missing_record="receipt",
+        sidecar_preexists=True, monkeypatch=monkeypatch)
+    record_path = root / "run_record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["acceptance"]["observer_acceptance"] is True
+    record["acceptance"]["observer_acceptance"] = False
+    _write_canonical_json(record_path, record)
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="RUN_RECORD_FAILURE_CHAIN_ACCEPTANCE_MISMATCH"):
         validate_run_directory(root)
 
 
