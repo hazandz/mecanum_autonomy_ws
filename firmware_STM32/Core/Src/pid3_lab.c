@@ -27,12 +27,12 @@ extern TIM_HandleTypeDef htim1, htim2, htim3, htim4, htim5;
 typedef struct { uint32_t fl, fr, rl, rr; } EncoderRaw;
 typedef struct { float u0, kv; } Pid3Feedforward;
 
-/* Validated PID-2A ALL_FORWARD coefficients, indexed [FL, FR, RL, RR]. */
-static const Pid3Feedforward forward_feedforward[PID3_WHEEL_COUNT] = {
-  {40.330665f, 0.217819026f},
-  {32.415574f, 0.231811480f},
-  {61.698998f, 0.212679580f},
-  {37.521999f, 0.223981830f}
+/* Validated reverse coefficients, indexed [FL, FR, RL, RR]. */
+static const Pid3Feedforward reverse_feedforward[PID3_WHEEL_COUNT] = {
+  {36.253577f, 0.225076821f},  /* FL reverse */
+  {34.233335f, 0.226312521f},  /* FR reverse */
+  {54.760209f, 0.223609266f},  /* RL reverse */
+  {32.707200f, 0.229221684f}   /* RR reverse */
 };
 static const uint32_t pwm_channel[PID3_WHEEL_COUNT] = {
   TIM_CHANNEL_4, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_2
@@ -282,7 +282,7 @@ static void start_all_pwm_or_fault(const float output[4])
     safety_io_force_motor_disabled();
     motor_logic_stop_all();
     for (i = 0U; i < PID3_WHEEL_COUNT; ++i)
-      motor_logic_set_direction(motor_wheel[i], MOTOR_DIRECTION_FORWARD);
+      motor_logic_set_direction(motor_wheel[i], MOTOR_DIRECTION_REVERSE);
   }
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i)
     __HAL_TIM_SET_COMPARE(&htim3, pwm_channel[i], compare[i]);
@@ -304,11 +304,12 @@ static uint32_t monitor_guards(uint32_t now_ms, uint32_t dt_ms,
                                uint32_t *error, uint32_t *fault_mask)
 {
   uint32_t i, min_i = 0U, max_i = 0U;
-  float min_speed = measured[0], max_speed = measured[0];
+  float min_speed = -measured[0], max_speed = -measured[0];
   bool grace = elapsed(now_ms, run_started_ms) >= PID3_SYNC_GRACE_MS;
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     uint32_t bit = 1UL << i;
-    if (measured[i] < -PID3_DIRECTION_THRESHOLD_CPS)
+    float y = -measured[i];
+    if (y < -PID3_DIRECTION_THRESHOLD_CPS)
       wrong_direction_ms[i] += dt_ms;
     else
       wrong_direction_ms[i] = 0U;
@@ -318,7 +319,7 @@ static uint32_t monitor_guards(uint32_t now_ms, uint32_t dt_ms,
       return 1U;
     }
     if (grace && output[i] >= PID3_STALL_OUTPUT_PERMILLE &&
-        fabsf(measured[i]) < PID3_DIRECTION_THRESHOLD_CPS)
+        fabsf(y) < PID3_DIRECTION_THRESHOLD_CPS)
       stall_ms[i] += dt_ms;
     else
       stall_ms[i] = 0U;
@@ -327,8 +328,8 @@ static uint32_t monitor_guards(uint32_t now_ms, uint32_t dt_ms,
       *fault_mask = bit;
       return 1U;
     }
-    if (measured[i] < min_speed) { min_speed = measured[i]; min_i = i; }
-    if (measured[i] > max_speed) { max_speed = measured[i]; max_i = i; }
+    if (y < min_speed) { min_speed = y; min_i = i; }
+    if (y > max_speed) { max_speed = y; max_i = i; }
   }
   g_pid3.sync_spread_cps = max_speed - min_speed;
   g_pid3.sync_warning = (grace && g_pid3.sync_spread_cps > PID3_SYNC_WARNING_CPS) ? 1U : 0U;
@@ -353,10 +354,12 @@ static void compute_outputs(uint32_t dt_ms, float target_cps,
   float dt_seconds = (float)dt_ms / 1000.0f;
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     float candidate, raw;
+    float y;
     measured[i] = (float)delta[i] * 1000.0f / (float)dt_ms;
-    error[i] = target_cps - measured[i];
-    ff[i] = forward_feedforward[i].u0 +
-            forward_feedforward[i].kv * target_cps;
+    y = -measured[i];
+    error[i] = target_cps - y;
+    ff[i] = reverse_feedforward[i].u0 +
+            reverse_feedforward[i].kv * target_cps;
     up[i] = PID3_DEFAULT_KP * error[i];
     candidate = integral_permille[i] + PID3_DEFAULT_KI * error[i] * dt_seconds;
     if (candidate > PID3_INTEGRAL_LIMIT) candidate = PID3_INTEGRAL_LIMIT;
@@ -514,9 +517,10 @@ void pid3_lab_step(uint32_t now_ms)
     return;
   }
 
-  float current_target_cps =
+  float current_target_magnitude_cps =
       target_cps_for_run_elapsed(g_pid3.run_elapsed_ms);
-  g_pid3.target_cps = current_target_cps;
+  float signed_target_cps = -current_target_magnitude_cps;
+  g_pid3.target_cps = signed_target_cps;
   {
     EncoderRaw current = read_all_encoders();
     int32_t delta[PID3_WHEEL_COUNT];
@@ -538,7 +542,7 @@ void pid3_lab_step(uint32_t now_ms)
     g_pid3.total_delta_rl += delta[2];
     g_pid3.total_delta_rr += delta[3];
     g_pid3.dt_ms = dt_ms;
-    compute_outputs(dt_ms, current_target_cps, delta, measured, error,
+    compute_outputs(dt_ms, current_target_magnitude_cps, delta, measured, error,
                     ff, up, ui, output);
     for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
       if (!isfinite(measured[i]) || !isfinite(error[i]) || !isfinite(ff[i]) ||
@@ -558,7 +562,7 @@ void pid3_lab_step(uint32_t now_ms)
     if (internal_state == PID3_STATE_FAULT) return;
     if (++log_divider >= PID3_LOG_EVERY_CYCLES) {
       log_divider = 0U;
-      append_sample(now_ms, dt_ms, current_target_cps, measured, error,
+      append_sample(now_ms, dt_ms, signed_target_cps, measured, error,
                     ff, ui, output, delta);
       if (internal_state == PID3_STATE_FAULT) return;
     }
