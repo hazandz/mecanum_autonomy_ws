@@ -6,8 +6,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "encoder_diag.h"
-#include "motor_bench.h"
+#include "pid0_lab.h"
 #include "safety_io.h"
 /* USER CODE END Includes */
 
@@ -94,8 +93,7 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   safety_io_init_safe();
-  encoder_diag_init();
-  motor_bench_init();
+  pid0_lab_init();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -508,19 +506,13 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  uint32_t encoder_diag_last_ms = HAL_GetTick();
+  uint32_t wake_tick = osKernelGetTickCount();
 
   for (;;)
   {
-    motor_bench_step();
-
-    if ((uint32_t)(HAL_GetTick() - encoder_diag_last_ms) >= 100U)
-    {
-      encoder_diag_step();
-      encoder_diag_last_ms = HAL_GetTick();
-    }
-
-    osDelay(10);
+    pid0_lab_step(HAL_GetTick());
+    wake_tick += PID0_SAMPLE_PERIOD_MS;
+    (void)osDelayUntil(wake_tick);
   }
   /* USER CODE END 5 */
 }
