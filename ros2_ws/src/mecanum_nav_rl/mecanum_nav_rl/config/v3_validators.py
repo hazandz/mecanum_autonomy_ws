@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from mecanum_nav_rl.config.v3_models import ResolvedConfigV3, RuntimeProfileV3
 from mecanum_nav_rl.config.v3_policy import validate_profile_mode_v3
+from mecanum_nav_rl.config.step07_temporal_contract import (
+    CONTRACT_ID as RUN005_TEMPORAL_CONTRACT_ID,
+    CONTRACT_SHA256 as RUN005_TEMPORAL_CONTRACT_SHA256,
+    validate_run005_temporal_binding,
+)
 
 
 def validate_resolved_config_v3(config: ResolvedConfigV3) -> None:
@@ -53,3 +58,10 @@ def validate_resolved_config_v3(config: ResolvedConfigV3) -> None:
         and config.motion_limits.source_class != "MEASURED_REGISTRY"
     ):
         raise ValueError("deploy_real requires a measured-registry motion source")
+    binding = config.navigation.temporal_coherence_contract
+    if binding is not None:
+        validate_run005_temporal_binding(
+            binding.model_dump(mode="json"),
+            runtime_profile=config.runtime.runtime_profile.value,
+            navigation_mode=config.runtime.navigation_mode.value,
+        )

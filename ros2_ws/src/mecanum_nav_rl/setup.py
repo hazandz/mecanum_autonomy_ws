@@ -17,6 +17,10 @@ _V3_CONFIG_DATA_FILES = [
         ],
     ),
     (
+        "share/mecanum_nav_rl/config/v3/contracts",
+        ["config/v3/contracts/step07_run005_temporal_coherence.v1.json"],
+    ),
+    (
         "share/mecanum_nav_rl/config/v3/profiles",
         [
             "config/v3/profiles/sim_train.yaml",

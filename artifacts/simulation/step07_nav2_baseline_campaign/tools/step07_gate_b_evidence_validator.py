@@ -54,6 +54,29 @@ def validate_gate_b_collection(document: dict, *, config_hash: str, invocation_i
             or type(document.get("errors")) is not list
             or document.get("source_contract") != "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3"):
         raise ValueError("GATE_B_COLLECTION_SCHEMA_INVALID")
+    if config_hash == RUN005_TEMPORAL_CONFIG_HASH:
+        binding = document.get("temporal_coherence_contract")
+        ingress = document.get("lifecycle_ingress")
+        if (binding != {"contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+                        "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256}
+                or type(ingress) is not dict
+                or ingress.get("schema") != LIFECYCLE_INGRESS_SCHEMA
+                or type(ingress.get("collector_session_id")) is not str
+                or not ingress["collector_session_id"]):
+            raise ValueError("GATE_B_TEMPORAL_OR_LIFECYCLE_BINDING_INVALID")
+        refs = ingress.get("selected_record_references")
+        if type(refs) is not list or len(refs) != len(samples):
+            raise ValueError("GATE_B_LIFECYCLE_REFERENCE_COUNT_INVALID")
+        for sample, reference in zip(samples, refs):
+            correlation = sample.get("correlation")
+            if (type(reference) is not dict
+                    or set(reference) != {"record_index", "record_sha256"}
+                    or type(reference.get("record_index")) is not int
+                    or type(reference.get("record_sha256")) is not str
+                    or type(correlation) is not dict
+                    or correlation.get("lifecycle_record_index") != reference["record_index"]
+                    or correlation.get("lifecycle_record_sha256") != reference["record_sha256"]):
+                raise ValueError("GATE_B_LIFECYCLE_REFERENCE_SAMPLE_BINDING_INVALID")
     return document
 
 
@@ -61,7 +84,9 @@ def validate_gate_b_terminal(terminal: dict, *, collection_raw: bytes, peer_raw:
                              config_hash: str, invocation_id: str) -> dict:
     collection = json.loads(collection_raw, object_pairs_hook=_pairs, parse_constant=_constant)
     validate_gate_b_collection(collection, config_hash=config_hash, invocation_id=invocation_id)
-    if terminal.get("handshake_protocol", "2.0") != "2.0":
+    terminal_protocol = terminal.get("handshake_protocol")
+    if ((config_hash == RUN005_TEMPORAL_CONFIG_HASH and terminal_protocol != "2.0")
+            or (terminal_protocol is not None and terminal_protocol != "2.0")):
         raise ValueError("COLLECTOR_PROTOCOL_UNKNOWN_OR_UNSUPPORTED")
     if (terminal.get("schema_version") != "1.0" or terminal.get("collector") != "step07_gate_b_observer"
             or terminal.get("protocol_phase") != "TERMINAL"
@@ -81,6 +106,11 @@ def validate_gate_b_terminal(terminal: dict, *, collection_raw: bytes, peer_raw:
         if (peer.get("schema_version") != "1.0" or peer.get("config_hash") != config_hash
                 or peer.get("invocation_id") != invocation_id or peer.get("snapshot_complete") is not True):
             raise ValueError("GATE_B_TERMINAL_PEER_IDENTITY_INVALID")
+        if config_hash == RUN005_TEMPORAL_CONFIG_HASH:
+            if (terminal.get("temporal_coherence_contract") != collection.get("temporal_coherence_contract")
+                    or terminal.get("lifecycle_ingress_session_id") != collection["lifecycle_ingress"].get("collector_session_id")
+                    or terminal.get("selected_lifecycle_references") != collection["lifecycle_ingress"].get("selected_record_references")):
+                raise ValueError("GATE_B_TERMINAL_TEMPORAL_BINDING_MISMATCH")
     elif not errors or terminal.get("peer_artifact") is not None:
         raise ValueError("GATE_B_TERMINAL_FAILURE_REASON_MISSING")
     passed = verified and not errors and not collection["errors"] and all(collection["acceptance"].values())
@@ -407,6 +437,15 @@ def verify_artifacts(run_directory: str | Path) -> dict:
 
 PROTOCOL2_EVENTS = ["GATE_B_COLLECTION_VERIFIED", "CPP_FINALIZE_REQUESTED",
                     "CPP_SNAPSHOT_COMPLETE", "GATE_B_TERMINAL_VERIFIED"]
+RUN005_TEMPORAL_CONTRACT_ID = "mecanum.step07-run005-temporal-coherence/v1"
+RUN005_TEMPORAL_CONTRACT_SHA256 = "57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59"
+RUN005_TEMPORAL_CONFIG_HASH = "4fac960ff2298cefd1b261db314bfa8e802855f8cb6290b762594658982b7925"
+LIFECYCLE_INGRESS_SCHEMA = "mecanum.step07-run005.lifecycle-ingress/v1"
+LIFECYCLE_INGRESS_FILES = {
+    "live": "lifecycle_ingress.live.json",
+    "references": "lifecycle_ingress.references.json",
+    "final": "lifecycle_ingress.final.json",
+}
 
 
 def _protocol2_state(record: dict, gate_doc: dict | None = None,
@@ -458,15 +497,29 @@ def _required_sealed_artifacts(record: dict, *, protocol2: bool) -> set[str]:
             "PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"):
         required.update({"runtime_observer.json", "gate_b_vectors.json", "gate_b_terminal.json",
                          "navigation_evidence_chain.json"})
+    temporal_bundle = (record.get("config_hash") == RUN005_TEMPORAL_CONFIG_HASH
+                       or type(record.get("temporal_coherence_contract")) is dict)
+    if temporal_bundle and record.get("call_counts", {}).get("gate_b_observer", 0) > 0:
+        required.add(LIFECYCLE_INGRESS_FILES["live"])
+        groups = record.get("process_groups")
+        gate_group = groups.get("gate_b_observer") if type(groups) is dict else None
+        readiness = gate_group.get("readiness") if type(gate_group) is dict else None
+        if type(readiness) is dict and readiness.get("ready") is True:
+            required.add(LIFECYCLE_INGRESS_FILES["references"])
     handshake = record.get("collector_handshake")
     if type(handshake) is dict:
         events = handshake.get("events")
         events = events if type(events) is list else []
         if "GATE_B_COLLECTION_VERIFIED" in events:
             required.add("gate_b_vectors.json")
+            if temporal_bundle:
+                required.update({LIFECYCLE_INGRESS_FILES["live"],
+                                 LIFECYCLE_INGRESS_FILES["references"]})
         # A request is not proof that the peer snapshot was produced.
         if "CPP_SNAPSHOT_COMPLETE" in events:
             required.add("runtime_observer.json")
+            if temporal_bundle:
+                required.add(LIFECYCLE_INGRESS_FILES["final"])
         if "GATE_B_TERMINAL_VERIFIED" in events:
             required.add("gate_b_terminal.json")
         if handshake.get("status") == "FAIL":
@@ -482,7 +535,155 @@ def _required_sealed_artifacts(record: dict, *, protocol2: bool) -> set[str]:
         required.add("runtime_observer.json")
     if acceptance.get("gate_b_vectors") is True:
         required.add("gate_b_vectors.json")
+    if temporal_bundle and acceptance.get("gate_b_vectors") is True:
+        required.update(LIFECYCLE_INGRESS_FILES.values())
     return required
+
+
+def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record: dict,
+                                       gate: dict | None, terminal: dict | None,
+                                       observer: dict | None) -> dict:
+    """Validate the exact native lifecycle records behind temporal samples."""
+    binding = record.get("temporal_coherence_contract")
+    if (type(binding) is not dict or binding != {
+            "contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+            "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256}
+            or record.get("config_hash") != RUN005_TEMPORAL_CONFIG_HASH):
+        raise ValueError("RUN005_TEMPORAL_CONTRACT_BUNDLE_BINDING_INVALID")
+    identity = record.get("lifecycle_ingress")
+    if type(identity) is not dict or identity.get("schema") != LIFECYCLE_INGRESS_SCHEMA:
+        raise ValueError("LIFECYCLE_INGRESS_RUN_RECORD_IDENTITY_INVALID")
+    session = identity.get("collector_session_id")
+    if type(session) is not str or not session:
+        raise ValueError("LIFECYCLE_INGRESS_SESSION_MISSING")
+    for key, filename in LIFECYCLE_INGRESS_FILES.items():
+        if identity.get({"live": "live_artifact", "references": "reference_request_artifact",
+                         "final": "final_artifact"}[key]) != filename:
+            raise ValueError("LIFECYCLE_INGRESS_ARTIFACT_NAME_INVALID")
+
+    docs = {}
+    for key, filename in LIFECYCLE_INGRESS_FILES.items():
+        if filename not in verified:
+            if (root / filename).exists() or (root / filename).is_symlink():
+                raise ValueError(f"VERDICT_ARTIFACT_NOT_SEALED:{filename}")
+            # Early failures can occur before the relevant native stage.
+            continue
+        path = _require_sealed(filename, root=root, verified=verified)
+        doc, raw = load_json(path)
+        if semantic_canonical_bytes(doc) != raw:
+            raise ValueError(f"LIFECYCLE_INGRESS_JSON_NOT_CANONICAL:{filename}")
+        docs[key] = doc
+    live, request, final = docs.get("live"), docs.get("references"), docs.get("final")
+    for label, doc in docs.items():
+        if (doc.get("schema") != LIFECYCLE_INGRESS_SCHEMA
+                or doc.get("schema_version") != "1.0"
+                or doc.get("invocation_id") != record.get("invocation_id")
+                or doc.get("collector_session_id") != session
+                or doc.get("config_hash") != RUN005_TEMPORAL_CONFIG_HASH):
+            raise ValueError(f"LIFECYCLE_INGRESS_{label.upper()}_IDENTITY_INVALID")
+    if request is not None:
+        refs_request = request.get("references")
+        if type(refs_request) is not list or len(refs_request) > 5:
+            raise ValueError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_INVALID")
+    else:
+        refs_request = None
+    if live is not None:
+        endpoint = live.get("endpoint_binding")
+        if (type(endpoint) is not dict or endpoint.get("publisher_gid") in (None, "")
+                or endpoint.get("topic") != "/mecanum/safety_lifecycle_state"
+                or endpoint.get("type") != "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState"
+                or endpoint.get("node_name") != "safety_lifecycle"
+                or endpoint.get("node_namespace") != "/"
+                or endpoint.get("reliability") != 1 or endpoint.get("durability") != 2
+                or endpoint.get("qos_history_depth_status") not in ("OBSERVED_MATCH", "UNOBSERVABLE")):
+            raise ValueError("LIFECYCLE_INGRESS_ENDPOINT_BINDING_INVALID")
+        rows = live.get("records")
+        if type(rows) is not list or len(rows) > 64:
+            raise ValueError("LIFECYCLE_INGRESS_LIVE_RECORD_WINDOW_INVALID")
+        previous_index, previous_sequence, previous_mono = 0, -1, 0
+        live_records = {}
+        for row in rows:
+            canonical = semantic_canonical_bytes(row) if type(row) is dict else b""
+            receive = row.get("receive_time") if type(row) is dict else None
+            index = row.get("record_index") if type(row) is dict else None
+            sequence = row.get("sequence") if type(row) is dict else None
+            mono = receive.get("monotonic_ns") if type(receive) is dict else None
+            if (type(row) is not dict or len(canonical) > 8192
+                    or type(index) is not int or index <= previous_index
+                    or type(sequence) is not int or sequence < previous_sequence
+                    or type(mono) is not int or mono <= previous_mono
+                    or receive.get("clock") != "CLOCK_MONOTONIC"
+                    or row.get("publisher_gid") != endpoint.get("publisher_gid")
+                    or row.get("payload_provenance") != "rclcpp::MessageInfo.publisher_gid"
+                    or row.get("validity") != "ADMITTED"
+                    or type(row.get("payload")) is not dict
+                    or row["payload"].get("sequence") != sequence):
+                raise ValueError("LIFECYCLE_INGRESS_LIVE_RECORD_PROVENANCE_INVALID")
+            previous_index, previous_sequence, previous_mono = index, sequence, mono
+            live_records[index] = hashlib.sha256(canonical).hexdigest()
+    else:
+        live_records = {}
+        endpoint = None
+    selected = []
+    if gate is not None:
+        if gate.get("temporal_coherence_contract") != binding:
+            raise ValueError("GATE_B_TEMPORAL_CONTRACT_BINDING_MISMATCH")
+        gate_ingress = gate.get("lifecycle_ingress")
+        if (type(gate_ingress) is not dict
+                or gate_ingress.get("schema") != LIFECYCLE_INGRESS_SCHEMA
+                or gate_ingress.get("collector_session_id") != session):
+            raise ValueError("GATE_B_LIFECYCLE_INGRESS_IDENTITY_INVALID")
+        selected = gate_ingress.get("selected_record_references")
+        samples = gate.get("samples")
+        if type(selected) is not list or type(samples) is not list or len(selected) != len(samples):
+            raise ValueError("GATE_B_LIFECYCLE_REFERENCE_COUNT_INVALID")
+        for sample, ref in zip(samples, selected):
+            correlation = sample.get("correlation") if type(sample) is dict else None
+            if (type(ref) is not dict or set(ref) != {"record_index", "record_sha256"}
+                    or type(ref.get("record_index")) is not int
+                    or type(ref.get("record_sha256")) is not str
+                    or type(correlation) is not dict
+                    or correlation.get("lifecycle_record_index") != ref["record_index"]
+                    or correlation.get("lifecycle_record_sha256") != ref["record_sha256"]):
+                raise ValueError("GATE_B_LIFECYCLE_REFERENCE_SAMPLE_BINDING_INVALID")
+        if record.get("lifecycle_ingress", {}).get("selected_record_references") != selected:
+            raise ValueError("RUN_RECORD_LIFECYCLE_REFERENCE_BINDING_MISMATCH")
+    if terminal is not None:
+        if (terminal.get("temporal_coherence_contract") != binding
+                or terminal.get("lifecycle_ingress_session_id") != session
+                or terminal.get("selected_lifecycle_references") != selected):
+            raise ValueError("GATE_B_TERMINAL_LIFECYCLE_BINDING_MISMATCH")
+    if final is not None:
+        retained = final.get("retained_references")
+        if (final.get("state") not in ("FINALIZED", "FAILED")
+                or type(retained) is not list or len(retained) > 5
+                or (observer is not None and observer.get("lifecycle_ingress") != final)):
+            raise ValueError("LIFECYCLE_INGRESS_FINAL_SCHEMA_OR_OBSERVER_MISMATCH")
+        final_records = {}
+        for entry in retained:
+            row = entry.get("record") if type(entry) is dict else None
+            index = entry.get("record_index") if type(entry) is dict else None
+            if type(row) is not dict or type(index) is not int:
+                raise ValueError("LIFECYCLE_INGRESS_FINAL_REFERENCE_INVALID")
+            digest = hashlib.sha256(semantic_canonical_bytes(row)).hexdigest()
+            if (row.get("record_index") != index or entry.get("record_sha256") != digest
+                    or index in final_records):
+                raise ValueError("LIFECYCLE_INGRESS_FINAL_REFERENCE_HASH_INVALID")
+            final_records[index] = digest
+        if any(final_records.get(ref.get("record_index")) != ref.get("record_sha256")
+               for ref in selected):
+            raise ValueError("LIFECYCLE_INGRESS_REQUIRED_REFERENCE_NOT_RETAINED")
+        if live is not None and final.get("endpoint_binding") != endpoint:
+            raise ValueError("LIFECYCLE_INGRESS_FINAL_ENDPOINT_MISMATCH")
+        if request is not None and request.get("references") != selected:
+            raise ValueError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_MISMATCH")
+        raw = (root / LIFECYCLE_INGRESS_FILES["final"]).read_bytes()
+        if (identity.get("final_sha256") != hashlib.sha256(raw).hexdigest()
+                or identity.get("final_size_bytes") != len(raw)):
+            raise ValueError("LIFECYCLE_INGRESS_RUN_RECORD_FINAL_SEAL_MISMATCH")
+    elif record.get("acceptance", {}).get("gate_b_vectors") is True:
+        raise ValueError("LIFECYCLE_INGRESS_FINAL_ARTIFACT_REQUIRED_FOR_PASS")
+    return {"state": "VALIDATED", "selected_record_references": selected}
 
 
 def _require_sealed(path_name: str, *, root: Path, verified: set[str]) -> Path:
@@ -992,6 +1193,18 @@ def validate_gate_b_document(document: dict, *, config_hash: str, minimum_sample
                 "navigate_to_pose_succeeded": document["navigate_to_pose"].get("succeeded") is True,
                 "no_command_or_policy_publisher": True,
                 "errors_absent": document.get("errors") == []}
+    if config_hash == RUN005_TEMPORAL_CONFIG_HASH:
+        binding = document.get("temporal_coherence_contract")
+        ingress = document.get("lifecycle_ingress")
+        refs = ingress.get("selected_record_references") if type(ingress) is dict else None
+        expected["temporal_coherence_contract"] = binding == {
+            "contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+            "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256}
+        expected["lifecycle_ingress_references_verified"] = (
+            type(ingress) is dict and ingress.get("schema") == LIFECYCLE_INGRESS_SCHEMA
+            and type(ingress.get("collector_session_id")) is str
+            and len(ingress.get("collector_session_id", "")) > 0
+            and type(refs) is list and len(refs) == len(samples))
     if document.get("acceptance") != expected:
         raise ValueError("GATE_B_ACCEPTANCE_RAW_MISMATCH")
     protocol_marker = document.get("handshake_protocol")
@@ -1067,6 +1280,10 @@ def validate_run_directory(run_directory: str | Path) -> dict:
             "no_command_or_policy_publisher": False, "errors_absent": False},
             "stage_failure": gate_doc["stage_failure"],
             "blocking_reason": stage_result["blocking_reason"]}
+        if record.get("config_hash") == RUN005_TEMPORAL_CONFIG_HASH:
+            result["lifecycle_ingress"] = _validate_lifecycle_ingress_bundle(
+                root=root, verified=verified, record=record, gate=gate_doc,
+                terminal=terminal, observer=stage_observer)
         return result
 
     if protocol2 and not result["verdict"]["pass"] and not gate_exists:
@@ -1084,6 +1301,10 @@ def validate_run_directory(run_directory: str | Path) -> dict:
         failure_chain = _validate_sealed_failure_chain(root=root, verified=verified, record=record)
         if failure_chain is not None:
             result["navigation_evidence_chain"] = {"state": "FAILURE", "chain": failure_chain}
+        if record.get("config_hash") == RUN005_TEMPORAL_CONFIG_HASH:
+            result["lifecycle_ingress"] = _validate_lifecycle_ingress_bundle(
+                root=root, verified=verified, record=record, gate=None,
+                terminal=terminal, observer=None)
         return result
     if not gate_exists:
         raise ValueError("GATE_B_ARTIFACT_REQUIRED_BUT_MISSING")
@@ -1133,6 +1354,10 @@ def validate_run_directory(run_directory: str | Path) -> dict:
             result["collector_handshake_failure"] = failure_doc
             _validate_sealed_failure_chain(root=root, verified=verified, record=record,
                 observer=observer, gate_document=gate_doc)
+            if record.get("config_hash") == RUN005_TEMPORAL_CONFIG_HASH:
+                result["lifecycle_ingress"] = _validate_lifecycle_ingress_bundle(
+                    root=root, verified=verified, record=record, gate=gate_doc,
+                    terminal=terminal, observer=observer)
             return result
     else:
         if not observer_exists:
@@ -1143,6 +1368,10 @@ def validate_run_directory(run_directory: str | Path) -> dict:
     if not protocol2:
         observer, _ = load_json(observer_path)
     assert gate_doc is not None
+    if record.get("config_hash") == RUN005_TEMPORAL_CONFIG_HASH:
+        result["lifecycle_ingress"] = _validate_lifecycle_ingress_bundle(
+            root=root, verified=verified, record=record, gate=gate_doc,
+            terminal=terminal, observer=observer)
     if gate_doc.get("collector_terminal_state") == "NOT_STARTED":
         required_observer = {"clock", "scan", "wheel_odometry_raw", "imu_data", "filtered_odometry",
             "tf", "tf_static", "lifecycle", "receipt", "graph", "cmd_vel_ownership",

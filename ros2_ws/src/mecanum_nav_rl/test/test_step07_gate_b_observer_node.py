@@ -7,6 +7,66 @@ from mecanum_nav_rl.observations.step07_gate_b_observer_node import (
     LIFECYCLE_STATE_QOS_CONTRACT, LIFECYCLE_STATE_TOPIC,
     lifecycle_state_qos_profile, validate_vector_samples,
 )
+from mecanum_nav_rl.observations.step07_temporal_state import (
+    AttemptContext, Run005TemporalAttempt,
+)
+
+
+def _attempt_context(config_hash="a" * 64, lifecycle_sequence=1):
+    return AttemptContext("fixture-goal-intent", config_hash, "warehouse_map2", "b" * 64,
+                          1, 2, 3, lifecycle_sequence)
+
+
+def _seed_temporal(collector, *, ros_ns=None, context=None):
+    import time
+    from mecanum_nav_rl.observations.step07_gate_b_observer_node import RUN005_CONFIG_HASH
+    collector.temporal = Run005TemporalAttempt(
+        steady_deadline_ns=time.monotonic_ns() + 10_000_000_000)
+    if ros_ns is not None:
+        context = context or _attempt_context(RUN005_CONFIG_HASH)
+        collector.temporal.consume_trigger(valid=True, ros_ns=ros_ns,
+            steady_ns=time.monotonic_ns(), context=context)
+    return collector.temporal
+
+
+def _lifecycle_record(receive_ns=0, stamp_sec=1):
+    return {
+        "record_index": 1, "sequence": 1, "publisher_gid": "gid-fixture",
+        "validity": "ADMITTED",
+        "payload_provenance": "rclcpp::MessageInfo.publisher_gid",
+        "receive_time": {"clock": "CLOCK_MONOTONIC", "monotonic_ns": receive_ns},
+        "payload": {"stamp_sec": stamp_sec, "stamp_nanosec": 0, "frame_id": "",
+            "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+            "sequence": 1, "primary_state": 2, "barrier_state": 1,
+            "motion_permitted": True, "reason": "ACTIVE",
+            "barrier_stamp_sec": stamp_sec, "barrier_stamp_nanosec": 0},
+    }
+
+
+class _FakeLifecycleIngress:
+    def __init__(self, record=None):
+        self.record = record or _lifecycle_record()
+        self.requested = []
+
+    def request_references(self, records):
+        import hashlib
+        import json
+        self.requested = [{"record_index": row["record_index"],
+            "record_sha256": hashlib.sha256(json.dumps(row, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()}
+            for row in records]
+
+    def read_live(self):
+        return {"state": "READY", "endpoint_binding": {
+            "publisher_gid": "gid-fixture", "topic": "/mecanum/safety_lifecycle_state",
+            "type": "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState",
+            "node_name": "safety_lifecycle", "node_namespace": "/",
+            "reliability": 1, "durability": 2,
+            "qos_history_depth_status": "OBSERVED_MATCH"},
+            "records": [self.record], "acknowledged_references": list(self.requested)}
+
+    def acknowledged(self, document):
+        return document["acknowledged_references"] == self.requested
 
 
 def test_accepts_five_immutable_finite_observation81_samples():
@@ -39,6 +99,7 @@ def test_collector_error_waits_for_result_only_until_existing_deadline(monkeypat
     from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
     c=m._Collector.__new__(m._Collector)
     c._finished=False;c.samples=[];c.errors=["LOCAL_REFERENCE_INVALID"];c.navigate_result=None
+    _seed_temporal(c)
     c.node=SimpleNamespace(get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(nanoseconds=0)))
     c.deadline=10;done=[];c._finish=lambda:done.append(True)
     monkeypatch.setattr(m.time,'monotonic',lambda:1)
@@ -52,17 +113,22 @@ def test_zero_sample_timeout_records_no_action_request_and_bounded_diagnostics(t
     c = m._Collector.__new__(m._Collector)
     c._finished = False
     c.args = SimpleNamespace(output=tmp_path / "gate.json", peer_timeout_sec=1,
-        invocation_id="DIAGNOSTIC_FIXTURE")
+        invocation_id="DIAGNOSTIC_FIXTURE", collector_session_id="session-fixture")
     c.config_hash = "a" * 64
     c.samples = []
     c.raw = {"scan": [], "filtered_odometry": [], "lifecycle": [], "receipt": []}
     c.errors = ["GATE_B_SAMPLE_TIMEOUT"]
     c.path = None
+    c._path_context = None
+    c._pending_sample = None
+    c._pending_reference_requested = False
+    c._last_measurement_key = None
     c.path_transcript = None
     c.navigate_result = None
     c._compute_path_requested = c._navigate_requested = False
     c._compute_path_calls = c._navigate_calls = 0
     c.diagnostics = m._new_collector_diagnostics()
+    c._selected_lifecycle_refs = []
     c._wait_peer = lambda: None
 
     c._finish()
@@ -79,6 +145,7 @@ def test_tf_blocking_predicate_is_captured_without_changing_request_semantics(mo
     from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
     c = m._Collector.__new__(m._Collector)
     c._finished = False; c.samples = []; c.errors = []; c.navigate_result = None
+    _seed_temporal(c)
     c.diagnostics = m._new_collector_diagnostics()
     c.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=10_000_000_000)))
     c.deadline = 100
@@ -86,15 +153,27 @@ def test_tf_blocking_predicate_is_captured_without_changing_request_semantics(mo
     c._read_goal_trigger = lambda: True
     c._compute_path_requested = c._navigate_requested = False
     c.path = None
+    c._path_context = None
     c.tf_buffer = SimpleNamespace(can_transform=lambda *_args: False)
+    c._pending_sample = None
+    c._pending_reference_requested = False
+    c._last_measurement_key = None
     c.latest_lifecycle = c.latest_scan = c.latest_odom = c.latest_receipt = None
+    c.lifecycle_ingress = _FakeLifecycleIngress(_lifecycle_record(stamp_sec=10))
+    c.map_identity = ("warehouse_map2", "b" * 64)
+    c._goal_intent = "fixture-goal-intent"
+    c.config_hash = "a" * 64
+    c.temporal.consume_trigger(valid=True, ros_ns=10_000_000_000,
+        steady_ns=__import__("time").monotonic_ns(), context=_attempt_context(c.config_hash))
+    c.diagnostics = m._new_collector_diagnostics()
+    c._last_ros_time_ns = None
     monkeypatch.setattr(m.time, "monotonic", lambda: 1)
     monkeypatch.setattr(m.importlib, "import_module", lambda name: SimpleNamespace(
         Time=lambda **kwargs: kwargs) if name == "rclpy.time" else __import__(name))
 
     c._tick()
 
-    assert c.diagnostics["tf"]["state"] == "UNAVAILABLE"
+    assert c.diagnostics["tf"]["state"] == "UNAVAILABLE_AT_FIXED_T_A"
     assert c.diagnostics["tf"]["last_query_time_ns"] == 10_000_000_000
     assert c.diagnostics["actions"]["compute_path_to_pose"]["state"] == "NOT_REQUESTED"
     assert c.diagnostics["first_blocking_predicate"]["predicate"] == "TF_TRANSFORM_UNAVAILABLE"
@@ -196,7 +275,44 @@ c.tf_buffer=buffer; c.path=path; c.config_hash="a"*64
 c._compute_path_requested=c._navigate_requested=True
 c._compute_path_calls=c._navigate_calls=1
 c._finished=False; c._last_measurement_key=None; c.samples=[]; c.errors=[]
-c.args=NS()
+c.args=NS(collector_session_id="fixture-session")
+c.temporal=m.Run005TemporalAttempt(steady_deadline_ns=10**30)
+c.temporal.consume_trigger(valid=True,ros_ns=1000000000,steady_ns=1,
+    context=m.AttemptContext("fixture-goal", "a"*64, "warehouse_map2", "b"*64, 1, 2, 3, 1))
+c.temporal.mark_planner_sent("compute-uuid", 1000000000)
+c.temporal.admit_path(request_uuid="compute-uuid",result_status="SUCCEEDED",frame_id="map",
+    poses=tuple(path.poses),receipt_steady_ns=1,campaign_deadline_ns=10**30,
+    context=c.temporal.context)
+c.path_sequence=1
+c._path_context=c.temporal.path
+c._path_request_uuid="compute-uuid"
+c.map_identity=("warehouse_map2","b"*64)
+c._goal_intent="fixture-goal"
+import hashlib, json
+class FakeIngress:
+    def __init__(self): self.requested=[]
+    def request_references(self, rows):
+        self.requested=[{"record_index":r["record_index"],"record_sha256":hashlib.sha256(
+            json.dumps(r,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest()} for r in rows]
+    def read_live(self):
+        record={"record_index":1,"sequence":1,"publisher_gid":"gid-fixture","validity":"ADMITTED",
+            "payload_provenance":"rclcpp::MessageInfo.publisher_gid",
+            "receive_time":{"clock":"CLOCK_MONOTONIC","monotonic_ns":0},
+            "payload":{"stamp_sec":1,"stamp_nanosec":0,"frame_id":"","episode_generation":1,
+                "reset_epoch":2,"runtime_generation":3,"sequence":1,"primary_state":2,
+                "barrier_state":1,"motion_permitted":True,"reason":"ACTIVE",
+                "barrier_stamp_sec":1,"barrier_stamp_nanosec":0}}
+        return {"state":"READY","endpoint_binding":{"publisher_gid":"gid-fixture",
+            "topic":"/mecanum/safety_lifecycle_state","type":"mecanum_nav_rl_interfaces/msg/SafetyLifecycleState",
+            "node_name":"safety_lifecycle","node_namespace":"/","reliability":1,"durability":2,
+            "qos_history_depth_status":"OBSERVED_MATCH"},"records":[record],
+            "acknowledged_references":list(self.requested)}
+    def acknowledged(self, doc): return doc["acknowledged_references"]==self.requested
+c.lifecycle_ingress=FakeIngress()
+c._selected_lifecycle_refs=[]
+c._pending_sample=None
+c._pending_reference_requested=False
+c._last_measurement_key=None
 c.deadline=m.time.monotonic()+10
 c.binner=LidarAngularBinner(ObservationConfig())
 c.lidar_binding=m.IngressMessageBinding(LaserScan,"/scan","sensor_msgs/msg/LaserScan","lidar_frame",c._sectorize,None)
@@ -222,15 +338,11 @@ admitted=validate_observation_inputs(context=ctx,lidar=lidar,local_reference=loc
 vector=m.assemble_observation(admitted)
 assert vector.ready and vector.vector.dtype==np.float32 and not vector.vector.flags.writeable
 assert validate_observation_inputs(context=ctx,lidar=lidar,local_reference=local,measured_twist=twist,receipt=rc,fixture_claims=replace(m.BINDING_CLAIMS,lidar_topic="/wrong")) is None
-# Clock/future/identity/TF chưa sẵn sàng không được tạo sample giả.
-c._last_measurement_key=None
-for now in (0, 999999999, 2000000000):
-    c.node=NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=now)))
-    c._tick(); assert len(c.samples)==1
-c.node=NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=1000000000)))
+# Mismatch generation không tạo sample thay thế.
 receipt.runtime_generation=4
 c._tick(); assert len(c.samples)==1 and not c.errors
 receipt.runtime_generation=3
+# Measurement identity đã commit không thể được dùng lại dù buffer đổi.
 c.tf_buffer=Buffer()
 c._tick(); assert len(c.samples)==1 and not c.errors
 ''')
@@ -254,14 +366,16 @@ def test_async_actions_sent_once_and_completion_verdict_uses_actual_results():
     c._compute_path_requested = c._navigate_requested = False
     c._compute_path_calls = c._navigate_calls = 0
     c.errors = []
+    c.diagnostics = m._new_collector_diagnostics()
+    _seed_temporal(c, ros_ns=1)
     c.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1)))
+    c._goal_pose = lambda: SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=0,nanosec=1)))
     c._request_path_once(); c._navigate_once()
     assert not calls
     client.server_is_ready = lambda: True
-    client.send_goal_async = lambda goal: (calls.append(goal) or SimpleNamespace(add_done_callback=lambda cb: None))
+    client.send_goal_async = lambda goal, **kwargs: (calls.append((goal,kwargs)) or SimpleNamespace(add_done_callback=lambda cb: None))
     c.ComputePathToPose = SimpleNamespace(Goal=lambda: SimpleNamespace())
     c.NavigateToPose = SimpleNamespace(Goal=lambda: SimpleNamespace())
-    c._goal_pose = lambda: object()
     c._request_path_once(); c._request_path_once()
     c._navigate_once(); c._navigate_once()
     assert len(calls) == 2 and c._compute_path_calls == c._navigate_calls == 1
@@ -303,9 +417,11 @@ def test_peer_lifetime_atomic_once_early_and_late_goal_and_failures(tmp_path, mo
         output = tmp_path / f"gate-{early}.json"
         events = []
         c = m._Collector.__new__(m._Collector)
-        c.args = SimpleNamespace(output=output, peer_evidence_path=peer, peer_timeout_sec=10)
+        c.args = SimpleNamespace(output=output, peer_evidence_path=peer, peer_timeout_sec=10,
+            collector_session_id="session-fixture")
         c.config_hash = "a"*64; c._finished = c._closed = c._peer_verified = False
         c.samples=[{"stamp_ns":i,"dimension":81,"dtype":"float32","values":[0.0]*81} for i in range(1,6)]
+        c._selected_lifecycle_refs=[{"record_index":i,"record_sha256":"a"*64} for i in range(1,6)]
         c.raw={}; c.errors=[]; c.path=SimpleNamespace(header=SimpleNamespace(frame_id="map")); c.path_transcript={}
         c._compute_path_requested=c._navigate_requested=True
         c._compute_path_calls=c._navigate_calls=1
@@ -340,6 +456,7 @@ def test_constructor_sim_clock_buffer_binding_and_steady_watchdog_without_graph(
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 import rclpy, rclpy.action, tf2_ros
+import tempfile
 from rclpy.clock import ClockType
 from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
 captured={}; subscriptions=[]; sends=[]
@@ -351,7 +468,16 @@ def create_node(name,**kwargs):
 def buffer(**kwargs): captured.update(buffer_options=kwargs); return NS()
 def action(*args):
     return NS(server_is_ready=lambda:False,send_goal_async=lambda goal:sends.append(goal))
-args=NS(config_hash="a"*64,goal_x=-4.,goal_y=0.,goal_yaw=0.,timeout_sec=10)
+tmp=tempfile.TemporaryDirectory(prefix="run005-gateb-fixture-")
+from pathlib import Path
+root=Path(tmp.name)
+args=NS(config_hash=m.RUN005_CONFIG_HASH,goal_x=-4.,goal_y=0.,goal_yaw=0.,timeout_sec=10,
+    invocation_id="offline-fixture",collector_session_id="session-fixture",
+    map_id="warehouse_map2",map_sha256="7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1",
+    temporal_contract_id=m.RUN005_TEMPORAL_CONTRACT_ID,
+    temporal_contract_sha256=m.RUN005_TEMPORAL_CONTRACT_SHA256,
+    lifecycle_ingress_live_path=str(root/"live.json"),lifecycle_ingress_references_path=str(root/"refs.json"),
+    lifecycle_ingress_final_path=str(root/"final.json"))
 with patch.object(rclpy,"create_node",create_node), patch.object(tf2_ros,"Buffer",buffer), patch.object(tf2_ros,"TransformListener",lambda *args:None), patch.object(rclpy.action,"ActionClient",action):
     c=m._Collector(args)
 assert captured["node_options"]["parameter_overrides"][0].name=="use_sim_time"
@@ -376,10 +502,12 @@ def test_interruption_writes_rejected_result_once_and_closes_without_action_retr
     from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
     c=m._Collector.__new__(m._Collector)
     c.args=SimpleNamespace(output=tmp_path/"gate.json",peer_evidence_path=tmp_path/"peer.json",
-        peer_timeout_sec=10,ready_path=tmp_path/"ready.json",start_path=tmp_path/"start.json")
-    c.config_hash="a"*64; c._finished=c._closed=c._peer_verified=False
+        peer_timeout_sec=10,ready_path=tmp_path/"ready.json",start_path=tmp_path/"start.json",
+        collector_session_id="session-fixture")
+    c.config_hash=m.RUN005_CONFIG_HASH; c._finished=c._closed=c._peer_verified=False
     c.samples=[]; c.raw={}; c.errors=[]; c.path=None; c.path_transcript=None
     c._compute_path_requested=c._navigate_requested=False; c._compute_path_calls=c._navigate_calls=0
+    c._selected_lifecycle_refs=[]
     c.navigate_result=None
     events=[]
     c.node=SimpleNamespace(destroy_node=lambda:events.append("destroy"))
@@ -410,7 +538,14 @@ def test_interruption_writes_rejected_result_once_and_closes_without_action_retr
     monkeypatch.setattr(m,"_Collector",lambda args:c)
     assert m.main(["--output",str(c.args.output),"--config-hash",c.config_hash,
                    "--peer-evidence-path",str(c.args.peer_evidence_path),"--invocation-id","offline-fixture",
-                   "--ready-path",str(c.args.ready_path),"--start-path",str(c.args.start_path)]) == 2
+                   "--ready-path",str(c.args.ready_path),"--start-path",str(c.args.start_path),
+                   "--lifecycle-ingress-live-path",str(tmp_path/"live.json"),
+                   "--lifecycle-ingress-references-path",str(tmp_path/"refs.json"),
+                   "--lifecycle-ingress-final-path",str(tmp_path/"final.json"),
+                   "--collector-session-id",c.args.collector_session_id,
+                   "--map-id","warehouse_map2","--map-sha256","7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1",
+                   "--temporal-contract-id",m.RUN005_TEMPORAL_CONTRACT_ID,
+                   "--temporal-contract-sha256",m.RUN005_TEMPORAL_CONTRACT_SHA256]) == 2
     doc=json.loads(c.args.output.read_bytes())
     assert doc["errors"] == ["GATE_B_COLLECTOR_INTERRUPTED"]
     assert not doc["acceptance"]["navigate_to_pose_requested_once"]
@@ -428,6 +563,7 @@ def test_gate_b_readiness_explicitly_records_live_process_context_and_subscripti
     collector.subscriptions = [object()] * 4
     collector.navigate = NS(server_is_ready=lambda: True)
     collector.config_hash = "a" * 64
+    collector.lifecycle_ingress = NS(read_live=lambda: {"state": "READY"})
     ready = collector._ready_document()
     assert ready["state"] == "READY"
     assert ready["process_alive"] is True
@@ -440,9 +576,12 @@ def _peer_pending_collector(tmp_path, finish=True):
     from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
     c=m._Collector.__new__(m._Collector)
     c.args=SimpleNamespace(output=tmp_path/'gate_b_vectors.json',peer_evidence_path=tmp_path/'runtime_observer.json',
-        terminal_output=tmp_path/'gate_b_terminal.json',peer_timeout_sec=60,invocation_id='offline-fixture')
+        terminal_output=tmp_path/'gate_b_terminal.json',peer_timeout_sec=60,invocation_id='offline-fixture',
+        collector_session_id='session-fixture')
     c.config_hash='a'*64;c._finished=c._closed=c._peer_verified=False
+    _seed_temporal(c)
     c.samples=[{'stamp_ns':i,'dimension':81,'dtype':'float32','values':[0.0]*81} for i in range(1,6)]
+    c._selected_lifecycle_refs=[{'record_index':i,'record_sha256':'a'*64} for i in range(1,6)]
     c.raw={};c.errors=[];c.path=SimpleNamespace(header=SimpleNamespace(frame_id='map'));c.path_transcript={}
     c._compute_path_requested=c._navigate_requested=True;c._compute_path_calls=c._navigate_calls=1
     c.navigate_result={'accepted':True,'succeeded':True,'status':4}

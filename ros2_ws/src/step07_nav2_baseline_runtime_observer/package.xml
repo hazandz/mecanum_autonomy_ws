@@ -13,6 +13,7 @@
   <depend>tf2_msgs</depend>
   <depend>mecanum_nav_rl_interfaces</depend>
   <depend>nlohmann_json</depend>
+  <depend>openssl</depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

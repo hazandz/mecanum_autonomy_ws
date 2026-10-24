@@ -42,7 +42,10 @@ MAP_HASHES = {
 WORLD_REL = "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf"
 WORLD_SHA256 = "a4b6253340baa866d89640d62a94d04fbea51425e9af1deca591422a0a36d91d"
 CONFIG_REL = "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json"
-CONFIG_SHA256 = "3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84"
+CONFIG_SHA256 = "26a2320a56e98a8dccf75527dd912f138cdea7e96efb064ddcce26aa66eb759e"
+RUN005_CONFIG_HASH = "4fac960ff2298cefd1b261db314bfa8e802855f8cb6290b762594658982b7925"
+TEMPORAL_CONTRACT_ID = "mecanum.step07-run005-temporal-coherence/v1"
+TEMPORAL_CONTRACT_SHA256 = "57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59"
 PYDANTIC_VERSION = "2.10.6"
 EXPECTED_ORIGIN = "https://github.com/hazandz/mecanum_autonomy_ws.git"
 
@@ -503,8 +506,12 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
     if sha256(architecture) != ARCHITECTURE_SHA256:
         raise RuntimeError("ARCHITECTURE_AUTHORITY_HASH_MISMATCH")
     config_doc = json.loads((worktree / CONFIG_REL).read_text(encoding="utf-8"))
-    if config_doc.get("provenance", {}).get("config_hash") != "5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071":
+    if config_doc.get("provenance", {}).get("config_hash") != RUN005_CONFIG_HASH:
         raise RuntimeError("RESOLVED_CONFIG_HASH_MISMATCH")
+    binding = config_doc.get("navigation", {}).get("temporal_coherence_contract")
+    if binding != {"contract_id": TEMPORAL_CONTRACT_ID,
+                   "contract_sha256": TEMPORAL_CONTRACT_SHA256}:
+        raise RuntimeError("RUN005_TEMPORAL_CONTRACT_BINDING_MISMATCH")
     if not os.access("/dev/shm", os.W_OK):
         raise RuntimeError("DEV_SHM_NOT_WRITABLE")
     for program in ("ros2", "gz"):
@@ -923,6 +930,81 @@ def write_navigation_chain(run_directory: Path, chain: dict) -> None:
             "size_bytes": len(artifact_raw)}
 
 
+def _validate_native_lifecycle_references(collection: dict, peer: dict,
+                                          record: dict, run_directory: Path) -> dict:
+    """Bind Gate-B's exact record references to the native observer's retained copies."""
+    identity = record.get("lifecycle_ingress")
+    collection_identity = collection.get("lifecycle_ingress")
+    final = peer.get("lifecycle_ingress")
+    if (type(identity) is not dict or type(collection_identity) is not dict
+            or type(final) is not dict
+            or identity.get("schema") != "mecanum.step07-run005.lifecycle-ingress/v1"
+            or collection_identity.get("schema") != identity.get("schema")
+            or identity.get("collector_session_id") != collection_identity.get("collector_session_id")
+            or identity.get("collector_session_id") != final.get("collector_session_id")
+            or identity.get("collector_session_id") != record.get("lifecycle_ingress", {}).get("collector_session_id")
+            or collection_identity.get("selected_record_references") is None
+            or final.get("schema") != identity.get("schema")
+            or final.get("schema_version") != "1.0"
+            or final.get("invocation_id") != record.get("invocation_id")
+            or final.get("collector_session_id") != identity.get("collector_session_id")
+            or final.get("config_hash") != record.get("config_hash")
+            or final.get("state") != "FINALIZED"):
+        raise RuntimeError("LIFECYCLE_INGRESS_NATIVE_FINAL_IDENTITY_INVALID")
+    selected = collection_identity.get("selected_record_references")
+    retained = final.get("retained_references")
+    if (type(selected) is not list or len(selected) != len(collection.get("samples", []))
+            or type(retained) is not list):
+        raise RuntimeError("LIFECYCLE_INGRESS_SELECTED_REFERENCE_COUNT_INVALID")
+    native = {}
+    for item in retained:
+        if type(item) is not dict or type(item.get("record")) is not dict:
+            raise RuntimeError("LIFECYCLE_INGRESS_NATIVE_REFERENCE_INVALID")
+        row = item["record"]
+        index = item.get("record_index")
+        digest = hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+        if (type(index) is not int or index != row.get("record_index")
+                or item.get("record_sha256") != digest or index in native):
+            raise RuntimeError("LIFECYCLE_INGRESS_NATIVE_REFERENCE_HASH_INVALID")
+        native[index] = digest
+    normalized = []
+    for item in selected:
+        if (type(item) is not dict or set(item) != {"record_index", "record_sha256"}
+                or type(item.get("record_index")) is not int
+                or native.get(item["record_index"]) != item.get("record_sha256")):
+            raise RuntimeError("LIFECYCLE_INGRESS_REFERENCE_NOT_RETAINED_BY_NATIVE")
+        normalized.append({"record_index": item["record_index"],
+                           "record_sha256": item["record_sha256"]})
+    request_path = run_directory / identity.get("reference_request_artifact", "")
+    request = load_canonical_json(request_path)
+    if (request.get("schema") != identity.get("schema")
+            or request.get("schema_version") != "1.0"
+            or request.get("invocation_id") != record.get("invocation_id")
+            or request.get("collector_session_id") != identity.get("collector_session_id")
+            or request.get("references") != normalized):
+        raise RuntimeError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_MISMATCH")
+    live_path = run_directory / identity.get("live_artifact", "")
+    live = load_canonical_json(live_path)
+    if (live.get("schema") != identity.get("schema")
+            or live.get("invocation_id") != record.get("invocation_id")
+            or live.get("collector_session_id") != identity.get("collector_session_id")
+            or live.get("config_hash") != record.get("config_hash")
+            or live.get("endpoint_binding") != final.get("endpoint_binding")):
+        raise RuntimeError("LIFECYCLE_INGRESS_LIVE_IDENTITY_MISMATCH")
+    record["lifecycle_ingress"]["selected_record_references"] = normalized
+    final_path = run_directory / identity.get("final_artifact", "")
+    final_raw = final_path.read_bytes()
+    record["lifecycle_ingress"].update({
+        "final_sha256": hashlib.sha256(final_raw).hexdigest(),
+        "final_size_bytes": len(final_raw),
+    })
+    return {"selected_record_references": normalized,
+            "endpoint_binding": final.get("endpoint_binding"),
+            "final_sha256": hashlib.sha256(final_raw).hexdigest(),
+            "final_size_bytes": len(final_raw)}
+
+
 def read_navigation_chain_artifact(path: Path) -> tuple[dict, dict]:
     """Read back a previously written chain sidecar and verify its inner seal."""
     if path.is_symlink() or not path.is_file():
@@ -1089,6 +1171,10 @@ def complete_collector_handshake(*, gate, cpp, cpp_member, gate_path: Path,
                 or peer.get("invocation_id") != invocation_id or peer.get("snapshot_complete") is not True
                 or type(peer.get("graph")) is not dict or type(peer.get("qos_verdict")) is not dict):
             raise RuntimeError("CPP_OBSERVER_FINAL_ARTIFACT_INVALID")
+        if config_hash == RUN005_CONFIG_HASH:
+            lifecycle_identity = _validate_native_lifecycle_references(
+                collection, peer, record, gate_path.parent)
+            record["lifecycle_ingress"].update(lifecycle_identity)
         state["events"].append("CPP_SNAPSHOT_COMPLETE")
         gate.wait(timeout=finalize_timeout + 5)
         terminal_path = gate_path.with_name("gate_b_terminal.json")
@@ -1890,6 +1976,48 @@ def mark_collector_failures(teardown: dict, outcomes: dict) -> dict:
     return teardown
 
 
+def reconcile_lifecycle_ingress_settlement(run_directory: Path, record: dict,
+                                           runtime_acceptance: dict) -> None:
+    """Persist stage-real lifecycle references after all owned collectors stop."""
+    if record.get("config_hash") != RUN005_CONFIG_HASH:
+        return
+    identity = record.get("lifecycle_ingress")
+    if type(identity) is not dict:
+        record.setdefault("pre_teardown_failure", "LIFECYCLE_INGRESS_RUN_RECORD_IDENTITY_MISSING")
+        runtime_acceptance["gate_b_vectors"] = False
+        return
+    gate_path = run_directory / "gate_b_vectors.json"
+    observer_path = run_directory / "runtime_observer.json"
+    try:
+        if gate_path.is_file() and not gate_path.is_symlink():
+            collection = load_canonical_json(gate_path)
+            ingress = collection.get("lifecycle_ingress")
+            refs = ingress.get("selected_record_references") if type(ingress) is dict else None
+            if type(refs) is not list or len(refs) > 5:
+                raise ValueError("GATE_B_LIFECYCLE_REFERENCE_LIST_INVALID")
+            identity["selected_record_references"] = refs
+        else:
+            identity["selected_record_references"] = []
+        if observer_path.is_file() and not observer_path.is_symlink():
+            observer = load_canonical_json(observer_path)
+            native_final = observer.get("lifecycle_ingress")
+            if type(native_final) is not dict:
+                raise ValueError("CPP_LIFECYCLE_INGRESS_FINAL_MISSING")
+            final_path = run_directory / identity.get("final_artifact", "")
+            if final_path.is_symlink() or not final_path.is_file():
+                raise ValueError("CPP_LIFECYCLE_INGRESS_FINAL_PATH_INVALID")
+            final_raw = final_path.read_bytes()
+            identity.update({"final_sha256": hashlib.sha256(final_raw).hexdigest(),
+                "final_size_bytes": len(final_raw),
+                "endpoint_binding": native_final.get("endpoint_binding")})
+    except (OSError, ValueError) as error:
+        literal = f"LIFECYCLE_INGRESS_SETTLEMENT_INVALID:{type(error).__name__}:{_safe_error_message(error)}"
+        record.setdefault("failure_reason_literals", []).append(literal)
+        record.setdefault("pre_teardown_failure", literal)
+        record.setdefault("lifecycle_ingress", {})["settlement_failure"] = literal
+        runtime_acceptance["gate_b_vectors"] = False
+
+
 def terminal_exit_code(record: dict) -> int:
     """Map the persisted terminal verdict to the runner's process status."""
     return 0 if record.get("terminal_outcome", "").endswith(
@@ -1974,6 +2102,7 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                 collector_procs=collector_procs, collector_members=collector_members,
                 bootstrap_calls=bootstrap_calls, composite_calls=composite_calls)
             mark_collector_failures(teardown, record.get("collector_outcomes", {}))
+            reconcile_lifecycle_ingress_settlement(run_directory, record, runtime_acceptance)
         except BaseException as error:
             teardown = {"completed": True, "clean": False, "ordered": False,
                         "order_correct": False, "verified": False, "graceful": False,
@@ -1983,6 +2112,7 @@ def finalize_campaign_after_acquisition(*, record, runtime_acceptance, composite
                         "errors": [f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{_safe_error_message(error)}"]}
             record.setdefault("pre_teardown_failure",
                 f"TEARDOWN_UNEXPECTED_FAILURE:{type(error).__name__}:{_safe_error_message(error)}")
+            reconcile_lifecycle_ingress_settlement(run_directory, record, runtime_acceptance)
         record["call_counts"].update({"bootstrap": bootstrap_calls, "composite": composite_calls,
                                       "cpp_observer": cpp_calls, "gate_b_observer": gate_b_calls})
         if sigterm_handler.interrupted:
@@ -2082,9 +2212,20 @@ def main():
     guard_lock = runtime_guard.with_suffix(runtime_guard.suffix + ".lock")
     observer_path = args.run_directory / "runtime_observer.json"
     gate_vectors_path = args.run_directory / "gate_b_vectors.json"
+    lifecycle_session_id = uuid.uuid4().hex
+    lifecycle_live_path = args.run_directory / "lifecycle_ingress.live.json"
+    lifecycle_references_path = args.run_directory / "lifecycle_ingress.references.json"
+    lifecycle_final_path = args.run_directory / "lifecycle_ingress.final.json"
     record = {"schema_version": "1.0", "process_group_schema_version": "2.0",
               "run_id": RUN_ID, "review_commit": head,
               "invocation_id": args.run_directory.name, "collector_handshake_protocol": "2.0",
+              "temporal_coherence_contract": {"contract_id": TEMPORAL_CONTRACT_ID,
+                  "contract_sha256": TEMPORAL_CONTRACT_SHA256},
+              "lifecycle_ingress": {"schema": "mecanum.step07-run005.lifecycle-ingress/v1",
+                  "collector_session_id": lifecycle_session_id,
+                  "live_artifact": lifecycle_live_path.name,
+                  "reference_request_artifact": lifecycle_references_path.name,
+                  "final_artifact": lifecycle_final_path.name},
               "integration_base": args.expected_integration_base, "partition": PARTITION,
               "guard_path": str(args.guard_path), "guard_capacity": guard["capacity"],
               "guard_acquisition_count": guard["acquisition_count"],
@@ -2097,7 +2238,7 @@ def main():
                   "root_cause": "PACKAGE_PREFIX_CLOSURE_MISSING_ROBOT_URDF_FINAL_DESCRIPTION",
                   "retry_permitted": False,
               },
-              **authorization, "config_hash": "5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071",
+              **authorization, "config_hash": RUN005_CONFIG_HASH,
               "map_root": str(args.canonical_map_root), "world_sha256": WORLD_SHA256,
               "runtime_python": str(args.runtime_python),
               "call_counts": {"runner": 1, "bootstrap": 0, "composite": 0, "cpp_observer": 0, "gate_b_observer": 0},
@@ -2227,6 +2368,10 @@ def main():
                        "-p", f"output_path:={observer_path}", "-p", f"ready_path:={cpp_ready_path}",
                        "-p", f"config_hash:={record['config_hash']}",
                        "-p", f"invocation_id:={record['invocation_id']}",
+                       "-p", f"lifecycle_ingress_live_path:={lifecycle_live_path}",
+                       "-p", f"lifecycle_ingress_references_path:={lifecycle_references_path}",
+                       "-p", f"lifecycle_ingress_final_path:={lifecycle_final_path}",
+                       "-p", f"collector_session_id:={lifecycle_session_id}",
                        "-p", "duration_sec:=1800", "-p", "runner_controlled_shutdown:=true"]
         record["collector_stage"] = "CPP_OBSERVER_STARTING"
         cpp, cpp_member = _spawn_owned_process(
@@ -2267,6 +2412,14 @@ def main():
                               "--output", str(args.run_directory / "gate_b_vectors.json"),
                               "--config-hash", record["config_hash"], "--peer-evidence-path", str(observer_path),
                               "--invocation-id", record["invocation_id"],
+                              "--lifecycle-ingress-live-path", str(lifecycle_live_path),
+                              "--lifecycle-ingress-references-path", str(lifecycle_references_path),
+                              "--lifecycle-ingress-final-path", str(lifecycle_final_path),
+                              "--collector-session-id", lifecycle_session_id,
+                              "--map-id", "warehouse_map2",
+                              "--map-sha256", MAP_HASHES["map_manifest.json"],
+                              "--temporal-contract-id", TEMPORAL_CONTRACT_ID,
+                              "--temporal-contract-sha256", TEMPORAL_CONTRACT_SHA256,
                               "--terminal-output", str(args.run_directory / "gate_b_terminal.json"),
                               "--ready-path", str(gate_ready_path), "--start-path", str(goal_trigger_path),
                               "--goal-x", "-4.0", "--goal-y", "0.0", "--goal-yaw", "0.0"]
@@ -2505,7 +2658,9 @@ def main():
                     cpp_member=collector_members.get("cpp_observer"), gate_path=gate_vectors_path,
                     observer_path=observer_path, config_hash=record["config_hash"],
                     failure_literal=settlement_literal,
-                    blocking_reason=settlement_blocking_reason)
+                    blocking_reason=settlement_blocking_reason,
+                    invocation_id=record["invocation_id"],
+                    collector_session_id=lifecycle_session_id)
                 try:
                     settle_navigation_chain_failure(args.run_directory, record,
                         gate_path=gate_vectors_path, observer_path=observer_path,
@@ -2793,7 +2948,9 @@ def not_attempted_action_server(blocking_reason: str) -> dict:
 def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
                                      gate_path: Path, observer_path: Path,
                                      config_hash: str, failure_literal: str,
-                                     blocking_reason: str | None = None) -> dict:
+                                     blocking_reason: str | None = None,
+                                     invocation_id: str = "",
+                                     collector_session_id: str = "") -> dict:
     """Stop owned collectors first and preserve explicit partial evidence."""
     failure_literal = _safe_failure_text(failure_literal, "COLLECTOR_SETTLEMENT_FAILED")
     blocker = _safe_failure_text(blocking_reason, failure_literal)
@@ -2831,7 +2988,14 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
             "teardown_errors": list(stop_result.get("errors", []))}
     if not gate_path.exists():
         not_started = gate is None
-        _atomic_write(gate_path, {"schema_version": "1.0", "config_hash": config_hash,
+        _atomic_write(gate_path, {"schema_version": "1.0", "handshake_protocol": "2.0",
+            "protocol_phase": "RUNNER_STAGE_FAILURE", "invocation_id": invocation_id,
+            "temporal_coherence_contract": {"contract_id": TEMPORAL_CONTRACT_ID,
+                "contract_sha256": TEMPORAL_CONTRACT_SHA256},
+            "lifecycle_ingress": {"schema": "mecanum.step07-run005.lifecycle-ingress/v1",
+                "collector_session_id": collector_session_id,
+                "selected_record_references": []},
+            "config_hash": config_hash,
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
             "sample_count": 0, "samples": [], "errors": [failure_literal],
             "collector_terminal_state": "NOT_STARTED" if not_started else "FAILURE_ARTIFACT_WRITTEN_BY_RUNNER",

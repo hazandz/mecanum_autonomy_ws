@@ -21,6 +21,11 @@ from mecanum_nav_rl.config.v3_hashing import (
     config_v3_sha256,
     hash_payload_from_resolved_v3,
 )
+from mecanum_nav_rl.config.step07_temporal_contract import (
+    CONTRACT_ID as RUN005_TEMPORAL_ID,
+    CONTRACT_SHA256 as RUN005_TEMPORAL_SHA,
+    load_run005_semantic_payload,
+)
 from mecanum_nav_rl.config.v3_loader import load_v3_mapping, load_v3_yaml_mapping
 from mecanum_nav_rl.config.v3_policy import ResolutionStageV3
 
@@ -145,6 +150,7 @@ def _compile(
     navigation: dict[str, object] | None = None,
     experiment: ApprovedExperimentOverrideV3 | None = None,
     measured: ApprovedMeasuredRegistryV3 | None = None,
+    temporal: dict[str, object] | None = None,
     output_stage: ResolutionStageV3 = ResolutionStageV3.CONFIG_INPUT,
     gate4: bool = False,
 ) -> object:
@@ -156,6 +162,7 @@ def _compile(
         measured_hardware_registry_layer=measured,
         output_stage=output_stage,
         gate4=gate4,
+        temporal_coherence_contract=temporal,
     )
 
 
@@ -177,6 +184,33 @@ def test_valid_five_layer_merge_is_immutable_and_non_mutating() -> None:
     assert base == before
     with pytest.raises(Exception):
         config.runtime.use_sim_time = False  # type: ignore[misc]
+
+
+def test_temporal_contract_binding_recomputes_global_hash_and_omits_none() -> None:
+    baseline = _compile()
+    baseline_payload = baseline.model_dump(mode="json")
+    assert "temporal_coherence_contract" not in baseline_payload["navigation"]
+    selected = _compile(
+        runtime={"runtime": {"runtime_profile": "sim_eval", "use_sim_time": True}},
+        navigation={"runtime": {"navigation_mode": "NAV2_BASELINE"}},
+        temporal={"contract_id": RUN005_TEMPORAL_ID, "contract_sha256": RUN005_TEMPORAL_SHA},
+    )
+    assert selected.navigation.temporal_coherence_contract.contract_id == RUN005_TEMPORAL_ID
+    assert selected.provenance.config_hash != baseline.provenance.config_hash
+    assert selected.provenance.config_hash == config_v3_sha256(hash_payload_from_resolved_v3(selected))
+
+
+def test_temporal_contract_binding_rejects_wrong_digest_and_nonselected_scope() -> None:
+    with pytest.raises(ValueError, match="BINDING_MISMATCH"):
+        _compile(runtime={"runtime": {"runtime_profile": "sim_eval", "use_sim_time": True}},
+                 navigation={"runtime": {"navigation_mode": "NAV2_BASELINE"}},
+                 temporal={"contract_id": RUN005_TEMPORAL_ID, "contract_sha256": "0" * 64})
+    with pytest.raises(ValueError, match="SCOPE_MISMATCH"):
+        _compile(temporal={"contract_id": RUN005_TEMPORAL_ID, "contract_sha256": RUN005_TEMPORAL_SHA})
+
+
+def test_temporal_semantic_package_resource_matches_approved_digest() -> None:
+    assert load_run005_semantic_payload()["contract_id"] == RUN005_TEMPORAL_ID
 
 
 def test_deep_merge_is_nested_deterministic_and_non_mutating() -> None:

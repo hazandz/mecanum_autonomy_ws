@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <ctime>
 
 #include "mecanum_nav_rl_interfaces/msg/final_issued_command_receipt.hpp"
 #include "mecanum_nav_rl_interfaces/msg/safety_lifecycle_state.hpp"
@@ -22,6 +23,8 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nlohmann/json.hpp"
+#include "step07_nav2_baseline_runtime_observer/lifecycle_ingress.hpp"
+#include "rmw/types.h"
 #include "rclcpp/rclcpp.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -237,10 +240,23 @@ class Observer final : public rclcpp::Node {
     ready_path_ = declare_parameter<std::string>("ready_path", "");
     config_hash_ = declare_parameter<std::string>("config_hash", "");
     invocation_id_ = declare_parameter<std::string>("invocation_id", "");
+    lifecycle_ingress_live_path_ = declare_parameter<std::string>("lifecycle_ingress_live_path", "");
+    lifecycle_ingress_references_path_ = declare_parameter<std::string>("lifecycle_ingress_references_path", "");
+    lifecycle_ingress_final_path_ = declare_parameter<std::string>("lifecycle_ingress_final_path", "");
+    collector_session_id_ = declare_parameter<std::string>("collector_session_id", "");
     duration_sec_ = declare_parameter<int>("duration_sec", 30);
     runner_controlled_shutdown_ = declare_parameter<bool>("runner_controlled_shutdown", false);
     if (runner_controlled_shutdown_ && invocation_id_.empty()) {
       throw std::invalid_argument("OBSERVER_INVOCATION_ID_REQUIRED");
+    }
+    if (runner_controlled_shutdown_) {
+      if (lifecycle_ingress_live_path_.empty() || lifecycle_ingress_references_path_.empty() ||
+          lifecycle_ingress_final_path_.empty() || collector_session_id_.empty()) {
+        throw std::invalid_argument("LIFECYCLE_INGRESS_ARGUMENTS_REQUIRED");
+      }
+      lifecycle_ingress_ = std::make_unique<LifecycleIngress>(lifecycle_ingress_live_path_,
+          lifecycle_ingress_references_path_, lifecycle_ingress_final_path_, invocation_id_,
+          collector_session_id_, config_hash_);
     }
     if (output_path_.empty() || ready_path_.empty() || config_hash_.size() != 64 || duration_sec_ < 1 || duration_sec_ > 1800) {
       throw std::invalid_argument("OBSERVER_ARGUMENT_INVALID");
@@ -285,7 +301,8 @@ class Observer final : public rclcpp::Node {
     tf_static_sub_ = create_subscription<tf2_msgs::msg::TFMessage>("/tf_static", static_qos,
       [this](tf2_msgs::msg::TFMessage::ConstSharedPtr msg, const rclcpp::MessageInfo &info) { collect_tf(msg, info, true); });
     lifecycle_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyLifecycleState>("/mecanum/safety_lifecycle_state", lifecycle_qos,
-      [this](mecanum_nav_rl_interfaces::msg::SafetyLifecycleState::ConstSharedPtr msg) { doc_["lifecycle"].push_back({{"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"primary_state", msg->primary_state}, {"barrier_state", msg->barrier_state}, {"motion_permitted", msg->motion_permitted}, {"reason", msg->reason}}); });
+      [this](mecanum_nav_rl_interfaces::msg::SafetyLifecycleState::ConstSharedPtr msg,
+             const rclcpp::MessageInfo &info) { collect_lifecycle(msg, info); });
     receipt_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt>("/mecanum/final_issued_command", receipt_subscription_qos,
       [this](mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt::ConstSharedPtr msg) { doc_["receipt"].push_back({{"stamp_sec", msg->header.stamp.sec}, {"stamp_nanosec", msg->header.stamp.nanosec}, {"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch}, {"runtime_generation", msg->runtime_generation}, {"sequence", msg->final_publish_sequence}, {"source", msg->source}, {"vx", msg->final_command.linear.x}, {"vy", msg->final_command.linear.y}, {"wz", msg->final_command.angular.z}}); });
     safety_state_sub_ = create_subscription<mecanum_nav_rl_interfaces::msg::SafetyState>(
@@ -317,7 +334,8 @@ class Observer final : public rclcpp::Node {
       {"subscriptions_created", subscriptions_created ? Json::array({"/clock", "/scan",
         "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/tf", "/tf_static",
         "/mecanum/safety_lifecycle_state", "/mecanum/final_issued_command", "/mecanum/safety_state"}) : Json::array()},
-      {"state", context_valid && subscriptions_created ? "READY" : "NOT_READY"}};
+      {"lifecycle_ingress_ready", !runner_controlled_shutdown_},
+      {"state", context_valid && subscriptions_created && !runner_controlled_shutdown_ ? "READY" : "NOT_READY"}};
     if (!context_valid || !subscriptions_created) {
       ready_document_["failure_literal"] = "OBSERVER_READINESS_HANDSHAKE_FAILED";
     }
@@ -325,6 +343,9 @@ class Observer final : public rclcpp::Node {
       doc_["errors"].push_back("OBSERVER_READINESS_HANDSHAKE_FAILED");
       failed_closed_ = true;
     }
+    lifecycle_timer_ = create_wall_timer(std::chrono::milliseconds(20), [this]() {
+      refresh_lifecycle_ingress_readiness();
+    });
     if (!runner_controlled_shutdown_) {
       timer_ = create_wall_timer(std::chrono::seconds(duration_sec_), [this]() { finish(); });
     }
@@ -364,6 +385,70 @@ class Observer final : public rclcpp::Node {
     }
   }
 
+  void collect_lifecycle(
+      mecanum_nav_rl_interfaces::msg::SafetyLifecycleState::ConstSharedPtr msg,
+      const rclcpp::MessageInfo &info) {
+    const int64_t ros_stamp = static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+        static_cast<int64_t>(msg->header.stamp.nanosec);
+    Json payload{{"frame_id", msg->header.frame_id}, {"stamp_sec", msg->header.stamp.sec},
+        {"stamp_nanosec", msg->header.stamp.nanosec},
+        {"episode_generation", msg->episode_generation}, {"reset_epoch", msg->reset_epoch},
+        {"runtime_generation", msg->runtime_generation}, {"sequence", msg->sequence},
+        {"primary_state", msg->primary_state}, {"barrier_state", msg->barrier_state},
+        {"barrier_stamp_sec", msg->barrier_stamp.sec},
+        {"barrier_stamp_nanosec", msg->barrier_stamp.nanosec},
+        {"motion_permitted", msg->motion_permitted}, {"reason", msg->reason}};
+    doc_["lifecycle"].push_back(payload);
+    if (!lifecycle_ingress_) return;
+    const auto &rmw_info = info.get_rmw_message_info();
+    const auto gid = canonical_gid(rmw_info.publisher_gid.data, RMW_GID_STORAGE_SIZE);
+    struct timespec now {};
+    if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+      failed_closed_ = true;
+      doc_["errors"].push_back("LIFECYCLE_MONOTONIC_CLOCK_READ_FAILED");
+      return;
+    }
+    const int64_t receive_ns = static_cast<int64_t>(now.tv_sec) * 1000000000LL + now.tv_nsec;
+    lifecycle_ingress_->admit(payload, gid, ros_stamp, receive_ns);
+  }
+
+  void refresh_lifecycle_ingress_readiness() {
+    if (!lifecycle_ingress_) return;
+    std::vector<LifecyclePublisherEndpoint> publishers;
+    for (const auto &endpoint : get_publishers_info_by_topic("/mecanum/safety_lifecycle_state")) {
+      const auto &qos = endpoint.qos_profile();
+      const auto &gid = endpoint.endpoint_gid();
+      publishers.push_back({"/mecanum/safety_lifecycle_state", endpoint.topic_type(),
+          endpoint.node_name(), endpoint.node_namespace(), canonical_gid(gid.data(), gid.size()),
+          static_cast<int>(qos.reliability()), static_cast<int>(qos.durability()),
+          static_cast<int>(qos.history()), static_cast<int>(qos.depth())});
+    }
+    lifecycle_ingress_->pin_endpoint(publishers);
+    const bool endpoint_ready = lifecycle_ingress_->ready();
+    const bool ingress_failed = lifecycle_ingress_->failed();
+    ready_document_["lifecycle_ingress"] = lifecycle_ingress_->live_document();
+    ready_document_["lifecycle_ingress_ready"] = endpoint_ready;
+    if (ingress_failed) {
+      const auto literal = lifecycle_ingress_->failure_literal();
+      ready_document_["state"] = "FAILED";
+      ready_document_["failure_literal"] = literal;
+      failed_closed_ = true;
+      doc_["errors"].push_back(literal);
+    } else if (endpoint_ready && ready_document_.value("ros_context_valid", false) &&
+               ready_document_.contains("subscriptions_created") &&
+               ready_document_["subscriptions_created"].is_array() &&
+               ready_document_["subscriptions_created"].size() == 10) {
+      ready_document_["state"] = "READY";
+      ready_document_.erase("failure_literal");
+    } else {
+      ready_document_["state"] = "NOT_READY";
+    }
+    if (!write_json_atomic(ready_path_, ready_document_)) {
+      failed_closed_ = true;
+      doc_["errors"].push_back("OBSERVER_READINESS_ARTIFACT_WRITE_FAILED");
+    }
+  }
+
   void finish() {
     if (finished_) return;
     finished_ = true;
@@ -375,6 +460,14 @@ class Observer final : public rclcpp::Node {
         {"ros_context_valid", false}, {"partial_artifact", output_path_}};
       write_json_atomic(output_path_, doc_);
       return;
+    }
+    if (lifecycle_ingress_) {
+      doc_["lifecycle_ingress"] = lifecycle_ingress_->finalize();
+      if (doc_["lifecycle_ingress"].value("state", "FAILED") != "FINALIZED") {
+        failed_closed_ = true;
+        doc_["errors"].push_back(doc_["lifecycle_ingress"].value("failure", Json::object()).value(
+            "literal", "LIFECYCLE_INGRESS_FINALIZE_FAILED"));
+      }
     }
     doc_["observer_lifecycle"] = Json{{"state", "FINALIZING"}, {"ros_context_valid", true}};
     for (const auto *topic : {"/tf", "/tf_static", "/cmd_vel", "/clock", "/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered", "/map", "/odom", "/ground_truth/odom", "/mecanum/safety_lifecycle_state", "/mecanum/safety/lifecycle_state", "/mecanum/final_issued_command", "/mecanum/safety_state"}) {
@@ -600,6 +693,8 @@ class Observer final : public rclcpp::Node {
 
  private:
   std::string output_path_, ready_path_, config_hash_, invocation_id_;
+  std::string lifecycle_ingress_live_path_, lifecycle_ingress_references_path_, lifecycle_ingress_final_path_;
+  std::string collector_session_id_;
   int duration_sec_{30};
   bool finished_{false};
   bool failed_closed_{false};
@@ -610,6 +705,8 @@ class Observer final : public rclcpp::Node {
   std::set<std::string> dynamic_gids_, static_gids_;
   std::set<std::string> map_to_odom_gids_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr lifecycle_timer_;
+  std::unique_ptr<LifecycleIngress> lifecycle_ingress_;
   rclcpp::Subscription<rosgraph_msgs::msg::Clock>::SharedPtr clock_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr wheel_sub_, filtered_sub_;

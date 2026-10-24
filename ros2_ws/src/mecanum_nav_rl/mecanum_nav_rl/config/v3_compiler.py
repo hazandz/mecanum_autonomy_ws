@@ -21,6 +21,7 @@ from mecanum_nav_rl.config.v3_policy import (
     validate_tokenized_input_v3,
 )
 from mecanum_nav_rl.config.v3_validators import validate_resolved_config_v3
+from mecanum_nav_rl.config.step07_temporal_contract import validate_run005_temporal_binding
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ def compile_v3_config(
     measured_hardware_registry_layer: ApprovedMeasuredRegistryV3 | None,
     output_stage: ResolutionStageV3,
     gate4: bool,
+    temporal_coherence_contract: Mapping[str, object] | None = None,
 ) -> ResolvedConfigV3:
     """Compile the architecture's five layers into immutable V3 config.
 
@@ -242,6 +244,24 @@ def compile_v3_config(
         if not isinstance(measured_hardware_registry_layer, ApprovedMeasuredRegistryV3):
             raise TypeError("measured registry requires approved provenance wrapper")
         merged = deep_merge_v3(merged, measured_hardware_registry_layer.values)
+    if temporal_coherence_contract is not None:
+        binding = load_v3_mapping(temporal_coherence_contract)
+        if set(binding) != {"contract_id", "contract_sha256"}:
+            raise ValueError("RUN005_TEMPORAL_CONTRACT_BINDING_SCHEMA_INVALID")
+        navigation = merged.get("navigation")
+        if not isinstance(navigation, Mapping):
+            raise ValueError("RUN005_TEMPORAL_CONTRACT_NAVIGATION_MISSING")
+        if "temporal_coherence_contract" in navigation:
+            raise ValueError("RUN005_TEMPORAL_CONTRACT_DUPLICATE_SELECTION")
+        runtime = merged.get("runtime")
+        if not isinstance(runtime, Mapping):
+            raise ValueError("RUN005_TEMPORAL_CONTRACT_RUNTIME_MISSING")
+        validate_run005_temporal_binding(
+            binding,
+            runtime_profile=str(runtime.get("runtime_profile", "")),
+            navigation_mode=str(runtime.get("navigation_mode", "")),
+        )
+        merged = deep_merge_v3(merged, {"navigation": {"temporal_coherence_contract": binding}})
     _assert_no_caller_config_hash(merged)
     context = _require_runtime_context(
         merged, output_stage=output_stage, gate4=gate4

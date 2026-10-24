@@ -15,6 +15,9 @@ INTEGRATION_BASE = "f7f98c683d59cf4c62e462da9f37d4ffb2455c80"
 PARTITION = "mecanum_step7_nav2_run005_f7f98c6"
 RUNTIME_PYTHON_PATH = "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python"
 PYDANTIC_REQUIREMENT = "pydantic==2.10.6"
+RUN005_CONFIG_HASH = "4fac960ff2298cefd1b261db314bfa8e802855f8cb6290b762594658982b7925"
+TEMPORAL_CONTRACT_ID = "mecanum.step07-run005-temporal-coherence/v1"
+TEMPORAL_CONTRACT_SHA256 = "57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59"
 FUEL_URI_PATH_BINDINGS = {
     "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Depot":
         "fuel.gazebosim.org/openrobotics/models/depot/<positive-integer-version>",
@@ -70,7 +73,11 @@ def validate_seed(guard: dict, *, run_id: str, review_commit: str,
         "use_sim_time": True, "runtime_eligible": False,
         "runtime_evidence_status": "NOT_CREATED", "GATE_B": "NOT_STARTED",
         "RUNTIME_APPROVED": "NOT_APPROVED", "retry_permitted": False,
-        "config_hash": "5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071",
+        "config_hash": RUN005_CONFIG_HASH,
+        "temporal_coherence_contract": {
+            "contract_id": TEMPORAL_CONTRACT_ID,
+            "contract_sha256": TEMPORAL_CONTRACT_SHA256,
+        },
         "map_root": "artifacts/maps/warehouse_map2", "map_id": "warehouse_map2",
         "map_artifact_identity": "4a8a23d0-7e27-4a50-8201-dd1abf1a3db4",
         "map_content_hash": "2bd9ff0a40eaeb61c2359aab4bb213da623ab56746debe591edd4a54c2229f90",

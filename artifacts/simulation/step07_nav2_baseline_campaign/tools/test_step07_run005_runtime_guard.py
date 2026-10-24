@@ -61,8 +61,25 @@ COMPOSITE_NEW_PIN_PATHS = {
 QOS_TRACE_NEW_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_lifecycle_node.py",
 }
+TEMPORAL_L2_NEW_PIN_PATHS = {
+    "ros2_ws/src/mecanum_nav_rl/config/v3/contracts/step07_run005_temporal_coherence.v1.json",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/step07_temporal_contract.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_compiler.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_models.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_validators.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_lifecycle_ingress.py",
+    "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_temporal_state.py",
+    "ros2_ws/src/mecanum_nav_rl/setup.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_compiler.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_lifecycle_ingress.py",
+    "ros2_ws/src/mecanum_nav_rl/test/test_step07_temporal_state.py",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/CMakeLists.txt",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/include/step07_nav2_baseline_runtime_observer/lifecycle_ingress.hpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/src/lifecycle_ingress.cpp",
+    "ros2_ws/src/step07_nav2_baseline_runtime_observer/test/test_lifecycle_ingress.cpp",
+}
 HISTORICAL_SOURCE_PIN_PATHS = EXPECTED_SOURCE_PIN_PATHS.copy()
-EXPECTED_SOURCE_PIN_PATHS |= COMPOSITE_NEW_PIN_PATHS | QOS_TRACE_NEW_PIN_PATHS
+EXPECTED_SOURCE_PIN_PATHS |= COMPOSITE_NEW_PIN_PATHS | QOS_TRACE_NEW_PIN_PATHS | TEMPORAL_L2_NEW_PIN_PATHS
 
 NEW_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
@@ -78,7 +95,7 @@ NEW_SOURCE_PIN_PATHS = {
     "ros2_ws/src/mecanum_base_bridge/launch/sim_eval_wheel_imu_ingress.launch.py",
     "ros2_ws/src/mecanum_base_bridge/config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml",
     "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
-}
+} | TEMPORAL_L2_NEW_PIN_PATHS
 OLD_SOURCE_PIN_PATHS = EXPECTED_SOURCE_PIN_PATHS - NEW_SOURCE_PIN_PATHS
 
 
@@ -129,8 +146,9 @@ def test_committed_run005_guard_is_exact_pending_seed_and_its_own_source_closes(
         "source_pin_count": len(pins),
     }
     assert not GUARD.with_suffix(GUARD.suffix + ".lock").exists()
-    assert EXPECTED_SOURCE_PIN_PATHS == HISTORICAL_SOURCE_PIN_PATHS | COMPOSITE_NEW_PIN_PATHS
-    assert len(EXPECTED_SOURCE_PIN_PATHS) == len(HISTORICAL_SOURCE_PIN_PATHS) + len(COMPOSITE_NEW_PIN_PATHS)
+    assert EXPECTED_SOURCE_PIN_PATHS == (HISTORICAL_SOURCE_PIN_PATHS | COMPOSITE_NEW_PIN_PATHS
+        | QOS_TRACE_NEW_PIN_PATHS | TEMPORAL_L2_NEW_PIN_PATHS)
+    assert len(EXPECTED_SOURCE_PIN_PATHS) == 53
     assert set(pins) <= EXPECTED_SOURCE_PIN_PATHS
     assert set(pins) | NEW_SOURCE_PIN_PATHS == EXPECTED_SOURCE_PIN_PATHS
     assert "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py" in pins
@@ -163,7 +181,7 @@ def test_default_route_corrective_preserves_exact_run005_pin_membership():
     historical = json.loads(historical_raw)
     current = load_guard(GUARD)
     expected = set(historical["source_pins"])
-    assert expected == EXPECTED_SOURCE_PIN_PATHS - QOS_TRACE_NEW_PIN_PATHS
+    assert expected == EXPECTED_SOURCE_PIN_PATHS - QOS_TRACE_NEW_PIN_PATHS - TEMPORAL_L2_NEW_PIN_PATHS
     assert set(current["source_pins"]) == EXPECTED_SOURCE_PIN_PATHS
 
 

@@ -208,8 +208,10 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     map_root.mkdir()
     config = worktree / "test_resolved.json"
     config.write_text(json.dumps({"provenance": {
-        "config_hash": "5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071"
-    }}))
+        "config_hash": "4fac960ff2298cefd1b261db314bfa8e802855f8cb6290b762594658982b7925"
+    }, "navigation": {"temporal_coherence_contract": {
+        "contract_id": "mecanum.step07-run005-temporal-coherence/v1",
+        "contract_sha256": "57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59"}}}))
     monkeypatch.setattr(runner, "CONFIG_REL", "test_resolved.json")
     architecture = worktree / "docs/MECANUM_NAV_DRL_Architecture.docx"
     architecture.parent.mkdir(parents=True)
@@ -382,8 +384,10 @@ def test_host_preflight_missing_robot_description_prefix_fails_before_installed_
     map_root.mkdir()
     (worktree / "test_resolved.json").write_text(
         json.dumps({"provenance": {
-            "config_hash": "5b3bb2be3bc4d8ff5f9f1524b5ecd52f735c63622e3dd6ddd3e67aa9e6ce1071"
-        }}))
+            "config_hash": "4fac960ff2298cefd1b261db314bfa8e802855f8cb6290b762594658982b7925"
+        }, "navigation": {"temporal_coherence_contract": {
+            "contract_id": "mecanum.step07-run005-temporal-coherence/v1",
+            "contract_sha256": "57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59"}}}))
     monkeypatch.setattr(runner, "CONFIG_REL", "test_resolved.json")
     architecture = worktree / "docs/MECANUM_NAV_DRL_Architecture.docx"
     architecture.parent.mkdir(parents=True)
@@ -2760,16 +2764,20 @@ def test_invocation_019_evidence_bundle_remains_immutable():
 def _handoff_model(tmp_path, monkeypatch):
     """Filesystem và hai process giả chạy chính Gate-B state machine, không ROS."""
     from types import SimpleNamespace as NS
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/mecanum_nav_rl"))
     spec = importlib.util.spec_from_file_location('gate_b_handoff_model', ROOT /
         'ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     c = module._Collector.__new__(module._Collector)
     c.args = NS(output=tmp_path/'gate_b_vectors.json', peer_evidence_path=tmp_path/'runtime_observer.json',
-        terminal_output=tmp_path/'gate_b_terminal.json', peer_timeout_sec=60, invocation_id='offline-fixture')
+        terminal_output=tmp_path/'gate_b_terminal.json', peer_timeout_sec=60, invocation_id='offline-fixture',
+        collector_session_id='offline-session')
     c.config_hash='a'*64; c._finished=c._closed=c._peer_verified=False
     c.samples=[{'stamp_ns':i,'dtype':'float32','dimension':81,'values':[0.0]*81} for i in range(1,6)]
     c.raw={};c.errors=[];c.path=NS(header=NS(frame_id='map'));c.path_transcript={}
     c._compute_path_calls=c._navigate_calls=1;c._compute_path_requested=c._navigate_requested=True
+    c._selected_lifecycle_refs=[{"record_index": i, "record_sha256": f"{i:064x}"}
+        for i in range(1, 6)]
     c.navigate_result={'accepted':True,'succeeded':True,'status':4}
     events=[]; c.subscriptions=[object()]*4
     c.node=NS(destroy_node=lambda:events.append('gate_destroy'))

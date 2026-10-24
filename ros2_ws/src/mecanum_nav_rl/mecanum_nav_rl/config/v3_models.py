@@ -10,7 +10,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_serializer, model_validator
 from pydantic.types import StringConstraints
 
 
@@ -186,6 +186,13 @@ class LocalizationContractV3(ConfigModelV3):
     covariance_jump_contract_id: IdentifierV3
 
 
+class TemporalCoherenceBindingV3(ConfigModelV3):
+    """Optional, content-addressed temporal contract selected by one config."""
+
+    contract_id: Literal["mecanum.step07-run005-temporal-coherence/v1"]
+    contract_sha256: Sha256V3
+
+
 class NavigationContractV3(ConfigModelV3):
     """Planner/controller ownership and D10 position-settle contract IDs."""
 
@@ -195,6 +202,14 @@ class NavigationContractV3(ConfigModelV3):
     local_reference_contract_id: IdentifierV3
     goal_type: Literal["position_only"]
     goal_settle_contract_id: IdentifierV3
+    temporal_coherence_contract: TemporalCoherenceBindingV3 | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_unselected_temporal_contract(self, handler):
+        serialized = handler(self)
+        if self.temporal_coherence_contract is None:
+            serialized.pop("temporal_coherence_contract", None)
+        return serialized
 
 
 class ObservationInputProfileV3(ConfigModelV3):
