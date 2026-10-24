@@ -1,0 +1,149 @@
+{
+  "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+  "branch": "step07-integrated-nav2-gateb-campaign-f7f98c6",
+  "environment": {
+    "external_overlay": "/tmp/step07_inv017_behavioral_verification_20261023/install",
+    "pydantic_version": "2.10.6",
+    "python_executable": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python3",
+    "python_version": "3.12.3",
+    "ros_distro": "jazzy",
+    "runtime_or_campaign": false
+  },
+  "fingerprint_semantics": "SHA-256 and byte size of exact current bytes; this file does not self-hash.",
+  "original_external_forensic_inputs_read_only": [
+    {
+      "byte_size": 23594,
+      "path": "/home/hazan/step07_forensic_reports/invocation_021/fixed_timestamp_nonblocking_tf_wait_20261024/TF_EXACT_TIME_WAIT_PROPOSAL.md",
+      "sha256": "04cd8a85a4981d880dcc3a5d6f20d5fc764f746e5d0badb22504398d77016c2b"
+    },
+    {
+      "byte_size": 20215,
+      "path": "/home/hazan/step07_forensic_reports/invocation_021/fixed_timestamp_nonblocking_tf_wait_20261024/fixed_timestamp_nonblocking_tf_wait.py",
+      "sha256": "db75defbbb207a849a1f13737d1fde3d763bc8c187e044641f1685c64889c061"
+    },
+    {
+      "byte_size": 6594,
+      "path": "/home/hazan/step07_forensic_reports/invocation_021/fixed_timestamp_nonblocking_tf_wait_20261024/offline_validation_results.json",
+      "sha256": "4841f0a51e957c7d877916a167ba82e9f941e74fd6cf24953c1d8c28650f7969"
+    },
+    {
+      "byte_size": 4669,
+      "path": "/home/hazan/step07_forensic_reports/invocation_021/fixed_timestamp_nonblocking_tf_wait_20261024/dependency_fingerprint.json",
+      "sha256": "ebca08e48691d54a8de69a0396f4495c5adc48f95bc21e004205136d1dc8dcdf"
+    }
+  ],
+  "packet_type": "REVIEW_ONLY_L2_DESIGN_DEPENDENCY_FINGERPRINT",
+  "source_and_authority_inputs": [
+    {
+      "byte_size": 84141,
+      "path": "docs/MECANUM_NAV_DRL_Architecture.docx",
+      "sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
+    },
+    {
+      "byte_size": 22779,
+      "path": "AGENTS.md",
+      "sha256": "7217029d0acbf7decafaff54e010cefa1053529d1f834836509a533ffe56e412"
+    },
+    {
+      "byte_size": 174309,
+      "path": "docs/governance/PROJECT_EXECUTION_PLAN.md",
+      "sha256": "fcbeb52fef633a6beb56d003b83f47a5bb874dada51538f206599e3d99d25e51"
+    },
+    {
+      "byte_size": 231071,
+      "path": "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+      "sha256": "0e93baa83bfd45e57aa18fc0257822c3a2f1fe24a4cae6f4b6865acba3aba0fd"
+    },
+    {
+      "byte_size": 307428,
+      "path": "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+      "sha256": "84d0ffdc8321fb3ef69285d279b652ec55fd462d81fcee479a3515c51966fffc"
+    },
+    {
+      "byte_size": 26015,
+      "path": "docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md",
+      "sha256": "a80427e18725c5f67b6da82961a68774bcd1cfa67dfbb7de044e5341cef87669"
+    },
+    {
+      "byte_size": 27654,
+      "path": "docs/OBSERVATION_V3_SPECIFICATION.md",
+      "sha256": "ac87ba8a81fb8bc55a812d06278433343a025ea779a4162ead1fb35335a947af"
+    },
+    {
+      "byte_size": 13096,
+      "path": "docs/OBSERVATION_INPUT_CONTRACT_V3.md",
+      "sha256": "d44d33843c32d1f0d5c747522f3add09bfde21fcb0884e21da93a52476cb4dfc"
+    },
+    {
+      "byte_size": 46181,
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+      "sha256": "39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f"
+    },
+    {
+      "byte_size": 27029,
+      "path": "ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py",
+      "sha256": "601b7b3b1ecbfdafec81c746e424939bfa6637e44e01fa1bd7d76475e21eeef5"
+    },
+    {
+      "byte_size": 5539,
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/v3_snapshot_types.py",
+      "sha256": "23539fe9a7e55c10b9c02dc6d2dbeda1ca826843335290819c83d86383c6d863"
+    },
+    {
+      "byte_size": 4878,
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/v3_snapshot_validation.py",
+      "sha256": "cf9ac74be7942286c1cc84cab9c909da47acc34f8f52430cc2da41dd5e5a5ea6"
+    },
+    {
+      "byte_size": 9298,
+      "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/synchronizer.py",
+      "sha256": "b47f6179fddf44ba5e688c227247adf7347850119d42a25d0cb027b1f6d672fe"
+    },
+    {
+      "byte_size": 1095,
+      "path": "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+      "sha256": "d96998c05efad4b65eb9ed116de2ee57a1bccd7e51e09c0a7bd3de5aa10cb636"
+    },
+    {
+      "byte_size": 5326,
+      "path": "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+      "sha256": "3841d1a1c2e9e1a4883431f05d7d5ff13e0b687569e5734f0b4f91aa69294b84"
+    },
+    {
+      "byte_size": 165042,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+      "sha256": "4b24599b89de3d301f89bacac60847ded24dd3c0f2d9c13e18a56e8f0ab99a40"
+    },
+    {
+      "byte_size": 163182,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+      "sha256": "9d342b44d9c105d4198c4ccab8b0facf9e39cd208864a35de8c17f8f0da2657f"
+    },
+    {
+      "byte_size": 79786,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+      "sha256": "d52f7785b3d2f351f93906a61c2acb6893998dc47e45db7686509dd7cb23e6ef"
+    },
+    {
+      "byte_size": 83740,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+      "sha256": "9ee70d2766ad3e4fc7f5680dbc3b7e8027aeb1388f3d9e979613e1f5fd2ed03e"
+    },
+    {
+      "byte_size": 167783,
+      "path": "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+      "sha256": "631b6d28fdf42ceb4867da953d4a3586c9e6e2d804fa4f35f3a18f90dcc13cd9"
+    },
+    {
+      "byte_size": 27664,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_model.py",
+      "sha256": "482a8926241f1963cd7f895d80b149e3dbe0873f0410b2783676f828d75dc38e"
+    },
+    {
+      "byte_size": 17675,
+      "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/TF_EXACT_TIME_WAIT_PROPOSAL.md",
+      "sha256": "e49a01d465ec08a899ae3f56e5c52a1af169aa7d3a335338700f6a2e30119a45"
+    }
+  ],
+  "source_base": "4e83ce6cffdd9910c288f90454ab747497d7a4a6"
+}
