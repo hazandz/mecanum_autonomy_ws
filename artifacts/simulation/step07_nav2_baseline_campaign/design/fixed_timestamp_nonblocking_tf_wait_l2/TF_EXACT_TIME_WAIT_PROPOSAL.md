@@ -1,138 +1,115 @@
 # FIXED_TIMESTAMP_NONBLOCKING_TF_WAIT — L2 design packet
 
 **Status:** `DRAFT_L2_PENDING_INDEPENDENT_REVIEW_AND_OWNER_APPROVAL`
-**Mode:** review-only design and offline validation; no production implementation or runtime.
-**Source base / required parent for this packet:** `ae620c57f396f593a39aafb589f4f69b3daf37c2`
-**Production baseline source commit:** `4e83ce6cffdd9910c288f90454ab747497d7a4a6`
+**Mode:** review-only packet and offline model; no production implementation or runtime.
+**Packet base / required parent:** `674791655d43155accfe2b230f20994b76cbbc7b`
+**Pinned production baseline:** `4e83ce6cffdd9910c288f90454ab747497d7a4a6`
 **Branch:** `step07-integrated-nav2-gateb-campaign-f7f98c6`
 **Invocation_021:** `ROOT_CAUSE_UNRESOLVED_FOR_INVOCATION_021` remains unchanged.
 
 ## 1. Scope and evidence boundary
 
-This packet records the supplied architecture decisions for two separate TF operations in the Run005 Gate-B collector. It changes no production source, profile, config hash, guard, ACR, or runtime evidence. The original forensic report and harness under `/home/hazan/step07_forensic_reports/invocation_021/fixed_timestamp_nonblocking_tf_wait_20261024/` were read and left untouched; no raw historical evidence was copied.
+This correction records decisions F1–F4 for a future Run005 collector change. It changes only these four packet files. No production source, ACR, profile, resolved config/config hash, guard, historical evidence, or runtime checkout is changed. The original Invocation_021 forensic report and harness remain outside the repository and untouched.
 
-The baseline model imports exactly `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` from the pinned source checkout and verifies its SHA-256 (`39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f`) before calling `_Collector._tick()` and `_features_from_path()` with fake objects. Import origin and hash are asserted. The proposed model is a separate deterministic Python state machine. Monkeypatches of import and monotonic time are scoped to a context manager and verified restored. It starts no ROS graph, node, action server, process, Gazebo, Nav2, campaign, or runtime evidence.
+The model first imports the production baseline from the explicitly supplied `--repo-root`, checks the resolved module path and pinned SHA-256, then separately exercises `_Collector._tick()` and `_features_from_path()` using fake objects. A mismatch stops execution; there is no fallback source or overlay discovery. The proposed state model runs separately. Import and monotonic-clock monkeypatches are scoped to the baseline call and asserted restored.
 
-The model tests temporal state and LocalReference construction only. It does **not** evaluate 81D vector acceptance, QoS, evidence-chain acceptance, Gate-B/campaign acceptance, Nav2 runtime, or tf2 runtime buffer behavior. Offline cases do not confirm Invocation_021's cause.
+The model covers temporal state transitions and LocalReference transform behavior only. `81D_acceptance`, QoS, evidence-chain acceptance, campaign acceptance, Nav2 runtime, and tf2 runtime are `NOT_EVALUATED`. No offline outcome confirms Invocation_021's root cause.
 
 ## 2. Authority consulted
 
-- `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, including §45 `GlobalPath và LocalReference`: `GlobalPathSnapshot` has `goal_id`, `path_sequence`, `reset_epoch`, `runtime_generation`, `map_id`, `map_content_hash`, ROS path stamp, steady receipt/expiry, and immutable poses. `LocalReference` binds source-path stamp, transform/reference ROS stamps, steady expiry, and a `base_link` point; the observation builder checks reference/odometry skew within the selected `max_reference_snapshot_skew_ns`.
-- `AGENTS.md`: Architecture is highest authority; offline evidence is not runtime evidence; unresolved conflict with a locked contract must not be silently decided.
-- `docs/governance/PROJECT_EXECUTION_PLAN.md`: plan/governance cannot change frozen architecture; architecture-sensitive changes require a separately approved ACR/change-control.
-- `docs/governance/CANONICAL_SOURCE_REGISTRY.md`: registry is source-selection/governance evidence, not authority to resolve an unselected profile value.
-- Latest relevant `docs/governance/PROJECT_PROGRESS_LEDGER.md` entries: Invocation_021 remains historical and `ROOT_CAUSE_UNRESOLVED`; this packet does not replace that status.
-- `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`, `docs/OBSERVATION_V3_SPECIFICATION.md`, and `docs/OBSERVATION_INPUT_CONTRACT_V3.md`: exact lifecycle/config identity, lifecycle-owned barriers, receipt ordering, no future/post-cutoff or synthetic input, and unresolved profile-specific timing references.
+- `docs/MECANUM_NAV_DRL_Architecture.docx`, SHA-256 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`, especially §45, **GlobalPath and LocalReference**.
+- `AGENTS.md`: Architecture is highest authority; source and offline test evidence cannot silently replace or resolve an authority contract.
+- `docs/governance/PROJECT_EXECUTION_PLAN.md`, `docs/governance/CANONICAL_SOURCE_REGISTRY.md`, and the latest relevant entries in `docs/governance/PROJECT_PROGRESS_LEDGER.md`.
+- `docs/architecture/ARCH_CHANGE_RECORD_OBSERVATION_INPUT_PROFILE_V3.md`, `docs/OBSERVATION_V3_SPECIFICATION.md`, and `docs/OBSERVATION_INPUT_CONTRACT_V3.md` for identity, receipt/barrier, freshness, and profile/hash boundaries.
 
-### Section 45 authority vs remaining mapping
+Architecture §45 defines the authoritative path fields: `goal_id`, `path_sequence`, `reset_epoch`, `runtime_generation`, `map_id`, `map_content_hash`, ROS path stamp, steady receipt/expiry, and immutable poses. These fields belong to a returned `GlobalPathSnapshot`; they are not prerequisites to a planner request. Their exact producer/API mapping into this Run005 collector, including how replacement/revision events and steady expiry are observed, remains unspecified. The model binds these values only after a matching successful planner result; it does not invent their production source.
 
-The fields `goal_id`, `path_sequence`, `reset_epoch`, `runtime_generation`, `map_id`, `map_content_hash`, ROS path stamp, steady receipt/expiry, and immutable poses already have architectural authority. The design therefore requires them in the active path context and binds them to the pending sample. The exact producer-side record/version that supplies each field to this collector, how a path replacement event is surfaced, and how steady expiry is enforced at this boundary remain unselected mappings. The implementation must map the authoritative fields; it must not invent substitute IDs or an expiry duration.
+## 3. F1 — cause-ordered contexts and Phase A
 
-Architecture requires reference/odometry skew and configured TF-age/future rules, but this packet's consulted authority does not identify a concrete selected Run005 bound for those predicates. No TF-age, skew, path-expiry, or wait limit is added here. That unresolved source selection belongs to a subsequent architecture-decision package.
+### Attempt context before planner
 
-## 3. Executed decisions and recommended temporal contract
+The current goal trigger is JSON and has no ROS header. At the first consumption of a valid trigger, read ROS time once. If positive, pin `t_A` and this attempt context exactly once:
 
-The following behavior is the design captured by the provided decisions. It is not production authorization.
+- the goal intent/goal ID granted to the attempt;
+- active lifecycle/config identity `(episode_generation, reset_epoch, runtime_generation, config_hash)`;
+- map identity `(map_id, map_content_hash)`;
+- barrier revision/event context.
 
-### Phase A — JSON trigger prerequisite and planner request
+This **AttemptContext deliberately has no** `path_sequence`, path stamp, path expiry, returned path, or `PathContext`. The system must not fabricate a path or infer one from the goal. If ROS time is zero/unstarted when the trigger is consumed, retain no `t_A`, send no action, and keep nonblocking until valid ROS time or the existing steady deadline. File mtime and wall time are never used.
 
-1. The current trigger is JSON and has no ROS header. On the first consumption of a valid trigger, read ROS time once. If it is positive, pin `t_A` to that ROS-clock value and pin the attempt context (active lifecycle/config identity, trigger goal ID, and active path context). File mtime and wall time are never read. If ROS time is zero/unstarted, do not pin `t_A` and do not send an action; keep waiting nonblockingly under the existing steady deadline.
-2. Evaluate the existing steady campaign deadline on every tick, including when ROS time is zero or paused. No new or extended campaign deadline is introduced.
-3. Poll exact-time `map -> base_link` availability at the same `t_A` and against the same pinned context. A false availability result, including a future-extrapolation-like interval in the fake model, does not prove the query can never be served. Continue nonblocking polls until an existing invalidation/terminal predicate or the existing steady deadline ends the attempt. Do not switch to latest, time zero, `now - offset`, or a new timestamp.
-4. Before sending ComputePath, compare the live identity and context with the pinned values. Any mismatch ends this attempt. A ROS-time rollback or terminal failure is terminal for this attempt; a later clock increase cannot restore READY. A paused clock does not stop the steady deadline.
-5. Query re-arm changes only poll scheduling. It preserves `t_A` and attempt context and cannot send a second action. At most one action request is sent for this attempt.
-6. Keep the planner request timestamp at the production behavior already in use: ROS time at request-send. `t_A` is only the TF prerequisite timestamp; it is **not** the planner goal stamp. The model records both values separately.
-7. `can_transform=true` is not sufficient proof of a successful lookup. If the subsequent exact transform throws, retain the underlying cause as structured type/message, do not send/commit on that result, and remain subject to existing invalidation and steady-deadline policy. Do not silently choose another time.
+Poll exact-time TF for the pinned positive `t_A`. False availability, including a future-extrapolation-like fake buffer result, does not establish permanent unserviceability; continue querying the same stamp until an existing invalidation, terminal failure, or steady campaign deadline. Never use latest TF, time zero, `now-minus-offset`, or move `t_A`. The steady deadline is checked even when ROS clock is zero or paused.
 
-### Phase B — sample acquisition, LocalReference transform, and commit
+Before sending ComputePath, recheck active lifecycle/config identity, map identity, goal intent, and barrier revision/event against the pinned AttemptContext. Mismatch, rollback, or terminal failure ends this attempt. A later clock increase cannot restore READY. A query re-arm retains the same `t_A` and AttemptContext and cannot re-send the action. The attempt sends the planner action at most once.
 
-Each pending sample has four separate time values:
+The planner request keeps current production timestamp semantics: ROS time at request-send. `t_A` is the prerequisite lookup time, not the planner goal stamp. The model records both independently.
 
-- `t_vector`: ROS cutoff read once at acquisition.
-- `t_odom`: exact source stamp of the odometry record frozen into the sample.
-- `t_tf`: exactly `t_odom`, used for the path-feature transform.
-- `t_commit`: ROS time at the final validation/commit check; provenance only, never a replacement cutoff or data stamp.
+### Returned path binding after planner success
 
-At acquisition, require an active identity, barrier revision, and path context. Missing context rejects the sample. Pin one immutable snapshot: scan/odometry/lifecycle records, exact final-issued receipt and sequence, their source stamps/record IDs, action/reset barriers, lifecycle/config identity, path context, and immutable path poses. Check freshness with the existing selected source predicates at acquisition. Every input stamp must be at or before its applicable cutoff; the final-issued receipt must be strictly after applicable action/reset barriers and no later than `t_vector`. A future input or receipt after cutoff is rejected.
+Only a planner result with status `SUCCEEDED`, the exact pending `request_id`, matching `goal_id`, matching lifecycle/config identity and map identity, and a still-active matching AttemptContext may create an eligible `PathContext`. A wrong-request callback, stale callback, old generation, mismatched map, or failed/pending result is rejected and creates no eligible path. Returned path fields are bound to that request/goal only after this check. Phase B cannot start without the accepted returned path and its full §45 identity.
 
-While TF is pending, keep exactly that snapshot. New arrivals may update live ingress but never replace pending members implicitly. Recheck the same exact transform at `t_tf`. At commit, check freshness again, exact active identity, authoritative barrier revision, exact path context, correlation links, and cutoff ordering. Any identity, barrier, or path-context change invalidates the pending sample. A revision/sequence/event must advance on change, so a state that later looks equal does not resurrect the old pending sample. A clock rollback invalidates the sample. Existing path steady expiry is honored; this design adds no duration.
+## 4. F2 — single pending Phase B snapshot
 
-If `can_transform` reports available but lookup throws, preserve its underlying exception type/message in structured diagnostics and do not commit. The retry/wait remains nonblocking and bounded only by existing invalidation and overall steady deadline. Never mutate raw path or pose: deep-copy the transform request and preserve raw source stamps/provenance.
+Phase B requires the accepted returned path and a complete active path context. On first acquisition, pin one snapshot and:
 
-The measurement deduplication key is built from source measurement identity and lifecycle/path context (scan record, odometry record, receipt sequence, lifecycle sequence, goal/path sequence, epoch/generation, and map identity). It excludes model-created `snapshot_id` and `t_vector`; changing those cannot make the same measurements appear new. Correlation records stay immutable and their timestamp ordering is preserved.
+- `t_vector`: ROS cutoff at acquisition;
+- `t_odom`: exact odometry source stamp in that snapshot;
+- `t_tf = t_odom`: exact transform query stamp;
+- `t_commit`: ROS time read by the final supplier check after transform; provenance only.
 
-The model's commit record contains only temporal provenance and LocalReference output. It does not assemble a vector. Five valid 81D float32 samples, navigation success, QoS, evidence-chain integrity, and all existing acceptance remain requirements outside this model and are marked `NOT_EVALUATED`.
+Freshness is checked at acquisition and commit using existing authorized predicates. Every input must be at or before its applicable cutoff; the final-issued receipt must be after the action/reset barriers and no later than `t_vector`. Future or post-cutoff inputs are rejected. Do not change `t_vector`, `t_tf`, or pinned source stamps while waiting.
 
-### Nonblocking state outline
+While a pending snapshot and its attempt/context remain valid, a second `capture_sample()` explicitly returns `REJECTED_PENDING_SNAPSHOT_EXISTS`. It cannot overwrite the first snapshot, cutoff, TF stamp, or correlation IDs. A different snapshot is accepted only after explicit commit or explicit invalidation/discard. New arrivals never replace pending members implicitly.
 
-```text
-Phase A:
-  JSON_VALID + ROS_TIME<=0 -> WAIT_CLOCK (no t_A, no action)
-  first JSON_VALID + ROS_TIME>0 -> pin (t_A, attempt context) -> WAIT_EXACT_TF(t_A)
-  poll false/lookup transient -> WAIT_EXACT_TF(t_A), steady deadline continues
-  exact TF + active context still matches -> send ComputePath once at send-time ROS stamp
-  rollback/context change/steady deadline/terminal failure -> terminal FAIL for attempt
+Measurement deduplication uses source measurement identity within lifecycle/path context—scan record, odometry record, receipt sequence, lifecycle sequence, goal/path sequence, epoch/generation, and map identity. It excludes model-generated `snapshot_id` and cutoff; changing those alone cannot make old measurements new. Correlation records remain immutable.
 
-Phase B:
-  require active identity + barrier revision + path context
-  acquire: t_vector=ROS now; pin records; t_tf=t_odom; validate cutoff/freshness
-  poll callbacks and exact TF(t_tf) without blocking; never replace pending records
-  final check: freshness + identity + revision + path + correlation + cutoff
-  pass checks -> commit one LocalReference record at t_commit provenance
-  mismatch/stale/future/rollback/lookup terminal/deadline -> discard/fail, no fallback
-```
+The transform request uses a deep copy of the path/pose. Raw poses and timestamps are not mutated. `can_transform=true` is followed by lookup/transform; a thrown exception is recorded with the original cause and cannot commit a LocalReference.
 
-## 4. Offline model cases and requirement matrix
+## 5. F3/F4 — rollback latch and final supplier check
 
-`offline_model.py` runs the pinned production baseline first/independently for the source methods, then executes proposed-model cases. The result JSON labels the two tracks separately and marks all out-of-model acceptance `NOT_EVALUATED`.
+All relevant model entry points—trigger consumption, Phase A polling/re-arm, planner-result admission, sample capture, and sample polling—read the same fake clock/context state and run the rollback/deadline guard. A rollback clears pending state, records a structured terminal failure, and latches the current attempt terminal. A subsequent capture, re-arm, result, or increased ROS time cannot restore it. A new attempt is outside this model and can only be created under a separately approved lifecycle/authorization contract.
 
-| Requirement | Model assertion/case |
+For Phase B, the fake state supplier is read before lookup and **again after lookup/transform immediately before commit**. The final read supplies fresh ROS time, steady time, identity, AttemptContext, barrier revision, and PathContext. Commit repeats the overall steady-deadline check, freshness, cutoff ordering, exact context, and path identity checks using that final state. Therefore a lookup that advances ROS time beyond freshness, advances steady time to the deadline, or changes context/barrier/path cannot commit. The model does not reset the pinned input or timestamps after such a change.
+
+If lookup throws, the supplier is still read after the failed transform. A rollback/deadline/context/freshness invalidation wins and discards/fails the pending attempt; otherwise the original lookup cause is retained as a structured wait outcome under the existing deadline policy. No timestamp fallback is used.
+
+## 6. Regression coverage
+
+`offline_model.py` uses named cases with expected outcomes asserted at each case. Coverage matrix is stored separately from behavioral case results; static declarations (including the source freshness values) are not counted as tests.
+
+| Requirement | Behavioral case |
 |---|---|
-| Trigger is JSON with no header; zero ROS clock does not pin/action; steady deadline still ends wait | `json_trigger_clock_invalid_steady_deadline` |
-| TF arrives late at fixed `t_A`; planner request uses send-time stamp, distinct from `t_A` | `phase_a_late_tf_fixed_trigger_consumption_time` |
-| Identity/context changes before action | `phase_a_identity_changed_before_action` |
-| Rollback followed by increasing clock cannot restore attempt | `phase_a_rollback_terminal_no_resurrection` |
-| False availability/target outside fake buffer is not declared permanently impossible; existing steady deadline ends attempt | `phase_a_target_outside_buffer_until_steady_deadline` |
-| Query re-arm keeps `t_A`/context and sends one action only | `phase_a_rearm_one_action_preserve_ta` |
-| Phase B rejects future input and receipt after `t_vector` | `phase_b_cutoff_rejects_future_and_post_cutoff_inputs` |
-| Active barrier/path context is mandatory | `phase_b_missing_active_context_rejected` |
-| Pending sample is not replaced by latest | `pending_snapshot_not_replaced_by_latest` |
-| Duplicate measurements with new snapshot ID/cutoff remain duplicate | `same_measurements_different_snapshot_id_and_cutoff` |
-| Acquisition freshness is rechecked at commit | `fresh_at_acquisition_stale_at_commit` |
-| Barrier/path change then apparent return invalidates by revision/sequence | `barrier_and_path_change_then_return_invalidate` |
-| `can_transform=true` followed by lookup exception never commits; cause is preserved | `can_transform_true_lookup_exception` |
-| Raw path is immutable across transform request | `raw_path_immutability` |
-| Callbacks proceed between nonblocking polls | `callbacks_progress_while_nonblocking_wait` |
-| Production moving-now baseline and fixed-time proposed behavior are distinct | `phase_a_late_tf_fixed_trigger_consumption_time`, `phase_b_fixed_odom_transform_time` |
+| Startup has no path; AttemptContext alone plus exact TF can send once; context change blocks the action | `startup_without_path_sends_planner_once`, `phase_a_attempt_context_change_before_action` |
+| Bind path only after correct successful request result | `planner_success_correct_request_binds_path_after_result` |
+| Wrong request, stale generation, and non-success result cannot bind path; only matching SUCCEEDED binds | `wrong_request_result_rejected`, `stale_generation_result_rejected`, `planner_non_success_result_does_not_bind_path`, `planner_success_correct_request_binds_path_after_result` |
+| JSON trigger without header; zero ROS time waits while steady deadline runs | `json_trigger_no_header_clock_zero_steady_deadline` |
+| Fixed `t_A`, late TF, send-time planner stamp, re-arm without action retry | `fixed_ta_late_tf_send_once` |
+| Second capture rejected; first pending values preserved | `capture_second_snapshot_rejected_without_overwrite` |
+| Rollback detected on a separate entry point, pending cleared, no recovery | `rollback_entrypoint_invalidates_and_latches_attempt` |
+| Freshness recheck after transform | `lookup_advances_ros_past_freshness_final_check_rejects` |
+| Steady deadline recheck after transform | `lookup_advances_steady_to_deadline_no_commit` |
+| Context, barrier, and path changes during lookup fail final check | `lookup_context_change_context`, `lookup_context_change_barrier`, `lookup_context_change_path` |
+| Barrier/path event advances through a change and remains invalidated after value-like return | `barrier_changed_then_values_return_revision_invalidates`, `path_sequence_changed_then_restored_payload_not_resurrected` |
+| Future and post-cutoff inputs rejected | `phase_b_cutoff_rejects_future_and_post_cutoff_receipt` |
+| Same measurements remain duplicate across new ID/cutoff | `same_measurements_new_snapshot_id_cutoff_duplicate` |
+| `can_transform=true` plus lookup exception does not commit | `can_transform_true_lookup_exception_no_commit` |
+| Transform request does not mutate raw path; callbacks proceed between returned polls | `transform_request_does_not_mutate_raw_path`, `callbacks_progress_between_nonblocking_polls` |
 
-The model also checks existing source freshness values as a model input only; that does not select them as TF-age, skew, or path-expiry authority.
+The production baseline runs separately with the pinned observer source methods and fake objects. Proposed outcomes are model evidence only. No case tests full 81D vector acceptance or campaign verdict.
 
-## 5. Identity, diagnostics, profile, and config hash
+## 7. Limits, mappings, and future authority work
 
-Active path context binds the Architecture §45 identity fields: `goal_id`, `path_sequence`, `reset_epoch`, `runtime_generation`, `map_id`, `map_content_hash`, ROS path stamp, steady receipt/expiry, and immutable poses. In addition it binds the current lifecycle/config identity and an authoritative barrier revision/event token. Any unselected source-to-field mapping is a prerequisite for a future implementation, not a reason to weaken the requirement.
+No TF-age, skew, or path-expiry numeric bound is chosen or added. Existing source freshness constants in the model are declarations copied from the pinned baseline; they are not authority for TF age/skew/path expiry. Unresolved production mappings are:
 
-Diagnostics should remain phase-specific and bounded: phase, source/target frame, fixed query stamp, attempt/snapshot identity, context/path sequence/map identity, pending-start and last-poll steady times, current availability, lookup exception type/message/cause, first/last blocker, saturating counters, freshness-at-acquisition/commit, and invalidation reason. Do not use one shared `tf.state` for both phases. Diagnostic details do not replace machine-readable context or acceptance.
+1. Approved source/API that supplies the actual GlobalPathSnapshot fields to this collector, including path replacement events reflected by `path_sequence` and steady receipt/expiry.
+2. Approved immutable source for applicable TF-age/future and reference/odometry skew predicates; this packet supplies no defaults.
+3. Exact lifecycle/barrier event source and monotonic revision mapping at the collector boundary.
+4. Whether later temporal-contract activation changes a contract/profile reference or global config hash. This packet does not alter ACR, profile, config hash, or public interface.
+5. Versioned evidence/diagnostic schema if these state details are persisted later.
 
-This packet does not edit or resolve the static profile, config hash, or current ACR. Runtime timestamps and pending state remain runtime facts, not resolved-config members. The semantic choice of exact-time Phase A prerequisite and Phase B `t_tf=t_odom` must be taken to the subsequent architecture-decision package; any resulting contract version/profile/hash effect is decided there. No public ROS interface change is proposed.
+These mappings belong to a subsequent architecture-decision package. They are not guessed or implemented here.
 
-## 6. Remaining decisions for the subsequent architecture package
+## 8. Evidence status and PLAN_UPDATE_PROPOSAL
 
-The supplied decisions settle this packet's state-machine behavior. The following authority mappings remain missing and must be resolved before production implementation:
+Model status is `PROPOSAL_ONLY_NOT_PRODUCTION`; it verifies only temporal state and LocalReference fake cases. `81D_acceptance`, QoS, evidence chain, campaign acceptance, Nav2 runtime, and tf2 runtime are `NOT_EVALUATED`. It cannot validate the real executor, TF cache, action transport, producer path semantics, or Invocation_021. Invocation_021 remains `ROOT_CAUSE_UNRESOLVED_FOR_INVOCATION_021`.
 
-1. Which approved immutable Run005 source supplies the concrete TF age/future predicate required by Architecture, and how its result is evaluated without adding a local limit.
-2. Which approved contract/profile source supplies the applicable reference/odometry skew predicate and freshness mapping at this collector boundary.
-3. Which producer record/API maps Architecture §45 fields into active path context, including path replacement event/revision and steady expiry.
-4. Whether the temporal binding changes require a new LocalReference contract reference/version and a resolved-profile/global `config_hash` change. The current profile/hash and ACR are not modified by this packet.
-5. The exact bounded diagnostic schema/version and evidence-validator binding, if those diagnostics are persisted.
-
-These are not implementation choices for this packet and no defaults are proposed.
-
-## 7. Evidence limits and status
-
-The proposed state machine is a fake-clock/fake-TF/fake-message model, not production code. The production comparison is limited to the two current source methods, called offline with fake objects from the pinned source file. It does not prove real tf2 cache/extrapolation behavior, executor scheduling, sensor cadence, QoS, action delivery, path producer semantics, full-vector correctness, evidence-chain acceptance, Gate-B acceptance, or any Invocation_021 root cause. No campaign, runtime, checksum, or historical validator was run.
-
-The packet remains `DRAFT_L2_PENDING_INDEPENDENT_REVIEW_AND_OWNER_APPROVAL`. No runtime authorization or acceptance claim is made.
-
-## 8. PLAN_UPDATE_PROPOSAL
-
-Work item: Run005 fixed-timestamp nonblocking TF wait L2 design packet correction. Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; packet base/required parent `ae620c57f396f593a39aafb589f4f69b3daf37c2`; pinned production baseline `4e83ce6cffdd9910c288f90454ab747497d7a4a6`. Evidence status: `IMPLEMENTED_OFFLINE_ONLY` for the four-file design/model packet only; Invocation_021 remains `ROOT_CAUSE_UNRESOLVED_FOR_INVOCATION_021`. Next action: independent review and a subsequent architecture-decision package to resolve the source mappings in section 6 before any separately authorized production implementation. No runtime or new invocation is proposed.
+`PLAN_UPDATE_PROPOSAL`: Run005 fixed-time TF wait review packet corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; packet base/required parent `674791655d43155accfe2b230f20994b76cbbc7b`; pinned production baseline `4e83ce6cffdd9910c288f90454ab747497d7a4a6`. Evidence is `IMPLEMENTED_OFFLINE_ONLY` for this four-file packet and fake model only. Next step: independent review and a subsequent architecture-decision package for the listed production field mappings; no production implementation or runtime is authorized by this packet.

@@ -1,8 +1,66 @@
 {
-  "case_count": 17,
+  "baseline_source": {
+    "commit": "4e83ce6cffdd9910c288f90454ab747497d7a4a6",
+    "executed_separately": true,
+    "methods": [
+      "_Collector._tick()",
+      "_features_from_path()"
+    ],
+    "path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "resolved_import": "/home/hazan/step07-integrated-nav2-gateb-campaign-f7f98c6/ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
+    "sha256": "39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f"
+  },
+  "behavioral_case_count": 22,
   "cases": [
     {
-      "baseline_production": [
+      "action_count": 1,
+      "case": "startup_without_path_sends_planner_once",
+      "expected": "PLANNER_REQUESTED_ONCE",
+      "observed": "PLANNER_REQUESTED_ONCE",
+      "path_context_after_request": null,
+      "path_context_before_planner": null,
+      "planner_stamp_ns": 20000000000,
+      "t_a_ns": 20000000000
+    },
+    {
+      "action_count": 0,
+      "case": "phase_a_attempt_context_change_before_action",
+      "expected": "FAILED_ACTIVE_ATTEMPT_CONTEXT_CHANGED",
+      "observed": "FAILED_ACTIVE_ATTEMPT_CONTEXT_CHANGED",
+      "t_a_ns": 20000000000
+    },
+    {
+      "action_count": 0,
+      "case": "json_trigger_no_header_clock_zero_steady_deadline",
+      "expected": [
+        "WAIT_VALID_ROS_CLOCK",
+        "FAILED_STEADY_DEADLINE"
+      ],
+      "observed": [
+        "WAIT_VALID_ROS_CLOCK",
+        "FAILED_STEADY_DEADLINE"
+      ],
+      "trigger_has_ros_header": false
+    },
+    {
+      "case": "fixed_ta_late_tf_send_once",
+      "expected": {
+        "count": 1,
+        "rearm": true,
+        "request_stamp": 30020000000,
+        "sent": "PLANNER_REQUESTED_ONCE",
+        "t_a": 30000000000,
+        "wait": "WAIT_EXACT_TF"
+      },
+      "observed": {
+        "count": 1,
+        "rearm": true,
+        "request_stamp": 30020000000,
+        "sent": "PLANNER_REQUESTED_ONCE",
+        "t_a": 30000000000,
+        "wait": "WAIT_EXACT_TF"
+      },
+      "production_baseline": [
         {
           "planner_requested": false,
           "query_ns": 10000000000
@@ -16,311 +74,249 @@
           "query_ns": 10100000000
         }
       ],
-      "case": "phase_a_late_tf_fixed_trigger_consumption_time",
-      "phase_a_query_stamps": [
-        10000000000,
-        10000000000,
-        10000000000
-      ],
-      "planner_request_count": 1,
-      "planner_request_stamp_ns": 10050000000,
-      "proposed_model": [
-        "WAIT_EXACT_TF",
-        "PLANNER_REQUESTED_ONCE",
-        "PLANNER_REQUESTED_ONCE"
-      ],
-      "t_a_ns": 10000000000,
-      "trigger_format": "JSON_NO_ROS_HEADER"
-    },
-    {
-      "baseline_production": [
-        {
-          "cause": "ExtrapolationException",
-          "wrapper": "LOCAL_REFERENCE_TF_TRANSFORM_FAILED"
-        },
-        {
-          "cause": "ExtrapolationException",
-          "wrapper": "LOCAL_REFERENCE_TF_TRANSFORM_FAILED"
-        }
-      ],
-      "case": "phase_b_fixed_odom_transform_time",
-      "committed_records": [
-        {
-          "lifecycle_sequence": 4,
-          "local_reference": [
-            1.0,
-            0.0,
-            1.0
-          ],
-          "map_id": "map-1",
-          "measurement_identity": [
-            [
-              3,
-              2,
-              7,
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            ],
-            "scan-1",
-            "odom-1",
-            11,
-            4,
-            "goal-1",
-            7,
-            2,
-            7,
-            "map-1",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          ],
-          "odom_record_id": "odom-1",
-          "path_sequence": 7,
-          "receipt_sequence": 11,
-          "receipt_stamp_ns": 10000000000,
-          "scan_record_id": "scan-1",
-          "t_commit_ros_ns": 10100000000,
-          "t_odom_ns": 10000000000,
-          "t_tf_ns": 10000000000,
-          "t_vector_ns": 10000000000
-        }
-      ],
-      "proposed_model": [
-        "WAIT_EXACT_TF_SAME_STAMP",
-        "LOCAL_REFERENCE_COMMITTED"
-      ]
-    },
-    {
-      "action_count": 0,
-      "baseline_production": null,
-      "case": "json_trigger_clock_invalid_steady_deadline",
-      "proposed_model": [
-        "WAIT_VALID_ROS_CLOCK",
-        "FAILED_STEADY_DEADLINE"
-      ],
-      "t_a_ns": null,
-      "trigger_has_ros_header": false
-    },
-    {
-      "action_count": 0,
-      "baseline_production": null,
-      "case": "phase_a_identity_changed_before_action",
-      "proposed_model": "FAILED_ACTIVE_CONTEXT_CHANGED"
-    },
-    {
-      "action_count": 0,
-      "baseline_production": null,
-      "case": "phase_a_rollback_terminal_no_resurrection",
-      "proposed_model": [
-        "FAILED_CLOCK_ROLLBACK",
-        "FAILED_CLOCK_ROLLBACK"
-      ]
-    },
-    {
-      "baseline_production": null,
-      "case": "phase_a_rearm_one_action_preserve_ta",
-      "pinned_context_unchanged": true,
-      "planner_request_count": 1,
-      "planner_request_stamp_ns": 40020000000,
-      "proposed_model": "PLANNER_REQUESTED_ONCE",
       "query_stamps": [
-        40000000000,
-        40000000000,
-        40000000000
-      ],
-      "rearm_accepted": true,
-      "t_a_ns": 40000000000
-    },
-    {
-      "baseline_production": null,
-      "case": "phase_a_target_outside_buffer_until_steady_deadline",
-      "proposed_model": [
-        "WAIT_EXACT_TF",
-        "WAIT_EXACT_TF",
-        "FAILED_STEADY_DEADLINE"
-      ],
-      "query_stamps": [
-        50000000000,
-        50000000000
-      ],
-      "t_a_ns": 50000000000
-    },
-    {
-      "baseline_production": null,
-      "case": "phase_b_cutoff_rejects_future_and_post_cutoff_inputs",
-      "proposed_model": {
-        "future_input_accepted": false,
-        "post_cutoff_receipt_accepted": false
-      }
-    },
-    {
-      "baseline_production": null,
-      "case": "phase_b_missing_active_context_rejected",
-      "proposed_model": {
-        "missing_barrier_at_acquisition": false,
-        "missing_barrier_at_commit": "DISCARDED_MISSING_CONTEXT",
-        "missing_path_at_acquisition": false,
-        "missing_path_at_commit": "DISCARDED_MISSING_CONTEXT"
-      }
-    },
-    {
-      "baseline_production": null,
-      "case": "pending_snapshot_not_replaced_by_latest",
-      "committed_records": [
-        {
-          "lifecycle_sequence": 4,
-          "local_reference": [
-            1.0,
-            0.0,
-            1.0
-          ],
-          "map_id": "map-1",
-          "measurement_identity": [
-            [
-              3,
-              2,
-              7,
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            ],
-            "scan-exact-1",
-            "odom-exact-1",
-            91,
-            4,
-            "goal-1",
-            7,
-            2,
-            7,
-            "map-1",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          ],
-          "odom_record_id": "odom-exact-1",
-          "path_sequence": 7,
-          "receipt_sequence": 91,
-          "receipt_stamp_ns": 60000000000,
-          "scan_record_id": "scan-exact-1",
-          "t_commit_ros_ns": 60000000002,
-          "t_odom_ns": 60000000000,
-          "t_tf_ns": 60000000000,
-          "t_vector_ns": 60000000000
-        }
-      ],
-      "pending_unchanged": true,
-      "proposed_model": [
-        "WAIT_EXACT_TF_SAME_STAMP",
-        "LOCAL_REFERENCE_COMMITTED"
+        30000000000,
+        30000000000,
+        30000000000
       ]
     },
     {
-      "baseline_production": null,
-      "case": "same_measurements_different_snapshot_id_and_cutoff",
-      "committed_count": 1,
-      "discarded": [
-        {
-          "reason": "DUPLICATE_MEASUREMENT_IDENTITY",
-          "snapshot_id": "id-b"
-        }
-      ],
-      "proposed_model": "DISCARDED_DUPLICATE_MEASUREMENT_IDENTITY"
+      "case": "wrong_request_result_rejected",
+      "expected": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "observed": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "path_context_created": false
     },
     {
-      "acquired": true,
-      "baseline_production": null,
-      "case": "fresh_at_acquisition_stale_at_commit",
-      "commits": 0,
-      "proposed_model": "DISCARDED_INPUT_STALE_FUTURE_OR_AFTER_CUTOFF"
+      "case": "stale_generation_result_rejected",
+      "expected": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "observed": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "path_context_created": false
     },
     {
-      "baseline_production": null,
-      "case": "barrier_and_path_change_then_return_invalidate",
-      "proposed_model": {
-        "barrier": "DISCARDED_BARRIER_REVISION_CHANGED",
-        "current_values_equal_old_payload": true,
-        "path": "DISCARDED_PATH_CONTEXT_CHANGED",
-        "revision_or_sequence_advanced": true
-      }
+      "case": "planner_non_success_result_does_not_bind_path",
+      "expected": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "observed": "REJECTED_WRONG_OR_STALE_PLANNER_RESULT",
+      "path_context_created": false
     },
     {
-      "baseline_production": null,
-      "can_transform_result": true,
-      "case": "can_transform_true_lookup_exception",
-      "commits": 0,
-      "lookup_failures": [
-        {
-          "message": "fake lookup cause",
-          "phase": "B",
-          "type": "ExtrapolationException",
-          "wrapper_type": "ValueError"
-        }
-      ],
-      "proposed_model": "WAIT_TF_LOOKUP_EXCEPTION"
+      "case": "planner_success_correct_request_binds_path_after_result",
+      "expected": "BOUND_RETURNED_PATH_AFTER_MATCHED_SUCCESS",
+      "goal_id": "goal-1",
+      "observed": "BOUND_RETURNED_PATH_AFTER_MATCHED_SUCCESS",
+      "path_absent_before_result": true,
+      "path_sequence": 22,
+      "request_id": "request-1"
     },
     {
-      "baseline_production": {
-        "after": [
-          3,
-          4
-        ],
-        "before": [
-          2,
-          0
-        ]
+      "case": "capture_second_snapshot_rejected_without_overwrite",
+      "expected": "REJECTED_PENDING_SNAPSHOT_EXISTS",
+      "first_capture": "PENDING_EXACT_TIME_TF",
+      "observed": "REJECTED_PENDING_SNAPSHOT_EXISTS",
+      "pending_snapshot_id": "pending-A",
+      "pending_t_tf": 40000000000,
+      "pending_t_vector": 40000000000,
+      "pending_value_identical": true
+    },
+    {
+      "case": "rollback_entrypoint_invalidates_and_latches_attempt",
+      "expected": {
+        "capture": "REJECTED_TERMINAL_ATTEMPT",
+        "pending_cleared": true,
+        "recovered_poll": "REJECTED_TERMINAL_ATTEMPT"
       },
-      "case": "raw_path_immutability",
-      "proposed_model": {
-        "after": [
-          2,
-          0
-        ],
-        "before": [
-          2,
-          0
-        ],
-        "unchanged": true
+      "failure": {
+        "entrypoint": "capture_sample",
+        "reason": "ROS_CLOCK_ROLLBACK"
+      },
+      "observed": {
+        "capture": "REJECTED_TERMINAL_ATTEMPT",
+        "pending_cleared": true,
+        "recovered_poll": "REJECTED_TERMINAL_ATTEMPT"
       }
     },
     {
-      "baseline_production": null,
-      "case": "callbacks_progress_while_nonblocking_wait",
-      "proposed_model": {
-        "callbacks_processed": 1,
-        "first_poll": "WAIT_EXACT_TF_SAME_STAMP",
-        "next_poll": "LOCAL_REFERENCE_COMMITTED"
+      "case": "lookup_advances_ros_past_freshness_final_check_rejects",
+      "commit_count": 0,
+      "expected": "DISCARDED_FINAL_INPUT",
+      "final_ros_ns": 60250000001,
+      "observed": "DISCARDED_FINAL_INPUT",
+      "supplier_reads": 3
+    },
+    {
+      "case": "lookup_advances_steady_to_deadline_no_commit",
+      "commit_count": 0,
+      "expected": "REJECTED_TERMINAL_ATTEMPT",
+      "observed": "REJECTED_TERMINAL_ATTEMPT",
+      "terminal_failure": {
+        "entrypoint": "poll_sample_final_check",
+        "reason": "STEADY_DEADLINE"
       }
     },
     {
-      "authority_note": "existing collector source values only; not TF-age/skew/expiry authority",
-      "baseline_production": null,
-      "case": "freshness_limits_used_by_model",
-      "proposed_model": {
-        "lifecycle": 500000000,
-        "odom": 250000000,
-        "receipt": 500000000,
-        "scan": 500000000
+      "case": "lookup_context_change_context",
+      "commit_count": 0,
+      "expected": "DISCARDED_FINAL_CONTEXT",
+      "final_barrier_revision": 4,
+      "final_path_sequence": 7,
+      "final_ros_ns": 80000000001,
+      "observed": "DISCARDED_FINAL_CONTEXT"
+    },
+    {
+      "case": "lookup_context_change_barrier",
+      "commit_count": 0,
+      "expected": "DISCARDED_FINAL_CONTEXT",
+      "final_barrier_revision": 4,
+      "final_path_sequence": 7,
+      "final_ros_ns": 80000000001,
+      "observed": "DISCARDED_FINAL_CONTEXT"
+    },
+    {
+      "case": "lookup_context_change_path",
+      "commit_count": 0,
+      "expected": "DISCARDED_FINAL_CONTEXT",
+      "final_barrier_revision": 3,
+      "final_path_sequence": 8,
+      "final_ros_ns": 80000000001,
+      "observed": "DISCARDED_FINAL_CONTEXT"
+    },
+    {
+      "case": "barrier_changed_then_values_return_revision_invalidates",
+      "commit_count": 0,
+      "event_trace": [
+        4,
+        5
+      ],
+      "expected": "DISCARDED_FINAL_CONTEXT",
+      "final_revision": 5,
+      "observed": "DISCARDED_FINAL_CONTEXT",
+      "pinned_revision": 3
+    },
+    {
+      "can_transform": true,
+      "case": "can_transform_true_lookup_exception_no_commit",
+      "commit_count": 0,
+      "expected": "WAIT_TF_LOOKUP_EXCEPTION",
+      "observed": "WAIT_TF_LOOKUP_EXCEPTION",
+      "original_cause": {
+        "message": "fake lookup cause",
+        "reason": "TF_LOOKUP_EXCEPTION",
+        "type": "ExtrapolationException",
+        "wrapper_type": "ValueError"
+      }
+    },
+    {
+      "case": "phase_b_cutoff_rejects_future_and_post_cutoff_receipt",
+      "expected": [
+        "REJECTED_INPUT_AT_ACQUISITION",
+        "REJECTED_INPUT_AT_ACQUISITION"
+      ],
+      "observed": [
+        "REJECTED_INPUT_AT_ACQUISITION",
+        "REJECTED_INPUT_AT_ACQUISITION"
+      ]
+    },
+    {
+      "case": "same_measurements_new_snapshot_id_cutoff_duplicate",
+      "committed_count": 1,
+      "expected": "DISCARDED_DUPLICATE_MEASUREMENT_IDENTITY",
+      "observed": "DISCARDED_DUPLICATE_MEASUREMENT_IDENTITY"
+    },
+    {
+      "case": "path_sequence_changed_then_restored_payload_not_resurrected",
+      "commit_count": 0,
+      "expected": "DISCARDED_FINAL_CONTEXT",
+      "observed": "DISCARDED_FINAL_CONTEXT",
+      "sequence_revision": 9
+    },
+    {
+      "case": "transform_request_does_not_mutate_raw_path",
+      "expected": [
+        2,
+        0
+      ],
+      "observed": [
+        2,
+        0
+      ]
+    },
+    {
+      "case": "callbacks_progress_between_nonblocking_polls",
+      "expected": {
+        "callbacks": 1,
+        "first": "WAIT_EXACT_TF_SAME_STAMP",
+        "second": "LOCAL_REFERENCE_COMMITTED"
+      },
+      "observed": {
+        "callbacks": 1,
+        "first": "WAIT_EXACT_TF_SAME_STAMP",
+        "second": "LOCAL_REFERENCE_COMMITTED"
       }
     }
   ],
-  "freshness_limits_ns": {
-    "lifecycle": 500000000,
-    "odom": 250000000,
-    "receipt": 500000000,
-    "scan": 500000000
+  "coverage": {
+    "F1_no_path_before_planner_and_match_result": [
+      "startup_without_path_sends_planner_once",
+      "phase_a_attempt_context_change_before_action",
+      "wrong_request_result_rejected",
+      "stale_generation_result_rejected",
+      "planner_non_success_result_does_not_bind_path",
+      "planner_success_correct_request_binds_path_after_result"
+    ],
+    "F2_single_pending_snapshot": [
+      "capture_second_snapshot_rejected_without_overwrite"
+    ],
+    "F3_rollback_terminal_invalidation": [
+      "rollback_entrypoint_invalidates_and_latches_attempt"
+    ],
+    "F4_final_supplier_recheck": [
+      "lookup_advances_ros_past_freshness_final_check_rejects",
+      "lookup_advances_steady_to_deadline_no_commit",
+      "lookup_context_change_context",
+      "lookup_context_change_barrier",
+      "lookup_context_change_path"
+    ],
+    "clock_trigger_TA_action_once": [
+      "json_trigger_no_header_clock_zero_steady_deadline",
+      "fixed_ta_late_tf_send_once",
+      "rollback_entrypoint_invalidates_and_latches_attempt"
+    ],
+    "cutoff_dedup_immutability": [
+      "phase_b_cutoff_rejects_future_and_post_cutoff_receipt",
+      "same_measurements_new_snapshot_id_cutoff_duplicate",
+      "path_sequence_changed_then_restored_payload_not_resurrected",
+      "transform_request_does_not_mutate_raw_path",
+      "callbacks_progress_between_nonblocking_polls"
+    ],
+    "lookup_exception": [
+      "can_transform_true_lookup_exception_no_commit"
+    ]
+  },
+  "declarations": {
+    "existing_source_freshness_values_ns": {
+      "lifecycle": 500000000,
+      "odom": 250000000,
+      "receipt": 500000000,
+      "scan": 500000000
+    },
+    "model_not_evaluated": [
+      "81D_acceptance",
+      "QoS",
+      "evidence_chain",
+      "campaign_acceptance",
+      "Nav2_runtime",
+      "tf2_runtime"
+    ],
+    "new_tf_age_skew_expiry_limits": "NONE_SELECTED"
   },
   "model_status": "PROPOSAL_ONLY_NOT_PRODUCTION",
   "not_evaluated": [
-    "81D_vector_acceptance",
-    "QoS_acceptance",
-    "evidence_chain_acceptance",
-    "campaign_pass",
+    "81D_acceptance",
+    "QoS",
+    "evidence_chain",
+    "campaign_acceptance",
     "Nav2_runtime",
-    "TF2_runtime_buffer_behavior"
+    "tf2_runtime"
   ],
-  "production_baseline": {
-    "executed_separately": true,
-    "fake_objects_only": true,
-    "methods": [
-      "_Collector._tick()",
-      "_features_from_path()"
-    ],
-    "source_path": "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py",
-    "source_sha256": "39b9c08d01770c8ca12d1264297c69e5943a8b90640daa98ffeeaf9b2b28c28f"
-  },
-  "runtime_or_campaign": false,
-  "tf_wait_budget": "none added; steady deadline is the existing whole-run deadline"
+  "proposed_model": "temporal state and LocalReference fake cases only",
+  "runtime_or_campaign": false
 }

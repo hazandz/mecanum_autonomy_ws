@@ -2,10 +2,11 @@
   "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
   "branch": "step07-integrated-nav2-gateb-campaign-f7f98c6",
   "environment": {
-    "external_overlay": "/tmp/step07_inv017_behavioral_verification_20261023/install",
+    "overlay": "/tmp/step07_inv017_behavioral_verification_20261023/install",
     "pydantic_version": "2.10.6",
     "python_executable": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python3",
     "python_version": "3.12.3",
+    "repository_root_argument": "/home/hazan/step07-integrated-nav2-gateb-campaign-f7f98c6",
     "ros_distro": "jazzy",
     "runtime_or_campaign": false
   },
@@ -136,20 +137,20 @@
       "sha256": "631b6d28fdf42ceb4867da953d4a3586c9e6e2d804fa4f35f3a18f90dcc13cd9"
     },
     {
-      "byte_size": 16899,
+      "byte_size": 13515,
       "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/TF_EXACT_TIME_WAIT_PROPOSAL.md",
-      "sha256": "8c9bb61be4f5aae006a654fdbfeef7eb9925f9d35b1dcb55e3605326b63f485c"
+      "sha256": "5d5e01d6ab2d70db9898c8e21fe613a6c5db15e28869043da4e9cd2e78d5bd96"
     },
     {
-      "byte_size": 38250,
+      "byte_size": 41981,
       "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_model.py",
-      "sha256": "9e9d6b0a23bbf2206344cb716ed0a0bb6dc3301aca3699678019faafd188aeb2"
+      "sha256": "adfdc005a19cf787bfe93200cf425dc3045f2b81189abf4f83bb4e0534d7e92b"
     },
     {
-      "byte_size": 8794,
+      "byte_size": 9945,
       "path": "artifacts/simulation/step07_nav2_baseline_campaign/design/fixed_timestamp_nonblocking_tf_wait_l2/offline_validation_results.json",
-      "sha256": "f427eb0cda4aea219deae463079afe3d8841d82cd6eb1385ac77db3d11324bde"
+      "sha256": "6f82288c38ea954486dd7125247ae4ca7c79db82f1f63201e6c488a39e090774"
     }
   ],
-  "source_base": "ae620c57f396f593a39aafb589f4f69b3daf37c2"
+  "source_base": "674791655d43155accfe2b230f20994b76cbbc7b"
 }
