@@ -56,6 +56,15 @@ static float integral_permille[PID3_WHEEL_COUNT];
 
 static uint32_t elapsed(uint32_t now, uint32_t then) { return now - then; }
 
+static float target_cps_for_run_elapsed(uint32_t run_elapsed_ms)
+{
+  if (run_elapsed_ms >= PID3_RAMP_DURATION_MS)
+    return PID3_TARGET_CPS;
+
+  return PID3_TARGET_CPS *
+         ((float)run_elapsed_ms / (float)PID3_RAMP_DURATION_MS);
+}
+
 static int32_t delta32(uint32_t old, uint32_t now)
 {
   uint32_t d = now - old;
@@ -335,18 +344,19 @@ static uint32_t monitor_guards(uint32_t now_ms, uint32_t dt_ms,
   return 0U;
 }
 
-static void compute_outputs(uint32_t dt_ms, const int32_t delta[4],
-                            float measured[4], float error[4], float ff[4],
-                            float up[4], float ui[4], float output[4])
+static void compute_outputs(uint32_t dt_ms, float target_cps,
+                            const int32_t delta[4], float measured[4],
+                            float error[4], float ff[4], float up[4],
+                            float ui[4], float output[4])
 {
   uint32_t i;
   float dt_seconds = (float)dt_ms / 1000.0f;
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     float candidate, raw;
     measured[i] = (float)delta[i] * 1000.0f / (float)dt_ms;
-    error[i] = PID3_TARGET_CPS - measured[i];
+    error[i] = target_cps - measured[i];
     ff[i] = forward_feedforward[i].u0 +
-            forward_feedforward[i].kv * PID3_TARGET_CPS;
+            forward_feedforward[i].kv * target_cps;
     up[i] = PID3_DEFAULT_KP * error[i];
     candidate = integral_permille[i] + PID3_DEFAULT_KI * error[i] * dt_seconds;
     if (candidate > PID3_INTEGRAL_LIMIT) candidate = PID3_INTEGRAL_LIMIT;
@@ -363,7 +373,7 @@ static void compute_outputs(uint32_t dt_ms, const int32_t delta[4],
   }
 }
 
-static void append_sample(uint32_t now_ms, uint32_t dt_ms,
+static void append_sample(uint32_t now_ms, uint32_t dt_ms, float target_cps,
                           const float measured[4], const float error[4],
                           const float ff[4], const float ui[4],
                           const float output[4], const int32_t delta[4])
@@ -378,7 +388,7 @@ static void append_sample(uint32_t now_ms, uint32_t dt_ms,
   sample = &g_pid3_log[log_used++];
   sample->timestamp_ms = now_ms;
   sample->state = PID3_STATE_RUN;
-  sample->target_cps = PID3_TARGET_CPS;
+  sample->target_cps = target_cps;
   sample->dt_ms = dt_ms;
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     sample->measured_cps[i] = measured[i];
@@ -504,6 +514,9 @@ void pid3_lab_step(uint32_t now_ms)
     return;
   }
 
+  float current_target_cps =
+      target_cps_for_run_elapsed(g_pid3.run_elapsed_ms);
+  g_pid3.target_cps = current_target_cps;
   {
     EncoderRaw current = read_all_encoders();
     int32_t delta[PID3_WHEEL_COUNT];
@@ -525,7 +538,8 @@ void pid3_lab_step(uint32_t now_ms)
     g_pid3.total_delta_rl += delta[2];
     g_pid3.total_delta_rr += delta[3];
     g_pid3.dt_ms = dt_ms;
-    compute_outputs(dt_ms, delta, measured, error, ff, up, ui, output);
+    compute_outputs(dt_ms, current_target_cps, delta, measured, error,
+                    ff, up, ui, output);
     for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
       if (!isfinite(measured[i]) || !isfinite(error[i]) || !isfinite(ff[i]) ||
           !isfinite(up[i]) || !isfinite(ui[i]) || !isfinite(output[i]) ||
@@ -535,7 +549,6 @@ void pid3_lab_step(uint32_t now_ms)
       }
     }
     set_debug_vector(measured, error, ff, ui, output, delta);
-    g_pid3.target_cps = PID3_TARGET_CPS;
     if (monitor_guards(now_ms, dt_ms, measured, output,
                        &fault_error, &fault_mask) != 0U) {
       fail_closed(fault_error, fault_mask);
@@ -545,7 +558,8 @@ void pid3_lab_step(uint32_t now_ms)
     if (internal_state == PID3_STATE_FAULT) return;
     if (++log_divider >= PID3_LOG_EVERY_CYCLES) {
       log_divider = 0U;
-      append_sample(now_ms, dt_ms, measured, error, ff, ui, output, delta);
+      append_sample(now_ms, dt_ms, current_target_cps, measured, error,
+                    ff, ui, output, delta);
       if (internal_state == PID3_STATE_FAULT) return;
     }
   }
