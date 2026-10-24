@@ -2371,3 +2371,18 @@ Base/required sole parent: `dcc36a39f410651f5e7a142fa52eeda5daa50012`; exact cur
 Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; runtime not approved. No runtime, invocation retry, integration, HIL, hardware or Fuel operation was performed.
 
 PLAN_UPDATE_PROPOSAL: Run005 R5 lineage metadata correction; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `dcc36a39f410651f5e7a142fa52eeda5daa50012`; commit pending required final delivery checks; evidence is IMPLEMENTED_OFFLINE_ONLY; runtime authorization remains separate and NOT_GRANTED; next action is conditional single review delivery and independent review.
+
+
+### 2026-10-24 — Invocation_020 offline corrective candidate
+
+Work package: Invocation_020 corrective L1; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base and intended sole parent `d123c708bb3b0fd80c8096daa9836da50440db85`.
+
+`supersedes`: only the prior R5 candidate's current-candidate base/scope and pending next-action statement; historical R3/R4/R5 facts and Invocation_014–020 outcomes are unchanged. Invocation_020 remains a historical FAIL and immutable.
+
+Forensic classification: `ROOT_CAUSE_UNRESOLVED`. Persisted evidence has a goal-trigger artifact, action-server probe PASS and four readiness stages PASS, followed by zero vectors and `GATE_B_SAMPLE_TIMEOUT`; `ComputePathToPose.requested_once=false` and `NavigateToPose=NO_RESULT`. Exact trigger consumption, action-time TF query/result, and action response/result callback state were not persisted, so timeout causation is not assigned. QoS `UNOBSERVABLE` is not called a mismatch. PID 73149 was reported by prior read-only inventory as a ros2 daemon under PGID 71890 with the run partition; no signal or cleanup was performed.
+
+Confirmed offline fixes: readiness exception settlement cannot produce a null/fifth transition after four passes; chain `artifact_written` is set only after actual sidecar write/readback, with structured failure chain and missing links. Bounded diagnostics were added without changing action, timeout, TF, lifecycle, safety, QoS, freshness, or acceptance semantics.
+
+Phase A: focused behavior PASS; Step-7 417 passed/2 skipped with only expected pre-A.5 runner pin drift; bringup 342 passed; RL 722 passed; six-package external build PASS; installed/source equality 18/18 PASS; py_compile PASS; diff check PASS. Phase A.5: membership 38/38, seven stale source entries refreshed. Phase B: exact scope 14 paths from base d123c708; allowlist 17; `SOURCE_FREEZE=TRUE`. Post-reconciliation final checks remain pending execution and are not claimed here. Guard is pending/capacity 1/acquisition 0/NOT_GRANTED; no runtime was run.
+
+PLAN_UPDATE_PROPOSAL: Invocation_020 offline corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base `d123c708bb3b0fd80c8096daa9836da50440db85`; commit pending final verification; evidence is IMPLEMENTED_OFFLINE_ONLY; runtime authorization remains separate and NOT_GRANTED; next action is final offline verification, then conditional single review delivery.

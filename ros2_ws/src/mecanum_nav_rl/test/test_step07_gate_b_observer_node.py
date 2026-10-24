@@ -46,6 +46,61 @@ def test_collector_error_waits_for_result_only_until_existing_deadline(monkeypat
     c.deadline=0;c._tick();assert done and 'GATE_B_SAMPLE_TIMEOUT' in c.errors
 
 
+def test_zero_sample_timeout_records_no_action_request_and_bounded_diagnostics(tmp_path):
+    import json
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    c = m._Collector.__new__(m._Collector)
+    c._finished = False
+    c.args = SimpleNamespace(output=tmp_path / "gate.json", peer_timeout_sec=1,
+        invocation_id="DIAGNOSTIC_FIXTURE")
+    c.config_hash = "a" * 64
+    c.samples = []
+    c.raw = {"scan": [], "filtered_odometry": [], "lifecycle": [], "receipt": []}
+    c.errors = ["GATE_B_SAMPLE_TIMEOUT"]
+    c.path = None
+    c.path_transcript = None
+    c.navigate_result = None
+    c._compute_path_requested = c._navigate_requested = False
+    c._compute_path_calls = c._navigate_calls = 0
+    c.diagnostics = m._new_collector_diagnostics()
+    c._wait_peer = lambda: None
+
+    c._finish()
+    document = json.loads(c.args.output.read_bytes())
+    assert document["sample_count"] == 0 and document["samples"] == []
+    assert document["compute_path_to_pose"]["requested_once"] is False
+    assert document["navigate_to_pose"] == {"accepted": False, "status": "NO_RESULT",
+        "requested_once": False}
+    assert document["diagnostics"]["actions"]["compute_path_to_pose"]["state"] == "NOT_REQUESTED"
+    assert document["diagnostics"]["actions"]["navigate_to_pose"]["state"] == "NOT_REQUESTED"
+
+
+def test_tf_blocking_predicate_is_captured_without_changing_request_semantics(monkeypatch):
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    c = m._Collector.__new__(m._Collector)
+    c._finished = False; c.samples = []; c.errors = []; c.navigate_result = None
+    c.diagnostics = m._new_collector_diagnostics()
+    c.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=10_000_000_000)))
+    c.deadline = 100
+    c._publish_ready_when_complete = lambda: None
+    c._read_goal_trigger = lambda: True
+    c._compute_path_requested = c._navigate_requested = False
+    c.path = None
+    c.tf_buffer = SimpleNamespace(can_transform=lambda *_args: False)
+    c.latest_lifecycle = c.latest_scan = c.latest_odom = c.latest_receipt = None
+    monkeypatch.setattr(m.time, "monotonic", lambda: 1)
+    monkeypatch.setattr(m.importlib, "import_module", lambda name: SimpleNamespace(
+        Time=lambda **kwargs: kwargs) if name == "rclpy.time" else __import__(name))
+
+    c._tick()
+
+    assert c.diagnostics["tf"]["state"] == "UNAVAILABLE"
+    assert c.diagnostics["tf"]["last_query_time_ns"] == 10_000_000_000
+    assert c.diagnostics["actions"]["compute_path_to_pose"]["state"] == "NOT_REQUESTED"
+    assert c.diagnostics["first_blocking_predicate"]["predicate"] == "TF_TRANSFORM_UNAVAILABLE"
+    assert c.diagnostics["predicate_counts"]["TF_TRANSFORM_UNAVAILABLE"] == 1
+
+
 def test_local_reference_adapter_uses_successful_compute_path_result_only():
     source = (Path(__file__).parents[1] / "mecanum_nav_rl" / "observations" / "step07_gate_b_observer_node.py").read_text(encoding="utf-8")
     assert "STATUS_SUCCEEDED" in source
@@ -199,6 +254,7 @@ def test_async_actions_sent_once_and_completion_verdict_uses_actual_results():
     c._compute_path_requested = c._navigate_requested = False
     c._compute_path_calls = c._navigate_calls = 0
     c.errors = []
+    c.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1)))
     c._request_path_once(); c._navigate_once()
     assert not calls
     client.server_is_ready = lambda: True

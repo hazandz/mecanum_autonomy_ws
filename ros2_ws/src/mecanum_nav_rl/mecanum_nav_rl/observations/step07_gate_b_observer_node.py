@@ -37,6 +37,33 @@ FINAL_RECEIPT_QOS_CONTRACT = {
 }
 
 
+def _new_collector_diagnostics():
+    predicates = (
+        "GOAL_TRIGGER_NOT_VALID", "CLOCK_NOT_VALID", "TF_TRANSFORM_UNAVAILABLE",
+        "TF_LOOKUP_EXCEPTION", "COMPUTE_PATH_NOT_READY", "NAVIGATE_ACTION_SERVER_NOT_READY",
+        "COMPUTE_PATH_ACTION_SERVER_NOT_READY", "SENSOR_INPUT_MISSING", "LIFECYCLE_BARRIER_BLOCKED",
+        "GENERATION_MISMATCH", "SENSOR_FRAME_INVALID", "SENSOR_TIMESTAMP_NOT_FRESH",
+        "PATH_FEATURE_TF_FAILURE", "ADAPTER_REJECTED", "ASSEMBLY_REJECTED", "DEADLINE_EXPIRED")
+    return {
+        "schema_version": "1.0",
+        "goal_trigger": {"state": "NOT_READ", "read_count": 0, "failure": None},
+        "clock": {"state": "NOT_QUERIED", "last_ros_time_ns": None, "query_count": 0},
+        "tf": {"state": "NOT_QUERIED", "query_count": 0,
+            "last_query_time_ns": None, "last_error_type": None},
+        "actions": {
+            "compute_path_to_pose": {"state": "NOT_REQUESTED", "server_state": "UNKNOWN",
+                "response": "NOT_REQUESTED", "result": "NOT_REQUESTED", "request_time_ns": None,
+                "terminal_status": None},
+            "navigate_to_pose": {"state": "NOT_REQUESTED", "server_state": "UNKNOWN",
+                "response": "NOT_REQUESTED", "result": "NOT_REQUESTED", "request_time_ns": None,
+                "terminal_status": None},
+        },
+        "predicate_counts": {name: 0 for name in predicates},
+        "first_blocking_predicate": None, "last_blocking_predicate": None,
+        "generation_mismatch": None, "freshness": {},
+    }
+
+
 def lifecycle_state_qos_profile(qos=None):
     """Build lifecycle subscription QoS independently from receipt QoS."""
     if qos is None:
@@ -207,6 +234,7 @@ class _Collector:
         self._navigate_calls = 0
         self._compute_path_requested = False
         self._navigate_requested = False
+        self.diagnostics = _new_collector_diagnostics()
         self.path_error = None
         self.navigate_result = None
         self.path_transcript = None
@@ -268,13 +296,19 @@ class _Collector:
 
     def _read_goal_trigger(self):
         if getattr(self, "_goal_triggered", False):
+            self._set_trigger_diagnostic("TRIGGER_GOAL_VALID")
             return True
         trigger_path = getattr(getattr(self, "args", None), "start_path", None)
         if not trigger_path:
+            self._set_trigger_diagnostic("TRIGGER_PATH_NOT_CONFIGURED")
             return True
         try:
             trigger = json.loads(Path(trigger_path).read_bytes())
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            self._set_trigger_diagnostic("TRIGGER_FILE_MISSING")
+            return False
+        except (OSError, ValueError) as error:
+            self._set_trigger_diagnostic(f"TRIGGER_READ_FAILED:{type(error).__name__}")
             return False
         if (type(trigger) is dict and trigger.get("state") == "TRIGGER_GOAL"
                 and trigger.get("config_hash") == self.config_hash
@@ -283,7 +317,51 @@ class _Collector:
                 and trigger.get("ready_collectors") == ["step07_nav2_baseline_runtime_observer",
                     "step07_gate_b_observer", "navigation_evidence_chain_collector"]):
             self._goal_triggered = True
+            self._set_trigger_diagnostic("TRIGGER_GOAL_VALID")
+        else:
+            self._set_trigger_diagnostic("TRIGGER_SCHEMA_OR_IDENTITY_INVALID")
         return getattr(self, "_goal_triggered", False)
+
+    def _set_trigger_diagnostic(self, state):
+        if not hasattr(self, "diagnostics"):
+            return
+        trigger = self.diagnostics["goal_trigger"]
+        trigger["read_count"] = min(2_147_483_647, trigger.get("read_count", 0) + 1)
+        trigger["state"] = state
+        trigger["failure"] = state if state != "TRIGGER_GOAL_VALID" else None
+
+    def _record_blocker(self, predicate, now_ns=None, evidence=None):
+        diagnostics = getattr(self, "diagnostics", None)
+        if type(diagnostics) is not dict or predicate not in diagnostics["predicate_counts"]:
+            return
+        counts = diagnostics["predicate_counts"]
+        counts[predicate] = min(2_147_483_647, counts[predicate] + 1)
+        event = {"predicate": predicate, "ros_time_ns": now_ns}
+        if type(evidence) is dict:
+            event["evidence"] = {str(key): value for key, value in list(evidence.items())[:8]
+                if value is None or type(value) in (str, int, float, bool)}
+        if diagnostics["first_blocking_predicate"] is None:
+            diagnostics["first_blocking_predicate"] = event
+        diagnostics["last_blocking_predicate"] = event
+
+    @staticmethod
+    def _set_action_state(diagnostics, name, *, state=None, response=None, result=None,
+                          request_time_ns=None, terminal_status=None):
+        if type(diagnostics) is not dict:
+            return
+        action = diagnostics.get("actions", {}).get(name)
+        if type(action) is not dict:
+            return
+        if state is not None:
+            action["state"] = state
+        if response is not None:
+            action["response"] = response
+        if result is not None:
+            action["result"] = result
+        if request_time_ns is not None:
+            action["request_time_ns"] = int(request_time_ns)
+        if terminal_status is not None:
+            action["terminal_status"] = terminal_status
 
     def _goal_pose(self):
         pose = self.PoseStamped()
@@ -296,13 +374,25 @@ class _Collector:
         return pose
 
     def _request_path_once(self):
-        if self._compute_path_requested or not self.compute.server_is_ready():
+        if type(getattr(self, "diagnostics", None)) is not dict:
+            self.diagnostics = _new_collector_diagnostics()
+        if self._compute_path_requested:
+            return
+        server_ready = self.compute.server_is_ready()
+        self.diagnostics["actions"]["compute_path_to_pose"]["server_state"] = (
+            "READY" if server_ready else "NOT_READY")
+        if not server_ready:
+            self._record_blocker("COMPUTE_PATH_ACTION_SERVER_NOT_READY",
+                getattr(self, "_last_ros_time_ns", None))
             return
         goal = self.ComputePathToPose.Goal()
         goal.goal = self._goal_pose()
         goal.use_start = False
         self._compute_path_requested = True
         self._compute_path_calls += 1
+        now_ns = self.node.get_clock().now().nanoseconds
+        self._set_action_state(self.diagnostics, "compute_path_to_pose", state="RESPONSE_PENDING",
+            response="PENDING", result="NOT_REQUESTED", request_time_ns=now_ns)
         future = self.compute.send_goal_async(goal)
         future.add_done_callback(self._path_goal_response)
 
@@ -310,10 +400,16 @@ class _Collector:
         try:
             handle = future.result()
             if not handle.accepted:
+                self._set_action_state(self.diagnostics, "compute_path_to_pose", state="REJECTED",
+                    response="REJECTED", terminal_status="GOAL_REJECTED")
                 raise RuntimeError("COMPUTE_PATH_TO_POSE_REJECTED")
+            self._set_action_state(self.diagnostics, "compute_path_to_pose", state="RESULT_PENDING",
+                response="ACCEPTED", result="PENDING")
             handle.get_result_async().add_done_callback(self._path_result)
         except Exception as error:
             self.errors.append(f"COMPUTE_PATH_TO_POSE_FAILURE:{error}")
+            self._set_action_state(self.diagnostics, "compute_path_to_pose", state="TERMINAL",
+                response="ERROR", result="FAILED", terminal_status=type(error).__name__)
 
     def _path_result(self, future):
         try:
@@ -321,6 +417,8 @@ class _Collector:
             if wrapped.status != self.GoalStatus.STATUS_SUCCEEDED or wrapped.result.path.header.frame_id != "map":
                 raise RuntimeError("COMPUTE_PATH_TO_POSE_NOT_SUCCESSFUL")
             self.path = wrapped.result.path
+            self._set_action_state(self.diagnostics, "compute_path_to_pose", state="TERMINAL",
+                result="SUCCEEDED", terminal_status=int(wrapped.status))
             self.path_transcript = {
                 "goal": {"frame_id": "map", "x": self.goal[0], "y": self.goal[1], "yaw": self.goal[2]},
                 "path_frame_id": self.path.header.frame_id,
@@ -333,17 +431,29 @@ class _Collector:
             }
         except Exception as error:
             self.errors.append(f"COMPUTE_PATH_TO_POSE_FAILURE:{error}")
+            self._set_action_state(self.diagnostics, "compute_path_to_pose", state="TERMINAL",
+                result="FAILED", terminal_status=type(error).__name__)
 
     def _navigate_once(self):
+        if type(getattr(self, "diagnostics", None)) is not dict:
+            self.diagnostics = _new_collector_diagnostics()
         if self._navigate_requested:
             self.errors.append("NAVIGATE_TO_POSE_RETRY_FORBIDDEN")
             return
-        if not self.navigate.server_is_ready():
+        server_ready = self.navigate.server_is_ready()
+        self.diagnostics["actions"]["navigate_to_pose"]["server_state"] = (
+            "READY" if server_ready else "NOT_READY")
+        if not server_ready:
+            self._record_blocker("NAVIGATE_ACTION_SERVER_NOT_READY",
+                getattr(self, "_last_ros_time_ns", None))
             return
         goal = self.NavigateToPose.Goal()
         goal.pose = self._goal_pose()
         self._navigate_requested = True
         self._navigate_calls += 1
+        now_ns = self.node.get_clock().now().nanoseconds
+        self._set_action_state(self.diagnostics, "navigate_to_pose", state="RESPONSE_PENDING",
+            response="PENDING", result="NOT_REQUESTED", request_time_ns=now_ns)
         future = self.navigate.send_goal_async(goal)
         future.add_done_callback(self._navigate_goal_response)
 
@@ -352,18 +462,29 @@ class _Collector:
             handle = future.result()
             if not handle.accepted:
                 self.navigate_result = {"accepted": False, "status": "REJECTED"}
+                self._set_action_state(self.diagnostics, "navigate_to_pose", state="REJECTED",
+                    response="REJECTED", result="NOT_REQUESTED", terminal_status="GOAL_REJECTED")
                 return
+            self._set_action_state(self.diagnostics, "navigate_to_pose", state="RESULT_PENDING",
+                response="ACCEPTED", result="PENDING")
             handle.get_result_async().add_done_callback(self._navigate_done)
         except Exception as error:
             self.errors.append(f"NAVIGATE_TO_POSE_FAILURE:{error}")
+            self._set_action_state(self.diagnostics, "navigate_to_pose", state="TERMINAL",
+                response="ERROR", result="FAILED", terminal_status=type(error).__name__)
 
     def _navigate_done(self, future):
         try:
             wrapped = future.result()
             self.navigate_result = {"accepted": True, "status": int(wrapped.status),
                                     "succeeded": wrapped.status == self.GoalStatus.STATUS_SUCCEEDED}
+            self._set_action_state(self.diagnostics, "navigate_to_pose", state="TERMINAL",
+                result="SUCCEEDED" if self.navigate_result["succeeded"] else "FAILED",
+                terminal_status=int(wrapped.status))
         except Exception as error:
             self.errors.append(f"NAVIGATE_TO_POSE_FAILURE:{error}")
+            self._set_action_state(self.diagnostics, "navigate_to_pose", state="TERMINAL",
+                result="FAILED", terminal_status=type(error).__name__)
 
     def _sectorize(self, msg):
         from mecanum_nav_rl.observations.lidar import RawLidarScan
@@ -398,6 +519,8 @@ class _Collector:
                 msg.final_command.linear.y, msg.final_command.angular.z]})
 
     def _tick(self):
+        if type(getattr(self, "diagnostics", None)) is not dict:
+            self.diagnostics = _new_collector_diagnostics()
         if self._finished:
             self._wait_peer()
             return
@@ -413,43 +536,112 @@ class _Collector:
             self.errors.append("GATE_B_NAVIGATION_TERMINAL_FAILURE")
             self._finish()
             return
-        now = self.node.get_clock().now().nanoseconds
+        try:
+            now = self.node.get_clock().now().nanoseconds
+        except Exception as error:
+            now = None
+            self._record_blocker("CLOCK_NOT_VALID", evidence={"query_error_type": type(error).__name__})
+            if type(getattr(self, "diagnostics", None)) is dict:
+                self.diagnostics["clock"].update(state="QUERY_ERROR", last_error_type=type(error).__name__)
+        if type(getattr(self, "diagnostics", None)) is dict:
+            clock_diag = self.diagnostics["clock"]
+            clock_diag["query_count"] = min(2_147_483_647, clock_diag["query_count"] + 1)
+            clock_diag["last_ros_time_ns"] = now
+            if now is not None:
+                clock_diag["state"] = "VALID" if now > 0 else "NOT_STARTED"
+        self._last_ros_time_ns = now
         if time.monotonic() >= self.deadline:
             if "GATE_B_SAMPLE_TIMEOUT" not in self.errors:
                 self.errors.append("GATE_B_SAMPLE_TIMEOUT")
+            self._record_blocker("DEADLINE_EXPIRED", now)
             self._finish()
             return
-        if now <= 0:
+        if now is None or now <= 0:
+            self._record_blocker("CLOCK_NOT_VALID", now)
             return
         if not self._read_goal_trigger():
+            self._record_blocker("GOAL_TRIGGER_NOT_VALID", now,
+                {"trigger_state": self.diagnostics.get("goal_trigger", {}).get("state")})
             return
         stamp_type = importlib.import_module("rclpy.time").Time
         if not self._compute_path_requested:
-            if self.tf_buffer.can_transform("base_link", "map", stamp_type(nanoseconds=now)):
+            if type(self.diagnostics) is dict:
+                tf_diag = self.diagnostics["tf"]
+                tf_diag["query_count"] = min(2_147_483_647, tf_diag["query_count"] + 1)
+                tf_diag["last_query_time_ns"] = int(now)
+            try:
+                can_transform = self.tf_buffer.can_transform("base_link", "map", stamp_type(nanoseconds=now))
+            except Exception as error:
+                can_transform = False
+                if type(self.diagnostics) is dict:
+                    self.diagnostics["tf"].update(state="QUERY_ERROR", last_error_type=type(error).__name__)
+                self._record_blocker("TF_LOOKUP_EXCEPTION", now,
+                    {"query_error_type": type(error).__name__})
+            if can_transform:
+                if type(self.diagnostics) is dict:
+                    self.diagnostics["tf"].update(state="AVAILABLE", last_error_type=None)
                 self._request_path_once()
+            elif type(self.diagnostics) is dict and self.diagnostics["tf"].get("state") != "QUERY_ERROR":
+                self.diagnostics["tf"].update(state="UNAVAILABLE", last_error_type=None)
+                self._record_blocker("TF_TRANSFORM_UNAVAILABLE", now,
+                    {"target_frame": "base_link", "source_frame": "map"})
         if self.path is not None and not self._navigate_requested:
             self._navigate_once()
+        if self.path is None:
+            self._record_blocker("COMPUTE_PATH_NOT_READY", now,
+                {"action_state": self.diagnostics["actions"]["compute_path_to_pose"]["state"]})
         lifecycle, scan, odom, receipt = self.latest_lifecycle, self.latest_scan, self.latest_odom, self.latest_receipt
         if lifecycle is None or scan is None or odom is None or receipt is None or self.path is None:
+            missing = [name for name, value in (("lifecycle", lifecycle), ("scan", scan),
+                ("odometry", odom), ("receipt", receipt), ("path", self.path)) if value is None]
+            self._record_blocker("SENSOR_INPUT_MISSING", now, {"missing": ",".join(missing)})
             return
         if lifecycle.primary_state != 2 or lifecycle.barrier_state != 1 or not lifecycle.motion_permitted:
+            self._record_blocker("LIFECYCLE_BARRIER_BLOCKED", now, {
+                "primary_state": int(lifecycle.primary_state), "barrier_state": int(lifecycle.barrier_state),
+                "motion_permitted": bool(lifecycle.motion_permitted)})
             return
         identity = (lifecycle.episode_generation, lifecycle.reset_epoch, lifecycle.runtime_generation)
         if (identity != (receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation)
                 or not self.config_hash or receipt.source not in (1, 2, 4)):
+            self.diagnostics["generation_mismatch"] = {
+                "lifecycle": {"episode_generation": int(lifecycle.episode_generation),
+                    "reset_epoch": int(lifecycle.reset_epoch), "runtime_generation": int(lifecycle.runtime_generation),
+                    "sequence": int(lifecycle.sequence)},
+                "receipt": {"episode_generation": int(receipt.episode_generation),
+                    "reset_epoch": int(receipt.reset_epoch), "runtime_generation": int(receipt.runtime_generation),
+                    "sequence": int(receipt.final_publish_sequence), "source": int(receipt.source)},
+                "config_hash_present": bool(self.config_hash)}
+            self._record_blocker("GENERATION_MISMATCH", now, {"identity_matches": identity == (
+                receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation),
+                "receipt_source": int(receipt.source), "config_hash_present": bool(self.config_hash)})
             return
         scan_stamp = scan.header.stamp.sec * 1_000_000_000 + scan.header.stamp.nanosec
         odom_stamp = odom.header.stamp.sec * 1_000_000_000 + odom.header.stamp.nanosec
         if scan.header.frame_id != "lidar_frame" or odom.header.frame_id != "odom" or odom.child_frame_id != "base_link":
             self.errors.append("GATE_B_SENSOR_FRAME_CONTRACT_FAILURE")
+            self._record_blocker("SENSOR_FRAME_INVALID", now, {"scan_frame": scan.header.frame_id,
+                "odometry_frame": odom.header.frame_id, "odometry_child_frame": odom.child_frame_id})
             return
         if any(not math.isfinite(float(value)) for value in tuple(odom.pose.covariance) + tuple(odom.twist.covariance)):
             self.errors.append("GATE_B_FILTERED_ODOMETRY_COVARIANCE_INVALID")
             return
-        if (not fresh_stamp(now, scan_stamp, 500_000_000)
-                or not fresh_stamp(now, odom_stamp, 250_000_000)
-                or not fresh_stamp(now, lifecycle.header.stamp.sec * 1_000_000_000 + lifecycle.header.stamp.nanosec, 500_000_000)
-                or not fresh_stamp(now, receipt.header.stamp.sec * 1_000_000_000 + receipt.header.stamp.nanosec, 500_000_000)):
+        lifecycle_stamp = lifecycle.header.stamp.sec * 1_000_000_000 + lifecycle.header.stamp.nanosec
+        receipt_stamp = receipt.header.stamp.sec * 1_000_000_000 + receipt.header.stamp.nanosec
+        freshness = {
+            "scan": {"stamp_ns": int(scan_stamp), "age_ns": int(now - scan_stamp), "limit_ns": 500_000_000},
+            "odometry": {"stamp_ns": int(odom_stamp), "age_ns": int(now - odom_stamp), "limit_ns": 250_000_000},
+            "lifecycle": {"stamp_ns": int(lifecycle_stamp), "age_ns": int(now - lifecycle_stamp), "limit_ns": 500_000_000},
+            "receipt": {"stamp_ns": int(receipt_stamp), "age_ns": int(now - receipt_stamp), "limit_ns": 500_000_000},
+        }
+        for name, item in freshness.items():
+            item["state"] = ("FUTURE" if item["age_ns"] < 0 else
+                "STALE" if item["age_ns"] > item["limit_ns"] else "FRESH")
+        self.diagnostics["freshness"] = freshness
+        if any(item["state"] != "FRESH" for item in freshness.values()):
+            self._record_blocker("SENSOR_TIMESTAMP_NOT_FRESH", now,
+                {"stale_or_future": ",".join(name for name, item in freshness.items()
+                    if item["state"] != "FRESH")})
             return
         measurement_key = (scan_stamp, odom_stamp, int(receipt.final_publish_sequence), int(lifecycle.sequence))
         if measurement_key == self._last_measurement_key:
@@ -465,8 +657,11 @@ class _Collector:
             local = adapt_local_reference_message(self.path, binding=path_binding, context=context)
         except ValueError as error:
             if str(error) == "LOCAL_REFERENCE_TF_TRANSFORM_FAILED":
+                self._record_blocker("PATH_FEATURE_TF_FAILURE", now,
+                    {"failure": str(error)})
                 return
             self.errors.append(str(error))
+            self._record_blocker("ADAPTER_REJECTED", now, {"failure": str(error)})
             # Preserve the collector until five valid samples or an action
             # terminal result lets us write complete failure evidence.
             return
@@ -480,12 +675,18 @@ class _Collector:
             type_claim="mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt")
         if lidar is None or local is None or twist is None:
             self.errors.append("GATE_B_INPUT_ADAPTER_REJECTED")
+            self._record_blocker("ADAPTER_REJECTED", now,
+                {"lidar": lidar is not None, "local_reference": local is not None,
+                 "measured_twist": twist is not None})
             return
         admitted = validate_observation_inputs(context=context, lidar=lidar, local_reference=local,
             measured_twist=twist, receipt=receipt_context, fixture_claims=BINDING_CLAIMS)
         assembly = assemble_observation(admitted) if admitted is not None else None
         if assembly is None or not assembly.ready:
             self.errors.append("GATE_B_OBSERVATION_ASSEMBLY_REJECTED")
+            self._record_blocker("ASSEMBLY_REJECTED", now,
+                {"assembly_present": assembly is not None,
+                 "assembly_ready": bool(assembly is not None and assembly.ready)})
             return
         stamp = now
         if self.samples and stamp <= self.samples[-1]["stamp_ns"]:
@@ -517,6 +718,7 @@ class _Collector:
             "protocol_phase": "COLLECTION_COMPLETE_AWAITING_PEER",
             "source_contract": "LIDAR72_LOCAL_REFERENCE3_FILTERED_TWIST3_FINAL_RECEIPT3",
             "sample_count": len(self.samples), "samples": self.samples,
+            "diagnostics": getattr(self, "diagnostics", _new_collector_diagnostics()),
             "raw_transcripts": self.raw, "compute_path_to_pose": {"requested_once": self._compute_path_requested, "success": self.path is not None, "frame_id": getattr(getattr(self.path, "header", None), "frame_id", None), "transcript": self.path_transcript},
             "navigate_to_pose": {**(self.navigate_result or {"accepted": False, "status": "NO_RESULT"}), "requested_once": self._navigate_requested},
             "acceptance": {"five_immutable_observation81": validate_vector_samples(self.samples),

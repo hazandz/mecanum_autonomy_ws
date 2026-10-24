@@ -1762,6 +1762,49 @@ def test_gate_b_readiness_state_machine_stops_after_each_failed_prerequisite():
         "cpp_initial_ready", "action_server_ready", "cpp_pre_gate_b_recheck"]
 
 
+def test_four_readiness_passes_then_collection_failure_does_not_append_transition_or_mask_failure():
+    record = {"collector_stage": "GATE_B_COLLECTION", "failure_reason_literals": ["GATE_B_SAMPLE_TIMEOUT"]}
+    for stage in runner.GATE_B_READINESS_STAGES:
+        runner.record_gate_b_readiness_transition(record, stage, "PASS")
+    before = json.loads(json.dumps(record["gate_b_readiness_state_machine"]))
+    original_failure = list(record["failure_reason_literals"])
+
+    transition = runner.record_pending_gate_b_readiness_failure(record, "GATE_B_SAMPLE_TIMEOUT")
+
+    assert transition is None
+    assert record["gate_b_readiness_state_machine"] == before
+    assert record["failure_reason_literals"] == original_failure
+    assert "gate_b_readiness_state_machine_failure" not in record
+
+
+def test_failure_chain_written_means_sidecar_readback_not_observer_or_ready_file(tmp_path):
+    gate_path = tmp_path / "gate_b_vectors.json"
+    observer_path = tmp_path / "runtime_observer.json"
+    ready_path = tmp_path / "navigation_evidence_chain_collector.ready.json"
+    outcomes = runner.settle_collectors_before_teardown(gate=None, cpp=None,
+        gate_member=None, cpp_member=None, gate_path=gate_path, observer_path=observer_path,
+        config_hash="a" * 64, failure_literal="RUNNER_FAILURE", blocking_reason="CPP_NOT_READY")
+    ready_path.write_text('{"state":"READY"}', encoding="utf-8")
+    outcomes["navigation_evidence_chain_collector"] = {
+        "artifact_written": False, "readiness_artifact": ready_path.name}
+    record = {"collector_stage": "CPP_OBSERVER_STARTING", "collector_outcomes": outcomes}
+
+    identity = runner.settle_navigation_chain_failure(tmp_path, record, gate_path=gate_path,
+        observer_path=observer_path, failure_literal="RUNNER_FAILURE",
+        blocking_reason="CPP_NOT_READY", stage="CPP_OBSERVER_STARTING")
+
+    envelope, readback = runner.read_navigation_chain_artifact(tmp_path / identity["path"])
+    outcome = record["collector_outcomes"]["navigation_evidence_chain_collector"]
+    assert outcome["artifact_written"] is True
+    assert outcome["artifact"] == "navigation_evidence_chain.json"
+    assert outcome["artifact_sha256"] == readback["sha256"]
+    assert envelope["chain"]["state"] == "FAILURE"
+    assert envelope["chain"]["failure_stage"] == "CPP_OBSERVER_STARTING"
+    assert envelope["chain"]["blocking_reason"] == "CPP_NOT_READY"
+    assert envelope["chain"]["window"]["sample_count"] == 0
+    assert all(link["state"] == "MISSING" for link in envelope["chain"]["links"].values())
+
+
 def test_zero_collector_exit_code_does_not_imply_observer_or_qos_acceptance(tmp_path):
     outcomes = {"cpp_observer": {"exit_code": 0, "terminal_state": "EXITED",
                                  "artifact_written": True}}

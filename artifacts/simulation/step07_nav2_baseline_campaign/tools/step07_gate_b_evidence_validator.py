@@ -276,7 +276,8 @@ def canonical_navigation_evidence_chain(observer: dict, gate_document: dict) -> 
 
 
 def navigation_evidence_chain_failure(observer: dict, gate_document: dict,
-                                      failure_literal: str) -> dict:
+                                      failure_literal: str, *, stage: str | None = None,
+                                      blocking_reason: str | None = None) -> dict:
     """Represent absent or incomplete evidence as explicit structured failure."""
     samples = gate_document.get("samples")
     samples = samples if type(samples) is list else []
@@ -302,13 +303,18 @@ def navigation_evidence_chain_failure(observer: dict, gate_document: dict,
                        "required_fields": required, "records_in_gate_window": len(in_window),
                        "failure_reason": ("RECORDS_NOT_CORRELATED_TO_GATE_SAMPLE_IDENTITY" if correlation_failure else
                            "" if in_window else "NO_CORRELATED_RECORD_IN_GATE_WINDOW")}
-    return {"schema_version": "1.0", "state": "FAILURE",
+    failure = {"schema_version": "1.0", "state": "FAILURE",
             "failure_literal": failure_literal if type(failure_literal) is str and failure_literal else "EVIDENCE_CHAIN_FAILURE_REASON_REQUIRED",
             "window": {"source": "gate_b_vectors.samples", "start_stamp_ns": start,
                        "end_stamp_ns": end, "sample_count": len(valid_samples)},
             "links": links, "observer_lifecycle_state": observer.get("observer_lifecycle", {}).get("state", "UNRECORDED") if type(observer.get("observer_lifecycle")) is dict else "UNRECORDED",
             "gate_b_terminal_state": gate_document.get("collector_terminal_state", "UNRECORDED"),
             "partial_artifact_paths": ["runtime_observer.json", "gate_b_vectors.json"]}
+    if type(stage) is str and stage:
+        failure["failure_stage"] = stage
+    if type(blocking_reason) is str and blocking_reason:
+        failure["blocking_reason"] = blocking_reason
+    return failure
 
 
 def verify_artifacts(run_directory: str | Path) -> dict:
@@ -488,6 +494,44 @@ def _require_sealed(path_name: str, *, root: Path, verified: set[str]) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"VERDICT_ARTIFACT_PATH_INVALID:{path_name}")
     return path
+
+
+def _validate_sealed_failure_chain(*, root: Path, verified: set[str], record: dict,
+                                   observer: dict | None = None,
+                                   gate_document: dict | None = None) -> dict | None:
+    outcomes = record.get("collector_outcomes")
+    outcome = outcomes.get("navigation_evidence_chain_collector") if type(outcomes) is dict else None
+    if type(outcome) is not dict or outcome.get("artifact_written") is not True:
+        return None
+    path = _require_sealed("navigation_evidence_chain.json", root=root, verified=verified)
+    envelope, _ = load_json(path)
+    chain = envelope.get("chain")
+    if type(chain) is not dict:
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_FAILURE_SIDECAR_INVALID")
+    if chain.get("state") != "FAILURE":
+        return None
+    canonical = semantic_canonical_bytes(chain)
+    if (envelope.get("schema_version") != "1.0"
+            or envelope.get("canonical") != canonical.decode("utf-8")
+            or envelope.get("sha256") != hashlib.sha256(canonical).hexdigest()):
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_FAILURE_SIDECAR_SEAL_INVALID")
+    recorded = record.get("navigation_evidence_chain_failure")
+    recorded_sha = record.get("navigation_evidence_chain_failure_sha256")
+    if (recorded != chain or recorded_sha != hashlib.sha256(canonical).hexdigest()
+            or outcome.get("artifact") != "navigation_evidence_chain.json"):
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_FAILURE_RECORD_MISMATCH")
+    settlement = record.get("collector_settlement")
+    if type(settlement) is dict:
+        if (chain.get("failure_stage") != settlement.get("stage")
+                or chain.get("blocking_reason") != settlement.get("blocking_reason")):
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_FAILURE_STAGE_MISMATCH")
+    if observer is not None and gate_document is not None and type(settlement) is dict:
+        expected = navigation_evidence_chain_failure(observer, gate_document,
+            chain.get("failure_literal"), stage=settlement.get("stage"),
+            blocking_reason=settlement.get("blocking_reason"))
+        if expected != chain:
+            raise ValueError("NAVIGATION_EVIDENCE_CHAIN_FAILURE_LINKS_MISMATCH")
+    return chain
 
 
 def _validate_handshake_failure_artifact(failure: dict, record: dict,
@@ -977,6 +1021,12 @@ def validate_run_directory(run_directory: str | Path) -> dict:
     if protocol2 and gate_doc is not None and gate_doc.get("protocol_phase") != "COLLECTION_COMPLETE_AWAITING_PEER":
         stage_result = _validate_runner_stage_failure(
             gate_doc, record, config_hash=record.get("config_hash"))
+        stage_observer = (load_json(observer_path)[0] if observer_exists
+                          and "runtime_observer.json" in verified else None)
+        failure_chain = _validate_sealed_failure_chain(root=root, verified=verified, record=record,
+            observer=stage_observer, gate_document=gate_doc)
+        if failure_chain is not None:
+            result["navigation_evidence_chain"] = {"state": "FAILURE", "chain": failure_chain}
         events = handshake.get("events", []) if handshake is not None else []
         if (events or record.get("call_counts", {}).get("gate_b_observer", 0)
                 != (1 if stage_result["state"] == "FAILED" else 0)):
@@ -1007,6 +1057,9 @@ def validate_run_directory(run_directory: str | Path) -> dict:
         if record.get("acceptance", {}).get("observer_acceptance") is not False or record.get(
                 "acceptance", {}).get("gate_b_vectors") is not False:
             raise ValueError("PRE_GATE_B_FAILURE_ACCEPTANCE_INCONSISTENT")
+        failure_chain = _validate_sealed_failure_chain(root=root, verified=verified, record=record)
+        if failure_chain is not None:
+            result["navigation_evidence_chain"] = {"state": "FAILURE", "chain": failure_chain}
         return result
     if not gate_exists:
         raise ValueError("GATE_B_ARTIFACT_REQUIRED_BUT_MISSING")
@@ -1054,6 +1107,8 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                     "navigate_to_pose_succeeded": False, "no_command_or_policy_publisher": False,
                     "errors_absent": False}}
             result["collector_handshake_failure"] = failure_doc
+            _validate_sealed_failure_chain(root=root, verified=verified, record=record,
+                observer=observer, gate_document=gate_doc)
             return result
     else:
         if not observer_exists:
@@ -1096,6 +1151,10 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                 or type(failure_chain) is not dict
                 or failure_chain.get("window", {}).get("sample_count") != 0):
             raise ValueError("GATE_B_NOT_STARTED_FAILURE_RECORD_INVALID")
+        failure_chain = _validate_sealed_failure_chain(root=root, verified=verified, record=result["run_record"],
+            observer=observer, gate_document=gate_doc)
+        if failure_chain is not None:
+            result["navigation_evidence_chain"] = {"state": "FAILURE", "chain": failure_chain}
         result["gate_b"] = {"acceptance": {"five_immutable_observation81": False,
             "compute_path_success_map_frame": False, "navigate_to_pose_requested_once": False,
             "navigate_to_pose_succeeded": False, "no_command_or_policy_publisher": False,
@@ -1114,7 +1173,14 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                                               verified=verified))[0] if protocol2 else {
             "chain": observer.get("navigation_evidence_chain"), "canonical": observer.get("navigation_evidence_chain_canonical"),
             "sha256": observer.get("navigation_evidence_chain_sha256")}
-        if (chain_doc.get("chain") != chain
+        failure_chain = (_validate_sealed_failure_chain(root=root, verified=verified,
+            record=result["run_record"], observer=observer, gate_document=gate_doc)
+            if protocol2 else None)
+        if failure_chain is not None:
+            if result["verdict"]["pass"]:
+                raise ValueError("PASS_WITH_FAILURE_EVIDENCE_CHAIN")
+            result["navigation_evidence_chain"] = {"state": "FAILURE", "chain": failure_chain}
+        elif (chain_doc.get("chain") != chain
                 or chain_doc.get("canonical") != canonical_chain.decode("utf-8")
                 or chain_doc.get("sha256") != hashlib.sha256(canonical_chain).hexdigest()):
             raise ValueError("NAVIGATION_EVIDENCE_CHAIN_CANONICAL_MISMATCH")

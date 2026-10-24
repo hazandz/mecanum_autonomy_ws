@@ -910,6 +910,40 @@ def test_protocol2_pre_gate_producer_not_started_artifact_is_a_sealed_failure(tm
     assert result["gate_b"]["blocking_reason"] == blocker
 
 
+def test_runner_failure_chain_sidecar_is_sealed_and_validate_run_directory_returns_fail(tmp_path):
+    from run_step07_nav2_baseline_run005 import (
+        settle_collectors_before_teardown, settle_navigation_chain_failure)
+
+    root = tmp_path / "pre_gate_failure_chain"
+    root.mkdir()
+    config_hash, invocation_id = "a" * 64, "FAILURE_CHAIN_FIXTURE"
+    literal, blocker, stage = "RUNNER_COLLECTOR_SETTLEMENT:RuntimeError:CPP_NOT_READY", "CPP_NOT_READY", "CPP_OBSERVER_STARTING"
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id=invocation_id,
+        collector_handshake_protocol="2.0", collector_stage=stage,
+        collector_settlement={"failure_literal": literal, "blocking_reason": blocker, "stage": stage})
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = [blocker]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    gate_path, observer_path = root / "gate_b_vectors.json", root / "runtime_observer.json"
+    outcomes = settle_collectors_before_teardown(gate=None, cpp=None,
+        gate_member=None, cpp_member=None, gate_path=gate_path, observer_path=observer_path,
+        config_hash=config_hash, failure_literal=literal, blocking_reason=blocker)
+    record["collector_outcomes"] = outcomes
+    settle_navigation_chain_failure(root, record, gate_path=gate_path, observer_path=observer_path,
+        failure_literal=literal, blocking_reason=blocker, stage=stage)
+    _write_canonical_json(root / "run_record.json", record)
+    _seal_bundle(root)
+
+    result = validate_run_directory(root)
+
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b"]["state"] == "NOT_STARTED"
+    assert result["gate_b"]["blocking_reason"] == blocker
+    assert result["navigation_evidence_chain"]["state"] == "FAILURE"
+    assert result["navigation_evidence_chain"]["chain"]["window"]["sample_count"] == 0
+
+
 @pytest.mark.parametrize("mutation", ["wrong_invocation", "wrong_config", "wrong_events", "wrong_literal"])
 def test_protocol2_handshake_failure_sidecar_must_match_run_record(tmp_path, mutation):
     root = tmp_path / mutation

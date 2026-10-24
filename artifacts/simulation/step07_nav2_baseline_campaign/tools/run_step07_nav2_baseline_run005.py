@@ -906,9 +906,78 @@ def write_metadata_evidence_manifest(evidence_path: Path, evidence: dict,
 def write_navigation_chain(run_directory: Path, chain: dict) -> None:
     raw = json.dumps(chain, ensure_ascii=False, sort_keys=True,
                      separators=(",", ":"), allow_nan=False).encode("utf-8")
-    _atomic_write(run_directory / "navigation_evidence_chain.json", {
-        "schema_version": "1.0", "chain": chain, "canonical": raw.decode("utf-8"),
-        "sha256": hashlib.sha256(raw).hexdigest()})
+    path = run_directory / "navigation_evidence_chain.json"
+    _atomic_write(path, {"schema_version": "1.0", "chain": chain,
+        "canonical": raw.decode("utf-8"), "sha256": hashlib.sha256(raw).hexdigest()})
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("NAVIGATION_EVIDENCE_CHAIN_READBACK_PATH_INVALID")
+    stored = load_canonical_json(path)
+    stored_raw = json.dumps(stored.get("chain"), ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if (stored.get("schema_version") != "1.0" or stored.get("chain") != chain
+            or stored.get("canonical") != stored_raw.decode("utf-8")
+            or stored.get("sha256") != hashlib.sha256(stored_raw).hexdigest()):
+        raise RuntimeError("NAVIGATION_EVIDENCE_CHAIN_READBACK_MISMATCH")
+    artifact_raw = path.read_bytes()
+    return {"path": path.name, "sha256": hashlib.sha256(artifact_raw).hexdigest(),
+            "size_bytes": len(artifact_raw)}
+
+
+def read_navigation_chain_artifact(path: Path) -> tuple[dict, dict]:
+    """Read back a previously written chain sidecar and verify its inner seal."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_ARTIFACT_MISSING_OR_UNSAFE")
+    envelope = load_canonical_json(path)
+    chain = envelope.get("chain")
+    raw = json.dumps(chain, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if (envelope.get("schema_version") != "1.0"
+            or envelope.get("canonical") != raw.decode("utf-8")
+            or envelope.get("sha256") != hashlib.sha256(raw).hexdigest()):
+        raise ValueError("NAVIGATION_EVIDENCE_CHAIN_READBACK_MISMATCH")
+    return envelope, {"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                      "size_bytes": path.stat().st_size}
+
+
+def settle_navigation_chain_failure(run_directory: Path, record: dict, *, gate_path: Path,
+                                    observer_path: Path, failure_literal: str,
+                                    blocking_reason: str, stage: str) -> dict:
+    """Persist the actual sealed chain sidecar for a runner-settled failure."""
+    from step07_gate_b_evidence_validator import navigation_evidence_chain_failure, load_json
+    chain_path = run_directory / "navigation_evidence_chain.json"
+    outcome = record.setdefault("collector_outcomes", {}).setdefault(
+        "navigation_evidence_chain_collector", {})
+    if chain_path.exists() or chain_path.is_symlink():
+        envelope, identity = read_navigation_chain_artifact(chain_path)
+        chain = envelope.get("chain")
+        outcome.update({"artifact_written": True, "artifact": identity["path"],
+            "artifact_sha256": identity["sha256"], "artifact_size_bytes": identity["size_bytes"]})
+        if type(chain) is dict and chain.get("state") == "FAILURE":
+            canonical = json.dumps(chain, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False).encode("utf-8")
+            record["navigation_evidence_chain_failure"] = chain
+            record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical).hexdigest()
+        return identity
+    observer = load_json(observer_path)[0] if observer_path.is_file() and not observer_path.is_symlink() else {
+        "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
+    gate = load_json(gate_path)[0] if gate_path.is_file() and not gate_path.is_symlink() else {
+        "schema_version": "1.0", "sample_count": 0, "samples": [],
+        "collector_terminal_state": "NOT_STARTED",
+        "stage_failure": {"status": "NOT_STARTED", "blocking_reason": blocking_reason,
+            "gate_b_observer_started": False},
+        "collector_failure": {"literal": failure_literal, "valid_sample_count": 0}}
+    chain = navigation_evidence_chain_failure(observer, gate, failure_literal,
+        stage=stage, blocking_reason=blocking_reason)
+    canonical = json.dumps(chain, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    record["navigation_evidence_chain_failure"] = chain
+    record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical).hexdigest()
+    identity = write_navigation_chain(run_directory, chain)
+    outcome.update({"exit_code": 2, "terminal_state": "FAILED_WITH_SEALED_CHAIN",
+        "artifact_written": True, "artifact": identity["path"],
+        "artifact_sha256": identity["sha256"], "artifact_size_bytes": identity["size_bytes"],
+        "failure_literal": failure_literal, "stage": stage})
+    return identity
 
 
 def complete_collector_handshake(*, gate, cpp, cpp_member, gate_path: Path,
@@ -2152,7 +2221,7 @@ def main():
         chain_ready_readback = load_canonical_json(chain_ready_path)
         record["collector_outcomes"] = {"navigation_evidence_chain_collector": {
             "exit_code": None, "terminal_state": "READY_AWAITING_ARTIFACTS",
-            "artifact_written": chain_ready_readback.get("state") == "READY",
+            "artifact_written": False,
             "readiness_artifact": chain_ready_path.name}}
         if cpp.poll() is not None:
             record["cpp_observer_terminal_state"] = "CPP_OBSERVER_READY_BUT_TERMINATED"
@@ -2192,7 +2261,7 @@ def main():
                 "artifact_written": observer_path.is_file()},
             "navigation_evidence_chain_collector": {"exit_code": None,
                 "terminal_state": "READY_AWAITING_ARTIFACTS",
-                "artifact_written": chain_ready_path.is_file(),
+                "artifact_written": False,
                 "readiness_artifact": chain_ready_path.name},
         }
         gate_member["exit_code"] = gate.returncode
@@ -2204,7 +2273,9 @@ def main():
                 "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
             failure_literal = (f"GATE_B_OBSERVER_FAILED:{gate.returncode}" if gate.returncode != 0
                                else f"CPP_OBSERVER_FAILED:{cpp.returncode}")
-            failure = navigation_evidence_chain_failure(cpp_doc, gate_doc, failure_literal)
+            failure = navigation_evidence_chain_failure(cpp_doc, gate_doc, failure_literal,
+                stage=record.get("collector_stage", "COLLECTOR_SETTLEMENT"),
+                blocking_reason=failure_literal)
             failure_bytes = json.dumps(failure, ensure_ascii=False, sort_keys=True,
                 separators=(",", ":"), allow_nan=False).encode("utf-8")
             record["collector_failure"] = {"failure_literal": failure_literal,
@@ -2217,8 +2288,15 @@ def main():
                 "evidence_chain_failure_sha256": hashlib.sha256(failure_bytes).hexdigest()}
             record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                 "exit_code": 2, "terminal_state": "FAILED_UPSTREAM_COLLECTOR",
-                "artifact_written": True, "failure_literal": failure_literal}
-            write_navigation_chain(args.run_directory, failure)
+                    "artifact_written": False, "failure_literal": failure_literal}
+            chain_identity = write_navigation_chain(args.run_directory, failure)
+            record["navigation_evidence_chain_failure"] = failure
+            record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(
+                json.dumps(failure, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+            record["collector_outcomes"]["navigation_evidence_chain_collector"].update(
+                artifact_written=True, artifact=chain_identity["path"],
+                artifact_sha256=chain_identity["sha256"], artifact_size_bytes=chain_identity["size_bytes"])
             raise RuntimeError(failure_literal)
         if cpp.returncode != 0:
             raise RuntimeError(f"CPP_OBSERVER_FAILED:{cpp.returncode}")
@@ -2247,20 +2325,28 @@ def main():
         cpp_member["terminal_state"] = record["cpp_observer_terminal_state"]
         try:
             chain, canonical_chain = canonical_navigation_evidence_chain(cpp_document, gate_document)
-            write_navigation_chain(args.run_directory, chain)
+            chain_identity = write_navigation_chain(args.run_directory, chain)
         except ValueError as error:
-            failure_chain = navigation_evidence_chain_failure(cpp_document, gate_document, str(error))
+            failure_chain = navigation_evidence_chain_failure(cpp_document, gate_document, str(error),
+                stage=record.get("collector_stage", "EVIDENCE_CHAIN"),
+                blocking_reason=str(error))
             canonical_failure = json.dumps(failure_chain, ensure_ascii=False, sort_keys=True,
                 separators=(",", ":"), allow_nan=False).encode("utf-8")
-            write_navigation_chain(args.run_directory, failure_chain)
+            record["navigation_evidence_chain_failure"] = failure_chain
+            record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(canonical_failure).hexdigest()
+            failure_identity = write_navigation_chain(args.run_directory, failure_chain)
             record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
                 "exit_code": 2, "terminal_state": "FAILED_INCOMPLETE_EVIDENCE_CHAIN",
                 "artifact_written": True, "failure_literal": str(error),
-                "failure_artifact": "navigation_evidence_chain.json"}
+                "failure_artifact": failure_identity["path"],
+                "artifact_sha256": failure_identity["sha256"],
+                "artifact_size_bytes": failure_identity["size_bytes"]}
             raise RuntimeError(f"NAVIGATION_EVIDENCE_CHAIN_INCOMPLETE:{error}") from error
         record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
             "exit_code": 0, "terminal_state": "COMPLETE",
-            "artifact_written": True, "artifact": "navigation_evidence_chain.json"}
+            "artifact_written": True, "artifact": chain_identity["path"],
+            "artifact_sha256": chain_identity["sha256"],
+            "artifact_size_bytes": chain_identity["size_bytes"]}
         gate_validation = validate_gate_b_document(gate_document, config_hash=record["config_hash"],
             terminal=load_canonical_json(args.run_directory / "gate_b_terminal.json"),
             collection_raw=gate_vectors_path.read_bytes(), peer_raw=observer_path.read_bytes(),
@@ -2277,18 +2363,7 @@ def main():
         error_message = failure_details["message"]
         error_text = failure_details["literal"]
         try:
-            events = record.get("gate_b_readiness_state_machine", [])
-            next_stage = (GATE_B_READINESS_STAGES[len(events)]
-                          if type(events) is list and len(events) < len(GATE_B_READINESS_STAGES)
-                          else None)
-            expected_failure_stage = {
-                "CPP_OBSERVER_STARTING": "cpp_initial_ready",
-                "CPP_OBSERVER_READY": "action_server_ready",
-                "CPP_PRE_GATE_B_RECHECK": "cpp_pre_gate_b_recheck",
-            }.get(record.get("collector_stage"))
-            if (next_stage == expected_failure_stage
-                    and (not events or events[-1].get("status") == "PASS")):
-                record_gate_b_readiness_transition(record, next_stage, "FAIL", error_text)
+            record_pending_gate_b_readiness_failure(record, error_text)
         except BaseException as transition_error:
             record["gate_b_readiness_state_machine_failure"] = (
                 f"{type(transition_error).__name__}:{_safe_error_message(transition_error)}")
@@ -2347,32 +2422,22 @@ def main():
                     observer_path=observer_path, config_hash=record["config_hash"],
                     failure_literal=settlement_literal,
                     blocking_reason=settlement_blocking_reason)
-                chain_ready_path = args.run_directory / "navigation_evidence_chain_collector.ready.json"
-                if chain_ready_path.is_file() and record["collector_outcomes"].get(
-                        "navigation_evidence_chain_collector", {}).get("terminal_state") != "COMPLETE":
-                    record["collector_outcomes"]["navigation_evidence_chain_collector"] = {
-                        "exit_code": 2, "terminal_state": "FAILED_RUNNER_POSTPROCESSING",
-                        "artifact_written": observer_path.is_file(), "failure_literal": settlement_literal}
-                if gate is None:
-                    from step07_gate_b_evidence_validator import navigation_evidence_chain_failure, load_json
-                    cpp_doc = load_json(observer_path)[0] if observer_path.is_file() else {
-                        "observer_lifecycle": {"state": "ARTIFACT_MISSING_AFTER_COLLECTOR_EXIT"}}
-                    gate_doc = load_json(gate_vectors_path)[0] if gate_vectors_path.is_file() else {
-                        "stage_failure": {"status": "NOT_STARTED", "blocking_reason": settlement_literal}}
-                    blocking_reason = (gate_doc.get("stage_failure", {}).get("blocking_reason")
-                        if type(gate_doc.get("stage_failure")) is dict else None) or record.get("collector_stage", "UNRECORDED")
-                    chain_failure = navigation_evidence_chain_failure(
-                        cpp_doc, gate_doc, f"EVIDENCE_WINDOW_NOT_FORMED:{blocking_reason}")
-                    chain_bytes = json.dumps(chain_failure, ensure_ascii=False, sort_keys=True,
-                        separators=(",", ":"), allow_nan=False).encode("utf-8")
-                    record["navigation_evidence_chain_failure"] = chain_failure
-                    record["navigation_evidence_chain_failure_sha256"] = hashlib.sha256(chain_bytes).hexdigest()
-                    write_navigation_chain(args.run_directory, chain_failure)
-                    record.setdefault("collector_outcomes", {})["navigation_evidence_chain_collector"] = {
-                        "process_exit_status": "NOT_STARTED", "terminal_state": "NOT_STARTED",
-                        "artifact_written": observer_path.is_file(),
-                        "failure_literal": chain_failure["failure_literal"],
-                        "stage": record.get("collector_stage", "UNRECORDED")}
+                try:
+                    settle_navigation_chain_failure(args.run_directory, record,
+                        gate_path=gate_vectors_path, observer_path=observer_path,
+                        failure_literal=settlement_literal,
+                        blocking_reason=settlement_blocking_reason,
+                        stage=record.get("collector_stage", "UNRECORDED"))
+                except BaseException as chain_error:
+                    record.setdefault("collector_outcomes", {}).setdefault(
+                        "navigation_evidence_chain_collector", {}).update({
+                            "exit_code": 2, "terminal_state": "FAILED_CHAIN_READBACK",
+                            "artifact_written": False,
+                            "failure_literal": f"{type(chain_error).__name__}:{_safe_error_message(chain_error)}"})
+                chain_outcome = record["collector_outcomes"]["navigation_evidence_chain_collector"]
+                chain_outcome.setdefault("exit_code", 2)
+                chain_outcome.setdefault("terminal_state", "FAILED_RUNNER_POSTPROCESSING")
+                chain_outcome.setdefault("failure_literal", settlement_literal)
                 failed = {name: row for name, row in record["collector_outcomes"].items()
                           if type(row) is dict and row.get("exit_code") not in (0, None)}
                 if failed or not all(row.get("artifact_written") is True
@@ -2613,6 +2678,23 @@ def record_gate_b_readiness_transition(record: dict, stage: str, status: str,
         record["gate_b_start_blocking_reason"] = event["blocking_reason"]
     events.append(event)
     return event
+
+
+def record_pending_gate_b_readiness_failure(record: dict, failure_literal: str) -> dict | None:
+    """Record a readiness failure only while a named prerequisite is pending."""
+    events = record.get("gate_b_readiness_state_machine", [])
+    if type(events) is not list or len(events) >= len(GATE_B_READINESS_STAGES):
+        return None
+    next_stage = GATE_B_READINESS_STAGES[len(events)]
+    expected = {
+        "CPP_OBSERVER_STARTING": "cpp_initial_ready",
+        "CPP_OBSERVER_READY": "action_server_ready",
+        "CPP_PRE_GATE_B_RECHECK": "cpp_pre_gate_b_recheck",
+    }.get(record.get("collector_stage"))
+    if (expected is None or next_stage != expected
+            or (events and events[-1].get("status") != "PASS")):
+        return None
+    return record_gate_b_readiness_transition(record, next_stage, "FAIL", failure_literal)
 
 
 def not_attempted_action_server(blocking_reason: str) -> dict:
