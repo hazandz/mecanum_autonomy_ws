@@ -6,7 +6,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "pid0_lab.h"
+#include "pid1_lab.h"
 #include "safety_io.h"
 /* USER CODE END Includes */
 
@@ -93,7 +93,7 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   safety_io_init_safe();
-  pid0_lab_init();
+  pid1_lab_init();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -510,8 +510,8 @@ void StartDefaultTask(void *argument)
 
   for (;;)
   {
-    pid0_lab_step(HAL_GetTick());
-    wake_tick += PID0_SAMPLE_PERIOD_MS;
+    pid1_lab_step(HAL_GetTick());
+    wake_tick += PID1_SAMPLE_PERIOD_MS;
     (void)osDelayUntil(wake_tick);
   }
   /* USER CODE END 5 */
