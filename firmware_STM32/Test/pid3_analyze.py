@@ -218,14 +218,16 @@ def analyze(rows: list[Row]) -> tuple[str, bool]:
     return "\n".join(lines), not failures
 
 
-def _fixture(speed: int = 500, *, fault: int = 0, overflow: int = 0,
-             pwm: int = 150, counts: int = 2500, spread: int = 20,
-             varied: bool = False) -> list[Row]:
+def _fixture(*, fault: int = 0, overflow: int = 0, pwm: int = 150,
+             counts: int = 2500, spread: int = 20,
+             varied: bool = False, failing_wheel: str | None = None) -> list[Row]:
     rows = []
     for idx in range(125):
         measured = {}
         for wheel in WHEELS:
-            offset = ((idx % 3) - 1) * 50 if varied else speed - 500
+            offset = ((idx % 3) - 1) * 50 if varied else 0
+            if wheel == failing_wheel:
+                offset -= 100
             measured[wheel] = float(500 + offset)
         rows.append(Row(
             timestamp=idx * 40, state=RUN_STATE, target=500.0, dt_ms=20,
@@ -245,7 +247,7 @@ def self_test() -> None:
 
     _, passed = analyze(_fixture())
     require(passed, "perfect four-wheel tracking should pass")
-    _, passed = analyze(_fixture(speed=400))
+    _, passed = analyze(_fixture(failing_wheel="rl"))
     require(not passed, "one-wheel steady-error violation should fail")
     _, passed = analyze(_fixture(spread=150))
     require(not passed, "excessive synchronization spread should fail")
