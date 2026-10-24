@@ -27,12 +27,34 @@ extern TIM_HandleTypeDef htim1, htim2, htim3, htim4, htim5;
 typedef struct { uint32_t fl, fr, rl, rr; } EncoderRaw;
 typedef struct { float u0, kv; } Pid3Feedforward;
 
-/* Validated reverse coefficients, indexed [FL, FR, RL, RR]. */
-static const Pid3Feedforward reverse_feedforward[PID3_WHEEL_COUNT] = {
-  {36.253577f, 0.225076821f},  /* FL reverse */
-  {34.233335f, 0.226312521f},  /* FR reverse */
-  {54.760209f, 0.223609266f},  /* RL reverse */
-  {32.707200f, 0.229221684f}   /* RR reverse */
+/* Validated coefficients, indexed [wheel][0=forward, 1=reverse]. */
+static const Pid3Feedforward feedforward[PID3_WHEEL_COUNT][2] = {
+  /* FL */
+  {
+    {40.330665f, 0.217819026f},
+    {36.253577f, 0.225076821f}
+  },
+  /* FR */
+  {
+    {32.415574f, 0.231811480f},
+    {34.233335f, 0.226312521f}
+  },
+  /* RL */
+  {
+    {61.698998f, 0.212679580f},
+    {54.760209f, 0.223609266f}
+  },
+  /* RR */
+  {
+    {37.521999f, 0.223981830f},
+    {32.707200f, 0.229221684f}
+  }
+};
+static const float wheel_command_sign[PID3_WHEEL_COUNT] = {
+  -1.0f,  /* FL reverse */
+  +1.0f,  /* FR forward */
+  +1.0f,  /* RL forward */
+  -1.0f   /* RR reverse */
 };
 static const uint32_t pwm_channel[PID3_WHEEL_COUNT] = {
   TIM_CHANNEL_4, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_2
@@ -55,6 +77,12 @@ static uint32_t stall_ms[PID3_WHEEL_COUNT], sync_fault_ms;
 static float integral_permille[PID3_WHEEL_COUNT];
 
 static uint32_t elapsed(uint32_t now, uint32_t then) { return now - then; }
+
+static MotorDirection wheel_command_direction(uint32_t i)
+{
+  return wheel_command_sign[i] > 0.0f ?
+         MOTOR_DIRECTION_FORWARD : MOTOR_DIRECTION_REVERSE;
+}
 
 static float target_cps_for_run_elapsed(uint32_t run_elapsed_ms)
 {
@@ -282,7 +310,7 @@ static void start_all_pwm_or_fault(const float output[4])
     safety_io_force_motor_disabled();
     motor_logic_stop_all();
     for (i = 0U; i < PID3_WHEEL_COUNT; ++i)
-      motor_logic_set_direction(motor_wheel[i], MOTOR_DIRECTION_REVERSE);
+      motor_logic_set_direction(motor_wheel[i], wheel_command_direction(i));
   }
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i)
     __HAL_TIM_SET_COMPARE(&htim3, pwm_channel[i], compare[i]);
@@ -304,11 +332,12 @@ static uint32_t monitor_guards(uint32_t now_ms, uint32_t dt_ms,
                                uint32_t *error, uint32_t *fault_mask)
 {
   uint32_t i, min_i = 0U, max_i = 0U;
-  float min_speed = -measured[0], max_speed = -measured[0];
+  float min_speed = wheel_command_sign[0] * measured[0];
+  float max_speed = wheel_command_sign[0] * measured[0];
   bool grace = elapsed(now_ms, run_started_ms) >= PID3_SYNC_GRACE_MS;
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     uint32_t bit = 1UL << i;
-    float y = -measured[i];
+    float y = wheel_command_sign[i] * measured[i];
     if (y < -PID3_DIRECTION_THRESHOLD_CPS)
       wrong_direction_ms[i] += dt_ms;
     else
@@ -355,11 +384,12 @@ static void compute_outputs(uint32_t dt_ms, float target_cps,
   for (i = 0U; i < PID3_WHEEL_COUNT; ++i) {
     float candidate, raw;
     float y;
+    uint32_t direction_index = wheel_command_sign[i] > 0.0f ? 0U : 1U;
+    const Pid3Feedforward *coeff = &feedforward[i][direction_index];
     measured[i] = (float)delta[i] * 1000.0f / (float)dt_ms;
-    y = -measured[i];
+    y = wheel_command_sign[i] * measured[i];
     error[i] = target_cps - y;
-    ff[i] = reverse_feedforward[i].u0 +
-            reverse_feedforward[i].kv * target_cps;
+    ff[i] = coeff->u0 + coeff->kv * target_cps;
     up[i] = PID3_DEFAULT_KP * error[i];
     candidate = integral_permille[i] + PID3_DEFAULT_KI * error[i] * dt_seconds;
     if (candidate > PID3_INTEGRAL_LIMIT) candidate = PID3_INTEGRAL_LIMIT;
