@@ -316,3 +316,14 @@ Phase A/A.5 evidence: full Step-7 377 passed; bringup 289; RL 720; six-package e
 Guard/evidence/manifest SHA-256: `fc5b8de7d681e29f130490181705c1b0bf86da8eed939c26cea02de939b81c9c` / `a5a867a91383d95c7609d7da9e9161cfa0955b29d47637b8146a33f83519295d` / `95a6afedcceb7384e0ec1756d35f0061e962fcec33bc116c2a98a574a0c5489b`; exact evidence byte size `73921`.
 
 Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime checkout 018/019; targets 014–017 ghi UNAVAILABLE, không tính preservation PASS. Guard source PENDING/capacity 1/acquisition 0/NOT_GRANTED, không lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry, HIL/hardware, Fuel provisioning hoặc integration; public ROS/QoS/Safety/Nav2/map/TF/launch contracts không đổi. Evidence IMPLEMENTED_OFFLINE_ONLY.
+
+
+## 2026-10-24 — Corrective L1 R1/R2 protocol and sealed verdict artifacts (OFFLINE)
+
+Base/sole parent target: `71713d0a79b006580510169924732d6791c87858`; historical closure `21eab358..71713d0` is unchanged.
+
+R1 was a protocol downgrade gap: the run record selected protocol 2.0 while the Gate-B document could enter the legacy path, and PASS did not require the complete handshake event chain. The validator now binds run record, collection, terminal, and handshake-failure protocol markers; rejects missing, unsupported, or contradictory protocol declarations; requires the four ordered events and `COMPLETE` for protocol-2 PASS; and validates stage-appropriate structured failure evidence. Legacy documents remain supported only when protocol markers are absent.
+
+R2 was an incomplete integrity-coverage gap: a verdict artifact omitted from both manifest and `SHA256SUMS.txt` could escape the equality check. The validator now requires manifest schema/run identity/count, SHA-256 and exact byte size, exact checksum path/hash equality, sealed coverage for every verdict artifact actually read, all five required files for protocol-2 PASS, and safe in-root regular paths without symlinks or traversal. The manifest does not hash itself. Existing five-vector and acceptance requirements are unchanged.
+
+Offline regressions exercise complete PASS via `validate_run_directory()`, protocol/event/terminal mutations, stage-specific failures, missing or unsealed artifacts, tampered bytes, symlink/path rejection, and fixed-base exact phase scopes. Phase A: Step-7 tools 408 passed/2 skipped, bringup 303 passed, RL 720 passed, validator 68 passed; source-pin drift encountered during source edits was closed in Phase A.5. Final post-Phase-B verification remains a separate required check. No runtime or authorization claim is made.

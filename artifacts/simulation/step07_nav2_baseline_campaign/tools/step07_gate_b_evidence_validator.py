@@ -61,6 +61,8 @@ def validate_gate_b_terminal(terminal: dict, *, collection_raw: bytes, peer_raw:
                              config_hash: str, invocation_id: str) -> dict:
     collection = json.loads(collection_raw, object_pairs_hook=_pairs, parse_constant=_constant)
     validate_gate_b_collection(collection, config_hash=config_hash, invocation_id=invocation_id)
+    if terminal.get("handshake_protocol", "2.0") != "2.0":
+        raise ValueError("COLLECTOR_PROTOCOL_UNKNOWN_OR_UNSUPPORTED")
     if (terminal.get("schema_version") != "1.0" or terminal.get("collector") != "step07_gate_b_observer"
             or terminal.get("protocol_phase") != "TERMINAL"
             or terminal.get("config_hash") != config_hash or terminal.get("invocation_id") != invocation_id):
@@ -311,34 +313,180 @@ def navigation_evidence_chain_failure(observer: dict, gate_document: dict,
 
 def verify_artifacts(run_directory: str | Path) -> dict:
     root = Path(run_directory)
-    record, _ = load_json(root / "run_record.json")
-    manifest, _ = load_json(root / "artifact_manifest.json")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("EVIDENCE_ROOT_NOT_REAL_DIRECTORY")
+    absolute_root = root.absolute()
+    current = Path(absolute_root.anchor)
+    for part in absolute_root.parts[1:]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("EVIDENCE_ROOT_PATH_CONTAINS_SYMLINK")
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("EVIDENCE_ROOT_UNAVAILABLE") from error
+
+    def fixed_file(name: str) -> Path:
+        candidate = root / name
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError(f"EVIDENCE_CONTROL_FILE_INVALID:{name}")
+        try:
+            candidate.resolve(strict=True).relative_to(resolved_root)
+        except (OSError, ValueError) as error:
+            raise ValueError(f"EVIDENCE_CONTROL_FILE_OUTSIDE_ROOT:{name}") from error
+        return candidate
+
+    record, record_raw = load_json(fixed_file("run_record.json"))
+    manifest, _ = load_json(fixed_file("artifact_manifest.json"))
+    if manifest.get("schema_version") != "1.0" or manifest.get("run_id") != record.get("run_id"):
+        raise ValueError("ARTIFACT_MANIFEST_IDENTITY_INVALID")
     entries = manifest.get("artifacts")
-    if type(entries) is not list or not entries:
+    if (type(entries) is not list or not entries
+            or type(manifest.get("artifact_count")) is not int
+            or manifest["artifact_count"] != len(entries)):
         raise ValueError("ARTIFACT_MANIFEST_ENTRIES_INVALID")
     expected = {}
+    sizes = {}
     for item in entries:
         if type(item) is not dict or set(item) != {"path", "sha256", "size_bytes"}:
             raise ValueError("ARTIFACT_MANIFEST_ROW_INVALID")
         rel = item["path"]
-        if type(rel) is not str or Path(rel).is_absolute() or ".." in Path(rel).parts or rel in expected:
+        rel_path = Path(rel) if type(rel) is str else None
+        if (rel_path is None or not rel or rel_path.is_absolute() or
+                rel_path.as_posix() != rel or any(part in ("", ".", "..") for part in rel.split("/"))
+                or rel in expected or rel in {"artifact_manifest.json", "SHA256SUMS.txt"}
+                or type(item["sha256"]) is not str or len(item["sha256"]) != 64
+                or any(ch not in "0123456789abcdef" for ch in item["sha256"])
+                or type(item["size_bytes"]) is not int or item["size_bytes"] < 0):
             raise ValueError("ARTIFACT_MANIFEST_PATH_INVALID_OR_DUPLICATE")
-        path = root / rel
-        raw = path.read_bytes()
+        path = root.joinpath(*rel.split("/"))
+        current = root
+        for part in rel.split("/"):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"ARTIFACT_SYMLINK_FORBIDDEN:{rel}")
+        if not path.is_file():
+            raise ValueError(f"ARTIFACT_FILE_INVALID:{rel}")
+        try:
+            path.resolve(strict=True).relative_to(resolved_root)
+        except (OSError, ValueError) as error:
+            raise ValueError(f"ARTIFACT_PATH_OUTSIDE_ROOT:{rel}") from error
+        raw = record_raw if rel == "run_record.json" else path.read_bytes()
         actual = hashlib.sha256(raw).hexdigest()
         if actual != item["sha256"] or len(raw) != item["size_bytes"]:
             raise ValueError(f"ARTIFACT_INTEGRITY_MISMATCH:{rel}")
         expected[rel] = actual
-    sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
+        sizes[rel] = len(raw)
+    if "run_record.json" not in expected:
+        raise ValueError("RUN_RECORD_NOT_SEALED")
+    try:
+        sums = fixed_file("SHA256SUMS.txt").read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("SHA256SUMS_ENCODING_INVALID") from error
     listed = {}
     for line in sums.splitlines():
-        digest, rel = line.split("  ", 1)
+        try:
+            digest, rel = line.split("  ", 1)
+        except ValueError as error:
+            raise ValueError("SHA256SUMS_ROW_INVALID") from error
         if rel in listed:
             raise ValueError("SHA256SUMS_DUPLICATE_PATH")
         listed[rel] = digest
     if listed != expected:
         raise ValueError("MANIFEST_SHA256SUMS_MISMATCH")
-    return {"run_record": record, "manifest": manifest, "artifact_hashes": expected}
+    return {"run_record": record, "manifest": manifest, "artifact_hashes": expected,
+            "artifact_sizes": sizes, "verified_artifacts": set(expected),
+            "evidence_root": resolved_root}
+
+
+PROTOCOL2_EVENTS = ["GATE_B_COLLECTION_VERIFIED", "CPP_FINALIZE_REQUESTED",
+                    "CPP_SNAPSHOT_COMPLETE", "GATE_B_TERMINAL_VERIFIED"]
+
+
+def _protocol2_state(record: dict, gate_doc: dict | None = None,
+                     terminal: dict | None = None, failure_doc: dict | None = None) -> bool:
+    markers = [record.get("collector_handshake_protocol")]
+    handshake = record.get("collector_handshake")
+    markers.append(handshake.get("protocol") if type(handshake) is dict else None)
+    markers.append(gate_doc.get("handshake_protocol") if type(gate_doc) is dict else None)
+    markers.append(terminal.get("handshake_protocol") if type(terminal) is dict else None)
+    markers.append(failure_doc.get("protocol") if type(failure_doc) is dict else None)
+    present = [value for value in markers if value is not None]
+    if any(value != "2.0" for value in present):
+        raise ValueError("COLLECTOR_PROTOCOL_UNKNOWN_OR_UNSUPPORTED")
+    protocol2 = "2.0" in present
+    if protocol2 and record.get("collector_handshake_protocol") != "2.0":
+        raise ValueError("COLLECTOR_PROTOCOL_MISMATCH")
+    return protocol2
+
+
+def _validate_handshake_events(record: dict, *, protocol2: bool) -> dict | None:
+    handshake = record.get("collector_handshake")
+    if handshake is None:
+        if protocol2 and record.get("terminal_outcome", "").endswith(
+                "PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"):
+            raise ValueError("COLLECTOR_HANDSHAKE_MISSING_FOR_PASS")
+        return None
+    if not protocol2 or type(handshake) is not dict or handshake.get("protocol") != "2.0":
+        raise ValueError("COLLECTOR_PROTOCOL_MISMATCH")
+    events, status = handshake.get("events"), handshake.get("status")
+    if type(events) is not list or any(type(event) is not str for event in events):
+        raise ValueError("COLLECTOR_HANDSHAKE_EVENTS_INVALID")
+    if status == "COMPLETE":
+        if events != PROTOCOL2_EVENTS or handshake.get("failure_literal") not in (None, ""):
+            raise ValueError("COLLECTOR_HANDSHAKE_COMPLETE_EVENTS_INVALID")
+    elif status == "FAIL":
+        if events != PROTOCOL2_EVENTS[:len(events)] or len(events) > len(PROTOCOL2_EVENTS):
+            raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_EVENTS_INVALID")
+        if type(handshake.get("failure_literal")) is not str or not handshake["failure_literal"]:
+            raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_LITERAL_MISSING")
+    else:
+        raise ValueError("COLLECTOR_HANDSHAKE_STATUS_INVALID")
+    return handshake
+
+
+def _required_sealed_artifacts(record: dict, *, protocol2: bool) -> set[str]:
+    required = {"run_record.json"}
+    acceptance = record.get("acceptance", {})
+    if protocol2 and record.get("terminal_outcome", "").endswith(
+            "PASS_PENDING_INDEPENDENT_EVIDENCE_AUDIT"):
+        required.update({"runtime_observer.json", "gate_b_vectors.json", "gate_b_terminal.json",
+                         "navigation_evidence_chain.json"})
+    handshake = record.get("collector_handshake")
+    if type(handshake) is dict:
+        events = handshake.get("events")
+        events = events if type(events) is list else []
+        if "GATE_B_COLLECTION_VERIFIED" in events:
+            required.add("gate_b_vectors.json")
+        if "CPP_FINALIZE_REQUESTED" in events or "CPP_SNAPSHOT_COMPLETE" in events:
+            required.add("runtime_observer.json")
+        if "GATE_B_TERMINAL_VERIFIED" in events:
+            required.add("gate_b_terminal.json")
+        if handshake.get("status") == "FAIL" and events:
+            required.add("collector_handshake.failure.json")
+    outcomes = record.get("collector_outcomes")
+    if type(outcomes) is dict:
+        for key, filename in (("gate_b_observer", "gate_b_vectors.json"),
+                              ("cpp_observer", "runtime_observer.json"),
+                              ("navigation_evidence_chain_collector", "navigation_evidence_chain.json")):
+            if type(outcomes.get(key)) is dict and outcomes[key].get("artifact_written") is True:
+                required.add(filename)
+    if acceptance.get("observer_acceptance") is True:
+        required.add("runtime_observer.json")
+    if acceptance.get("gate_b_vectors") is True:
+        required.add("gate_b_vectors.json")
+    return required
+
+
+def _require_sealed(path_name: str, *, root: Path, verified: set[str]) -> Path:
+    path = root / path_name
+    if path.exists() and path_name not in verified:
+        raise ValueError(f"VERDICT_ARTIFACT_NOT_SEALED:{path_name}")
+    if path_name not in verified:
+        raise ValueError(f"VERDICT_ARTIFACT_REQUIRED_BUT_MISSING:{path_name}")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"VERDICT_ARTIFACT_PATH_INVALID:{path_name}")
+    return path
 
 
 def validate_run_record(record: dict) -> dict:
@@ -694,7 +842,8 @@ def validate_gate_b_document(document: dict, *, config_hash: str, minimum_sample
     if document.get("schema_version") != "1.0" or document.get("config_hash") != config_hash:
         raise ValueError("GATE_B_SCHEMA_OR_CONFIG_HASH_INVALID")
     samples = document.get("samples")
-    if type(samples) is not list or not validate_vector_samples(samples, minimum=minimum_samples):
+    if (type(samples) is not list or len(samples) != minimum_samples
+            or not validate_vector_samples(samples, minimum=minimum_samples)):
         raise ValueError("GATE_B_VECTOR_SAMPLES_INVALID")
     if document.get("sample_count") != len(samples):
         raise ValueError("GATE_B_SAMPLE_COUNT_MISMATCH")
@@ -712,7 +861,10 @@ def validate_gate_b_document(document: dict, *, config_hash: str, minimum_sample
                 "errors_absent": document.get("errors") == []}
     if document.get("acceptance") != expected:
         raise ValueError("GATE_B_ACCEPTANCE_RAW_MISMATCH")
-    if document.get("handshake_protocol") == "2.0":
+    protocol_marker = document.get("handshake_protocol")
+    if protocol_marker is not None and protocol_marker != "2.0":
+        raise ValueError("COLLECTOR_PROTOCOL_UNKNOWN_OR_UNSUPPORTED")
+    if protocol_marker == "2.0":
         if terminal is None or collection_raw is None or invocation_id is None:
             raise ValueError("GATE_B_TERMINAL_EVIDENCE_MISSING")
         status = validate_gate_b_terminal(terminal, collection_raw=collection_raw, peer_raw=peer_raw,
@@ -725,14 +877,95 @@ def validate_gate_b_document(document: dict, *, config_hash: str, minimum_sample
 def validate_run_directory(run_directory: str | Path) -> dict:
     result = verify_artifacts(run_directory)
     result["verdict"] = validate_run_record(result["run_record"])
-    observer_path = Path(run_directory) / "runtime_observer.json"
-    observer, _ = load_json(observer_path)
-    gate_path = Path(run_directory) / "gate_b_vectors.json"
-    gate_doc, _ = load_json(gate_path)
-    protocol2 = result["run_record"].get("collector_handshake_protocol") == "2.0"
+    root = result["evidence_root"]
+    record = result["run_record"]
+    verified = result["verified_artifacts"]
+    observer_candidate, gate_candidate = root / "runtime_observer.json", root / "gate_b_vectors.json"
+    observer_exists = observer_candidate.exists() or observer_candidate.is_symlink()
+    gate_exists = gate_candidate.exists() or gate_candidate.is_symlink()
+    observer_path = (_require_sealed("runtime_observer.json", root=root, verified=verified)
+                     if observer_exists else observer_candidate)
+    gate_path = (_require_sealed("gate_b_vectors.json", root=root, verified=verified)
+                 if gate_exists else gate_candidate)
+    gate_doc = load_json(gate_path)[0] if gate_exists else None
+    terminal_path = root / "gate_b_terminal.json"
+    terminal = None
+    if terminal_path.exists() or terminal_path.is_symlink():
+        terminal = load_json(_require_sealed("gate_b_terminal.json", root=root,
+                                             verified=verified))[0]
+    failure_path = root / "collector_handshake.failure.json"
+    failure_doc = None
+    if failure_path.exists() or failure_path.is_symlink():
+        failure_doc = load_json(_require_sealed("collector_handshake.failure.json", root=root,
+                                                verified=verified))[0]
+    protocol2 = _protocol2_state(record, gate_doc, terminal, failure_doc)
+    handshake = _validate_handshake_events(record, protocol2=protocol2)
+    if protocol2 and handshake is None and gate_doc is not None:
+        raise ValueError("COLLECTOR_HANDSHAKE_MISSING_AFTER_COLLECTION")
+    missing = _required_sealed_artifacts(record, protocol2=protocol2) - verified
+    if missing:
+        raise ValueError(f"VERDICT_ARTIFACT_COVERAGE_INCOMPLETE:{','.join(sorted(missing))}")
+    if protocol2 and not result["verdict"]["pass"] and not gate_exists:
+        calls = record.get("call_counts", {})
+        gate_member = record.get("process_groups", {}).get("gate_b_observer", {})
+        if (handshake is not None and handshake.get("events")
+                or calls.get("gate_b_observer", 0) != 0
+                or (type(gate_member) is dict and gate_member.get("pid") is not None)):
+            raise ValueError("GATE_B_ARTIFACT_MISSING_AFTER_STAGE_START")
+        result["observer"] = {"state": "NOT_REQUIRED_BEFORE_GATE_B"}
+        result["gate_b"] = {"state": "NOT_STARTED"}
+        if record.get("acceptance", {}).get("observer_acceptance") is not False or record.get(
+                "acceptance", {}).get("gate_b_vectors") is not False:
+            raise ValueError("PRE_GATE_B_FAILURE_ACCEPTANCE_INCONSISTENT")
+        return result
+    if not gate_exists:
+        raise ValueError("GATE_B_ARTIFACT_REQUIRED_BUT_MISSING")
+    if protocol2:
+        if gate_doc.get("handshake_protocol") != "2.0":
+            raise ValueError("COLLECTOR_PROTOCOL_MISMATCH")
+        if gate_doc.get("protocol_phase") != "COLLECTION_COMPLETE_AWAITING_PEER":
+            raise ValueError("GATE_B_COLLECTION_PHASE_INVALID")
+        validate_gate_b_collection(gate_doc, config_hash=record.get("config_hash"),
+                                   invocation_id=record.get("invocation_id"))
+        if observer_exists:
+            observer, _ = load_json(observer_path)
+        else:
+            observer = None
+        if terminal is not None and terminal.get("protocol_phase") != "TERMINAL":
+            raise ValueError("GATE_B_TERMINAL_PHASE_INVALID")
+        if (result["verdict"]["pass"] and (handshake is None or handshake.get("status") != "COMPLETE"
+                or handshake.get("events") != PROTOCOL2_EVENTS)):
+            raise ValueError("COLLECTOR_HANDSHAKE_INCOMPLETE_FOR_PASS")
+        if handshake is not None and handshake.get("status") == "FAIL":
+            failure_path = _require_sealed("collector_handshake.failure.json", root=root,
+                                           verified=verified)
+            failure, _ = load_json(failure_path)
+            if (failure.get("schema_version") != "1.0" or failure.get("protocol") != "2.0"
+                    or failure.get("config_hash") != record.get("config_hash")
+                    or failure.get("invocation_id") != record.get("invocation_id")
+                    or any(failure.get(key) != handshake.get(key)
+                           for key in ("status", "events", "failure_literal"))):
+                raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
+        if terminal is not None:
+            result["gate_b_terminal"] = validate_gate_b_terminal(
+                terminal, collection_raw=gate_path.read_bytes(),
+                peer_raw=observer_path.read_bytes() if observer_exists else None,
+                config_hash=record.get("config_hash"), invocation_id=record.get("invocation_id"))
+        if handshake is not None and handshake.get("status") == "COMPLETE" and terminal is None:
+            raise ValueError("GATE_B_TERMINAL_EVIDENCE_MISSING")
+    else:
+        if not observer_exists:
+            raise ValueError("OBSERVER_ARTIFACT_REQUIRED_BUT_MISSING")
+        observer, _ = load_json(observer_path)
+    if protocol2 and observer is None and record.get("acceptance", {}).get("observer_acceptance") is True:
+        raise ValueError("OBSERVER_ARTIFACT_REQUIRED_FOR_ACCEPTANCE")
+    if not protocol2:
+        observer, _ = load_json(observer_path)
+    assert gate_doc is not None
     if protocol2 and not result["verdict"]["pass"] and result["run_record"].get(
             "collector_handshake", {}).get("status") == "FAIL":
-        failure, _ = load_json(Path(run_directory) / "collector_handshake.failure.json")
+        failure, _ = load_json(_require_sealed("collector_handshake.failure.json", root=root,
+                                               verified=verified))
         state = result["run_record"]["collector_handshake"]
         if (failure.get("schema_version") != "1.0" or failure.get("protocol") != "2.0"
                 or failure.get("config_hash") != result["run_record"]["config_hash"]
@@ -742,12 +975,6 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                 or result["run_record"]["acceptance"].get("gate_b_vectors") is not False
                 or result["run_record"]["acceptance"].get("observer_acceptance") is not False):
             raise ValueError("COLLECTOR_HANDSHAKE_FAILURE_RECORD_MISMATCH")
-        terminal_path = Path(run_directory) / "gate_b_terminal.json"
-        if terminal_path.is_file():
-            terminal, _ = load_json(terminal_path)
-            result["gate_b_terminal"] = validate_gate_b_terminal(terminal,
-                collection_raw=gate_path.read_bytes(), peer_raw=observer_path.read_bytes(),
-                config_hash=result["run_record"]["config_hash"], invocation_id=result["run_record"]["invocation_id"])
         result["collector_handshake_failure"] = failure
         return result
     if gate_doc.get("collector_terminal_state") == "NOT_STARTED":
@@ -761,7 +988,8 @@ def validate_run_directory(run_directory: str | Path) -> dict:
                 review_commit=result["run_record"].get("review_commit"))
         else:
             failure_chain = result["run_record"].get("navigation_evidence_chain_failure")
-            chain_doc = (load_json(Path(run_directory) / "navigation_evidence_chain.json")[0]
+            chain_doc = (load_json(_require_sealed("navigation_evidence_chain.json", root=root,
+                                                    verified=verified))[0]
                          if protocol2 else None)
             recorded_chain = chain_doc.get("chain") if protocol2 else observer.get("navigation_evidence_chain_failure")
             recorded_sha = chain_doc.get("sha256") if protocol2 else observer.get("navigation_evidence_chain_failure_sha256")
@@ -789,12 +1017,14 @@ def validate_run_directory(run_directory: str | Path) -> dict:
         result["observer"] = validate_observer(observer, config_hash=result["run_record"]["config_hash"],
             qos_implementation_pin_evidence=result["run_record"].get("preflight", {}).get("qos_implementation_pin_evidence"),
             review_commit=result["run_record"].get("review_commit"))
-        terminal = load_json(Path(run_directory) / "gate_b_terminal.json")[0] if protocol2 else None
+        terminal = load_json(_require_sealed("gate_b_terminal.json", root=root,
+                                             verified=verified))[0] if protocol2 else None
         result["gate_b"] = validate_gate_b_document(gate_doc, config_hash=result["run_record"]["config_hash"],
             terminal=terminal, collection_raw=gate_path.read_bytes(), peer_raw=observer_path.read_bytes(),
             invocation_id=result["run_record"].get("invocation_id"))
         chain, canonical_chain = canonical_navigation_evidence_chain(observer, gate_doc)
-        chain_doc = load_json(Path(run_directory) / "navigation_evidence_chain.json")[0] if protocol2 else {
+        chain_doc = load_json(_require_sealed("navigation_evidence_chain.json", root=root,
+                                              verified=verified))[0] if protocol2 else {
             "chain": observer.get("navigation_evidence_chain"), "canonical": observer.get("navigation_evidence_chain_canonical"),
             "sha256": observer.get("navigation_evidence_chain_sha256")}
         if (chain_doc.get("chain") != chain

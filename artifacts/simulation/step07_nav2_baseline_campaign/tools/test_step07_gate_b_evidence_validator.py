@@ -578,6 +578,7 @@ def test_validate_run_directory_accepts_complete_canonical_run005_bundle(tmp_pat
                               "size_bytes": len(raw)})
     _write_canonical_json(run_dir / "artifact_manifest.json",
                           {"schema_version": "1.0", "run_id": record["run_id"],
+                           "artifact_count": len(artifact_rows),
                            "artifacts": artifact_rows})
     checksum_rows = sorted((item["sha256"], item["path"]) for item in artifact_rows)
     (run_dir / "SHA256SUMS.txt").write_text(
@@ -672,8 +673,314 @@ def test_peer_failure_after_vector_write_round_trips_as_failure_not_collection_p
     rows=[]
     for name,doc in artifacts.items():
         p=tmp_path/name;_write_canonical_json(p,doc);raw=p.read_bytes();rows.append({'path':name,'sha256':hashlib.sha256(raw).hexdigest(),'size_bytes':len(raw)})
-    _write_canonical_json(tmp_path/'artifact_manifest.json',{'schema_version':'1.0','run_id':record['run_id'],'artifacts':rows})
+    _write_canonical_json(tmp_path/'artifact_manifest.json',{'schema_version':'1.0','run_id':record['run_id'],
+        'artifact_count':len(rows),'artifacts':rows})
     (tmp_path/'SHA256SUMS.txt').write_text(''.join(f"{row['sha256']}  {row['path']}\n" for row in rows))
     result=validate_run_directory(tmp_path)
     assert not result['verdict']['pass'] and not result['gate_b_terminal']['terminal_pass']
     assert all(gate['acceptance'].values()) # Collection local xanh không được nâng terminal.
+
+
+PROTOCOL2_EVENTS = ["GATE_B_COLLECTION_VERIFIED", "CPP_FINALIZE_REQUESTED",
+                    "CPP_SNAPSHOT_COMPLETE", "GATE_B_TERMINAL_VERIFIED"]
+
+
+def _seal_bundle(root, filenames=None):
+    filenames = filenames or sorted(path.name for path in root.glob("*.json")
+                                    if path.name != "artifact_manifest.json")
+    record = json.loads((root / "run_record.json").read_text(encoding="utf-8"))
+    rows = []
+    for name in filenames:
+        raw = (root / name).read_bytes()
+        rows.append({"path": name, "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)})
+    _write_canonical_json(root / "artifact_manifest.json", {"schema_version": "1.0",
+        "run_id": record["run_id"], "artifact_count": len(rows), "artifacts": rows})
+    (root / "SHA256SUMS.txt").write_text(
+        "".join(f"{row['sha256']}  {row['path']}\n" for row in rows), encoding="utf-8")
+
+
+def _protocol2_pass_bundle(root):
+    root.mkdir(parents=True, exist_ok=True)
+    config_hash, invocation_id = "a" * 64, "INVOCATION_PROTOCOL2_FIXTURE"
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id=invocation_id,
+        collector_handshake_protocol="2.0", collector_handshake={
+            "protocol": "2.0", "status": "COMPLETE", "events": PROTOCOL2_EVENTS.copy()})
+    record["acceptance"].update(observer_acceptance=True, gate_b_vectors=True)
+    observer = observer_doc()
+    observer.update(invocation_id=invocation_id, snapshot_complete=True)
+    gate = _gate_b_doc(config_hash)
+    gate.update(handshake_protocol="2.0", protocol_phase="COLLECTION_COMPLETE_AWAITING_PEER",
+                invocation_id=invocation_id)
+    for row in observer["filtered_odometry"]:
+        row.update(stamp_sec=0, pose=[0.0] * 7, twist=[0.0] * 6)
+    observer["safety_state"] = [{"stamp_sec": 0, "stamp_nanosec": i,
+        "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
+        "intervention_reasons": [], "command_valid": True, "motion_permitted": True}
+        for i in range(1, 6)]
+    observer["receipt"] = [{"stamp_sec": 0, "stamp_nanosec": i, "sequence": i,
+        "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+        "vx": 0.0, "vy": 0.0, "wz": 0.0} for i in range(1, 6)]
+    observer["navigation_evidence_chain"], chain_raw = canonical_navigation_evidence_chain(observer, gate)
+    observer["navigation_evidence_chain_canonical"] = chain_raw.decode("utf-8")
+    observer["navigation_evidence_chain_sha256"] = hashlib.sha256(chain_raw).hexdigest()
+
+    def identity(raw, name):
+        return {"path": name, "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+
+    collection_raw = semantic_canonical_bytes(gate)
+    peer_raw = semantic_canonical_bytes(observer)
+    terminal = {"schema_version": "1.0", "collector": "step07_gate_b_observer",
+        "protocol_phase": "TERMINAL", "config_hash": config_hash, "invocation_id": invocation_id,
+        "status": "PASS", "errors": [], "peer_verified": True,
+        "collection_artifact": identity(collection_raw, "gate_b_vectors.json"),
+        "peer_artifact": identity(peer_raw, "runtime_observer.json")}
+    chain_raw = semantic_canonical_bytes(observer["navigation_evidence_chain"])
+    chain_doc = {"schema_version": "1.0", "chain": observer["navigation_evidence_chain"],
+        "canonical": chain_raw.decode("utf-8"), "sha256": hashlib.sha256(chain_raw).hexdigest()}
+    for name, document in (("run_record.json", record), ("runtime_observer.json", observer),
+                           ("gate_b_vectors.json", gate), ("gate_b_terminal.json", terminal),
+                           ("navigation_evidence_chain.json", chain_doc)):
+        _write_canonical_json(root / name, document)
+    _seal_bundle(root)
+    return root
+
+
+def _refresh_protocol2_terminal_binding(root):
+    path = root / "gate_b_terminal.json"
+    terminal = json.loads(path.read_text(encoding="utf-8"))
+    for key, filename in (("collection_artifact", "gate_b_vectors.json"),
+                          ("peer_artifact", "runtime_observer.json")):
+        artifact = root / filename
+        if terminal.get(key) is not None and artifact.is_file():
+            raw = artifact.read_bytes()
+            terminal[key] = {"path": filename, "sha256": hashlib.sha256(raw).hexdigest(),
+                             "size_bytes": len(raw)}
+    _write_canonical_json(path, terminal)
+    _seal_bundle(root)
+
+
+def test_protocol2_pass_fixture_is_accepted_by_validate_run_directory(tmp_path):
+    result = validate_run_directory(_protocol2_pass_bundle(tmp_path / "pass"))
+    assert result["verdict"]["pass"] is True
+    assert result["gate_b_terminal"]["terminal_pass"] is True
+    assert set(result["artifact_hashes"]) == {"run_record.json", "runtime_observer.json",
+        "gate_b_vectors.json", "gate_b_terminal.json", "navigation_evidence_chain.json"}
+
+
+@pytest.mark.parametrize("mutation", [
+    "collection_missing_protocol", "collection_old_protocol", "collection_unknown_protocol",
+    "run_record_protocol_mismatch", "terminal_fail", "terminal_wrong_config",
+    "terminal_wrong_invocation", "terminal_wrong_hash", "terminal_wrong_size",
+    "handshake_missing_status", "handshake_fail_status", "event_missing", "event_duplicate",
+    "event_wrong_order", "six_vectors", "omit_run_record_seal", "omit_observer_seal",
+    "omit_collection_seal", "omit_terminal_seal", "omit_chain_seal", "missing_terminal",
+    "missing_chain", "missing_run_record", "artifact_changed_after_manifest",
+])
+def test_protocol2_pass_mutations_fail_through_validate_run_directory(tmp_path, mutation):
+    root = _protocol2_pass_bundle(tmp_path / mutation)
+    record_path, gate_path, terminal_path = (root / name for name in (
+        "run_record.json", "gate_b_vectors.json", "gate_b_terminal.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    if mutation == "collection_missing_protocol":
+        gate.pop("handshake_protocol")
+    elif mutation == "collection_old_protocol":
+        gate["handshake_protocol"] = "1.0"
+    elif mutation == "collection_unknown_protocol":
+        gate["handshake_protocol"] = "9.0"
+    elif mutation == "run_record_protocol_mismatch":
+        record["collector_handshake_protocol"] = "1.0"
+    elif mutation == "terminal_fail":
+        terminal["status"] = "FAIL"
+    elif mutation == "terminal_wrong_config":
+        terminal["config_hash"] = "b" * 64
+    elif mutation == "terminal_wrong_invocation":
+        terminal["invocation_id"] = "OTHER"
+    elif mutation == "terminal_wrong_hash":
+        terminal["collection_artifact"]["sha256"] = "0" * 64
+    elif mutation == "terminal_wrong_size":
+        terminal["collection_artifact"]["size_bytes"] += 1
+    elif mutation == "handshake_missing_status":
+        record["collector_handshake"].pop("status")
+    elif mutation == "handshake_fail_status":
+        record["collector_handshake"]["status"] = "FAIL"
+        record["collector_handshake"]["failure_literal"] = "FIXTURE_FAILURE"
+    elif mutation == "event_missing":
+        record["collector_handshake"]["events"].pop()
+    elif mutation == "event_duplicate":
+        record["collector_handshake"]["events"][1] = record["collector_handshake"]["events"][0]
+    elif mutation == "event_wrong_order":
+        record["collector_handshake"]["events"][:2] = reversed(record["collector_handshake"]["events"][:2])
+    elif mutation == "six_vectors":
+        gate["samples"].append(copy.deepcopy(gate["samples"][-1]))
+        gate["samples"][-1]["stamp_ns"] = 6
+        gate["sample_count"] = 6
+    elif mutation.startswith("omit_"):
+        filename = {"omit_run_record_seal": "run_record.json", "omit_observer_seal": "runtime_observer.json",
+            "omit_collection_seal": "gate_b_vectors.json", "omit_terminal_seal": "gate_b_terminal.json",
+            "omit_chain_seal": "navigation_evidence_chain.json"}[mutation]
+        rows = json.loads((root / "artifact_manifest.json").read_text())["artifacts"]
+        rows = [row for row in rows if row["path"] != filename]
+        record = json.loads(record_path.read_text())
+        _write_canonical_json(root / "artifact_manifest.json", {"schema_version": "1.0",
+            "run_id": record["run_id"], "artifact_count": len(rows), "artifacts": rows})
+        (root / "SHA256SUMS.txt").write_text(
+            "".join(f"{row['sha256']}  {row['path']}\n" for row in rows), encoding="utf-8")
+        with pytest.raises(ValueError, match="RUN_RECORD_NOT_SEALED|VERDICT_ARTIFACT_COVERAGE_INCOMPLETE|VERDICT_ARTIFACT_NOT_SEALED"):
+            validate_run_directory(root)
+        return
+    elif mutation in ("missing_terminal", "missing_chain", "missing_run_record"):
+        filename = {"missing_terminal": "gate_b_terminal.json", "missing_chain": "navigation_evidence_chain.json",
+                    "missing_run_record": "run_record.json"}[mutation]
+        (root / filename).unlink()
+        if mutation != "missing_run_record":
+            _seal_bundle(root)
+        with pytest.raises((ValueError, FileNotFoundError)):
+            validate_run_directory(root)
+        return
+    elif mutation == "artifact_changed_after_manifest":
+        gate_path.write_bytes(gate_path.read_bytes() + b" ")
+        with pytest.raises(ValueError, match="ARTIFACT_INTEGRITY_MISMATCH:gate_b_vectors.json"):
+            validate_run_directory(root)
+        return
+    _write_canonical_json(record_path, record)
+    _write_canonical_json(gate_path, gate)
+    _write_canonical_json(terminal_path, terminal)
+    if mutation == "six_vectors":
+        _refresh_protocol2_terminal_binding(root)
+    else:
+        _seal_bundle(root)
+    with pytest.raises(ValueError):
+        validate_run_directory(root)
+
+
+def test_protocol2_pre_gate_failure_requires_only_sealed_run_record(tmp_path):
+    root = tmp_path / "pre_gate"
+    root.mkdir()
+    record = _run005_record()
+    record.update(config_hash="a" * 64, invocation_id="PRE_GATE", collector_handshake_protocol="2.0")
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = ["CPP_INITIAL_READY_FAILED"]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    _write_canonical_json(root / "run_record.json", record)
+    _seal_bundle(root, ["run_record.json"])
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b"]["state"] == "NOT_STARTED"
+
+
+def test_protocol2_handshake_failure_accepts_sealed_partial_bundle(tmp_path):
+    root = tmp_path / "partial"
+    root.mkdir()
+    config_hash, invocation_id = "a" * 64, "PARTIAL_HANDSHAKE"
+    state = {"protocol": "2.0", "status": "FAIL", "events": ["GATE_B_COLLECTION_VERIFIED"],
+             "failure_literal": "CPP_FINALIZE_REQUEST_FAILED"}
+    record = _run005_record()
+    record.update(config_hash=config_hash, invocation_id=invocation_id,
+        collector_handshake_protocol="2.0", collector_handshake=state)
+    record["acceptance"].update(observer_acceptance=False, gate_b_vectors=False)
+    record["failure_reason_literals"] = [state["failure_literal"]]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    gate = _gate_b_doc(config_hash)
+    gate.update(handshake_protocol="2.0", protocol_phase="COLLECTION_COMPLETE_AWAITING_PEER",
+                invocation_id=invocation_id)
+    collection_raw = semantic_canonical_bytes(gate)
+    terminal = {"schema_version": "1.0", "collector": "step07_gate_b_observer",
+        "protocol_phase": "TERMINAL", "config_hash": config_hash, "invocation_id": invocation_id,
+        "status": "FAIL", "errors": [state["failure_literal"]], "peer_verified": False,
+        "collection_artifact": {"path": "gate_b_vectors.json",
+            "sha256": hashlib.sha256(collection_raw).hexdigest(), "size_bytes": len(collection_raw)},
+        "peer_artifact": None}
+    failure = {"schema_version": "1.0", "protocol": "2.0", "config_hash": config_hash,
+               "invocation_id": invocation_id, **state}
+    for name, document in (("run_record.json", record), ("gate_b_vectors.json", gate),
+                           ("gate_b_terminal.json", terminal),
+                           ("collector_handshake.failure.json", failure)):
+        _write_canonical_json(root / name, document)
+    _seal_bundle(root)
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b_terminal"]["terminal_pass"] is False
+
+
+def test_protocol2_post_handshake_failure_is_validated_as_terminal_failure(tmp_path):
+    root = _protocol2_pass_bundle(tmp_path / "post_handshake")
+    record_path, gate_path, observer_path = (root / name for name in (
+        "run_record.json", "gate_b_vectors.json", "runtime_observer.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    observer = json.loads(observer_path.read_text(encoding="utf-8"))
+    record["acceptance"]["gate_b_vectors"] = False
+    record["failure_reason_literals"] = ["NAVIGATE_TO_POSE_FAILED"]
+    record["terminal_outcome"] = "STEP07_NAV2_BASELINE_RUN005_FAIL_NO_RETRY_GUARD_CONSUMED"
+    gate["navigate_to_pose"]["succeeded"] = False
+    gate["errors"] = ["NAVIGATE_TO_POSE_FAILED"]
+    gate["acceptance"]["navigate_to_pose_succeeded"] = False
+    gate["acceptance"]["errors_absent"] = False
+    observer["navigation_evidence_chain"], chain_raw = canonical_navigation_evidence_chain(observer, gate)
+    observer["navigation_evidence_chain_canonical"] = chain_raw.decode("utf-8")
+    observer["navigation_evidence_chain_sha256"] = hashlib.sha256(chain_raw).hexdigest()
+    chain_doc = {"schema_version": "1.0", "chain": observer["navigation_evidence_chain"],
+        "canonical": chain_raw.decode("utf-8"), "sha256": hashlib.sha256(chain_raw).hexdigest()}
+    terminal = json.loads((root / "gate_b_terminal.json").read_text(encoding="utf-8"))
+    terminal["status"] = "FAIL"
+    terminal["errors"] = gate["errors"]
+    _write_canonical_json(record_path, record)
+    _write_canonical_json(gate_path, gate)
+    _write_canonical_json(observer_path, observer)
+    _write_canonical_json(root / "navigation_evidence_chain.json", chain_doc)
+    _write_canonical_json(root / "gate_b_terminal.json", terminal)
+    _refresh_protocol2_terminal_binding(root)
+    result = validate_run_directory(root)
+    assert result["verdict"]["pass"] is False
+    assert result["gate_b_terminal"]["terminal_pass"] is False
+    assert result["gate_b"]["acceptance"]["navigate_to_pose_succeeded"] is False
+
+
+@pytest.mark.parametrize("mutation", ["manifest_count", "manifest_identity", "artifact_path_escape"])
+def test_manifest_identity_count_and_path_contract_are_enforced(tmp_path, mutation):
+    root = _protocol2_pass_bundle(tmp_path / mutation)
+    manifest_path = root / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "manifest_count":
+        manifest["artifact_count"] += 1
+    elif mutation == "manifest_identity":
+        manifest["run_id"] = "OTHER_RUN"
+    else:
+        manifest["artifacts"][0]["path"] = "../outside.json"
+    _write_canonical_json(manifest_path, manifest)
+    with pytest.raises(ValueError, match="ARTIFACT_MANIFEST_IDENTITY_INVALID|ARTIFACT_MANIFEST_ENTRIES_INVALID|ARTIFACT_MANIFEST_PATH_INVALID"):
+        validate_run_directory(root)
+
+
+def test_evidence_root_and_verdict_artifact_symlinks_are_rejected(tmp_path):
+    root = _protocol2_pass_bundle(tmp_path / "sealed")
+    linked_root = tmp_path / "root-link"
+    linked_root.symlink_to(root, target_is_directory=True)
+    with pytest.raises(ValueError, match="EVIDENCE_ROOT_NOT_REAL_DIRECTORY"):
+        validate_run_directory(linked_root)
+    target = tmp_path / "observer-copy.json"
+    target.write_bytes((root / "runtime_observer.json").read_bytes())
+    (root / "runtime_observer.json").unlink()
+    (root / "runtime_observer.json").symlink_to(target)
+    with pytest.raises(ValueError, match="ARTIFACT_SYMLINK_FORBIDDEN:runtime_observer.json"):
+        validate_run_directory(root)
+
+
+def test_protocol2_marker_in_failure_document_cannot_fall_back_to_legacy(tmp_path):
+    root = _protocol2_pass_bundle(tmp_path / "legacy_downgrade")
+    record = json.loads((root / "run_record.json").read_text())
+    gate = json.loads((root / "gate_b_vectors.json").read_text())
+    record.pop("collector_handshake_protocol")
+    record.pop("collector_handshake")
+    gate.pop("handshake_protocol")
+    gate.pop("protocol_phase")
+    _write_canonical_json(root / "run_record.json", record)
+    _write_canonical_json(root / "gate_b_vectors.json", gate)
+    _write_canonical_json(root / "collector_handshake.failure.json", {
+        "schema_version": "1.0", "protocol": "2.0", "status": "FAIL"})
+    _seal_bundle(root)
+    with pytest.raises(ValueError, match="COLLECTOR_PROTOCOL_MISMATCH"):
+        validate_run_directory(root)

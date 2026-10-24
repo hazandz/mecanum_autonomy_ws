@@ -905,6 +905,166 @@ RUN005_AUDIT21_PHASE_B_PATHS = RUN005_AUDIT21_PHASE_A5_PATHS | (
 RUN005_AUDIT21_PHASE_SCOPES = {"PHASE_A": RUN005_AUDIT21_PHASE_A_PATHS,
     "PHASE_A5": RUN005_AUDIT21_PHASE_A5_PATHS, "PHASE_B": RUN005_AUDIT21_PHASE_B_PATHS}
 
+RUN005_R1R2_BASE = "71713d0a79b006580510169924732d6791c87858"
+RUN005_R1R2_SOURCE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py",
+    "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+}
+RUN005_R1R2_PIN_CLOSURE_PATHS = {
+    "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_EVIDENCE.json",
+    "docs/governance/evidence/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_GUARD_MANIFEST.json",
+}
+RUN005_R1R2_PHASE_A5_PATHS = RUN005_R1R2_SOURCE_PATHS | RUN005_R1R2_PIN_CLOSURE_PATHS
+RUN005_R1R2_PHASE_B_GOVERNANCE_PATHS = {
+    "docs/governance/decisions/STEP-07_INTEGRATED_NAV2_BASELINE_GATE_B_CAMPAIGN_RUN005_L1_DECISION.md",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md",
+    "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+}
+RUN005_R1R2_PHASE_B_PATHS = RUN005_R1R2_PHASE_A5_PATHS | RUN005_R1R2_PHASE_B_GOVERNANCE_PATHS
+RUN005_R1R2_AUTHORIZED_PATHS = RUN005_R1R2_PHASE_B_PATHS | {
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py",
+    "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_nav2_baseline_run005.py",
+}
+RUN005_R1R2_PHASE_SCOPES = {"PHASE_A": RUN005_R1R2_SOURCE_PATHS,
+    "PHASE_A5": RUN005_R1R2_PHASE_A5_PATHS, "PHASE_B": RUN005_R1R2_PHASE_B_PATHS}
+
+
+def _r1r2_scope_document(phase, base=RUN005_R1R2_BASE):
+    paths = RUN005_R1R2_PHASE_SCOPES[phase]
+    return {"current_candidate_base_commit": base,
+        "SOURCE_FREEZE": "FALSE" if phase == "PHASE_A" else "TRUE",
+        "current_corrective_scope": {"base_commit": base,
+            "phase": phase, "path_count": len(paths), "paths": sorted(paths)}}
+
+
+def _validate_r1r2_scope(actual, document, untracked=(), expected_base=RUN005_R1R2_BASE):
+    scope = document.get("current_corrective_scope", {})
+    phase = scope.get("phase")
+    if (phase not in RUN005_R1R2_PHASE_SCOPES
+            or document.get("current_candidate_base_commit") != expected_base
+            or scope.get("base_commit") != expected_base):
+        raise AssertionError("RUN005_R1R2_PHASE_OR_BASE_INVALID")
+    expected = RUN005_R1R2_PHASE_SCOPES[phase]
+    if scope.get("paths") != sorted(expected) or scope.get("path_count") != len(expected):
+        raise AssertionError("RUN005_R1R2_METADATA_SCOPE_MISMATCH")
+    if phase != "PHASE_A" and document.get("SOURCE_FREEZE") != "TRUE":
+        raise AssertionError("RUN005_R1R2_SOURCE_FREEZE_INVALID")
+    if set(actual) != expected or untracked:
+        raise AssertionError(f"RUN005_R1R2_EXACT_SCOPE_MISMATCH:{sorted(actual)}:{sorted(untracked)}")
+    if not set(actual) <= RUN005_R1R2_AUTHORIZED_PATHS:
+        raise AssertionError("RUN005_R1R2_PATH_OUTSIDE_AUTHORIZATION")
+    return phase
+
+
+def _r1r2_git_changed_paths(root=ROOT, base=RUN005_R1R2_BASE):
+    actual = set(subprocess.run(["git", "diff", "--name-only", base], cwd=root,
+        check=True, capture_output=True, text=True).stdout.splitlines())
+    untracked = set(subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=root, check=True, capture_output=True, text=True).stdout.splitlines())
+    return actual, untracked
+
+
+def _r1r2_current_scope_document():
+    document = _load_json(ROOT / "artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json")
+    if document.get("current_candidate_base_commit") != RUN005_R1R2_BASE:
+        parent = json.loads(subprocess.run(["git", "show", f"{RUN005_R1R2_BASE}:artifacts/simulation/step07_nav2_baseline_campaign/approval_guards/STEP07_NAV2_BASELINE_RUN_005.json"],
+            cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+        if document != parent:
+            raise AssertionError("RUN005_R1R2_INITIAL_METADATA_NOT_EXACT_BASE")
+        return _r1r2_scope_document("PHASE_A")
+    return document
+
+
+def test_run005_r1r2_lineage_preserves_f1_f5_closure_and_exact_phase_sets():
+    assert RUN005_R1R2_BASE == "71713d0a79b006580510169924732d6791c87858"
+    assert subprocess.run(["git", "rev-parse", f"{RUN005_R1R2_BASE}^"], cwd=ROOT,
+        check=True, capture_output=True, text=True).stdout.strip() == "21eab3580be48de9f00585cba904445dae7ce62f"
+    historical = set(subprocess.run(["git", "diff", "--name-only",
+        "21eab3580be48de9f00585cba904445dae7ce62f..71713d0a79b006580510169924732d6791c87858"],
+        cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines())
+    assert historical == RUN005_AUDIT21_PHASE_B_PATHS
+    assert len(RUN005_R1R2_SOURCE_PATHS) == 3
+    assert len(RUN005_R1R2_PHASE_A5_PATHS) == 6
+    assert len(RUN005_R1R2_PHASE_B_PATHS) == 10
+    assert len(RUN005_R1R2_AUTHORIZED_PATHS) == 12
+
+
+def test_run005_r1r2_current_candidate_exact_scope_from_fixed_base():
+    document = _r1r2_current_scope_document()
+    actual, untracked = _r1r2_git_changed_paths()
+    phase = _validate_r1r2_scope(actual, document, untracked)
+    assert actual <= RUN005_R1R2_AUTHORIZED_PATHS
+    assert phase in RUN005_R1R2_PHASE_SCOPES
+
+
+@pytest.mark.parametrize("phase", ["PHASE_A", "PHASE_A5", "PHASE_B"])
+def test_run005_r1r2_scope_accepts_only_declared_exact_phase(phase):
+    assert _validate_r1r2_scope(RUN005_R1R2_PHASE_SCOPES[phase],
+        _r1r2_scope_document(phase)) == phase
+
+
+@pytest.mark.parametrize("fault", ["missing_governance", "extra", "historical", "phase_mismatch",
+                                    "metadata_paths", "wrong_base", "freeze", "untracked"])
+def test_run005_r1r2_phase_scope_rejects_ambiguous_or_unauthorized_paths(fault):
+    document = _r1r2_scope_document("PHASE_B")
+    actual = set(RUN005_R1R2_PHASE_B_PATHS)
+    untracked = set()
+    if fault == "missing_governance":
+        actual.remove("docs/governance/PROJECT_PROGRESS_LEDGER.md")
+    elif fault == "extra":
+        actual.add("unapproved.txt")
+    elif fault == "historical":
+        actual.add("artifacts/simulation/STEP07_NAV2_BASELINE_RUN_005_ATTEMPT_002_INVOCATION_019/run_record.json")
+    elif fault == "phase_mismatch":
+        document = _r1r2_scope_document("PHASE_A")
+    elif fault == "metadata_paths":
+        document["current_corrective_scope"]["paths"].pop()
+    elif fault == "wrong_base":
+        document["current_candidate_base_commit"] = "21eab3580be48de9f00585cba904445dae7ce62f"
+    elif fault == "freeze":
+        document["SOURCE_FREEZE"] = "FALSE"
+    else:
+        untracked.add("log/new.txt")
+    with pytest.raises(AssertionError, match="RUN005_R1R2_"):
+        _validate_r1r2_scope(actual, document, untracked)
+
+
+def test_run005_r1r2_diff_scope_covers_staged_unstaged_untracked_and_post_commit(tmp_path):
+    paths = sorted(RUN005_R1R2_SOURCE_PATHS)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "offline@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Offline Scope Fixture"], cwd=tmp_path, check=True)
+    for path in paths:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", *paths], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "scope base"], cwd=tmp_path, check=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    (tmp_path / paths[0]).write_text("staged change\n", encoding="utf-8")
+    subprocess.run(["git", "add", paths[0]], cwd=tmp_path, check=True)
+    (tmp_path / paths[1]).write_text("unstaged change\n", encoding="utf-8")
+    (tmp_path / paths[2]).write_text("staged then unstaged\n", encoding="utf-8")
+    subprocess.run(["git", "add", paths[2]], cwd=tmp_path, check=True)
+    (tmp_path / paths[2]).write_text("unstaged after stage\n", encoding="utf-8")
+    actual, untracked = _r1r2_git_changed_paths(tmp_path, base)
+    assert actual == RUN005_R1R2_SOURCE_PATHS and not untracked
+    _validate_r1r2_scope(actual, _r1r2_scope_document("PHASE_A", base), expected_base=base)
+    subprocess.run(["git", "add", *paths], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "scope phase A"], cwd=tmp_path, check=True)
+    actual, untracked = _r1r2_git_changed_paths(tmp_path, base)
+    assert actual == RUN005_R1R2_SOURCE_PATHS and not untracked
+    _validate_r1r2_scope(actual, _r1r2_scope_document("PHASE_A", base), expected_base=base)
+    (tmp_path / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+    actual, untracked = _r1r2_git_changed_paths(tmp_path, base)
+    with pytest.raises(AssertionError, match="RUN005_R1R2_EXACT_SCOPE_MISMATCH"):
+        _validate_r1r2_scope(actual, _r1r2_scope_document("PHASE_A", base),
+                             untracked, expected_base=base)
+
 
 def _audit21_scope_fixture(phase):
     paths = RUN005_AUDIT21_PHASE_SCOPES[phase]
@@ -1012,6 +1172,11 @@ def _candidate_changed_paths():
         check=True, capture_output=True, text=True,
     ).stdout
     dirty = bool(status.strip())
+    if head == RUN005_R1R2_BASE or parent == RUN005_R1R2_BASE:
+        document = _r1r2_current_scope_document()
+        actual, untracked = _r1r2_git_changed_paths()
+        _validate_r1r2_scope(actual, document, untracked)
+        return actual, dirty
     if head == RUN005_AUDIT21_BASE or parent == RUN005_AUDIT21_BASE:
         return _audit21_changed_paths(_load_json(RUN005_INVOCATION_019_GUARD)), dirty
     if head == RUN005_INVOCATION_019_BASE or parent == RUN005_INVOCATION_019_BASE:
@@ -1493,7 +1658,7 @@ def test_current_step07_campaign_scope_chain_is_exact_and_historical_wp06_is_not
         RUN005_INVOCATION_019_PHASE_A_PATHS,
         RUN005_INVOCATION_019_PHASE_A5_PATHS,
         RUN005_INVOCATION_019_PHASE_B_PATHS,
-        *RUN005_AUDIT21_PHASE_SCOPES.values(),
+        *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
     )
 
     assert subprocess.run(
@@ -1565,7 +1730,7 @@ def test_run005_validator_identity_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_A_PATHS,
                        RUN005_INVOCATION_019_PHASE_A5_PATHS,
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
-                       *RUN005_AUDIT21_PHASE_SCOPES.values())
+                       *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values())
 
     # The original root campaign remains the immutable 23-path diff from its
     # integration base through the first topology-corrected campaign commit.
@@ -1773,7 +1938,7 @@ def test_historical_runtime_conservation_and_candidate_scope():
         RUN005_INVOCATION_019_PHASE_A_PATHS,
         RUN005_INVOCATION_019_PHASE_A5_PATHS,
         RUN005_INVOCATION_019_PHASE_B_PATHS,
-        *RUN005_AUDIT21_PHASE_SCOPES.values(),
+        *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values(),
     )
     attempt001 = subprocess.run(
         ["git", "diff", "--name-only", f"{RUN005_ATTEMPT_001_BASE}..{RUN005_ATTEMPT_001_COMMIT}"],
@@ -1815,7 +1980,7 @@ def test_run005_gz_ip_graceful_teardown_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_A_PATHS,
                        RUN005_INVOCATION_019_PHASE_A5_PATHS,
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
-                       *RUN005_AUDIT21_PHASE_SCOPES.values())
+                       *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values())
 
 
 def test_run005_default_route_resolver_corrective_scope_is_exact():
@@ -1837,7 +2002,7 @@ def test_run005_default_route_resolver_corrective_scope_is_exact():
                        RUN005_INVOCATION_019_PHASE_A_PATHS,
                        RUN005_INVOCATION_019_PHASE_A5_PATHS,
                        RUN005_INVOCATION_019_PHASE_B_PATHS,
-                       *RUN005_AUDIT21_PHASE_SCOPES.values())
+                       *RUN005_AUDIT21_PHASE_SCOPES.values(), *RUN005_R1R2_PHASE_SCOPES.values())
 
 
 @pytest.mark.parametrize('phase',['PHASE_A','PHASE_A5','PHASE_B'])

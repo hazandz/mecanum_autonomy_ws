@@ -2315,3 +2315,16 @@ Guard/evidence/manifest SHA-256: `fc5b8de7d681e29f130490181705c1b0bf86da8eed939c
 Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime checkout 018/019; targets 014–017 ghi UNAVAILABLE, không tính preservation PASS. Guard source PENDING/capacity 1/acquisition 0/NOT_GRANTED, không lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry, HIL/hardware, Fuel provisioning hoặc integration; public ROS/QoS/Safety/Nav2/map/TF/launch contracts không đổi. Evidence IMPLEMENTED_OFFLINE_ONLY.
 
 `PLAN_UPDATE_PROPOSAL`: Run005 attempt_002 corrective L1 F1–F5; branch/base như trên; commit pending required final checks. Dependencies offline source/test/build/pin closure đã kiểm; blocker delivery: post-reconciliation full tools/bringup/coherence. Next action: một commit/review push chỉ khi mọi final checks PASS, sau đó review độc lập; runtime cần Owner authorization riêng. Không chuyển milestone hoặc dependency status.
+
+
+## 2026-10-24 — Run005 attempt_002 R1/R2 protocol/integrity corrective (OFFLINE)
+
+`supersedes`: current candidate validator/scope metadata only; no source/runtime behavior or historical Invocation_014–019 outcome is superseded. Branch `step07-integrated-nav2-gateb-campaign-f7f98c6`, base/sole-parent target `71713d0a79b006580510169924732d6791c87858`.
+
+R1: protocol2 is selected consistently across run record, collection, terminal, and handshake-failure artifacts. Protocol2 PASS requires COMPLETE plus exact ordered events `GATE_B_COLLECTION_VERIFIED`, `CPP_FINALIZE_REQUESTED`, `CPP_SNAPSHOT_COMPLETE`, `GATE_B_TERMINAL_VERIFIED`, bound terminal hashes/sizes/identity/status, and existing full acceptance. Failures are validated by reached stage; legacy evidence remains accepted only with no protocol marker.
+
+R2: all files read for verdict are sealed. Protocol2 PASS requires the sealed run record, C++ observer, Gate-B collection, Gate-B terminal and navigation-chain sidecar. Stage-specific failure coverage includes each artifact read. Manifest identity/count, SHA-256, exact byte size, exact `SHA256SUMS.txt` parity, and in-root nonsymlink paths are enforced; no self-hash is introduced.
+
+Phase A: focused validator 68 passed; full Step-7 408 passed/2 skipped; full bringup 303 passed; full RL 720 passed; Python 3.12.3/Pydantic 2.10.6; `py_compile` and diff checks passed. The first source-pin mismatch was expected Phase-A.5 drift; final inventory retained 38/38 membership and refreshed three existing pin records for the validator, validator tests and scope contract test. External build/observer/ROSIDL evidence is inherited from base because no runtime source, build input or dependency changed. Phase B final re-verification is required and is not pre-claimed here.
+
+Exact Phase B changed set: 10 paths; authorized allowlist: 12. `SOURCE_FREEZE=TRUE` denotes offline source/pin closure only. Source guard remains pending, capacity 1, acquisition count 0, runtime authorization `NOT_GRANTED`; `GATE_B=NOT_STARTED`, `RUNTIME_APPROVED=NOT_APPROVED`. No runtime, retry, integration, HIL, hardware or Fuel provisioning.

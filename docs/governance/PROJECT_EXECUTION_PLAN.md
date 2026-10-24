@@ -1249,3 +1249,12 @@ Phase A/A.5 evidence: full Step-7 377 passed; bringup 289; RL 720; six-package e
 Guard/evidence/manifest SHA-256: `fc5b8de7d681e29f130490181705c1b0bf86da8eed939c26cea02de939b81c9c` / `a5a867a91383d95c7609d7da9e9161cfa0955b29d47637b8146a33f83519295d` / `95a6afedcceb7384e0ec1756d35f0061e962fcec33bc116c2a98a574a0c5489b`; exact evidence byte size `73921`.
 
 Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime checkout 018/019; targets 014–017 ghi UNAVAILABLE, không tính preservation PASS. Guard source PENDING/capacity 1/acquisition 0/NOT_GRANTED, không lock; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Không runtime, retry, HIL/hardware, Fuel provisioning hoặc integration; public ROS/QoS/Safety/Nav2/map/TF/launch contracts không đổi. Evidence IMPLEMENTED_OFFLINE_ONLY.
+
+
+## 2026-10-24 — Run005 R1/R2 offline corrective candidate
+
+- Work package: Run005 attempt_002 R1/R2 validator/evidence corrective.
+- Branch/base: `step07-integrated-nav2-gateb-campaign-f7f98c6` / `71713d0a79b006580510169924732d6791c87858`.
+- Phase A source scope: 3 paths; Phase A.5 pin-closure scope: 6 paths; Phase B final scope: 10 paths; authorized allowlist: 12 paths.
+- Evidence status: `IMPLEMENTED_OFFLINE_ONLY`; full post-Phase-B tests/coherence are required before delivery. No milestone or runtime status transition is recorded.
+- Next action: complete final offline verification; independent review and runtime require their own approval.

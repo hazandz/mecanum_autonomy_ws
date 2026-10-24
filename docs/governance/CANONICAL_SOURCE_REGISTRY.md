@@ -1448,3 +1448,12 @@ Historical chỉ kiểm bytes hiện hữu: 5.119 entries tại evidence/runtime
 | `ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_gate_b_observer_node.py` | `9d67b0db0c80f776fc27e84f60d80b5d924bb180c403339d7c636c1e1f7f2db0` | 33340 |
 | `ros2_ws/src/mecanum_nav_rl/test/test_step07_gate_b_observer_node.py` | `18e6ac472aafd77f761e8a05053cb93213f1cdce3164ebdf1332679d781fadd0` | 24139 |
 | `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `413e496ca02621a8b2b90c41d6260c74233e9d1715aa1d1c4fac3f14640de5a5` | 44911 |
+
+
+## Run005 R1/R2 validator source (2026-10-24)
+
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/step07_gate_b_evidence_validator.py` owns strict Run005 protocol selection, terminal handshake coherence, sealed-artifact coverage, path safety, and legacy compatibility.
+- `artifacts/simulation/step07_nav2_baseline_campaign/tools/test_step07_gate_b_evidence_validator.py` owns end-to-end protocol2 bundle and manifest/integrity regression fixtures.
+- `ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py` owns fixed-base R1/R2 Phase A/A.5/B exact-scope lineage while preserving the historical `21eab358..71713d0` closure.
+
+Classification: `IMPLEMENTED_OFFLINE_ONLY`; collector acceptance, safety, QoS and public interfaces are unchanged.
