@@ -8,6 +8,8 @@ import pytest
 from step07_gate_b_evidence_validator import (
     QOS_PROFILE_SOURCE_PATHS, canonical_navigation_evidence_chain,
     build_navigation_evidence_chain, semantic_canonical_bytes,
+    RUN005_TEMPORAL_CONFIG_HASH, RUN005_TEMPORAL_CONTRACT_ID,
+    RUN005_TEMPORAL_CONTRACT_SHA256, LIFECYCLE_INGRESS_SCHEMA,
     navigation_evidence_chain_failure,
     load_json, validate_gate_b_document, validate_observer,
     validate_run_directory, validate_run_record, validate_vector_samples,
@@ -760,12 +762,230 @@ def _refresh_protocol2_terminal_binding(root):
     _seal_bundle(root)
 
 
+def _protocol2_temporal_pass_bundle(root):
+    """Complete current-contract bundle with five samples sharing one native record."""
+    root = _protocol2_pass_bundle(root)
+    config_hash = RUN005_TEMPORAL_CONFIG_HASH
+    invocation_id = "INVOCATION_TEMPORAL_PROTOCOL2_FIXTURE"
+    session = "collector-temporal-fixture"
+    binding = {"contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+        "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256}
+    record = json.loads((root / "run_record.json").read_text(encoding="utf-8"))
+    gate = json.loads((root / "gate_b_vectors.json").read_text(encoding="utf-8"))
+    observer = json.loads((root / "runtime_observer.json").read_text(encoding="utf-8"))
+    terminal = json.loads((root / "gate_b_terminal.json").read_text(encoding="utf-8"))
+    record.update(config_hash=config_hash, invocation_id=invocation_id,
+        collector_handshake_protocol="2.0",
+        temporal_coherence_contract=binding,
+        collector_handshake={"protocol": "2.0", "status": "COMPLETE",
+            "events": PROTOCOL2_EVENTS.copy()})
+    selected = []
+    row = {"record_index": 1, "sequence": 7,
+        "receive_time": {"clock": "CLOCK_MONOTONIC", "monotonic_ns": 100},
+        "ros_stamp_ns": 980_000_000, "publisher_gid": "11" * 24,
+        "payload_provenance": "rclcpp::MessageInfo.publisher_gid",
+        "payload": {"stamp_sec": 0, "stamp_nanosec": 980_000_000, "frame_id": "",
+            "episode_generation": 1, "reset_epoch": 2, "runtime_generation": 3,
+            "sequence": 7, "primary_state": 2, "barrier_state": 1,
+            "motion_permitted": True, "reason": "ACTIVE",
+            "barrier_stamp_sec": 0, "barrier_stamp_nanosec": 980_000_000},
+        "validity": "ADMITTED"}
+    row_hash = hashlib.sha256(semantic_canonical_bytes(row)).hexdigest()
+    reference = {"record_index": 1, "record_sha256": row_hash}
+    selected = [copy.deepcopy(reference) for _ in range(5)]
+    endpoint = {"topic": "/mecanum/safety_lifecycle_state",
+        "type": "mecanum_nav_rl_interfaces/msg/SafetyLifecycleState",
+        "node_name": "safety_lifecycle", "node_namespace": "/",
+        "publisher_gid": "11" * 24, "reliability": 1, "durability": 2,
+        "history": 1, "depth": 10, "qos_history_depth_status": "OBSERVED_MATCH"}
+    request = {"schema": LIFECYCLE_INGRESS_SCHEMA, "schema_version": "1.0",
+        "protocol_revision": "2.0", "invocation_id": invocation_id,
+        "collector_session_id": session, "config_hash": config_hash,
+        "request_revision": 10, "operation": "PROMOTE", "record_index": 1,
+        "record_sha256": row_hash, "references": selected}
+    request["request_digest"] = hashlib.sha256(semantic_canonical_bytes(request)).hexdigest()
+    ack = {"revision": 10, "request_digest": request["request_digest"],
+        "operation": "PROMOTE", "record_index": 1, "record_sha256": row_hash,
+        "status": "ACKNOWLEDGED"}
+    live = {"schema": LIFECYCLE_INGRESS_SCHEMA, "schema_version": "1.0",
+        "protocol_revision": "2.0", "invocation_id": invocation_id,
+        "collector_session_id": session, "config_hash": config_hash, "state": "READY",
+        "failure": None, "endpoint_binding": endpoint, "records": [row],
+        "acknowledged_references": [reference], "reference_ack": ack,
+        "committed_reference_count": 1, "pending_reference": None,
+        "retained_reference_count": 1, "record_index_next": 2}
+    final = {"schema": LIFECYCLE_INGRESS_SCHEMA, "schema_version": "1.0",
+        "protocol_revision": "2.0", "invocation_id": invocation_id,
+        "collector_session_id": session, "config_hash": config_hash,
+        "state": "FINALIZED", "failure": None, "endpoint_binding": endpoint,
+        "retained_references": [{"record_index": 1, "record": row, "record_sha256": row_hash}],
+        "committed_references": [reference], "committed_reference_count": 1,
+        "request_ack": ack, "record_count_seen": 1, "record_count_retained": 1}
+    ingress_identity = {"schema": LIFECYCLE_INGRESS_SCHEMA, "protocol_revision": "2.0",
+        "collector_session_id": session, "live_artifact": "lifecycle_ingress.live.json",
+        "reference_request_artifact": "lifecycle_ingress.references.json",
+        "final_artifact": "lifecycle_ingress.final.json",
+        "selected_record_references": selected}
+    gate.update(handshake_protocol="2.0", protocol_phase="COLLECTION_COMPLETE_AWAITING_PEER",
+        invocation_id=invocation_id, config_hash=config_hash,
+        temporal_coherence_contract=binding,
+        lifecycle_ingress={**ingress_identity, "selected_record_references": selected})
+    gate["acceptance"].update(temporal_coherence_contract=True,
+        lifecycle_ingress_references_verified=True)
+    for index, sample in enumerate(gate["samples"], 1):
+        vector = 1_000_000_000 + index * 10_000_000
+        scan, odom, receipt = vector - 10_000_000, vector - 20_000_000, vector - 15_000_000
+        commit = vector + 1
+        sample["stamp_ns"] = vector
+        sample["correlation"] = {"episode_generation": 1, "reset_epoch": 2,
+            "runtime_generation": 3, "lifecycle_sequence": 7,
+            "receipt_sequence": index, "scan_stamp_ns": scan,
+            "odometry_stamp_ns": odom, "receipt_stamp_ns": receipt,
+            "t_vector_ns": vector, "t_tf_ns": odom,
+            "lifecycle_record_index": 1, "lifecycle_record_sha256": row_hash}
+        source_stamps = {"scan": scan, "odometry": odom, "receipt": receipt,
+            "lifecycle": row["ros_stamp_ns"]}
+        limits = {"scan": 500_000_000, "odometry": 250_000_000,
+            "receipt": 500_000_000, "lifecycle": 500_000_000}
+        def freshness(at):
+            return {name: {"stamp_ns": stamp, "age_ns": at - stamp,
+                "limit_ns": limits[name]} for name, stamp in source_stamps.items()}
+        sample["temporal_proof"] = {"protocol_revision": "2.0",
+            "contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+            "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256,
+            "config_hash": config_hash, "t_vector_ns": vector,
+            "t_tf_ns": odom, "t_odom_ns": odom, "t_commit_ns": commit,
+            "t_commit_steady_ns": 200 + index, "input_stamps_ns": source_stamps,
+            "input_age_limits_ns": limits,
+            "freshness_at_acquisition": freshness(vector),
+            "freshness_at_commit": freshness(commit),
+            "context": {"goal_intent": "fixture-goal", "config_hash": config_hash,
+                "map_id": "warehouse_map2", "map_sha256": "b" * 64,
+                "episode_generation": 1, "reset_epoch": 2,
+                "runtime_generation": 3, "barrier_revision": 7},
+            "path_context": {"request_uuid": "compute-request", "path_sequence": 1,
+                "goal_intent": "fixture-goal", "frame_id": "map",
+                "receipt_steady_ns": 50, "expiry_steady_ns": 9_000},
+            "compute_path_request_uuid": "compute-request",
+            "navigate_to_pose_request_uuid": "navigate-request",
+            "measurement_identity": [scan, odom, index, 7, 1],
+            "native_lifecycle_reference": reference,
+            "campaign_deadline_steady_ns": 10_000}
+    gate["attempt_context"] = copy.deepcopy(gate["samples"][0]["temporal_proof"]["context"])
+    gate["path_context"] = copy.deepcopy(gate["samples"][0]["temporal_proof"]["path_context"])
+    gate["compute_path_request_uuid"] = "compute-request"
+    gate["navigate_to_pose_request_uuid"] = "navigate-request"
+    record["lifecycle_ingress"] = {**ingress_identity,
+        "selected_record_references": selected}
+    record["acceptance"].update(observer_acceptance=True, gate_b_vectors=True,
+        runtime_graph_and_goal=True)
+    observer.update(config_hash=config_hash, invocation_id=invocation_id,
+        snapshot_complete=True, lifecycle_ingress=final)
+    odometry_rows, receipt_rows, safety_rows = [], [], []
+    for index, sample in enumerate(gate["samples"], 1):
+        proof = sample["temporal_proof"]
+        odom_stamp, receipt_stamp, vector = proof["t_odom_ns"], proof["input_stamps_ns"]["receipt"], sample["stamp_ns"]
+        sec, nsec = divmod(odom_stamp, 1_000_000_000)
+        odometry_rows.append({"frame_id": "odom", "child_frame_id": "base_link",
+            "stamp_sec": sec, "stamp_nanosec": nsec, "pose": [0.0] * 7,
+            "twist": [0.0] * 6, "pose_finite": True, "twist_finite": True,
+            "pose_covariance_finite": True, "twist_covariance_finite": True,
+            "pose_covariance_count": 36, "twist_covariance_count": 36})
+        sec, nsec = divmod(receipt_stamp, 1_000_000_000)
+        receipt_rows.append({"stamp_sec": sec, "stamp_nanosec": nsec,
+            "sequence": index, "episode_generation": 1, "reset_epoch": 2,
+            "runtime_generation": 3, "vx": 0.0, "vy": 0.0, "wz": 0.0})
+        sec, nsec = divmod(vector, 1_000_000_000)
+        safety_rows.append({"stamp_sec": sec, "stamp_nanosec": nsec,
+            "raw_command": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
+            "intervention_reasons": [], "command_valid": True, "motion_permitted": True,
+            "scan_fresh": True, "odom_fresh": True, "tf_valid": True,
+            "localization_valid": True})
+    observer["filtered_odometry"] = odometry_rows
+    observer["receipt"] = receipt_rows
+    observer["safety_state"] = safety_rows
+    observer["navigation_evidence_chain"], chain_raw = canonical_navigation_evidence_chain(observer, gate)
+    observer["navigation_evidence_chain_canonical"] = chain_raw.decode("utf-8")
+    observer["navigation_evidence_chain_sha256"] = hashlib.sha256(chain_raw).hexdigest()
+    final_raw = semantic_canonical_bytes(final)
+    record["lifecycle_ingress"].update(final_sha256=hashlib.sha256(final_raw).hexdigest(),
+        final_size_bytes=len(final_raw))
+    terminal.update(handshake_protocol="2.0", invocation_id=invocation_id,
+        config_hash=config_hash, status="PASS", peer_verified=True,
+        temporal_coherence_contract=binding, lifecycle_ingress_protocol_revision="2.0",
+        lifecycle_ingress_session_id=session, selected_lifecycle_references=selected)
+    for name, doc in (("run_record.json", record), ("runtime_observer.json", observer),
+                      ("gate_b_vectors.json", gate), ("gate_b_terminal.json", terminal),
+                      ("lifecycle_ingress.live.json", live),
+                      ("lifecycle_ingress.references.json", request),
+                      ("lifecycle_ingress.final.json", final)):
+        _write_canonical_json(root / name, doc)
+    chain = observer["navigation_evidence_chain"]
+    chain_raw = semantic_canonical_bytes(chain)
+    _write_canonical_json(root / "navigation_evidence_chain.json", {
+        "schema_version": "1.0", "chain": chain,
+        "canonical": chain_raw.decode("utf-8"),
+        "sha256": hashlib.sha256(chain_raw).hexdigest()})
+    _refresh_protocol2_terminal_binding(root)
+    _seal_bundle(root)
+    return root
+
+
 def test_protocol2_pass_fixture_is_accepted_by_validate_run_directory(tmp_path):
     result = validate_run_directory(_protocol2_pass_bundle(tmp_path / "pass"))
     assert result["verdict"]["pass"] is True
     assert result["gate_b_terminal"]["terminal_pass"] is True
     assert set(result["artifact_hashes"]) == {"run_record.json", "runtime_observer.json",
         "gate_b_vectors.json", "gate_b_terminal.json", "navigation_evidence_chain.json"}
+
+
+def test_current_temporal_protocol2_bundle_accepts_five_samples_sharing_one_native_record(tmp_path):
+    result = validate_run_directory(_protocol2_temporal_pass_bundle(tmp_path / "current_temporal"))
+    assert result["verdict"]["pass"] is True
+    assert result["lifecycle_ingress"]["state"] == "VALIDATED"
+    selected = result["lifecycle_ingress"]["selected_record_references"]
+    assert len(selected) == 5 and len({(row["record_index"], row["record_sha256"]) for row in selected}) == 1
+
+
+@pytest.mark.parametrize("mutation", ["t_tf", "t_commit", "cutoff", "context", "gid",
+                                       "reference_hash", "request_revision", "path_uuid"])
+def test_current_temporal_protocol2_resealed_sample_or_native_mutations_reject(tmp_path, mutation):
+    root = _protocol2_temporal_pass_bundle(tmp_path / mutation)
+    gate_path = root / "gate_b_vectors.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    proof = gate["samples"][0]["temporal_proof"]
+    if mutation == "t_tf":
+        proof["t_tf_ns"] += 1
+    elif mutation == "t_commit":
+        proof["t_commit_ns"] = proof["t_vector_ns"] - 1
+    elif mutation == "cutoff":
+        proof["input_stamps_ns"]["scan"] = proof["t_vector_ns"] + 1
+    elif mutation == "context":
+        proof["context"]["episode_generation"] += 1
+    elif mutation == "gid":
+        final_path = root / "lifecycle_ingress.final.json"
+        final = json.loads(final_path.read_text(encoding="utf-8"))
+        final["retained_references"][0]["record"]["publisher_gid"] = "22" * 24
+        _write_canonical_json(final_path, final)
+        observer_path = root / "runtime_observer.json"
+        observer = json.loads(observer_path.read_text(encoding="utf-8"))
+        observer["lifecycle_ingress"] = final
+        _write_canonical_json(observer_path, observer)
+    elif mutation == "reference_hash":
+        gate["lifecycle_ingress"]["selected_record_references"][0]["record_sha256"] = "0" * 64
+    elif mutation == "request_revision":
+        request_path = root / "lifecycle_ingress.references.json"
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        request["request_revision"] += 1
+        unsigned = dict(request); unsigned.pop("request_digest")
+        request["request_digest"] = hashlib.sha256(semantic_canonical_bytes(unsigned)).hexdigest()
+        _write_canonical_json(request_path, request)
+    else:
+        proof["path_context"]["request_uuid"] = "different-compute-request"
+    _write_canonical_json(gate_path, gate)
+    _refresh_protocol2_terminal_binding(root)
+    with pytest.raises(ValueError):
+        validate_run_directory(root)
 
 
 def test_real_observer_failure_is_persisted_as_false_not_inferred_from_process_status():

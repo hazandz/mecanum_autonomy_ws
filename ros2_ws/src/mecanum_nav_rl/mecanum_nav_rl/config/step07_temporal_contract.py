@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -25,23 +24,27 @@ def _reject_constant(_: str) -> None:
     raise ValueError("RUN005_TEMPORAL_CONTRACT_NONFINITE")
 
 
+def resolve_run005_semantic_resource() -> Path:
+    """Return the exact source/share resource path used by the loader."""
+    source_root = Path(__file__).resolve().parents[2]
+    source_resource = source_root / "config" / "v3" / "contracts" / Path(CONTRACT_RESOURCE).name
+    if source_resource.is_file():
+        return source_resource.resolve(strict=True)
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return (Path(get_package_share_directory("mecanum_nav_rl")) /
+                "config" / "v3" / "contracts" / Path(CONTRACT_RESOURCE).name).resolve(strict=True)
+    except (ImportError, OSError) as error:
+        raise ValueError("RUN005_TEMPORAL_CONTRACT_RESOURCE_UNAVAILABLE") from error
+
+
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def load_run005_semantic_payload() -> dict[str, Any]:
-    source_root = Path(__file__).resolve().parents[2]
-    source_resource = source_root / "config" / "v3" / "contracts" / Path(CONTRACT_RESOURCE).name
-    if source_resource.is_file():
-        raw = source_resource.read_bytes()
-    else:
-        try:
-            from ament_index_python.packages import get_package_share_directory
-            raw = (Path(get_package_share_directory("mecanum_nav_rl")) /
-                   "config" / "v3" / "contracts" / Path(CONTRACT_RESOURCE).name).read_bytes()
-        except (ImportError, OSError) as error:
-            raise ValueError("RUN005_TEMPORAL_CONTRACT_RESOURCE_UNAVAILABLE") from error
+    raw = resolve_run005_semantic_resource().read_bytes()
     if raw.startswith(b"\xef\xbb\xbf") or raw.endswith(b"\n"):
         raise ValueError("RUN005_TEMPORAL_CONTRACT_SERIALIZATION_INVALID")
     document = json.loads(raw.decode("utf-8", errors="strict"),

@@ -302,6 +302,8 @@ def test_host_preflight_collects_complete_prefix_closure_before_installed_byte_c
     monkeypatch.setattr(runner, "sha256", lambda _path: runner.ARCHITECTURE_SHA256)
     monkeypatch.setattr(runner, "validate_runtime_python_environment",
                         lambda _python, _env, _prefix: {"observer_module_path": str(module)})
+    monkeypatch.setattr(runner, "validate_installed_temporal_source_closure",
+                        lambda *_args: {"offline_fixture": {"byte_equal": True}})
     monkeypatch.setattr(runner.os, "access", lambda *_args: True)
     monkeypatch.setattr(runner, "validate_gz_transport_host_capability",
                         lambda *_args: {"gz_topic_list": "PASS"})
@@ -2989,3 +2991,54 @@ def test_old_committed_exit_before_finalize_protocol_times_out_in_same_process_m
     code=compile(ast.fix_missing_locations(ast.Module(body=blocks[0],type_ignores=[])),'old_offline_protocol','exec')
     with pytest.raises(subprocess.TimeoutExpired):exec(code,context)
     assert not signals and not events and not c._closed and not c.args.peer_evidence_path.exists()
+
+
+def test_installed_temporal_helper_and_loader_resource_closure_rejects_stale_bytes(tmp_path, monkeypatch):
+    import shutil
+    source_root = tmp_path / "source"
+    package_prefix = tmp_path / "overlay"
+    source_pins = {}
+    module_paths = {}
+    for module, relative in runner.TEMPORAL_PYTHON_MODULES.items():
+        source = ROOT / relative
+        source_target = source_root / relative
+        installed = package_prefix / "lib/python3.12/site-packages" / Path(*module.split("." )).with_suffix(".py")
+        source_target.parent.mkdir(parents=True, exist_ok=True)
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, source_target)
+        shutil.copyfile(source, installed)
+        raw = source.read_bytes()
+        source_pins[relative] = {"sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+        module_paths[module] = str(installed)
+    resource_source = ROOT / runner.TEMPORAL_CONTRACT_RESOURCE
+    resource_target = source_root / runner.TEMPORAL_CONTRACT_RESOURCE
+    resource_installed = package_prefix / "share/mecanum_nav_rl/config/v3/contracts/step07_run005_temporal_coherence.v1.json"
+    resource_target.parent.mkdir(parents=True, exist_ok=True)
+    resource_installed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(resource_source, resource_target)
+    shutil.copyfile(resource_source, resource_installed)
+    raw = resource_source.read_bytes()
+    source_pins[runner.TEMPORAL_CONTRACT_RESOURCE] = {
+        "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+    facts = {"modules": module_paths, "resource": str(resource_installed)}
+    commands = []
+    def fake_run(args, **_kwargs):
+        commands.append(args)
+        return type("Result", (), {"stdout": json.dumps(facts)})()
+    monkeypatch.setattr(runner, "_run", fake_run)
+    result = runner.validate_installed_temporal_source_closure(Path("/canonical/python"), {},
+        source_root, package_prefix, source_pins)
+    assert len(result) == 4 and all(row["byte_equal"] for row in result.values())
+    assert "resolve_run005_semantic_resource" in commands[0][2]
+
+    stale = Path(module_paths["mecanum_nav_rl.observations.step07_temporal_state"])
+    stale.write_bytes(stale.read_bytes() + b"# stale overlay\n")
+    with pytest.raises(RuntimeError, match="TEMPORAL_MODULE_INSTALLED_SOURCE_OR_PIN_MISMATCH"):
+        runner.validate_installed_temporal_source_closure(Path("/canonical/python"), {},
+            source_root, package_prefix, source_pins)
+    shutil.copyfile(source_root / runner.TEMPORAL_PYTHON_MODULES[
+        "mecanum_nav_rl.observations.step07_temporal_state"], stale)
+    resource_installed.write_bytes(resource_installed.read_bytes() + b" ")
+    with pytest.raises(RuntimeError, match="TEMPORAL_RESOURCE_INSTALLED_SOURCE_OR_PIN_MISMATCH"):
+        runner.validate_installed_temporal_source_closure(Path("/canonical/python"), {},
+            source_root, package_prefix, source_pins)

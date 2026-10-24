@@ -269,6 +269,9 @@ class _Collector:
         self._last_measurement_key = None
         self._pending_sample = None
         self._pending_reference_requested = False
+        self._reference_operation_pending = None
+        self._finish_after_reference_release = False
+        self._deferred_reference_release = None
         self._selected_lifecycle_refs = []
         self._last_ros_time_ns = None
         self.sample_rows = []
@@ -304,7 +307,6 @@ class _Collector:
             collector_session_id=args.collector_session_id,
             config_hash=args.config_hash,
         )
-        self.lifecycle_ingress.request_references([])
         self.map_identity = (args.map_id, args.map_sha256)
         self._goal_intent = f"{args.invocation_id}:map_goal:{args.goal_x:.9f}:{args.goal_y:.9f}:{args.goal_yaw:.9f}"
         self._goal_triggered = False
@@ -636,12 +638,65 @@ class _Collector:
     def _tick(self):
         if type(getattr(self, "diagnostics", None)) is not dict:
             self.diagnostics = _new_collector_diagnostics()
+        # These fields are initialized in __init__ before any production
+        # callbacks are installed.  getattr defaults also keep exception
+        # settlement safe when construction itself was interrupted.
+        if not hasattr(self, "_pending_sample"):
+            self._pending_sample = None
+        if not hasattr(self, "_pending_reference_requested"):
+            self._pending_reference_requested = False
+        if not hasattr(self, "_reference_operation_pending"):
+            self._reference_operation_pending = None
+        if not hasattr(self, "_deferred_reference_release"):
+            self._deferred_reference_release = None
         if self._finished:
             self._wait_peer()
             return
+        if self._deferred_reference_release is not None:
+            row, reason = self._deferred_reference_release
+            try:
+                live = self.lifecycle_ingress.read_live()
+            except (OSError, ValueError):
+                return
+            if not self.lifecycle_ingress.acknowledged(live):
+                return
+            self.lifecycle_ingress.release_reference(row,
+                sample_references=self._selected_lifecycle_refs)
+            self._reference_operation_pending = "RELEASE"
+            self._deferred_reference_release = None
+            self.diagnostics["temporal"].update(pending_snapshot=False,
+                pending_discard_reason=reason)
+            return
+        if self._reference_operation_pending is not None:
+            try:
+                live = self.lifecycle_ingress.read_live()
+            except (OSError, ValueError) as error:
+                self.errors.append(f"LIFECYCLE_REFERENCE_ACK_READ_FAILED:{error}")
+                self._finish()
+                return
+            if not self.lifecycle_ingress.acknowledged(live):
+                self._record_blocker("NATIVE_REFERENCE_PENDING", self._last_ros_time_ns,
+                    {"operation": self._reference_operation_pending})
+                return
+            completed_operation = self._reference_operation_pending
+            self._reference_operation_pending = None
+            if completed_operation == "RELEASE" and self._finish_after_reference_release:
+                self._finish_after_reference_release = False
+                self._finish()
+                return
         self._publish_ready_when_complete()
         if len(self.samples) == 5 and self.navigate_result is not None:
             self._finish()
+            return
+        if len(self.samples) == 5:
+            # Keep action callbacks alive while navigation is pending.  No sixth
+            # sensor acquisition, native reservation, TF transform or commit.
+            self.diagnostics["temporal"].update(attempt_state="WAIT_NAVIGATION_RESULT",
+                pending_snapshot=False)
+            if time.monotonic() >= self.deadline:
+                if "GATE_B_NAVIGATION_RESULT_TIMEOUT" not in self.errors:
+                    self.errors.append("GATE_B_NAVIGATION_RESULT_TIMEOUT")
+                self._finish()
             return
         if self.errors:
             if self.navigate_result is not None:
@@ -791,6 +846,7 @@ class _Collector:
         else:
             lifecycle, scan, odom, receipt = current_lifecycle, self.latest_scan, self.latest_odom, self.latest_receipt
         if self._pending_sample is not None and context != self.temporal.pending.context:
+            self._release_pending_lifecycle_reference("ACTIVE_CONTEXT_CHANGED")
             self.temporal.pending = None
             self._pending_sample = None
             self._pending_reference_requested = False
@@ -850,6 +906,7 @@ class _Collector:
                 {"stale_or_future": ",".join(name for name, item in freshness.items()
                     if item["state"] != "FRESH")})
             if self._pending_sample is not None:
+                self._release_pending_lifecycle_reference("FRESHNESS_FAILED_BEFORE_COMMIT")
                 self.temporal.pending = None
                 self._pending_sample = None
                 self._pending_reference_requested = False
@@ -892,7 +949,8 @@ class _Collector:
             pending_sample["odom"], pending_sample["receipt"], pending_sample["path"])
         measurement_key = pending_sample["measurement_key"]
         if not self._pending_reference_requested:
-            self.lifecycle_ingress.request_references([pending_sample["lifecycle_record"]])
+            self.lifecycle_ingress.request_references([pending_sample["lifecycle_record"]],
+                sample_references=self._selected_lifecycle_refs)
             self._pending_reference_requested = True
         context = ActiveLifecycleConfigContext(LIFECYCLE_BARRIER_CONTRACT_ID,
             int(lifecycle.episode_generation), int(lifecycle.reset_epoch), int(lifecycle.runtime_generation), self.config_hash)
@@ -987,7 +1045,53 @@ class _Collector:
         values = [float(value) for value in assembly.vector.tolist()]
         if len(self.samples) >= 5:
             return
+        path_context = self._path_context
+        reference_digest = hashlib.sha256(canonical_json_bytes(
+            pending_sample["lifecycle_record"])).hexdigest()
+        commit_freshness = {name: {"stamp_ns": int(source_stamp),
+            "age_ns": int(commit_ros_ns - source_stamp), "limit_ns": int(limit)}
+            for name, source_stamp, limit in zip(
+                ("odometry", "scan", "receipt", "lifecycle"),
+                (odom_stamp, scan_stamp, receipt_stamp, lifecycle_stamp),
+                (250_000_000, 500_000_000, 500_000_000, 500_000_000))}
+        attempt_context = self.temporal.context
+        temporal_proof = {
+            "protocol_revision": "2.0", "contract_id": RUN005_TEMPORAL_CONTRACT_ID,
+            "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256,
+            "config_hash": self.config_hash,
+            "t_vector_ns": int(stamp), "t_tf_ns": int(odom_stamp),
+            "t_odom_ns": int(odom_stamp), "t_commit_ns": int(commit_ros_ns),
+            "t_commit_steady_ns": int(commit_steady_ns),
+            "input_stamps_ns": {"scan": int(scan_stamp), "odometry": int(odom_stamp),
+                "receipt": int(receipt_stamp), "lifecycle": int(lifecycle_stamp)},
+            "input_age_limits_ns": {"scan": 500_000_000, "odometry": 250_000_000,
+                "receipt": 500_000_000, "lifecycle": 500_000_000},
+            "freshness_at_acquisition": freshness, "freshness_at_commit": commit_freshness,
+            "context": {"goal_intent": attempt_context.goal_intent,
+                "config_hash": attempt_context.config_hash,
+                "map_id": attempt_context.map_id, "map_sha256": attempt_context.map_sha256,
+                "episode_generation": int(attempt_context.episode_generation),
+                "reset_epoch": int(attempt_context.reset_epoch),
+                "runtime_generation": int(attempt_context.runtime_generation),
+                "barrier_revision": int(attempt_context.barrier_sequence)},
+            "path_context": {"request_uuid": path_context.request_uuid,
+                "path_sequence": int(path_context.path_sequence),
+                "goal_intent": path_context.goal_intent,
+                "frame_id": path_context.frame_id,
+                "receipt_steady_ns": int(path_context.receipt_steady_ns),
+                "expiry_steady_ns": int(path_context.expiry_steady_ns)},
+            "compute_path_request_uuid": self._compute_request_uuid,
+            "navigate_to_pose_request_uuid": self._navigate_request_uuid,
+            "measurement_identity": [int(scan_stamp), int(odom_stamp),
+                int(receipt.final_publish_sequence), int(lifecycle.sequence),
+                int(pending_sample["lifecycle_record"]["record_index"])],
+            "native_lifecycle_reference": {"record_index": int(
+                pending_sample["lifecycle_record"]["record_index"]),
+                "record_sha256": reference_digest},
+            "campaign_deadline_steady_ns": int(self.temporal.deadline_ns),
+        }
         self.samples.append({"stamp_ns": int(stamp), "dimension": 81, "dtype": "float32", "values": values,
+            "temporal_proof": temporal_proof,
             "correlation": {"episode_generation": int(lifecycle.episode_generation),
                 "reset_epoch": int(lifecycle.reset_epoch), "runtime_generation": int(lifecycle.runtime_generation),
                 "lifecycle_sequence": int(lifecycle.sequence),
@@ -996,31 +1100,79 @@ class _Collector:
                 "receipt_stamp_ns": int(receipt.header.stamp.sec * 1_000_000_000 + receipt.header.stamp.nanosec),
                 "t_vector_ns": int(stamp), "t_tf_ns": int(odom_stamp),
                 "lifecycle_record_index": int(pending_sample["lifecycle_record"]["record_index"]),
-                "lifecycle_record_sha256": hashlib.sha256(canonical_json_bytes(
-                    pending_sample["lifecycle_record"])).hexdigest()}})
+                "lifecycle_record_sha256": reference_digest}})
         self._last_measurement_key = measurement_key
         reference = {"record_index": int(pending_sample["lifecycle_record"]["record_index"]),
             "record_sha256": hashlib.sha256(canonical_json_bytes(
                 pending_sample["lifecycle_record"])).hexdigest()}
-        if reference not in self._selected_lifecycle_refs:
-            self._selected_lifecycle_refs.append(reference)
+        self._selected_lifecycle_refs.append(reference)
+        self.lifecycle_ingress.promote_reference(pending_sample["lifecycle_record"],
+            sample_references=self._selected_lifecycle_refs)
+        self._reference_operation_pending = "PROMOTE"
         self._pending_sample = None
         self._pending_reference_requested = False
         if len(self.samples) == 5 and self.navigate_result is not None:
+            if self.navigate_result.get("succeeded") is not True:
+                self.errors.append("GATE_B_NAVIGATION_TERMINAL_FAILURE")
             self._finish()
 
     def _finish(self):
         if self._finished:
             return
+        if not hasattr(self, "_pending_sample"):
+            self._pending_sample = None
+        if not hasattr(self, "_pending_reference_requested"):
+            self._pending_reference_requested = False
+        if not hasattr(self, "_reference_operation_pending"):
+            self._reference_operation_pending = None
+        if not hasattr(self, "_finish_after_reference_release"):
+            self._finish_after_reference_release = False
+        if self._pending_sample is not None and self._pending_reference_requested:
+            try:
+                live = self.lifecycle_ingress.read_live()
+            except (OSError, ValueError):
+                # Finalization remains a structured failure; native will also
+                # reject an unacknowledged reservation at finalize.
+                live = None
+            if live is None or not self.lifecycle_ingress.acknowledged(live):
+                return
+            record = self._pending_sample["lifecycle_record"]
+            self.lifecycle_ingress.release_reference(record,
+                sample_references=self._selected_lifecycle_refs)
+            self._reference_operation_pending = "RELEASE"
+            self._finish_after_reference_release = True
+            return
         self._finished = True
         self._peer_deadline = time.monotonic() + self.args.peer_timeout_sec
+        temporal_state = getattr(self, "temporal", None)
+        active_context = getattr(temporal_state, "context", None)
+        path_context = getattr(temporal_state, "path", None)
+        serialized_context = (None if active_context is None else {
+            "goal_intent": active_context.goal_intent, "config_hash": active_context.config_hash,
+            "map_id": active_context.map_id, "map_sha256": active_context.map_sha256,
+            "episode_generation": int(active_context.episode_generation),
+            "reset_epoch": int(active_context.reset_epoch),
+            "runtime_generation": int(active_context.runtime_generation),
+            "barrier_revision": int(active_context.barrier_sequence)})
+        serialized_path = (None if path_context is None else {
+            "request_uuid": path_context.request_uuid,
+            "path_sequence": int(path_context.path_sequence),
+            "goal_intent": path_context.goal_intent,
+            "frame_id": path_context.frame_id,
+            "receipt_steady_ns": int(path_context.receipt_steady_ns),
+            "expiry_steady_ns": int(path_context.expiry_steady_ns)})
         document = {
             "schema_version": "1.0", "config_hash": self.config_hash,
             "handshake_protocol": "2.0",
             "invocation_id": getattr(self.args, "invocation_id", ""),
             "temporal_coherence_contract": {"contract_id": RUN005_TEMPORAL_CONTRACT_ID,
                 "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256},
+            "attempt_context": serialized_context,
+            "path_context": serialized_path,
+            "compute_path_request_uuid": getattr(self, "_compute_request_uuid", None),
+            "navigate_to_pose_request_uuid": getattr(self, "_navigate_request_uuid", None),
             "lifecycle_ingress": {"schema": "mecanum.step07-run005.lifecycle-ingress/v1",
+                "protocol_revision": "2.0",
                 "collector_session_id": self.args.collector_session_id,
                 "selected_record_references": list(self._selected_lifecycle_refs)},
             "protocol_phase": "COLLECTION_COMPLETE_AWAITING_PEER",
@@ -1079,6 +1231,23 @@ class _Collector:
             if self.rclpy.ok():
                 self.rclpy.shutdown()
 
+    def _release_pending_lifecycle_reference(self, reason: str) -> None:
+        """Release one reserved, uncommitted native record without blocking the timer."""
+        if not self._pending_sample or not self._pending_reference_requested:
+            return
+        row = self._pending_sample["lifecycle_record"]
+        try:
+            live = self.lifecycle_ingress.read_live()
+        except (OSError, ValueError):
+            self._deferred_reference_release = (row, reason)
+            return
+        if not self.lifecycle_ingress.acknowledged(live):
+            self._deferred_reference_release = (row, reason)
+            return
+        self.lifecycle_ingress.release_reference(row,
+            sample_references=self._selected_lifecycle_refs)
+        self._reference_operation_pending = "RELEASE"
+
     def _write_terminal(self):
         """Collection bất biến; terminal handshake ghi riêng đúng một lần."""
         if getattr(self, "_terminal_written", False):
@@ -1096,6 +1265,7 @@ class _Collector:
             "temporal_coherence_contract": {"contract_id": RUN005_TEMPORAL_CONTRACT_ID,
                 "contract_sha256": RUN005_TEMPORAL_CONTRACT_SHA256},
             "lifecycle_ingress_session_id": self.args.collector_session_id,
+            "lifecycle_ingress_protocol_revision": "2.0",
             "selected_lifecycle_references": list(self._selected_lifecycle_refs),
             "status": "PASS" if self.passed() else "FAIL", "errors": list(dict.fromkeys(self.errors)),
             "collection_artifact": {"path": Path(self.args.output).name,

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <optional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -35,6 +36,7 @@ class LifecycleIngress final {
   static constexpr size_t kArtifactMaxBytes = 1048576;
   static constexpr size_t kReferenceMaxBytes = 8192;
   static constexpr size_t kReferenceMaxCount = 5;
+  static constexpr size_t kPendingReferenceMaxCount = 1;
 
   LifecycleIngress(std::string live_path, std::string references_path,
                    std::string final_path, std::string invocation_id,
@@ -72,8 +74,13 @@ class LifecycleIngress final {
   std::deque<Json> queue_;
   std::deque<Json> history_;
   std::map<uint64_t, Json> retained_;
-  std::map<uint64_t, std::string> acknowledged_;
-  std::set<uint64_t> requested_;
+  std::map<uint64_t, std::string> committed_;
+  std::vector<Json> sample_references_;
+  std::optional<std::pair<uint64_t, std::string>> pending_;
+  Json request_ack_ = Json::object();
+  uint64_t request_revision_{0};
+  std::string request_digest_;
+  std::string request_bytes_;
   Json endpoint_ = Json::object();
   std::string failure_;
   uint64_t next_record_index_{1};

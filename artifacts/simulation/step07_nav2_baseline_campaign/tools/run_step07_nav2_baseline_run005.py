@@ -494,6 +494,73 @@ env -0
     return sourced
 
 
+TEMPORAL_PYTHON_MODULES = {
+    "mecanum_nav_rl.config.step07_temporal_contract":
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/step07_temporal_contract.py",
+    "mecanum_nav_rl.observations.step07_temporal_state":
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_temporal_state.py",
+    "mecanum_nav_rl.observations.step07_lifecycle_ingress":
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_lifecycle_ingress.py",
+}
+TEMPORAL_CONTRACT_RESOURCE = (
+    "ros2_ws/src/mecanum_nav_rl/config/v3/contracts/step07_run005_temporal_coherence.v1.json"
+)
+
+
+def validate_installed_temporal_source_closure(runtime_python: Path, env: dict[str, str],
+                                               worktree: Path, package_prefix: Path,
+                                               source_pins: dict) -> dict:
+    """Compare the actually imported helpers/resource against pinned source bytes.
+
+    This is a pure file/import-origin check; it runs no ROS graph or host probe.
+    """
+    probe = r'''import importlib, json
+modules = {}
+for name in json.loads(__import__('os').environ['TEMPORAL_MODULES_JSON']):
+ m = importlib.import_module(name); modules[name] = str(m.__file__)
+from mecanum_nav_rl.config.step07_temporal_contract import resolve_run005_semantic_resource
+resource = resolve_run005_semantic_resource()
+print(json.dumps({'modules':modules,'resource':str(resource)},sort_keys=True,separators=(',',':')))
+'''
+    module_paths = json.dumps(sorted(TEMPORAL_PYTHON_MODULES), separators=(",", ":"))
+    probe_env = dict(env, TEMPORAL_MODULES_JSON=module_paths)
+    try:
+        facts = json.loads(_run([str(runtime_python), "-c", probe], env=probe_env).stdout.strip())
+    except (RuntimeError, json.JSONDecodeError, AttributeError) as error:
+        raise RuntimeError("TEMPORAL_INSTALLED_IMPORT_OR_RESOURCE_PROBE_FAILED") from error
+    results = {}
+    for module, relative in TEMPORAL_PYTHON_MODULES.items():
+        installed = Path(facts.get("modules", {}).get(module, "")).resolve(strict=True)
+        source = (worktree / relative).resolve(strict=True)
+        try:
+            installed.relative_to(package_prefix.resolve(strict=True))
+        except ValueError as error:
+            raise RuntimeError(f"TEMPORAL_MODULE_ORIGIN_OUTSIDE_SELECTED_OVERLAY:{module}") from error
+        pin = source_pins.get(relative)
+        source_bytes, installed_bytes = source.read_bytes(), installed.read_bytes()
+        if (type(pin) is not dict or pin.get("sha256") != hashlib.sha256(source_bytes).hexdigest()
+                or pin.get("size_bytes") != len(source_bytes) or installed_bytes != source_bytes):
+            raise RuntimeError(f"TEMPORAL_MODULE_INSTALLED_SOURCE_OR_PIN_MISMATCH:{module}")
+        results[relative] = {"module": module, "installed_path": str(installed),
+            "source_path": str(source), "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "size_bytes": len(source_bytes), "byte_equal": True}
+    resource_installed = Path(facts.get("resource", "")).resolve(strict=True)
+    resource_source = (worktree / TEMPORAL_CONTRACT_RESOURCE).resolve(strict=True)
+    try:
+        resource_installed.relative_to(package_prefix.resolve(strict=True))
+    except ValueError as error:
+        raise RuntimeError("TEMPORAL_RESOURCE_ORIGIN_OUTSIDE_SELECTED_OVERLAY") from error
+    source_bytes, installed_bytes = resource_source.read_bytes(), resource_installed.read_bytes()
+    pin = source_pins.get(TEMPORAL_CONTRACT_RESOURCE)
+    if (type(pin) is not dict or pin.get("sha256") != hashlib.sha256(source_bytes).hexdigest()
+            or pin.get("size_bytes") != len(source_bytes) or installed_bytes != source_bytes):
+        raise RuntimeError("TEMPORAL_RESOURCE_INSTALLED_SOURCE_OR_PIN_MISMATCH")
+    results[TEMPORAL_CONTRACT_RESOURCE] = {"installed_path": str(resource_installed),
+        "source_path": str(resource_source), "sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "size_bytes": len(source_bytes), "byte_equal": True, "loader_resource_verified": True}
+    return results
+
+
 def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
                    partition: str, map_root: Path, fuel_root: Path, source_pins: dict,
                    runtime_python: Path, record: dict | None = None) -> dict:
@@ -518,6 +585,8 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
         if not any((Path(part) / program).is_file() for part in env.get("PATH", "").split(os.pathsep)):
             raise RuntimeError(f"REQUIRED_EXECUTABLE_MISSING:{program}")
     prefixes = collect_package_prefixes(env)
+    temporal_installed_source_closure = validate_installed_temporal_source_closure(
+        runtime_python, env, worktree, Path(prefixes["mecanum_nav_rl"]), source_pins)
     nav2_executables = validate_nav2_executables(prefixes)
     installed_files = INSTALLED_FILE_ARTIFACTS
     validate_installed_file_package_closure(installed_files, prefixes)
@@ -591,6 +660,7 @@ def host_preflight(env: dict[str, str], worktree: Path, run_directory: Path,
             "gate_b_observer_console_script": str(gate_script),
             "runtime_python": str(runtime_python), "runtime_python_fingerprint": runtime_facts,
             "installed_source_byte_equality": equality, "rosidl_import": "PASS",
+            "temporal_installed_source_closure": temporal_installed_source_closure,
             "qos_implementation_pin_evidence": qos_implementation_pin_evidence,
             "stale_processes": stale, "gz_transport_host_capability": transport_facts,
             "ros_discovery_host_capability": ros_discovery_facts}
@@ -939,6 +1009,7 @@ def _validate_native_lifecycle_references(collection: dict, peer: dict,
     if (type(identity) is not dict or type(collection_identity) is not dict
             or type(final) is not dict
             or identity.get("schema") != "mecanum.step07-run005.lifecycle-ingress/v1"
+            or identity.get("protocol_revision") != "2.0"
             or collection_identity.get("schema") != identity.get("schema")
             or identity.get("collector_session_id") != collection_identity.get("collector_session_id")
             or identity.get("collector_session_id") != final.get("collector_session_id")
@@ -946,6 +1017,7 @@ def _validate_native_lifecycle_references(collection: dict, peer: dict,
             or collection_identity.get("selected_record_references") is None
             or final.get("schema") != identity.get("schema")
             or final.get("schema_version") != "1.0"
+            or final.get("protocol_revision") != "2.0"
             or final.get("invocation_id") != record.get("invocation_id")
             or final.get("collector_session_id") != identity.get("collector_session_id")
             or final.get("config_hash") != record.get("config_hash")
@@ -978,15 +1050,26 @@ def _validate_native_lifecycle_references(collection: dict, peer: dict,
                            "record_sha256": item["record_sha256"]})
     request_path = run_directory / identity.get("reference_request_artifact", "")
     request = load_canonical_json(request_path)
+    unsigned_request = dict(request)
+    supplied_digest = unsigned_request.pop("request_digest", None)
+    request_digest = hashlib.sha256(json.dumps(unsigned_request, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
     if (request.get("schema") != identity.get("schema")
             or request.get("schema_version") != "1.0"
+            or request.get("protocol_revision") != "2.0"
             or request.get("invocation_id") != record.get("invocation_id")
             or request.get("collector_session_id") != identity.get("collector_session_id")
-            or request.get("references") != normalized):
+            or request.get("config_hash") != record.get("config_hash")
+            or request.get("operation") != "PROMOTE"
+            or type(request.get("request_revision")) is not int
+            or request.get("request_revision", 0) < len(collection.get("samples", [])) * 2
+            or supplied_digest != request_digest
+            or request.get("references") != selected):
         raise RuntimeError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_MISMATCH")
     live_path = run_directory / identity.get("live_artifact", "")
     live = load_canonical_json(live_path)
     if (live.get("schema") != identity.get("schema")
+            or live.get("protocol_revision") != "2.0"
             or live.get("invocation_id") != record.get("invocation_id")
             or live.get("collector_session_id") != identity.get("collector_session_id")
             or live.get("config_hash") != record.get("config_hash")
@@ -999,6 +1082,14 @@ def _validate_native_lifecycle_references(collection: dict, peer: dict,
         "final_sha256": hashlib.sha256(final_raw).hexdigest(),
         "final_size_bytes": len(final_raw),
     })
+    unique_selected = {item["record_index"]: item["record_sha256"] for item in normalized}
+    committed = final.get("committed_references")
+    expected_committed = [{"record_index": index, "record_sha256": digest}
+                          for index, digest in sorted(unique_selected.items())]
+    if committed != expected_committed:
+        raise RuntimeError("LIFECYCLE_INGRESS_NATIVE_COMMITTED_SET_MISMATCH")
+    if final.get("request_ack") != live.get("reference_ack"):
+        raise RuntimeError("LIFECYCLE_INGRESS_FINAL_REQUEST_ACK_MISMATCH")
     return {"selected_record_references": normalized,
             "endpoint_binding": final.get("endpoint_binding"),
             "final_sha256": hashlib.sha256(final_raw).hexdigest(),
@@ -2222,6 +2313,7 @@ def main():
               "temporal_coherence_contract": {"contract_id": TEMPORAL_CONTRACT_ID,
                   "contract_sha256": TEMPORAL_CONTRACT_SHA256},
               "lifecycle_ingress": {"schema": "mecanum.step07-run005.lifecycle-ingress/v1",
+                  "protocol_revision": "2.0",
                   "collector_session_id": lifecycle_session_id,
                   "live_artifact": lifecycle_live_path.name,
                   "reference_request_artifact": lifecycle_references_path.name,
@@ -2993,6 +3085,7 @@ def settle_collectors_before_teardown(*, gate, cpp, gate_member, cpp_member,
             "temporal_coherence_contract": {"contract_id": TEMPORAL_CONTRACT_ID,
                 "contract_sha256": TEMPORAL_CONTRACT_SHA256},
             "lifecycle_ingress": {"schema": "mecanum.step07-run005.lifecycle-ingress/v1",
+                "protocol_revision": "2.0",
                 "collector_session_id": collector_session_id,
                 "selected_record_references": []},
             "config_hash": config_hash,

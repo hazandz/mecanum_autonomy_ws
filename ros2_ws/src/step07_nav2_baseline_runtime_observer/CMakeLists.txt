@@ -24,9 +24,14 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_step07_nav2_baseline_runtime_observer
     test/test_step07_nav2_baseline_runtime_observer.cpp
+    test/test_lifecycle_ingress.cpp
     src/lifecycle_ingress.cpp)
   ament_target_dependencies(test_step07_nav2_baseline_runtime_observer rclcpp rosgraph_msgs sensor_msgs nav_msgs tf2_msgs mecanum_nav_rl_interfaces)
   target_link_libraries(test_step07_nav2_baseline_runtime_observer nlohmann_json::nlohmann_json OpenSSL::Crypto)
   target_include_directories(test_step07_nav2_baseline_runtime_observer PRIVATE include)
+  target_compile_definitions(test_step07_nav2_baseline_runtime_observer PRIVATE
+    STEP07_RL_PYTHON_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../mecanum_nav_rl"
+    STEP07_REPOSITORY_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../../.."
+    STEP07_RUN005_RUNNER="${CMAKE_CURRENT_SOURCE_DIR}/../../../artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_nav2_baseline_run005.py")
 endif()
 ament_package()

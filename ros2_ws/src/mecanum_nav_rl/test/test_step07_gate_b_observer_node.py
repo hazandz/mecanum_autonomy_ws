@@ -47,14 +47,31 @@ class _FakeLifecycleIngress:
     def __init__(self, record=None):
         self.record = record or _lifecycle_record()
         self.requested = []
+        self.revision = 0
+        self.ack = None
+        self.committed = []
 
-    def request_references(self, records):
+    def _request(self, operation, row, sample_references):
         import hashlib
         import json
-        self.requested = [{"record_index": row["record_index"],
-            "record_sha256": hashlib.sha256(json.dumps(row, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()}
-            for row in records]
+        digest = hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+        self.revision += 1
+        self.ack = {"revision": self.revision, "operation": operation,
+            "record_index": row["record_index"], "record_sha256": digest,
+            "status": "ACKNOWLEDGED"}
+        if operation == "PROMOTE":
+            self.committed = list(sample_references)
+        self.requested = list(sample_references)
+
+    def request_references(self, records, *, sample_references=None):
+        self._request("RESERVE", records[0], sample_references or [])
+
+    def promote_reference(self, row, *, sample_references):
+        self._request("PROMOTE", row, sample_references)
+
+    def release_reference(self, row, *, sample_references):
+        self._request("RELEASE", row, sample_references)
 
     def read_live(self):
         return {"state": "READY", "endpoint_binding": {
@@ -63,16 +80,57 @@ class _FakeLifecycleIngress:
             "node_name": "safety_lifecycle", "node_namespace": "/",
             "reliability": 1, "durability": 2,
             "qos_history_depth_status": "OBSERVED_MATCH"},
-            "records": [self.record], "acknowledged_references": list(self.requested)}
+            "records": [self.record], "acknowledged_references": list(self.requested),
+            "protocol_revision": "2.0", "reference_ack": self.ack,
+            "committed_references": list(self.committed)}
 
     def acknowledged(self, document):
-        return document["acknowledged_references"] == self.requested
+        return (document.get("protocol_revision") == "2.0"
+            and document.get("reference_ack") == self.ack
+            and document.get("acknowledged_references") == self.requested)
 
 
 def test_accepts_five_immutable_finite_observation81_samples():
     rows = [{"stamp_ns": i, "dimension": 81, "dtype": "float32", "values": [0.0] * 81}
             for i in range(1, 6)]
     assert validate_vector_samples(rows)
+
+
+def test_five_samples_wait_for_navigation_without_sixth_capture_and_callbacks_progress(monkeypatch):
+    from mecanum_nav_rl.observations import step07_gate_b_observer_node as m
+    import time
+    c = m._Collector.__new__(m._Collector)
+    c._finished = False
+    c.samples = [{"stamp_ns": i, "dimension": 81, "dtype": "float32", "values": [0.0] * 81}
+                 for i in range(1, 6)]
+    c.errors = []
+    c.navigate_result = None
+    c.deadline = time.monotonic() + 10
+    c.diagnostics = m._new_collector_diagnostics()
+    calls = {"ready": 0, "finish": 0, "ingress": 0}
+    c._publish_ready_when_complete = lambda: calls.__setitem__("ready", calls["ready"] + 1)
+    c._finish = lambda: calls.__setitem__("finish", calls["finish"] + 1)
+    c.lifecycle_ingress = SimpleNamespace(
+        read_live=lambda: calls.__setitem__("ingress", calls["ingress"] + 1),
+        request_references=lambda *_a, **_k: calls.__setitem__("ingress", calls["ingress"] + 1))
+    c._pending_sample = None
+    c._pending_reference_requested = False
+    c._reference_operation_pending = None
+    c._deferred_reference_release = None
+    c._selected_lifecycle_refs = []
+    c._tick()
+    assert len(c.samples) == 5
+    assert c.diagnostics["temporal"]["attempt_state"] == "WAIT_NAVIGATION_RESULT"
+    assert calls == {"ready": 1, "finish": 0, "ingress": 0}
+
+    c._navigate_request_uuid = "nav-request"
+    c.GoalStatus = SimpleNamespace(STATUS_SUCCEEDED=4)
+    # The callback path remains callable while the timer waits for sample completion.
+    c._navigate_done(SimpleNamespace(result=lambda: SimpleNamespace(status=4)), "nav-request")
+    assert c.navigate_result == {"accepted": True, "status": 4, "succeeded": True}
+    c._tick()
+    assert calls["finish"] == 1
+    assert len(c.samples) == 5
 
 
 def test_rejects_partial_nonfinite_and_nonmonotonic_vectors():
@@ -274,6 +332,8 @@ c.node=NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=1000000000)))
 c.tf_buffer=buffer; c.path=path; c.config_hash="a"*64
 c._compute_path_requested=c._navigate_requested=True
 c._compute_path_calls=c._navigate_calls=1
+c._compute_request_uuid="compute-uuid"
+c._navigate_request_uuid="navigate-uuid"
 c._finished=False; c._last_measurement_key=None; c.samples=[]; c.errors=[]
 c.args=NS(collector_session_id="fixture-session")
 c.temporal=m.Run005TemporalAttempt(steady_deadline_ns=10**30)
@@ -290,10 +350,20 @@ c.map_identity=("warehouse_map2","b"*64)
 c._goal_intent="fixture-goal"
 import hashlib, json
 class FakeIngress:
-    def __init__(self): self.requested=[]
-    def request_references(self, rows):
-        self.requested=[{"record_index":r["record_index"],"record_sha256":hashlib.sha256(
-            json.dumps(r,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest()} for r in rows]
+    def __init__(self): self.requested=[]; self.revision=0; self.ack=None; self.committed=[]
+    def _request(self, operation, row, sample_references):
+        self.revision += 1
+        digest=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest()
+        self.ack={"revision":self.revision,"operation":operation,"record_index":row["record_index"],
+            "record_sha256":digest,"status":"ACKNOWLEDGED"}
+        self.requested=list(sample_references)
+        if operation=="PROMOTE":self.committed=list(sample_references)
+    def request_references(self, rows, *, sample_references=None):
+        self._request("RESERVE",rows[0],sample_references or [])
+    def promote_reference(self, row, *, sample_references):
+        self._request("PROMOTE",row,sample_references)
+    def release_reference(self, row, *, sample_references):
+        self._request("RELEASE",row,sample_references)
     def read_live(self):
         record={"record_index":1,"sequence":1,"publisher_gid":"gid-fixture","validity":"ADMITTED",
             "payload_provenance":"rclcpp::MessageInfo.publisher_gid",
@@ -306,8 +376,10 @@ class FakeIngress:
             "topic":"/mecanum/safety_lifecycle_state","type":"mecanum_nav_rl_interfaces/msg/SafetyLifecycleState",
             "node_name":"safety_lifecycle","node_namespace":"/","reliability":1,"durability":2,
             "qos_history_depth_status":"OBSERVED_MATCH"},"records":[record],
-            "acknowledged_references":list(self.requested)}
-    def acknowledged(self, doc): return doc["acknowledged_references"]==self.requested
+            "acknowledged_references":list(self.requested),"protocol_revision":"2.0",
+            "reference_ack":self.ack,"committed_references":list(self.committed)}
+    def acknowledged(self, doc): return (doc.get("protocol_revision")=="2.0"
+        and doc.get("reference_ack")==self.ack and doc.get("acknowledged_references")==self.requested)
 c.lifecycle_ingress=FakeIngress()
 c._selected_lifecycle_refs=[]
 c._pending_sample=None

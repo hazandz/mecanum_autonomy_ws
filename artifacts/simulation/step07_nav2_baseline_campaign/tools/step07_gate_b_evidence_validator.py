@@ -108,6 +108,7 @@ def validate_gate_b_terminal(terminal: dict, *, collection_raw: bytes, peer_raw:
             raise ValueError("GATE_B_TERMINAL_PEER_IDENTITY_INVALID")
         if config_hash == RUN005_TEMPORAL_CONFIG_HASH:
             if (terminal.get("temporal_coherence_contract") != collection.get("temporal_coherence_contract")
+                    or terminal.get("lifecycle_ingress_protocol_revision") != "2.0"
                     or terminal.get("lifecycle_ingress_session_id") != collection["lifecycle_ingress"].get("collector_session_id")
                     or terminal.get("selected_lifecycle_references") != collection["lifecycle_ingress"].get("selected_record_references")):
                 raise ValueError("GATE_B_TERMINAL_TEMPORAL_BINDING_MISMATCH")
@@ -551,7 +552,8 @@ def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record
             or record.get("config_hash") != RUN005_TEMPORAL_CONFIG_HASH):
         raise ValueError("RUN005_TEMPORAL_CONTRACT_BUNDLE_BINDING_INVALID")
     identity = record.get("lifecycle_ingress")
-    if type(identity) is not dict or identity.get("schema") != LIFECYCLE_INGRESS_SCHEMA:
+    if (type(identity) is not dict or identity.get("schema") != LIFECYCLE_INGRESS_SCHEMA
+            or identity.get("protocol_revision") != "2.0"):
         raise ValueError("LIFECYCLE_INGRESS_RUN_RECORD_IDENTITY_INVALID")
     session = identity.get("collector_session_id")
     if type(session) is not str or not session:
@@ -577,13 +579,22 @@ def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record
     for label, doc in docs.items():
         if (doc.get("schema") != LIFECYCLE_INGRESS_SCHEMA
                 or doc.get("schema_version") != "1.0"
+                or doc.get("protocol_revision") != "2.0"
                 or doc.get("invocation_id") != record.get("invocation_id")
                 or doc.get("collector_session_id") != session
                 or doc.get("config_hash") != RUN005_TEMPORAL_CONFIG_HASH):
             raise ValueError(f"LIFECYCLE_INGRESS_{label.upper()}_IDENTITY_INVALID")
     if request is not None:
         refs_request = request.get("references")
-        if type(refs_request) is not list or len(refs_request) > 5:
+        unsigned_request = dict(request)
+        supplied_digest = unsigned_request.pop("request_digest", None)
+        computed_digest = hashlib.sha256(semantic_canonical_bytes(unsigned_request)).hexdigest()
+        if (type(refs_request) is not list or len(refs_request) > 5
+                or request.get("protocol_revision") != "2.0"
+                or type(request.get("request_revision")) is not int
+                or request.get("request_revision", 0) <= 0
+                or request.get("config_hash") != record.get("config_hash")
+                or supplied_digest != computed_digest):
             raise ValueError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_INVALID")
     else:
         refs_request = None
@@ -631,6 +642,7 @@ def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record
         gate_ingress = gate.get("lifecycle_ingress")
         if (type(gate_ingress) is not dict
                 or gate_ingress.get("schema") != LIFECYCLE_INGRESS_SCHEMA
+                or gate_ingress.get("protocol_revision") != "2.0"
                 or gate_ingress.get("collector_session_id") != session):
             raise ValueError("GATE_B_LIFECYCLE_INGRESS_IDENTITY_INVALID")
         selected = gate_ingress.get("selected_record_references")
@@ -650,12 +662,14 @@ def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record
             raise ValueError("RUN_RECORD_LIFECYCLE_REFERENCE_BINDING_MISMATCH")
     if terminal is not None:
         if (terminal.get("temporal_coherence_contract") != binding
+                or terminal.get("lifecycle_ingress_protocol_revision") != "2.0"
                 or terminal.get("lifecycle_ingress_session_id") != session
                 or terminal.get("selected_lifecycle_references") != selected):
             raise ValueError("GATE_B_TERMINAL_LIFECYCLE_BINDING_MISMATCH")
     if final is not None:
         retained = final.get("retained_references")
         if (final.get("state") not in ("FINALIZED", "FAILED")
+                or final.get("protocol_revision") != "2.0"
                 or type(retained) is not list or len(retained) > 5
                 or (observer is not None and observer.get("lifecycle_ingress") != final)):
             raise ValueError("LIFECYCLE_INGRESS_FINAL_SCHEMA_OR_OBSERVER_MISMATCH")
@@ -669,14 +683,136 @@ def _validate_lifecycle_ingress_bundle(*, root: Path, verified: set[str], record
             if (row.get("record_index") != index or entry.get("record_sha256") != digest
                     or index in final_records):
                 raise ValueError("LIFECYCLE_INGRESS_FINAL_REFERENCE_HASH_INVALID")
-            final_records[index] = digest
-        if any(final_records.get(ref.get("record_index")) != ref.get("record_sha256")
+            receive = row.get("receive_time")
+            payload = row.get("payload")
+            sequence = row.get("sequence")
+            if (len(semantic_canonical_bytes(row)) > 8192
+                    or type(sequence) is not int or sequence < 0
+                    or type(receive) is not dict or receive.get("clock") != "CLOCK_MONOTONIC"
+                    or type(receive.get("monotonic_ns")) is not int
+                    or receive["monotonic_ns"] <= 0
+                    or row.get("publisher_gid") != endpoint.get("publisher_gid")
+                    or row.get("payload_provenance") != "rclcpp::MessageInfo.publisher_gid"
+                    or row.get("validity") != "ADMITTED"
+                    or type(payload) is not dict or payload.get("sequence") != sequence
+                    or type(payload.get("episode_generation")) is not int
+                    or type(payload.get("reset_epoch")) is not int
+                    or type(payload.get("runtime_generation")) is not int
+                    or type(payload.get("primary_state")) is not int
+                    or type(payload.get("barrier_state")) is not int
+                    or type(payload.get("motion_permitted")) is not bool):
+                raise ValueError("LIFECYCLE_INGRESS_FINAL_RECORD_PROVENANCE_INVALID")
+            final_records[index] = {"sha256": digest, "record": row}
+        if any(final_records.get(ref.get("record_index"), {}).get("sha256") != ref.get("record_sha256")
                for ref in selected):
             raise ValueError("LIFECYCLE_INGRESS_REQUIRED_REFERENCE_NOT_RETAINED")
+        if (final.get("committed_references") != [
+                {"record_index": index, "record_sha256": digest}
+                for index, digest in sorted({r["record_index"]: r["record_sha256"] for r in selected}.items())]):
+            raise ValueError("LIFECYCLE_INGRESS_COMMITTED_REFERENCE_SET_MISMATCH")
         if live is not None and final.get("endpoint_binding") != endpoint:
             raise ValueError("LIFECYCLE_INGRESS_FINAL_ENDPOINT_MISMATCH")
-        if request is not None and request.get("references") != selected:
+        if request is not None and (request.get("references") != selected
+                or request.get("operation") != "PROMOTE"
+                or request.get("request_digest") != live.get("reference_ack", {}).get("request_digest")
+                or request.get("request_revision") != live.get("reference_ack", {}).get("revision")):
             raise ValueError("LIFECYCLE_INGRESS_REFERENCE_REQUEST_MISMATCH")
+        if final.get("request_ack") != (live.get("reference_ack") if live is not None else None):
+            raise ValueError("LIFECYCLE_INGRESS_FINAL_REQUEST_ACK_MISMATCH")
+        if gate is not None:
+            proof_seen = set()
+            for sample, reference in zip(gate.get("samples", []), selected):
+                proof = sample.get("temporal_proof") if type(sample) is dict else None
+                correlation = sample.get("correlation") if type(sample) is dict else None
+                native_entry = final_records[reference["record_index"]]
+                native_payload = native_entry["record"]["payload"]
+                if (type(proof) is not dict or proof.get("protocol_revision") != "2.0"
+                        or proof.get("contract_id") != RUN005_TEMPORAL_CONTRACT_ID
+                        or proof.get("contract_sha256") != RUN005_TEMPORAL_CONTRACT_SHA256
+                        or proof.get("config_hash") != record.get("config_hash")
+                        or proof.get("native_lifecycle_reference") != reference
+                        or proof.get("t_vector_ns") != sample.get("stamp_ns")
+                        or type(correlation) is not dict
+                        or type(proof.get("path_context")) is not dict
+                        or type(proof.get("context")) is not dict
+                        or proof.get("context") != gate.get("attempt_context")
+                        or proof.get("path_context") != gate.get("path_context")
+                        or proof.get("compute_path_request_uuid") != gate.get("compute_path_request_uuid")
+                        or proof.get("navigate_to_pose_request_uuid") != gate.get("navigate_to_pose_request_uuid")
+                        or proof.get("t_tf_ns") != proof.get("t_odom_ns")
+                        or proof.get("t_tf_ns") != correlation.get("odometry_stamp_ns")
+                        or proof.get("t_vector_ns") != correlation.get("t_vector_ns")
+                        or proof.get("compute_path_request_uuid") != proof.get("path_context", {}).get("request_uuid")
+                        or proof.get("path_context", {}).get("goal_intent") != proof.get("context", {}).get("goal_intent")
+                        or proof.get("path_context", {}).get("frame_id") != "map"
+                        or type(proof.get("compute_path_request_uuid")) is not str
+                        or not proof["compute_path_request_uuid"]
+                        or type(proof.get("navigate_to_pose_request_uuid")) is not str
+                        or not proof["navigate_to_pose_request_uuid"]):
+                    raise ValueError("GATE_B_TEMPORAL_SAMPLE_PROOF_INVALID")
+                stamps = proof.get("input_stamps_ns")
+                limits = proof.get("input_age_limits_ns")
+                acquisition = proof.get("freshness_at_acquisition")
+                committed = proof.get("freshness_at_commit")
+                if (type(stamps) is not dict or type(limits) is not dict
+                        or set(stamps) != {"scan", "odometry", "receipt", "lifecycle"}
+                        or set(limits) != set(stamps) or type(acquisition) is not dict
+                        or type(committed) is not dict):
+                    raise ValueError("GATE_B_TEMPORAL_SAMPLE_INPUT_PROOF_INVALID")
+                t_vector, t_commit = proof["t_vector_ns"], proof["t_commit_ns"]
+                t_commit_steady = proof.get("t_commit_steady_ns")
+                deadline = proof.get("campaign_deadline_steady_ns")
+                if (type(t_vector) is not int or type(t_commit) is not int
+                        or type(t_commit_steady) is not int or type(deadline) is not int
+                        or t_commit < t_vector or t_commit_steady <= 0 or t_commit_steady >= deadline):
+                    raise ValueError("GATE_B_TEMPORAL_SAMPLE_DEADLINE_OR_ORDER_INVALID")
+                for name, source_stamp in stamps.items():
+                    limit = limits[name]
+                    acq = acquisition.get(name)
+                    end = committed.get(name)
+                    if (type(source_stamp) is not int or source_stamp <= 0 or source_stamp > t_vector
+                            or type(limit) is not int or limit <= 0
+                            or type(acq) is not dict or type(end) is not dict
+                            or acq.get("stamp_ns") != source_stamp
+                            or acq.get("age_ns") != t_vector - source_stamp
+                            or acq.get("limit_ns") != limit
+                            or end.get("stamp_ns") != source_stamp
+                            or end.get("age_ns") != t_commit - source_stamp
+                            or end.get("limit_ns") != limit
+                            or not 0 <= t_vector - source_stamp <= limit
+                            or not 0 <= t_commit - source_stamp <= limit):
+                        raise ValueError("GATE_B_TEMPORAL_SAMPLE_FRESHNESS_INVALID")
+                context = proof.get("context")
+                path_context = proof.get("path_context")
+                if (type(context) is not dict or type(path_context) is not dict
+                        or context.get("config_hash") != record.get("config_hash")
+                        or context.get("episode_generation") != native_payload.get("episode_generation")
+                        or context.get("reset_epoch") != native_payload.get("reset_epoch")
+                        or context.get("runtime_generation") != native_payload.get("runtime_generation")
+                        or context.get("barrier_revision") != native_payload.get("sequence")
+                        or native_payload.get("primary_state") != 2
+                        or native_payload.get("barrier_state") != 1
+                        or native_payload.get("motion_permitted") is not True
+                        or path_context.get("path_sequence", 0) <= 0
+                        or path_context.get("expiry_steady_ns", 0) <= t_commit_steady
+                        or path_context.get("expiry_steady_ns", 0) > deadline
+                        or path_context.get("receipt_steady_ns", deadline) > t_commit_steady
+                        or context.get("goal_intent") != proof.get("path_context", {}).get("goal_intent")):
+                    raise ValueError("GATE_B_TEMPORAL_SAMPLE_CONTEXT_OR_PATH_INVALID")
+                measurement = proof.get("measurement_identity")
+                expected_measurement = [stamps.get("scan"), stamps.get("odometry"),
+                    correlation.get("receipt_sequence"), native_payload.get("sequence"),
+                    reference.get("record_index")]
+                if (type(measurement) is not list or len(measurement) != 5
+                        or measurement != expected_measurement or tuple(measurement) in proof_seen
+                        or stamps.get("scan") != correlation.get("scan_stamp_ns")
+                        or stamps.get("odometry") != correlation.get("odometry_stamp_ns")
+                        or stamps.get("receipt") != correlation.get("receipt_stamp_ns")
+                        or stamps.get("lifecycle") != native_entry["record"].get("ros_stamp_ns")
+                        or correlation.get("receipt_sequence") != measurement[2]
+                        or correlation.get("lifecycle_sequence") != native_payload.get("sequence")):
+                    raise ValueError("GATE_B_TEMPORAL_MEASUREMENT_IDENTITY_INVALID")
+                proof_seen.add(tuple(measurement))
         raw = (root / LIFECYCLE_INGRESS_FILES["final"]).read_bytes()
         if (identity.get("final_sha256") != hashlib.sha256(raw).hexdigest()
                 or identity.get("final_size_bytes") != len(raw)):

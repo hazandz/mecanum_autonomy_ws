@@ -1529,3 +1529,12 @@ The current Run005 `sim_eval` / `NAV2_BASELINE` candidate binds `navigation.temp
 Current implementation paths are recorded as an exact phase-aware set in the Run005 guard/evidence: Phase A 26 source/test paths, Phase A.5 29 paths, Phase B 33 paths. The authorized allowlist is a separate 37-path set. The inventory has 53 members with SHA-256 and byte size: the prior 38-member closure plus 15 source/test/package dependencies used by the temporal contract, config binding, Python temporal/lifecycle adapters and native C++ ingress. Current evidence ceiling is `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`; no runtime claim is made.
 
 Final offline verification for this candidate passed: Step-7 tools 433/2 skipped (two historical immutable-bundle tests not enabled because evidence roots were not configured and checksum replay was prohibited), bringup 375, RL 740, six-package external build, observer/ROSIDL 33, py_compile 18, installed/source equality 22, and strict metadata/parser/pin/scope/hash/ledger/diff checks. Evidence ceiling remains `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`; no runtime verification is inferred.
+
+
+## Run005 L2 temporal-coherence corrective F1–F10 — current candidate
+
+Current base: `9856f025bcc4d9c008664ba41fb0589303e005da`; semantic contract `mecanum.step07-run005-temporal-coherence/v1` (`57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59`). Exact Phase A source/test set is 16 paths; Phase A.5 is 19 paths; Phase B is 23 paths; the separate base-guard authorization has 37 unique paths. `SOURCE_FREEZE=TRUE` denotes offline source/test and pin closure only.
+
+Current implementation owners: runner + validator and their tests provide protocol/ref handoff, sealing, per-sample validation, source/install preflight, and config-hash closure; `mecanum_nav_rl/observations/step07_lifecycle_ingress.py` and `step07_nav2_baseline_runtime_observer/{include,src}/lifecycle_ingress.*` own the private lifecycle reference protocol; `step07_gate_b_observer_node.py` owns five-sample stop and post-five navigation progress; `config/step07_temporal_contract.py` resolves the exact selected semantic resource; `v3_models.py` rejects explicit null; CMake/native/Python regressions cover the corresponding handoffs. Exact current file list and 53 SHA-256/size pins are in the Run005 guard/evidence/manifest.
+
+Evidence state: `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`. No runtime claim or authorization is implied.

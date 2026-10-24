@@ -13,6 +13,7 @@ from mecanum_nav_rl.config.v3_compiler import (
     ApprovalProvenanceV3,
     ApprovedExperimentOverrideV3,
     ApprovedMeasuredRegistryV3,
+    compile_resolved_document_v3,
     compile_v3_config,
     deep_merge_v3,
 )
@@ -198,6 +199,13 @@ def test_temporal_contract_binding_recomputes_global_hash_and_omits_none() -> No
     assert selected.navigation.temporal_coherence_contract.contract_id == RUN005_TEMPORAL_ID
     assert selected.provenance.config_hash != baseline.provenance.config_hash
     assert selected.provenance.config_hash == config_v3_sha256(hash_payload_from_resolved_v3(selected))
+    selected_unhashed = selected.model_dump(mode="json")
+    selected_unhashed["provenance"].pop("config_hash")
+    selected_round_trip = compile_resolved_document_v3(selected_unhashed)
+    assert selected_round_trip.navigation.temporal_coherence_contract == selected.navigation.temporal_coherence_contract
+    assert selected_round_trip.provenance.config_hash == selected.provenance.config_hash
+    assert selected_round_trip.provenance.config_hash == config_v3_sha256(
+        hash_payload_from_resolved_v3(selected_round_trip))
 
 
 def test_temporal_contract_binding_rejects_wrong_digest_and_nonselected_scope() -> None:
@@ -207,6 +215,28 @@ def test_temporal_contract_binding_rejects_wrong_digest_and_nonselected_scope() 
                  temporal={"contract_id": RUN005_TEMPORAL_ID, "contract_sha256": "0" * 64})
     with pytest.raises(ValueError, match="SCOPE_MISMATCH"):
         _compile(temporal={"contract_id": RUN005_TEMPORAL_ID, "contract_sha256": RUN005_TEMPORAL_SHA})
+
+
+def test_explicit_null_temporal_binding_rejected_but_omission_hash_is_preserved() -> None:
+    baseline = _compile()
+    payload = baseline.model_dump(mode="json")
+    assert "temporal_coherence_contract" not in payload["navigation"]
+    original_hash = baseline.provenance.config_hash
+    unhashed = deepcopy(payload)
+    unhashed["provenance"].pop("config_hash")
+    round_trip = compile_resolved_document_v3(unhashed)
+    assert round_trip.provenance.config_hash == original_hash
+    assert "temporal_coherence_contract" not in round_trip.model_dump(mode="json")["navigation"]
+
+    explicit_null = deepcopy(payload)
+    explicit_null["navigation"]["temporal_coherence_contract"] = None
+    explicit_null["provenance"].pop("config_hash")
+    with pytest.raises(ValueError, match="EXPLICIT_NULL_FORBIDDEN"):
+        compile_resolved_document_v3(explicit_null)
+    base_with_null = _base_layer()
+    base_with_null["navigation"]["temporal_coherence_contract"] = None  # type: ignore[index]
+    with pytest.raises(ValueError, match="EXPLICIT_NULL_FORBIDDEN"):
+        _compile(base=base_with_null)
 
 
 def test_temporal_semantic_package_resource_matches_approved_digest() -> None:

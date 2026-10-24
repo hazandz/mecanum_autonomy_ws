@@ -1332,3 +1332,19 @@ Evidence state: `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`. `SOURCE_FR
 Current corrective lineage is base/required sole parent `66849ee6af092dce973075bcd438bd3d936fd2a3`. Phase A contains 26 source/test paths; Phase A.5 contains 29 paths including guard/evidence/manifest pin closure; Phase B records the exact 33-path changed set and a separate 37-path authorized allowlist. Runtime execution and integration remain separate approval gates.
 
 Final offline verification for the Run005 temporal coherence L2 candidate: Step-7 433 passed/2 historical-root checks skipped, bringup 375 passed, RL 740 passed, six-package external build passed, observer/ROSIDL 33 tests passed, py_compile 18 files passed, installed/source equality 22/22 passed, and pin/scope/hash/parser/ledger/diff checks passed. The two skipped historical bundle checks require external evidence-root variables; they were not replayed under the no-historical-checksum instruction. This is offline evidence pending independent audit only.
+
+
+## 2026-10-24 — Run005 temporal-coherence corrective F1–F10
+
+Corrective candidate on branch `step07-integrated-nav2-gateb-campaign-f7f98c6`, exact base/required sole parent `9856f025bcc4d9c008664ba41fb0589303e005da`. Authority is the Owner-approved L2 design at `66849ee6af092dce973075bcd438bd3d936fd2a3` and semantic digest `57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59`. Actual direct paths are phase-aware: Phase A 16 source/test paths, Phase A.5 19 including guard/evidence/manifest, Phase B 23 including decision/registry/plan/ledger; authorized base-guard membership is 37 paths.
+
+Offline source verification before metadata reconciliation: Step-7 443 passed/2 historical-root checks skipped, bringup 386 passed, RL 745 passed, six-package external build passed, observer CTest 31/31 GTest cases and ROSIDL 8 cases passed, py_compile 12 Python files passed. Full final post-Phase-B checks are still required after this metadata snapshot; no future result is preclaimed.
+
+Guard remains PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Invocation_021 remains ROOT_CAUSE_UNRESOLVED. No runtime, invocation, integration, HIL, hardware, Fuel provisioning, or historical bundle mutation occurred.
+
+`PLAN_UPDATE_PROPOSAL`: Run005 L2 offline corrective F1–F10; branch as above; base `9856f025bcc4d9c008664ba41fb0589303e005da`; evidence `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`; current work is at Phase B with final offline verification pending; next action is final verification and conditional single review delivery, then independent audit. Runtime authority remains separate.
+
+
+## 2026-10-24 — Run005 F1–F10 final verification addendum
+
+`supersedes`: the preceding F1–F10 plan note's statement that post-Phase-B verification was pending only. Final Step-7, bringup, RL, external six-package build, native/ROSIDL, py_compile, installed/source equality, 53-pin closure, strict parse/hash/scope/ledger/diff checks passed. Two historical 018/019 evidence-root tests remain unavailable/skipped. Exact Phase B scope is 23; allowlist is 37. Guard remains pending/count 0/NOT_GRANTED, Gate B NOT_STARTED, runtime not approved; Invocation_021 remains ROOT_CAUSE_UNRESOLVED. Next action: independent audit of the review commit.

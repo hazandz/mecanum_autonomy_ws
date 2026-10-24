@@ -21,15 +21,20 @@ constexpr const char *kSchema = "mecanum.step07-run005.lifecycle-ingress/v1";
 std::atomic<uint64_t> temp_counter{0};
 
 bool parse_no_duplicate_keys(const std::string &raw, nlohmann::json &out) {
-  std::map<int, std::set<std::string>> keys;
+  std::vector<std::set<std::string>> keys;
   auto callback = [&](int depth, nlohmann::json::parse_event_t event,
                       nlohmann::json &parsed) {
-    if (event == nlohmann::json::parse_event_t::object_start) keys[depth].clear();
+    (void)depth;
+    if (event == nlohmann::json::parse_event_t::object_start) keys.emplace_back();
     if (event == nlohmann::json::parse_event_t::key) {
       const auto key = parsed.get<std::string>();
-      if (!keys[depth].insert(key).second) return false;
+      if (keys.empty() || !keys.back().insert(key).second)
+        throw std::runtime_error("LIFECYCLE_INGRESS_DUPLICATE_KEY");
     }
-    if (event == nlohmann::json::parse_event_t::object_end) keys.erase(depth);
+    if (event == nlohmann::json::parse_event_t::object_end) {
+      if (keys.empty()) throw std::runtime_error("LIFECYCLE_INGRESS_OBJECT_STACK_INVALID");
+      keys.pop_back();
+    }
     return true;
   };
   try {
@@ -108,7 +113,11 @@ bool LifecycleIngress::pin_endpoint(const std::vector<LifecyclePublisherEndpoint
         publishers.front().topic != endpoint_.value("topic", "") ||
         publishers.front().type != endpoint_.value("type", "") ||
         publishers.front().node_name != endpoint_.value("node_name", "") ||
-        publishers.front().node_namespace != endpoint_.value("node_namespace", "")) {
+        publishers.front().node_namespace != endpoint_.value("node_namespace", "") ||
+        publishers.front().reliability != endpoint_.value("reliability", -1) ||
+        publishers.front().durability != endpoint_.value("durability", -1) ||
+        publishers.front().history != endpoint_.value("history", -1) ||
+        publishers.front().depth != endpoint_.value("depth", -1)) {
       latch_failure_locked("LIFECYCLE_PUBLISHER_SET_OR_GID_CHANGED");
       return false;
     }
@@ -233,14 +242,20 @@ LifecycleIngress::Json LifecycleIngress::live_document_locked() const {
   Json rows = Json::array();
   for (const auto &row : history_) rows.push_back(row);
   Json refs = Json::array();
-  for (const auto &[index, digest] : acknowledged_) refs.push_back(
+  for (const auto &[index, digest] : committed_) refs.push_back(
       {{"record_index", index}, {"record_sha256", digest}});
-  return Json{{"schema", kSchema}, {"schema_version", "1.0"},
+  if (pending_) refs.push_back({{"record_index", pending_->first},
+                                {"record_sha256", pending_->second}});
+  return Json{{"schema", kSchema}, {"schema_version", "1.0"}, {"protocol_revision", "2.0"},
       {"invocation_id", invocation_id_}, {"collector_session_id", session_id_},
       {"config_hash", config_hash_}, {"state", failure_.empty() ? (endpoint_pinned_ ? "READY" : "NOT_READY") : "FAILED"},
       {"failure", failure_.empty() ? Json(nullptr) : Json{{"literal", failure_}}},
       {"endpoint_binding", endpoint_}, {"records", rows},
-      {"acknowledged_references", refs}, {"retained_reference_count", retained_.size()},
+      {"acknowledged_references", refs}, {"reference_ack", request_ack_},
+      {"committed_reference_count", committed_.size()},
+      {"pending_reference", pending_ ? Json{{"record_index", pending_->first},
+          {"record_sha256", pending_->second}} : Json(nullptr)},
+      {"retained_reference_count", retained_.size()},
       {"record_index_next", next_record_index_}};
 }
 
@@ -300,67 +315,164 @@ bool LifecycleIngress::read_strict(const std::string &path, Json &document,
 
 void LifecycleIngress::process_references_locked(const Json &request) {
   if (request.is_null()) return;
-  if (request.value("schema", "") != kSchema || request.value("schema_version", "") != "1.0" ||
+  if (!request.is_object() || request.value("schema", "") != kSchema || request.value("schema_version", "") != "1.0" ||
+      request.value("protocol_revision", "") != "2.0" ||
       request.value("invocation_id", "") != invocation_id_ ||
       request.value("collector_session_id", "") != session_id_ ||
+      request.value("config_hash", "") != config_hash_ ||
+      !request.contains("request_revision") || !request["request_revision"].is_number_unsigned() ||
+      !request.contains("operation") || !request["operation"].is_string() ||
+      !request.contains("record_index") || !request["record_index"].is_number_unsigned() ||
+      !request.contains("record_sha256") || !request["record_sha256"].is_string() ||
+      !request.contains("request_digest") || !request["request_digest"].is_string() ||
       !request.contains("references") || !request["references"].is_array() ||
       request["references"].size() > kReferenceMaxCount) {
     latch_failure_locked("LIFECYCLE_REFERENCE_IDENTITY_OR_SCHEMA_INVALID");
     return;
   }
-  for (const auto &reference : request["references"]) {
-    if (!reference.is_object() || !reference.contains("record_index") ||
-        !reference["record_index"].is_number_unsigned() ||
-        !reference.contains("record_sha256") || !reference["record_sha256"].is_string()) {
-      latch_failure_locked("LIFECYCLE_REFERENCE_ROW_INVALID");
+  const auto revision = request["request_revision"].get<uint64_t>();
+  const auto operation = request["operation"].get<std::string>();
+  const auto index = request["record_index"].get<uint64_t>();
+  const auto digest = request["record_sha256"].get<std::string>();
+  const auto supplied_request_digest = request["request_digest"].get<std::string>();
+  for (const auto &sample_ref : request["references"]) {
+    if (!sample_ref.is_object() || sample_ref.size() != 2 ||
+        !sample_ref.contains("record_index") || !sample_ref["record_index"].is_number_unsigned() ||
+        !sample_ref.contains("record_sha256") || !sample_ref["record_sha256"].is_string() ||
+        sample_ref["record_index"].get<uint64_t>() == 0 ||
+        sample_ref["record_sha256"].get<std::string>().size() != 64) {
+      latch_failure_locked("LIFECYCLE_SAMPLE_REFERENCE_ROW_INVALID");
       return;
     }
-    const auto index = reference["record_index"].get<uint64_t>();
-    const auto digest = reference["record_sha256"].get<std::string>();
-    const bool digest_hex = digest.size() == 64 && std::all_of(digest.begin(), digest.end(), [](char c) {
+  }
+  Json unsigned_request = request;
+  unsigned_request.erase("request_digest");
+  const auto request_bytes = unsigned_request.dump(-1, ' ', false, Json::error_handler_t::strict);
+  const auto computed_request_digest = sha256_hex(request_bytes);
+  if (supplied_request_digest != computed_request_digest) {
+    latch_failure_locked("LIFECYCLE_REFERENCE_REQUEST_DIGEST_MISMATCH");
+    return;
+  }
+  if (revision == request_revision_) {
+    if (request_bytes != request_bytes_) {
+      latch_failure_locked("LIFECYCLE_REFERENCE_REVISION_CONTENT_CONFLICT");
+      return;
+    }
+    return;  // exact idempotent retry; current ACK remains authoritative
+  }
+  if (revision != request_revision_ + 1) {
+    latch_failure_locked("LIFECYCLE_REFERENCE_REVISION_NOT_MONOTONIC");
+    return;
+  }
+  const bool digest_hex = digest.size() == 64 && std::all_of(digest.begin(), digest.end(), [](char c) {
       return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
     });
-    if (index == 0 || !digest_hex ||
-        (requested_.size() >= kReferenceMaxCount && !requested_.count(index))) {
-      latch_failure_locked("LIFECYCLE_REFERENCE_LIMIT_OR_ID_INVALID");
+  if (index == 0 || !digest_hex ||
+      (operation != "RESERVE" && operation != "PROMOTE" && operation != "RELEASE")) {
+    latch_failure_locked("LIFECYCLE_REFERENCE_LIMIT_OR_ID_INVALID");
+    return;
+  }
+  std::vector<Json> requested_samples;
+  for (const auto &sample_ref : request["references"]) requested_samples.push_back(sample_ref);
+  if (operation == "PROMOTE") {
+    auto expected_samples = sample_references_;
+    expected_samples.push_back({{"record_index", index}, {"record_sha256", digest}});
+    if (requested_samples != expected_samples) {
+      latch_failure_locked("LIFECYCLE_SAMPLE_REFERENCE_ORDER_OR_BINDING_MISMATCH");
       return;
     }
-    requested_.insert(index);
-    const auto pinned = retained_.find(index);
-    if (pinned != retained_.end()) {
-      if (sha256_hex(pinned->second.dump()) != digest)
+  } else if (requested_samples != sample_references_) {
+    latch_failure_locked("LIFECYCLE_SAMPLE_REFERENCE_ORDER_OR_BINDING_MISMATCH");
+    return;
+  }
+  for (const auto &sample_ref : requested_samples) {
+    const auto sample_index = sample_ref["record_index"].get<uint64_t>();
+    const auto sample_digest = sample_ref["record_sha256"].get<std::string>();
+    const auto committed = committed_.find(sample_index);
+    const bool is_current_pending = pending_ && pending_->first == sample_index &&
+        pending_->second == sample_digest && operation == "PROMOTE" && sample_index == index;
+    const bool is_current_committed = operation == "PROMOTE" && sample_index == index &&
+        committed != committed_.end() && committed->second == sample_digest;
+    if ((!is_current_pending && !is_current_committed &&
+         (committed == committed_.end() || committed->second != sample_digest)) ||
+        (is_current_pending && committed != committed_.end())) {
+      latch_failure_locked("LIFECYCLE_SAMPLE_REFERENCE_NOT_COMMITTED_OR_PENDING");
+      return;
+    }
+  }
+  if (committed_.count(index) && committed_.at(index) != digest) {
+    latch_failure_locked("LIFECYCLE_REFERENCE_HASH_MISMATCH");
+    return;
+  }
+  if (operation == "RESERVE" && !committed_.count(index)) {
+    if (pending_ && pending_->first != index) {
+      latch_failure_locked("LIFECYCLE_PENDING_REFERENCE_CAPACITY_EXCEEDED");
+      return;
+    }
+    if (committed_.size() >= kReferenceMaxCount && (!pending_ || pending_->first != index)) {
+      latch_failure_locked("LIFECYCLE_COMMITTED_REFERENCE_CAPACITY_EXCEEDED");
+      return;
+    }
+    auto pinned = retained_.find(index);
+    if (pinned == retained_.end()) {
+      const auto row = std::find_if(history_.begin(), history_.end(), [&](const Json &candidate) {
+        return candidate.value("record_index", uint64_t{0}) == index;
+      });
+      if (row == history_.end()) {
+        const auto next = next_record_index_;
+        if (next > kHistoryCapacity && index <= next - kHistoryCapacity)
+          latch_failure_locked("LIFECYCLE_REQUIRED_RECORD_EVICTED");
+        return;
+      }
+      if (sha256_hex(row->dump()) != digest) {
         latch_failure_locked("LIFECYCLE_REFERENCE_HASH_MISMATCH");
-      else acknowledged_[index] = digest;
-      continue;
+        return;
+      }
+      retained_[index] = *row;
+      pinned = retained_.find(index);
     }
-    const auto row = std::find_if(history_.begin(), history_.end(), [&](const Json &candidate) {
-      return candidate.value("record_index", uint64_t{0}) == index;
-    });
-    if (row == history_.end()) {
-      if (index < next_record_index_ - kHistoryCapacity) latch_failure_locked("LIFECYCLE_REQUIRED_RECORD_EVICTED");
-      continue;
-    }
-    if (sha256_hex(row->dump()) != digest) {
+    if (sha256_hex(pinned->second.dump()) != digest) {
       latch_failure_locked("LIFECYCLE_REFERENCE_HASH_MISMATCH");
       return;
     }
-    if (!retained_.count(index)) retained_[index] = *row;
-    acknowledged_[index] = digest;
+    pending_ = std::make_pair(index, digest);
+  } else if (operation == "PROMOTE") {
+    if (committed_.count(index)) {
+      if (committed_.at(index) != digest) latch_failure_locked("LIFECYCLE_REFERENCE_HASH_MISMATCH");
+      else sample_references_ = std::move(requested_samples);
+    } else if (!pending_ || pending_->first != index || pending_->second != digest) {
+      latch_failure_locked("LIFECYCLE_REFERENCE_PROMOTION_WITHOUT_RESERVATION");
+    } else {
+      committed_[index] = digest;
+      pending_.reset();
+      sample_references_ = std::move(requested_samples);
+    }
+  } else if (operation == "RELEASE") {
+    if (!pending_ || pending_->first != index || pending_->second != digest) {
+      latch_failure_locked("LIFECYCLE_REFERENCE_RELEASE_WITHOUT_RESERVATION");
+    } else {
+      pending_.reset();
+      retained_.erase(index);
+    }
+  }
+  if (failure_.empty()) {
+    request_revision_ = revision;
+    request_digest_ = supplied_request_digest;
+    request_bytes_ = request_bytes;
+    request_ack_ = Json{{"revision", revision}, {"request_digest", supplied_request_digest},
+      {"operation", operation}, {"record_index", index}, {"record_sha256", digest},
+      {"status", "ACKNOWLEDGED"}};
   }
 }
 
 void LifecycleIngress::worker_loop() {
   std::unique_lock<std::mutex> lock(mutex_);
+  try {
   while (true) {
     wake_.wait_for(lock, std::chrono::milliseconds(10), [&] { return stopping_ || !queue_.empty(); });
     while (!queue_.empty()) {
       if (history_.size() >= kHistoryCapacity) {
-        const auto oldest = history_.front().value("record_index", uint64_t{0});
-        if (retained_.count(oldest)) {
-          latch_failure_locked("LIFECYCLE_REQUIRED_RECORD_EVICTION_BLOCKED");
-          queue_.clear();
-          break;
-        }
+        // A retained exact copy survives rolling-window eviction.
         history_.pop_front();
       }
       history_.push_back(std::move(queue_.front()));
@@ -387,6 +499,23 @@ void LifecycleIngress::worker_loop() {
     if (!published) latch_failure_locked("LIFECYCLE_LIVE_ARTIFACT_WRITE_FAILED");
     if (stop_after_publish) break;
   }
+  } catch (const std::exception &error) {
+    if (!lock.owns_lock()) lock.lock();
+    latch_failure_locked(std::string("LIFECYCLE_WORKER_EXCEPTION:") + error.what());
+    const auto snapshot = live_document_locked();
+    lock.unlock();
+    const bool published = write_atomic(live_path_, snapshot, kArtifactMaxBytes);
+    lock.lock();
+    if (!published) latch_failure_locked("LIFECYCLE_LIVE_ARTIFACT_WRITE_FAILED");
+  } catch (...) {
+    if (!lock.owns_lock()) lock.lock();
+    latch_failure_locked("LIFECYCLE_WORKER_EXCEPTION:UNKNOWN");
+    const auto snapshot = live_document_locked();
+    lock.unlock();
+    const bool published = write_atomic(live_path_, snapshot, kArtifactMaxBytes);
+    lock.lock();
+    if (!published) latch_failure_locked("LIFECYCLE_LIVE_ARTIFACT_WRITE_FAILED");
+  }
 }
 
 LifecycleIngress::Json LifecycleIngress::finalize() {
@@ -398,16 +527,26 @@ LifecycleIngress::Json LifecycleIngress::finalize() {
   wake_.notify_all();
   if (worker_.joinable()) worker_.join();
   std::unique_lock<std::mutex> lock(mutex_);
+  if (pending_) latch_failure_locked("LIFECYCLE_FINALIZE_WITH_PENDING_REFERENCE");
   Json retained = Json::array();
-  for (const auto &[index, row] : retained_) {
-    retained.push_back({{"record_index", index}, {"record", row},
-                        {"record_sha256", acknowledged_.at(index)}});
+  Json committed_references = Json::array();
+  for (const auto &[index, digest] : committed_) {
+    const auto row = retained_.find(index);
+    if (row == retained_.end() || sha256_hex(row->second.dump()) != digest) {
+      latch_failure_locked("LIFECYCLE_COMMITTED_REFERENCE_MISSING_AT_FINALIZE");
+      continue;
+    }
+    retained.push_back({{"record_index", index}, {"record", row->second},
+                        {"record_sha256", digest}});
+    committed_references.push_back({{"record_index", index}, {"record_sha256", digest}});
   }
-  Json document{{"schema", kSchema}, {"schema_version", "1.0"},
+  Json document{{"schema", kSchema}, {"schema_version", "1.0"}, {"protocol_revision", "2.0"},
       {"invocation_id", invocation_id_}, {"collector_session_id", session_id_},
       {"config_hash", config_hash_}, {"state", failure_.empty() ? "FINALIZED" : "FAILED"},
       {"failure", failure_.empty() ? Json(nullptr) : Json{{"literal", failure_}}},
       {"endpoint_binding", endpoint_}, {"retained_references", retained},
+      {"committed_references", committed_references},
+      {"committed_reference_count", committed_.size()}, {"request_ack", request_ack_},
       {"record_count_seen", next_record_index_ - 1}, {"record_count_retained", history_.size()}};
   if (document.dump().size() > kArtifactMaxBytes) {
     latch_failure_locked("LIFECYCLE_FINAL_ARTIFACT_WRITE_FAILED");

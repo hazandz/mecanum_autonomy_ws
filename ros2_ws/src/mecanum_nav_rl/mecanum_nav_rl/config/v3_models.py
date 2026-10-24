@@ -204,6 +204,19 @@ class NavigationContractV3(ConfigModelV3):
     goal_settle_contract_id: IdentifierV3
     temporal_coherence_contract: TemporalCoherenceBindingV3 | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_null_temporal_binding(cls, value):
+        # Omission preserves the legacy/non-selecting profile serialization.
+        # An explicit null is an attempted selection with no contract identity
+        # and must not be treated as omission.
+        if isinstance(value, Mapping) and (
+            "temporal_coherence_contract" in value
+            and value["temporal_coherence_contract"] is None
+        ):
+            raise ValueError("RUN005_TEMPORAL_CONTRACT_EXPLICIT_NULL_FORBIDDEN")
+        return value
+
     @model_serializer(mode="wrap")
     def omit_unselected_temporal_contract(self, handler):
         serialized = handler(self)

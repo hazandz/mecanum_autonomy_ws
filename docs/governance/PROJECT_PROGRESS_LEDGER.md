@@ -2437,3 +2437,27 @@ Final suites: Step-7 tools 433 passed/2 skipped; full bringup 375 passed; full R
 Guard/evidence/manifest SHA-256: `1219ab4634636b210ad6bb70a21e0fc155082648f23afbb9293bbf904d6419aa` / `d393bc9abc45c653571337abdeb69ac6b1bbfd4a7af252ba1ca4aa6fe65d6883` (109803 bytes) / `da47c8bcb0865c3f6566ddc3cfaf7f1abea12bfb083e92d93b2ad860d2157136`. Guard remains pending/capacity 1/acquisition 0/`NOT_GRANTED`; Gate B `NOT_STARTED`; `RUNTIME_APPROVED=NOT_APPROVED`. Invocation_021 remains `ROOT_CAUSE_UNRESOLVED`. No runtime or integration was run.
 
 `PLAN_UPDATE_PROPOSAL`: Run005 temporal coherence L2; branch as above; base `66849ee6af092dce973075bcd438bd3d936fd2a3`; evidence `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`; offline verification is complete; next action is independent audit of this exact candidate. Runtime remains separately unauthorized.
+
+
+## 2026-10-24 — Run005 temporal-coherence corrective F1–F10 (Phase B candidate)
+
+`supersedes`: the prior temporal-coherence L2 entry's base `66849ee6af092dce973075bcd438bd3d936fd2a3`, its 26/29/33 current scopes, and its pending-current-candidate statement only. The design approval at `66849ee6af092dce973075bcd438bd3d936fd2a3`, semantic digest `57aa6b871fd3bcdc4ae6eb2b6f7a0dcb66b07b927516b7b0969d5e47e5c36e59`, and historical runtime outcomes remain unchanged.
+
+Corrective base/required sole parent: `9856f025bcc4d9c008664ba41fb0589303e005da`. Phase A exact scope: 16; Phase A.5 exact scope: 19; Phase B exact scope: 23; authorized base-guard allowlist: 37. The current candidate closes F1–F10 offline across Python/native reference protocol, retention/release, five-sample termination, strict input handling, per-sample proof/validation, imported helper/resource preflight, and null/config-hash behavior. Existing source-pin membership remains 53/53; 16 stale source entries were refreshed with SHA-256 and exact byte sizes.
+
+Phase A evidence: Step-7 tools 443 passed/2 skipped (historical bundle roots unavailable), full bringup 386 passed, full RL 745 passed, six-package external build passed, observer CTest 31 GTest cases passed, ROSIDL 8 tests passed, and 12 changed Python files passed py_compile. Post-Phase-B final verification is pending at this ledger entry and is not preclaimed.
+
+Guard is PENDING/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Invocation_021 remains ROOT_CAUSE_UNRESOLVED. Evidence ceiling `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`; no runtime or integration was performed.
+
+`PLAN_UPDATE_PROPOSAL`: Run005 F1–F10 offline corrective; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base/parent `9856f025bcc4d9c008664ba41fb0589303e005da`; final post-reconciliation verification pending; next action conditional single review delivery and independent audit. Runtime approval remains separate.
+
+
+## 2026-10-24 — Run005 F1–F10 final offline verification
+
+`supersedes`: the preceding F1–F10 Phase B ledger entry's “post-Phase-B final verification is pending” statement only. Base, phase scopes, approval, historical facts, and runtime outcomes are unchanged.
+
+For base `9856f025bcc4d9c008664ba41fb0589303e005da`, exact Phase B scope remains 23 paths within the 37-path authorized allowlist; 53/53 existing source-pin membership/hash/byte-size checks pass. Final checks: Step-7 tools 443 passed/2 skipped; bringup 386 passed; RL 745 passed; six-package external build 6 packages; observer CTest 31 GTest cases and ROSIDL 8 tests passed; 12 changed Python files compiled; installed/source equality passed for 15 runtime artifacts, 3 imported runtime modules, 2 temporal helper modules and the loader-selected semantic resource. Strict metadata/canonical JSON, duplicate/non-finite rejection, semantic digest, 2 pinned JSON + 10 YAML + 4 XML/SDF parsers, guard/evidence/manifest hash-size chain, exact scopes, ledger parent-byte-prefix, and staged/unstaged diff checks passed.
+
+Two Step-7 immutable Invocation_018/019 checks remain skipped because their external evidence roots are unavailable. Historical bundles were not replayed or modified. No runtime, official runner, host probe, invocation, integration, HIL, hardware, Fuel provisioning, or cleanup was performed. Invocation_021 remains `ROOT_CAUSE_UNRESOLVED`. Guard remains pending/capacity 1/acquisition 0/NOT_GRANTED; Gate B NOT_STARTED; RUNTIME_APPROVED NOT_APPROVED. Evidence: `IMPLEMENTED_OFFLINE_ONLY_PENDING_INDEPENDENT_AUDIT`.
+
+`PLAN_UPDATE_PROPOSAL`: Run005 L2 offline corrective F1–F10; branch `step07-integrated-nav2-gateb-campaign-f7f98c6`; base/required sole parent `9856f025bcc4d9c008664ba41fb0589303e005da`; offline implementation and verification recorded; next action is independent audit of the single review commit. Runtime authority remains separate.
