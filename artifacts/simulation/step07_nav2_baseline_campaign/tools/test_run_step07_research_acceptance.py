@@ -755,123 +755,233 @@ def test_startup_rearm_refusal_and_missing_authorization_fail_closed():
     assert calls == ["rearm"]
 
 
-def _runner_with_tf_owner_observer():
-    from mecanum_nav_rl.observations.step07_research_observer import (
-        Step07ResearchObserver,
-    )
-
-    observer = object.__new__(Step07ResearchObserver)
-    observer._lock = threading.RLock()
-    observer.tf_edge_owners = {}
-    observer.tf_edge_unresolved = {}
-    endpoints = {}
-    observer.node = SimpleNamespace(
-        get_publishers_info_by_topic=lambda topic: endpoints.get(topic, []),
-    )
+def _tf_graph_fixture(graph=None, *, observed_edges=None):
     runner = object.__new__(ResearchAcceptanceRunner)
-    runner.observer = observer
-    return runner, endpoints
-
-
-def _send_tf_owner_fact(observer, edge, gid):
-    transform = SimpleNamespace(
-        header=SimpleNamespace(frame_id=edge[0]), child_frame_id=edge[1])
-    observer._tf(
-        SimpleNamespace(transforms=[transform]),
-        SimpleNamespace(publisher_gid=gid),
+    runner.tf_configured_ownership = {
+        'configured_owners': {
+            'map->odom': {'node_name': 'amcl', 'node_namespace': '/'},
+            'odom->base_link': {
+                'node_name': 'ekf_filter_node', 'node_namespace': '/'},
+            'base_link->lidar_frame': {
+                'node_name': 'robot_state_publisher', 'node_namespace': '/'},
+        },
+        'dynamic_joint_names': ['Wheel_LF_Joint'],
+    }
+    runner._last_tf_a4_evidence = {}
+    runner.observer = SimpleNamespace(
+        tf_observed_edges=set(observed_edges or {
+            ('map', 'odom'), ('odom', 'base_link'),
+            ('base_link', 'lidar_frame'),
+        }),
+        tf_publisher_graph=lambda: graph or _complete_tf_graph(),
+        lookup_transform=lambda target, source, stamp: (target, source, stamp),
+        executor_error=None,
     )
+    return runner
 
 
-def _tf_owner_endpoint(gid, node_name):
-    return SimpleNamespace(endpoint_gid=gid, node_name=node_name)
+def _endpoint(name, namespace='/', topic_type='tf2_msgs/msg/TFMessage'):
+    return {
+        'node_name': name,
+        'node_namespace': namespace,
+        'topic_type': topic_type,
+    }
 
 
-def _record_non_map_tf_edges(observer, endpoints):
-    for edge, gid, owner in (
-            (('odom', 'base_link'), b'ekf', 'ekf_filter_node'),
-            (('base_link', 'lidar_frame'), b'rsp', 'robot_state_publisher')):
-        endpoints['/tf'] = [_tf_owner_endpoint(gid, owner)]
-        _send_tf_owner_fact(observer, edge, gid)
+def _complete_tf_graph():
+    return {
+        '/tf': [_endpoint('amcl'), _endpoint('ekf_filter_node'),
+                _endpoint('robot_state_publisher')],
+        '/tf_static': [_endpoint('robot_state_publisher')],
+    }
 
 
-def test_tf_owner_unknown_source_resolves_and_runner_accepts_all_three_edges():
-    """Admit all required TF edges after the exact source resolves."""
-    runner, endpoints = _runner_with_tf_owner_observer()
-    observer = runner.observer
-    _record_non_map_tf_edges(observer, endpoints)
-    gid = b'amcl-source'
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid}}
-    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    assert runner._tf_ownership_ready() is True
-    assert runner._observed_tf_owners() == {
-        'map->odom': 'amcl', 'odom->base_link': 'ekf_filter_node',
-        'base_link->lidar_frame': 'robot_state_publisher'}
+def test_tf_graph_edges_and_exact_time_lookup_form_a4_evidence():
+    """Verify tf graph edges and exact time lookup form a4 evidence."""
+    runner = _tf_graph_fixture()
+    assert runner._tf_a4_ready(123456)
+    measured = runner._last_tf_a4_evidence
+    assert measured['configured_ownership']['map->odom']['node_name'] == 'amcl'
+    assert (measured['observed_publisher_graph']['/tf']
+            == _complete_tf_graph()['/tf'])
+    assert set(measured['observed_edges']) == {
+        'map->odom', 'odom->base_link', 'base_link->lidar_frame'}
+    assert measured['exact_time_lookup']['stamp_ns'] == 123456
+    assert (measured['per_message_publisher_attribution']
+            == 'NOT_PROVIDED_BY_RCLPY_CALLBACK_API')
 
 
-def test_tf_owner_unknown_source_does_not_resolve_from_other_publisher():
-    """Keep one publisher unresolved when a different publisher is mapped."""
-    runner, endpoints = _runner_with_tf_owner_observer()
-    observer = runner.observer
-    _record_non_map_tf_edges(observer, endpoints)
-    gid_a, gid_b = b'amcl-source', b'other-source'
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_b)
-    endpoints['/tf'] = [_tf_owner_endpoint(gid_a, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_a)
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
-    assert runner._tf_ownership_ready() is False
-    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_UNRESOLVED'):
-        runner._observed_tf_owners()
+def test_tf_static_edge_before_graph_discovery_can_resolve_without_new_message(
+        monkeypatch):
+    """Verify late graph discovery resolves an earlier static edge."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    graph = {'/tf': [], '/tf_static': []}
+    runner = _tf_graph_fixture(graph=graph)
+    runner.observer.tf_observed_edges = {('base_link', 'lidar_frame')}
+
+    def discover():
+        if clock[0] >= 0.2:
+            graph.update(_complete_tf_graph())
+        return graph
+    runner.observer.tf_publisher_graph = discover
+    edge_messages = [1]
+    assert runner.observer.tf_observed_edges == {('base_link', 'lidar_frame')}
+    runner.observer.tf_observed_edges.update(
+        {('map', 'odom'), ('odom', 'base_link')})
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    runner._wait_for(
+        runner._tf_ownership_ready, 1.0, stage='A4_TF',
+        component='tf_publishers', reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.2
+    assert edge_messages == [1]
+    assert runner._tf_ownership_ready()
 
 
-def test_tf_owner_mismatch_survives_unknown_gap_and_runner_rejects_it():
-    """Retain wrong owner evidence across an unknown discovery interval."""
-    runner, endpoints = _runner_with_tf_owner_observer()
-    observer = runner.observer
-    _record_non_map_tf_edges(observer, endpoints)
-    gid_amcl, gid_wrong, gid_unknown = b'amcl', b'wrong', b'unknown'
-    endpoints['/tf'] = [_tf_owner_endpoint(gid_amcl, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_amcl)
-    endpoints['/tf'] = [_tf_owner_endpoint(gid_wrong, 'other_localizer')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_wrong)
-    endpoints['/tf'] = []
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_unknown)
-    endpoints['/tf'] = [_tf_owner_endpoint(gid_amcl, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_amcl)
-    assert observer.tf_edge_owners[('map', 'odom')] == {
-        'amcl', 'other_localizer'}
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_unknown}}
-    endpoints['/tf'] = [_tf_owner_endpoint(gid_unknown, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid_unknown)
-    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
+@pytest.mark.parametrize('mutation,reason', [
+    ('foreign', 'TF_PUBLISHER_TOPOLOGY_MISMATCH'),
+    ('duplicate', 'TF_PUBLISHER_DUPLICATE_ENDPOINT'),
+    ('wrong_namespace', 'TF_PUBLISHER_TOPOLOGY_MISMATCH'),
+    ('wrong_type', 'TF_PUBLISHER_TYPE_MISMATCH'),
+])
+def test_tf_graph_rejects_foreign_duplicate_namespace_and_type(
+        mutation, reason):
+    """Verify tf graph rejects foreign duplicate namespace and type."""
+    graph = _complete_tf_graph()
+    if mutation == 'foreign':
+        graph['/tf'].append(_endpoint('other_localizer'))
+    elif mutation == 'duplicate':
+        graph['/tf'].append(_endpoint('amcl'))
+    elif mutation == 'wrong_namespace':
+        graph['/tf'][0] = _endpoint('amcl', '/robot')
+    else:
+        graph['/tf'][0] = _endpoint(
+            'amcl', topic_type='geometry_msgs/msg/TransformStamped')
+    runner = _tf_graph_fixture(graph=graph)
+    with pytest.raises(AcceptanceFailure, match=reason):
         runner._tf_ownership_ready()
 
 
-def test_tf_unknown_source_resolving_to_wrong_owner_is_rejected():
-    """Reject a source after resolving its endpoint to a wrong node."""
-    runner, endpoints = _runner_with_tf_owner_observer()
-    observer = runner.observer
-    _record_non_map_tf_edges(observer, endpoints)
-    gid = b'wrong-source'
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'other_localizer')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
+def test_robot_state_publisher_tf_endpoint_requires_dynamic_robot_joints(
+):
+    """Verify RSP TF endpoint requires movable robot joints."""
+    runner = _tf_graph_fixture()
+    runner.tf_configured_ownership['dynamic_joint_names'] = []
+    with pytest.raises(
+            AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH:/tf'):
         runner._tf_ownership_ready()
 
 
-def test_tf_repeated_valid_endpoint_metadata_is_idempotent():
-    """Count repeated observations from the same endpoint only once."""
-    runner, endpoints = _runner_with_tf_owner_observer()
-    observer = runner.observer
-    _record_non_map_tf_edges(observer, endpoints)
-    gid = b'amcl-source'
-    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'amcl')]
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
-    assert observer.tf_edge_owners[('map', 'odom')] == {'amcl'}
-    assert runner._tf_ownership_ready() is True
+def test_tf_graph_missing_publishers_wait_and_unresolved_graph_times_out(
+        monkeypatch):
+    """Verify missing publishers wait until graph discovery expires."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    runner = _tf_graph_fixture(graph={'/tf': [], '/tf_static': []})
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    with pytest.raises(AcceptanceFailure, match='TF_GRAPH_UNRESOLVED'):
+        runner._wait_for(
+            runner._tf_ownership_ready, 0.25, stage='A4_TF',
+            component='tf_publishers', reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.25
+    assert not runner._tf_ownership_ready()
+
+
+def test_tf_graph_delayed_resolution_before_deadline_is_requeried(monkeypatch):
+    """Verify tf graph delayed resolution before deadline is requeried."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    graph = {'/tf': [], '/tf_static': []}
+    runner = _tf_graph_fixture(graph=graph)
+    runner.observer.tf_publisher_graph = lambda: (
+        _complete_tf_graph() if clock[0] >= 0.15 else graph)
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    runner._wait_for(
+        runner._tf_ownership_ready, 1.0, stage='A4_TF',
+        component='tf_publishers', reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.15
+
+
+@pytest.mark.parametrize(
+    'mutation', ['missing_edge', 'wrong_frame', 'lookup_failure'])
+def test_tf_a4_still_fails_for_missing_edge_or_exact_time_lookup(
+        monkeypatch, mutation):
+    """Verify tf a4 still fails for missing edge or exact time lookup."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    runner = _tf_graph_fixture()
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    if mutation in ('missing_edge', 'wrong_frame'):
+        runner.observer.tf_observed_edges.remove(('base_link', 'lidar_frame'))
+        if mutation == 'wrong_frame':
+            runner.observer.tf_observed_edges.add(('base_link', 'lidar'))
+    else:
+        runner.observer.lookup_transform = lambda *_: (
+            (_ for _ in ()).throw(LookupError('no exact transform')))
+    with pytest.raises(AcceptanceFailure, match='TF_A4_NOT_READY'):
+        runner._wait_for(
+            lambda: runner._tf_a4_ready(123456), 0.2,
+            stage='A4_TF', component='tf2', reason='TF_A4_NOT_READY')
+    assert clock[0] >= 0.2
+
+
+def test_tf_resource_validation_rejects_wrong_configured_owner(
+        monkeypatch, tmp_path):
+    """Verify tf resource validation rejects wrong configured owner."""
+    import shutil
+    verify_tf_ownership_resources = runner_module.verify_tf_ownership_resources
+    source_repo = Path(__file__).resolve().parents[4]
+    repo = tmp_path / 'repo'
+    shares = {}
+    for package in ('mecanum_nav_bringup', 'ROBOT_URDF_final_description'):
+        shares[package] = tmp_path / package / 'share' / package
+        shares[package].mkdir(parents=True)
+    relative = (
+        ('mecanum_nav_bringup',
+         'launch/sim_eval_nav2_baseline_system.launch.py'),
+        ('mecanum_nav_bringup',
+         'launch/sim_eval_tf_ekf_state_estimation.launch.py'),
+        ('mecanum_nav_bringup', 'config/localization/amcl_omni.yaml'),
+        ('mecanum_nav_bringup', 'config/state_estimation/ekf_sim.yaml'),
+        ('ROBOT_URDF_final_description',
+         'launch/sim_eval_nav2_baseline_bootstrap.launch.py'),
+        ('ROBOT_URDF_final_description', 'urdf/ROBOT_URDF_final.xacro'),
+    )
+    for package, rel in relative:
+        source = source_repo / 'ros2_ws/src' / package / rel
+        source_copy = repo / 'ros2_ws/src' / package / rel
+        target = shares[package] / rel
+        source_copy.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, source_copy)
+        shutil.copyfile(source, target)
+    verified = verify_tf_ownership_resources(
+        repo, share_resolver=lambda package: str(shares[package]))
+    assert verified['source_installed_resources_byte_equal'] is True
+    assert 'Wheel_LF_Joint' in verified['dynamic_joint_names']
+    amcl = shares['mecanum_nav_bringup'] / 'config/localization/amcl_omni.yaml'
+    invalid_amcl = amcl.read_text().replace(
+        'tf_broadcast: true', 'tf_broadcast: false')
+    amcl.write_text(invalid_amcl)
+    source_amcl = (
+        repo / 'ros2_ws/src/mecanum_nav_bringup/config/localization/'
+        'amcl_omni.yaml')
+    source_amcl.write_text(invalid_amcl)
+    with pytest.raises(ValueError, match='TF_OWNERSHIP_AMCL_CONFIG_MISMATCH'):
+        verify_tf_ownership_resources(
+            repo, share_resolver=lambda package: str(shares[package]))
 
 
 def test_shutdown_a10_requires_safe_stop_capture_finalization_and_owned_cleanup():
@@ -1106,18 +1216,15 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
         ),
         tf_buffer=SimpleNamespace(lookup_transform=lookup),
         lookup_transform=lambda *args: None,
-        tf_edge_owners={
-            ('map', 'odom'): {'amcl'},
-            ('odom', 'base_link'): {'ekf_filter_node'},
-            ('base_link', 'lidar_frame'): {'robot_state_publisher'},
-        },
-        tf_edge_unresolved=set(),
+        tf_observed_edges={('map', 'odom'), ('odom', 'base_link'),
+                           ('base_link', 'lidar_frame')},
         _Duration=lambda **kwargs: SimpleNamespace(**kwargs),
     )
     # Clock callback in the fake node reads this assigned observer dynamically.
     observer.clock_ns = now_ros
     runner = object.__new__(ResearchAcceptanceRunner)
     runner.observer = observer
+    runner._tf_ownership_ready = lambda: True
     runner.rclpy = SimpleNamespace(clock=SimpleNamespace(ClockType=clock_type))
     runner.path_snapshot = PathSnapshot(
         ((0.0, 0.0), (1.0, 0.0), (2.0, 0.0)),
@@ -1378,21 +1485,79 @@ def test_navigation_success_requires_fresh_settle(monkeypatch):
     assert outcome['measured']['settled'] is True
 
 
-def test_tf_owner_unknown_and_invalid_owners_are_distinct():
-    """Reject unresolved, wrong and duplicate edge owners distinctly."""
+def test_a4_failure_before_mission_keeps_full_a6_unevaluated():
+    """Verify a4 failure before mission keeps full a6 unevaluated."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        evaluate_a1_a10,
+    )
     runner = object.__new__(ResearchAcceptanceRunner)
-    runner.observer = SimpleNamespace(tf_edge_owners={
-        ('map', 'odom'): {'amcl'}, ('odom', 'base_link'): {'ekf_filter_node'},
-        ('base_link', 'lidar_frame'): {'robot_state_publisher'}},
-        tf_edge_unresolved={('map', 'odom')})
-    assert runner._tf_ownership_ready() is False
-    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_UNRESOLVED'):
-        runner._observed_tf_owners()
-    runner.observer.tf_edge_unresolved.clear()
-    assert runner._tf_ownership_ready() is True
-    runner.observer.tf_edge_owners[('map', 'odom')].add('other_localizer')
-    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
-        runner._tf_ownership_ready()
+    runner.state = CampaignState(stage='STARTUP')
+    runner.started_steady = 0.0
+    runner.output = None
+    runner.start_observer = lambda: None
+    runner.start_runtime_children = lambda: None
+    runner._wait_ready = lambda: (_ for _ in ()).throw(
+        AcceptanceFailure('A4_TF', 'tf_publishers', 'TF_GRAPH_UNRESOLVED'))
+    runner.log = lambda *_args: None
+    runner.shutdown = lambda: {}
+    runner.evaluate_and_write = lambda: evaluate_a1_a10({
+        **runner.state.facts, 'primary_failure': runner.state.primary_failure})
+    runner.close = lambda: None
+
+    report = runner.execute()
+
+    assert report['acceptance']['A6']['status'] == 'FAIL'
+    assert report['acceptance']['A6']['reason'] == 'NOT_EVALUATED_DUE_TO_A4_TF'
+
+
+def test_full_a6_is_recorded_only_after_path_success_and_navigate_acceptance():
+    """Verify A6 follows successful planning and accepted navigation."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        PathSnapshot,
+    )
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.started_steady = time.monotonic()-459.0
+    runner.now_steady = time.monotonic
+    runner.state = CampaignState()
+    runner.log_stream = io.StringIO()
+    runner.navigation_goal_handle = None
+    context = SimpleNamespace()
+    runner._send_one_plan = lambda: setattr(
+        runner, 'path_snapshot', PathSnapshot(
+            ((0.0, 0.0), (1.0, 0.0)), 'request', (-4.0, 0.0),
+            'warehouse_map2', 'b'*64, context, 1, 2))
+    runner._goal_pose = lambda: SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace()))
+
+    class ResultFuture:
+        def done(self): return False
+
+    class CompletedFuture:
+        def done(self): return True
+        def exception(self): return None
+        def result(self): return goal_handle
+
+    goal_handle = SimpleNamespace(
+        accepted=True, goal_id=SimpleNamespace(uuid=b'accepted-goal'),
+        get_result_async=lambda: ResultFuture())
+    runner.observer = SimpleNamespace(
+        node=SimpleNamespace(get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(nanoseconds=10))),
+        barrier_sequence=4, barrier_stamp_ns=9,
+        send_navigation=lambda _goal: CompletedFuture(),
+        executor_error=None,
+    )
+    runner._check_live_mission_health = lambda *_args: (_ for _ in ()).throw(
+        AcceptanceFailure(
+            'A7_OBSERVATION', 'mission', 'STOP_AFTER_ACCEPTANCE_ASSERTION'))
+
+    with pytest.raises(
+            AcceptanceFailure, match='STOP_AFTER_ACCEPTANCE_ASSERTION'):
+        runner._mission()
+
+    assert runner.state.facts['A6']['pass'] is True
+    assert (runner.state.facts['A6']['reason']
+            == 'PATH_SUCCEEDED_AND_NAVIGATE_GOAL_ACCEPTED')
 
 
 def test_command_episode_rechecks_current_publisher():
@@ -1663,10 +1828,11 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
     runner._localization_ok = lambda: (True, None)
     runner._tf_chain_usable = lambda _stamp: True
     runner._tf_ownership_ready = lambda: True
-    runner._observed_tf_owners = lambda: {
-        'map->odom': 'amcl', 'odom->base_link': 'ekf_filter_node',
-        'base_link->lidar_frame': 'robot_state_publisher',
-    }
+    runner._tf_a4_ready = lambda stamp: (
+        setattr(
+            runner, '_last_tf_a4_evidence',
+            {'ownership_basis': 'fake canonical graph', 'stamp_ns': stamp})
+        or True)
     runner._startup_rearm = lambda _deadline: rearm_calls.append(clock())
 
 
@@ -1687,14 +1853,8 @@ def test_production_wait_ready_requeries_until_all_six_are_active(
     runner._wait_ready()
 
     assert clients['map_server'].calls == 3
-    assert runner.state.facts['A6']['pass'] is True
-    assert set(
-        runner.state.facts['A6']['measured']['lifecycle_states']) == set(
-        REQUIRED_NAV2_LIFECYCLE_NODES
-    )
-    assert all(
-        x['id'] == 3 for x in
-        runner.state.facts['A6']['measured']['lifecycle_states'].values())
+    assert 'A6' not in runner.state.facts
+    assert runner.state.facts['A4']['pass'] is True
     assert rearm_calls and rearm_calls[0] >= clock()
 
 
@@ -1823,7 +1983,7 @@ def test_nav2_all_active_after_failed_round_continues_startup(monkeypatch):
 
     runner._wait_ready()
 
-    assert runner.state.facts['A6']['pass'] is True
+    assert 'A6' not in runner.state.facts
     assert clients['amcl'].calls == 2
     assert rearm_calls and rearm_calls[0] >= clock()
 

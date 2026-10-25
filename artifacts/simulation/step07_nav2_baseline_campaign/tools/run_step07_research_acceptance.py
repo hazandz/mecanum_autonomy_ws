@@ -9,6 +9,7 @@ exclusive output target. It never imports the retired Run005 runner/guard.
 from __future__ import annotations
 
 import argparse
+import ast
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -186,6 +187,133 @@ def validate_resolved_config(document: Mapping[str, Any], *, expected_hash: str 
     if compiled.navigation.step07_acceptance is None:
         raise ValueError("resolved config lacks Step07 global-hash acceptance policy")
     return compiled.provenance.config_hash
+
+
+def verify_tf_ownership_resources(
+    repository: Path, *, share_resolver: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Verify production TF owner bindings from canonical resources."""
+    import xml.etree.ElementTree as ET
+    import yaml
+
+    if share_resolver is None:
+        from ament_index_python.packages import get_package_share_directory
+        share_resolver = get_package_share_directory
+    resources = (
+        ('mecanum_nav_bringup',
+         'launch/sim_eval_nav2_baseline_system.launch.py'),
+        ('mecanum_nav_bringup',
+         'launch/sim_eval_tf_ekf_state_estimation.launch.py'),
+        ('mecanum_nav_bringup', 'config/localization/amcl_omni.yaml'),
+        ('mecanum_nav_bringup', 'config/state_estimation/ekf_sim.yaml'),
+        ('ROBOT_URDF_final_description',
+         'launch/sim_eval_nav2_baseline_bootstrap.launch.py'),
+        ('ROBOT_URDF_final_description', 'urdf/ROBOT_URDF_final.xacro'),
+    )
+    installed: dict[str, Path] = {}
+    for package, relative in resources:
+        source = repository / 'ros2_ws' / 'src' / package / relative
+        share = Path(share_resolver(package)).resolve(strict=True)
+        target = share / relative
+        try:
+            if (not source.is_file() or not target.is_file()
+                    or source.read_bytes() != target.read_bytes()):
+                raise ValueError(
+                    f'TF_OWNERSHIP_RESOURCE_MISMATCH:{package}/{relative}')
+        except OSError as error:
+            raise ValueError(
+                f'TF_OWNERSHIP_RESOURCE_UNAVAILABLE:{package}/{relative}'
+            ) from error
+        installed[f'{package}/{relative}'] = target
+
+    def launch_nodes(path: Path) -> set[tuple[str, str, str]]:
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        nodes = set()
+        for item in ast.walk(tree):
+            if (not isinstance(item, ast.Call)
+                    or not isinstance(item.func, ast.Name)
+                    or item.func.id != 'Node'):
+                continue
+            values = {kw.arg: kw.value.value for kw in item.keywords
+                      if kw.arg in {'package', 'executable', 'name'}
+                      and isinstance(kw.value, ast.Constant)
+                      and isinstance(kw.value.value, str)}
+            if len(values) == 3:
+                nodes.add((
+                    values['package'], values['executable'], values['name']))
+        return nodes
+
+    composite = installed[
+        'mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py']
+    ekf_launch = installed[
+        'mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py'
+    ]
+    bootstrap = installed[
+        'ROBOT_URDF_final_description/launch/'
+        'sim_eval_nav2_baseline_bootstrap.launch.py']
+    if (('nav2_amcl', 'amcl', 'amcl') not in launch_nodes(composite)
+            or ('robot_localization', 'ekf_node', 'ekf_filter_node')
+            not in launch_nodes(ekf_launch)
+            or ('robot_state_publisher', 'robot_state_publisher',
+                'robot_state_publisher')
+            not in launch_nodes(bootstrap)):
+        raise ValueError('TF_OWNERSHIP_LAUNCH_NODE_BINDING_MISMATCH')
+    composite_text = composite.read_text(encoding='utf-8')
+    bootstrap_text = bootstrap.read_text(encoding='utf-8')
+    if ('sim_eval_tf_ekf_state_estimation.launch.py' not in composite_text
+            or ('sim_eval_nav2_baseline_bootstrap.launch.py'
+                not in composite_text)
+            or 'ROBOT_URDF_final.xacro' not in bootstrap_text):
+        raise ValueError('TF_OWNERSHIP_LAUNCH_RESOURCE_BINDING_MISMATCH')
+
+    amcl_path = installed[
+        'mecanum_nav_bringup/config/localization/amcl_omni.yaml']
+    ekf_path = installed[
+        'mecanum_nav_bringup/config/state_estimation/ekf_sim.yaml']
+    amcl = yaml.safe_load(
+        amcl_path.read_text(encoding='utf-8'))['amcl']['ros__parameters']
+    ekf = yaml.safe_load(ekf_path.read_text(encoding='utf-8'))[
+        'ekf_filter_node']['ros__parameters']
+    if (amcl.get('tf_broadcast') is not True
+            or (amcl.get('global_frame_id'), amcl.get('odom_frame_id'),
+                amcl.get('base_frame_id')) != ('map', 'odom', 'base_link')):
+        raise ValueError('TF_OWNERSHIP_AMCL_CONFIG_MISMATCH')
+    if (ekf.get('publish_tf') is not True
+            or (ekf.get('world_frame'), ekf.get('odom_frame'),
+                ekf.get('base_link_frame')) != ('odom', 'odom', 'base_link')):
+        raise ValueError('TF_OWNERSHIP_EKF_CONFIG_MISMATCH')
+
+    xacro_path = installed[
+        'ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro']
+    robot = ET.parse(xacro_path).getroot()
+    joints = tuple(
+        (joint.attrib.get('name', ''), joint.attrib.get('type', ''))
+        for joint in robot.iter('joint'))
+    dynamic_joints = sorted(
+        name for name, kind in joints if name and kind != 'fixed')
+    lidar_joints = [
+        joint for joint in robot.iter('joint')
+        if joint.attrib.get('name') == 'base_link_to_lidar_frame']
+    lidar_child = (
+        lidar_joints[0].find('child') if len(lidar_joints) == 1 else None)
+    if (not dynamic_joints or len(lidar_joints) != 1
+            or lidar_joints[0].attrib.get('type') != 'fixed'
+            or lidar_child is None
+            or lidar_child.attrib.get('link') != 'lidar_frame'):
+        raise ValueError('TF_OWNERSHIP_ROBOT_TOPOLOGY_MISMATCH')
+    return {
+        'configured_owners': {
+            'map->odom': {'node_name': 'amcl', 'node_namespace': '/'},
+            'odom->base_link': {
+                'node_name': 'ekf_filter_node', 'node_namespace': '/'},
+            'base_link->lidar_frame': {
+                'node_name': 'robot_state_publisher', 'node_namespace': '/'},
+        },
+        'dynamic_joint_names': dynamic_joints,
+        'source_installed_resources_byte_equal': True,
+        'installed_resources': {
+            key: str(value) for key, value in installed.items()},
+    }
 
 
 def verify_canonical_map(map_root: Path, map_identity: Mapping[str, Any]) -> dict[str, Any]:
@@ -504,6 +632,8 @@ class ResearchAcceptanceRunner:
         self.goal_barrier_sequence = 0
         self.goal_barrier_stamp_ns = 0
         self.authorization: dict[str, Any] = {}
+        self.tf_configured_ownership: dict[str, Any] = {}
+        self._last_tf_a4_evidence: dict[str, Any] = {}
         self.rearm_requested = False
         self.mission_deadline_steady = 0.0
         self.shutdown_results: list[dict[str, Any]] = []
@@ -517,6 +647,13 @@ class ResearchAcceptanceRunner:
         config_path = self.repository / "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json"
         self.config = load_json(config_path)
         self.config_hash = validate_resolved_config(self.config)
+        try:
+            self.tf_configured_ownership = verify_tf_ownership_resources(self.repository)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise AcceptanceFailure(
+                'PREFLIGHT', 'tf_ownership_resources',
+                f"TF_OWNERSHIP_RESOURCE_VALIDATION_FAILED:{error}",
+            ) from error
         if not self.partition.strip():
             raise AcceptanceFailure("PREFLIGHT", "partition", "GZ_PARTITION_REQUIRED")
         self.authorization = verify_runtime_authorization(self.authorization_path, commit=self.commit,
@@ -1013,12 +1150,7 @@ class ResearchAcceptanceRunner:
         self.state.facts["A3"] = {"pass": True, "reason": "EKF_FILTERED_ODOMETRY_ADVANCING",
             "measured": {"samples": len(odoms), "frame_id": "odom", "child_frame_id": "base_link"}}
 
-        lifecycle_states = self._wait_nav2_ready(deadline)
-        self.state.facts["A6"] = {"pass": True, "reason": "NAV2_NODES_AND_ACTION_SERVERS_READY",
-                                  'measured': {
-                                      'nodes': sorted(
-                                          REQUIRED_NAV2_LIFECYCLE_NODES),
-                                      'lifecycle_states': lifecycle_states}}
+        self._wait_nav2_ready(deadline)
         self.state.stage = "A5_LOCALIZATION"
         localization_ok, localization_reason = self._localization_ok()
         if not localization_ok:
@@ -1028,19 +1160,13 @@ class ResearchAcceptanceRunner:
             "measured": {"samples": len(self.observer.localization), "map_id": self.config["map_identity"]["map_id"]}}
         # Required TF edges are checked at the same fresh filtered-odometry stamps.
         self.state.stage = "A4_TF"
-        self._wait_for(lambda: self._tf_chain_usable(self.observer.odometry[-1].stamp_ns), deadline,
-            stage="A4_TF", component="tf2", reason="REQUIRED_TF_CHAIN_UNAVAILABLE_AT_SENSOR_STAMP")
         self._wait_for(
-            self._tf_ownership_ready,
-            deadline,
-            stage='A4_TF',
-            component='tf_publishers',
-            reason='TF_EDGE_OWNER_METADATA_UNRESOLVED',
+            lambda: self._tf_a4_ready(self.observer.odometry[-1].stamp_ns),
+            deadline, stage='A4_TF', component='tf_publishers',
+            reason='TF_GRAPH_EDGES_OR_EXACT_TIME_LOOKUP_NOT_READY',
         )
-        owner_map = self._observed_tf_owners()
         self.state.facts["A4"] = {"pass": True, "reason": "TF_CHAIN_AVAILABLE_AT_SENSOR_TIMESTAMP",
-            "measured": {"edges": ["map->odom", "odom->base_link", "base_link->lidar_frame"],
-                         "owners": owner_map}}
+            'measured': self._last_tf_a4_evidence}
         self._startup_rearm(deadline)
 
     def _startup_rearm(self, deadline: float) -> None:
@@ -1084,48 +1210,121 @@ class ResearchAcceptanceRunner:
         except Exception:
             return False
 
-    def _observed_tf_owners(self) -> dict[str, str]:
-        expected = {("map", "odom"): "amcl",
-                    ("odom", "base_link"): "ekf_filter_node",
-                    ("base_link", "lidar_frame"): "robot_state_publisher"}
-        observed: dict[str, str] = {}
-        for edge, owner in expected.items():
-            owners = self.observer.tf_edge_owners.get(edge, set())
-            normalized = {str(name).strip("/").lower() for name in owners}
-            if (edge in getattr(self.observer, 'tf_edge_unresolved', set())
-                    or not normalized):
+    def _tf_graph_evidence(
+            self) -> tuple[bool, dict[str, list[dict[str, str]]]]:
+        configured = self.tf_configured_ownership
+        owners = configured.get('configured_owners', {})
+        required = {'map->odom', 'odom->base_link', 'base_link->lidar_frame'}
+        if set(owners) != required:
+            raise AcceptanceFailure('A4_TF', 'tf_ownership_resources',
+                                    'TF_CONFIGURED_OWNERSHIP_UNAVAILABLE')
+        expected = {
+            '/tf': {
+                (owners['map->odom']['node_name'],
+                 owners['map->odom']['node_namespace']),
+                (owners['odom->base_link']['node_name'],
+                 owners['odom->base_link']['node_namespace']),
+            },
+            '/tf_static': {
+                (owners['base_link->lidar_frame']['node_name'],
+                 owners['base_link->lidar_frame']['node_namespace']),
+            },
+        }
+        if configured.get('dynamic_joint_names'):
+            expected['/tf'].add((
+                owners['base_link->lidar_frame']['node_name'],
+                owners['base_link->lidar_frame']['node_namespace']))
+        graph = self.observer.tf_publisher_graph()
+        measured: dict[str, list[dict[str, str]]] = {}
+        for topic, expected_endpoints in expected.items():
+            raw_endpoints = tuple(graph.get(topic, ()))
+            endpoints: list[dict[str, str]] = []
+            identities = []
+            for endpoint in raw_endpoints:
+                if not isinstance(endpoint, Mapping):
+                    return False, measured
+                raw_name = endpoint.get('node_name')
+                raw_namespace = endpoint.get('node_namespace')
+                raw_topic_type = endpoint.get('topic_type')
+                if not raw_name or not raw_namespace or not raw_topic_type:
+                    return False, measured
+                name, namespace, topic_type = (
+                    str(raw_name), str(raw_namespace), str(raw_topic_type))
+                if topic_type != 'tf2_msgs/msg/TFMessage':
+                    raise AcceptanceFailure(
+                        'A4_TF', 'tf_publishers',
+                        f'TF_PUBLISHER_TYPE_MISMATCH:{topic}:{topic_type}')
+                identity = (name, namespace)
+                identities.append(identity)
+                endpoints.append({
+                    'node_name': name,
+                    'node_namespace': namespace,
+                    'topic_type': topic_type,
+                })
+            if len(identities) != len(set(identities)):
                 raise AcceptanceFailure(
                     'A4_TF', 'tf_publishers',
-                    f'TF_EDGE_OWNER_UNRESOLVED:{edge[0]}->{edge[1]}',
-                )
-            if normalized != {owner}:
+                    f'TF_PUBLISHER_DUPLICATE_ENDPOINT:{topic}')
+            unexpected = set(identities) - expected_endpoints
+            if unexpected:
                 raise AcceptanceFailure(
                     'A4_TF', 'tf_publishers',
-                    f'TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:{sorted(normalized)}',
+                    'TF_PUBLISHER_TOPOLOGY_MISMATCH:'
+                    f'{topic}:{sorted(unexpected)}',
                 )
-            observed[f"{edge[0]}->{edge[1]}"] = next(iter(owners))
-        return observed
+            measured[topic] = endpoints
+            if set(identities) != expected_endpoints:
+                return False, measured
+        return True, measured
 
     def _tf_ownership_ready(self) -> bool:
-        expected = {('map', 'odom'): 'amcl',
-                    ('odom', 'base_link'): 'ekf_filter_node',
-                    ('base_link', 'lidar_frame'): 'robot_state_publisher'}
-        unresolved = getattr(self.observer, 'tf_edge_unresolved', set())
-        for edge, owner in expected.items():
-            if edge in unresolved:
+        graph_ready, _ = self._tf_graph_evidence()
+        required_edges = {
+            ('map', 'odom'), ('odom', 'base_link'),
+            ('base_link', 'lidar_frame'),
+        }
+        observed_edges = getattr(self.observer, 'tf_observed_edges', set())
+        return graph_ready and required_edges.issubset(observed_edges)
+
+    def _tf_a4_ready(self, stamp_ns: int) -> bool:
+        graph_ready, graph = self._tf_graph_evidence()
+        required_edges = {
+            ('map', 'odom'), ('odom', 'base_link'),
+            ('base_link', 'lidar_frame'),
+        }
+        observed_edges = getattr(self.observer, 'tf_observed_edges', set())
+        if (not graph_ready or not required_edges.issubset(observed_edges)
+                or stamp_ns <= 0):
+            return False
+        lookup_edges = (
+            ('map', 'odom'), ('odom', 'base_link'),
+            ('base_link', 'lidar_frame'),
+        )
+        lookup_results = []
+        for target, source in lookup_edges:
+            try:
+                self.observer.lookup_transform(target, source, stamp_ns)
+            except Exception:
                 return False
-            owners = {
-                str(name).strip('/').lower()
-                for name in self.observer.tf_edge_owners.get(edge, set())
-            }
-            if not owners:
-                return False
-            if owners != {owner}:
-                raise AcceptanceFailure(
-                    'A4_TF', 'tf_publishers',
-                    f'TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:'
-                    f'{sorted(owners)}',
-                )
+            lookup_results.append({
+                'target_frame': target, 'source_frame': source,
+                'available': True,
+            })
+        self._last_tf_a4_evidence = {
+            'ownership_basis': (
+                'canonical_launch_config_plus_live_publisher_graph_and_tf_observations'
+            ),
+            'configured_ownership': (
+                self.tf_configured_ownership['configured_owners']),
+            'observed_publisher_graph': graph,
+            'observed_edges': [
+                f'{parent}->{child}'
+                for parent, child in sorted(required_edges)],
+            'exact_time_lookup': {
+                'stamp_ns': stamp_ns, 'edges': lookup_results},
+            'per_message_publisher_attribution': (
+                'NOT_PROVIDED_BY_RCLPY_CALLBACK_API'),
+        }
         return True
 
     def _send_one_plan(self) -> None:
@@ -1160,8 +1359,6 @@ class ResearchAcceptanceRunner:
             map_content_hash=self.map_identity_actual["map_content_hash"],
             received_steady_ns=time.monotonic_ns(),
             expires_steady_ns=int((self.started_steady+460.0)*1_000_000_000))
-        self.state.facts["A6"] = {"pass": True, "reason": "COMPUTE_PATH_SUCCEEDED_AND_NAV_GOAL_ACCEPTED_PENDING",
-                                   "measured": {"path_pose_count": len(poses), "request_id": req_id}}
 
     def _lookup_local_reference(self, odom_stamp_ns: int, odom_receive_ns: int,
                                 cutoff_ns: int, deadline: float) -> tuple[tuple[float, float, float], float, int] | None:
@@ -1552,27 +1749,18 @@ class ResearchAcceptanceRunner:
             self.now_steady()+0.2, self.started_steady+480.0
         )
         try:
-            self._wait_for(
-                self._tf_ownership_ready,
-                final_tf_deadline,
-                stage='A4_TF',
-                component='tf_publishers',
-                reason='TF_EDGE_OWNER_METADATA_UNRESOLVED',
-            )
-            if (
-                not self.observer.odometry
-                or not self._tf_chain_usable(
-                    self.observer.odometry[-1].stamp_ns
-                )
-            ):
+            if not self.observer.odometry:
                 raise AcceptanceFailure(
-                    'A4_TF', 'tf2',
-                    'FINAL_TF_CHAIN_UNAVAILABLE_AT_ODOMETRY_STAMP',
-                )
+                    'A4_TF', 'tf2', 'FINAL_TF_CHAIN_UNAVAILABLE_AT_ODOMETRY_STAMP')
+            self._wait_for(
+                lambda: self._tf_a4_ready(self.observer.odometry[-1].stamp_ns),
+                final_tf_deadline, stage='A4_TF', component='tf_publishers',
+                reason='FINAL_TF_GRAPH_EDGE_OR_LOOKUP_NOT_READY',
+            )
             self.state.facts['A4'] = {
                 'pass': True,
-                'reason': 'TF_OWNER_AND_CHAIN_VALID_AT_MISSION_END',
-                'measured': {'owners': self._observed_tf_owners()},
+                'reason': 'TF_GRAPH_EDGES_AND_CHAIN_VALID_AT_MISSION_END',
+                'measured': self._last_tf_a4_evidence,
             }
         except AcceptanceFailure as error:
             self.state.facts['A4'] = {'pass': False, 'reason': error.reason}

@@ -27,7 +27,7 @@ def test_observer_has_no_collector_process_or_file_ipc_protocol():
     assert "subprocess" not in source
     assert "ros2cli" not in source
     assert "ACK/RELEASE" not in source
-    assert "lookup_transform(\"base_link\", \"map\", stamp" in source
+    assert 'lookup_transform("base_link", "map", stamp' in source
     assert "ClockType.ROS_TIME" in source
 
 
@@ -244,92 +244,60 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     assert len(observer.localization) == 1
 
 
-def _tf_owner_observer():
+def _tf_edge_observer():
     observer = object.__new__(observer_module.Step07ResearchObserver)
     observer._lock = threading.RLock()
-    observer.tf_edge_owners = {}
-    observer.tf_edge_unresolved = {}
-    endpoints = {}
-    observer.node = SimpleNamespace(
-        get_publishers_info_by_topic=lambda topic: endpoints.get(topic, []))
-    return observer, endpoints
+    observer.tf_observed_edges = set()
+    return observer
 
 
-def _send_tf_owner(observer, publisher_gid, edge=('map', 'odom')):
+def _send_tf_metadata(observer, edge, *, static=False):
     transform = SimpleNamespace(
         header=SimpleNamespace(frame_id=edge[0]), child_frame_id=edge[1]
     )
-    observer._tf(
-        SimpleNamespace(transforms=[transform]),
-        SimpleNamespace(publisher_gid=publisher_gid),
-    )
+    callback = observer._tf_static if static else observer._tf
+    callback(SimpleNamespace(transforms=[transform]), {
+        'source_timestamp': 10, 'received_timestamp': 11,
+        'publication_sequence_number': 1, 'reception_sequence_number': 1,
+    })
 
 
-def _tf_endpoint(gid, node_name):
-    return SimpleNamespace(endpoint_gid=gid, node_name=node_name)
+def test_tf_callback_accepts_jazzy_dictionary_metadata_without_gid():
+    """Verify tf callback accepts jazzy dictionary metadata without gid."""
+    observer = _tf_edge_observer()
+    _send_tf_metadata(observer, ('map', 'odom'))
+    assert observer.tf_observed_edges == {('map', 'odom')}
 
 
-def test_tf_owner_unknown_source_resolves_only_after_its_endpoint_appears():
-    """Resolve an unknown edge source by matching its own publisher GID."""
-    observer, endpoints = _tf_owner_observer()
-    gid_a = b'publisher-a'
-    _send_tf_owner(observer, gid_a)
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_a}}
-    assert observer.tf_edge_owners == {}
-
-    endpoints['/tf'] = [_tf_endpoint(gid_a, 'amcl')]
-    _send_tf_owner(observer, gid_a)
-    assert observer.tf_edge_unresolved == {}
-    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}
+def test_tf_edge_observations_are_bounded_to_the_three_required_edges():
+    """Verify tf edge observations are bounded to the three required edges."""
+    observer = _tf_edge_observer()
+    for edge in (('map', 'odom'), ('odom', 'base_link'),
+                 ('base_link', 'lidar_frame'), ('map', 'base_link')):
+        _send_tf_metadata(observer, edge)
+    assert observer.tf_observed_edges == {
+        ('map', 'odom'), ('odom', 'base_link'), ('base_link', 'lidar_frame')}
 
 
-def test_tf_owner_unknown_does_not_clear_known_or_wrong_owners():
-    """An unresolved source cannot erase or mask owners already observed."""
-    observer, endpoints = _tf_owner_observer()
-    gid_amcl, gid_wrong, gid_unknown = b'amcl', b'wrong', b'unknown'
-    endpoints['/tf'] = [_tf_endpoint(gid_amcl, 'amcl')]
-    _send_tf_owner(observer, gid_amcl)
-    endpoints['/tf'] = [_tf_endpoint(gid_wrong, 'other_localizer')]
-    _send_tf_owner(observer, gid_wrong)
-
-    endpoints['/tf'] = []
-    _send_tf_owner(observer, gid_unknown)
-    endpoints['/tf'] = [_tf_endpoint(gid_amcl, 'amcl')]
-    _send_tf_owner(observer, gid_amcl)
-    assert observer.tf_edge_owners[('map', 'odom')] == {
-        'amcl', 'other_localizer'}
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_unknown}}
+def test_tf_static_edge_observation_does_not_depend_on_callback_gid():
+    """Verify tf static edge observation does not depend on callback gid."""
+    observer = _tf_edge_observer()
+    _send_tf_metadata(observer, ('base_link', 'lidar_frame'), static=True)
+    assert observer.tf_observed_edges == {('base_link', 'lidar_frame')}
 
 
-def test_tf_owner_message_from_other_publisher_cannot_resolve_unknown_source():
-    """A known AMCL endpoint does not resolve another publisher's GID."""
-    observer, endpoints = _tf_owner_observer()
-    gid_a, gid_b = b'amcl-source', b'unknown-source'
-    _send_tf_owner(observer, gid_b)
-    endpoints['/tf'] = [_tf_endpoint(gid_a, 'amcl')]
-    _send_tf_owner(observer, gid_a)
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
-    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}
-
-
-def test_tf_owner_unknown_source_resolving_to_wrong_owner_stays_observable():
-    """Resolving a source to a wrong node records that owner for rejection."""
-    observer, endpoints = _tf_owner_observer()
-    gid_b = b'wrong-source'
-    _send_tf_owner(observer, gid_b)
-    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
-    endpoints['/tf'] = [_tf_endpoint(gid_b, 'other_localizer')]
-    _send_tf_owner(observer, gid_b)
-    assert observer.tf_edge_unresolved == {}
-    assert observer.tf_edge_owners == {('map', 'odom'): {'other_localizer'}}
-
-
-def test_tf_owner_repeated_metadata_for_valid_publisher_is_idempotent():
-    """Repeated metadata for one valid publisher is idempotent."""
-    observer, endpoints = _tf_owner_observer()
-    gid = b'amcl-source'
-    endpoints['/tf'] = [_tf_endpoint(gid, 'amcl')]
-    _send_tf_owner(observer, gid)
-    _send_tf_owner(observer, gid)
-    assert observer.tf_edge_unresolved == {}
-    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}
+def test_tf_static_observation_survives_later_live_graph_discovery():
+    """Verify tf static observation survives later live graph discovery."""
+    observer = _tf_edge_observer()
+    endpoints = {'/tf': [], '/tf_static': []}
+    observer.node = SimpleNamespace(
+        get_publishers_info_by_topic=lambda topic: endpoints[topic])
+    _send_tf_metadata(observer, ('base_link', 'lidar_frame'), static=True)
+    assert observer.tf_publisher_graph()['/tf_static'] == ()
+    endpoints['/tf_static'] = [SimpleNamespace(
+        node_name='robot_state_publisher', node_namespace='/',
+        topic_type='tf2_msgs/msg/TFMessage')]
+    assert observer.tf_publisher_graph()['/tf_static'] == ({
+        'node_name': 'robot_state_publisher', 'node_namespace': '/',
+        'topic_type': 'tf2_msgs/msg/TFMessage'},)
+    assert observer.tf_observed_edges == {('base_link', 'lidar_frame')}

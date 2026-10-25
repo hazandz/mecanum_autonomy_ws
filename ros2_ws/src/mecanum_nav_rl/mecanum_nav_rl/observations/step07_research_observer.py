@@ -19,7 +19,6 @@ _REQUIRED_TF_EDGES = {
     ('odom', 'base_link'),
     ('base_link', 'lidar_frame'),
 }
-_TF_OWNER_SOURCE_CAPACITY = 64
 
 
 class Step07ResearchObserver:
@@ -78,8 +77,7 @@ class Step07ResearchObserver:
         self.path_result: Any = None
         self.action_events: deque[dict[str, Any]] = deque(maxlen=128)
         self.map_message: Any = None
-        self.tf_edge_owners: dict[tuple[str, str], set[str]] = {}
-        self.tf_edge_unresolved: dict[tuple[str, str], set[bytes | None]] = {}
+        self.tf_observed_edges: set[tuple[str, str]] = set()
         self.node = Node(node_name, parameter_overrides=[])
         self._subs = []
         try:
@@ -195,8 +193,7 @@ class Step07ResearchObserver:
                        self.accepted_envelopes, self.safety_states,
                        self.localization):
             stream.clear()
-        self.tf_edge_owners.clear()
-        self.tf_edge_unresolved.clear()
+        self.tf_observed_edges.clear()
 
     @staticmethod
     def _insert_ordered(stream: deque[StampedFact], fact: StampedFact) -> None:
@@ -273,57 +270,18 @@ class Step07ResearchObserver:
             self.map_message = msg
 
     def _tf(self, msg: Any, message_info: Any) -> None:
-        self._record_tf_edges("/tf", msg, message_info)
+        self._record_tf_edges(msg)
 
     def _tf_static(self, msg: Any, message_info: Any) -> None:
-        self._record_tf_edges("/tf_static", msg, message_info)
+        self._record_tf_edges(msg)
 
-    def _record_tf_edges(self, topic: str, msg: Any, message_info: Any) -> None:
-        owner = None
-        publisher_gid = None
-        try:
-            publisher_gid = bytes(message_info.publisher_gid)
-            endpoints = self.node.get_publishers_info_by_topic(topic)
-            matches = [endpoint.node_name for endpoint in endpoints
-                       if bytes(endpoint.endpoint_gid) == publisher_gid]
-            if len(matches) == 1:
-                owner = str(matches[0])
-        except (AttributeError, TypeError, ValueError):
-            pass
+    def _record_tf_edges(self, msg: Any) -> None:
+        """Retain bounded edge-presence facts without owner identity."""
         with self._lock:
             for item in msg.transforms:
                 key = (str(item.header.frame_id), str(item.child_frame_id))
-                if key not in _REQUIRED_TF_EDGES:
-                    continue
-                unresolved = self.tf_edge_unresolved.setdefault(key, set())
-                if owner is None:
-                    # Keep unresolved state on its source; a different
-                    # publisher's discovery must not resolve this observation.
-                    if publisher_gid in unresolved:
-                        continue
-                    known_sources = sum(
-                        source is not None for source in unresolved
-                    )
-                    if (publisher_gid is not None
-                            and known_sources < _TF_OWNER_SOURCE_CAPACITY):
-                        unresolved.add(publisher_gid)
-                    else:
-                        # None remains a bounded, permanent fail-closed marker
-                        # when source metadata is missing or capacity is full.
-                        unresolved.add(None)
-                else:
-                    if publisher_gid is None:
-                        unresolved.add(None)
-                        continue
-                    unresolved.discard(publisher_gid)
-                    owners = self.tf_edge_owners.setdefault(key, set())
-                    if (owner in owners
-                            or len(owners) < _TF_OWNER_SOURCE_CAPACITY):
-                        owners.add(owner)
-                    else:
-                        unresolved.add(None)
-                if not unresolved:
-                    self.tf_edge_unresolved.pop(key, None)
+                if key in _REQUIRED_TF_EDGES:
+                    self.tf_observed_edges.add(key)
 
     def _wheel(self, msg: Any) -> None:
         if not self._valid_odom(msg):
@@ -477,6 +435,17 @@ class Step07ResearchObserver:
                                          s.qos_profile.depth) for s in subscriptions),
             }
         return {"nodes": node_names, "topics": topics}
+
+    def tf_publisher_graph(self) -> dict[str, tuple[dict[str, str], ...]]:
+        """Re-read current TF publisher endpoint identities."""
+        result = {}
+        for topic in ('/tf', '/tf_static'):
+            result[topic] = tuple({
+                'node_name': str(endpoint.node_name or ''),
+                'node_namespace': str(endpoint.node_namespace or ''),
+                'topic_type': str(endpoint.topic_type or ''),
+            } for endpoint in self.node.get_publishers_info_by_topic(topic))
+        return result
 
     def recording_ready(self, topic_names: tuple[str, ...]) -> tuple[bool, tuple[str, ...]]:
         graph = self.graph_snapshot()
