@@ -1656,6 +1656,121 @@ def test_production_localization_selects_fresh_pose_before_future_newest(monkeyp
     ) == (True, None)
 
 
+def test_production_localization_current_pose_not_gated_by_predecessor_covariance(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    context = runner.path_snapshot.context
+    now_steady = time.monotonic_ns()
+    predecessor = _localization_fact(
+        context, stamp_ns=9_900_000_000,
+        received_steady_ns=now_steady-20_000_000,
+        pose=(0.0, 0.0, 0.0), covariance=(0.26, 0.01, 0.01),
+    )
+    selected = _localization_fact(
+        context, stamp_ns=10_000_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        pose=(0.01, 0.0, 0.0), covariance=(0.01, 0.01, 0.01),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (predecessor, selected)
+
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=10_000_000_000,
+        steady_now_ns=now_steady,
+    ) == (True, None)
+
+
+def test_localization_high_covariance_predecessor_still_checks_pose_jump(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    context = runner.path_snapshot.context
+    now_steady = time.monotonic_ns()
+    predecessor = _localization_fact(
+        context, stamp_ns=9_900_000_000,
+        received_steady_ns=now_steady-20_000_000,
+        covariance=(0.26, 0.01, 0.01),
+    )
+    selected = _localization_fact(
+        context, stamp_ns=10_000_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        pose=(1.0, 0.0, 0.0),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (predecessor, selected)
+
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=10_000_000_000,
+        steady_now_ns=now_steady,
+    ) == (False, 'LOCALIZATION_TRANSLATION_JUMP')
+
+
+@pytest.mark.parametrize(('predecessor_changes', 'expected'), [
+    ({'pose': (float('nan'), 0.0, 0.0)},
+     'PREDECESSOR_LOCALIZATION_VALUES_INVALID'),
+    ({'stamp_ns': 0}, 'PREDECESSOR_ROS_TIMESTAMP_INVALID'),
+])
+def test_localization_invalid_predecessor_cannot_prove_health(
+        monkeypatch, predecessor_changes, expected):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    context = runner.path_snapshot.context
+    now_steady = time.monotonic_ns()
+    predecessor_values = {
+        'stamp_ns': 9_900_000_000,
+        'received_steady_ns': now_steady-20_000_000,
+        'pose': (0.0, 0.0, 0.0),
+    }
+    predecessor_values.update(predecessor_changes)
+    predecessor = _localization_fact(
+        context, stamp_ns=predecessor_values['stamp_ns'],
+        received_steady_ns=predecessor_values['received_steady_ns'],
+        pose=predecessor_values['pose'],
+    )
+    selected = _localization_fact(
+        context, stamp_ns=10_000_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        pose=(0.01, 0.0, 0.0),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (predecessor, selected)
+
+    ok, reason = runner._localization_ok(
+        snapshot, ros_now_ns=10_000_000_000,
+        steady_now_ns=now_steady,
+    )
+    assert not ok and reason == expected
+
+
+def test_future_localization_covariance_is_checked_when_pose_becomes_selected(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    context = runner.path_snapshot.context
+    now_steady = time.monotonic_ns()
+    prior = _localization_fact(
+        context, stamp_ns=9_900_000_000,
+        received_steady_ns=now_steady-20_000_000,
+    )
+    future = _localization_fact(
+        context, stamp_ns=10_000_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        covariance=(0.26, 0.01, 0.01),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (prior, future)
+
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=9_950_000_000,
+        steady_now_ns=now_steady,
+    ) == (True, None)
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=10_000_000_000,
+        steady_now_ns=now_steady,
+    ) == (False, 'LOCALIZATION_COVARIANCE_INVALID')
+
+
 def test_production_localization_future_only_and_age_limits_fail_closed(monkeypatch):
     runner = _production_observation_runner(monkeypatch)
     runner._update_test_observation(0)

@@ -1944,20 +1944,21 @@ class ResearchAcceptanceRunner:
             if not valid_pose:
                 measured['reason'] = f'{prefix}LOCALIZATION_VALUES_INVALID'
                 return None, measured
-            covariance = candidate.get('covariance')
-            try:
-                valid_covariance = (
-                    isinstance(covariance, (tuple, list))
-                    and len(covariance) == 3
-                    and all(math.isfinite(float(value))
-                            and 0.0 <= float(value) <= 0.25
-                            for value in covariance)
-                )
-            except (TypeError, ValueError, OverflowError):
-                valid_covariance = False
-            if not valid_covariance:
-                measured['reason'] = f'{prefix}LOCALIZATION_COVARIANCE_INVALID'
-                return None, measured
+            if is_selected:
+                covariance = candidate.get('covariance')
+                try:
+                    valid_covariance = (
+                        isinstance(covariance, (tuple, list))
+                        and len(covariance) == 3
+                        and all(math.isfinite(float(value))
+                                and 0.0 <= float(value) <= 0.25
+                                for value in covariance)
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    valid_covariance = False
+                if not valid_covariance:
+                    measured['reason'] = 'LOCALIZATION_COVARIANCE_INVALID'
+                    return None, measured
 
         ordered = ((predecessor, fact) if predecessor is not None else (fact,))
         healthy, reason = localization_health(
