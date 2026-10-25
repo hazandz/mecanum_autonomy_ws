@@ -229,6 +229,7 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     observer._lock = threading.RLock()
     observer._steady_ns = lambda: 100
     observer.localization = deque(maxlen=64)
+    observer.context = Context(5, 2, 3, 'c' * 64)
     message = SimpleNamespace(header=SimpleNamespace(frame_id="map",
         stamp=SimpleNamespace(sec=1, nanosec=0)), pose=SimpleNamespace(
         pose=SimpleNamespace(position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
@@ -242,6 +243,52 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     message.pose.pose.position.x = math.inf
     observer._amcl(message)
     assert len(observer.localization) == 1
+
+
+def test_amcl_snapshot_pins_context_across_callback_interleaving():
+    """Keep captured localization context fixed across the next callback."""
+    observer = object.__new__(observer_module.Step07ResearchObserver)
+    observer._lock = threading.RLock()
+    observer._steady_ns = lambda: 9_000_000_000
+    observer.localization = deque(maxlen=64)
+    observer.context = Context(5, 2, 3, 'c' * 64)
+    observer.scans = deque()
+    observer.wheel = deque()
+    observer.imu = deque()
+    observer.odometry = deque()
+    observer.receipts = deque()
+    observer.lifecycle = None
+    observer.barrier_sequence = 2
+    observer.barrier_stamp_ns = 10_000_000_000
+    observer.clock_rollback = False
+    observer.clock_ns = 12_000_000_000
+    observer.clock_advance_count = 2
+
+    def amcl_message(sec):
+        return SimpleNamespace(
+            header=SimpleNamespace(
+                frame_id='map',
+                stamp=SimpleNamespace(sec=sec, nanosec=0),
+            ),
+            pose=SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=0.0),
+                    orientation=SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0,
+                    ),
+                ),
+                covariance=[0.0] * 36,
+            ),
+        )
+
+    observer._amcl(amcl_message(10))
+    captured = observer.sensor_health_snapshot()
+    observer.context = Context(6, 2, 3, 'c' * 64)
+    observer._amcl(amcl_message(11))
+
+    assert captured['localization'][0]['context'] == Context(5, 2, 3, 'c' * 64)
+    assert captured['localization'][0]['stamp_ns'] == 10_000_000_000
+    assert observer.localization[-1]['context'] == observer.context
 
 
 def _tf_edge_observer():

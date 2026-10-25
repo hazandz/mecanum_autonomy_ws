@@ -454,6 +454,16 @@ def test_execute_checks_upstream_before_recorder_and_never_missions_after_failur
     runner.start_runtime_children = lambda: calls.append('children')
     runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
     runner._topic_samples_ready = lambda: calls.append('upstream') or True
+    runner._last_sensor_health_success = {
+        'snapshot': {'clock_advance_count': 2,
+                     'odometry': tuple(runner.observer.odometry)},
+        'ros_now_ns': 100, 'steady_now_ns': now_ns,
+        'facts': {'scan': runner.observer.scans[0],
+                  'wheel_odometry': runner.observer.wheel[0],
+                  'imu': runner.observer.imu[0],
+                  'filtered_odometry': runner.observer.odometry[-1]},
+    }
+    runner._localization_ok = lambda: (True, None)
     runner._graph_ready_for_recording = lambda: calls.append('recorder') or True
     runner._mission = lambda: calls.append('mission')
     runner.shutdown = lambda: calls.append('shutdown')
@@ -726,6 +736,10 @@ def test_startup_rearm_requests_once_and_waits_for_fresh_ready_lifecycle():
     runner.rearm_requested = False
     runner.observer = SimpleNamespace(request_rearm=observer.request_rearm,
         lifecycle=life, context=context, clock_ns=100)
+    _bind_health_snapshot(
+        runner.observer, context=context, ros_now_ns=100,
+        lifecycle=life, odometry=(),
+    )
     runner.now_steady = time.monotonic
     runner.state = CampaignState()
     runner._startup_rearm(time.monotonic() + 1.0)
@@ -1219,6 +1233,35 @@ def _install_fake_ros_time(monkeypatch):
     return SimpleNamespace(ROS_TIME="ROS_TIME")
 
 
+def _bind_health_snapshot(
+        observer, *, context, ros_now_ns, lifecycle, odometry):
+    from collections import deque
+    from types import MethodType
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver,
+    )
+
+    observer._lock = threading.RLock()
+    observer.context = context
+    observer.lifecycle = lifecycle
+    observer.barrier_sequence = 5
+    observer.barrier_stamp_ns = 0
+    observer.clock_rollback = False
+    observer.clock_ns = ros_now_ns
+    observer.clock_advance_count = 2
+    observer.scans = deque()
+    observer.wheel = deque()
+    observer.imu = deque()
+    observer.odometry = deque(odometry)
+    observer.receipts = deque()
+    observer.localization = deque()
+    observer.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=ros_now_ns)))
+    observer.sensor_health_snapshot = MethodType(
+        Step07ResearchObserver.sensor_health_snapshot, observer
+    )
+
+
 @pytest.mark.parametrize(("poses", "translation", "rotation"), [
     (((0.2, 0.0), (1.2, 0.0)), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
     (((1.2, 0.0), (2.2, 0.0)), (-1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
@@ -1249,6 +1292,11 @@ def test_production_tf_lookup_applies_base_from_map_transform_without_mutating_p
         clock_ns=100, clock_rollback=False, context=context, barrier_sequence=5,
         lifecycle=StampedFact(100, now, "base_link", {"primary_state": 2,
             "barrier_state": 1, "motion_permitted": True}, context))
+    _bind_health_snapshot(
+        observer, context=context, ros_now_ns=100,
+        lifecycle=observer.lifecycle,
+        odometry=(StampedFact(100, now, 'base_link', SimpleNamespace(), context),),
+    )
     runner = object.__new__(ResearchAcceptanceRunner)
     runner.path_snapshot = path
     runner.observer = observer
@@ -1282,6 +1330,11 @@ def test_production_tf_lookup_returns_no_vector_for_unavailable_or_expired_path(
         _Duration=lambda **kwargs: None, clock_ns=100, clock_rollback=False,
         context=context, barrier_sequence=5, lifecycle=StampedFact(100, now, "base_link",
         {"primary_state": 2, "barrier_state": 1, "motion_permitted": True}, context))
+    _bind_health_snapshot(
+        observer, context=context, ros_now_ns=100,
+        lifecycle=observer.lifecycle,
+        odometry=(StampedFact(100, now, 'base_link', SimpleNamespace(), context),),
+    )
     runner = object.__new__(ResearchAcceptanceRunner)
     runner.path_snapshot = expired
     runner.observer = observer
@@ -1365,12 +1418,14 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
     observer = SimpleNamespace(
         context=context, clock_ns=now_ros, clock_rollback=False,
         barrier_sequence=7, barrier_stamp_ns=1, lifecycle=lifecycle,
-        scans=deque(), odometry=deque(), wheel=deque(), imu=deque(),
-        receipts=deque(),
-        localization=deque(),
+        scans=deque(maxlen=64), odometry=deque(maxlen=64),
+        wheel=deque(maxlen=64), imu=deque(maxlen=64),
+        receipts=deque(maxlen=64),
+        localization=deque(maxlen=64),
+        node_ros_clock_ns=now_ros,
         node=SimpleNamespace(
             get_clock=lambda: SimpleNamespace(
-                now=lambda: SimpleNamespace(nanoseconds=observer.clock_ns)
+                now=lambda: SimpleNamespace(nanoseconds=observer.node_ros_clock_ns)
             )
         ),
         tf_buffer=SimpleNamespace(lookup_transform=lookup),
@@ -1378,6 +1433,15 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
         tf_observed_edges={('map', 'odom'), ('odom', 'base_link'),
                            ('base_link', 'lidar_frame')},
         _Duration=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    from types import MethodType
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver,
+    )
+    observer._lock = threading.RLock()
+    observer.clock_advance_count = 2
+    observer.sensor_health_snapshot = MethodType(
+        Step07ResearchObserver.sensor_health_snapshot, observer
     )
     # Clock callback in the fake node reads this assigned observer dynamically.
     observer.clock_ns = now_ros
@@ -1413,6 +1477,7 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
         cutoff = now_ros + (index+1)*10_000_000
         steady = time.monotonic_ns()
         observer.clock_ns = cutoff
+        observer.node_ros_clock_ns = cutoff
         observer.lifecycle = StampedFact(
             cutoff, steady, 'base_link', {
                 'primary_state': 2, 'barrier_state': 1,
@@ -1460,6 +1525,7 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
             'frame_id': 'map',
             'pose': (0.0, 0.0, 0.0),
             'covariance': (0.01, 0.01, 0.01),
+            'context': context,
         })
         observer.receipts.clear()
         receipt = runner._test_receipt
@@ -1468,6 +1534,231 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
         ))
     runner._update_test_observation = update
     return runner
+
+
+def test_production_health_snapshot_precedes_interleaved_scan_callback(monkeypatch):
+    """Keep the evaluation on the scan facts captured before callback entry."""
+    """A callback after the local snapshot cannot make receive age negative."""
+    from types import MethodType
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver,
+    )
+
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    observer = runner.observer
+    observer._lock = threading.RLock()
+    observer._steady_ns = lambda: 1_000_000_001
+    observer._stamp = Step07ResearchObserver._stamp
+    observer._insert_ordered = Step07ResearchObserver._insert_ordered
+    observer._fact = MethodType(Step07ResearchObserver._fact, observer)
+    observer._scan = MethodType(Step07ResearchObserver._scan, observer)
+    observer.sensor_health_snapshot = MethodType(
+        Step07ResearchObserver.sensor_health_snapshot, observer
+    )
+    for stream_name in ('scans', 'wheel', 'imu', 'odometry'):
+        stream = getattr(observer, stream_name)
+        fact = stream[-1]
+        stream[-1] = type(fact)(
+            fact.stamp_ns, 999_000_000, fact.frame_id, fact.value,
+            fact.context, fact.identity,
+        )
+    observer.lifecycle = type(observer.lifecycle)(
+        observer.lifecycle.stamp_ns, 999_000_000, observer.lifecycle.frame_id,
+        observer.lifecycle.value, observer.lifecycle.context,
+        observer.lifecycle.identity,
+    )
+    observer.localization[-1]['received_steady_ns'] = 999_000_000
+    original_scan_stamp = observer.scans[-1].stamp_ns+1_000_000
+    scan_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(
+                sec=original_scan_stamp // 1_000_000_000,
+                nanosec=original_scan_stamp % 1_000_000_000,
+            ),
+            frame_id='lidar_frame',
+        ),
+        ranges=[2.0]*360, angle_min=-math.pi,
+        angle_increment=2*math.pi/360, range_min=0.1, range_max=10.0,
+    )
+    injected = False
+
+    evaluation_now = []
+
+    def evaluation_steady_ns():
+        nonlocal injected
+        if not injected:
+            injected = True
+            observer._scan(scan_message)
+            evaluation_now.append(1_000_000_000)
+            return evaluation_now[-1]
+        return evaluation_now[-1]+2
+
+    monkeypatch.setattr(runner_module.time, 'monotonic_ns', evaluation_steady_ns)
+    runner._assert_live_mission_health(
+        runner.path_snapshot.context, 'A7_OBSERVATION'
+    )
+    assert injected is True
+    assert observer.scans[-1].received_steady_ns > 1_000_000_000
+    assert 1_000_000_000-observer.scans[-1].received_steady_ns < 0
+    assert runner.state.valid_observations == []
+
+
+def test_production_health_uses_node_ros_clock_not_cached_clock(monkeypatch):
+    """A stale cache cannot make stale sensor facts appear fresh."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    observer = runner.observer
+    node_now = observer.node_ros_clock_ns
+    observer.node_ros_clock_ns = node_now + 200_000_000
+    observer.clock_ns = node_now - 200_000_000
+    scan = observer.scans[-1]
+    observer.scans[-1] = type(scan)(
+        node_now-400_000_000, scan.received_steady_ns, scan.frame_id,
+        scan.value, scan.context, scan.identity,
+    )
+    lifecycle = observer.lifecycle
+    observer.lifecycle = type(lifecycle)(
+        observer.clock_ns-100_000_000, lifecycle.received_steady_ns,
+        lifecycle.frame_id,
+        lifecycle.value, lifecycle.context, lifecycle.identity,
+    )
+    observer.localization[-1]['stamp_ns'] = observer.clock_ns-50_000_000
+    for stream_name in ('wheel', 'imu', 'odometry'):
+        stream = getattr(observer, stream_name)
+        fact = stream[-1]
+        stream[-1] = type(fact)(
+            observer.clock_ns-10_000_000, fact.received_steady_ns,
+            fact.frame_id, fact.value, fact.context, fact.identity,
+        )
+
+    with pytest.raises(AcceptanceFailure, match='ROS_AGE_EXCEEDED'):
+        runner._assert_live_mission_health(
+            runner.path_snapshot.context, 'A7_OBSERVATION'
+        )
+
+
+def test_production_health_reports_receive_age_when_ros_clock_is_paused(monkeypatch):
+    """Keep steady receive-age enforcement active with paused ROS time."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    fact = runner.observer.scans[-1]
+    runner.observer.scans[-1] = type(fact)(
+        fact.stamp_ns, fact.received_steady_ns-600_000_000,
+        fact.frame_id, fact.value, fact.context, fact.identity,
+    )
+
+    with pytest.raises(AcceptanceFailure, match='RECEIVE_AGE_EXCEEDED') as error:
+        runner._assert_live_mission_health(
+            runner.path_snapshot.context, 'A7_OBSERVATION'
+        )
+
+    measured = error.value.measured
+    assert measured['stream'] == 'scan'
+    assert (
+        measured['evaluation_ros_time_ns']
+        == runner.observer.node_ros_clock_ns
+    )
+    assert measured['ros_age_ns'] >= 0
+    assert measured['receive_age_ns'] > measured['steady_receive_limit_ns']
+
+
+def test_production_health_rejects_context_mismatch_with_measurement(monkeypatch):
+    """Reject facts outside the pinned context with measured evidence."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import Context
+
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    fact = runner.observer.scans[-1]
+    runner.observer.scans[-1] = type(fact)(
+        fact.stamp_ns, fact.received_steady_ns, fact.frame_id, fact.value,
+        Context(99, 2, 3, fact.context.config_hash), fact.identity,
+    )
+
+    with pytest.raises(AcceptanceFailure, match='CONTEXT_MISMATCH') as error:
+        runner._assert_live_mission_health(
+            runner.path_snapshot.context, 'A7_OBSERVATION'
+        )
+
+    assert error.value.measured['expected_context']['episode_generation'] == 4
+    assert error.value.measured['observed_context']['episode_generation'] == 99
+
+
+def test_production_health_treats_node_ros_clock_rollback_as_terminal(monkeypatch):
+    """Fail closed when the attached ROS clock moves backward."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    runner._last_node_ros_now_ns = runner.observer.node_ros_clock_ns+1
+    runner._node_ros_rollback = False
+
+    with pytest.raises(
+            AcceptanceFailure, match='SIM_CLOCK_INVALID_OR_ROLLED_BACK'):
+        runner._assert_live_mission_health(
+            runner.path_snapshot.context, 'A7_OBSERVATION'
+        )
+
+    assert runner._node_ros_rollback is True
+
+
+def test_production_health_future_only_buffer_does_not_create_observation(monkeypatch):
+    """A future-only buffer cannot produce an observation or report PASS."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    future = runner.observer.node_ros_clock_ns+1
+    fact = runner.observer.odometry[-1]
+    runner.observer.odometry[-1] = type(fact)(
+        future, fact.received_steady_ns, fact.frame_id, fact.value,
+        fact.context, fact.identity,
+    )
+
+    with pytest.raises(AcceptanceFailure, match='ROS_TIMESTAMP_FUTURE') as error:
+        runner._collect_one_observation(time.monotonic()+1.0)
+
+    assert error.value.measured['stream'] == 'filtered_odometry'
+    assert runner.state.valid_observations == []
+    assert (runner.state.primary_failure['measured']['reason']
+            == 'ROS_TIMESTAMP_FUTURE')
+
+
+def test_production_observation_skips_future_newest_for_earlier_fresh_pair(monkeypatch):
+    """A post-cutoff newest scan does not hide an eligible earlier pair."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import StampedFact
+
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    observer = runner.observer
+    cutoff = observer.node_ros_clock_ns
+    context = runner.path_snapshot.context
+    steady = time.monotonic_ns()
+    fresh_stamp = cutoff-20_000_000
+    fresh_scan = SimpleNamespace(
+        header=SimpleNamespace(frame_id='lidar_frame', stamp_ns=fresh_stamp),
+        ranges=[2.0]*360, angle_min=-math.pi,
+        angle_increment=2*math.pi/360, range_min=0.1, range_max=10.0,
+    )
+    future_scan = SimpleNamespace(
+        header=SimpleNamespace(frame_id='lidar_frame', stamp_ns=cutoff+1),
+        ranges=[2.0]*360, angle_min=-math.pi,
+        angle_increment=2*math.pi/360, range_min=0.1, range_max=10.0,
+    )
+    fresh_odom_value = observer.odometry[-1].value
+    fresh_odom_value.header.stamp_ns = fresh_stamp+1_000_000
+    fresh_odom = StampedFact(
+        fresh_stamp+1_000_000, steady, 'base_link', fresh_odom_value, context,
+    )
+    observer.scans.clear()
+    observer.scans.extend((
+        StampedFact(fresh_stamp, steady, 'lidar_frame', fresh_scan, context),
+        StampedFact(cutoff+1, steady, 'lidar_frame', future_scan, context),
+    ))
+    observer.odometry.clear()
+    observer.odometry.append(fresh_odom)
+
+    assert runner._collect_one_observation(time.monotonic()+1.0) is True
+    sample = runner.state.valid_observations[-1]
+    assert sample['scan_stamp_ns'] == fresh_stamp
+    assert sample['scan_stamp_ns'] <= sample['snapshot_cutoff_ros_ns']
+    assert len(runner.state.valid_observations) == 1
 
 
 def test_production_collect_one_observation_builds_five_distinct_81d_pairs(
@@ -1705,6 +1996,10 @@ def test_full_a6_is_recorded_only_after_path_success_and_navigate_acceptance():
         barrier_sequence=4, barrier_stamp_ns=9,
         send_navigation=lambda _goal: CompletedFuture(),
         executor_error=None,
+    )
+    _bind_health_snapshot(
+        runner.observer, context=context, ros_now_ns=10,
+        lifecycle=SimpleNamespace(context=context), odometry=(),
     )
     runner._check_live_mission_health = lambda *_args: (_ for _ in ()).throw(
         AcceptanceFailure(
@@ -1975,6 +2270,14 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
         SimpleNamespace(stamp_ns=1, value=odom_value),
         SimpleNamespace(stamp_ns=2, value=odom_value),
     ]
+    observer.sensor_health_snapshot = lambda: {
+        'context': None, 'barrier_sequence': 0, 'barrier_stamp_ns': 0,
+        'clock_rollback': False, 'clock_ns': 10, 'clock_advance_count': 2,
+        'lifecycle': None, 'scans': tuple(observer.scans),
+        'wheel': tuple(observer.wheel), 'imu': tuple(observer.imu),
+        'odometry': tuple(observer.odometry), 'receipts': (),
+        'localization': tuple(observer.localization),
+    }
     topics = {'/odometry/filtered': {'publishers': (('ekf_filter_node',),)}}
     observer.graph_snapshot = lambda: {
         'nodes': {name for name, client in observer.lifecycle_clients.items()
@@ -1984,6 +2287,15 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
     runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
     runner.config = {'map_identity': {'map_id': 'test_map'}}
     runner._topic_samples_ready = lambda: True
+    runner._last_sensor_health_success = {
+        'snapshot': {'clock_advance_count': 2,
+                     'odometry': tuple(observer.odometry)},
+        'ros_now_ns': 10, 'steady_now_ns': now_ns,
+        'facts': {
+            'scan': observer.scans[0], 'wheel_odometry': observer.wheel[0],
+            'imu': observer.imu[0], 'filtered_odometry': observer.odometry[-1],
+        },
+    }
     runner._localization_ok = lambda: (True, None)
     runner._tf_chain_usable = lambda _stamp: True
     runner._tf_ownership_ready = lambda: True
@@ -1992,6 +2304,8 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
             runner, '_last_tf_a4_evidence',
             {'ownership_basis': 'fake canonical graph', 'stamp_ns': stamp})
         or True)
+    runner._a4_current_ready = lambda: True
+    runner._last_tf_a4_evidence = {'test': 'canonical fake graph'}
     runner._startup_rearm = lambda _deadline: rearm_calls.append(clock())
 
 

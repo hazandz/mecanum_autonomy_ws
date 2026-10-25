@@ -64,9 +64,11 @@ NAV2_LIFECYCLE_STATE_LABELS = {
 
 
 class AcceptanceFailure(RuntimeError):
-    def __init__(self, stage: str, component: str, reason: str) -> None:
+    def __init__(self, stage: str, component: str, reason: str,
+                 measured: Mapping[str, Any] | None = None) -> None:
         super().__init__(reason)
         self.stage, self.component, self.reason = stage, component, reason
+        self.measured = dict(measured) if measured is not None else None
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -587,12 +589,15 @@ class CampaignState:
     metrics: dict[str, Any] = field(default_factory=dict)
     cleanup: dict[str, Any] = field(default_factory=dict)
 
-    def fail(self, component: str, reason: str, *, logs: list[str] | None = None) -> None:
+    def fail(self, component: str, reason: str, *, logs: list[str] | None = None,
+             measured: Mapping[str, Any] | None = None) -> None:
         if self.primary_failure is None:
             self.primary_failure = {"stage": self.stage, "primary_failure": reason,
                                     "component": component, "short_reason": reason,
                                     "relevant_logs": list(logs or ()),
                                     "bag_time_window": None, "root_cause": "ROOT_CAUSE_UNRESOLVED"}
+            if measured is not None:
+                self.primary_failure['measured'] = dict(measured)
 
 
 class ResearchAcceptanceRunner:
@@ -634,6 +639,9 @@ class ResearchAcceptanceRunner:
         self.authorization: dict[str, Any] = {}
         self.tf_configured_ownership: dict[str, Any] = {}
         self._last_tf_a4_evidence: dict[str, Any] = {}
+        self._last_node_ros_now_ns: int | None = None
+        self._node_ros_advance_count = 0
+        self._node_ros_rollback = False
         self.rearm_requested = False
         self.mission_deadline_steady = 0.0
         self.shutdown_results: list[dict[str, Any]] = []
@@ -774,6 +782,10 @@ class ResearchAcceptanceRunner:
             if predicate():
                 return
             if self._remaining(deadline) <= 0:
+                measured = getattr(self, '_last_sensor_health_failure', None)
+                if (measured is not None
+                        and getattr(self, '_last_sensor_health_stage', None) == stage):
+                    raise AcceptanceFailure(stage, component, reason, measured=measured)
                 raise AcceptanceFailure(stage, component, reason)
             time.sleep(min(0.02, self._remaining(deadline)))
 
@@ -790,24 +802,195 @@ class ResearchAcceptanceRunner:
             self.log("recorder", f"waiting for recorder subscriptions; missing={','.join(missing[:4])}")
         return ready
 
+    def _sensor_health_snapshot(self) -> dict[str, Any]:
+        return self.observer.sensor_health_snapshot()
+
+    def _node_ros_now_ns(self) -> int:
+        now_ns = int(self.observer.node.get_clock().now().nanoseconds)
+        previous = getattr(self, '_last_node_ros_now_ns', None)
+        if previous is not None and now_ns > previous:
+            self._node_ros_advance_count = getattr(
+                self, '_node_ros_advance_count', 0
+            ) + 1
+        else:
+            self._node_ros_advance_count = getattr(
+                self, '_node_ros_advance_count', 0
+            )
+        if previous is not None and now_ns < previous:
+            self._node_ros_rollback = True
+        self._last_node_ros_now_ns = now_ns
+        return now_ns
+
+    @staticmethod
+    def _context_measured(context: Any) -> dict[str, Any] | None:
+        if context is None:
+            return None
+        return {
+            'episode_generation': int(context.episode_generation),
+            'reset_epoch': int(context.reset_epoch),
+            'runtime_generation': int(context.runtime_generation),
+            'config_hash': str(context.config_hash),
+        }
+
+    @classmethod
+    def _health_fact_value(
+            cls, fact: Any, key: str, default: Any = None) -> Any:
+        if isinstance(fact, Mapping):
+            return fact.get(key, default)
+        return getattr(fact, key, default)
+
+    @classmethod
+    def _health_fact_measurement(
+            cls, stream: str, fact: Any, *, ros_now_ns: int,
+            steady_now_ns: int, ros_limit_ns: int, steady_limit_ns: int,
+            expected_context: Any) -> dict[str, Any]:
+        stamp_value = cls._health_fact_value(fact, 'stamp_ns')
+        receive_value = cls._health_fact_value(fact, 'received_steady_ns')
+        stamp_ns = int(stamp_value) if stamp_value is not None else None
+        receive_ns = int(receive_value) if receive_value is not None else None
+        return {
+            'stream': stream,
+            'evaluation_ros_time_ns': ros_now_ns,
+            'evaluation_steady_time_ns': steady_now_ns,
+            'message_stamp_ns': stamp_ns,
+            'receive_time_steady_ns': receive_ns,
+            'ros_age_ns': (
+                ros_now_ns-stamp_ns if stamp_ns is not None else None),
+            'receive_age_ns': (
+                steady_now_ns-receive_ns if receive_ns is not None else None),
+            'ros_limit_ns': ros_limit_ns,
+            'steady_receive_limit_ns': steady_limit_ns,
+            'expected_context': cls._context_measured(expected_context),
+            'observed_context': cls._context_measured(
+                cls._health_fact_value(fact, 'context')
+            ),
+        }
+
+    @classmethod
+    def _select_fresh_health_fact(
+            cls, facts: tuple[Any, ...], *, stream: str, context: Any,
+            ros_now_ns: int, steady_now_ns: int, ros_limit_ns: int,
+            steady_limit_ns: int) -> tuple[Any | None, dict[str, Any] | None]:
+        if not facts:
+            measured = cls._health_fact_measurement(
+                stream, None, ros_now_ns=ros_now_ns,
+                steady_now_ns=steady_now_ns,
+                ros_limit_ns=ros_limit_ns, steady_limit_ns=steady_limit_ns,
+                expected_context=context,
+            )
+            return None, {'reason': 'INPUT_MISSING', **measured}
+        matching = [fact for fact in facts
+                    if cls._health_fact_value(fact, 'context') == context]
+        if not matching:
+            fact = max(
+                facts, key=lambda item: cls._health_fact_value(item, 'stamp_ns'))
+            measured = cls._health_fact_measurement(
+                stream, fact, ros_now_ns=ros_now_ns,
+                steady_now_ns=steady_now_ns,
+                ros_limit_ns=ros_limit_ns, steady_limit_ns=steady_limit_ns,
+                expected_context=context,
+            )
+            return None, {'reason': 'CONTEXT_MISMATCH', **measured}
+        before_cutoff = [
+            fact for fact in matching
+            if cls._health_fact_value(fact, 'stamp_ns') <= ros_now_ns
+        ]
+        if not before_cutoff:
+            fact = max(
+                matching,
+                key=lambda item: cls._health_fact_value(item, 'stamp_ns'),
+            )
+            measured = cls._health_fact_measurement(
+                stream, fact, ros_now_ns=ros_now_ns,
+                steady_now_ns=steady_now_ns,
+                ros_limit_ns=ros_limit_ns, steady_limit_ns=steady_limit_ns,
+                expected_context=context,
+            )
+            return None, {'reason': 'ROS_TIMESTAMP_FUTURE', **measured}
+        eligible = [
+            fact for fact in before_cutoff
+            if 0 <= ros_now_ns-cls._health_fact_value(
+                fact, 'stamp_ns') <= ros_limit_ns
+            and 0 <= steady_now_ns-cls._health_fact_value(
+                fact, 'received_steady_ns') <= steady_limit_ns
+        ]
+        if eligible:
+            fact = max(
+                eligible,
+                key=lambda item: cls._health_fact_value(item, 'stamp_ns'),
+            )
+            return fact, None
+        fact = max(
+            before_cutoff,
+            key=lambda item: cls._health_fact_value(item, 'stamp_ns'),
+        )
+        measured = cls._health_fact_measurement(
+            stream, fact, ros_now_ns=ros_now_ns, steady_now_ns=steady_now_ns,
+            ros_limit_ns=ros_limit_ns, steady_limit_ns=steady_limit_ns,
+            expected_context=context,
+        )
+        ros_age = measured['ros_age_ns']
+        receive_age = measured['receive_age_ns']
+        if ros_age is not None and ros_age > ros_limit_ns:
+            reason = 'ROS_AGE_EXCEEDED'
+        elif receive_age is not None and receive_age < 0:
+            reason = 'RECEIVE_TIMESTAMP_FUTURE'
+        else:
+            reason = 'RECEIVE_AGE_EXCEEDED'
+        return None, {'reason': reason, **measured}
+
+    def _remember_sensor_health_failure(
+            self, stage: str, measured: dict[str, Any]) -> None:
+        self._last_sensor_health_failure = measured
+        self._last_sensor_health_stage = stage
+
+    def _raise_sensor_health_failure(
+            self, stage: str, component: str,
+            measured: dict[str, Any]) -> None:
+        self._remember_sensor_health_failure(stage, measured)
+        raise AcceptanceFailure(
+            stage, component, str(measured['reason']), measured=measured
+        )
+
     def _topic_samples_ready(self) -> bool:
         self._check_launch_processes()
         observer = self.observer
-        if observer.clock_rollback:
-            raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "clock", "SIM_CLOCK_ROLLBACK")
+        graph = observer.graph_snapshot()
+        snapshot = self._sensor_health_snapshot()
+        now_ros = self._node_ros_now_ns()
         now_steady = time.monotonic_ns()
-        if observer.clock_ns <= 0 or observer.clock_advance_count < 2 or observer.lifecycle is None:
+        stage = 'A2_CLOCK_AND_SENSORS'
+        if (snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)):
+            raise AcceptanceFailure(
+                'A2_CLOCK_AND_SENSORS', 'clock', 'SIM_CLOCK_ROLLBACK')
+        if now_ros <= 0 or self._node_ros_advance_count < 2:
             return False
-        life = observer.lifecycle
-        ros_age = observer.clock_ns - life.stamp_ns
+        context = snapshot['context']
+        life = snapshot['lifecycle']
+        if context is None or life is None:
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', life, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            self._remember_sensor_health_failure(
+                stage, {'reason': 'INPUT_MISSING', **measured})
+            return False
         if life.value["barrier_state"] == 3:
             raise AcceptanceFailure("STARTUP", "safety_lifecycle", "SAFETY_LIFECYCLE_FAULT")
+        life_fact, life_error = self._select_fresh_health_fact(
+            (life,), stream='safety_lifecycle', context=context,
+            ros_now_ns=now_ros, steady_now_ns=now_steady,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
+        if life_error is not None:
+            self._remember_sensor_health_failure(stage, life_error)
+            return False
         if (life.value["primary_state"] != 2
                 or life.value["barrier_state"] not in (1, 2)
-                or now_steady-life.received_steady_ns > 500_000_000
-                or not 0 <= ros_age <= 500_000_000):
+                or not life.value.get('motion_permitted', False)):
             return False
-        graph = observer.graph_snapshot()
         incompatible = self._known_qos_mismatches(graph)
         if incompatible:
             raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "qos",
@@ -817,29 +1000,64 @@ class ResearchAcceptanceRunner:
         if len(lifecycle_publishers) != 1 or lifecycle_publishers[0][0] != "safety_lifecycle":
             raise AcceptanceFailure("STARTUP", "safety_lifecycle_owner",
                                     "LIFECYCLE_PUBLISHER_OWNER_MISMATCH")
-        if not observer.scans or not observer.wheel or not observer.imu or not observer.odometry:
-            return False
-        scan = observer.scans[-1].value
-        wheel = observer.wheel[-1].value
-        imu = observer.imu[-1].value
-        odom = observer.odometry[-1].value
-        if (observer.scans[-1].frame_id != "lidar_frame" or not scan.ranges
+        requirements = (
+            ('scan', snapshot['scans'], 500_000_000),
+            ('wheel_odometry', snapshot['wheel'], 200_000_000),
+            ('imu', snapshot['imu'], 200_000_000),
+            ('filtered_odometry', snapshot['odometry'], 250_000_000),
+        )
+        selected: dict[str, Any] = {'safety_lifecycle': life_fact}
+        for name, facts, limit in requirements:
+            fact, failure = self._select_fresh_health_fact(
+                facts, stream=name, context=context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=limit,
+                steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._remember_sensor_health_failure(stage, failure)
+                return False
+            selected[name] = fact
+        scan = selected['scan'].value
+        wheel = selected['wheel_odometry'].value
+        imu = selected['imu'].value
+        odom = selected['filtered_odometry'].value
+        if (selected['scan'].frame_id != 'lidar_frame' or not scan.ranges
                 or wheel.header.frame_id != "odom" or wheel.child_frame_id != "base_link"
                 or imu.header.frame_id != "base_link" or odom.header.frame_id != "odom"
                 or odom.child_frame_id != "base_link"):
-            raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "sensor_frames", "SENSOR_TYPE_OR_FRAME_INVALID")
+            measured = self._health_fact_measurement(
+                'scan', selected['scan'], ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            measured['reason'] = 'SENSOR_TYPE_OR_FRAME_INVALID'
+            self._remember_sensor_health_failure(stage, measured)
+            raise AcceptanceFailure(
+                stage, 'sensor_frames', 'SENSOR_TYPE_OR_FRAME_INVALID',
+                measured=measured,
+            )
         from mecanum_nav_rl.observations.step07_research_acceptance import lidar_sectors
         try:
             lidar_sectors(scan.ranges, angle_min=scan.angle_min,
                 angle_increment=scan.angle_increment, range_min=scan.range_min,
                 range_max=scan.range_max, frame_id=scan.header.frame_id)
         except (TypeError, ValueError) as error:
-            raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "scan", f"SCAN_INVALID:{error}") from error
-        facts = (observer.scans[-1], observer.wheel[-1], observer.imu[-1], observer.odometry[-1])
-        limits = (500_000_000, 200_000_000, 200_000_000, 250_000_000)
-        return all(0 <= now_steady-f.received_steady_ns <= limit
-                   and 0 <= observer.clock_ns-f.stamp_ns <= limit
-                   for f, limit in zip(facts, limits))
+            measured = self._health_fact_measurement(
+                'scan', selected['scan'], ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            measured['reason'] = f'SCAN_VALUES_INVALID:{error}'
+            self._remember_sensor_health_failure(stage, measured)
+            raise AcceptanceFailure(
+                stage, 'scan', measured['reason'], measured=measured,
+            ) from error
+        self._last_sensor_health_failure = None
+        self._last_sensor_health_success = {
+            'snapshot': snapshot, 'ros_now_ns': now_ros,
+            'steady_now_ns': now_steady, 'facts': selected,
+        }
+        return True
 
     def _goal_pose(self) -> Any:
         from geometry_msgs.msg import PoseStamped
@@ -1122,18 +1340,41 @@ class ResearchAcceptanceRunner:
         self._wait_for(lambda: self._topic_samples_ready(), deadline, stage="A2_CLOCK_AND_SENSORS",
                        component="observer", reason="CLOCK_SENSOR_OR_LIFECYCLE_READINESS_TIMEOUT")
         self._check_launch_processes()
-        self.state.facts["A1"] = {**a1_assets,
-            "reason": "CANONICAL_SIMULATOR_STARTED_AND_ASSETS_VERIFIED",
-            "measured": {**a1_assets.get("measured", {}),
-                         "clock_ns": self.observer.clock_ns,
-                         "clock_advances": self.observer.clock_advance_count}}
-        self.state.facts["A2"] = {"pass": True, "reason": "CLOCK_AND_REQUIRED_SENSORS_FRESH",
-            "measured": {"clock_ns": self.observer.clock_ns,
-                         "clock_advances": self.observer.clock_advance_count,
-                         "scan_age_ms": (time.monotonic_ns()-self.observer.scans[-1].received_steady_ns)//1_000_000,
-                         "wheel_age_ms": (time.monotonic_ns()-self.observer.wheel[-1].received_steady_ns)//1_000_000,
-                         "imu_age_ms": (time.monotonic_ns()-self.observer.imu[-1].received_steady_ns)//1_000_000}}
-        odoms = tuple(self.observer.odometry)
+        health = self._last_sensor_health_success
+        if health is None:
+            raise AcceptanceFailure('A2_CLOCK_AND_SENSORS', 'observer',
+                                    'SENSOR_HEALTH_SNAPSHOT_UNAVAILABLE')
+        health_facts = health['facts']
+        ros_now = health['ros_now_ns']
+        steady_now = health['steady_now_ns']
+        clock_advances = getattr(self, '_node_ros_advance_count', 0)
+        self.state.facts['A1'] = {
+            **a1_assets,
+            'reason': 'CANONICAL_SIMULATOR_STARTED_AND_ASSETS_VERIFIED',
+            'measured': {
+                **a1_assets.get('measured', {}),
+                'clock_ns': ros_now,
+                'clock_advances': clock_advances,
+            },
+        }
+        self.state.facts['A2'] = {
+            'pass': True,
+            'reason': 'CLOCK_AND_REQUIRED_SENSORS_FRESH',
+            'measured': {
+                'clock_ns': ros_now,
+                'clock_advances': clock_advances,
+                'scan_age_ms': (
+                    steady_now-health_facts['scan'].received_steady_ns
+                ) // 1_000_000,
+                'wheel_age_ms': (
+                    steady_now-health_facts['wheel_odometry'].received_steady_ns
+                ) // 1_000_000,
+                'imu_age_ms': (
+                    steady_now-health_facts['imu'].received_steady_ns
+                ) // 1_000_000,
+            },
+        }
+        odoms = health['snapshot']['odometry']
         advancing = len(odoms) >= 2 and odoms[-1].stamp_ns > odoms[-2].stamp_ns
         valid = advancing and all(
             x.value.header.frame_id == "odom" and x.value.child_frame_id == "base_link"
@@ -1156,12 +1397,19 @@ class ResearchAcceptanceRunner:
         if not localization_ok:
             self._wait_for(lambda: self._localization_ok()[0], deadline, stage="A5_LOCALIZATION",
                            component="amcl", reason=localization_reason or "LOCALIZATION_NOT_HEALTHY")
-        self.state.facts["A5"] = {"pass": True, "reason": "AMCL_LOCALIZATION_HEALTH_VALID",
-            "measured": {"samples": len(self.observer.localization), "map_id": self.config["map_identity"]["map_id"]}}
+        localization_snapshot = self._sensor_health_snapshot()
+        self.state.facts['A5'] = {
+            'pass': True,
+            'reason': 'AMCL_LOCALIZATION_HEALTH_VALID',
+            'measured': {
+                'samples': len(localization_snapshot['localization']),
+                'map_id': self.config['map_identity']['map_id'],
+            },
+        }
         # Required TF edges are checked at the same fresh filtered-odometry stamps.
         self.state.stage = "A4_TF"
         self._wait_for(
-            lambda: self._tf_a4_ready(self.observer.odometry[-1].stamp_ns),
+            self._a4_current_ready,
             deadline, stage='A4_TF', component='tf_publishers',
             reason='TF_GRAPH_EDGES_OR_EXACT_TIME_LOOKUP_NOT_READY',
         )
@@ -1184,22 +1432,39 @@ class ResearchAcceptanceRunner:
             component="safety_lifecycle", reason="SAFETY_READY_AFTER_REARM_TIMEOUT")
 
     def _lifecycle_ready(self) -> bool:
-        life = self.observer.lifecycle
-        if life is None:
-            return False
+        snapshot = self._sensor_health_snapshot()
+        now_ros = self._node_ros_now_ns()
         now_steady = time.monotonic_ns()
-        return (life.context == self.observer.context and life.value["primary_state"] == 2
+        life = snapshot['lifecycle']
+        if (life is None or snapshot['context'] is None
+                or snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)):
+            return False
+        fact, failure = self._select_fresh_health_fact(
+            (life,), stream='safety_lifecycle', context=snapshot['context'],
+            ros_now_ns=now_ros, steady_now_ns=now_steady,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
+        return (failure is None and fact is not None
+            and life.context == snapshot['context'] and life.value["primary_state"] == 2
             and life.value["barrier_state"] == 1 and life.value["motion_permitted"]
-            and 0 <= now_steady-life.received_steady_ns <= 500_000_000
-            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000)
+            and snapshot['context'] == fact.context)
 
-    def _localization_ok(self) -> tuple[bool, str | None]:
+    def _localization_ok(
+            self, snapshot: Mapping[str, Any] | None = None, *,
+            ros_now_ns: int | None = None, steady_now_ns: int | None = None,
+    ) -> tuple[bool, str | None]:
         from mecanum_nav_rl.observations.step07_research_acceptance import localization_health
-        now_ros = self.observer.clock_ns
+        if snapshot is None:
+            snapshot = self._sensor_health_snapshot()
+        now_ros = self._node_ros_now_ns() if ros_now_ns is None else ros_now_ns
+        if getattr(self, '_node_ros_rollback', False):
+            return False, 'SIM_CLOCK_ROLLBACK'
         if now_ros <= 0:
             return False, "CLOCK_NOT_POSITIVE"
-        return localization_health(tuple(self.observer.localization), now_ros_ns=now_ros,
-            max_age_ns=2_000_000_000, now_steady_ns=time.monotonic_ns(), max_covariance=0.25)
+        steady_now = time.monotonic_ns() if steady_now_ns is None else steady_now_ns
+        return localization_health(snapshot['localization'], now_ros_ns=now_ros,
+            max_age_ns=2_000_000_000, now_steady_ns=steady_now, max_covariance=0.25)
 
     def _tf_chain_usable(self, stamp_ns: int) -> bool:
         try:
@@ -1367,13 +1632,25 @@ class ResearchAcceptanceRunner:
         }
         return True
 
+    def _a4_current_ready(self) -> bool:
+        snapshot = self._sensor_health_snapshot()
+        ros_now = self._node_ros_now_ns()
+        steady_now = time.monotonic_ns()
+        fact, failure = self._select_fresh_health_fact(
+            snapshot['odometry'], stream='filtered_odometry',
+            context=snapshot['context'], ros_now_ns=ros_now,
+            steady_now_ns=steady_now, ros_limit_ns=250_000_000,
+            steady_limit_ns=250_000_000,
+        )
+        return (failure is None and fact is not None
+                and self._tf_a4_ready(fact.stamp_ns))
+
     def _send_one_plan(self) -> None:
         from mecanum_nav_rl.observations.step07_research_acceptance import PathSnapshot
         self.state.stage = "A6_NAV2_PLAN"
         if not self.observer.wait_for_actions(timeout_sec=min(1.0, self.deadline_remaining())):
             raise AcceptanceFailure("A6_NAV2", "action_servers", "NAV2_ACTION_SERVER_UNAVAILABLE")
         goal = self._goal_pose()
-        sent_ns = self.observer.node.get_clock().now().nanoseconds
         future = self.observer.send_compute_path(goal, request_stamp=goal.header.stamp)
         response = self._wait_future(future, self.started_steady+460.0,
                                      stage="A6_NAV2", component="compute_path_send")
@@ -1390,8 +1667,9 @@ class ResearchAcceptanceRunner:
         if not all(math.isfinite(x) and math.isfinite(y) for x, y in poses):
             raise AcceptanceFailure("A6_NAV2", "compute_path", "PATH_NONFINITE")
         req_id = str(uuid.uuid4())
-        life = self.observer.lifecycle
-        if life is None or life.context != self.observer.context:
+        snapshot = self._sensor_health_snapshot()
+        life = snapshot['lifecycle']
+        if life is None or life.context != snapshot['context']:
             raise AcceptanceFailure("A6_NAV2", "context", "LIFECYCLE_CONTEXT_INVALID")
         self.path_snapshot = PathSnapshot(poses_xy=poses, request_id=req_id,
             goal_xy=(-4.0, 0.0), context=life.context,
@@ -1417,20 +1695,39 @@ class ResearchAcceptanceRunner:
             except Exception:
                 tf_error = "exact-time lookup unavailable"
                 time.sleep(0.005)
-        if (tf is None or self.observer.clock_ns < cutoff_ns or self.observer.clock_rollback
-                or self._remaining(deadline) <= 0 or self.observer.context != self.path_snapshot.context
-                or self.observer.lifecycle is None):
+        snapshot = self._sensor_health_snapshot()
+        ros_now = self._node_ros_now_ns()
+        now_steady = time.monotonic_ns()
+        lifecycle = snapshot['lifecycle']
+        if (tf is None or ros_now < cutoff_ns or snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)
+                or self._remaining(deadline) <= 0
+                or snapshot['context'] != self.path_snapshot.context
+                or lifecycle is None):
             self.log("tf", f"local reference unavailable: stamp={odom_stamp_ns} cutoff={cutoff_ns} error={tf_error}")
             return None
-        now_steady = time.monotonic_ns()
-        lifecycle = self.observer.lifecycle
-        if (not 0 <= now_steady-odom_receive_ns <= 250_000_000
-                or not 0 <= now_steady-lifecycle.received_steady_ns <= 500_000_000
-                or not 0 <= self.observer.clock_ns-lifecycle.stamp_ns <= 500_000_000
+        _, odom_failure = self._select_fresh_health_fact(
+            tuple(f for f in snapshot['odometry']
+                  if f.stamp_ns == odom_stamp_ns
+                  and f.received_steady_ns == odom_receive_ns),
+            stream='filtered_odometry', context=self.path_snapshot.context,
+            ros_now_ns=ros_now, steady_now_ns=now_steady,
+            ros_limit_ns=250_000_000, steady_limit_ns=250_000_000,
+        )
+        _, lifecycle_failure = self._select_fresh_health_fact(
+            (lifecycle,), stream='safety_lifecycle',
+            context=self.path_snapshot.context, ros_now_ns=ros_now,
+            steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+            steady_limit_ns=500_000_000,
+        )
+        if (odom_failure is not None or lifecycle_failure is not None
                 or lifecycle.context != self.path_snapshot.context
                 or lifecycle.value["primary_state"] != 2
                 or lifecycle.value["barrier_state"] != 1
                 or not lifecycle.value["motion_permitted"]):
+            failure = odom_failure or lifecycle_failure
+            if failure is not None:
+                self._remember_sensor_health_failure('A7_OBSERVATION', failure)
             self.log("tf", "local reference rejected: stale odometry/lifecycle or invalid context")
             return None
         tr = tf.transform.translation
@@ -1447,64 +1744,141 @@ class ResearchAcceptanceRunner:
         except ValueError as error:
             self.log("observation", f"local reference unavailable: {error}")
             return None
+        commit_snapshot = self._sensor_health_snapshot()
+        commit_ros = self._node_ros_now_ns()
         committed_steady = time.monotonic_ns()
-        if (committed_steady-odom_receive_ns > 250_000_000
-                or self._remaining(deadline) <= 0 or self.observer.context != self.path_snapshot.context
-                or self.observer.barrier_sequence != self.goal_barrier_sequence
-                or self.observer.clock_rollback):
+        _, odom_failure = self._select_fresh_health_fact(
+            tuple(f for f in commit_snapshot['odometry']
+                  if f.stamp_ns == odom_stamp_ns
+                  and f.received_steady_ns == odom_receive_ns),
+            stream='filtered_odometry', context=self.path_snapshot.context,
+            ros_now_ns=commit_ros, steady_now_ns=committed_steady,
+            ros_limit_ns=250_000_000, steady_limit_ns=250_000_000,
+        )
+        _, lifecycle_failure = self._select_fresh_health_fact(
+            (commit_snapshot['lifecycle'],) if commit_snapshot['lifecycle'] is not None else (),
+            stream='safety_lifecycle', context=self.path_snapshot.context,
+            ros_now_ns=commit_ros, steady_now_ns=committed_steady,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
+        if (odom_failure is not None or lifecycle_failure is not None
+                or self._remaining(deadline) <= 0
+                or commit_snapshot['context'] != self.path_snapshot.context
+                or commit_snapshot['barrier_sequence'] != self.goal_barrier_sequence
+                or commit_snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)):
+            failure = odom_failure or lifecycle_failure
+            if failure is not None:
+                self._remember_sensor_health_failure('A7_OBSERVATION', failure)
             self.log("tf", "local reference expired before commit")
             return None
         return ((distance_feature, math.sin(bearing), math.cos(bearing)),
                 progress, committed_steady)
 
-    def _mission_lifecycle_valid(self, context: Any, now_steady_ns: int) -> bool:
-        life = self.observer.lifecycle
-        if life is None or life.context != context or self.observer.context != context:
+    def _mission_lifecycle_valid(
+            self, context: Any, now_steady_ns: int, *,
+            snapshot: Mapping[str, Any] | None = None,
+            now_ros_ns: int | None = None) -> bool:
+        if snapshot is None:
+            snapshot = self._sensor_health_snapshot()
+        if now_ros_ns is None:
+            now_ros_ns = self._node_ros_now_ns()
+        life = snapshot['lifecycle']
+        if (life is None or life.context != context or snapshot['context'] != context
+                or snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)):
             return False
         barrier_matches = (
             not hasattr(self, 'goal_barrier_sequence')
             or (
-                self.observer.barrier_sequence == self.goal_barrier_sequence
-                and self.observer.barrier_stamp_ns
+                snapshot['barrier_sequence'] == self.goal_barrier_sequence
+                and snapshot['barrier_stamp_ns']
                 == self.goal_barrier_stamp_ns
             )
         )
+        life_fact, failure = self._select_fresh_health_fact(
+            (life,), stream='safety_lifecycle', context=context,
+            ros_now_ns=now_ros_ns, steady_now_ns=now_steady_ns,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
         return (
-            barrier_matches
+            life_fact is not None and failure is None and barrier_matches
             and life.value['primary_state'] == 2
             and life.value['barrier_state'] == 1
             and life.value['motion_permitted']
-            and 0 <= now_steady_ns-life.received_steady_ns <= 500_000_000
-            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000
         )
 
-    def _assert_live_mission_health(self, context: Any, stage: str) -> None:
-        observer = self.observer
-        if observer.clock_rollback or observer.clock_ns <= 0:
+    def _assert_live_mission_health(
+            self, context: Any, stage: str, *,
+            snapshot: Mapping[str, Any] | None = None,
+            now_ros_ns: int | None = None,
+            now_steady_ns: int | None = None) -> tuple[Mapping[str, Any], int, int]:
+        if snapshot is None:
+            snapshot = self._sensor_health_snapshot()
+        now_ros = self._node_ros_now_ns() if now_ros_ns is None else now_ros_ns
+        now_steady = time.monotonic_ns() if now_steady_ns is None else now_steady_ns
+        if (snapshot['clock_rollback'] or now_ros <= 0
+                or getattr(self, '_node_ros_rollback', False)):
             raise AcceptanceFailure(stage, "clock", "SIM_CLOCK_INVALID_OR_ROLLED_BACK")
-        now_ros, now_steady = observer.clock_ns, time.monotonic_ns()
-        if not self._mission_lifecycle_valid(context, now_steady):
-            raise AcceptanceFailure(stage, "safety_lifecycle", "LIFECYCLE_NOT_READY_OR_STALE")
-        required = ((observer.scans, 500_000_000, "scan"),
-                    (observer.wheel, 200_000_000, "wheel_odometry"),
-                    (observer.imu, 200_000_000, "imu"),
-                    (observer.odometry, 250_000_000, "filtered_odometry"))
-        for stream, limit, name in required:
-            if not stream:
-                raise AcceptanceFailure(stage, name, f"{name.upper()}_MISSING")
-            fact = stream[-1]
-            if (fact.context != context or not 0 <= now_steady-fact.received_steady_ns <= limit
-                    or not 0 <= now_ros-fact.stamp_ns <= limit):
-                raise AcceptanceFailure(stage, name, f"{name.upper()}_STALE_OR_WRONG_CONTEXT")
+        if snapshot['context'] != context:
+            life = snapshot['lifecycle']
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', life, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            self._raise_sensor_health_failure(stage, 'safety_lifecycle',
+                                              {'reason': 'CONTEXT_MISMATCH', **measured})
+        life = snapshot['lifecycle']
+        life_fact, life_failure = self._select_fresh_health_fact(
+            (life,) if life is not None else (), stream='safety_lifecycle',
+            context=context, ros_now_ns=now_ros, steady_now_ns=now_steady,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
+        if life_failure is not None:
+            self._raise_sensor_health_failure(stage, 'safety_lifecycle', life_failure)
+        if (not self._mission_lifecycle_valid(
+                context, now_steady, snapshot=snapshot, now_ros_ns=now_ros)
+                or life_fact is None):
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', life, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            measured['reason'] = 'LIFECYCLE_NOT_READY_OR_STALE'
+            raise AcceptanceFailure(stage, 'safety_lifecycle', measured['reason'],
+                                    measured=measured)
+        required = (
+            ('scan', snapshot['scans'], 500_000_000),
+            ('wheel_odometry', snapshot['wheel'], 200_000_000),
+            ('imu', snapshot['imu'], 200_000_000),
+            ('filtered_odometry', snapshot['odometry'], 250_000_000),
+        )
+        selected: dict[str, Any] = {'safety_lifecycle': life_fact}
+        for name, facts, limit in required:
+            fact, failure = self._select_fresh_health_fact(
+                facts, stream=name, context=context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=limit,
+                steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._raise_sensor_health_failure(stage, name, failure)
+            selected[name] = fact
         from mecanum_nav_rl.observations.step07_research_acceptance import (
             lidar_sectors,
         )
         from mecanum_nav_rl.observations.step07_research_observer import (
             Step07ResearchObserver,
         )
-        scan = observer.scans[-1]
+        scan = selected['scan']
         if scan.frame_id != 'lidar_frame':
-            raise AcceptanceFailure(stage, 'scan', 'SCAN_FRAME_INVALID')
+            measured = self._health_fact_measurement(
+                'scan', scan, ros_now_ns=now_ros, steady_now_ns=now_steady,
+                ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+                expected_context=context,
+            )
+            measured['reason'] = 'SCAN_FRAME_INVALID'
+            raise AcceptanceFailure(stage, 'scan', measured['reason'], measured=measured)
         try:
             lidar_sectors(
                 scan.value.ranges,
@@ -1515,18 +1889,23 @@ class ResearchAcceptanceRunner:
                 frame_id=scan.frame_id,
             )
         except (AttributeError, TypeError, ValueError) as error:
-            raise AcceptanceFailure(
-                stage, 'scan', 'SCAN_VALUES_INVALID'
-            ) from error
-        if not Step07ResearchObserver._valid_odom(observer.wheel[-1].value):
+            measured = self._health_fact_measurement(
+                'scan', scan, ros_now_ns=now_ros, steady_now_ns=now_steady,
+                ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+                expected_context=context,
+            )
+            measured['reason'] = 'SCAN_VALUES_INVALID'
+            raise AcceptanceFailure(stage, 'scan', measured['reason'],
+                                    measured=measured) from error
+        if not Step07ResearchObserver._valid_odom(selected['wheel_odometry'].value):
             raise AcceptanceFailure(
                 stage, 'wheel_odometry', 'WHEEL_ODOMETRY_INVALID'
             )
-        if not Step07ResearchObserver._valid_odom(observer.odometry[-1].value):
+        if not Step07ResearchObserver._valid_odom(selected['filtered_odometry'].value):
             raise AcceptanceFailure(
                 stage, 'filtered_odometry', 'FILTERED_ODOMETRY_INVALID'
             )
-        imu = observer.imu[-1]
+        imu = selected['imu']
         try:
             vectors = (
                 imu.value.angular_velocity.x,
@@ -1557,16 +1936,24 @@ class ResearchAcceptanceRunner:
             raise AcceptanceFailure(
                 stage, 'imu', 'IMU_VALUES_OR_FRAME_INVALID'
             )
-        localization_ok, localization_reason = self._localization_ok()
+        localization_ok, localization_reason = self._localization_ok(
+            snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady
+        )
         if not localization_ok:
             raise AcceptanceFailure(
                 stage, 'localization',
                 localization_reason or 'LOCALIZATION_HEALTH_INVALID',
             )
+        self._last_sensor_health_failure = None
+        self._last_sensor_health_stage = None
+        return snapshot, now_ros, now_steady
 
     def _record_live_health_failure(self, error: AcceptanceFailure) -> None:
         reason = error.reason
         measured = {'pass': False, 'reason': reason}
+        if error.measured is not None:
+            measured.update(error.measured)
+            self.state.facts['sensor_health_failure'] = dict(error.measured)
         if error.component in {
             'clock', 'safety_lifecycle', 'scan', 'wheel_odometry', 'imu'
         }:
@@ -1578,11 +1965,19 @@ class ResearchAcceptanceRunner:
         self.state.facts['A7'] = measured
         self.state.facts['A9'] = measured
         self.state.stage = error.stage
-        self.state.fail(error.component, reason)
+        self.state.fail(error.component, reason, measured=error.measured)
 
-    def _check_live_mission_health(self, context: Any, stage: str) -> None:
+    def _check_live_mission_health(
+            self, context: Any, stage: str, *,
+            snapshot: Mapping[str, Any] | None = None,
+            now_ros_ns: int | None = None,
+            now_steady_ns: int | None = None
+    ) -> tuple[Mapping[str, Any], int, int]:
         try:
-            self._assert_live_mission_health(context, stage)
+            return self._assert_live_mission_health(
+                context, stage, snapshot=snapshot,
+                now_ros_ns=now_ros_ns, now_steady_ns=now_steady_ns,
+            )
         except AcceptanceFailure as error:
             self._record_live_health_failure(error)
             raise
@@ -1592,87 +1987,122 @@ class ResearchAcceptanceRunner:
             lidar_sectors, make_observation, select_actual_receipt,
             select_scan_odom_pair,
         )
-        observer = self.observer
+        snapshot = self._sensor_health_snapshot()
+        cutoff = self._node_ros_now_ns()
+        now_steady = time.monotonic_ns()
+        pinned_context = self.path_snapshot.context
         self._check_live_mission_health(
-            self.path_snapshot.context, 'A7_OBSERVATION'
+            pinned_context, 'A7_OBSERVATION', snapshot=snapshot,
+            now_ros_ns=cutoff, now_steady_ns=now_steady,
         )
-        cutoff = observer.node.get_clock().now().nanoseconds
-        if cutoff <= 0 or observer.context != self.path_snapshot.context:
+        if cutoff <= 0 or snapshot['context'] != pinned_context:
             raise AcceptanceFailure("A7_OBSERVATION", "context_or_clock", "INVALID_OBSERVATION_CONTEXT")
-        if (observer.barrier_sequence != self.goal_barrier_sequence
-                or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
+        if (snapshot['barrier_sequence'] != self.goal_barrier_sequence
+                or snapshot['barrier_stamp_ns'] != self.goal_barrier_stamp_ns):
             raise AcceptanceFailure("A7_OBSERVATION", "lifecycle", "LIFECYCLE_BARRIER_CHANGED_DURING_MISSION")
         barrier_ns = max(self.action_accept_ns, self.goal_barrier_stamp_ns)
-        now_steady = time.monotonic_ns()
-        pair = select_scan_odom_pair(tuple(observer.scans), tuple(observer.odometry),
+        pair = select_scan_odom_pair(snapshot['scans'], snapshot['odometry'],
             cutoff_ns=cutoff, now_steady_ns=now_steady, scan_freshness_ns=500_000_000,
             odom_freshness_ns=250_000_000, sync_tolerance_ns=50_000_000,
             scan_barrier_ns=barrier_ns, odom_barrier_ns=barrier_ns,
-            context=self.path_snapshot.context, used_pairs=self.used_pairs, now_ros_ns=cutoff)
+            context=pinned_context, used_pairs=self.used_pairs, now_ros_ns=cutoff)
         if pair is None:
             return False
         scan_fact, odom_fact = pair
-        receipt = select_actual_receipt(tuple(observer.receipts), cutoff_ns=cutoff,
-            now_steady_ns=time.monotonic_ns(), freshness_ns=500_000_000,
-            after_barrier_ns=barrier_ns, context=self.path_snapshot.context, now_ros_ns=cutoff)
+        receipt = select_actual_receipt(snapshot['receipts'], cutoff_ns=cutoff,
+            now_steady_ns=now_steady, freshness_ns=500_000_000,
+            after_barrier_ns=barrier_ns, context=pinned_context, now_ros_ns=cutoff)
         if receipt is None:
             return False
-        pinned_context = self.path_snapshot.context
-        if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
-                or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
-            raise AcceptanceFailure("A7_OBSERVATION", "lifecycle", "LIFECYCLE_CONTEXT_CHANGED_DURING_MISSION")
-        if not self._mission_lifecycle_valid(pinned_context, time.monotonic_ns()):
-            raise AcceptanceFailure("A7_OBSERVATION", "safety_lifecycle", "LIFECYCLE_NOT_READY_OR_STALE")
-        pre_tf_now_steady = time.monotonic_ns()
         if (scan_fact.frame_id != "lidar_frame" or odom_fact.frame_id != "base_link"
                 or odom_fact.value.header.frame_id != "odom"
                 or odom_fact.value.child_frame_id != "base_link"
                 or scan_fact.context != pinned_context or odom_fact.context != pinned_context
-                or receipt.context != pinned_context
-                or not 0 <= cutoff-scan_fact.stamp_ns <= 500_000_000
-                or not 0 <= cutoff-odom_fact.stamp_ns <= 250_000_000
-                or not 0 <= cutoff-receipt.stamp_ns <= 500_000_000
-                or not 0 <= pre_tf_now_steady-scan_fact.received_steady_ns <= 500_000_000
-                or not 0 <= pre_tf_now_steady-odom_fact.received_steady_ns <= 250_000_000
-                or not 0 <= pre_tf_now_steady-receipt.received_steady_ns <= 500_000_000
-                or self._remaining(deadline) <= 0):
-            return False
+                or receipt.context != pinned_context):
+            raise AcceptanceFailure("A7_OBSERVATION", "sensor_context", "CONTEXT_MISMATCH")
         try:
             lidar_sectors(scan_fact.value.ranges, angle_min=scan_fact.value.angle_min,
                 angle_increment=scan_fact.value.angle_increment, range_min=scan_fact.value.range_min,
                 range_max=scan_fact.value.range_max, frame_id=scan_fact.frame_id)
-        except (TypeError, ValueError) as error:
+        except (AttributeError, TypeError, ValueError) as error:
             self.state.facts["rejected_observations"] = self.state.facts.get("rejected_observations", 0)+1
             reasons = self.state.facts.setdefault("rejection_reasons", {})
             reasons[str(error)] = reasons.get(str(error), 0)+1
             return False
+
+        # Freeze the sampled tuple before evaluating ages; callbacks may keep
+        # advancing the observer buffers while exact-time TF is polled.
+        pre_tf_snapshot = self._sensor_health_snapshot()
+        pre_tf_ros = self._node_ros_now_ns()
+        pre_tf_steady = time.monotonic_ns()
+        self._check_live_mission_health(
+            pinned_context, 'A7_OBSERVATION', snapshot=pre_tf_snapshot,
+            now_ros_ns=pre_tf_ros, now_steady_ns=pre_tf_steady,
+        )
+        if (pre_tf_snapshot['barrier_sequence'] != self.goal_barrier_sequence
+                or pre_tf_snapshot['barrier_stamp_ns'] != self.goal_barrier_stamp_ns):
+            raise AcceptanceFailure("A7_OBSERVATION", "lifecycle", "LIFECYCLE_BARRIER_CHANGED_DURING_MISSION")
+        for stream_name, fact, limit in (
+                ('scan', scan_fact, 500_000_000),
+                ('filtered_odometry', odom_fact, 250_000_000),
+                ('receipt', receipt, 500_000_000)):
+            _, failure = self._select_fresh_health_fact(
+                (fact,), stream=stream_name, context=pinned_context,
+                ros_now_ns=pre_tf_ros, steady_now_ns=pre_tf_steady,
+                ros_limit_ns=limit, steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._remember_sensor_health_failure('A7_OBSERVATION', failure)
+                return False
+        if self._remaining(deadline) <= 0:
+            return False
         reference_result = self._lookup_local_reference(odom_fact.stamp_ns, odom_fact.received_steady_ns,
                                                         cutoff, deadline)
         if reference_result is None:
-            if (observer.context != pinned_context
-                    or observer.barrier_sequence != self.goal_barrier_sequence
-                    or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns
-                    or observer.clock_rollback):
+            current = self._sensor_health_snapshot()
+            if (current['context'] != pinned_context
+                    or current['barrier_sequence'] != self.goal_barrier_sequence
+                    or current['barrier_stamp_ns'] != self.goal_barrier_stamp_ns
+                    or current['clock_rollback']):
                 raise AcceptanceFailure("A7_OBSERVATION", "lifecycle",
                                         "LIFECYCLE_OR_CLOCK_CONTEXT_CHANGED_DURING_TF_LOOKUP")
+            measured = getattr(self, '_last_sensor_health_failure', None)
+            if (measured is not None
+                    and getattr(self, '_last_sensor_health_stage', None)
+                    == 'A7_OBSERVATION'):
+                error = AcceptanceFailure(
+                    'A7_OBSERVATION', measured.get('stream', 'sensor_health'),
+                    str(measured.get('reason', 'SENSOR_HEALTH_INVALID')),
+                    measured=measured,
+                )
+                self._record_live_health_failure(error)
+                raise error
             return False
         reference, progress, reference_receive_ns = reference_result
-        now_steady = time.monotonic_ns()
-        self._check_live_mission_health(pinned_context, 'A7_OBSERVATION')
-        if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
-                or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
+        post_tf_snapshot = self._sensor_health_snapshot()
+        post_tf_ros = self._node_ros_now_ns()
+        post_tf_steady = time.monotonic_ns()
+        self._check_live_mission_health(
+            pinned_context, 'A7_OBSERVATION', snapshot=post_tf_snapshot,
+            now_ros_ns=post_tf_ros, now_steady_ns=post_tf_steady,
+        )
+        if (post_tf_snapshot['barrier_sequence'] != self.goal_barrier_sequence
+                or post_tf_snapshot['barrier_stamp_ns'] != self.goal_barrier_stamp_ns):
             raise AcceptanceFailure("A7_OBSERVATION", "lifecycle",
                                     "LIFECYCLE_BARRIER_CHANGED_DURING_TF_LOOKUP")
-        if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
-                or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns or observer.clock_rollback
-                or not 0 <= now_steady-scan_fact.received_steady_ns <= 500_000_000
-                or not 0 <= now_steady-odom_fact.received_steady_ns <= 250_000_000
-                or not 0 <= now_steady-receipt.received_steady_ns <= 500_000_000
-                or not 0 <= observer.clock_ns-scan_fact.stamp_ns <= 500_000_000
-                or not 0 <= observer.clock_ns-odom_fact.stamp_ns <= 250_000_000
-                or not 0 <= observer.clock_ns-receipt.stamp_ns <= 500_000_000
-                or not self._mission_lifecycle_valid(pinned_context, now_steady)
-                or self._remaining(deadline) <= 0):
+        for stream_name, fact, limit in (
+                ('scan', scan_fact, 500_000_000),
+                ('filtered_odometry', odom_fact, 250_000_000),
+                ('receipt', receipt, 500_000_000)):
+            _, failure = self._select_fresh_health_fact(
+                (fact,), stream=stream_name, context=pinned_context,
+                ros_now_ns=post_tf_ros, steady_now_ns=post_tf_steady,
+                ros_limit_ns=limit, steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._remember_sensor_health_failure('A7_OBSERVATION', failure)
+                return False
+        if self._remaining(deadline) <= 0:
             return False
         scan = scan_fact.value
         odom = odom_fact.value
@@ -1690,6 +2120,31 @@ class ResearchAcceptanceRunner:
             reasons = self.state.facts.setdefault("rejection_reasons", {})
             reasons[str(error)] = reasons.get(str(error), 0)+1
             return False
+        commit_snapshot = self._sensor_health_snapshot()
+        commit_ros = self._node_ros_now_ns()
+        commit_steady = time.monotonic_ns()
+        self._check_live_mission_health(
+            pinned_context, 'A7_OBSERVATION', snapshot=commit_snapshot,
+            now_ros_ns=commit_ros, now_steady_ns=commit_steady,
+        )
+        if (commit_snapshot['barrier_sequence'] != self.goal_barrier_sequence
+                or commit_snapshot['barrier_stamp_ns'] != self.goal_barrier_stamp_ns):
+            raise AcceptanceFailure('A7_OBSERVATION', 'lifecycle',
+                                    'LIFECYCLE_BARRIER_CHANGED_BEFORE_OBSERVATION_COMMIT')
+        for stream_name, fact, limit in (
+                ('scan', scan_fact, 500_000_000),
+                ('filtered_odometry', odom_fact, 250_000_000),
+                ('receipt', receipt, 500_000_000)):
+            _, failure = self._select_fresh_health_fact(
+                (fact,), stream=stream_name, context=pinned_context,
+                ros_now_ns=commit_ros, steady_now_ns=commit_steady,
+                ros_limit_ns=limit, steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._remember_sensor_health_failure('A7_OBSERVATION', failure)
+                return False
+        if self._remaining(deadline) <= 0:
+            return False
         record = {"vector": vector.tolist(), "dtype": "float32", "shape": [81],
                   "scan_stamp_ns": scan_fact.stamp_ns, "odom_stamp_ns": odom_fact.stamp_ns,
                   "reference_stamp_ns": odom_fact.stamp_ns,
@@ -1703,7 +2158,7 @@ class ResearchAcceptanceRunner:
                   "context": {"episode_generation": receipt.context.episode_generation,
                       "reset_epoch": receipt.context.reset_epoch,
                       "runtime_generation": receipt.context.runtime_generation},
-                  "barrier_sequence": observer.barrier_sequence,
+                  "barrier_sequence": commit_snapshot['barrier_sequence'],
                   "config_hash": self.config_hash}
         self.state.valid_observations.append(record)
         self.last_progress_arc = progress
@@ -1746,9 +2201,14 @@ class ResearchAcceptanceRunner:
         if not response.accepted:
             raise AcceptanceFailure("A9_NAVIGATION_OUTCOME", "navigate_to_pose", "NAVIGATE_GOAL_REJECTED")
         self.navigation_goal_handle = response
-        self.action_accept_ns = self.observer.node.get_clock().now().nanoseconds
-        self.goal_barrier_sequence = self.observer.barrier_sequence
-        self.goal_barrier_stamp_ns = self.observer.barrier_stamp_ns
+        accepted_snapshot = self._sensor_health_snapshot()
+        self.action_accept_ns = self._node_ros_now_ns()
+        if (accepted_snapshot['context'] != self.path_snapshot.context
+                or accepted_snapshot['lifecycle'] is None):
+            raise AcceptanceFailure('A9_NAVIGATION_OUTCOME', 'context',
+                                    'LIFECYCLE_CONTEXT_INVALID')
+        self.goal_barrier_sequence = accepted_snapshot['barrier_sequence']
+        self.goal_barrier_stamp_ns = accepted_snapshot['barrier_stamp_ns']
         self.log("navigate", f"accepted goal_uuid={bytes(response.goal_id.uuid).hex()}")
         from dataclasses import replace
         self.path_snapshot = replace(self.path_snapshot,
@@ -1789,11 +2249,12 @@ class ResearchAcceptanceRunner:
             self.now_steady()+0.2, self.started_steady+480.0
         )
         try:
-            if not self.observer.odometry:
+            final_snapshot = self._sensor_health_snapshot()
+            if not final_snapshot['odometry']:
                 raise AcceptanceFailure(
                     'A4_TF', 'tf2', 'FINAL_TF_CHAIN_UNAVAILABLE_AT_ODOMETRY_STAMP')
             self._wait_for(
-                lambda: self._tf_a4_ready(self.observer.odometry[-1].stamp_ns),
+                self._a4_current_ready,
                 final_tf_deadline, stage='A4_TF', component='tf_publishers',
                 reason='FINAL_TF_GRAPH_EDGE_OR_LOOKUP_NOT_READY',
             )
@@ -1808,7 +2269,10 @@ class ResearchAcceptanceRunner:
             raise
         self.state.facts["A7"] = {"pass": len(self.state.valid_observations) >= 5,
             "reason": "FIVE_VALID_OBSERVATIONS" if len(self.state.valid_observations) >= 5 else "VALID_OBSERVATION_COUNT_BELOW_FIVE",
-            "measured": {"valid_count": len(self.state.valid_observations)}}
+            "measured": {"valid_count": len(self.state.valid_observations),
+                         **({'sensor_health_failure': self.state.facts['sensor_health_failure']}
+                            if len(self.state.valid_observations) < 5
+                            and 'sensor_health_failure' in self.state.facts else {})}}
         self.state.valid_observations = self.state.valid_observations[:5]
         self.state.facts["A8"] = self._command_chain_fact()
 
@@ -1817,20 +2281,60 @@ class ResearchAcceptanceRunner:
         if status != 4:
             return {"pass": False, "reason": f"NAVIGATION_ACTION_TERMINAL_STATUS_{status}",
                     "measured": {"status": status}}
-        result = action_result.result
-        pose = self.observer.localization[-1] if self.observer.localization else None
-        odom = self.observer.odometry[-1].value if self.observer.odometry else None
-        health, reason = self._localization_ok()
-        if pose is None or odom is None:
-            return {"pass": False, "reason": "NAVIGATION_RESULT_MISSING_POSE_OR_ODOMETRY"}
+        snapshot = self._sensor_health_snapshot()
+        ros_now = self._node_ros_now_ns()
+        steady_now = time.monotonic_ns()
+        context = self.path_snapshot.context
+        pose_fact, pose_failure = self._select_fresh_health_fact(
+            snapshot['localization'], stream='localization', context=context,
+            ros_now_ns=ros_now, steady_now_ns=steady_now,
+            ros_limit_ns=2_000_000_000, steady_limit_ns=2_000_000_000,
+        )
+        odom_fact, odom_failure = self._select_fresh_health_fact(
+            snapshot['odometry'], stream='filtered_odometry', context=context,
+            ros_now_ns=ros_now, steady_now_ns=steady_now,
+            ros_limit_ns=250_000_000, steady_limit_ns=250_000_000,
+        )
+        health, reason = self._localization_ok(
+            snapshot, ros_now_ns=ros_now, steady_now_ns=steady_now
+        )
+        if pose_fact is None or odom_fact is None:
+            failure = pose_failure or odom_failure
+            return {"pass": False,
+                    "reason": (failure or {}).get(
+                        'reason', 'NAVIGATION_RESULT_MISSING_POSE_OR_ODOMETRY'),
+                    "measured": failure or {}}
+        pose = pose_fact
+        odom = odom_fact.value
         x, y, _ = pose["pose"]
         linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
         angular = abs(odom.twist.twist.angular.z)
         settled = self._wait_for_settle(min(self.now_steady()+20.0,
             self.mission_deadline_steady, self.started_steady+460.0))
-        pose = self.observer.localization[-1] if self.observer.localization else pose
-        odom = self.observer.odometry[-1].value if self.observer.odometry else odom
-        health, reason = self._localization_ok()
+        snapshot = self._sensor_health_snapshot()
+        ros_now = self._node_ros_now_ns()
+        steady_now = time.monotonic_ns()
+        pose_fact, pose_failure = self._select_fresh_health_fact(
+            snapshot['localization'], stream='localization', context=context,
+            ros_now_ns=ros_now, steady_now_ns=steady_now,
+            ros_limit_ns=2_000_000_000, steady_limit_ns=2_000_000_000,
+        )
+        odom_fact, odom_failure = self._select_fresh_health_fact(
+            snapshot['odometry'], stream='filtered_odometry', context=context,
+            ros_now_ns=ros_now, steady_now_ns=steady_now,
+            ros_limit_ns=250_000_000, steady_limit_ns=250_000_000,
+        )
+        if pose_fact is None or odom_fact is None:
+            failure = pose_failure or odom_failure
+            return {"pass": False,
+                    "reason": (failure or {}).get(
+                        'reason', 'NAVIGATION_RESULT_MISSING_POSE_OR_ODOMETRY'),
+                    "measured": failure or {}}
+        pose = pose_fact
+        odom = odom_fact.value
+        health, reason = self._localization_ok(
+            snapshot, ros_now_ns=ros_now, steady_now_ns=steady_now
+        )
         x, y, _ = pose["pose"]
         linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
         angular = abs(odom.twist.twist.angular.z)
@@ -1850,28 +2354,50 @@ class ResearchAcceptanceRunner:
         """Observe advancing fresh AMCL/filtered-odom facts for one ROS second."""
         start_ros_ns = None
         last_pair = None
-        while self._remaining(deadline) > 0 and self.observer.clock_ns > 0:
+        while self._remaining(deadline) > 0:
+            snapshot = self._sensor_health_snapshot()
+            now_ros = self._node_ros_now_ns()
+            now_steady = time.monotonic_ns()
+            if (now_ros <= 0 or snapshot['clock_rollback']
+                    or getattr(self, '_node_ros_rollback', False)):
+                return False
             try:
                 self._check_live_mission_health(
-                    self.path_snapshot.context, 'A9_NAVIGATION_OUTCOME'
+                    self.path_snapshot.context, 'A9_NAVIGATION_OUTCOME',
+                    snapshot=snapshot, now_ros_ns=now_ros,
+                    now_steady_ns=now_steady,
                 )
             except AcceptanceFailure:
                 return False
-            if not self.observer.localization or not self.observer.odometry:
+            loc, loc_failure = self._select_fresh_health_fact(
+                snapshot['localization'], stream='localization',
+                context=self.path_snapshot.context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=2_000_000_000,
+                steady_limit_ns=2_000_000_000,
+            )
+            odom_fact, odom_failure = self._select_fresh_health_fact(
+                snapshot['odometry'], stream='filtered_odometry',
+                context=self.path_snapshot.context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=250_000_000,
+                steady_limit_ns=250_000_000,
+            )
+            if loc is None or odom_fact is None:
+                failure = loc_failure or odom_failure
+                if failure is not None:
+                    self._remember_sensor_health_failure(
+                        'A9_NAVIGATION_OUTCOME', failure
+                    )
                 time.sleep(0.02); continue
-            loc = self.observer.localization[-1]
-            odom_fact = self.observer.odometry[-1]
             odom = odom_fact.value
-            now_ros = self.observer.clock_ns
-            now_steady = time.monotonic_ns()
-            healthy, _ = self._localization_ok()
             pose = loc["pose"]
             linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
             angular = abs(odom.twist.twist.angular.z)
             owner_ready = self._tf_ownership_ready()
             context = self.path_snapshot.context
             ok = (
-                healthy
+                self._localization_ok(
+                    snapshot, ros_now_ns=now_ros,
+                    steady_now_ns=now_steady)[0]
                 and owner_ready
                 and loc.get('frame_id') == 'map'
                 and odom_fact.context == context
@@ -2037,8 +2563,12 @@ class ResearchAcceptanceRunner:
             self._mission()
         except AcceptanceFailure as error:
             self.state.stage = error.stage
-            self.state.fail(error.component, error.reason)
-            self.log(error.component, error.reason)
+            self.state.fail(error.component, error.reason, measured=error.measured)
+            if error.measured is not None:
+                self.state.facts['sensor_health_failure'] = dict(error.measured)
+                self.log(error.component, f"{error.reason} measured={json.dumps(error.measured, sort_keys=True)}")
+            else:
+                self.log(error.component, error.reason)
         except Exception as error:
             self.state.fail("runner", f"{type(error).__name__}:{error}")
             self.log("runner", f"unhandled failure {type(error).__name__}: {error}")

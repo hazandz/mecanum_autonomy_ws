@@ -187,13 +187,35 @@ class Step07ResearchObserver:
             return None
         return StampedFact(stamp, self._steady_ns(), frame, value, context, identity)
 
+    def sensor_health_snapshot(self) -> dict[str, Any]:
+        """Capture the small mutable health view used by runner decisions."""
+        with self._lock:
+            return {
+                'context': self.context,
+                'barrier_sequence': self.barrier_sequence,
+                'barrier_stamp_ns': self.barrier_stamp_ns,
+                'clock_rollback': self.clock_rollback,
+                'clock_ns': self.clock_ns,
+                'clock_advance_count': self.clock_advance_count,
+                'lifecycle': self.lifecycle,
+                'scans': tuple(self.scans),
+                'wheel': tuple(self.wheel),
+                'imu': tuple(self.imu),
+                'odometry': tuple(self.odometry),
+                'receipts': tuple(self.receipts),
+                'localization': tuple(
+                    dict(item) for item in self.localization
+                ),
+            }
+
     def _clear_buffers(self) -> None:
-        for stream in (self.scans, self.odometry, self.wheel, self.imu, self.receipts,
-                       self.nav2_candidates, self.cmd_vel_commands,
-                       self.accepted_envelopes, self.safety_states,
-                       self.localization):
-            stream.clear()
-        self.tf_observed_edges.clear()
+        with self._lock:
+            for stream in (self.scans, self.odometry, self.wheel, self.imu, self.receipts,
+                           self.nav2_candidates, self.cmd_vel_commands,
+                           self.accepted_envelopes, self.safety_states,
+                           self.localization):
+                stream.clear()
+            self.tf_observed_edges.clear()
 
     @staticmethod
     def _insert_ordered(stream: deque[StampedFact], fact: StampedFact) -> None:
@@ -206,17 +228,19 @@ class Step07ResearchObserver:
         stream.extend(items[-stream.maxlen:])
 
     def _scan(self, msg: Any) -> None:
-        fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
-        if fact:
-            with self._lock: self._insert_ordered(self.scans, fact)
+        with self._lock:
+            fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
+            if fact:
+                self._insert_ordered(self.scans, fact)
 
     def _clock_cb(self, msg: Any) -> None:
-        self.clock_ns = self._stamp(msg.clock)
-        if self.clock_ns > self._last_clock_ns:
-            self.clock_advance_count += 1
-        self._last_clock_ns = self.clock_ns
-        if not self.clock_guard.observe(self.clock_ns) and self.clock_guard.failed:
-            self.clock_rollback = True
+        with self._lock:
+            self.clock_ns = self._stamp(msg.clock)
+            if self.clock_ns > self._last_clock_ns:
+                self.clock_advance_count += 1
+            self._last_clock_ns = self.clock_ns
+            if not self.clock_guard.observe(self.clock_ns) and self.clock_guard.failed:
+                self.clock_rollback = True
 
     def _candidate(self, msg: Any) -> None:
         stamp = self._receive_ns()
@@ -286,9 +310,10 @@ class Step07ResearchObserver:
     def _wheel(self, msg: Any) -> None:
         if not self._valid_odom(msg):
             return
-        fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
-        if fact:
-            with self._lock: self._insert_ordered(self.wheel, fact)
+        with self._lock:
+            fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
+            if fact:
+                self._insert_ordered(self.wheel, fact)
 
     def _imu(self, msg: Any) -> None:
         vectors = (
@@ -301,16 +326,18 @@ class Step07ResearchObserver:
                 or any(msg.angular_velocity_covariance[i] < 0 for i in (0, 4, 8))
                 or any(msg.linear_acceleration_covariance[i] < 0 for i in (0, 4, 8))):
             return
-        fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
-        if fact:
-            with self._lock: self._insert_ordered(self.imu, fact)
+        with self._lock:
+            fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
+            if fact:
+                self._insert_ordered(self.imu, fact)
 
     def _odom(self, msg: Any) -> None:
         if not self._valid_odom(msg):
             return
-        fact = self._fact(msg, msg.child_frame_id, msg, (self._stamp(msg.header.stamp),))
-        if fact:
-            with self._lock: self._insert_ordered(self.odometry, fact)
+        with self._lock:
+            fact = self._fact(msg, msg.child_frame_id, msg, (self._stamp(msg.header.stamp),))
+            if fact:
+                self._insert_ordered(self.odometry, fact)
 
     def _amcl(self, msg: Any) -> None:
         pose = msg.pose.pose
@@ -325,10 +352,14 @@ class Step07ResearchObserver:
             return
         yaw = math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z))
         with self._lock:
+            context = self.context
+            if context is None:
+                return
             item = {
                 "stamp_ns": self._stamp(msg.header.stamp), "received_steady_ns": self._steady_ns(),
                 "frame_id": msg.header.frame_id, "pose": (pose.position.x, pose.position.y, yaw),
                 "covariance": (covariance[0], covariance[7], covariance[35]),
+                'context': context,
             }
             if not any(old["stamp_ns"] == item["stamp_ns"] for old in self.localization):
                 items = list(self.localization); items.append(item)
