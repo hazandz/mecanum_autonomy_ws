@@ -1218,7 +1218,7 @@ class ResearchAcceptanceRunner:
         if set(owners) != required:
             raise AcceptanceFailure('A4_TF', 'tf_ownership_resources',
                                     'TF_CONFIGURED_OWNERSHIP_UNAVAILABLE')
-        expected = {
+        required_endpoints = {
             '/tf': {
                 (owners['map->odom']['node_name'],
                  owners['map->odom']['node_namespace']),
@@ -1230,32 +1230,72 @@ class ResearchAcceptanceRunner:
                  owners['base_link->lidar_frame']['node_namespace']),
             },
         }
+        allowed_endpoints = {
+            topic: set(endpoints)
+            for topic, endpoints in required_endpoints.items()
+        }
         if configured.get('dynamic_joint_names'):
-            expected['/tf'].add((
+            allowed_endpoints['/tf'].add((
                 owners['base_link->lidar_frame']['node_name'],
                 owners['base_link->lidar_frame']['node_namespace']))
         graph = self.observer.tf_publisher_graph()
         measured: dict[str, list[dict[str, str]]] = {}
-        for topic, expected_endpoints in expected.items():
+        graph_ready = True
+        undiscovered_name = '_NODE_NAME_UNKNOWN_'
+        undiscovered_namespace = '_NODE_NAMESPACE_UNKNOWN_'
+        bare_dds_name = '_CREATED_BY_BARE_DDS_APP_'
+        for topic, required in required_endpoints.items():
             raw_endpoints = tuple(graph.get(topic, ()))
             endpoints: list[dict[str, str]] = []
-            identities = []
+            identities: list[tuple[str, str]] = []
+            unresolved = False
             for endpoint in raw_endpoints:
                 if not isinstance(endpoint, Mapping):
-                    return False, measured
+                    unresolved = True
+                    continue
                 raw_name = endpoint.get('node_name')
                 raw_namespace = endpoint.get('node_namespace')
                 raw_topic_type = endpoint.get('topic_type')
-                if not raw_name or not raw_namespace or not raw_topic_type:
-                    return False, measured
-                name, namespace, topic_type = (
-                    str(raw_name), str(raw_namespace), str(raw_topic_type))
-                if topic_type != 'tf2_msgs/msg/TFMessage':
+                if raw_name == bare_dds_name:
+                    raise AcceptanceFailure(
+                        'A4_TF', 'tf_publishers',
+                        f'TF_PUBLISHER_TOPOLOGY_MISMATCH:{topic}:BARE_DDS')
+                if (raw_name == undiscovered_name
+                        and raw_namespace == undiscovered_namespace):
+                    if raw_topic_type not in (
+                            None, '', 'tf2_msgs/msg/TFMessage'):
+                        raise AcceptanceFailure(
+                            'A4_TF', 'tf_publishers',
+                            'TF_PUBLISHER_TYPE_MISMATCH:'
+                            f'{topic}:{raw_topic_type}')
+                    unresolved = True
+                    continue
+                type_known = (isinstance(raw_topic_type, str)
+                              and bool(raw_topic_type.strip()))
+                topic_type = raw_topic_type.strip() if type_known else ''
+                if type_known and topic_type != 'tf2_msgs/msg/TFMessage':
                     raise AcceptanceFailure(
                         'A4_TF', 'tf_publishers',
                         f'TF_PUBLISHER_TYPE_MISMATCH:{topic}:{topic_type}')
+                name_known = (isinstance(raw_name, str)
+                              and bool(raw_name.strip()))
+                namespace_known = (isinstance(raw_namespace, str)
+                                   and bool(raw_namespace.strip()))
+                if not name_known or not namespace_known:
+                    unresolved = True
+                    continue
+                name, namespace = raw_name.strip(), raw_namespace.strip()
                 identity = (name, namespace)
                 identities.append(identity)
+                if identity not in allowed_endpoints[topic]:
+                    raise AcceptanceFailure(
+                        'A4_TF', 'tf_publishers',
+                        'TF_PUBLISHER_TOPOLOGY_MISMATCH:'
+                        f'{topic}:{identity}',
+                    )
+                if not type_known:
+                    unresolved = True
+                    continue
                 endpoints.append({
                     'node_name': name,
                     'node_namespace': namespace,
@@ -1265,7 +1305,7 @@ class ResearchAcceptanceRunner:
                 raise AcceptanceFailure(
                     'A4_TF', 'tf_publishers',
                     f'TF_PUBLISHER_DUPLICATE_ENDPOINT:{topic}')
-            unexpected = set(identities) - expected_endpoints
+            unexpected = set(identities) - allowed_endpoints[topic]
             if unexpected:
                 raise AcceptanceFailure(
                     'A4_TF', 'tf_publishers',
@@ -1273,9 +1313,9 @@ class ResearchAcceptanceRunner:
                     f'{topic}:{sorted(unexpected)}',
                 )
             measured[topic] = endpoints
-            if set(identities) != expected_endpoints:
-                return False, measured
-        return True, measured
+            if unresolved or not required.issubset(identities):
+                graph_ready = False
+        return graph_ready, measured
 
     def _tf_ownership_ready(self) -> bool:
         graph_ready, _ = self._tf_graph_evidence()

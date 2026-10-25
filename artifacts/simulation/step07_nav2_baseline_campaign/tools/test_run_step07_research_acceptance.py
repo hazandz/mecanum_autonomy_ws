@@ -769,11 +769,13 @@ def _tf_graph_fixture(graph=None, *, observed_edges=None):
     }
     runner._last_tf_a4_evidence = {}
     runner.observer = SimpleNamespace(
-        tf_observed_edges=set(observed_edges or {
-            ('map', 'odom'), ('odom', 'base_link'),
-            ('base_link', 'lidar_frame'),
-        }),
-        tf_publisher_graph=lambda: graph or _complete_tf_graph(),
+        tf_observed_edges=set(
+            observed_edges if observed_edges is not None else {
+                ('map', 'odom'), ('odom', 'base_link'),
+                ('base_link', 'lidar_frame'),
+            }),
+        tf_publisher_graph=lambda: (
+            graph if graph is not None else _complete_tf_graph()),
         lookup_transform=lambda target, source, stamp: (target, source, stamp),
         executor_error=None,
     )
@@ -790,9 +792,16 @@ def _endpoint(name, namespace='/', topic_type='tf2_msgs/msg/TFMessage'):
 
 def _complete_tf_graph():
     return {
-        '/tf': [_endpoint('amcl'), _endpoint('ekf_filter_node'),
-                _endpoint('robot_state_publisher')],
+        '/tf': [_endpoint('amcl'), _endpoint('ekf_filter_node')],
         '/tf_static': [_endpoint('robot_state_publisher')],
+    }
+
+
+def _undiscovered_endpoint():
+    return {
+        'node_name': '_NODE_NAME_UNKNOWN_',
+        'node_namespace': '_NODE_NAMESPACE_UNKNOWN_',
+        'topic_type': 'tf2_msgs/msg/TFMessage',
     }
 
 
@@ -865,10 +874,160 @@ def test_tf_graph_rejects_foreign_duplicate_namespace_and_type(
         runner._tf_ownership_ready()
 
 
+def test_jazzy_discovery_sentinel_waits_then_resolves_to_expected_endpoint(
+        monkeypatch):
+    """Wait for an undiscovered Jazzy endpoint to resolve."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_undiscovered_endpoint())
+    runner = _tf_graph_fixture(graph=graph)
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    assert runner._tf_graph_evidence()[0] is False
+
+    def current_graph():
+        if clock[0] >= 0.2:
+            graph['/tf'][-1] = _endpoint('robot_state_publisher')
+        return graph
+
+    runner.observer.tf_publisher_graph = current_graph
+    runner._wait_for(
+        lambda: runner._tf_a4_ready(123456), 1.0,
+        stage='A4_TF', component='tf_publishers',
+        reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.2
+    assert (runner._last_tf_a4_evidence['observed_publisher_graph']['/tf'][-1]
+            ['node_name'] == 'robot_state_publisher')
+
+
+def test_jazzy_sentinel_remaining_to_deadline_fails_readiness(monkeypatch):
+    """Fail readiness when the graph sentinel never resolves."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_undiscovered_endpoint())
+    runner = _tf_graph_fixture(graph=graph)
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+    with pytest.raises(AcceptanceFailure, match='TF_GRAPH_UNRESOLVED'):
+        runner._wait_for(
+            lambda: runner._tf_a4_ready(123456), 0.25, stage='A4_TF',
+            component='tf_publishers', reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.25
+
+
+def test_expected_publishers_plus_unresolved_endpoint_remain_pending():
+    """Keep expected publishers pending while any endpoint is unresolved."""
+    graph = _complete_tf_graph()
+    graph['/tf_static'].append(_undiscovered_endpoint())
+    runner = _tf_graph_fixture(graph=graph)
+    ready, measured = runner._tf_graph_evidence()
+    assert ready is False
+    assert len(measured['/tf_static']) == 1
+
+
+def test_unresolved_endpoint_resolving_as_foreign_fails_immediately(
+        monkeypatch):
+    """Reject an endpoint when discovery resolves to a foreign node."""
+    clock = [0.0]
+    monkeypatch.setattr(
+        runner_module.time, 'sleep',
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_undiscovered_endpoint())
+    runner = _tf_graph_fixture(graph=graph)
+    runner.started_steady = 0.0
+    runner.now_steady = lambda: clock[0]
+
+    def current_graph():
+        if clock[0] >= 0.2:
+            graph['/tf'][-1] = _endpoint('foreign_localizer')
+        return graph
+
+    runner.observer.tf_publisher_graph = current_graph
+    with pytest.raises(
+            AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH'):
+        runner._wait_for(
+            lambda: runner._tf_a4_ready(123456), 1.0, stage='A4_TF',
+            component='tf_publishers', reason='TF_GRAPH_UNRESOLVED')
+    assert clock[0] >= 0.2
+
+
+def test_multiple_undiscovered_endpoints_wait_without_false_duplicate():
+    """Keep discovery sentinels pending without false duplicate failure."""
+    graph = _complete_tf_graph()
+    graph['/tf'].extend([_undiscovered_endpoint(), _undiscovered_endpoint()])
+    runner = _tf_graph_fixture(graph=graph)
+    ready, _ = runner._tf_graph_evidence()
+    assert ready is False
+
+
+def test_unresolved_endpoint_does_not_hide_known_foreign_endpoint():
+    """Still reject known foreign endpoints beside a discovery sentinel."""
+    graph = _complete_tf_graph()
+    graph['/tf'].extend([
+        _undiscovered_endpoint(), _endpoint('foreign_localizer')])
+    runner = _tf_graph_fixture(graph=graph)
+    with pytest.raises(
+            AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH'):
+        runner._tf_graph_evidence()
+
+
+def test_only_exact_jazzy_sentinel_pair_is_treated_as_undiscovered():
+    """Do not treat partial or substring sentinel names as discovery state."""
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_endpoint('_NODE_NAME_UNKNOWN_'))
+    runner = _tf_graph_fixture(graph=graph)
+    with pytest.raises(
+            AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH'):
+        runner._tf_graph_evidence()
+
+
+def test_bare_dds_endpoint_is_not_treated_as_ros_discovery_pending():
+    """Reject the distinct bare DDS graph-cache sentinel as foreign."""
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_endpoint('_CREATED_BY_BARE_DDS_APP_'))
+    runner = _tf_graph_fixture(graph=graph)
+    with pytest.raises(
+            AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH'):
+        runner._tf_graph_evidence()
+
+
+def test_tf_graph_required_and_optional_endpoint_topology():
+    """Allow dynamic RSP optionally while requiring its static endpoint."""
+    runner = _tf_graph_fixture(graph=_complete_tf_graph())
+    assert runner._tf_a4_ready(123456)
+
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_endpoint('robot_state_publisher'))
+    runner = _tf_graph_fixture(graph=graph)
+    assert runner._tf_a4_ready(123456)
+
+    graph = _complete_tf_graph()
+    graph['/tf_static'] = []
+    runner = _tf_graph_fixture(graph=graph)
+    assert runner._tf_graph_evidence()[0] is False
+
+
+def test_empty_graph_and_edges_are_not_replaced_by_fixture_defaults():
+    """Preserve explicitly empty graph and edge observations in fixtures."""
+    runner = _tf_graph_fixture(graph={}, observed_edges=set())
+    assert runner.observer.tf_publisher_graph() == {}
+    assert runner.observer.tf_observed_edges == set()
+    assert runner._tf_ownership_ready() is False
+
+
 def test_robot_state_publisher_tf_endpoint_requires_dynamic_robot_joints(
 ):
     """Verify RSP TF endpoint requires movable robot joints."""
-    runner = _tf_graph_fixture()
+    graph = _complete_tf_graph()
+    graph['/tf'].append(_endpoint('robot_state_publisher'))
+    runner = _tf_graph_fixture(graph=graph)
     runner.tf_configured_ownership['dynamic_joint_names'] = []
     with pytest.raises(
             AcceptanceFailure, match='TF_PUBLISHER_TOPOLOGY_MISMATCH:/tf'):
