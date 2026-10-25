@@ -1722,7 +1722,9 @@ def test_production_health_future_only_buffer_does_not_create_observation(monkey
 
 def test_production_observation_skips_future_newest_for_earlier_fresh_pair(monkeypatch):
     """A post-cutoff newest scan does not hide an eligible earlier pair."""
-    from mecanum_nav_rl.observations.step07_research_acceptance import StampedFact
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        StampedFact,
+    )
 
     runner = _production_observation_runner(monkeypatch)
     runner._update_test_observation(0)
@@ -2307,6 +2309,304 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
     runner._a4_current_ready = lambda: True
     runner._last_tf_a4_evidence = {'test': 'canonical fake graph'}
     runner._startup_rearm = lambda _deadline: rearm_calls.append(clock())
+
+
+def _safety_core_startup_runner(monkeypatch, *, authorized=True,
+                                rearm_behavior='apply'):
+    """Build a real production startup path around the pure Safety core."""
+    from collections import deque
+    from mecanum_nav_rl.observations.step07_research_acceptance import StampedFact
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver,
+    )
+    from mecanum_nav_rl.runtime_safety.safety_contract import (
+        SafetyLifecycleCore,
+    )
+
+    class Clock:
+        seconds = 10.0
+        ros_ns = 1_200_000_000
+
+        def steady_ns(self):
+            return int(self.seconds * 1_000_000_000)
+
+        def sleep(self, seconds):
+            if rearm_behavior == 'stay_nonready':
+                self.seconds += 1_000.0
+            else:
+                self.seconds += seconds
+
+    clock = Clock()
+    monkeypatch.setattr(runner_module.time, 'monotonic_ns', clock.steady_ns)
+    monkeypatch.setattr(runner_module.time, 'sleep', clock.sleep)
+    core = SafetyLifecycleCore()
+    core.configure(1_000_000_000)
+    core.activate(1_100_000_000)
+    assert core.snapshot().reason == 'ACTIVE_REARM_REQUIRED'
+    assert core.snapshot().motion_permitted is False
+
+    observer = object.__new__(Step07ResearchObserver)
+    observer._lock = threading.RLock()
+    observer._config_hash = 'a' * 64
+    observer._steady_ns = clock.steady_ns
+    observer.lifecycle = None
+    observer.context = None
+    observer.barrier_sequence = 0
+    observer.barrier_stamp_ns = 0
+    observer.barrier_event_stamp_ns = 0
+    observer.action_events = []
+    observer.clock_rollback = False
+    observer.clock_ns = clock.ros_ns
+    observer.clock_advance_count = 2
+    observer.scans = deque()
+    observer.wheel = deque()
+    observer.imu = deque()
+    observer.odometry = deque()
+    observer.receipts = deque()
+    observer.localization = deque()
+    observer.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=clock.ros_ns)))
+
+    primary = {'Unconfigured': 0, 'Inactive': 1, 'Active': 2}
+    barrier = {'INIT': 0, 'READY': 1, 'NON_READY': 2, 'FAULT': 3}
+
+    def publish_identity(identity):
+        stamp = SimpleNamespace(sec=clock.ros_ns // 1_000_000_000,
+                                nanosec=clock.ros_ns % 1_000_000_000)
+        message = SimpleNamespace(
+            header=SimpleNamespace(stamp=stamp, frame_id='base_link'),
+            barrier_stamp=SimpleNamespace(
+                sec=identity.barrier_ros_time_ns // 1_000_000_000,
+                nanosec=identity.barrier_ros_time_ns % 1_000_000_000),
+            episode_generation=identity.episode_generation,
+            reset_epoch=identity.reset_epoch,
+            runtime_generation=identity.runtime_generation,
+            sequence=identity.sequence,
+            primary_state=primary[identity.primary_state.value],
+            barrier_state=barrier[identity.barrier_state.value],
+            motion_permitted=identity.motion_permitted,
+            reason=identity.reason,
+        )
+        Step07ResearchObserver._lifecycle_cb(observer, message)
+
+    publish_identity(core.snapshot())
+    context = observer.context
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver as Observer,
+    )
+    observer.sensor_health_snapshot = lambda: Observer.sensor_health_snapshot(
+        observer)
+    observer.graph_snapshot = lambda: {
+        'nodes': set(), 'topics': {
+            '/mecanum/safety_lifecycle_state': {
+                'publishers': (('safety_lifecycle',),)},
+            '/odometry/filtered': {
+                'publishers': (('ekf_filter_node',),)},
+        },
+    }
+    observer.wait_for_actions = lambda timeout_sec: True
+    observer.recording_ready = lambda _topics: (True, ())
+    observer.executor_error = None
+    observer.lifecycle_clients = {}
+    observer._GetState = SimpleNamespace(Request=lambda: object())
+
+    def add_fact(stream, stamp_ns, frame_id, value):
+        stream.append(StampedFact(
+            stamp_ns, clock.steady_ns(), frame_id, value, context))
+
+    sample_stamp = clock.ros_ns - 10_000_000
+    scan = SimpleNamespace(
+        header=SimpleNamespace(frame_id='lidar_frame'),
+        ranges=[1.0] * 720, angle_min=-math.pi,
+        angle_increment=(2 * math.pi / 720), range_min=0.1,
+        range_max=10.0,
+    )
+    add_fact(observer.scans, sample_stamp, 'lidar_frame', scan)
+    wheel = SimpleNamespace(
+        header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link')
+    add_fact(observer.wheel, sample_stamp, 'odom', wheel)
+    imu = SimpleNamespace(header=SimpleNamespace(frame_id='base_link'))
+    add_fact(observer.imu, sample_stamp, 'base_link', imu)
+
+    def odom(stamp_ns):
+        return SimpleNamespace(
+            header=SimpleNamespace(frame_id='odom'),
+            child_frame_id='base_link',
+            pose=SimpleNamespace(
+                pose=SimpleNamespace(position=SimpleNamespace(x=0.0, y=0.0)),
+                covariance=[0.0] * 36),
+            twist=SimpleNamespace(
+                twist=SimpleNamespace(
+                    linear=SimpleNamespace(x=0.0, y=0.0),
+                    angular=SimpleNamespace(z=0.0)),
+                covariance=[0.0] * 36),
+        )
+
+    add_fact(
+        observer.odometry, sample_stamp - 1, 'base_link',
+        odom(sample_stamp - 1),
+    )
+    add_fact(
+        observer.odometry, sample_stamp, 'base_link', odom(sample_stamp),
+    )
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = observer
+    runner.process_owner = SimpleNamespace(processes=[])
+    runner.now_steady = lambda: clock.seconds
+    runner.started_steady = 0.0
+    runner.state = CampaignState()
+    runner.log_stream = None
+    runner.output = None
+    runner.config = {'map_identity': {'map_id': 'test_map'}}
+    runner.authorization = {'sim_estop_release_authorized': authorized}
+    runner.rearm_requested = False
+    runner._last_node_ros_now_ns = clock.ros_ns - 1
+    runner._node_ros_advance_count = 2
+    runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
+    runner._wait_nav2_ready = lambda _deadline: {}
+    runner._localization_ok = lambda *args, **kwargs: (True, None)
+    runner._a4_current_ready = lambda: True
+    runner._last_tf_a4_evidence = {'fixture': 'offline'}
+    calls = {'rearm': 0, 'recorder': 0, 'mission': 0}
+
+    class Future:
+        def __init__(self, success=True):
+            self.success = success
+
+        def done(self):
+            return True
+
+        def exception(self):
+            return None
+
+        def result(self):
+            return SimpleNamespace(success=self.success)
+
+    def request_rearm():
+        calls['rearm'] += 1
+        if rearm_behavior == 'apply':
+            publish_identity(core.rearm(clock.ros_ns))
+        return Future(success=rearm_behavior != 'refuse')
+
+    observer.request_rearm = request_rearm
+    original_recording_ready = runner._graph_ready_for_recording
+
+    def recording_gate():
+        calls['recorder'] += 1
+        assert core.snapshot().barrier_state.value == 'READY'
+        assert core.snapshot().motion_permitted is True
+        return original_recording_ready()
+
+    runner._graph_ready_for_recording = recording_gate
+    runner._mission = lambda: calls.update(mission=calls['mission'] + 1)
+    runner.start_observer = lambda: None
+    runner.start_runtime_children = lambda: None
+    runner.shutdown = lambda: None
+    runner.close = lambda: None
+    runner.evaluate_and_write = lambda: {'overall': 'OFFLINE_TEST_ONLY'}
+    return runner, observer, core, clock, calls, publish_identity
+
+
+def test_production_wait_ready_rearms_real_nonready_core_before_mission(
+        monkeypatch):
+    """Use real configure/activate/rearm before recorder and mission gates."""
+    runner, observer, core, _clock, calls, _publish = (
+        _safety_core_startup_runner(monkeypatch))
+    assert observer.lifecycle.value['barrier_state'] == 2
+    assert observer.lifecycle.value['motion_permitted'] is False
+
+    report = runner.execute()
+
+    assert report['overall'] == 'OFFLINE_TEST_ONLY'
+    assert core.snapshot().barrier_state.value == 'READY'
+    assert observer.lifecycle.value['motion_permitted'] is True
+    assert calls == {'rearm': 1, 'recorder': 1, 'mission': 1}
+
+
+@pytest.mark.parametrize(('authorized', 'behavior', 'failure'), [
+    (False, 'apply', 'SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED'),
+    (True, 'refuse', 'SAFETY_REARM_REFUSED'),
+    (True, 'stay_nonready', 'SAFETY_READY_AFTER_REARM_TIMEOUT'),
+])
+def test_production_startup_rearm_failures_never_admit_recorder_or_mission(
+        monkeypatch, authorized, behavior, failure):
+    """Keep mission admission closed when authorization or rearm fails."""
+    runner, _observer, core, _clock, calls, _publish = (
+        _safety_core_startup_runner(
+            monkeypatch, authorized=authorized, rearm_behavior=behavior))
+
+    report = runner.execute()
+
+    assert report['overall'] == 'OFFLINE_TEST_ONLY'
+    assert runner.state.primary_failure['primary_failure'] == failure
+    assert calls['rearm'] == (0 if not authorized else 1)
+    assert calls['recorder'] == 0
+    assert calls['mission'] == 0
+    assert core.snapshot().barrier_state.value == 'NON_READY'
+
+
+@pytest.mark.parametrize('mutation', [
+    'fault', 'stale_lifecycle', 'stale_sensor', 'clock_rollback',
+])
+def test_pre_rearm_startup_still_rejects_fault_stale_inputs_and_rollback(
+        monkeypatch, mutation):
+    """Keep fault, freshness and rollback checks active before rearm."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        StampedFact,
+    )
+
+    runner, observer, core, clock, _calls, publish_identity = (
+        _safety_core_startup_runner(monkeypatch))
+    if mutation == 'fault':
+        publish_identity(core.fault('TEST_FAULT', clock.ros_ns))
+        with pytest.raises(AcceptanceFailure, match='SAFETY_LIFECYCLE_FAULT'):
+            runner._topic_samples_ready()
+        return
+    if mutation == 'clock_rollback':
+        observer.clock_rollback = True
+        with pytest.raises(AcceptanceFailure, match='SIM_CLOCK_ROLLBACK'):
+            runner._topic_samples_ready()
+        return
+
+    fact = (observer.lifecycle if mutation == 'stale_lifecycle'
+            else observer.scans[0])
+    stale = StampedFact(
+        fact.stamp_ns, fact.received_steady_ns - 600_000_000,
+        fact.frame_id, fact.value, fact.context, fact.identity,
+    )
+    if mutation == 'stale_lifecycle':
+        observer.lifecycle = stale
+    else:
+        observer.scans[0] = stale
+    assert runner._topic_samples_ready() is False
+
+
+def test_post_rearm_ready_without_motion_permission_is_not_lifecycle_ready():
+    """Require motion permission even when the barrier reports READY."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        Context, StampedFact,
+    )
+    context = Context(0, 0, 1, 'a' * 64)
+    life = StampedFact(100, time.monotonic_ns(), 'base_link', {
+        'primary_state': 2, 'barrier_state': 1, 'motion_permitted': False,
+        'reason': 'EXPLICIT_REARM',
+    }, context)
+    observer = SimpleNamespace(
+        node=SimpleNamespace(get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(nanoseconds=100))),
+        sensor_health_snapshot=lambda: {
+            'context': context, 'clock_rollback': False, 'lifecycle': life,
+        },
+        lifecycle=life, context=context,
+    )
+    _bind_health_snapshot(observer, context=context, ros_now_ns=100,
+                          lifecycle=life, odometry=())
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = observer
+    runner._last_node_ros_now_ns = 100
+    runner._node_ros_advance_count = 2
+
+    assert runner._lifecycle_ready() is False
 
 
 def test_production_wait_ready_requeries_until_all_six_are_active(

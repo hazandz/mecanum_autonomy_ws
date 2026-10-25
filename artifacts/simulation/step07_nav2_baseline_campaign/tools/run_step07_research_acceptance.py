@@ -987,9 +987,13 @@ class ResearchAcceptanceRunner:
         if life_error is not None:
             self._remember_sensor_health_failure(stage, life_error)
             return False
+        # Startup prerequisites are evaluated before the explicit rearm.  The
+        # SafetyLifecycleCore intentionally remains Active/NON_READY until that
+        # request; motion permission is required only after _startup_rearm().
         if (life.value["primary_state"] != 2
-                or life.value["barrier_state"] not in (1, 2)
-                or not life.value.get('motion_permitted', False)):
+                or life.value["barrier_state"] != 2
+                or life.value.get('motion_permitted') is not False
+                or life.value.get('reason') != 'ACTIVE_REARM_REQUIRED'):
             return False
         incompatible = self._known_qos_mismatches(graph)
         if incompatible:
