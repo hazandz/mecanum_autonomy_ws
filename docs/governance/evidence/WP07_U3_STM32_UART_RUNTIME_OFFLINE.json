@@ -1,0 +1,274 @@
+{
+  "candidate_id": "WP07_U3_STM32_UART_RUNTIME_OFFLINE",
+  "step": "U3",
+  "classification": "L2",
+  "evidence_level": "OFFLINE_ONLY",
+  "owner_decision": {
+    "id": "WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2",
+    "status": "OWNER_APPROVED_WITH_AMENDMENT",
+    "token": "OWNER_APPROVED_WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2_REV_A_20261025",
+    "amendment": "A1 — NO_PRECONFIG_TELEMETRY",
+    "scope_note": "U3 candidate source implementation only; U2 historical decision/evidence and canonical governance status are unchanged."
+  },
+  "git": {
+    "repository": "/home/hazan/mecanum_autonomy_ws",
+    "worktree": "/home/hazan/mecanum_autonomy_ws_uart_wp07",
+    "origin_fetch": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "origin_push": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "branch": "wp07-pi5-stm32-uart-parallel-fdc0e299",
+    "exact_parent": "438a6ef6d3f448cd59ea4f12d8981e4e01ca72ae",
+    "canonical_development_base": "fdc0e299515bda2286832aabec635948629517b5",
+    "live_refs": {
+      "refs/heads/integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "refs/heads/step07-research-runtime-simplification": "af8431fc290247450e4eab15bb58abe1cc4115ec",
+      "refs/heads/wp07-pi5-stm32-uart-parallel-fdc0e299": "438a6ef6d3f448cd59ea4f12d8981e4e01ca72ae"
+    },
+    "step7_changed_paths_from_coordinator_readback": [
+      "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_research_acceptance.py",
+      "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_research_acceptance.py",
+      "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_research_observer.py",
+      "ros2_ws/src/mecanum_nav_rl/test/test_step07_research_observer.py"
+    ],
+    "step7_scope_intersection": "none with U3 allowlist or UART authorities",
+    "local_integration_ref_note": "local refs/heads/integration/implementation remained the previously observed old ref f8933bcff2bb30b1dad57d71d91678e36746326f and was not used as candidate input",
+    "delivery": "at evidence authoring: source and required checks stabilized; commit/push/readback are recorded in the delivery report because this file is frozen by the candidate commit",
+    "main_worktree_readback": {
+      "head": "f7f98c683d59cf4c62e462da9f37d4ffb2455c80",
+      "branch": "main",
+      "status": "?? docs/architecture/proposals/ preserved unchanged"
+    },
+    "local_pidkin_worktree_readback": {
+      "head": "476d114697f5f3fb034dddd48c82d9297c3888b7",
+      "branch": "wp12-stm32-pid-kin-hil-evidence-fdc0e299",
+      "status": "clean"
+    }
+  },
+  "authority_sha256": {
+    "docs/MECANUM_NAV_DRL_Architecture.docx": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "docs/MECANUM_NAV_DRL_Project_Tree.txt": "1ca7ea9473cf3e1be826c9c7aa40c4b24ffa9115577d04852eeaecbb2e46f098",
+    "docs/Pi_STM32_Interface_Contract.md": "9adb0cd56a26b29e95576490133420c13bd77935448ffb1b90acfa32dab77cec",
+    "docs/Pi_STM32_UART_v1_Golden_Vectors.md": "65a886f2fc6efb20da0abbf5393b62610462236e9b941fe7556cb3e85423488f",
+    "docs/STM32_Firmware_Architecture.md": "f9e0a0cd3cde86e181c35c2a15ff2e9bace11c4d91f95cf798e4015dc13f0332",
+    "docs/governance/PROJECT_EXECUTION_PLAN.md": "9ebfc6e3c3ce473f5776b74f89ac3ec0167d7e185155ee1505ebe5b84b4dd5ab",
+    "docs/governance/CANONICAL_SOURCE_REGISTRY.md": "60c8c80752a818555451ab8667ada1aff0981c79b3a6ab2d7322865c982e73a3",
+    "docs/governance/decisions/WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2.md": "5e06942eee3dee25335ac5db579387db3361538dbb59d6e471d8cc5fdd6da894"
+  },
+  "hardware_authority": {
+    "uart": "USART6 PA11 TX / PA12 RX, 3.3 V TTL, protocol 0x0001",
+    "motor_enable_allowed": false,
+    "approval_yaml_modified": false,
+    "unconfirmed_hardware_values": "remain TBD_MEASURED",
+    "sha256": {
+      "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml": "3899fa5dfaac72fd69c42a00327ab9aef470900737d487865689912eec5c51ff",
+      "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/approval.yaml": "691e4348de02d1015f75ce54ce45992fb7b913a853d0cfaa862621684a299bd1"
+    },
+    "hal_driver_observation": "Vendored stm32f4xx_hal_uart.c was inspected: the USART IRQ records UART error flags before UART_Receive_IT can invoke RxEventCallback; this callback checks ErrorCode before rearming, because rearm resets ErrorCode. The host test invokes RxEvent then ErrorCallback and verifies no rearm on the earlier error. No MCU execution was performed."
+  },
+  "implementation": {
+    "uart": "USART6, 115200 8N1, no flow control, ReceiveToIdle_IT, no runtime DMA",
+    "owners": {
+      "isr": "bounded RX chunk copy, immediate UART error latch, task notification",
+      "CommunicationTask": "framing, existing codec validation, candidate enqueue and sole UART TX owner",
+      "ControlSafetyTask": "future U4 CONFIG/COMMAND semantic owner; not implemented here",
+      "TelemetryTask": "future copied snapshot producer; not implemented here"
+    },
+    "buffers": {
+      "hal_rx_bytes": 128,
+      "rx_pending_chunks": 4,
+      "rx_pending_payload_bytes": 512,
+      "rx_capacity_note": "four pending callback chunks of up to 128 bytes each, not 512 one-byte callbacks",
+      "candidate_queue_items": 8,
+      "tx_queue_items": 8,
+      "frame_wire_capacity_bytes": 98,
+      "rx_service_budget_chunks": 4,
+      "tx_frames_per_service": 1,
+      "tx_timeout_ms": 10,
+      "idle_wait_max_ms": 5,
+      "task_priority_initial": 24,
+      "task_stack_initial_words": 512,
+      "irq_priority_subpriority": "6/0"
+    },
+    "a1_boundary": "U3 does not accept CONFIG or produce CONFIG_STATUS/TELEMETRY/heartbeat/boot ID/encoder values. A future semantic owner must accept CONFIG, emit CONFIG_STATUS first, then allow telemetry; U3 does not create sentinel epochs or accepted command state.",
+    "hot_shared_files": "main.c, stm32f4xx_hal_msp.c, stm32f4xx_it.c, stm32f4xx_it.h, firmware_STM32.ioc and linker script are development/integration glue requiring U7 reconciliation, not final production bytes.",
+    "sector7": "FLASH limited to 384 KiB at 0x08000000; 0x08060000..0x0807FFFF reserved for future boot journal; no journal implemented."
+  },
+  "toolchain": {
+    "host_gcc": "GNU 13.3.0",
+    "cmake": "3.28.3",
+    "arm_gcc": "GNU Tools for STM32 14.3.rel1.20251027-0700, GCC 14.3.1 (2025-06-23)",
+    "arm_compiler_path": "/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc",
+    "arm_flags": "-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard; STM32F411xE USE_HAL_DRIVER; vendored HAL/CMSIS/FreeRTOS and startup_stm32f411ceux.s; explicit source list; no Test/fakes include path",
+    "sanitizers": "host compiler ASan/UBSan supported; leak detection disabled for test run due environment ptrace restriction"
+  },
+  "verification": {
+    "host_configure": {
+      "command": "cmake -U U3_HAS_SANITIZERS -S firmware_STM32 -B /tmp/wp07-u3-host -DCMAKE_BUILD_TYPE=Debug",
+      "exit_code": 0
+    },
+    "host_build": {
+      "command": "cmake --build /tmp/wp07-u3-host --parallel 2",
+      "exit_code": 0
+    },
+    "host_tests": {
+      "command": "ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u3-host --output-on-failure",
+      "exit_code": 0,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "scenario_groups": [
+        "existing codec golden-vector suite",
+        "existing control safety session suite",
+        "startup silence and valid CONFIG request silence",
+        "bytewise fragmented frame and coalesced 128-byte receive with buffer reuse",
+        "protocol version/type/payload length/direction and malformed COBS/CRC rejection",
+        "oversize discard and delimiter resynchronization",
+        "typed COMMAND sequence-zero candidate and RX chunk-end tick wraparound",
+        "foreign UART, invalid size, rearm HAL_BUSY/HAL_ERROR",
+        "PE/FE/NE/ORE observed in RxEvent before ErrorCallback",
+        "TX value copy/FIFO/wire decode/10 ms timeout",
+        "TX timeout/HAL error and TX/RX/candidate queue overflow fault cleanup",
+        "task-handle enforcement for service/TX, no retry/replay after fault"
+      ],
+      "execution_note": "15 independent CTest cases; 0 skipped. The fake backend checks nonblocking queue use, FromISR context, task-only transmit, task/ISR critical API selection, HAL call arguments, and buffer value copies."
+    },
+    "arm_build": {
+      "command": "cmake -S firmware_STM32 -B /tmp/wp07-u3-arm2 -DSTM32_ARM_BUILD=ON -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_COMPILER=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc -DCMAKE_ASM_COMPILER=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc && cmake --build /tmp/wp07-u3-arm2 --parallel 4",
+      "exit_code": 0,
+      "elf": "/tmp/wp07-u3-build/stm32_uart_runtime.elf",
+      "map": "/tmp/wp07-u3-build/stm32_uart_runtime.map",
+      "elf_size_bytes": {
+        "text": 18604,
+        "data": 16,
+        "bss": 25112
+      },
+      "flash_load_ranges": [
+        {
+          "start": "0x08000000",
+          "end_exclusive": "0x080048B4",
+          "description": "vector/text/rodata/ARM/init/fini"
+        },
+        {
+          "start": "0x080048B4",
+          "end_exclusive": "0x080048C4",
+          "description": ".data load image"
+        }
+      ],
+      "ram_ranges": [
+        {
+          "start": "0x20000000",
+          "end_exclusive": "0x20005C28",
+          "description": ".data/.bss"
+        },
+        {
+          "start": "0x20005C28",
+          "end_exclusive": "0x20006228",
+          "description": "reserved minimum heap/stack linker section"
+        }
+      ],
+      "sector7_clearance": "all flash load image ends below 0x08060000",
+      "strong_symbols": [
+        "StartDefaultTask",
+        "USART6_IRQHandler",
+        "communication_runtime_start",
+        "communication_runtime_service_once"
+      ],
+      "forbidden_runtime_symbols_found": false,
+      "dma_runtime_initialization_found": false
+    },
+    "python_suite": "not rerun because U2 was not changed; git diff against parent is empty for all nine U2 source/test/docs/evidence paths.",
+    "diff_check": "PASS: git -c core.whitespace=cr-at-eol diff --check; CRLF endings preserved in generated sources.",
+    "corrected_pre_final_attempts": [
+      {
+        "stage": "ARM configure",
+        "failure": "first ABI probe linked newlib syscalls without application stubs",
+        "disposition": "set CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY before project() for explicit cross build"
+      },
+      {
+        "stage": "host build/test",
+        "failure": "first compile lacked fake callback declarations; next run exposed parser/codec delimiter mismatch",
+        "disposition": "fixed declaration and passed final 15-test ASan/UBSan run"
+      },
+      {
+        "stage": "ARM link",
+        "failure": "first link lacked vendored FreeRTOS timers.c required by scheduler timer task",
+        "disposition": "added real timers.c dependency and passed final ARM ELF link"
+      }
+    ],
+    "forbidden_runtime_symbols_found": false,
+    "u2_unchanged_command": "git diff --quiet 438a6ef6d3f448cd59ea4f12d8981e4e01ca72ae -- <all nine U2 allowlist paths>; exit 0"
+  },
+  "change_scope": {
+    "allowlist_upper_bound": [
+      "firmware_STM32/Core/Inc/communication_runtime.h",
+      "firmware_STM32/Core/Src/communication_runtime.c",
+      "firmware_STM32/Core/Src/main.c",
+      "firmware_STM32/Core/Src/stm32f4xx_hal_msp.c",
+      "firmware_STM32/Core/Src/stm32f4xx_it.c",
+      "firmware_STM32/Core/Inc/stm32f4xx_it.h",
+      "firmware_STM32/firmware_STM32.ioc",
+      "firmware_STM32/STM32F411CEUX_FLASH.ld",
+      "firmware_STM32/CMakeLists.txt",
+      "firmware_STM32/Test/test_communication_runtime.c",
+      "firmware_STM32/Test/fakes/FreeRTOS.h",
+      "firmware_STM32/Test/fakes/task.h",
+      "firmware_STM32/Test/fakes/queue.h",
+      "firmware_STM32/Test/fakes/stm32f4xx_hal.h",
+      "firmware_STM32/README.md",
+      "docs/governance/evidence/WP07_U3_STM32_UART_RUNTIME_OFFLINE.json"
+    ],
+    "changed_paths": [
+      "firmware_STM32/CMakeLists.txt",
+      "firmware_STM32/Core/Inc/communication_runtime.h",
+      "firmware_STM32/Core/Src/communication_runtime.c",
+      "firmware_STM32/Core/Src/main.c",
+      "firmware_STM32/Core/Src/stm32f4xx_hal_msp.c",
+      "firmware_STM32/Core/Src/stm32f4xx_it.c",
+      "firmware_STM32/Core/Inc/stm32f4xx_it.h",
+      "firmware_STM32/firmware_STM32.ioc",
+      "firmware_STM32/STM32F411CEUX_FLASH.ld",
+      "firmware_STM32/Test/test_communication_runtime.c",
+      "firmware_STM32/Test/fakes/FreeRTOS.h",
+      "firmware_STM32/Test/fakes/task.h",
+      "firmware_STM32/Test/fakes/queue.h",
+      "firmware_STM32/Test/fakes/stm32f4xx_hal.h",
+      "firmware_STM32/README.md",
+      "docs/governance/evidence/WP07_U3_STM32_UART_RUNTIME_OFFLINE.json"
+    ],
+    "u2_nine_paths_unchanged": true
+  },
+  "sha256_changed_source_and_docs": {
+    "firmware_STM32/CMakeLists.txt": "3192cf15f113ba261bcf5ad35fa9db5f5d5a70300ebf4be444305d3d8f954fe4",
+    "firmware_STM32/Core/Inc/communication_runtime.h": "461de610c9e1716ac7f1401842c20da5f9d3d139c75c3f1e04924ec9c93ca48b",
+    "firmware_STM32/Core/Src/communication_runtime.c": "0a14bbc71e1a066a95544cc24d05887e0eeb71f64c21a018ae40d517c1e0b82f",
+    "firmware_STM32/Core/Src/main.c": "389acc711b0408444cc3bf6e273a88fda98880861d4c3f6e1af3e3f737519e4e",
+    "firmware_STM32/Core/Src/stm32f4xx_hal_msp.c": "408ef8e8e24a6cf4a912679610cfbeeb4d834a9285811fb3e32f256825c2e732",
+    "firmware_STM32/Core/Src/stm32f4xx_it.c": "527cf20d58946df4c45e8020487b361ac0313df19940d0b5ab3f28fdc7d7d4bc",
+    "firmware_STM32/Core/Inc/stm32f4xx_it.h": "0fbe55eae06bf1a48fe773cc646e3fa5e0ee24e390eb51dcf6027b115c80d130",
+    "firmware_STM32/firmware_STM32.ioc": "ad81da79886948ea3ed65712c9b5c0db49f2244c0c4d729bf89ae1238c3dbee7",
+    "firmware_STM32/STM32F411CEUX_FLASH.ld": "a4ecf05ff21b21ca04135a4d68d72b45cde5c5209d7459e9834f384c8d3d2489",
+    "firmware_STM32/Test/test_communication_runtime.c": "83490cc3f600e9ace6722e6fd0b6cd8de1916741287ed90eca4aff5a7599282d",
+    "firmware_STM32/Test/fakes/FreeRTOS.h": "d18f9842d1e9b6c4bd534e4151828c8f0b360f3f37f1a45cf1e26cf54303cfde",
+    "firmware_STM32/Test/fakes/task.h": "49b9f63285457fe676754f018b760ec81fd0239adb170f732c7bd40e6b15c1f1",
+    "firmware_STM32/Test/fakes/queue.h": "1c8e6ddcb2d7f1db5320ba566b8fbe7ed191b5dae002e4c87b2645cce50da47b",
+    "firmware_STM32/Test/fakes/stm32f4xx_hal.h": "a124ec876c016341e8012e65f773d115e8d404e067e2706b4450cc50f5c49c31",
+    "firmware_STM32/README.md": "6f754a9830364323b7142a51692a2c99d63d1a720c871b92f6ec2ed6b2de91d9"
+  },
+  "scope_gaps": {
+    "U4": "semantic CONFIG/COMMAND acceptance, session epoch/sequence and watchdog ownership, full A1 handshake and stale/fault behavior",
+    "U5": "boot journal implementation, sector 7 erase/program/recovery and production readiness",
+    "U6": "separately authorized HIL/hardware timing and physical evidence",
+    "U7": "clean integration branch consolidation, final shared-file reconciliation, impact tests, independent audit and Owner integration approval"
+  },
+  "not_executed": {
+    "ros": true,
+    "gazebo": true,
+    "nav2": true,
+    "serial_hardware": true,
+    "firmware_execution_or_flash": true,
+    "motor": true,
+    "hil": true,
+    "integration": true,
+    "independent_audit": true
+  },
+  "audit_status": "PENDING"
+}

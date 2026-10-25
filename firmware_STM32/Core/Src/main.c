@@ -6,8 +6,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "encoder_diag.h"
-#include "motor_bench.h"
+#include "communication_runtime.h"
 #include "safety_io.h"
 /* USER CODE END Includes */
 
@@ -94,12 +93,10 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   safety_io_init_safe();
-  encoder_diag_init();
-  motor_bench_init();
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
+  if (osKernelInitialize() != osOK) Error_Handler();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* USER CODE END RTOS_MUTEX */
@@ -116,6 +113,7 @@ int main(void)
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  if (defaultTaskHandle == NULL) Error_Handler();
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* USER CODE END RTOS_THREADS */
@@ -124,7 +122,7 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-  osKernelStart();
+  if (osKernelStart() != osOK) Error_Handler();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -508,20 +506,9 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  uint32_t encoder_diag_last_ms = HAL_GetTick();
-
-  for (;;)
-  {
-    motor_bench_step();
-
-    if ((uint32_t)(HAL_GetTick() - encoder_diag_last_ms) >= 100U)
-    {
-      encoder_diag_step();
-      encoder_diag_last_ms = HAL_GetTick();
-    }
-
-    osDelay(10);
-  }
+  (void)argument;
+  if (!communication_runtime_start(&huart6)) Error_Handler();
+  osThreadExit();
   /* USER CODE END 5 */
 }
 
@@ -552,6 +539,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+  for (;;) { }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
