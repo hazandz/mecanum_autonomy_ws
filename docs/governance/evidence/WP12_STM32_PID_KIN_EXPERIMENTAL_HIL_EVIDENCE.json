@@ -1,0 +1,900 @@
+{
+  "schema_version": "mecanum.wp12_stm32_pid_kin_experimental_hil_evidence/v1",
+  "change_level": "L2",
+  "evidence_level": "EXPERIMENTAL_HIL_SUPPORTING_EVIDENCE",
+  "production_integration": "NOT_PERFORMED",
+  "hardware_profile_id": "mecanum_f411_tb6612_ga25_370_rev_a",
+  "hardware_profile_approval": "NOT_CHANGED",
+  "motor_enable_allowed": "NOT_CHANGED",
+  "WP12_status_transition": "NONE",
+  "WP07_status_transition": "NONE",
+  "Gate3_status": "NOT_CLAIMED",
+  "Gate4_status": "NOT_CLAIMED",
+  "DEPLOY_REAL_ready": false,
+  "canonical_base": {
+    "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "branch": "origin/integration/implementation",
+    "sha": "fdc0e299515bda2286832aabec635948629517b5"
+  },
+  "source_provenance": {
+    "schema_version": "mecanum.experimental_stm32_pid_kin_source_provenance/v1",
+    "classification": "SOURCE_COMMIT_PINNED_WITH_DECLARED_DIRTY_WORKTREE_STATE",
+    "repository": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab",
+    "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "branch": "experiment/stm32-pid0-ff-lab",
+    "head": "515e4256f39340fa0de174e9bde01018dac81449",
+    "source_commits": [
+      {
+        "role": "PID4 generic four-wheel controller",
+        "commit": "231010db7de8a3f49f49a715da4339e129a48755",
+        "paths": [
+          "firmware_STM32/Core/Inc/pid4_lab.h",
+          "firmware_STM32/Core/Src/main.c",
+          "firmware_STM32/Core/Src/pid4_lab.c"
+        ]
+      },
+      {
+        "role": "KIN1 inverse kinematics",
+        "commit": "cdfe81ed2d57cd18e94ee4b53c84a7c95679b321",
+        "paths": [
+          "firmware_STM32/Core/Inc/mecanum_kinematics.h",
+          "firmware_STM32/Core/Src/mecanum_kinematics.c",
+          "firmware_STM32/Test/mecanum_kinematics_host_test.c"
+        ]
+      },
+      {
+        "role": "KIN2 kinematics to PID4 integration",
+        "commit": "515e4256f39340fa0de174e9bde01018dac81449",
+        "paths": [
+          "firmware_STM32/Core/Inc/kin2_lab.h",
+          "firmware_STM32/Core/Src/kin2_lab.c",
+          "firmware_STM32/Core/Src/main.c"
+        ]
+      }
+    ],
+    "worktree_state": {
+      "porcelain_v2_status_file": "experimental_worktree_status.txt",
+      "tracked_modifications": [
+        "firmware_STM32/Core/Src/pid0_lab.c",
+        "firmware_STM32/Test/pid0_analyze.py",
+        "firmware_STM32/firmware_STM32.launch"
+      ],
+      "untracked_paths": [
+        "firmware_STM32/.cproject",
+        "firmware_STM32/.mxproject",
+        "firmware_STM32/.project",
+        "firmware_STM32/.settings/",
+        "firmware_STM32/PID3_ATTACH_NO_RESET.launch",
+        "firmware_STM32/firmware_STM32.cfg",
+        "fl_forward.csv",
+        "fl_reverse.csv",
+        "fr_forward.csv",
+        "fr_reverse.csv",
+        "pid0_all_results.txt",
+        "pid1_fl_forward.csv",
+        "pid1_fl_forward_analysis.txt",
+        "pid1_fl_forward_analysis_v2.txt",
+        "pid1_fl_reverse.csv",
+        "pid1_fl_reverse_analysis.txt",
+        "pid1_fl_reverse_analysis_v2.txt",
+        "pid1_fr_analysis.txt",
+        "pid1_fr_forward.csv",
+        "pid1_fr_forward_refined.csv",
+        "pid1_fr_forward_refined_analysis.txt",
+        "pid1_fr_reverse.csv",
+        "pid1_rl_analysis.txt",
+        "pid1_rl_forward.csv",
+        "pid1_rl_reverse.csv",
+        "pid1_rr_analysis.txt",
+        "pid1_rr_forward.csv",
+        "pid1_rr_reverse.csv",
+        "pid2_all_forward.csv",
+        "pid2_all_forward_analysis.txt",
+        "pid2_all_reverse.csv",
+        "pid2_all_reverse_analysis.txt",
+        "pid3_floor_forward_500.csv",
+        "pid3_floor_forward_500_analysis.txt",
+        "pid3_floor_ramp1000_analysis.txt",
+        "pid3_floor_reverse500_analysis.txt",
+        "pid3_stand_ramp1000_analysis.txt",
+        "pid3_stand_reverse500_analysis.txt",
+        "pid3_stand_rotate_cw300_analysis.txt",
+        "pid3_stand_strafe_left300_analysis.txt",
+        "pid3_stand_strafe_right300_analysis.txt",
+        "pid4_stand_mixed_300_500_700_900_analysis.txt",
+        "rl_forward.csv",
+        "rl_reverse.csv",
+        "rr_forward.csv",
+        "rr_reverse.csv"
+      ],
+      "untracked_path_count": 46,
+      "cached_diff_empty": true,
+      "tracked_diff_file": "experimental_tracked_diff.patch",
+      "tracked_diff_sha256": "6d3f6d0ef55bdb08d6e98f12bcec646aa05c171bfb2c106a5f57690003d5c275",
+      "cached_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exact_clean_commit_claim": false,
+      "firmware_elf_or_flash_image_pinned": false
+    },
+    "raw_hil_files": [
+      {
+        "role": "forward",
+        "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_forward_vx020.bin",
+        "archived_path": "kin2_floor_forward_vx020.bin",
+        "bytes": 31680,
+        "sha256": "ec2d371e1ff887e962d4dc4930c42c858ab645f2c56e32389a8602551977c9d3"
+      },
+      {
+        "role": "strafe_left",
+        "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_strafe_left_vy010.bin",
+        "archived_path": "kin2_floor_strafe_left_vy010.bin",
+        "bytes": 31680,
+        "sha256": "c363289aabdd98a244a3d0d0b5edef01cbb297b6175c29a314ec2a596a608199"
+      },
+      {
+        "role": "rotate_cw",
+        "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_rotate_cw_wz050.bin",
+        "archived_path": "kin2_floor_rotate_cw_wz050.bin",
+        "bytes": 31680,
+        "sha256": "cb79f85b05094baec151183e5c041f6ea4031e910b44d7249f60469354c32fca"
+      }
+    ],
+    "note": "The raw HIL evidence is preserved separately from committed source provenance and the declared dirty tracked worktree state."
+  },
+  "raw_log_format": {
+    "record_type": "Pid4LabSample",
+    "record_size_bytes": 132,
+    "capacity": 240,
+    "file_size_bytes": 31680,
+    "byte_order": "little-endian STM32 host interpretation",
+    "field_order": [
+      "timestamp_ms",
+      "state",
+      "dt_ms",
+      "target_cps[FL,FR,RL,RR]",
+      "measured_cps[FL,FR,RL,RR]",
+      "error_cps[FL,FR,RL,RR]",
+      "u_ff[FL,FR,RL,RR]",
+      "u_i[FL,FR,RL,RR]",
+      "u_output_pwm_permille[FL,FR,RL,RR]",
+      "encoder_delta[FL,FR,RL,RR]",
+      "sync_spread_cps",
+      "sync_warning"
+    ]
+  },
+  "offline_raw_log_validation": {
+    "forward": {
+      "source_file": "kin2_floor_forward_vx020.bin",
+      "bytes": 31680,
+      "record_size_bytes": 132,
+      "capacity": 240,
+      "run_sample_count": 124,
+      "state_counts_in_nonzero_records": {
+        "2": 124
+      },
+      "first_timestamp_ms": 13085,
+      "last_timestamp_ms": 18005,
+      "first_to_last_timestamp_span_ms": 4920,
+      "sample_coverage_at_40ms_per_sample_ms": 4960,
+      "control_dt_ms_min": 20,
+      "control_dt_ms_max": 20,
+      "logged_interval_ms_min": 40,
+      "logged_interval_ms_max": 40,
+      "first_target_cps": [
+        24.60371208190918,
+        24.60371208190918,
+        24.60371208190918,
+        24.60371208190918
+      ],
+      "final_target_cps": [
+        615.0928344726562,
+        615.0928344726562,
+        615.0928344726562,
+        615.0928344726562
+      ],
+      "overall_mean_target_cps": [
+        555.5677218437195,
+        555.5677218437195,
+        555.5677218437195,
+        555.5677218437195
+      ],
+      "overall_mean_measured_cps": [
+        553.6290322580645,
+        555.241935483871,
+        554.8387096774194,
+        559.6774193548387
+      ],
+      "steady_state_window": "last 30 percent of RUN samples",
+      "steady_state_by_wheel": [
+        {
+          "wheel": "FL",
+          "steady_samples": 38,
+          "mean_target_cps": 615.0928344726562,
+          "mean_measured_cps": 607.8947368421053,
+          "mean_normalized_error_cps": 7.198097630550987,
+          "absolute_error_percent_of_target": 1.1702457299347675,
+          "measured_population_stddev_cps": 35.40427380808871,
+          "mean_u_ff_permille": 174.3095703125,
+          "mean_u_i_permille": 8.766366657457853,
+          "mean_pwm_permille": 183.68057451750101,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "FR",
+          "steady_samples": 38,
+          "mean_target_cps": 615.0928344726562,
+          "mean_measured_cps": 625.0,
+          "mean_normalized_error_cps": -9.90716552734375,
+          "absolute_error_percent_of_target": 1.6106780915172845,
+          "measured_population_stddev_cps": 40.95890109545626,
+          "mean_u_ff_permille": 175.00115966796875,
+          "mean_u_i_permille": 19.0452712711535,
+          "mean_pwm_permille": 193.21422456440172,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RL",
+          "steady_samples": 38,
+          "mean_target_cps": 615.0928344726562,
+          "mean_measured_cps": 611.8421052631579,
+          "mean_normalized_error_cps": 3.2507292094983553,
+          "absolute_error_percent_of_target": 0.5284940788304477,
+          "measured_population_stddev_cps": 49.24991387424448,
+          "mean_u_ff_permille": 192.51669311523438,
+          "mean_u_i_permille": 3.4887197049040544,
+          "mean_pwm_permille": 196.27847209729646,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RR",
+          "steady_samples": 38,
+          "mean_target_cps": 615.0928344726562,
+          "mean_measured_cps": 617.1052631578947,
+          "mean_normalized_error_cps": -2.0124286852384867,
+          "absolute_error_percent_of_target": 0.3271747893086452,
+          "measured_population_stddev_cps": 32.99983211574856,
+          "mean_u_ff_permille": 175.2916259765625,
+          "mean_u_i_permille": -9.774439447804502,
+          "mean_pwm_permille": 165.34813730340255,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        }
+      ],
+      "sync_spread_mean_cps": 68.95161290322581,
+      "sync_spread_p95_cps": 150.0,
+      "sync_spread_max_cps": 150.0,
+      "sync_warning_samples": 0,
+      "sampled_log_encoder_delta_sum_not_authoritative": [
+        1373,
+        1377,
+        1376,
+        1388
+      ],
+      "all_logged_float_fields_finite": true
+    },
+    "strafe_left": {
+      "source_file": "kin2_floor_strafe_left_vy010.bin",
+      "bytes": 31680,
+      "record_size_bytes": 132,
+      "capacity": 240,
+      "run_sample_count": 124,
+      "state_counts_in_nonzero_records": {
+        "2": 124
+      },
+      "first_timestamp_ms": 251669,
+      "last_timestamp_ms": 256589,
+      "first_to_last_timestamp_span_ms": 4920,
+      "sample_coverage_at_40ms_per_sample_ms": 4960,
+      "control_dt_ms_min": 20,
+      "control_dt_ms_max": 20,
+      "logged_interval_ms_min": 40,
+      "logged_interval_ms_max": 40,
+      "first_target_cps": [
+        -12.30185604095459,
+        12.30185604095459,
+        12.30185604095459,
+        -12.30185604095459
+      ],
+      "final_target_cps": [
+        -307.5464172363281,
+        307.5464172363281,
+        307.5464172363281,
+        -307.5464172363281
+      ],
+      "overall_mean_target_cps": [
+        -277.78386092185974,
+        277.78386092185974,
+        277.78386092185974,
+        -277.78386092185974
+      ],
+      "overall_mean_measured_cps": [
+        -264.9193548387097,
+        261.69354838709677,
+        257.258064516129,
+        -261.2903225806452
+      ],
+      "steady_state_window": "last 30 percent of RUN samples",
+      "steady_state_by_wheel": [
+        {
+          "wheel": "FL",
+          "steady_samples": 38,
+          "mean_target_cps": -307.5464172363281,
+          "mean_measured_cps": -301.3157894736842,
+          "mean_normalized_error_cps": 6.230627762643914,
+          "absolute_error_percent_of_target": 2.0259145980738604,
+          "measured_population_stddev_cps": 54.39480686472207,
+          "mean_u_ff_permille": 105.47515106201172,
+          "mean_u_i_permille": 41.93441451223273,
+          "mean_pwm_permille": 147.93293722052323,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "FR",
+          "steady_samples": 38,
+          "mean_target_cps": 307.5464172363281,
+          "mean_measured_cps": 300.0,
+          "mean_normalized_error_cps": 7.546417236328125,
+          "absolute_error_percent_of_target": 2.453749032143407,
+          "measured_population_stddev_cps": 51.2989176042577,
+          "mean_u_ff_permille": 103.70836639404297,
+          "mean_u_i_permille": 62.23031284934596,
+          "mean_pwm_permille": 166.5725780286287,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RL",
+          "steady_samples": 38,
+          "mean_target_cps": 307.5464172363281,
+          "mean_measured_cps": 300.0,
+          "mean_normalized_error_cps": 7.546417236328125,
+          "absolute_error_percent_of_target": 2.453749032143407,
+          "measured_population_stddev_cps": 57.35393346764044,
+          "mean_u_ff_permille": 127.10784149169922,
+          "mean_u_i_permille": 51.3158678757517,
+          "mean_pwm_permille": 179.05760634572883,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RR",
+          "steady_samples": 38,
+          "mean_target_cps": -307.5464172363281,
+          "mean_measured_cps": -297.36842105263156,
+          "mean_normalized_error_cps": 10.177996183696546,
+          "absolute_error_percent_of_target": 3.3094179002825,
+          "measured_population_stddev_cps": 45.8076189092874,
+          "mean_u_ff_permille": 103.20350646972656,
+          "mean_u_i_permille": 64.6766663601524,
+          "mean_pwm_permille": 168.7351238853053,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        }
+      ],
+      "sync_spread_mean_cps": 87.90322580645162,
+      "sync_spread_p95_cps": 200.0,
+      "sync_spread_max_cps": 250.0,
+      "sync_warning_samples": 9,
+      "sampled_log_encoder_delta_sum_not_authoritative": [
+        -657,
+        649,
+        638,
+        -648
+      ],
+      "all_logged_float_fields_finite": true
+    },
+    "rotate_cw": {
+      "source_file": "kin2_floor_rotate_cw_wz050.bin",
+      "bytes": 31680,
+      "record_size_bytes": 132,
+      "capacity": 240,
+      "run_sample_count": 124,
+      "state_counts_in_nonzero_records": {
+        "2": 124
+      },
+      "first_timestamp_ms": 17925,
+      "last_timestamp_ms": 22845,
+      "first_to_last_timestamp_span_ms": 4920,
+      "sample_coverage_at_40ms_per_sample_ms": 4960,
+      "control_dt_ms_min": 20,
+      "control_dt_ms_max": 20,
+      "logged_interval_ms_min": 40,
+      "logged_interval_ms_max": 40,
+      "first_target_cps": [
+        12.486384391784668,
+        -12.486384391784668,
+        12.486384391784668,
+        -12.486384391784668
+      ],
+      "final_target_cps": [
+        312.15960693359375,
+        -312.15960693359375,
+        312.15960693359375,
+        -312.15960693359375
+      ],
+      "overall_mean_target_cps": [
+        281.95061262961354,
+        -281.95061262961354,
+        281.95061262961354,
+        -281.95061262961354
+      ],
+      "overall_mean_measured_cps": [
+        275.80645161290323,
+        -276.2096774193548,
+        277.01612903225805,
+        -276.2096774193548
+      ],
+      "steady_state_window": "last 30 percent of RUN samples",
+      "steady_state_by_wheel": [
+        {
+          "wheel": "FL",
+          "steady_samples": 38,
+          "mean_target_cps": 312.15960693359375,
+          "mean_measured_cps": 305.2631578947368,
+          "mean_normalized_error_cps": 6.8964490388569075,
+          "absolute_error_percent_of_target": 2.209270157212878,
+          "measured_population_stddev_cps": 53.54471039309422,
+          "mean_u_ff_permille": 108.32496643066406,
+          "mean_u_i_permille": 27.949449689764727,
+          "mean_pwm_permille": 136.85371659931383,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "FR",
+          "steady_samples": 38,
+          "mean_target_cps": -312.15960693359375,
+          "mean_measured_cps": -313.1578947368421,
+          "mean_normalized_error_cps": -0.9982878032483553,
+          "absolute_error_percent_of_target": 0.31980044216954784,
+          "measured_population_stddev_cps": 39.209643225661424,
+          "mean_u_ff_permille": 104.87896728515625,
+          "mean_u_i_permille": 27.977095955296566,
+          "mean_pwm_permille": 132.77220655742445,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RL",
+          "steady_samples": 38,
+          "mean_target_cps": 312.15960693359375,
+          "mean_measured_cps": 306.57894736842104,
+          "mean_normalized_error_cps": 5.580659565172698,
+          "absolute_error_percent_of_target": 1.78775839064914,
+          "measured_population_stddev_cps": 51.517820922241825,
+          "mean_u_ff_permille": 128.08897399902344,
+          "mean_u_i_permille": 21.45602017954776,
+          "mean_pwm_permille": 150.01376985248766,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        },
+        {
+          "wheel": "RR",
+          "steady_samples": 38,
+          "mean_target_cps": -312.15960693359375,
+          "mean_measured_cps": -317.10526315789474,
+          "mean_normalized_error_cps": -4.945656224300987,
+          "absolute_error_percent_of_target": 1.5843357418607606,
+          "measured_population_stddev_cps": 32.99983211574856,
+          "mean_u_ff_permille": 104.26094818115234,
+          "mean_u_i_permille": 29.05472599832635,
+          "mean_pwm_permille": 132.9002396432977,
+          "pwm_saturated_samples": 0,
+          "estimated_pwm_saturation_ms_at_40ms_logging": 0
+        }
+      ],
+      "sync_spread_mean_cps": 89.11290322580645,
+      "sync_spread_p95_cps": 150.0,
+      "sync_spread_max_cps": 200.0,
+      "sync_warning_samples": 3,
+      "sampled_log_encoder_delta_sum_not_authoritative": [
+        684,
+        -685,
+        687,
+        -685
+      ],
+      "all_logged_float_fields_finite": true
+    }
+  },
+  "campaign": {
+    "controller_constants": {
+      "wheel_diameter_m": 0.097,
+      "wheelbase_m": 0.216,
+      "track_m": 0.19,
+      "Lx_m": 0.108,
+      "Ly_m": 0.095,
+      "K_m": 0.203,
+      "CPR": 937.2,
+      "max_wheel_target_cps": 1400,
+      "Kp": 0.084,
+      "Ki": 1.05
+    },
+    "forward": {
+      "command": {
+        "vx_mps": 0.2,
+        "vy_mps": 0.0,
+        "wz_radps": 0.0
+      },
+      "expected_target_cps": [
+        615.093,
+        615.093,
+        615.093,
+        615.093
+      ],
+      "owner_gdb_cumulative_encoder_totals": {
+        "FL": 2765,
+        "FR": 2757,
+        "RL": 2776,
+        "RR": 2786
+      },
+      "owner_manual_observation": {
+        "distance_m_approx": 0.95,
+        "drift": "slight right",
+        "yaw": "no meaningful yaw rotation"
+      },
+      "owner_analysis_summary": {
+        "run_samples": 124,
+        "nominal_sample_coverage_s": 4.96,
+        "sample_interval_ms": 40,
+        "steady_state_window": "final 30 percent",
+        "steady_state": {
+          "FL": {
+            "target_cps": 615.1,
+            "measured_cps": 607.9,
+            "error_cps": 7.2,
+            "absolute_error_percent": 1.17
+          },
+          "FR": {
+            "target_cps": 615.1,
+            "measured_cps": 625.0,
+            "error_cps": -9.9,
+            "absolute_error_percent": 1.61
+          },
+          "RL": {
+            "target_cps": 615.1,
+            "measured_cps": 611.8,
+            "error_cps": 3.3,
+            "absolute_error_percent": 0.53
+          },
+          "RR": {
+            "target_cps": 615.1,
+            "measured_cps": 617.1,
+            "error_cps": -2.0,
+            "absolute_error_percent": 0.33
+          }
+        },
+        "pwm_saturation_ms": {
+          "FL": 0,
+          "FR": 0,
+          "RL": 0,
+          "RR": 0
+        },
+        "cumulative_spread_counts": 29,
+        "cumulative_spread_percent_approx": 1.05
+      },
+      "encoder_distance_note": "The 0.901 m encoder-based value is diagnostic only and uses experimental CPR; it is not ground-truth distance."
+    },
+    "strafe_left": {
+      "command": {
+        "vx_mps": 0.0,
+        "vy_mps": 0.1,
+        "wz_radps": 0.0
+      },
+      "expected_wheel_signs": [
+        "-",
+        "+",
+        "+",
+        "-"
+      ],
+      "expected_target_cps": [
+        -307.546,
+        307.546,
+        307.546,
+        -307.546
+      ],
+      "owner_gdb_cumulative_encoder_totals": {
+        "FL": -1348,
+        "FR": 1316,
+        "RL": 1308,
+        "RR": -1312
+      },
+      "owner_manual_observation": {
+        "lateral_displacement_m_approx": 0.43,
+        "direction": "left",
+        "forward_backward_drift": "no meaningful drift",
+        "heading": "very small change"
+      },
+      "derived_metrics": {
+        "source_file": "kin2_floor_strafe_left_vy010.bin",
+        "bytes": 31680,
+        "record_size_bytes": 132,
+        "capacity": 240,
+        "run_sample_count": 124,
+        "state_counts_in_nonzero_records": {
+          "2": 124
+        },
+        "first_timestamp_ms": 251669,
+        "last_timestamp_ms": 256589,
+        "first_to_last_timestamp_span_ms": 4920,
+        "sample_coverage_at_40ms_per_sample_ms": 4960,
+        "control_dt_ms_min": 20,
+        "control_dt_ms_max": 20,
+        "logged_interval_ms_min": 40,
+        "logged_interval_ms_max": 40,
+        "first_target_cps": [
+          -12.30185604095459,
+          12.30185604095459,
+          12.30185604095459,
+          -12.30185604095459
+        ],
+        "final_target_cps": [
+          -307.5464172363281,
+          307.5464172363281,
+          307.5464172363281,
+          -307.5464172363281
+        ],
+        "overall_mean_target_cps": [
+          -277.78386092185974,
+          277.78386092185974,
+          277.78386092185974,
+          -277.78386092185974
+        ],
+        "overall_mean_measured_cps": [
+          -264.9193548387097,
+          261.69354838709677,
+          257.258064516129,
+          -261.2903225806452
+        ],
+        "steady_state_window": "last 30 percent of RUN samples",
+        "steady_state_by_wheel": [
+          {
+            "wheel": "FL",
+            "steady_samples": 38,
+            "mean_target_cps": -307.5464172363281,
+            "mean_measured_cps": -301.3157894736842,
+            "mean_normalized_error_cps": 6.230627762643914,
+            "absolute_error_percent_of_target": 2.0259145980738604,
+            "measured_population_stddev_cps": 54.39480686472207,
+            "mean_u_ff_permille": 105.47515106201172,
+            "mean_u_i_permille": 41.93441451223273,
+            "mean_pwm_permille": 147.93293722052323,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "FR",
+            "steady_samples": 38,
+            "mean_target_cps": 307.5464172363281,
+            "mean_measured_cps": 300.0,
+            "mean_normalized_error_cps": 7.546417236328125,
+            "absolute_error_percent_of_target": 2.453749032143407,
+            "measured_population_stddev_cps": 51.2989176042577,
+            "mean_u_ff_permille": 103.70836639404297,
+            "mean_u_i_permille": 62.23031284934596,
+            "mean_pwm_permille": 166.5725780286287,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "RL",
+            "steady_samples": 38,
+            "mean_target_cps": 307.5464172363281,
+            "mean_measured_cps": 300.0,
+            "mean_normalized_error_cps": 7.546417236328125,
+            "absolute_error_percent_of_target": 2.453749032143407,
+            "measured_population_stddev_cps": 57.35393346764044,
+            "mean_u_ff_permille": 127.10784149169922,
+            "mean_u_i_permille": 51.3158678757517,
+            "mean_pwm_permille": 179.05760634572883,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "RR",
+            "steady_samples": 38,
+            "mean_target_cps": -307.5464172363281,
+            "mean_measured_cps": -297.36842105263156,
+            "mean_normalized_error_cps": 10.177996183696546,
+            "absolute_error_percent_of_target": 3.3094179002825,
+            "measured_population_stddev_cps": 45.8076189092874,
+            "mean_u_ff_permille": 103.20350646972656,
+            "mean_u_i_permille": 64.6766663601524,
+            "mean_pwm_permille": 168.7351238853053,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          }
+        ],
+        "sync_spread_mean_cps": 87.90322580645162,
+        "sync_spread_p95_cps": 200.0,
+        "sync_spread_max_cps": 250.0,
+        "sync_warning_samples": 9,
+        "sampled_log_encoder_delta_sum_not_authoritative": [
+          -657,
+          649,
+          638,
+          -648
+        ],
+        "all_logged_float_fields_finite": true
+      }
+    },
+    "rotate_cw": {
+      "command": {
+        "vx_mps": 0.0,
+        "vy_mps": 0.0,
+        "wz_radps": -0.5
+      },
+      "expected_wheel_signs": [
+        "+",
+        "-",
+        "+",
+        "-"
+      ],
+      "expected_target_cps": [
+        312.159,
+        -312.159,
+        312.159,
+        -312.159
+      ],
+      "owner_gdb_cumulative_encoder_totals": {
+        "FL": 1373,
+        "FR": -1384,
+        "RL": 1380,
+        "RR": -1380
+      },
+      "owner_manual_observation": {
+        "motion": "rotated in place",
+        "center_drift": "no meaningful center drift",
+        "rotation_angle": "not formally measured"
+      },
+      "derived_metrics": {
+        "source_file": "kin2_floor_rotate_cw_wz050.bin",
+        "bytes": 31680,
+        "record_size_bytes": 132,
+        "capacity": 240,
+        "run_sample_count": 124,
+        "state_counts_in_nonzero_records": {
+          "2": 124
+        },
+        "first_timestamp_ms": 17925,
+        "last_timestamp_ms": 22845,
+        "first_to_last_timestamp_span_ms": 4920,
+        "sample_coverage_at_40ms_per_sample_ms": 4960,
+        "control_dt_ms_min": 20,
+        "control_dt_ms_max": 20,
+        "logged_interval_ms_min": 40,
+        "logged_interval_ms_max": 40,
+        "first_target_cps": [
+          12.486384391784668,
+          -12.486384391784668,
+          12.486384391784668,
+          -12.486384391784668
+        ],
+        "final_target_cps": [
+          312.15960693359375,
+          -312.15960693359375,
+          312.15960693359375,
+          -312.15960693359375
+        ],
+        "overall_mean_target_cps": [
+          281.95061262961354,
+          -281.95061262961354,
+          281.95061262961354,
+          -281.95061262961354
+        ],
+        "overall_mean_measured_cps": [
+          275.80645161290323,
+          -276.2096774193548,
+          277.01612903225805,
+          -276.2096774193548
+        ],
+        "steady_state_window": "last 30 percent of RUN samples",
+        "steady_state_by_wheel": [
+          {
+            "wheel": "FL",
+            "steady_samples": 38,
+            "mean_target_cps": 312.15960693359375,
+            "mean_measured_cps": 305.2631578947368,
+            "mean_normalized_error_cps": 6.8964490388569075,
+            "absolute_error_percent_of_target": 2.209270157212878,
+            "measured_population_stddev_cps": 53.54471039309422,
+            "mean_u_ff_permille": 108.32496643066406,
+            "mean_u_i_permille": 27.949449689764727,
+            "mean_pwm_permille": 136.85371659931383,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "FR",
+            "steady_samples": 38,
+            "mean_target_cps": -312.15960693359375,
+            "mean_measured_cps": -313.1578947368421,
+            "mean_normalized_error_cps": -0.9982878032483553,
+            "absolute_error_percent_of_target": 0.31980044216954784,
+            "measured_population_stddev_cps": 39.209643225661424,
+            "mean_u_ff_permille": 104.87896728515625,
+            "mean_u_i_permille": 27.977095955296566,
+            "mean_pwm_permille": 132.77220655742445,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "RL",
+            "steady_samples": 38,
+            "mean_target_cps": 312.15960693359375,
+            "mean_measured_cps": 306.57894736842104,
+            "mean_normalized_error_cps": 5.580659565172698,
+            "absolute_error_percent_of_target": 1.78775839064914,
+            "measured_population_stddev_cps": 51.517820922241825,
+            "mean_u_ff_permille": 128.08897399902344,
+            "mean_u_i_permille": 21.45602017954776,
+            "mean_pwm_permille": 150.01376985248766,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          },
+          {
+            "wheel": "RR",
+            "steady_samples": 38,
+            "mean_target_cps": -312.15960693359375,
+            "mean_measured_cps": -317.10526315789474,
+            "mean_normalized_error_cps": -4.945656224300987,
+            "absolute_error_percent_of_target": 1.5843357418607606,
+            "measured_population_stddev_cps": 32.99983211574856,
+            "mean_u_ff_permille": 104.26094818115234,
+            "mean_u_i_permille": 29.05472599832635,
+            "mean_pwm_permille": 132.9002396432977,
+            "pwm_saturated_samples": 0,
+            "estimated_pwm_saturation_ms_at_40ms_logging": 0
+          }
+        ],
+        "sync_spread_mean_cps": 89.11290322580645,
+        "sync_spread_p95_cps": 150.0,
+        "sync_spread_max_cps": 200.0,
+        "sync_warning_samples": 3,
+        "sampled_log_encoder_delta_sum_not_authoritative": [
+          684,
+          -685,
+          687,
+          -685
+        ],
+        "all_logged_float_fields_finite": true
+      },
+      "accuracy_claim": "No rotational geometry accuracy claim; yaw angle was not measured."
+    }
+  },
+  "calibration_boundary": {
+    "track_m": {
+      "experimental_value": 0.19,
+      "physical_measurement_provenance": "reported from experimental campaign",
+      "canonical_status": "NOT_APPROVED"
+    },
+    "wheelbase_m": {
+      "experimental_value": 0.216,
+      "canonical_status": "NOT_FORMALLY_CLOSED"
+    },
+    "encoder_cpr": {
+      "experimental_value": 937.2,
+      "canonical_status": "EXPERIMENTAL_THEORETICAL_NOT_CANONICAL",
+      "prior_manual_one_wheel_revolution_counts_approx": 906,
+      "closure_required": true
+    },
+    "manifest_status": "TBD_MEASURED",
+    "approval_status": "DRAFT",
+    "motor_enable_allowed_in_approval_yaml": false
+  },
+  "limitations": [
+    "Not production firmware validation.",
+    "Hardware manifest approval is unchanged.",
+    "TBD_MEASURED values are not closed by this campaign record.",
+    "UART runtime was not proven.",
+    "Watchdog was not HIL-proven in this campaign.",
+    "Physical E-stop was not HIL-proven in this campaign.",
+    "Pi forward kinematics is not implemented/proven.",
+    "Real-hardware /wheel/odometry_raw is not proven.",
+    "Real-hardware EKF is not proven.",
+    "Raw log delta sums are decimated diagnostics, not cumulative GDB totals."
+  ],
+  "status": "SUPPORTING_EXPERIMENTAL_HIL_EVIDENCE_ONLY"
+}

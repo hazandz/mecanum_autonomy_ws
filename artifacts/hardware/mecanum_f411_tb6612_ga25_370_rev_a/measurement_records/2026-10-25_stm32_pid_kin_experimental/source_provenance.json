@@ -1,0 +1,124 @@
+{
+  "schema_version": "mecanum.experimental_stm32_pid_kin_source_provenance/v1",
+  "classification": "SOURCE_COMMIT_PINNED_WITH_DECLARED_DIRTY_WORKTREE_STATE",
+  "repository": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab",
+  "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+  "branch": "experiment/stm32-pid0-ff-lab",
+  "head": "515e4256f39340fa0de174e9bde01018dac81449",
+  "source_commits": [
+    {
+      "role": "PID4 generic four-wheel controller",
+      "commit": "231010db7de8a3f49f49a715da4339e129a48755",
+      "paths": [
+        "firmware_STM32/Core/Inc/pid4_lab.h",
+        "firmware_STM32/Core/Src/main.c",
+        "firmware_STM32/Core/Src/pid4_lab.c"
+      ]
+    },
+    {
+      "role": "KIN1 inverse kinematics",
+      "commit": "cdfe81ed2d57cd18e94ee4b53c84a7c95679b321",
+      "paths": [
+        "firmware_STM32/Core/Inc/mecanum_kinematics.h",
+        "firmware_STM32/Core/Src/mecanum_kinematics.c",
+        "firmware_STM32/Test/mecanum_kinematics_host_test.c"
+      ]
+    },
+    {
+      "role": "KIN2 kinematics to PID4 integration",
+      "commit": "515e4256f39340fa0de174e9bde01018dac81449",
+      "paths": [
+        "firmware_STM32/Core/Inc/kin2_lab.h",
+        "firmware_STM32/Core/Src/kin2_lab.c",
+        "firmware_STM32/Core/Src/main.c"
+      ]
+    }
+  ],
+  "worktree_state": {
+    "porcelain_v2_status_file": "experimental_worktree_status.txt",
+    "tracked_modifications": [
+      "firmware_STM32/Core/Src/pid0_lab.c",
+      "firmware_STM32/Test/pid0_analyze.py",
+      "firmware_STM32/firmware_STM32.launch"
+    ],
+    "untracked_paths": [
+      "firmware_STM32/.cproject",
+      "firmware_STM32/.mxproject",
+      "firmware_STM32/.project",
+      "firmware_STM32/.settings/",
+      "firmware_STM32/PID3_ATTACH_NO_RESET.launch",
+      "firmware_STM32/firmware_STM32.cfg",
+      "fl_forward.csv",
+      "fl_reverse.csv",
+      "fr_forward.csv",
+      "fr_reverse.csv",
+      "pid0_all_results.txt",
+      "pid1_fl_forward.csv",
+      "pid1_fl_forward_analysis.txt",
+      "pid1_fl_forward_analysis_v2.txt",
+      "pid1_fl_reverse.csv",
+      "pid1_fl_reverse_analysis.txt",
+      "pid1_fl_reverse_analysis_v2.txt",
+      "pid1_fr_analysis.txt",
+      "pid1_fr_forward.csv",
+      "pid1_fr_forward_refined.csv",
+      "pid1_fr_forward_refined_analysis.txt",
+      "pid1_fr_reverse.csv",
+      "pid1_rl_analysis.txt",
+      "pid1_rl_forward.csv",
+      "pid1_rl_reverse.csv",
+      "pid1_rr_analysis.txt",
+      "pid1_rr_forward.csv",
+      "pid1_rr_reverse.csv",
+      "pid2_all_forward.csv",
+      "pid2_all_forward_analysis.txt",
+      "pid2_all_reverse.csv",
+      "pid2_all_reverse_analysis.txt",
+      "pid3_floor_forward_500.csv",
+      "pid3_floor_forward_500_analysis.txt",
+      "pid3_floor_ramp1000_analysis.txt",
+      "pid3_floor_reverse500_analysis.txt",
+      "pid3_stand_ramp1000_analysis.txt",
+      "pid3_stand_reverse500_analysis.txt",
+      "pid3_stand_rotate_cw300_analysis.txt",
+      "pid3_stand_strafe_left300_analysis.txt",
+      "pid3_stand_strafe_right300_analysis.txt",
+      "pid4_stand_mixed_300_500_700_900_analysis.txt",
+      "rl_forward.csv",
+      "rl_reverse.csv",
+      "rr_forward.csv",
+      "rr_reverse.csv"
+    ],
+    "untracked_path_count": 46,
+    "cached_diff_empty": true,
+    "tracked_diff_file": "experimental_tracked_diff.patch",
+    "tracked_diff_sha256": "6d3f6d0ef55bdb08d6e98f12bcec646aa05c171bfb2c106a5f57690003d5c275",
+    "cached_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "exact_clean_commit_claim": false,
+    "firmware_elf_or_flash_image_pinned": false
+  },
+  "raw_hil_files": [
+    {
+      "role": "forward",
+      "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_forward_vx020.bin",
+      "archived_path": "kin2_floor_forward_vx020.bin",
+      "bytes": 31680,
+      "sha256": "ec2d371e1ff887e962d4dc4930c42c858ab645f2c56e32389a8602551977c9d3"
+    },
+    {
+      "role": "strafe_left",
+      "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_strafe_left_vy010.bin",
+      "archived_path": "kin2_floor_strafe_left_vy010.bin",
+      "bytes": 31680,
+      "sha256": "c363289aabdd98a244a3d0d0b5edef01cbb297b6175c29a314ec2a596a608199"
+    },
+    {
+      "role": "rotate_cw",
+      "source_path": "/home/hazan/mecanum_autonomy_ws_pid0_ff_lab/kin2_floor_rotate_cw_wz050.bin",
+      "archived_path": "kin2_floor_rotate_cw_wz050.bin",
+      "bytes": 31680,
+      "sha256": "cb79f85b05094baec151183e5c041f6ea4031e910b44d7249f60469354c32fca"
+    }
+  ],
+  "note": "The raw HIL evidence is preserved separately from committed source provenance and the declared dirty tracked worktree state."
+}
