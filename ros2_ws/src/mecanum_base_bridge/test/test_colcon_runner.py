@@ -6,8 +6,8 @@ import unittest
 import pytest
 
 
-class PhaseACodecTests(unittest.TestCase):
-    def test_pytest_codec_suite(self) -> None:
+class PhaseACodecAndTransportTests(unittest.TestCase):
+    def test_pytest_codec_and_transport_suite(self) -> None:
         test_dir = Path(__file__).resolve().parent
         result = pytest.main([
             str(test_dir / 'test_crc16.py'),
@@ -15,5 +15,6 @@ class PhaseACodecTests(unittest.TestCase):
             str(test_dir / 'test_uart_v1_valid_vectors.py'),
             str(test_dir / 'test_uart_v1_invalid_vectors.py'),
             str(test_dir / 'test_uart_rx_diagnostic.py'),
+            str(test_dir / 'test_transport.py'),
         ])
         self.assertEqual(result, 0)

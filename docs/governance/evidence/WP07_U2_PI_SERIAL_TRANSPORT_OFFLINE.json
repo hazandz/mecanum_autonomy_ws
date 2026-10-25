@@ -1,0 +1,177 @@
+{
+  "candidate_id": "WP07_U2_PI_SERIAL_TRANSPORT_OFFLINE",
+  "candidate_state": "OFFLINE_VERIFIED_PENDING_INDEPENDENT_AUDIT",
+  "roadmap_step": "U2",
+  "classification": "L2",
+  "owner_decision": "WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2",
+  "approval_status": "OWNER_APPROVED_WITH_AMENDMENT",
+  "approval_token": "OWNER_APPROVED_WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2_REV_A_20261025",
+  "mandatory_amendment": {
+    "id": "A1",
+    "name": "NO_PRECONFIG_TELEMETRY",
+    "decision": "Recorded in the Owner decision. STM32 telemetry begins only after a valid CONFIG_REQUEST is accepted; CONFIG_STATUS supplies initial boot_id but alone does not permit ACTIVE or COMMAND."
+  },
+  "metadata_disposition": {
+    "package_version": "0.3.0",
+    "changelog_status": "Unreleased",
+    "candidate_is_release_0_4_0": false,
+    "previous_prompt_level_0_4_0_request": "Withdrawn by coordinator disposition; it was an implementation-prompt metadata requirement and was not part of the Owner L2 decision.",
+    "production_release_version_reconciliation": "U7"
+  },
+  "repository": {
+    "main_repository": "/home/hazan/mecanum_autonomy_ws",
+    "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "development_worktree": "/home/hazan/mecanum_autonomy_ws_uart_wp07",
+    "development_branch": "wp07-pi5-stm32-uart-parallel-fdc0e299",
+    "candidate_base_sha": "fdc0e299515bda2286832aabec635948629517b5",
+    "candidate_parent_sha": "fdc0e299515bda2286832aabec635948629517b5",
+    "candidate_head_sha": "fdc0e299515bda2286832aabec635948629517b5",
+    "final_commit_sha": null,
+    "remote_development_sha": null,
+    "main_head_before_and_after": "f7f98c683d59cf4c62e462da9f37d4ffb2455c80",
+    "main_branch_before_and_after": "main",
+    "main_status_porcelain_preserved": ["?? docs/architecture/proposals/"],
+    "local_integration_ref_preserved": "f8933bcff2bb30b1dad57d71d91678e36746326f",
+    "local_integration_root_cause": {
+      "classification": "STALE_LOCAL_BRANCH_NOT_USED_AS_CANDIDATE_INPUT",
+      "coordinator_verified_local_ahead": 0,
+      "coordinator_verified_local_behind": 131,
+      "coordinator_verified_merge_base": "f8933bcff2bb30b1dad57d71d91678e36746326f",
+      "historical_diff_excluded_from_candidate_source_selection": true
+    },
+    "live_remote_refs": {
+      "readback_source": "git ls-remote origin",
+      "refs/heads/integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "refs/heads/step07-research-runtime-simplification": "ad5e14346aac465805399127733ab83c0a0fa4fe"
+    },
+    "step7_change_since_coordinator_sha": {
+      "coordinator_sha": "f0623d0b1378a244025ba66b706c9bf95d340765",
+      "current_sha": "ad5e14346aac465805399127733ab83c0a0fa4fe",
+      "changed_paths": [
+        "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_research_acceptance.py",
+        "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_research_acceptance.py"
+      ],
+      "allowlist_intersection": [],
+      "uart_authority_intersection": []
+    }
+  },
+  "parallel_safety": {
+    "step7": "No changed-path overlap with this candidate allowlist or UART authority was found; Step-7 worktree was not modified.",
+    "pid_kin": "No PID/KIN worktree or source path was modified."
+  },
+  "sim_eval_test_integrity": {
+    "path": "ros2_ws/src/mecanum_base_bridge/test/test_sim_eval_wheel_imu_bridge_runtime_contract.py",
+    "base_blob_sha": "0b5eaecdaf5728900f93a349e9e06dd8ed974e11",
+    "worktree_sha256": "73b38b331164852ad28467b212312988ad3b27b2366077a848f000b6addfd4cb",
+    "diff_from_exact_base_empty": true
+  },
+  "authority_sha256": {
+    "docs/MECANUM_NAV_DRL_Architecture.docx": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "docs/MECANUM_NAV_DRL_Project_Tree.txt": "1ca7ea9473cf3e1be826c9c7aa40c4b24ffa9115577d04852eeaecbb2e46f098",
+    "docs/Pi_STM32_Interface_Contract.md": "9adb0cd56a26b29e95576490133420c13bd77935448ffb1b90acfa32dab77cec",
+    "docs/Pi_STM32_UART_v1_Golden_Vectors.md": "65a886f2fc6efb20da0abbf5393b62610462236e9b941fe7556cb3e85423488f",
+    "docs/STM32_Firmware_Architecture.md": "f9e0a0cd3cde86e181c35c2a15ff2e9bace11c4d91f95cf798e4015dc13f0332"
+  },
+  "dependency_fingerprint": {
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "pyserial": "3.5",
+    "pytest": "7.4.4",
+    "additional_dependencies_installed": false
+  },
+  "allowlist": [
+    "docs/governance/decisions/WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2.md",
+    "docs/governance/evidence/WP07_U2_PI_SERIAL_TRANSPORT_OFFLINE.json",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/transport.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_transport.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py",
+    "ros2_ws/src/mecanum_base_bridge/setup.py",
+    "ros2_ws/src/mecanum_base_bridge/package.xml",
+    "ros2_ws/src/mecanum_base_bridge/README.md",
+    "ros2_ws/src/mecanum_base_bridge/CHANGELOG.md"
+  ],
+  "actual_changed_paths": [
+    "docs/governance/decisions/WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2.md",
+    "docs/governance/evidence/WP07_U2_PI_SERIAL_TRANSPORT_OFFLINE.json",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/transport.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_transport.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py",
+    "ros2_ws/src/mecanum_base_bridge/setup.py",
+    "ros2_ws/src/mecanum_base_bridge/package.xml",
+    "ros2_ws/src/mecanum_base_bridge/README.md",
+    "ros2_ws/src/mecanum_base_bridge/CHANGELOG.md"
+  ],
+  "final_file_sha256": {
+    "docs/governance/decisions/WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2.md": "5e06942eee3dee25335ac5db579387db3361538dbb59d6e471d8cc5fdd6da894",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/transport.py": "779c6c4f2babe68a6c024c41eb24af429bb1100ac91e187ceab4eea86c1ff5b1",
+    "ros2_ws/src/mecanum_base_bridge/test/test_transport.py": "a61f1b1ac9b1d866df280643ff2f0c84f1039a2e7dd0881b9e8bbc8012a0fb2e",
+    "ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py": "2cac5ec5e7ac2269e8d7bed739db9637646a8585c418772ff6bc99b9b7bb66c4",
+    "ros2_ws/src/mecanum_base_bridge/setup.py": "932a465d94f5fa756dc687e57065e467fc685f26e83aae3657f4578caee5f504",
+    "ros2_ws/src/mecanum_base_bridge/package.xml": "516dc989654c5958b5cbf477f6931dcf47a0c6ed07aafa8edbc9392a9eca8aa2",
+    "ros2_ws/src/mecanum_base_bridge/README.md": "f2fb317a0cb8840c0dfed397354f252dd76bb4f74c0eeb388cfbeed623c0ed36",
+    "ros2_ws/src/mecanum_base_bridge/CHANGELOG.md": "e496164e8ef31cd630fb301fdd4f3d7392412ecd16af9cb15d02544bbfdbc1c8"
+  },
+  "historical_attempts": [
+    {
+      "command": "python3 -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+      "exit_code": 1,
+      "passed": 132,
+      "failed": 1,
+      "skipped": 0,
+      "disposition_at_time": "The earlier prompt requested package version 0.4.0. The unchanged Sim-Eval test expected 0.3.0. Coordinator later withdrew the 0.4.0 request; this failed run is retained as history, not treated as final verification."
+    }
+  ],
+  "offline_checks": [
+    {
+      "command": "python3 -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+      "exit_code": 0,
+      "passed": 133,
+      "failed": 0,
+      "skipped": 0,
+      "result": "PASS after coordinator withdrew the package version 0.4.0 metadata request and retained 0.3.0."
+    },
+    {
+      "command": "python3 -m pytest ros2_ws/src/mecanum_base_bridge/test/test_transport.py -q",
+      "exit_code": 0,
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "python3 -m pytest ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py -q",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "nested_suite": "Codec and transport pytest group completed successfully through test_colcon_runner"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "evidence_level": "OFFLINE_ONLY",
+  "unimplemented_steps": {
+    "U3": "Not implemented in this U2 candidate; future separately scoped work.",
+    "U4": "Not implemented here. Existing command sequence and watchdog behavior remains U4 work.",
+    "U5": "Not implemented in this U2 candidate; future separately scoped work.",
+    "U6": "Not implemented in this U2 candidate; future separately scoped work.",
+    "U7": "Not implemented; requires clean latest-integration branch, required source transfer, impact tests, independent audit, Owner approval, and separate integration work."
+  },
+  "execution_boundaries": {
+    "ros_executed": false,
+    "gazebo_executed": false,
+    "nav2_executed": false,
+    "serial_hardware_opened_or_scanned": false,
+    "hil_executed": false,
+    "stm32_flashed": false,
+    "motor_enabled": false,
+    "deploy_real_executed": false,
+    "integration_performed": false,
+    "independent_audit": "PENDING"
+  },
+  "canonical_status": "UNCHANGED",
+  "self_hash": null,
+  "final_commit_sha_reference": null
+}

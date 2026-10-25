@@ -22,7 +22,7 @@ setup(
             'launch/sim_eval_wheel_imu_ingress.launch.py',
         ]),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'pyserial==3.5'],
     zip_safe=True,
     maintainer='Hazan',
     maintainer_email='hazard@example.com',

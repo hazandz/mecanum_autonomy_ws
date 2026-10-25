@@ -1,5 +1,13 @@
 # Changelog — mecanum_base_bridge
 
+## Unreleased
+
+- Adds a bounded, single-owner pyserial byte transport with explicit port
+  selection and caller-controlled reconnect attempts.
+- Adds fake-backend offline transport tests to the package test runner.
+- Records offline U2 scope only; no ROS/session, STM32, HIL, motor-enable, or
+  deployment behavior is provided by this change.
+
 ## 0.3.0
 
 - Adds an offline-only, profile-specific GZ-to-ROS wheel/IMU bridge and ingress launch.
