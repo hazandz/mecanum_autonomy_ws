@@ -499,7 +499,140 @@ def test_execute_runs_mission_only_after_upstream_and_required_recorder_ready():
     assert calls == ['observer', 'children', 'upstream', 'recorder', 'mission', 'shutdown']
 
 
-def test_recorder_exit_or_missing_required_subscription_fails_before_mission():
+def _fake_clock_execute_runner(monkeypatch, upstream_time, recorder_ready):
+    import run_step07_research_acceptance as runner_module
+
+    class FakeClock:
+        def __init__(self):
+            self.value = 0.0
+
+        def __call__(self):
+            return self.value
+
+    clock = FakeClock()
+    calls = []
+    monkeypatch.setattr(runner_module.time, 'sleep', lambda _seconds: None)
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState()
+    runner.started_steady = 0.0
+    runner.now_steady = clock
+    runner.observer = None
+    runner.output = None
+    runner.log_stream = None
+
+    def start_observer():
+        calls.append('observer')
+
+    def start_children():
+        calls.append('children')
+
+    def wait_upstream():
+        calls.append('upstream')
+        clock.value = upstream_time
+
+    def mission():
+        calls.append('mission')
+
+    def shutdown():
+        calls.append('shutdown')
+
+    def report():
+        return {'overall': 'FAKE_OFFLINE_EXECUTE'}
+
+    runner.start_observer = start_observer
+    runner.start_runtime_children = start_children
+    runner._wait_ready = wait_upstream
+    runner._graph_ready_for_recording = recorder_ready(clock, calls)
+    runner._mission = mission
+    runner.shutdown = shutdown
+    runner.evaluate_and_write = report
+    return runner, clock, calls
+
+
+def test_recorder_stage_gets_sixty_seconds_after_late_startup(monkeypatch):
+    checks = []
+
+    def recorder_ready(clock, calls):
+        def check():
+            checks.append(clock.value)
+            if len(checks) == 1:
+                clock.value = 91.0
+                return False
+            clock.value = 92.0
+            return True
+        return check
+
+    runner, clock, calls = _fake_clock_execute_runner(
+        monkeypatch, upstream_time=90.0, recorder_ready=recorder_ready)
+    runner.execute()
+    assert checks == [90.0, 91.0]
+    assert clock.value == 92.0
+    assert 'mission' in calls
+    assert runner.state.primary_failure is None
+
+
+def test_recorder_stage_times_out_after_its_full_sixty_second_budget(monkeypatch):
+    checks = []
+
+    def recorder_ready(clock, _calls):
+        def check():
+            checks.append(clock.value)
+            clock.value += 1.0
+            return False
+        return check
+
+    runner, clock, calls = _fake_clock_execute_runner(
+        monkeypatch, upstream_time=90.0, recorder_ready=recorder_ready)
+    report = runner.execute()
+    assert len(checks) == 60
+    assert clock.value == 150.0
+    assert 'mission' not in calls
+    assert report['overall'] == 'FAKE_OFFLINE_EXECUTE'
+    assert runner.state.primary_failure['stage'] == 'RECORDER'
+    assert runner.state.primary_failure['component'] == 'recorder'
+    assert runner.state.primary_failure['primary_failure'] == 'RECORDER_SUBSCRIPTIONS_NOT_READY'
+
+
+def test_recorder_deadline_is_capped_at_campaign_shutdown_reserve(monkeypatch):
+    checks = []
+
+    def recorder_ready(clock, _calls):
+        def check():
+            checks.append(clock.value)
+            clock.value += 1.0
+            return False
+        return check
+
+    runner, clock, calls = _fake_clock_execute_runner(
+        monkeypatch, upstream_time=455.0, recorder_ready=recorder_ready)
+    runner.execute()
+    assert checks == [455.0, 456.0, 457.0, 458.0, 459.0]
+    assert clock.value == 460.0
+    assert 'mission' not in calls
+    assert runner.state.primary_failure['stage'] == 'RECORDER'
+
+
+def test_expired_recorder_work_deadline_rejects_even_if_ready(monkeypatch):
+    checks = []
+
+    def recorder_ready(_clock, _calls):
+        def check():
+            checks.append(True)
+            return True
+        return check
+
+    runner, clock, calls = _fake_clock_execute_runner(
+        monkeypatch, upstream_time=460.0, recorder_ready=recorder_ready)
+    runner.execute()
+    assert clock.value == 460.0
+    assert checks == []
+    assert 'mission' not in calls
+    assert runner.state.primary_failure['stage'] == 'RECORDER'
+    assert runner.state.primary_failure['component'] == 'recorder'
+    assert runner.state.primary_failure['primary_failure'] == 'RECORDER_STAGE_DEADLINE_EXPIRED'
+
+
+def test_recorder_exit_or_missing_required_subscription_fails_before_mission(monkeypatch):
     class Process:
         def __init__(self, returncode):
             self.returncode = returncode
@@ -507,11 +640,24 @@ def test_recorder_exit_or_missing_required_subscription_fails_before_mission():
         def poll(self):
             return self.returncode
 
+    class Clock:
+        value = 60.0
+
+        def __call__(self):
+            return self.value
+
+    clock = Clock()
+
+    def advance_to_deadline(_seconds):
+        clock.value += 60.0
+
+    monkeypatch.setattr('run_step07_research_acceptance.time.sleep', advance_to_deadline)
+
     for failure in ('exited', 'missing_subscription'):
         runner = object.__new__(ResearchAcceptanceRunner)
         runner.state = CampaignState()
         runner.started_steady = 0.0
-        runner.now_steady = lambda: 60.0
+        runner.now_steady = clock
         runner.observer = SimpleNamespace(recording_ready=lambda _topics: (False, ('/map',)))
         runner.process_owner = SimpleNamespace(processes=[])
         runner.output = None

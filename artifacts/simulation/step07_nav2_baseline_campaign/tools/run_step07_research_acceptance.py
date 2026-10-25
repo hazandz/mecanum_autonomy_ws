@@ -1570,9 +1570,17 @@ class ResearchAcceptanceRunner:
             self.start_runtime_children()
             self._wait_ready()
             self.state.stage = 'RECORDER'
-            self._wait_for(self._graph_ready_for_recording, min(self.started_steady+60.0,
-                self.started_steady+460.0), stage='RECORDER', component='recorder',
-                reason="RECORDER_SUBSCRIPTIONS_NOT_READY")
+            recorder_stage_start = self.now_steady()
+            recorder_deadline = min(recorder_stage_start + 60.0,
+                                    self.started_steady + 460.0)
+            if self.now_steady() >= recorder_deadline:
+                raise AcceptanceFailure(
+                    'RECORDER', 'recorder', 'RECORDER_STAGE_DEADLINE_EXPIRED')
+            self._wait_for(
+                lambda: self.now_steady() < recorder_deadline
+                and self._graph_ready_for_recording(),
+                recorder_deadline, stage='RECORDER', component='recorder',
+                reason='RECORDER_SUBSCRIPTIONS_NOT_READY')
             self._mission()
         except AcceptanceFailure as error:
             self.state.stage = error.stage
