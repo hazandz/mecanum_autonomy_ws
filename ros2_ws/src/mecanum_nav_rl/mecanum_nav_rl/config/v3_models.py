@@ -10,7 +10,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from pydantic.types import StringConstraints
 
 
@@ -195,6 +195,75 @@ class NavigationContractV3(ConfigModelV3):
     local_reference_contract_id: IdentifierV3
     goal_type: Literal["position_only"]
     goal_settle_contract_id: IdentifierV3
+    step07_acceptance: "Step07AcceptancePolicyV3 | None" = None
+
+
+class Step07AcceptancePolicyV3(ConfigModelV3):
+    """SIM-only integrated runtime acceptance policy included in config_hash."""
+
+    schema_id: Literal["mecanum.step07.research_acceptance/v1"]
+    runtime_profile: Literal["sim_eval"]
+    navigation_mode: Literal["NAV2_BASELINE"]
+    use_sim_time: StrictBool
+    freshness_ms: Mapping[str, StrictInt]
+    synchronization_ms: StrictInt
+    reference_age_ms: StrictInt
+    tf_wait_ms: StrictInt
+    buffer_capacity: StrictInt
+    observation_samples_minimum: StrictInt
+    sample_report_limit: StrictInt
+    local_reference_lookahead_m: StrictPositiveFiniteFloatV3
+    local_reference_backtrack_m: StrictFiniteFloatV3
+    local_reference_forward_window_m: StrictPositiveFiniteFloatV3
+    local_reference_max_deviation_m: StrictPositiveFiniteFloatV3
+    mission_deadline_s: StrictPositiveFiniteFloatV3
+    campaign_deadline_s: StrictPositiveFiniteFloatV3
+    shutdown_reserve_s: StrictPositiveFiniteFloatV3
+    goal_settle_s: StrictPositiveFiniteFloatV3
+    goal_xy_tolerance_m: StrictPositiveFiniteFloatV3
+    goal_linear_speed_mps: StrictFiniteFloatV3
+    goal_angular_speed_radps: StrictFiniteFloatV3
+    localization_max_covariance: StrictPositiveFiniteFloatV3
+    localization_pose_max_age_s: StrictPositiveFiniteFloatV3
+    localization_translation_jump_base_m: StrictPositiveFiniteFloatV3
+    localization_translation_jump_speed_mps: StrictPositiveFiniteFloatV3
+    localization_yaw_jump_base_rad: StrictPositiveFiniteFloatV3
+    localization_yaw_jump_speed_radps: StrictPositiveFiniteFloatV3
+    observation_twist_scales: tuple[StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3]
+    require_nonzero_nav2_command: StrictBool
+
+    @model_validator(mode="after")
+    def validate_policy_values(self) -> "Step07AcceptancePolicyV3":
+        expected = {
+            "scan": 500, "wheel_ingress": 200, "imu_ingress": 200,
+            "filtered_odometry": 250, "lifecycle": 500, "receipt": 500,
+        }
+        if dict(self.freshness_ms) != expected:
+            raise ValueError("Step07 freshness policy must match approved SIM_BASELINE")
+        if (self.use_sim_time is not True or self.synchronization_ms != 50
+                or self.reference_age_ms != 250 or self.tf_wait_ms != 200
+                or self.buffer_capacity != 64 or self.observation_samples_minimum != 5
+                or self.sample_report_limit != 5
+                or self.local_reference_lookahead_m != 0.50
+                or self.local_reference_backtrack_m != 0.10
+                or self.local_reference_forward_window_m != 1.0
+                or self.local_reference_max_deviation_m != 0.50):
+            raise ValueError("Step07 synchronization/sample policy differs from SIM_BASELINE")
+        if (self.mission_deadline_s != 240 or self.campaign_deadline_s != 480
+                or self.shutdown_reserve_s != 20 or self.goal_settle_s != 1.0
+                or self.goal_xy_tolerance_m != 0.15
+                or self.goal_linear_speed_mps != 0.03
+                or self.goal_angular_speed_radps != 0.05
+                or self.localization_max_covariance != 0.25
+                or self.localization_pose_max_age_s != 2.0
+                or self.localization_translation_jump_base_m != 0.50
+                or self.localization_translation_jump_speed_mps != 0.35
+                or self.localization_yaw_jump_base_rad != 0.50
+                or self.localization_yaw_jump_speed_radps != 1.0
+                or self.observation_twist_scales != (0.25, 0.20, 0.80)
+                or self.require_nonzero_nav2_command is not True):
+            raise ValueError("Step07 mission acceptance differs from approved SIM_BASELINE")
+        return self
 
 
 class ObservationInputProfileV3(ConfigModelV3):

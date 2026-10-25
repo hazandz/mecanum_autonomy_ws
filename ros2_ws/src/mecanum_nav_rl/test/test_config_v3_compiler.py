@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 import hashlib
 from pathlib import Path
 
@@ -148,10 +149,21 @@ def _compile(
     output_stage: ResolutionStageV3 = ResolutionStageV3.CONFIG_INPUT,
     gate4: bool = False,
 ) -> object:
+    runtime_layer = runtime or {"runtime": {"runtime_profile": "sim_train", "use_sim_time": True}}
+    mode_layer = navigation or {"runtime": {"navigation_mode": "LOCAL_TRAINING"}}
+    selected_profile = runtime_layer.get("runtime", {}).get("runtime_profile")
+    selected_mode = mode_layer.get("runtime", {}).get("navigation_mode")
+    if selected_profile == "sim_eval" and selected_mode == "NAV2_BASELINE":
+        import yaml
+
+        policy_path = Path(__file__).parents[1] / "config/v3/step07_research_acceptance.yaml"
+        mode_layer = deepcopy(mode_layer)
+        mode_layer.setdefault("navigation", {})["step07_acceptance"] = yaml.safe_load(
+            policy_path.read_text(encoding="utf-8"))
     return compile_v3_config(
         base_layer=_base_layer() if base is None else base,
-        runtime_profile_layer=runtime or {"runtime": {"runtime_profile": "sim_train", "use_sim_time": True}},
-        navigation_mode_layer=navigation or {"runtime": {"navigation_mode": "LOCAL_TRAINING"}},
+        runtime_profile_layer=runtime_layer,
+        navigation_mode_layer=mode_layer,
         experiment_override_layer=experiment,
         measured_hardware_registry_layer=measured,
         output_stage=output_stage,

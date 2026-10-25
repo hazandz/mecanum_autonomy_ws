@@ -57,6 +57,8 @@ def _synthetic_sdf(path: Path, uris=None) -> Path:
 
 
 def _cache(root: Path, owner: str, model: str, version: str = "1") -> Path:
+    if version == "1" and model == "depot":
+        version = "6"
     version_dir = root / "fuel.gazebosim.org" / owner / "models" / model / version
     version_dir.mkdir(parents=True)
     (version_dir / "model.config").write_text("<model/>", encoding="utf-8")
@@ -68,8 +70,8 @@ def test_exact_fuel_uris_and_single_complete_cache_versions_are_accepted(tmp_pat
     module = _module()
     sdf = _synthetic_sdf(tmp_path / "world.sdf")
     root = tmp_path / "fuel"
-    _cache(root, "OpenRobotics", "Depot")
-    _cache(root, "MovAi", "Tugbot")
+    _cache(root, "openrobotics", "depot")
+    _cache(root, "movai", "tugbot")
     resolved = module.validate_fuel_layout(sdf, root)
     assert set(resolved) == set(module.FUEL_URIS)
     actual = ROOT / "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf"
@@ -96,11 +98,11 @@ def test_missing_each_model_is_rejected(tmp_path) -> None:
     module = _module()
     sdf = _synthetic_sdf(tmp_path / "world.sdf")
     root = tmp_path / "fuel"
-    _cache(root, "MovAi", "Tugbot")
+    _cache(root, "movai", "tugbot")
     with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_MODEL_MISSING:OpenRobotics/Depot"):
         module.validate_fuel_layout(sdf, root)
-    shutil.rmtree(root / "fuel.gazebosim.org" / "MovAi")
-    _cache(root, "OpenRobotics", "Depot")
+    shutil.rmtree(root / "fuel.gazebosim.org" / "movai")
+    _cache(root, "openrobotics", "depot")
     with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_MODEL_MISSING:MovAi/Tugbot"):
         module.validate_fuel_layout(sdf, root)
 
@@ -109,8 +111,8 @@ def test_missing_model_config_or_sdf_is_rejected(tmp_path) -> None:
     module = _module()
     sdf = _synthetic_sdf(tmp_path / "world.sdf")
     root = tmp_path / "fuel"
-    depot = _cache(root, "OpenRobotics", "Depot")
-    _cache(root, "MovAi", "Tugbot")
+    depot = _cache(root, "openrobotics", "depot")
+    _cache(root, "movai", "tugbot")
     (depot / "model.config").unlink()
     with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_MODEL_CONTENT_MISSING:OpenRobotics/Depot"):
         module.validate_fuel_layout(sdf, root)
@@ -124,10 +126,10 @@ def test_ambiguous_versions_and_case_mismatched_uris_fail_closed(tmp_path) -> No
     module = _module()
     sdf = _synthetic_sdf(tmp_path / "world.sdf")
     root = tmp_path / "fuel"
-    _cache(root, "OpenRobotics", "Depot", "1")
-    _cache(root, "OpenRobotics", "Depot", "2")
-    _cache(root, "MovAi", "Tugbot")
-    with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_VERSION_AMBIGUOUS_OR_MISSING"):
+    _cache(root, "openrobotics", "depot", "5")
+    _cache(root, "openrobotics", "depot", "6")
+    _cache(root, "movai", "tugbot")
+    with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_EXPECTED_VERSION_MISSING_OR_AMBIGUOUS"):
         module.validate_fuel_layout(sdf, root)
     changed = _synthetic_sdf(tmp_path / "case.sdf", [
         "https://fuel.gazebosim.org/1.0/openrobotics/models/Depot",
@@ -141,10 +143,33 @@ def test_cache_symlink_cannot_escape_selected_root(tmp_path) -> None:
     module = _module()
     sdf = _synthetic_sdf(tmp_path / "world.sdf")
     root = tmp_path / "fuel"
-    _cache(root, "MovAi", "Tugbot")
-    outside = _cache(tmp_path / "outside", "OpenRobotics", "Depot")
-    parent = root / "fuel.gazebosim.org" / "OpenRobotics" / "models"
+    _cache(root, "movai", "tugbot")
+    outside = _cache(tmp_path / "outside", "openrobotics", "depot")
+    parent = root / "fuel.gazebosim.org" / "openrobotics" / "models"
     parent.mkdir(parents=True)
-    (parent / "Depot").symlink_to(outside.parent, target_is_directory=True)
+    (parent / "depot").symlink_to(outside.parent, target_is_directory=True)
     with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_PATH_ESCAPES_ROOT"):
+        module.validate_fuel_layout(sdf, root)
+
+
+def test_uppercase_fuel_parent_is_rejected_even_when_lowercase_cache_is_valid(tmp_path) -> None:
+    module = _module()
+    sdf = _synthetic_sdf(tmp_path / "world.sdf")
+    root = tmp_path / "fuel"
+    _cache(root, "openrobotics", "depot")
+    _cache(root, "movai", "tugbot")
+    uppercase = root / "fuel.gazebosim.org" / "OpenRobotics" / "models" / "Depot"
+    uppercase.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_PATH_CASE_MISMATCH:OpenRobotics/Depot"):
+        module.validate_fuel_layout(sdf, root)
+
+
+@pytest.mark.parametrize("version", ["0", "-1", "1.0", "latest"])
+def test_non_positive_or_non_integer_version_is_rejected(tmp_path, version) -> None:
+    module = _module()
+    sdf = _synthetic_sdf(tmp_path / "world.sdf")
+    root = tmp_path / "fuel"
+    _cache(root, "openrobotics", "depot", version)
+    _cache(root, "movai", "tugbot")
+    with pytest.raises(RuntimeError, match="SIM_EVAL_FUEL_CACHE_EXPECTED_VERSION_MISSING_OR_AMBIGUOUS"):
         module.validate_fuel_layout(sdf, root)

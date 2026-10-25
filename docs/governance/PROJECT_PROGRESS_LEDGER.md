@@ -1835,3 +1835,19 @@ Run003 direct scope is exactly 14 paths, including the Owner-authorized historic
 ### STEP07 Run003 scope assertion and pin finalization
 
 The exact active Run003 scope test now includes the Owner-authorized Run002 historical guard test and asserts exactly 14 distinct paths. The historical 23/14/9/13 path scopes remain separate. The existing 16-pin Run003 inventory is refreshed for its existing pinned bringup contract-test path to SHA-256 `d16c487554495e73dbbdd8f7df857b383897db6a804c85aef9a1572c2486203d`, size 32084 bytes; no additional source pin was added. Evidence/manifest guard-seed references were recomputed. This entry supersedes the preceding candidate-only pin references; all Ledger bytes at the base remain an exact prefix. Decision SHA-256 `04ef84ed664fcdde8d0d9e6eb902632e1a001e8687f3caa077a33dfccadf3d29; evidence SHA-256 `2f26ff124310e55568605f8e8d9958fa19c673955e257bcd41bc35fe0bc762f6; guard manifest SHA-256 `121b0f1b02dce97811397168286a55bddc99160b61062fb09b8e93fdde57fa65.
+
+
+### STEP07 L2 research-grade runtime acceptance simplification — offline candidate
+
+| Field | Record |
+|---|---|
+| Decision | `STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2`; owner approval `OWNER_APPROVED_STEP07_RESEARCH_GRADE_SIMPLIFICATION_L2_OFFLINE_IMPLEMENTATION` |
+| Candidate | `step07-research-runtime-simplification`; base and sole-parent target `fdc0e299515bda2286832aabec635948629517b5` |
+| Scope | Step 7 `sim_eval` / `NAV2_BASELINE`; one runner, in-process observer, one rosbag, pure A1–A10 evaluator; no architecture DOCX change |
+| Active model | `RUN005_FORENSIC_CAMPAIGN = RETIRED_AS_ACTIVE_ACCEPTANCE_MODEL`; `HISTORICAL_RECORDS = PRESERVED`; `INVOCATION_021_ROOT_CAUSE = ROOT_CAUSE_UNRESOLVED` |
+| Config identity | Existing global `ResolvedConfigV3` hash `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f` |
+| Offline evidence | Five-package external build completed; RL 727 passed/2 deselected; bringup 237 passed/1 deselected; Fuel bootstrap 13 passed; bridge 121 passed; interfaces 8 passed; Step-7 tools 5 passed; focused pure core/observer 21 passed; Python compile and XML/YAML/JSON parse passed |
+| Exclusions/exception | Final test selections excluded one lifecycle test that initializes `rclpy`/creates a graph, one stale pure-only observation source scan, the legacy nested-suite aggregator that invokes that scan, and one stale WP05 source-hash assertion. An earlier broad RL suite did run that lifecycle unit test before its graph creation was recognized; no simulator, Nav2 launch, or campaign runner was started. |
+| Evidence ceiling | `IMPLEMENTED_OFFLINE_ONLY`; no runtime evidence, Gate B result, HIL, real readiness, or integration |
+| Current status | Roadmap Step 7 `NOT_STARTED`; Gate B `NOT_STARTED`; `RUNTIME_AUTHORIZATION = NOT_GRANTED`; `REAL_READY = NOT_CLAIMED` |
+| Next action | Independent candidate audit, then separate Owner integration authorization and separate runtime authorization; neither is granted here |

@@ -12,7 +12,8 @@ from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandRec
 class FinalTwistPublisherNode(Node):
     def __init__(self) -> None:
         super().__init__("final_twist_publisher")
-        self.declare_parameter("use_sim_time", True)
+        if self.get_parameter("use_sim_time").value is not True:
+            raise ValueError("SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE")
         self._identity: SafetyLifecycleState | None = None
         self._final_publish_sequence = 0
         self._publisher_instance_id = os.getpid()

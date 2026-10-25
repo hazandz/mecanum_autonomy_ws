@@ -17,6 +17,16 @@ def validate_resolved_config_v3(config: ResolvedConfigV3) -> None:
     expected_sim_time = config.runtime.runtime_profile is not RuntimeProfileV3.DEPLOY_REAL
     if config.runtime.use_sim_time != expected_sim_time:
         raise ValueError("resolved v3 use_sim_time violates its runtime profile")
+    step07_policy = config.navigation.step07_acceptance
+    if (config.runtime.runtime_profile is RuntimeProfileV3.SIM_EVAL
+            and config.runtime.navigation_mode.value == "NAV2_BASELINE"
+            and step07_policy is None):
+        raise ValueError("sim_eval/NAV2_BASELINE requires hashed Step07 acceptance policy")
+    if step07_policy is not None and (
+        config.runtime.runtime_profile is not RuntimeProfileV3.SIM_EVAL
+        or config.runtime.navigation_mode.value != "NAV2_BASELINE"
+    ):
+        raise ValueError("Step07 acceptance policy is restricted to sim_eval/NAV2_BASELINE")
     if config.frames_tf.odom_to_base_link_authority != "EKF":
         raise ValueError("only EKF may own odom to base_link")
     if config.frames_tf.base_link_to_lidar_authority != "robot_state_publisher":

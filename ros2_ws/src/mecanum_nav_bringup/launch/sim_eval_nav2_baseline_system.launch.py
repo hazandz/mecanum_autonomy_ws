@@ -8,10 +8,15 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler, EmitEvent
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch.event_handlers import OnProcessStart
+from launch_ros.actions import Node, LifecycleNode
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
+from launch.events import matches_action
+from lifecycle_msgs.msg import Transition
 
 MAP_FILES = {
     "map.yaml": "5073762401784f67e856b5018656ad869ecc26e723f85e5979054eadc7876a68",
@@ -52,6 +57,44 @@ def _bootstrap_include(start_bootstrap: str, bootstrap: str, partition: str,
         "fuel_cache_root": fuel_cache_root,
         **pose,
     }.items())]
+
+
+NAV2_LIFECYCLE_NODES = [
+    "map_server", "amcl", "planner_server", "controller_server",
+    "behavior_server", "bt_navigator",
+]
+
+
+def lifecycle_manager_parameters(path):
+    """Policy barrier không phải ROS parameter file; kiểm trước khi dựng topology."""
+    import yaml
+    policy = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    expected = {
+        "schema": "mecanum.sim_eval_nav2_baseline_lifecycle/v1",
+        "use_sim_time": True, "primary_states": ["Unconfigured", "Inactive", "Active"],
+        "barrier_owner": "SafetyLifecycle", "barrier_topic": "/mecanum/safety_lifecycle_state",
+        "barrier_freshness_max_ms": 500, "motion_requires": ["READY", "fresh_barrier"],
+        "reset_owner": "SafetyLifecycle", "missing_stale_invalid_or_mismatched_input": "FAIL_CLOSED",
+    }
+    if policy != expected:
+        raise RuntimeError("SIM_EVAL_LIFECYCLE_POLICY_INVALID")
+    return {"use_sim_time": True, "autostart": True,
+            "node_names": list(NAV2_LIFECYCLE_NODES), "bond_timeout": 4.0}
+
+
+def safety_lifecycle_actions():
+    node = LifecycleNode(package="mecanum_nav_rl", executable="safety_lifecycle",
+                         name="safety_lifecycle", namespace="",
+                         parameters=[{"use_sim_time": True}], output="screen")
+    configure = RegisterEventHandler(OnProcessStart(
+        target_action=node, handle_once=True, on_start=[EmitEvent(event=ChangeState(
+            lifecycle_node_matcher=matches_action(node),
+            transition_id=Transition.TRANSITION_CONFIGURE))]))
+    activate = RegisterEventHandler(OnStateTransition(
+        target_lifecycle_node=node, goal_state="inactive", handle_once=True,
+        entities=[EmitEvent(event=ChangeState(lifecycle_node_matcher=matches_action(node),
+                                             transition_id=Transition.TRANSITION_ACTIVATE))]))
+    return [configure, activate, node]
 
 
 def _actions(context):
@@ -122,8 +165,7 @@ def _actions(context):
         Node(package="nav2_bt_navigator", executable="bt_navigator", name="bt_navigator",
              parameters=[nav_config, {"use_sim_time": True}], output="screen"),
         Node(package="nav2_lifecycle_manager", executable="lifecycle_manager", name="lifecycle_manager_navigation",
-             parameters=[lifecycle_config, {"use_sim_time": True, "autostart": True,
-                 "node_names": ["map_server", "amcl", "planner_server", "controller_server", "behavior_server", "bt_navigator", "safety_lifecycle"]}], output="screen"),
+             parameters=[lifecycle_manager_parameters(lifecycle_config)], output="screen"),
     ]
     return [
         *bootstrap_actions,
@@ -133,8 +175,7 @@ def _actions(context):
         Node(package="ros_gz_bridge", executable="parameter_bridge", name="sim_eval_scan_bridge",
              parameters=[{"config_file": os.path.join(share, "config", "bridge", "sim_eval_lidar_scan_bridge.runtime.yaml"), "use_sim_time": True}], output="screen"),
         *nav2,
-        Node(package="mecanum_nav_rl", executable="safety_lifecycle", name="safety_lifecycle",
-             parameters=[{"use_sim_time": True}], output="screen"),
+        *safety_lifecycle_actions(),
         Node(package="mecanum_nav_rl", executable="safety_supervisor", name="safety_supervisor",
              parameters=[safety_parameters, {"use_sim_time": True}], output="screen"),
         Node(package="mecanum_nav_rl", executable="final_twist_publisher", name="final_twist_publisher",

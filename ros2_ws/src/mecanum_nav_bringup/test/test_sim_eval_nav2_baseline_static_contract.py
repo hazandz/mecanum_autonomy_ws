@@ -58,3 +58,27 @@ def test_nav2_and_safety_command_ownership_is_explicit() -> None:
     assert 'create_publisher(Twist, "/cmd_vel"' not in supervisor
     assert "direction: ROS_TO_GZ" in (root / "mecanum_nav_bringup/config/bridge/sim_eval_cmd_vel.runtime.yaml").read_text()
     assert 'publisher_owner: mecanum_base_bridge' in (root / "mecanum_nav_rl/config/v3/topics.yaml").read_text().split("- name: /imu/data", 1)[1].split("- name:", 1)[0]
+
+
+def test_each_navigation_node_uses_filtered_odometry_and_direct_observer_dependencies():
+    navigation = yaml.safe_load((ROOT / "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml").read_text())
+    for node in ("controller_server", "bt_navigator"):
+        assert navigation[node]["ros__parameters"]["odom_topic"] == "/odometry/filtered"
+    dependencies = [item.text for item in ET.parse(ROOT / "ros2_ws/src/mecanum_nav_rl/package.xml").getroot().findall("exec_depend")]
+    for package in ("action_msgs", "nav2_msgs", "tf2_geometry_msgs"):
+        assert dependencies.count(package) == 1
+    safety = yaml.safe_load((ROOT / "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml").read_text())
+    assert safety["scan_validity"]["positive_infinity"] == "VALID_NO_RETURN_WITH_VALID_RANGE_METADATA"
+
+
+def test_research_goal_checker_and_amcl_health_baseline_parse():
+    nav = yaml.safe_load((ROOT / "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml").read_text())
+    checker = nav["controller_server"]["ros__parameters"]["goal_checker"]
+    assert checker == {"plugin": "nav2_controller::StoppedGoalChecker",
+        "xy_goal_tolerance": 0.15, "yaw_goal_tolerance": 3.141592653589793,
+        "trans_stopped_velocity": 0.03, "rot_stopped_velocity": 0.05,
+        "stateful": False}
+    assert "RotateToGoal" not in nav["controller_server"]["ros__parameters"]["FollowPath"]["critics"]
+    amcl = yaml.safe_load((ROOT / "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml").read_text())["amcl"]["ros__parameters"]
+    assert amcl["update_min_d"] == amcl["update_min_a"] == 0.0
+    assert amcl["set_initial_pose"] is True

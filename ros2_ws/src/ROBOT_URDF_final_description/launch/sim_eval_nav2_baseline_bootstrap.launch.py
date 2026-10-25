@@ -15,8 +15,12 @@ from launch_ros.actions import Node
 import xacro
 
 FUEL_URIS = {
-    "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Depot": ("OpenRobotics", "Depot"),
-    "https://fuel.gazebosim.org/1.0/MovAi/models/Tugbot": ("MovAi", "Tugbot"),
+    "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Depot": (
+        "openrobotics", "depot", "OpenRobotics/Depot", "6"
+    ),
+    "https://fuel.gazebosim.org/1.0/MovAi/models/Tugbot": (
+        "movai", "tugbot", "MovAi/Tugbot", "1"
+    ),
 }
 WORLD_NAME = "world_demo"
 ENTITY_NAME = "ROBOT_URDF_final"
@@ -55,12 +59,16 @@ def validate_fuel_layout(sdf_path: str | Path, root: str | Path) -> dict[str, Pa
     if len(uris) != 2 or set(uris) != set(FUEL_URIS):
         raise RuntimeError("SIM_EVAL_FUEL_URI_SET_MISMATCH")
     resolved: dict[str, Path] = {}
-    for uri, (owner, model) in FUEL_URIS.items():
+    for uri, (owner, model, identity, expected_version) in FUEL_URIS.items():
+        original_owner, original_model = identity.split("/", maxsplit=1)
+        uppercase_parent = root / "fuel.gazebosim.org" / original_owner / "models" / original_model
+        if os.path.lexists(uppercase_parent):
+            raise RuntimeError(f"SIM_EVAL_FUEL_CACHE_PATH_CASE_MISMATCH:{identity}")
         parent = root / "fuel.gazebosim.org" / owner / "models" / model
         try:
             parent_real = parent.resolve(strict=True)
         except OSError as error:
-            raise RuntimeError(f"SIM_EVAL_FUEL_CACHE_MODEL_MISSING:{owner}/{model}") from error
+            raise RuntimeError(f"SIM_EVAL_FUEL_CACHE_MODEL_MISSING:{identity}") from error
         if not parent_real.is_relative_to(root):
             raise RuntimeError("SIM_EVAL_FUEL_CACHE_PATH_ESCAPES_ROOT")
         versions = []
@@ -73,13 +81,13 @@ def validate_fuel_layout(sdf_path: str | Path, root: str | Path) -> dict[str, Pa
                 continue
             if real.is_relative_to(root) and real.is_dir():
                 versions.append((child, real))
-        if len(versions) != 1:
-            raise RuntimeError("SIM_EVAL_FUEL_CACHE_VERSION_AMBIGUOUS_OR_MISSING")
+        if len(versions) != 1 or versions[0][0].name != expected_version:
+            raise RuntimeError("SIM_EVAL_FUEL_CACHE_EXPECTED_VERSION_MISSING_OR_AMBIGUOUS")
         version_path, real_version = versions[0]
         config = version_path / "model.config"
         model_sdf = version_path / "model.sdf"
         if not config.is_file() or not model_sdf.is_file():
-            raise RuntimeError(f"SIM_EVAL_FUEL_CACHE_MODEL_CONTENT_MISSING:{owner}/{model}")
+            raise RuntimeError(f"SIM_EVAL_FUEL_CACHE_MODEL_CONTENT_MISSING:{identity}")
         content_paths = [config, model_sdf]
         if any(not path.resolve(strict=True).is_relative_to(root) for path in content_paths):
             raise RuntimeError("SIM_EVAL_FUEL_CACHE_PATH_ESCAPES_ROOT")

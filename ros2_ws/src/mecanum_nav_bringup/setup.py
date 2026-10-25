@@ -60,6 +60,8 @@ setup(
             "share/" + package_name + "/config/navigation",
             ["config/navigation/nav2_baseline.yaml", "config/navigation/sim_eval_nav2_baseline.runtime.yaml"],
         ),
+        ("share/" + package_name + "/config/recording",
+            ["config/recording/step07_research_qos.yaml"]),
         (
             "share/" + package_name + "/config/remaps",
             ["config/remaps/navigation_v1.yaml"],

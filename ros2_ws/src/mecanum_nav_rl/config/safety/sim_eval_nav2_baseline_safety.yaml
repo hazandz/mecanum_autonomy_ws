@@ -29,3 +29,7 @@ estop_boundary:
   scope: SIM_EVAL_ONLY_NOT_HARDWARE_ESTOP
   default_active: true
   release_requires_launch_authorization: true
+
+scan_validity:
+  positive_infinity: VALID_NO_RETURN_WITH_VALID_RANGE_METADATA
+  rejected: [NaN, NEGATIVE_INFINITY, INVALID_RANGE_METADATA, EMPTY_SCAN]

@@ -105,3 +105,31 @@ assert events == [] and not n._cmd_pub.messages and not n._receipt_pub.messages
     Path(env["ROS_HOME"]).mkdir()
     Path(env["ROS_LOG_DIR"]).mkdir()
     subprocess.run([sys.executable, "-c", script], env=env, check=True, capture_output=True, text=True)
+
+
+def test_final_publisher_uses_jazzy_predeclared_sim_clock_without_duplicate_declaration():
+    script = r'''
+from types import SimpleNamespace as NS
+import rclpy.node
+class Node:
+    clock = True
+    def __init__(self, name): self.parameters = {"use_sim_time": self.clock}
+    def declare_parameter(self, name, value=None):
+        assert name not in self.parameters, "PARAMETER_ALREADY_DECLARED"
+        self.parameters[name] = value
+    def get_parameter(self, name): return NS(value=self.parameters[name])
+    def create_publisher(self, *args): return NS()
+    def create_subscription(self, *args): return NS()
+rclpy.node.Node = Node
+from mecanum_nav_rl.runtime_safety.final_twist_publisher_node import FinalTwistPublisherNode
+assert FinalTwistPublisherNode().get_parameter("use_sim_time").value is True
+for value in (False, 1, "true"):
+    Node.clock = value
+    try: FinalTwistPublisherNode()
+    except ValueError as error: assert str(error) == "SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE"
+    else: raise AssertionError("clock sai vẫn được nhận")
+'''
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -43,6 +43,10 @@ _V3_CONFIG_DATA_FILES = [
         ["config/v3/resolved/sim_eval_nav2_baseline.resolved.json"],
     ),
     (
+        "share/mecanum_nav_rl/config/v3",
+        ["config/v3/step07_research_acceptance.yaml"],
+    ),
+    (
         "share/mecanum_nav_rl/config/safety",
         ["config/safety/sim_eval_nav2_baseline_safety.yaml"],
     ),
@@ -98,7 +102,6 @@ setup(
             "safety_lifecycle=mecanum_nav_rl.runtime_safety.safety_lifecycle_node:main",
             "safety_supervisor=mecanum_nav_rl.runtime_safety.safety_supervisor_node:main",
             "final_twist_publisher=mecanum_nav_rl.runtime_safety.final_twist_publisher_node:main",
-            "step07_gate_b_observer=mecanum_nav_rl.observations.step07_gate_b_observer_node:main",
         ],
     },
 )

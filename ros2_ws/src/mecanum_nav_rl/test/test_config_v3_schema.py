@@ -32,6 +32,7 @@ from mecanum_nav_rl.config.v3_models import (
     RewardContractV3,
     RuntimeProfileV3,
     RuntimeSelectionV3,
+    Step07AcceptancePolicyV3,
     StateEstimationContractV3,
     TokenizedConfigInputV3,
     TopicQosContractV3,
@@ -114,6 +115,11 @@ def _config(
             local_reference_contract_id="test_reference_v1",
             goal_type="position_only",
             goal_settle_contract_id="test_settle_v1",
+            step07_acceptance=(Step07AcceptancePolicyV3.model_validate(
+                __import__("yaml").safe_load((Path(__file__).parents[1] /
+                    "config/v3/step07_research_acceptance.yaml").read_text(encoding="utf-8")))
+                if profile is RuntimeProfileV3.SIM_EVAL and mode is NavigationModeV3.NAV2_BASELINE
+                else None),
         ),
         observation=ObservationContractV3(
             schema_id="obs-v3-l72-g3-t3-c3-f32",

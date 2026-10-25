@@ -22,6 +22,9 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
 
   <!-- Custom message của dự án -->
@@ -35,6 +38,7 @@
 
   <!-- Tra cứu TF giữa map, odom, base_link và LiDAR -->
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
 
   <!-- Giao tiếp với Gazebo Harmonic -->
   <exec_depend>ros_gz_interfaces</exec_depend>

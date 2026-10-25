@@ -40,6 +40,7 @@ _REQUIRED_ASSETS = (
     "acceptance.yaml",
     "measurements.yaml",
     "algorithms/ppo.yaml",
+    "step07_research_acceptance.yaml",
 )
 _TOKEN_LITERALS = {
     "FIXED_ARCH",

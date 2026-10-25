@@ -922,3 +922,7 @@ Run003 source inventory (16 unique current-worktree SHA-256 and byte-size pins, 
 | `ros2_ws/src/step07_nav2_baseline_runtime_observer/src/step07_nav2_baseline_runtime_observer.cpp` | `d713d8c67145bfdaf55d4f55c0ab5fcb4b2114013a1aa9d69cff3c27fd925519` | 29652 |
 
 No runtime evidence, Gate B transition, or `RUNTIME_APPROVED` is claimed. Run001/Run002 and WP06 historical artifacts are unchanged.
+
+### STEP07 L2 research-grade runtime acceptance selection — offline candidate
+
+Decision `STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2` is recorded in `docs/architecture/ACR_STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2.md`. The candidate based on `fdc0e299515bda2286832aabec635948629517b5` selects the one-runner, in-process observer, single rosbag, pure A1–A10 model for `sim_eval` / `NAV2_BASELINE`. `RUN005_FORENSIC_CAMPAIGN = RETIRED_AS_ACTIVE_ACCEPTANCE_MODEL`; historical records remain preserved; Invocation_021 root cause remains unresolved. Evidence ceiling is `IMPLEMENTED_OFFLINE_ONLY`; Step 7 remains `NOT_STARTED`, Gate B `NOT_STARTED`, runtime authorization `NOT_GRANTED`, and no integration/runtime transition is recorded. The global `ResolvedConfigV3` hash is `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f`. Offline test/build scope and exclusions are recorded in the candidate evidence report, not as runtime evidence.
