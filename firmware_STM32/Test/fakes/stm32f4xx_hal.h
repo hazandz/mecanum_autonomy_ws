@@ -15,6 +15,7 @@ typedef struct {
 #define HAL_UART_ERROR_FE 4U
 #define HAL_UART_ERROR_ORE 8U
 uint32_t HAL_GetTick(void);
+uint32_t __get_IPSR(void);
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t size);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *uart);
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uint16_t size, uint32_t timeout);

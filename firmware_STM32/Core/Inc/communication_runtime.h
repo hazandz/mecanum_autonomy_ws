@@ -31,7 +31,9 @@ typedef struct {
     } value;
 } communication_candidate_t;
 
+/* API này chỉ gọi trong task context; lời gọi từ ISR bị từ chối. */
 bool communication_runtime_start(UART_HandleTypeDef *uart);
+/* Các API công khai bên dưới chỉ dành cho task context, không gọi từ ISR. */
 bool communication_runtime_is_usable(void);
 bool communication_runtime_take_candidate(communication_candidate_t *candidate);
 bool communication_runtime_enqueue_config_status(

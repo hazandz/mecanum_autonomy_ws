@@ -5,7 +5,7 @@ endif()
 project(mecanum_stm32_uart_runtime C ASM)
 
 option(STM32_ARM_BUILD "Build the firmware with the STM32 ARM GNU toolchain" OFF)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "/tmp/wp07-u3-build")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
 if(NOT STM32_ARM_BUILD)
   enable_testing()
@@ -30,7 +30,7 @@ if(NOT STM32_ARM_BUILD)
     Core/Src/communication_runtime.c Core/Src/communication.c)
   target_compile_options(test_communication_runtime PRIVATE -Wno-missing-field-initializers)
   add_test(NAME communication_runtime COMMAND test_communication_runtime)
-  foreach(case rearm-busy rearm-error invalid-size rx-error-pe rx-error-fe rx-error-ne rx-error-ore tx-timeout tx-error tx-full rx-full candidate-full)
+  foreach(case rearm-busy rearm-error invalid-size rx-error-pe rx-error-fe rx-error-ne rx-error-ore tx-timeout tx-error tx-full rx-full candidate-full fault-after-tx-dequeue fault-after-candidate-dequeue fault-during-tx fault-after-status-enqueue fault-after-telemetry-enqueue isr-public-apis)
     add_test(NAME communication_runtime_${case} COMMAND test_communication_runtime ${case})
   endforeach()
   return()
@@ -86,5 +86,7 @@ target_compile_options(stm32_uart_runtime PRIVATE
 target_link_options(stm32_uart_runtime PRIVATE
   -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
   --specs=nano.specs --specs=nosys.specs -T${FW}/STM32F411CEUX_FLASH.ld
-  -Wl,--gc-sections -Wl,-Map=/tmp/wp07-u3-build/stm32_uart_runtime.map)
-set_target_properties(stm32_uart_runtime PROPERTIES SUFFIX ".elf")
+  -Wl,--gc-sections -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/stm32_uart_runtime.map)
+set_target_properties(stm32_uart_runtime PROPERTIES
+  SUFFIX ".elf"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

@@ -9,6 +9,7 @@
 #include <string.h>
 
 USART_TypeDef fake_usart6;
+static UART_HandleTypeDef uart;
 static uint32_t fake_tick = UINT32_MAX - 3U;
 static HAL_StatusTypeDef receive_status = HAL_OK, transmit_status = HAL_OK;
 static uint8_t *active_rx;
@@ -19,18 +20,32 @@ static uint16_t transmitted_size[16];
 static uint32_t transmitted_timeout[16];
 static bool in_isr, in_task;
 static TaskHandle_t created_task, current_task;
+static unsigned critical_api_calls, queue_api_calls, task_api_calls, queue_create_calls, task_create_calls;
+typedef enum { INJECT_NONE, INJECT_CANDIDATE_RECEIVE, INJECT_TX_RECEIVE,
+               INJECT_STATUS_SEND, INJECT_TELEMETRY_SEND } inject_target_t;
+static inject_target_t inject_fault_after_dequeue, inject_fault_after_send;
+static bool inject_fault_during_transmit;
 static struct fake_queue { UBaseType_t length, item_size, head, count; uint8_t *storage; } queues[3];
+static struct fake_queue *candidate_queue_fake, *tx_queue_fake;
 static unsigned queue_count;
 
-void fake_task_enter_critical(void) { assert(!in_isr); }
-void fake_task_exit_critical(void) { assert(!in_isr); }
+uint32_t __get_IPSR(void) { return in_isr ? 16U : 0U; }
+void fake_task_enter_critical(void) { assert(!in_isr); ++critical_api_calls; }
+void fake_task_exit_critical(void) { assert(!in_isr); ++critical_api_calls; }
 UBaseType_t fake_task_enter_critical_from_isr(void) { assert(in_isr); return 0U; }
 void fake_task_exit_critical_from_isr(UBaseType_t mask) { assert(in_isr); (void)mask; }
 void fake_yield_from_isr(BaseType_t woken) { assert(in_isr); (void)woken; ++yields; }
+static void inject_uart_fault(void)
+{
+    uart.ErrorCode = HAL_UART_ERROR_ORE;
+    in_isr = true; HAL_UART_ErrorCallback(&uart); in_isr = false;
+    uart.ErrorCode = HAL_UART_ERROR_NONE;
+}
 TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name, uint32_t depth,
                                void *arg, UBaseType_t priority, StackType_t *stack,
                                StaticTask_t *control)
 {
+    assert(!in_isr); ++task_create_calls;
     assert(entry != NULL && strcmp(name, "UARTComm") == 0 && depth == 512U);
     assert(arg == NULL && priority == 24U && stack != NULL && control != NULL);
     created_task = (TaskHandle_t)control;
@@ -38,11 +53,14 @@ TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name, uint32_t
 }
 void vTaskNotifyGiveFromISR(TaskHandle_t task, BaseType_t *woken) { assert(in_isr && task != NULL); *woken = pdTRUE; }
 uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t ticks) { (void)clear; (void)ticks; return 0U; }
-TaskHandle_t xTaskGetCurrentTaskHandle(void) { return current_task; }
+TaskHandle_t xTaskGetCurrentTaskHandle(void) { assert(!in_isr); ++task_api_calls; return current_task; }
 QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage, StaticQueue_t *control)
 {
+    assert(!in_isr); ++queue_create_calls;
     assert(length > 0U && item_size > 0U && storage != NULL && control != NULL && queue_count < 3U);
     struct fake_queue *q = &queues[queue_count++];
+    if (queue_count == 2U) candidate_queue_fake = q;
+    if (queue_count == 3U) tx_queue_fake = q;
     q->length = length; q->item_size = item_size; q->storage = storage; q->head = 0U; q->count = 0U;
     return q;
 }
@@ -54,17 +72,34 @@ static BaseType_t queue_send(QueueHandle_t q, const void *item)
     memcpy(q->storage + tail * q->item_size, item, q->item_size); ++q->count; return pdPASS;
 }
 BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t wait)
-{ assert(!in_isr && wait == 0U); return queue_send(q, item); }
+{
+    BaseType_t result;
+    assert(!in_isr && wait == 0U); ++queue_api_calls;
+    result = queue_send(q, item);
+    if ((result == pdPASS) && (q == tx_queue_fake)
+        && ((inject_fault_after_send == INJECT_STATUS_SEND)
+            || (inject_fault_after_send == INJECT_TELEMETRY_SEND))) {
+        inject_fault_after_send = INJECT_NONE;
+        inject_uart_fault();
+    }
+    return result;
+}
 BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *item, BaseType_t *woken)
 { assert(in_isr); *woken = pdTRUE; return queue_send(q, item); }
 BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait)
 {
-    assert(!in_isr && wait == 0U);
+    assert(!in_isr && wait == 0U); ++queue_api_calls;
     if (q->count == 0U) return pdFAIL;
     memcpy(item, q->storage + q->head * q->item_size, q->item_size);
-    q->head = (q->head + 1U) % q->length; --q->count; return pdPASS;
+    q->head = (q->head + 1U) % q->length; --q->count;
+    if (((inject_fault_after_dequeue == INJECT_CANDIDATE_RECEIVE) && (q == candidate_queue_fake))
+        || ((inject_fault_after_dequeue == INJECT_TX_RECEIVE) && (q == tx_queue_fake))) {
+        inject_fault_after_dequeue = INJECT_NONE;
+        inject_uart_fault();
+    }
+    return pdPASS;
 }
-BaseType_t xQueueReset(QueueHandle_t q) { q->head = 0U; q->count = 0U; return pdPASS; }
+BaseType_t xQueueReset(QueueHandle_t q) { assert(!in_isr); ++queue_api_calls; q->head = 0U; q->count = 0U; return pdPASS; }
 uint32_t HAL_GetTick(void) { return fake_tick; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t size)
 {
@@ -79,7 +114,14 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uin
     assert(in_task && !in_isr && uart != NULL && transmit_calls < 16U);
     assert(size <= sizeof(transmitted[0]));
     memcpy(transmitted[transmit_calls], data, size); transmitted_size[transmit_calls] = size;
-    transmitted_timeout[transmit_calls] = timeout; ++transmit_calls; return transmit_status;
+    transmitted_timeout[transmit_calls] = timeout; ++transmit_calls;
+    if (inject_fault_during_transmit) {
+        inject_fault_during_transmit = false;
+        uart->ErrorCode = HAL_UART_ERROR_ORE;
+        in_isr = true; HAL_UART_ErrorCallback(uart); in_isr = false;
+        uart->ErrorCode = HAL_UART_ERROR_NONE;
+    }
+    return transmit_status;
 }
 
 static size_t make_config_frame(uint8_t *wire)
@@ -111,7 +153,6 @@ static size_t make_custom_frame(uint16_t version, uint8_t type, const uint8_t *p
     wire[encoded_length++] = 0U;
     return encoded_length;
 }
-static UART_HandleTypeDef uart;
 static void receive_chunk(const uint8_t *bytes, uint16_t size, uint32_t tick)
 {
     memcpy(active_rx, bytes, size); fake_tick = tick;
@@ -128,6 +169,7 @@ static int run_fault_case(const char *name)
 {
     uint8_t byte = 0x55U;
     uint8_t wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+    communication_candidate_t candidate;
     mecanum_uart_v1_config_status_t status = {0};
     unsigned i;
     if (strcmp(name, "rearm-busy") == 0) {
@@ -178,6 +220,45 @@ static int run_fault_case(const char *name)
         }
         in_task = true; service_task(); in_task = false;
         assert(!communication_runtime_is_usable());
+    } else if (strcmp(name, "fault-after-tx-dequeue") == 0) {
+        assert(communication_runtime_enqueue_config_status(&status));
+        inject_fault_after_dequeue = INJECT_TX_RECEIVE;
+        in_task = true; service_task(); in_task = false;
+        assert(!communication_runtime_is_usable());
+        assert(transmit_calls == 0U);
+        in_task = true; service_task(); in_task = false;
+        assert(abort_calls == 1U && transmit_calls == 0U);
+    } else if (strcmp(name, "fault-after-candidate-dequeue") == 0) {
+        size_t frame_size = make_config_frame(wire);
+        candidate.type = COMMUNICATION_CANDIDATE_COMMAND;
+        receive_chunk(wire, (uint16_t)frame_size, 7U);
+        in_task = true; service_task(); in_task = false;
+        inject_fault_after_dequeue = INJECT_CANDIDATE_RECEIVE;
+        assert(!communication_runtime_take_candidate(&candidate));
+        assert(candidate.type == COMMUNICATION_CANDIDATE_COMMAND);
+        assert(!communication_runtime_is_usable());
+        in_task = true; service_task(); in_task = false;
+        assert(abort_calls == 1U);
+    } else if (strcmp(name, "fault-during-tx") == 0) {
+        assert(communication_runtime_enqueue_config_status(&status));
+        assert(communication_runtime_enqueue_telemetry(&(mecanum_uart_v1_telemetry_t){0}));
+        inject_fault_during_transmit = true;
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 1U && !communication_runtime_is_usable());
+        in_task = true; service_task(); in_task = false;
+        assert(abort_calls == 1U && transmit_calls == 1U);
+    } else if (strcmp(name, "fault-after-status-enqueue") == 0) {
+        inject_fault_after_send = INJECT_STATUS_SEND;
+        assert(!communication_runtime_enqueue_config_status(&status));
+        assert(!communication_runtime_is_usable());
+        in_task = true; service_task(); in_task = false;
+        assert(abort_calls == 1U && transmit_calls == 0U);
+    } else if (strcmp(name, "fault-after-telemetry-enqueue") == 0) {
+        inject_fault_after_send = INJECT_TELEMETRY_SEND;
+        assert(!communication_runtime_enqueue_telemetry(&(mecanum_uart_v1_telemetry_t){0}));
+        assert(!communication_runtime_is_usable());
+        in_task = true; service_task(); in_task = false;
+        assert(abort_calls == 1U && transmit_calls == 0U);
     } else return 2;
     assert(!communication_runtime_is_usable());
     in_task = true; service_task(); in_task = false;
@@ -199,10 +280,40 @@ int main(int argc, char **argv)
     mecanum_uart_v1_telemetry_t telemetry = {0};
     UART_HandleTypeDef foreign = { &(USART_TypeDef){0}, 0U };
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
+        in_isr = true;
+        assert(!communication_runtime_start(&uart));
+        in_isr = false;
+        assert(queue_create_calls == 0U && task_create_calls == 0U);
+    }
     assert(!communication_runtime_start(&foreign));
     assert(!communication_runtime_is_usable());
     assert(communication_runtime_start(&uart));
     assert(receive_calls == 1U && active_rx_capacity == 128U && transmit_calls == 0U);
+    if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
+        communication_candidate_t out = {0};
+        mecanum_uart_v1_config_status_t out_status = {0};
+        mecanum_uart_v1_telemetry_t out_telemetry = {0};
+        unsigned critical_before = critical_api_calls, queue_before = queue_api_calls;
+        unsigned task_before = task_api_calls, create_before = queue_create_calls;
+        current_task = created_task; /* Same owner handle remains visible in interrupt context. */
+        in_isr = true;
+        assert(!communication_runtime_start(&uart));
+        assert(!communication_runtime_is_usable());
+        assert(!communication_runtime_take_candidate(&out));
+        assert(!communication_runtime_enqueue_config_status(&out_status));
+        assert(!communication_runtime_enqueue_telemetry(&out_telemetry));
+        communication_runtime_service_once();
+        in_isr = false;
+        assert(critical_api_calls == critical_before && queue_api_calls == queue_before);
+        assert(task_api_calls == task_before && queue_create_calls == create_before);
+        assert(transmit_calls == 0U && communication_runtime_is_usable());
+        wire_size = make_config_frame(wire);
+        receive_chunk(wire, (uint16_t)wire_size, 21U);
+        service_task();
+        assert(communication_runtime_take_candidate(&candidate));
+        return 0;
+    }
     if (argc == 2) return run_fault_case(argv[1]);
 
     wire_size = make_config_frame(wire);

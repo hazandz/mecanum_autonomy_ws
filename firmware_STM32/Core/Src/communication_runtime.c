@@ -77,11 +77,13 @@ static bool fault_is_latched_isr(void)
 
 bool communication_runtime_is_usable(void)
 {
+    if (__get_IPSR() != 0U) return false;
     return started && !fault_is_latched();
 }
 
 bool communication_runtime_start(UART_HandleTypeDef *uart)
 {
+    if (__get_IPSR() != 0U) return false;
     if ((uart == NULL) || (uart->Instance != USART6) || started) {
         return false;
     }
@@ -115,27 +117,35 @@ bool communication_runtime_start(UART_HandleTypeDef *uart)
 
 bool communication_runtime_take_candidate(communication_candidate_t *candidate)
 {
-    return (candidate != NULL) && communication_runtime_is_usable()
-        && (xQueueReceive(candidate_queue, candidate, 0U) == pdPASS);
+    communication_candidate_t pending;
+    if ((__get_IPSR() != 0U) || (candidate == NULL) || !communication_runtime_is_usable()) return false;
+    if (xQueueReceive(candidate_queue, &pending, 0U) != pdPASS) return false;
+    if (!communication_runtime_is_usable()) return false;
+    *candidate = pending;
+    return true;
 }
 
 bool communication_runtime_enqueue_config_status(const mecanum_uart_v1_config_status_t *status)
 {
     tx_item_t item;
+    if (__get_IPSR() != 0U) return false;
     if ((status == NULL) || !communication_runtime_is_usable()) return false;
     item.type = TX_CONFIG_STATUS;
     item.value.config_status = *status;
     if (xQueueSend(tx_queue, &item, 0U) != pdPASS) { latch_fault_task(); return false; }
+    if (!communication_runtime_is_usable()) return false;
     return true;
 }
 
 bool communication_runtime_enqueue_telemetry(const mecanum_uart_v1_telemetry_t *telemetry)
 {
     tx_item_t item;
+    if (__get_IPSR() != 0U) return false;
     if ((telemetry == NULL) || !communication_runtime_is_usable()) return false;
     item.type = TX_TELEMETRY;
     item.value.telemetry = *telemetry;
     if (xQueueSend(tx_queue, &item, 0U) != pdPASS) { latch_fault_task(); return false; }
+    if (!communication_runtime_is_usable()) return false;
     return true;
 }
 
@@ -190,6 +200,8 @@ static bool transmit_one(void)
     size_t payload_length, wire_length;
     uint8_t type;
     if (fault_is_latched() || xQueueReceive(tx_queue, &item, 0U) != pdPASS) return false;
+    /* Chốt lỗi sau dequeue trước khi serialize hoặc quyết định dispatch. */
+    if (fault_is_latched()) return true;
     if (item.type == TX_CONFIG_STATUS) {
         type = MECANUM_UART_V1_MESSAGE_CONFIG;
         payload_length = MECANUM_UART_V1_CONFIG_STATUS_PAYLOAD_LENGTH;
@@ -206,6 +218,8 @@ static bool transmit_one(void)
     if (mecanum_uart_v1_build_wire_frame(type, payload, payload_length, wire, sizeof(wire), &wire_length) != MECANUM_UART_V1_OK) {
         latch_fault_task(); return true;
     }
+    /* ISR có thể latch lỗi trong lúc serialize; không dispatch frame mới sau latch. */
+    if (fault_is_latched()) return true;
     if ((HAL_UART_Transmit(bound_uart, wire, (uint16_t)wire_length, COMMUNICATION_RUNTIME_TX_TIMEOUT_MS) != HAL_OK)
         || fault_is_latched()) latch_fault_task();
     return true;
@@ -215,6 +229,7 @@ void communication_runtime_service_once(void)
 {
     rx_chunk_t chunk;
     uint8_t budget = COMMUNICATION_RUNTIME_RX_PENDING_CHUNKS;
+    if (__get_IPSR() != 0U) return;
     if (!started || (xTaskGetCurrentTaskHandle() != communication_task)) return;
     if (fault_is_latched()) {
         if (!fault_cleanup_done) {
