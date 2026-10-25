@@ -643,6 +643,12 @@ class ResearchAcceptanceRunner:
         self._node_ros_advance_count = 0
         self._node_ros_rollback = False
         self.rearm_requested = False
+        self.pre_rearm_context: Any = None
+        self.pre_rearm_barrier_sequence: int | None = None
+        self.pre_rearm_barrier_stamp_ns: int | None = None
+        self.startup_context: Any = None
+        self.startup_barrier_sequence: int | None = None
+        self.startup_barrier_stamp_ns: int | None = None
         self.mission_deadline_steady = 0.0
         self.shutdown_results: list[dict[str, Any]] = []
         self.shutdown_completed = False
@@ -1061,6 +1067,9 @@ class ResearchAcceptanceRunner:
             'snapshot': snapshot, 'ros_now_ns': now_ros,
             'steady_now_ns': now_steady, 'facts': selected,
         }
+        self.pre_rearm_context = context
+        self.pre_rearm_barrier_sequence = int(snapshot['barrier_sequence'])
+        self.pre_rearm_barrier_stamp_ns = int(snapshot['barrier_stamp_ns'])
         return True
 
     def _goal_pose(self) -> Any:
@@ -1426,14 +1435,275 @@ class ResearchAcceptanceRunner:
             raise AcceptanceFailure("STARTUP", "authorization", "SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED")
         if self.rearm_requested:
             raise AcceptanceFailure("STARTUP", "safety_lifecycle", "STARTUP_REARM_ALREADY_REQUESTED")
+        before = self._sensor_health_snapshot()
+        before_context = before.get('context')
+        if before_context is None:
+            raise AcceptanceFailure('STARTUP_REARM', 'safety_lifecycle',
+                                    'LIFECYCLE_CONTEXT_UNAVAILABLE')
+        before_lifecycle = before.get('lifecycle')
+        if (before_context != self.pre_rearm_context
+                or before['barrier_sequence']
+                != self.pre_rearm_barrier_sequence
+                or before['barrier_stamp_ns']
+                != self.pre_rearm_barrier_stamp_ns
+                or before_lifecycle is None
+                or before_lifecycle.value.get('primary_state') != 2
+                or before_lifecycle.value.get('barrier_state') != 2
+                or before_lifecycle.value.get('motion_permitted') is not False
+                or before_lifecycle.value.get('reason')
+                != 'ACTIVE_REARM_REQUIRED'):
+            raise AcceptanceFailure(
+                'STARTUP_REARM', 'safety_lifecycle',
+                'PRE_REARM_LIFECYCLE_CONTEXT_CHANGED')
+        from mecanum_nav_rl.observations.step07_research_acceptance import (
+            Context,
+        )
+        expected_context = Context(
+            before_context.episode_generation, before_context.reset_epoch,
+            before_context.runtime_generation + 1, before_context.config_hash,
+        )
+        before_sequence = int(before['barrier_sequence'])
         self.rearm_requested = True
         rearm_future = self.observer.request_rearm()
         rearm_response = self._wait_future(rearm_future, deadline, stage="STARTUP_REARM",
                                            component="safety_rearm")
         if not rearm_response.success:
             raise AcceptanceFailure("STARTUP_REARM", "safety_rearm", "SAFETY_REARM_REFUSED")
-        self._wait_for(lambda: self._lifecycle_ready(), deadline, stage="STARTUP_REARM",
-            component="safety_lifecycle", reason="SAFETY_READY_AFTER_REARM_TIMEOUT")
+
+        def expected_ready_lifecycle() -> bool:
+            snapshot = self._sensor_health_snapshot()
+            context = snapshot.get('context')
+            life = snapshot.get('lifecycle')
+            if life is not None and life.value.get('barrier_state') == 3:
+                raise AcceptanceFailure(
+                    'STARTUP_REARM', 'safety_lifecycle',
+                    'SAFETY_LIFECYCLE_FAULT')
+            if context == before_context:
+                return False
+            if context != expected_context:
+                measured = self._health_fact_measurement(
+                    'safety_lifecycle', life,
+                    ros_now_ns=self._node_ros_now_ns(),
+                    steady_now_ns=time.monotonic_ns(),
+                    ros_limit_ns=500_000_000,
+                    steady_limit_ns=500_000_000,
+                    expected_context=expected_context,
+                )
+                measured['reason'] = 'POST_REARM_CONTEXT_CHANGED'
+                raise AcceptanceFailure(
+                    'STARTUP_REARM', 'safety_lifecycle',
+                    'POST_REARM_CONTEXT_CHANGED', measured=measured)
+            if snapshot['barrier_sequence'] <= before_sequence:
+                return False
+            return self._lifecycle_ready()
+
+        self._wait_for(
+            expected_ready_lifecycle, deadline,
+            stage='STARTUP_REARM', component='safety_lifecycle',
+            reason='SAFETY_READY_AFTER_REARM_TIMEOUT',
+        )
+        ready_snapshot = self._sensor_health_snapshot()
+        if (ready_snapshot['context'] != expected_context
+                or ready_snapshot['barrier_sequence'] <= before_sequence
+                or ready_snapshot['lifecycle'] is None
+                or ready_snapshot['lifecycle'].value.get(
+                    'barrier_state') == 3):
+            raise AcceptanceFailure(
+                'STARTUP_REARM', 'safety_lifecycle',
+                'POST_REARM_LIFECYCLE_IDENTITY_INVALID')
+        self.startup_context = expected_context
+        self.startup_barrier_sequence = int(ready_snapshot['barrier_sequence'])
+        self.startup_barrier_stamp_ns = int(ready_snapshot['barrier_stamp_ns'])
+        self.goal_barrier_sequence = self.startup_barrier_sequence
+        self.goal_barrier_stamp_ns = self.startup_barrier_stamp_ns
+        self._wait_for(
+            self._post_rearm_inputs_ready, deadline,
+            stage='STARTUP_REARM', component='post_rearm_inputs',
+            reason='POST_REARM_INPUT_READINESS_TIMEOUT',
+        )
+
+    def _post_rearm_inputs_ready(self) -> bool:
+        """Wait for fresh health facts after the pinned rearm barrier."""
+        self._check_launch_processes()
+        self._raise_executor_error('STARTUP_REARM')
+        snapshot = self._sensor_health_snapshot()
+        now_ros = self._node_ros_now_ns()
+        now_steady = time.monotonic_ns()
+        context = self.startup_context
+        life = snapshot.get('lifecycle')
+        if (snapshot['clock_rollback']
+                or getattr(self, '_node_ros_rollback', False)
+                or now_ros <= 0):
+            raise AcceptanceFailure(
+                'STARTUP_REARM', 'clock',
+                'SIM_CLOCK_INVALID_OR_ROLLED_BACK')
+        if life is not None and life.value.get('barrier_state') == 3:
+            raise AcceptanceFailure(
+                'STARTUP_REARM', 'safety_lifecycle',
+                'SAFETY_LIFECYCLE_FAULT')
+        if (snapshot['context'] != context
+                or snapshot['barrier_sequence']
+                != self.startup_barrier_sequence
+                or snapshot['barrier_stamp_ns']
+                != self.startup_barrier_stamp_ns):
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', life, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            measured['reason'] = 'POST_REARM_CONTEXT_OR_BARRIER_CHANGED'
+            raise AcceptanceFailure(
+                'STARTUP_REARM', 'safety_lifecycle',
+                'POST_REARM_CONTEXT_OR_BARRIER_CHANGED', measured=measured)
+        lifecycle_fact, lifecycle_failure = self._select_fresh_health_fact(
+            (life,) if life is not None else (),
+            stream='safety_lifecycle', context=context,
+            ros_now_ns=now_ros, steady_now_ns=now_steady,
+            ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+        )
+        if (lifecycle_failure is not None or lifecycle_fact is None
+                or life.value.get('primary_state') != 2
+                or life.value.get('barrier_state') != 1
+                or life.value.get('motion_permitted') is not True):
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', life, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=500_000_000,
+                steady_limit_ns=500_000_000, expected_context=context,
+            )
+            measured['reason'] = (
+                lifecycle_failure['reason'] if lifecycle_failure is not None
+                else 'LIFECYCLE_NOT_READY_OR_STALE'
+            )
+            self._remember_sensor_health_failure('STARTUP_REARM', measured)
+            return False
+
+        requirements = (
+            ('scan', snapshot['scans'], 500_000_000),
+            ('wheel_odometry', snapshot['wheel'], 200_000_000),
+            ('imu', snapshot['imu'], 200_000_000),
+            ('filtered_odometry', snapshot['odometry'], 250_000_000),
+        )
+        selected = {'safety_lifecycle': lifecycle_fact}
+        for name, facts, limit in requirements:
+            post_barrier_facts = tuple(
+                fact for fact in facts
+                if fact.stamp_ns > self.startup_barrier_stamp_ns
+            )
+            candidate_facts = post_barrier_facts or facts
+            fact, failure = self._select_fresh_health_fact(
+                candidate_facts, stream=name, context=context,
+                ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=limit,
+                steady_limit_ns=limit,
+            )
+            if failure is not None:
+                self._remember_sensor_health_failure('STARTUP_REARM', failure)
+                return False
+            if not post_barrier_facts:
+                measured = self._health_fact_measurement(
+                    name, fact, ros_now_ns=now_ros,
+                    steady_now_ns=now_steady, ros_limit_ns=limit,
+                    steady_limit_ns=limit, expected_context=context,
+                )
+                measured['reason'] = 'INPUT_NOT_AFTER_REARM_BARRIER'
+                self._remember_sensor_health_failure('STARTUP_REARM', measured)
+                return False
+            selected[name] = fact
+        from mecanum_nav_rl.observations.step07_research_acceptance import (
+            lidar_sectors,
+        )
+        from mecanum_nav_rl.observations.step07_research_observer import (
+            Step07ResearchObserver,
+        )
+        scan = selected['scan']
+        wheel = selected['wheel_odometry']
+        imu = selected['imu']
+        odometry = selected['filtered_odometry']
+        invalid_stream = None
+        invalid_reason = None
+        if scan.frame_id != 'lidar_frame':
+            invalid_stream, invalid_reason = 'scan', 'SCAN_FRAME_INVALID'
+        elif not Step07ResearchObserver._valid_odom(wheel.value):
+            invalid_stream = 'wheel_odometry'
+            invalid_reason = 'WHEEL_ODOMETRY_INVALID'
+        elif not Step07ResearchObserver._valid_odom(odometry.value):
+            invalid_stream = 'filtered_odometry'
+            invalid_reason = 'FILTERED_ODOMETRY_INVALID'
+        else:
+            try:
+                lidar_sectors(
+                    scan.value.ranges, angle_min=scan.value.angle_min,
+                    angle_increment=scan.value.angle_increment,
+                    range_min=scan.value.range_min,
+                    range_max=scan.value.range_max,
+                    frame_id=scan.frame_id,
+                )
+                imu_values = (
+                    imu.value.angular_velocity.x,
+                    imu.value.angular_velocity.y,
+                    imu.value.angular_velocity.z,
+                    imu.value.linear_acceleration.x,
+                    imu.value.linear_acceleration.y,
+                    imu.value.linear_acceleration.z,
+                    *imu.value.angular_velocity_covariance,
+                    *imu.value.linear_acceleration_covariance,
+                    *imu.value.orientation_covariance,
+                )
+                if (imu.frame_id != 'base_link'
+                        or not all(
+                            math.isfinite(float(value))
+                            for value in imu_values
+                        )
+                        or any(imu.value.angular_velocity_covariance[i] < 0
+                               for i in (0, 4, 8))
+                        or any(imu.value.linear_acceleration_covariance[i] < 0
+                               for i in (0, 4, 8))):
+                    invalid_stream = 'imu'
+                    invalid_reason = 'IMU_VALUES_OR_FRAME_INVALID'
+            except (
+                AttributeError, IndexError, TypeError, ValueError,
+            ) as error:
+                invalid_stream = 'scan'
+                invalid_reason = f'SCAN_VALUES_INVALID:{error}'
+        if invalid_stream is not None:
+            fact = selected[invalid_stream]
+            limits = {name: value for name, _facts, value in requirements}
+            limit = limits[invalid_stream]
+            measured = self._health_fact_measurement(
+                invalid_stream, fact, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, ros_limit_ns=limit,
+                steady_limit_ns=limit, expected_context=context,
+            )
+            measured['reason'] = invalid_reason
+            self._remember_sensor_health_failure('STARTUP_REARM', measured)
+            return False
+        self._last_sensor_health_failure = None
+        self._last_sensor_health_success = {
+            'snapshot': snapshot, 'ros_now_ns': now_ros,
+            'steady_now_ns': now_steady, 'facts': selected,
+        }
+        return True
+
+    def _assert_post_rearm_live_health(self, stage: str) -> None:
+        context = self.startup_context
+        if context is None:
+            raise AcceptanceFailure(stage, 'context',
+                                    'POST_REARM_CONTEXT_NOT_PINNED')
+        snapshot, ros_now, steady_now = (
+            self._check_live_mission_health(context, stage))
+        if (snapshot['barrier_sequence'] != self.startup_barrier_sequence
+                or snapshot['barrier_stamp_ns']
+                != self.startup_barrier_stamp_ns):
+            measured = self._health_fact_measurement(
+                'safety_lifecycle', snapshot['lifecycle'],
+                ros_now_ns=ros_now, steady_now_ns=steady_now,
+                ros_limit_ns=500_000_000, steady_limit_ns=500_000_000,
+                expected_context=context,
+            )
+            measured['reason'] = 'POST_REARM_CONTEXT_OR_BARRIER_CHANGED'
+            raise AcceptanceFailure(
+                stage, 'safety_lifecycle',
+                'POST_REARM_CONTEXT_OR_BARRIER_CHANGED', measured=measured)
 
     def _lifecycle_ready(self) -> bool:
         snapshot = self._sensor_health_snapshot()
@@ -1654,6 +1924,7 @@ class ResearchAcceptanceRunner:
         self.state.stage = "A6_NAV2_PLAN"
         if not self.observer.wait_for_actions(timeout_sec=min(1.0, self.deadline_remaining())):
             raise AcceptanceFailure("A6_NAV2", "action_servers", "NAV2_ACTION_SERVER_UNAVAILABLE")
+        self._assert_post_rearm_live_health('A6_NAV2_PLAN')
         goal = self._goal_pose()
         future = self.observer.send_compute_path(goal, request_stamp=goal.header.stamp)
         response = self._wait_future(future, self.started_steady+460.0,
@@ -1670,13 +1941,16 @@ class ResearchAcceptanceRunner:
         poses = tuple((float(p.pose.position.x), float(p.pose.position.y)) for p in path.poses)
         if not all(math.isfinite(x) and math.isfinite(y) for x, y in poses):
             raise AcceptanceFailure("A6_NAV2", "compute_path", "PATH_NONFINITE")
+        self._assert_post_rearm_live_health('A6_NAV2_PLAN')
         req_id = str(uuid.uuid4())
         snapshot = self._sensor_health_snapshot()
         life = snapshot['lifecycle']
-        if life is None or life.context != snapshot['context']:
+        if (life is None or life.context != self.startup_context
+                or snapshot['context'] != self.startup_context):
             raise AcceptanceFailure("A6_NAV2", "context", "LIFECYCLE_CONTEXT_INVALID")
-        self.path_snapshot = PathSnapshot(poses_xy=poses, request_id=req_id,
-            goal_xy=(-4.0, 0.0), context=life.context,
+        self.path_snapshot = PathSnapshot(
+            poses_xy=poses, request_id=req_id,
+            goal_xy=(-4.0, 0.0), context=self.startup_context,
             map_id=self.map_identity_actual["map_id"],
             map_content_hash=self.map_identity_actual["map_content_hash"],
             received_steady_ns=time.monotonic_ns(),
@@ -2195,6 +2469,7 @@ class ResearchAcceptanceRunner:
 
     def _mission(self) -> None:
         self._send_one_plan()
+        self._assert_post_rearm_live_health('A9_NAVIGATION_OUTCOME')
         goal = self._goal_pose()
         sent_steady = self.now_steady()
         result_deadline = min(sent_steady+240.0, self.started_steady+460.0)
@@ -2208,7 +2483,11 @@ class ResearchAcceptanceRunner:
         accepted_snapshot = self._sensor_health_snapshot()
         self.action_accept_ns = self._node_ros_now_ns()
         if (accepted_snapshot['context'] != self.path_snapshot.context
-                or accepted_snapshot['lifecycle'] is None):
+                or accepted_snapshot['lifecycle'] is None
+                or accepted_snapshot['barrier_sequence']
+                != self.startup_barrier_sequence
+                or accepted_snapshot['barrier_stamp_ns']
+                != self.startup_barrier_stamp_ns):
             raise AcceptanceFailure('A9_NAVIGATION_OUTCOME', 'context',
                                     'LIFECYCLE_CONTEXT_INVALID')
         self.goal_barrier_sequence = accepted_snapshot['barrier_sequence']

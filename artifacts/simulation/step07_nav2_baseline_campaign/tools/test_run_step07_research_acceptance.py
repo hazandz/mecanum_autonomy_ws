@@ -717,56 +717,35 @@ def test_owned_startup_process_exit_is_reported_before_recorder_gate():
     assert 'OWNED_LAUNCH_EXITED:23' == error.value.reason
 
 
-def test_startup_rearm_requests_once_and_waits_for_fresh_ready_lifecycle():
-    from mecanum_nav_rl.observations.step07_research_acceptance import Context, StampedFact
-    context = Context(1, 2, 3, "a" * 64)
-    now = time.monotonic_ns()
-    life = StampedFact(100, now, "base_link", {"primary_state": 2,
-        "barrier_state": 1, "motion_permitted": True}, context)
-    class Future:
-        def done(self): return True
-        def exception(self): return None
-        def result(self): return SimpleNamespace(success=True)
-    class Observer:
-        def __init__(self): self.calls = 0
-        def request_rearm(self): self.calls += 1; return Future()
-    observer = Observer()
-    runner = object.__new__(ResearchAcceptanceRunner)
-    runner.authorization = {"sim_estop_release_authorized": True}
-    runner.rearm_requested = False
-    runner.observer = SimpleNamespace(request_rearm=observer.request_rearm,
-        lifecycle=life, context=context, clock_ns=100)
-    _bind_health_snapshot(
-        runner.observer, context=context, ros_now_ns=100,
-        lifecycle=life, odometry=(),
-    )
-    runner.now_steady = time.monotonic
-    runner.state = CampaignState()
-    runner._startup_rearm(time.monotonic() + 1.0)
-    assert observer.calls == 1 and runner._lifecycle_ready()
-    with pytest.raises(AcceptanceFailure, match="STARTUP_REARM_ALREADY_REQUESTED"):
-        runner._startup_rearm(time.monotonic() + 1.0)
+def test_startup_rearm_requests_once_and_waits_for_fresh_ready_lifecycle(
+        monkeypatch):
+    """Use the production observer and Safety core to prove one rearm."""
+    runner, observer, _core, _clock, calls, _publish = (
+        _safety_core_startup_runner(monkeypatch))
+    assert runner._topic_samples_ready()
+    runner._startup_rearm(runner.now_steady() + 1.0)
+    assert calls['rearm'] == 1 and runner._lifecycle_ready()
+    assert runner._post_rearm_inputs_ready()
+    with pytest.raises(
+            AcceptanceFailure, match='STARTUP_REARM_ALREADY_REQUESTED'):
+        runner._startup_rearm(runner.now_steady() + 1.0)
 
 
-def test_startup_rearm_refusal_and_missing_authorization_fail_closed():
-    class Future:
-        def done(self): return True
-        def exception(self): return None
-        def result(self): return SimpleNamespace(success=False)
-    calls = []
-    runner = object.__new__(ResearchAcceptanceRunner)
-    runner.authorization = {"sim_estop_release_authorized": True}
-    runner.rearm_requested = False
-    runner.observer = SimpleNamespace(request_rearm=lambda: calls.append("rearm") or Future())
-    runner.now_steady = time.monotonic
-    with pytest.raises(AcceptanceFailure, match="SAFETY_REARM_REFUSED"):
-        runner._startup_rearm(time.monotonic() + 1.0)
-    assert calls == ["rearm"]
+def test_startup_rearm_refusal_and_missing_authorization_fail_closed(
+        monkeypatch):
+    """Keep the one-shot rearm request behind explicit sim authorization."""
+    runner, _observer, _core, _clock, calls, _publish = (
+        _safety_core_startup_runner(monkeypatch, rearm_behavior='refuse'))
+    assert runner._topic_samples_ready()
+    with pytest.raises(AcceptanceFailure, match='SAFETY_REARM_REFUSED'):
+        runner._startup_rearm(runner.now_steady() + 1.0)
+    assert calls['rearm'] == 1
     runner.authorization = {"sim_estop_release_authorized": False}
-    runner.rearm_requested = False
-    with pytest.raises(AcceptanceFailure, match="SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED"):
-        runner._startup_rearm(time.monotonic() + 1.0)
-    assert calls == ["rearm"]
+    with pytest.raises(
+            AcceptanceFailure,
+            match='SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED'):
+        runner._startup_rearm(runner.now_steady() + 1.0)
+    assert calls['rearm'] == 1
 
 
 def _tf_graph_fixture(graph=None, *, observed_edges=None):
@@ -1456,6 +1435,9 @@ def _production_observation_runner(monkeypatch, *, tf_available=True):
     )
     runner.goal_barrier_sequence = 7
     runner.goal_barrier_stamp_ns = 1
+    runner.startup_context = context
+    runner.startup_barrier_sequence = 7
+    runner.startup_barrier_stamp_ns = 1
     runner.action_accept_ns = 1
     runner.used_pairs = set()
     runner.last_progress_arc = None
@@ -1974,6 +1956,9 @@ def test_full_a6_is_recorded_only_after_path_success_and_navigate_acceptance():
     runner.log_stream = io.StringIO()
     runner.navigation_goal_handle = None
     context = SimpleNamespace()
+    runner.startup_context = context
+    runner.startup_barrier_sequence = 5
+    runner.startup_barrier_stamp_ns = 0
     runner._send_one_plan = lambda: setattr(
         runner, 'path_snapshot', PathSnapshot(
             ((0.0, 0.0), (1.0, 0.0)), 'request', (-4.0, 0.0),
@@ -2003,9 +1988,16 @@ def test_full_a6_is_recorded_only_after_path_success_and_navigate_acceptance():
         runner.observer, context=context, ros_now_ns=10,
         lifecycle=SimpleNamespace(context=context), odometry=(),
     )
-    runner._check_live_mission_health = lambda *_args: (_ for _ in ()).throw(
-        AcceptanceFailure(
-            'A7_OBSERVATION', 'mission', 'STOP_AFTER_ACCEPTANCE_ASSERTION'))
+    checks = {'count': 0}
+
+    def check_live(*_args):
+        checks['count'] += 1
+        if checks['count'] > 1:
+            raise AcceptanceFailure(
+                'A7_OBSERVATION', 'mission', 'STOP_AFTER_ACCEPTANCE_ASSERTION')
+        return (runner._sensor_health_snapshot(), 10, time.monotonic_ns())
+
+    runner._check_live_mission_health = check_live
 
     with pytest.raises(
             AcceptanceFailure, match='STOP_AFTER_ACCEPTANCE_ASSERTION'):
@@ -2312,10 +2304,10 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
 
 
 def _safety_core_startup_runner(monkeypatch, *, authorized=True,
-                                rearm_behavior='apply'):
+                                rearm_behavior='apply',
+                                deliver_post_rearm_sensors=True):
     """Build a real production startup path around the pure Safety core."""
     from collections import deque
-    from mecanum_nav_rl.observations.step07_research_acceptance import StampedFact
     from mecanum_nav_rl.observations.step07_research_observer import (
         Step07ResearchObserver,
     )
@@ -2326,6 +2318,8 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     class Clock:
         seconds = 10.0
         ros_ns = 1_200_000_000
+        on_sleep = None
+        refresh_lifecycle = None
 
         def steady_ns(self):
             return int(self.seconds * 1_000_000_000)
@@ -2335,6 +2329,10 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
                 self.seconds += 1_000.0
             else:
                 self.seconds += seconds
+            if self.refresh_lifecycle is not None:
+                self.refresh_lifecycle()
+            if self.on_sleep is not None:
+                self.on_sleep()
 
     clock = Clock()
     monkeypatch.setattr(runner_module.time, 'monotonic_ns', clock.steady_ns)
@@ -2358,14 +2356,21 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     observer.clock_rollback = False
     observer.clock_ns = clock.ros_ns
     observer.clock_advance_count = 2
-    observer.scans = deque()
-    observer.wheel = deque()
-    observer.imu = deque()
-    observer.odometry = deque()
-    observer.receipts = deque()
-    observer.localization = deque()
-    observer.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
-        now=lambda: SimpleNamespace(nanoseconds=clock.ros_ns)))
+    observer.scans = deque(maxlen=64)
+    observer.wheel = deque(maxlen=64)
+    observer.imu = deque(maxlen=64)
+    observer.odometry = deque(maxlen=64)
+    observer.receipts = deque(maxlen=64)
+    observer.localization = deque(maxlen=64)
+
+    def ros_now():
+        stamp_ns = clock.ros_ns
+        stamp = SimpleNamespace(sec=stamp_ns // 1_000_000_000,
+                                nanosec=stamp_ns % 1_000_000_000)
+        return SimpleNamespace(nanoseconds=stamp_ns, to_msg=lambda: stamp)
+
+    observer.node = SimpleNamespace(
+        get_clock=lambda: SimpleNamespace(now=ros_now))
 
     primary = {'Unconfigured': 0, 'Inactive': 1, 'Active': 2}
     barrier = {'INIT': 0, 'READY': 1, 'NON_READY': 2, 'FAULT': 3}
@@ -2390,7 +2395,8 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
         Step07ResearchObserver._lifecycle_cb(observer, message)
 
     publish_identity(core.snapshot())
-    context = observer.context
+    clock.refresh_lifecycle = lambda: publish_identity(
+        core.refresh(clock.ros_ns))
     from mecanum_nav_rl.observations.step07_research_observer import (
         Step07ResearchObserver as Observer,
     )
@@ -2410,45 +2416,99 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     observer.lifecycle_clients = {}
     observer._GetState = SimpleNamespace(Request=lambda: object())
 
-    def add_fact(stream, stamp_ns, frame_id, value):
-        stream.append(StampedFact(
-            stamp_ns, clock.steady_ns(), frame_id, value, context))
-
     sample_stamp = clock.ros_ns - 10_000_000
     scan = SimpleNamespace(
-        header=SimpleNamespace(frame_id='lidar_frame'),
+        header=SimpleNamespace(frame_id='lidar_frame', stamp=SimpleNamespace(
+            sec=sample_stamp // 1_000_000_000,
+            nanosec=sample_stamp % 1_000_000_000)),
         ranges=[1.0] * 720, angle_min=-math.pi,
         angle_increment=(2 * math.pi / 720), range_min=0.1,
         range_max=10.0,
     )
-    add_fact(observer.scans, sample_stamp, 'lidar_frame', scan)
     wheel = SimpleNamespace(
-        header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link')
-    add_fact(observer.wheel, sample_stamp, 'odom', wheel)
-    imu = SimpleNamespace(header=SimpleNamespace(frame_id='base_link'))
-    add_fact(observer.imu, sample_stamp, 'base_link', imu)
+        header=SimpleNamespace(frame_id='odom', stamp=SimpleNamespace(
+            sec=sample_stamp // 1_000_000_000,
+            nanosec=sample_stamp % 1_000_000_000)),
+        child_frame_id='base_link',
+        pose=SimpleNamespace(pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)),
+            covariance=[0.0] * 36),
+        twist=SimpleNamespace(twist=SimpleNamespace(
+            linear=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            angular=SimpleNamespace(x=0.0, y=0.0, z=0.0)),
+            covariance=[0.0] * 36),
+    )
+    imu = SimpleNamespace(
+        header=SimpleNamespace(frame_id='base_link', stamp=SimpleNamespace(
+            sec=sample_stamp // 1_000_000_000,
+            nanosec=sample_stamp % 1_000_000_000)),
+        angular_velocity=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+        linear_acceleration=SimpleNamespace(x=0.0, y=0.0, z=9.8),
+        angular_velocity_covariance=[0.0] * 9,
+        linear_acceleration_covariance=[0.0] * 9,
+        orientation_covariance=[0.0] * 9,
+    )
+    Observer._scan(observer, scan)
+    Observer._wheel(observer, wheel)
+    Observer._imu(observer, imu)
 
     def odom(stamp_ns):
         return SimpleNamespace(
             header=SimpleNamespace(frame_id='odom'),
             child_frame_id='base_link',
             pose=SimpleNamespace(
-                pose=SimpleNamespace(position=SimpleNamespace(x=0.0, y=0.0)),
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    orientation=SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0)),
                 covariance=[0.0] * 36),
             twist=SimpleNamespace(
                 twist=SimpleNamespace(
-                    linear=SimpleNamespace(x=0.0, y=0.0),
-                    angular=SimpleNamespace(z=0.0)),
+                    linear=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    angular=SimpleNamespace(x=0.0, y=0.0, z=0.0)),
                 covariance=[0.0] * 36),
         )
 
-    add_fact(
-        observer.odometry, sample_stamp - 1, 'base_link',
-        odom(sample_stamp - 1),
-    )
-    add_fact(
-        observer.odometry, sample_stamp, 'base_link', odom(sample_stamp),
-    )
+    def stamped_odom(stamp_ns):
+        message = odom(stamp_ns)
+        message.header.stamp = SimpleNamespace(
+            sec=stamp_ns // 1_000_000_000,
+            nanosec=stamp_ns % 1_000_000_000)
+        return message
+
+    Observer._odom(observer, stamped_odom(sample_stamp - 1))
+    Observer._odom(observer, stamped_odom(sample_stamp))
+
+    def publish_post_rearm_sensors(streams):
+        clock.ros_ns += 10_000_000
+        post_stamp = clock.ros_ns
+        stamp = SimpleNamespace(sec=post_stamp // 1_000_000_000,
+                                nanosec=post_stamp % 1_000_000_000)
+        if 'wheel_odometry' in streams:
+            Observer._wheel(observer, stamped_odom(post_stamp))
+        if 'imu' in streams:
+            post_imu = SimpleNamespace(
+                header=SimpleNamespace(frame_id='base_link', stamp=stamp),
+                angular_velocity=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                linear_acceleration=SimpleNamespace(x=0.0, y=0.0, z=9.8),
+                angular_velocity_covariance=[0.0] * 9,
+                linear_acceleration_covariance=[0.0] * 9,
+                orientation_covariance=[0.0] * 9,
+            )
+            Observer._imu(observer, post_imu)
+        if 'filtered_odometry' in streams:
+            Observer._odom(observer, stamped_odom(post_stamp))
+        if 'scan' in streams:
+            post_scan = SimpleNamespace(
+                header=SimpleNamespace(frame_id='lidar_frame', stamp=stamp),
+                ranges=[1.0] * 720, angle_min=-math.pi,
+                angle_increment=(2 * math.pi / 720), range_min=0.1,
+                range_max=10.0,
+            )
+            Observer._scan(observer, post_scan)
+
+    observer._test_publish_post_rearm_sensors = publish_post_rearm_sensors
     runner = object.__new__(ResearchAcceptanceRunner)
     runner.observer = observer
     runner.process_owner = SimpleNamespace(processes=[])
@@ -2486,6 +2546,13 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
         calls['rearm'] += 1
         if rearm_behavior == 'apply':
             publish_identity(core.rearm(clock.ros_ns))
+            if deliver_post_rearm_sensors:
+                streams = (
+                    ('scan', 'wheel_odometry', 'imu', 'filtered_odometry')
+                    if deliver_post_rearm_sensors is True
+                    else tuple(deliver_post_rearm_sensors)
+                )
+                publish_post_rearm_sensors(streams)
         return Future(success=rearm_behavior != 'refuse')
 
     observer.request_rearm = request_rearm
@@ -2510,7 +2577,7 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
 def test_production_wait_ready_rearms_real_nonready_core_before_mission(
         monkeypatch):
     """Use real configure/activate/rearm before recorder and mission gates."""
-    runner, observer, core, _clock, calls, _publish = (
+    runner, observer, core, clock, calls, _publish = (
         _safety_core_startup_runner(monkeypatch))
     assert observer.lifecycle.value['barrier_state'] == 2
     assert observer.lifecycle.value['motion_permitted'] is False
@@ -2521,6 +2588,271 @@ def test_production_wait_ready_rearms_real_nonready_core_before_mission(
     assert core.snapshot().barrier_state.value == 'READY'
     assert observer.lifecycle.value['motion_permitted'] is True
     assert calls == {'rearm': 1, 'recorder': 1, 'mission': 1}
+
+
+def test_production_wait_ready_blocks_generation_zero_inputs_after_rearm(
+        monkeypatch):
+    """Keep both Nav2 actions closed until post-rearm inputs exist."""
+    runner, observer, core, clock, calls, _publish = (
+        _safety_core_startup_runner(
+            monkeypatch, deliver_post_rearm_sensors=False))
+    actions = {'compute_path': 0, 'navigate': 0}
+    observer.send_compute_path = lambda *_args, **_kwargs: (
+        actions.update(compute_path=actions['compute_path'] + 1))
+    observer.send_navigation = lambda *_args, **_kwargs: (
+        actions.update(navigate=actions['navigate'] + 1))
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+
+    report = runner.execute()
+
+    assert report['overall'] == 'OFFLINE_TEST_ONLY'
+    assert runner.state.primary_failure['primary_failure'] == (
+        'POST_REARM_INPUT_READINESS_TIMEOUT')
+    assert clock.seconds == pytest.approx(160.0)
+    measured = runner.state.primary_failure['measured']
+    assert measured['stream'] == 'scan'
+    assert measured['expected_context']['runtime_generation'] == 1
+    assert measured['observed_context']['runtime_generation'] == 0
+    assert core.snapshot().runtime_generation == 1
+    assert observer.context.runtime_generation == 1
+    assert all(
+        fact.context.runtime_generation == 0 for fact in observer.scans)
+    assert calls['rearm'] == 1
+    assert calls['recorder'] == 0
+    assert actions == {'compute_path': 0, 'navigate': 0}
+
+
+def test_post_rearm_sensor_callbacks_arriving_in_order_admit_mission(
+        monkeypatch):
+    """Wait for the scan after other generation-one inputs."""
+    runner, observer, core, clock, calls, _publish = (
+        _safety_core_startup_runner(
+            monkeypatch,
+            deliver_post_rearm_sensors=(
+                'wheel_odometry', 'imu', 'filtered_odometry')))
+    actions = {'compute_path': 0, 'navigate': 0}
+
+    class Future:
+        def __init__(self, result):
+            self.value = result
+
+        def done(self):
+            return True
+
+        def exception(self):
+            return None
+
+        def result(self):
+            return self.value
+
+    class ComputeResponse:
+        accepted = True
+
+        def get_result_async(self):
+            pose = SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=-1.0, y=0.0)))
+            path = SimpleNamespace(
+                header=SimpleNamespace(frame_id='map'), poses=[pose, pose])
+            return Future(SimpleNamespace(
+                status=4, result=SimpleNamespace(path=path)))
+
+    class NavigateResponse:
+        accepted = True
+        goal_id = SimpleNamespace(uuid=bytes(16))
+
+        def get_result_async(self):
+            return Future(SimpleNamespace(status=6))
+
+    def assert_post_rearm_snapshot():
+        snapshot = observer.sensor_health_snapshot()
+        assert snapshot['context'] == runner.startup_context
+        assert snapshot['barrier_sequence'] == runner.startup_barrier_sequence
+        for stream_name in ('scans', 'wheel', 'imu', 'odometry'):
+            facts = snapshot[stream_name]
+            assert any(
+                fact.context == runner.startup_context
+                and fact.stamp_ns > runner.startup_barrier_stamp_ns
+                for fact in facts
+            )
+
+    def send_compute(*_args, **_kwargs):
+        assert_post_rearm_snapshot()
+        actions['compute_path'] += 1
+        return Future(ComputeResponse())
+
+    def send_navigation(*_args, **_kwargs):
+        assert_post_rearm_snapshot()
+        assert runner.path_snapshot.context == runner.startup_context
+        actions['navigate'] += 1
+        return Future(NavigateResponse())
+
+    observer.send_compute_path = send_compute
+    observer.send_navigation = send_navigation
+    runner.map_identity_actual = {
+        'map_id': 'test_map', 'map_content_hash': 'b' * 64}
+    runner._collect_one_observation = lambda _deadline: False
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+    scan_delivered = False
+
+    def deliver_scan_after_other_inputs():
+        nonlocal scan_delivered
+        if scan_delivered:
+            return
+        assert actions == {'compute_path': 0, 'navigate': 0}
+        scan_delivered = True
+        clock.on_sleep = None
+        observer._test_publish_post_rearm_sensors(('scan',))
+
+    clock.on_sleep = deliver_scan_after_other_inputs
+    report = runner.execute()
+
+    assert report['overall'] == 'OFFLINE_TEST_ONLY'
+    assert scan_delivered
+    assert core.snapshot().runtime_generation == 1
+    assert observer.context.runtime_generation == 1
+    assert all(
+        fact.context.runtime_generation == 1
+        for fact in observer.scans
+        if fact.stamp_ns > 1_200_000_000)
+    assert calls['rearm'] == 1
+    assert calls['recorder'] == 1
+    assert actions == {'compute_path': 1, 'navigate': 1}
+
+
+@pytest.mark.parametrize(('mutation', 'measured_reason'), [
+    ('stale', 'RECEIVE_AGE_EXCEEDED'),
+    ('future', 'ROS_TIMESTAMP_FUTURE'),
+    ('frame', 'SCAN_FRAME_INVALID'),
+])
+def test_post_rearm_invalid_scan_never_admits_actions(
+        monkeypatch, mutation, measured_reason):
+    """Reject stale, future, or wrong-frame current-generation scan facts."""
+    from dataclasses import replace
+
+    runner, observer, _core, clock, _calls, _publish = (
+        _safety_core_startup_runner(monkeypatch))
+    original_request = observer.request_rearm
+
+    def request_with_invalid_scan():
+        future = original_request()
+        current = observer.scans[-1]
+        if mutation == 'stale':
+            changed = replace(
+                current,
+                received_steady_ns=current.received_steady_ns - 600_000_000,
+            )
+        elif mutation == 'future':
+            changed = replace(current, stamp_ns=clock.ros_ns + 1)
+        else:
+            changed = replace(current, frame_id='wrong_frame')
+        observer.scans[-1] = changed
+        return future
+
+    observer.request_rearm = request_with_invalid_scan
+    actions = {'compute_path': 0, 'navigate': 0}
+    observer.send_compute_path = lambda *_args, **_kwargs: (
+        actions.update(compute_path=actions['compute_path'] + 1))
+    observer.send_navigation = lambda *_args, **_kwargs: (
+        actions.update(navigate=actions['navigate'] + 1))
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+
+    runner.execute()
+
+    assert runner.state.primary_failure['primary_failure'] == (
+        'POST_REARM_INPUT_READINESS_TIMEOUT')
+    assert runner.state.primary_failure['measured']['stream'] == 'scan'
+    if mutation == 'frame':
+        assert runner.state.primary_failure['measured']['reason'] in {
+            measured_reason, 'RECEIVE_AGE_EXCEEDED'}
+    else:
+        assert (runner.state.primary_failure['measured']['reason']
+                == measured_reason)
+    assert actions == {'compute_path': 0, 'navigate': 0}
+
+
+def test_post_rearm_context_change_fails_without_rebinding_or_second_rearm(
+        monkeypatch):
+    """Do not follow a second lifecycle identity while waiting on the pin."""
+    runner, observer, core, clock, calls, publish_identity = (
+        _safety_core_startup_runner(monkeypatch))
+    original_request = observer.request_rearm
+
+    def request_then_reset():
+        response = original_request()
+        publish_identity(core.begin_reset(clock.ros_ns))
+        return response
+
+    observer.request_rearm = request_then_reset
+    actions = {'compute_path': 0, 'navigate': 0}
+    observer.send_compute_path = lambda *_args, **_kwargs: (
+        actions.update(compute_path=actions['compute_path'] + 1))
+    observer.send_navigation = lambda *_args, **_kwargs: (
+        actions.update(navigate=actions['navigate'] + 1))
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+
+    runner.execute()
+
+    assert runner.state.primary_failure['primary_failure'] == (
+        'POST_REARM_CONTEXT_CHANGED')
+    assert runner.rearm_requested is True
+    assert calls['rearm'] == 1
+    assert actions == {'compute_path': 0, 'navigate': 0}
+
+
+@pytest.mark.parametrize(('failure', 'reason'), [
+    ('fault', 'SAFETY_LIFECYCLE_FAULT'),
+    ('rollback', 'SIM_CLOCK_INVALID_OR_ROLLED_BACK'),
+    ('executor', 'EXECUTOR_EXCEPTION:RuntimeError:offline executor failure'),
+    ('process', 'OWNED_LAUNCH_EXITED:17'),
+])
+def test_post_rearm_wait_fails_closed_on_runtime_health_failure(
+        monkeypatch, failure, reason):
+    """Keep lifecycle, clock, executor, and child failures closed."""
+    runner, observer, core, clock, calls, publish_identity = (
+        _safety_core_startup_runner(monkeypatch))
+    assert runner._topic_samples_ready()
+    runner._startup_rearm(runner.now_steady() + 1.0)
+    if failure == 'fault':
+        publish_identity(core.fault('TEST_FAULT', clock.ros_ns))
+    elif failure == 'rollback':
+        observer.clock_rollback = True
+    elif failure == 'executor':
+        observer.executor_error = RuntimeError('offline executor failure')
+    else:
+        runner.process_owner = SimpleNamespace(processes=[SimpleNamespace(
+            name='composite', process=SimpleNamespace(poll=lambda: 17))])
+
+    with pytest.raises(AcceptanceFailure, match=reason):
+        runner._post_rearm_inputs_ready()
+
+    assert calls['rearm'] == 1
+
+
+def test_recorder_delay_that_expires_sensor_health_blocks_planner_action(
+        monkeypatch):
+    """Recheck live inputs after recorder readiness and before planning."""
+    runner, observer, _core, clock, _calls, _publish = (
+        _safety_core_startup_runner(monkeypatch))
+    original_gate = runner._graph_ready_for_recording
+
+    def delayed_recorder_gate():
+        clock.seconds += 1.0
+        return original_gate()
+
+    runner._graph_ready_for_recording = delayed_recorder_gate
+    actions = {'compute_path': 0, 'navigate': 0}
+    observer.send_compute_path = lambda *_args, **_kwargs: (
+        actions.update(compute_path=actions['compute_path'] + 1))
+    observer.send_navigation = lambda *_args, **_kwargs: (
+        actions.update(navigate=actions['navigate'] + 1))
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+
+    runner.execute()
+
+    assert runner.state.primary_failure['primary_failure'] == (
+        'RECEIVE_AGE_EXCEEDED')
+    assert actions == {'compute_path': 0, 'navigate': 0}
 
 
 @pytest.mark.parametrize(('authorized', 'behavior', 'failure'), [
