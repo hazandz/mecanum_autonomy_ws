@@ -39,14 +39,21 @@ def test_local_probe_world_is_fuel_free_and_has_only_required_systems():
         "gz::sim::systems::UserCommands",
         "gz::sim::systems::SceneBroadcaster",
         "gz::sim::systems::Sensors",
+        'gz::sim::systems::Imu',
     ]
     assert [plugin.attrib["filename"] for plugin in plugins] == [
         "gz-sim-physics-system",
         "gz-sim-user-commands-system",
         "gz-sim-scene-broadcaster-system",
         "gz-sim-sensors-system",
+        'gz-sim-imu-system',
     ]
-    assert plugins[-1].findtext("render_engine") == "ogre2"
+    sensors_plugin = next(
+        plugin
+        for plugin in plugins
+        if plugin.attrib['name'] == 'gz::sim::systems::Sensors'
+    )
+    assert sensors_plugin.findtext('render_engine') == 'ogre2'
     models = world.findall("model")
     assert len(models) == 1
     assert models[0].attrib == {"name": "ground_plane"}

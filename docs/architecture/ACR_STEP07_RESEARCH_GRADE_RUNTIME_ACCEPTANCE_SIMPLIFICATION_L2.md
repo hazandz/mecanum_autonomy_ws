@@ -36,7 +36,7 @@ The mission uses the `nav2_controller::StoppedGoalChecker` contract: XY toleranc
 
 The runner owns bootstrap, composite and rosbag process groups. One observer runs in the runner process and supplies typed facts to the pure evaluator. The recorder stores only the explicit approved topic set, including hidden action topics, with simulation time and configured QoS overrides. `identity.json`, `resolved_config.json`, `runtime.log`, `capture/`, `acceptance.json`, and `metrics.json` are the only six evidence heads. JSON writes are finite and atomic; duplicate JSON keys are rejected on input. No source-file pins, sidecars, per-sample hashes, native lifecycle retention, or manifest hierarchy is part of active acceptance.
 
-Runtime authorization is separate and must explicitly bind the exact integrated candidate commit, global `config_hash`, run ID and exclusive output target. Sim-only E-stop release/rearm requires the separate explicit authorization bit; the runner never defaults it true. This ACR grants no runtime or integration permission.
+Runtime authorization is separate and must explicitly bind the exact candidate commit, global `config_hash`, run ID and exclusive output target. Sim-only E-stop release/rearm requires the separate explicit authorization bit; the runner never defaults it true. This ACR grants no runtime or integration permission.
 
 ## Retired from active acceptance
 

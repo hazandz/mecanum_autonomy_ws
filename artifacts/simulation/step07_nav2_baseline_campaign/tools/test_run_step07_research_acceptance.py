@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import io
+import math
 from pathlib import Path
 import signal
 import sys
+import threading
 import time
 from types import ModuleType
 from types import SimpleNamespace
@@ -140,6 +142,166 @@ def test_process_group_cleanup_detects_child_after_leader_exit_and_zombie(monkey
         "composite", FakeProcess(), time.monotonic(), io.BytesIO(), 12345)
     zombie = ProcessOwner().stop_one(owned, grace_s=0.01)
     assert zombie["sigint_timeout"] and zombie["group_members"] == [(23456, "Z")]
+
+
+def test_cleanup_reaps_exited_launcher_before_deciding_group_is_empty(
+    monkeypatch,
+):
+    """Reap a direct child before treating its process group as empty."""
+    members = [(12345, 'Z')]
+
+    class FakeProcess:
+        pid = 12345
+
+        def poll(self):
+            members.clear()
+            return 0
+
+        def wait(self, timeout=None):
+            self.waited = True
+            return 0
+
+    import io
+    process = FakeProcess()
+    process.waited = False
+
+    def group_members(pgid):
+        return tuple(members)
+
+    monkeypatch.setattr(
+        ProcessOwner, '_group_members', staticmethod(group_members)
+    )
+    owned = OwnedProcess(
+        'composite', process, time.monotonic(), io.BytesIO(), 12345
+    )
+    result = ProcessOwner().stop_one(owned)
+    assert result['stopped'] is True and result['returncode'] == 0
+    assert process.waited is True
+
+
+def test_procfs_race_is_ignored_but_permission_error_is_unknown(monkeypatch):
+    """Ignore an exited PID while preserving real procfs inspection errors."""
+    import run_step07_research_acceptance as runner_module
+
+    class Entry:
+        def __init__(self, name, raw=None, error=None):
+            self.name, self.raw, self.error = name, raw, error
+
+        def __truediv__(self, value):
+            return self
+
+        def read_text(self, encoding):
+            if self.error:
+                raise self.error
+            return self.raw
+
+    class Proc:
+        def is_dir(self): return True
+
+        def iterdir(self):
+            return iter((
+                Entry('110', error=FileNotFoundError()),
+                Entry('111', '111 (owned child) S 1 77 0'),
+            ))
+
+    monkeypatch.setattr(runner_module, 'Path', lambda _: Proc())
+    assert ProcessOwner._group_members(77) == ((111, 'S'),)
+
+    class DeniedProc(Proc):
+        def iterdir(self):
+            return iter((Entry('112', error=PermissionError()),))
+
+    monkeypatch.setattr(runner_module, 'Path', lambda _: DeniedProc())
+    assert ProcessOwner._group_members(77) is None
+
+
+def test_group_inspection_failure_does_not_block_next_cleanup(monkeypatch):
+    """Continue cleanup of the second owned group after the first fails."""
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid, self.returncode = pid, None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    groups = {101: None, 202: ((202, 'S'),)}
+    sent = []
+
+    def members(pgid): return groups[pgid]
+
+    def send(pgid, sig):
+        sent.append((pgid, sig))
+        groups[pgid] = ()
+
+    monkeypatch.setattr(ProcessOwner, '_group_members', staticmethod(members))
+    monkeypatch.setattr('run_step07_research_acceptance.os.killpg', send)
+    import io
+    owner = ProcessOwner()
+    owner.processes.extend((
+        OwnedProcess(
+            'bad', FakeProcess(101), time.monotonic(), io.BytesIO(), 101
+        ),
+        OwnedProcess(
+            'good', FakeProcess(202), time.monotonic(), io.BytesIO(), 202
+        ),
+    ))
+    results = owner.stop_all(('bad', 'good'), grace_s=0.02)
+    assert (
+        results[0]['group_inspection_error']
+        == 'OWNED_PROCESS_GROUP_STATUS_UNKNOWN'
+    )
+    assert results[1]['stopped'] is True
+    assert sent == [(202, signal.SIGINT)]
+
+
+def test_sigkill_containment_fails_a10_without_finalized_capture(monkeypatch):
+    """Mark containment as cleanup failure if capture was not finalized."""
+    class FakeProcess:
+        pid = 303
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    process = FakeProcess()
+    members = [(303, 'S')]
+    sent = []
+
+    def send(pgid, sig):
+        sent.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            members.clear()
+            process.returncode = 0
+
+    def group_members(pgid):
+        return tuple(members)
+
+    monkeypatch.setattr(
+        ProcessOwner, '_group_members', staticmethod(group_members)
+    )
+    monkeypatch.setattr('run_step07_research_acceptance.os.killpg', send)
+    import io
+    owner = ProcessOwner()
+    owned = OwnedProcess(
+        'recorder', process, time.monotonic(), io.BytesIO(), 303
+    )
+    owner.processes.append(owned)
+    result = owner.stop_all(
+        ('recorder',), grace_s=0.01, capture_finalized=lambda: False
+    )
+    assert sent == [(303, signal.SIGINT), (303, signal.SIGKILL)]
+    assert (
+        result[0]['sigkill_required'] is True
+        and result[0]['stopped'] is True
+    )
 
 
 def test_sigterm_fallback_waits_for_capture_finalize_and_records_escalation(monkeypatch):
@@ -427,6 +589,394 @@ def test_production_tf_lookup_returns_no_vector_for_unavailable_or_expired_path(
         rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)))
     runner.observer.tf_buffer.lookup_transform = lambda *args, **kwargs: transform
     assert runner._lookup_local_reference(100, now, 100, time.monotonic() + 1.0) is None
+
+
+def _production_observation_runner(monkeypatch, *, tf_available=True):
+    from collections import deque
+    from mecanum_nav_rl.observations.step07_research_acceptance import (
+        Context, PathSnapshot, StampedFact,
+    )
+
+    clock_type = _install_fake_ros_time(monkeypatch)
+    now_ros = 20_000_000_000
+    now_steady = time.monotonic_ns()
+    context = Context(4, 2, 3, 'a' * 64)
+    lifecycle = StampedFact(
+        now_ros, now_steady, 'base_link',
+        {'primary_state': 2, 'barrier_state': 1, 'motion_permitted': True},
+        context,
+    )
+    scan_value = SimpleNamespace(
+        header=SimpleNamespace(frame_id='lidar_frame'),
+        ranges=[2.0] * 360,
+        angle_min=-math.pi,
+        angle_increment=2*math.pi/360,
+        range_min=0.1,
+        range_max=10.0,
+    )
+
+    def odom_message(stamp_ns):
+        def vector3():
+            return SimpleNamespace(x=0.0, y=0.0, z=0.0)
+
+        return SimpleNamespace(
+            header=SimpleNamespace(frame_id='odom', stamp_ns=stamp_ns),
+            child_frame_id='base_link',
+            pose=SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=vector3(),
+                    orientation=SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0
+                    ),
+                ),
+                covariance=[0.0]*36,
+            ),
+            twist=SimpleNamespace(
+                twist=SimpleNamespace(
+                    linear=SimpleNamespace(x=0.1, y=-0.05, z=0.0),
+                    angular=SimpleNamespace(x=0.0, y=0.0, z=0.2),
+                ),
+                covariance=[0.0]*36,
+            ),
+        )
+
+    odom_value = odom_message(now_ros-1_000_000)
+
+    def lookup(target, source, stamp, *, timeout):
+        assert (target, source) == ('base_link', 'map')
+        assert stamp.nanoseconds == odom_value.header.stamp_ns
+        if not tf_available:
+            raise LookupError('exact-time TF unavailable')
+        return SimpleNamespace(
+            transform=SimpleNamespace(
+                translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            )
+        )
+
+    observer = SimpleNamespace(
+        context=context, clock_ns=now_ros, clock_rollback=False,
+        barrier_sequence=7, barrier_stamp_ns=1, lifecycle=lifecycle,
+        scans=deque(), odometry=deque(), wheel=deque(), imu=deque(),
+        receipts=deque(),
+        localization=deque(),
+        node=SimpleNamespace(
+            get_clock=lambda: SimpleNamespace(
+                now=lambda: SimpleNamespace(nanoseconds=observer.clock_ns)
+            )
+        ),
+        tf_buffer=SimpleNamespace(lookup_transform=lookup),
+        lookup_transform=lambda *args: None,
+        tf_edge_owners={
+            ('map', 'odom'): {'amcl'},
+            ('odom', 'base_link'): {'ekf_filter_node'},
+            ('base_link', 'lidar_frame'): {'robot_state_publisher'},
+        },
+        tf_edge_unresolved=set(),
+        _Duration=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    # Clock callback in the fake node reads this assigned observer dynamically.
+    observer.clock_ns = now_ros
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = observer
+    runner.rclpy = SimpleNamespace(clock=SimpleNamespace(ClockType=clock_type))
+    runner.path_snapshot = PathSnapshot(
+        ((0.0, 0.0), (1.0, 0.0), (2.0, 0.0)),
+        'path-request', (-4.0, 0.0), 'warehouse_map2', 'b' * 64, context,
+        now_steady-10_000_000, now_steady+10_000_000_000,
+    )
+    runner.goal_barrier_sequence = 7
+    runner.goal_barrier_stamp_ns = 1
+    runner.action_accept_ns = 1
+    runner.used_pairs = set()
+    runner.last_progress_arc = None
+    runner.now_steady = time.monotonic
+    runner.config_hash = context.config_hash
+    runner.state = CampaignState()
+    runner.log_stream = io.StringIO()
+    runner._test_scan_value = scan_value
+    runner._test_odom_value = odom_value
+    runner._test_context = context
+    runner._test_receipt = StampedFact(
+        now_ros-1_000_000, now_steady, 'base_link', {
+            'command': (0.1, -0.05, 0.2), 'source': 2, 'sequence': 3,
+            'final_publish_sequence': 8,
+        }, context,
+    )
+
+    def update(index, *, scan_stamp=None, odom_stamp=None):
+        cutoff = now_ros + (index+1)*10_000_000
+        steady = time.monotonic_ns()
+        observer.clock_ns = cutoff
+        observer.lifecycle = StampedFact(
+            cutoff, steady, 'base_link', {
+                'primary_state': 2, 'barrier_state': 1,
+                'motion_permitted': True,
+            }, context,
+        )
+        scan_value.header.stamp_ns = (
+            scan_stamp if scan_stamp is not None else cutoff-1_000_000
+        )
+        odom_value.header.stamp_ns = (
+            odom_stamp if odom_stamp is not None else cutoff-1_000_000
+        )
+        observer.scans.clear()
+        observer.scans.append(StampedFact(
+            scan_value.header.stamp_ns, steady, 'lidar_frame', scan_value,
+            context,
+        ))
+        observer.odometry.clear()
+        observer.odometry.append(StampedFact(
+            odom_value.header.stamp_ns, steady, 'base_link', odom_value,
+            context,
+        ))
+        observer.wheel.clear()
+        observer.wheel.append(StampedFact(
+            cutoff-1_000_000, steady, 'odom',
+            odom_message(cutoff-1_000_000), context,
+        ))
+        observer.imu.clear()
+        zeros = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+        imu_message = SimpleNamespace(
+            header=SimpleNamespace(frame_id='base_link'),
+            angular_velocity=zeros,
+            linear_acceleration=zeros,
+            angular_velocity_covariance=[0.0]*9,
+            linear_acceleration_covariance=[0.0]*9,
+            orientation_covariance=[0.0]*9,
+        )
+        observer.imu.append(StampedFact(
+            cutoff-1_000_000, steady, 'base_link', imu_message, context,
+        ))
+        observer.localization.clear()
+        observer.localization.append({
+            'stamp_ns': cutoff-1_000_000,
+            'received_steady_ns': steady,
+            'frame_id': 'map',
+            'pose': (0.0, 0.0, 0.0),
+            'covariance': (0.01, 0.01, 0.01),
+        })
+        observer.receipts.clear()
+        receipt = runner._test_receipt
+        observer.receipts.append(StampedFact(
+            receipt.stamp_ns, steady, receipt.frame_id, receipt.value, context,
+        ))
+    runner._update_test_observation = update
+    return runner
+
+
+def test_production_collect_one_observation_builds_five_distinct_81d_pairs(
+    monkeypatch,
+):
+    """Collect five production-path vectors from five distinct input pairs."""
+    runner = _production_observation_runner(monkeypatch)
+    deadline = time.monotonic()+3.0
+    for i in range(5):
+        runner._update_test_observation(i)
+        assert runner._collect_one_observation(deadline) is True
+    assert len(runner.state.valid_observations) == 5
+    assert all(
+        item['dtype'] == 'float32'
+        and item['shape'] == [81]
+        and len(item['vector']) == 81
+        for item in runner.state.valid_observations
+    )
+    pairs = {(item['scan_stamp_ns'], item['odom_stamp_ns'])
+             for item in runner.state.valid_observations}
+    assert len(pairs) == 5
+    assert runner._collect_one_observation(deadline) is False
+    assert len(runner.state.valid_observations) == 5
+
+
+@pytest.mark.parametrize('mutation', [
+    'stale', 'future', 'lifecycle', 'clock_rollback', 'tf_unavailable'
+])
+def test_production_collect_one_observation_rejects_invalid_live_facts(
+    monkeypatch, mutation,
+):
+    """Reject invalid live facts on the direct observation collection path."""
+    runner = _production_observation_runner(
+        monkeypatch, tf_available=mutation != 'tf_unavailable'
+    )
+    runner._update_test_observation(0)
+    if mutation == 'stale':
+        runner._update_test_observation(
+            0, scan_stamp=runner.observer.clock_ns-600_000_000
+        )
+    elif mutation == 'future':
+        runner._update_test_observation(
+            0, odom_stamp=runner.observer.clock_ns+1
+        )
+    elif mutation == 'lifecycle':
+        runner.observer.lifecycle.value['barrier_state'] = 2
+        runner.observer.lifecycle.value['motion_permitted'] = False
+    elif mutation == 'clock_rollback':
+        runner.observer.clock_rollback = True
+    deadline = time.monotonic()+(0.03 if mutation == 'tf_unavailable' else 1.0)
+    if mutation in ('lifecycle', 'clock_rollback', 'stale', 'future'):
+        with pytest.raises(AcceptanceFailure):
+            runner._collect_one_observation(deadline)
+    else:
+        assert runner._collect_one_observation(deadline) is False
+    assert runner.state.valid_observations == []
+
+
+def _prepare_mission_health_check(runner):
+    runner.started_steady = time.monotonic()-459.95
+    runner.now_steady = time.monotonic
+    runner._send_one_plan = lambda: None
+    runner._goal_pose = lambda: SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace())
+    )
+
+    class ResultFuture:
+        def done(self): return False
+
+    class GoalHandle:
+        accepted = True
+        goal_id = SimpleNamespace(uuid=b'goal')
+        def get_result_async(self): return ResultFuture()
+
+    class ReadyFuture:
+        def __init__(self, value): self.value = value
+        def done(self): return True
+        def exception(self): return None
+        def result(self): return self.value
+    runner.observer.send_navigation = lambda goal: ReadyFuture(GoalHandle())
+    runner._check_launch_processes = lambda: None
+    runner.state.valid_observations = [{'shape': [81]} for _ in range(5)]
+    runner.mission_deadline_steady = time.monotonic()+1.0
+
+
+@pytest.mark.parametrize(
+    'mutation', ['nonready', 'stale_input', 'stale_ros_odom', 'clock_rollback']
+)
+def test_production_mission_rechecks_health_after_fifth_observation(
+    monkeypatch, mutation,
+):
+    """Keep production mission health admission active after sample five."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    _prepare_mission_health_check(runner)
+    if mutation == 'nonready':
+        runner.observer.lifecycle.value['barrier_state'] = 2
+        runner.observer.lifecycle.value['motion_permitted'] = False
+    elif mutation == 'stale_input':
+        fact = runner.observer.scans[-1]
+        runner.observer.scans[-1] = type(fact)(
+            fact.stamp_ns, fact.received_steady_ns-600_000_000,
+            fact.frame_id, fact.value, fact.context, fact.identity,
+        )
+    elif mutation == 'stale_ros_odom':
+        fact = runner.observer.odometry[-1]
+        runner.observer.odometry[-1] = type(fact)(
+            runner.observer.clock_ns-300_000_000,
+            time.monotonic_ns(), fact.frame_id, fact.value, fact.context,
+            fact.identity,
+        )
+    else:
+        runner.observer.clock_rollback = True
+    with pytest.raises(AcceptanceFailure):
+        runner._mission()
+    assert runner.state.facts['A7']['pass'] is False
+    assert runner.state.facts['A9']['pass'] is False
+    assert runner.state.primary_failure is not None
+    if mutation in ('stale_input', 'nonready', 'clock_rollback'):
+        assert runner.state.facts['A2']['pass'] is False
+    if mutation == 'stale_ros_odom':
+        assert runner.state.facts['A3']['pass'] is False
+
+
+def test_settle_rejects_ros_stale_odometry(monkeypatch):
+    """Reject old ROS-stamped odometry during production settle checks."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    fact = runner.observer.odometry[-1]
+    runner.observer.odometry[-1] = type(fact)(
+        runner.observer.clock_ns-300_000_000,
+        time.monotonic_ns(), fact.frame_id, fact.value, fact.context,
+        fact.identity,
+    )
+    runner.mission_deadline_steady = time.monotonic()+0.05
+    assert runner._wait_for_settle(time.monotonic()+0.05) is False
+    assert runner.state.facts['A3']['pass'] is False
+    assert runner.state.facts['A9']['pass'] is False
+
+
+def test_navigation_success_requires_fresh_settle(monkeypatch):
+    """Require the real navigation success path to observe a fresh settle."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    runner.started_steady = time.monotonic()-10.0
+    runner.mission_deadline_steady = time.monotonic()+3.0
+    runner.observer.odometry[-1].value.twist.twist.linear.x = 0.0
+    runner.observer.odometry[-1].value.twist.twist.linear.y = 0.0
+    runner.observer.odometry[-1].value.twist.twist.angular.z = 0.0
+    runner.observer.localization[-1]['pose'] = (-4.0, 0.0, 0.0)
+    stop = threading.Event()
+
+    def refresh():
+        index = 1
+        while not stop.is_set():
+            runner._update_test_observation(index)
+            runner.observer.odometry[-1].value.twist.twist.linear.x = 0.0
+            runner.observer.odometry[-1].value.twist.twist.linear.y = 0.0
+            runner.observer.odometry[-1].value.twist.twist.angular.z = 0.0
+            runner.observer.localization[-1]['pose'] = (-4.0, 0.0, 0.0)
+            index += 1
+            time.sleep(0.02)
+    thread = threading.Thread(target=refresh)
+    thread.start()
+    try:
+        outcome = runner._navigation_outcome(
+            SimpleNamespace(status=4, result=SimpleNamespace())
+        )
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert outcome['pass'] is True
+    assert outcome['measured']['settled'] is True
+
+
+def test_tf_owner_unknown_and_invalid_owners_are_distinct():
+    """Reject unresolved, wrong and duplicate edge owners distinctly."""
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = SimpleNamespace(tf_edge_owners={
+        ('map', 'odom'): {'amcl'}, ('odom', 'base_link'): {'ekf_filter_node'},
+        ('base_link', 'lidar_frame'): {'robot_state_publisher'}},
+        tf_edge_unresolved={('map', 'odom')})
+    assert runner._tf_ownership_ready() is False
+    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_UNRESOLVED'):
+        runner._observed_tf_owners()
+    runner.observer.tf_edge_unresolved.clear()
+    assert runner._tf_ownership_ready() is True
+    runner.observer.tf_edge_owners[('map', 'odom')].add('other_localizer')
+    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
+        runner._tf_ownership_ready()
+
+
+def test_command_episode_rechecks_current_publisher():
+    """Recheck the actual sole publisher when accepting a retained episode."""
+    runner = object.__new__(ResearchAcceptanceRunner)
+    episode = {
+        'pass': True, 'reason': 'earlier causal episode', 'measured': {},
+    }
+    runner.state = CampaignState(facts={'command_chain_episode': episode})
+    runner.observer = SimpleNamespace(
+        graph_snapshot=lambda: {
+            'topics': {
+                '/cmd_vel': {
+                    'publishers': (
+                        ('other_publisher', '/', 'geometry_msgs/msg/Twist'),
+                    ),
+                },
+            },
+        }
+    )
+    result = runner._command_chain_fact()
+    assert result['pass'] is False
+    assert result['reason'] == 'FINAL_CMD_VEL_OWNER_NOT_SOLE_AT_CONCLUSION'
 
 
 def test_command_chain_correlates_actual_episode_and_retains_success_after_zero_command():

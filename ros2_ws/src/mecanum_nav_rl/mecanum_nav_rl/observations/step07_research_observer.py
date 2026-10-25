@@ -71,51 +71,96 @@ class Step07ResearchObserver:
         self.action_events: deque[dict[str, Any]] = deque(maxlen=128)
         self.map_message: Any = None
         self.tf_edge_owners: dict[tuple[str, str], set[str]] = {}
+        self.tf_edge_unresolved: set[tuple[str, str]] = set()
         self.node = Node(node_name, parameter_overrides=[])
-        self.node.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=True)])
-        self.tf_buffer = Buffer(node=self.node)
-        self.tf_listener = TransformListener(self.tf_buffer, self.node, spin_thread=False)
-        self.compute_path_client = ActionClient(self.node, ComputePathToPose, "/compute_path_to_pose")
-        self.navigate_client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
-        scan_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
-                              reliability=ReliabilityPolicy.BEST_EFFORT,
-                              durability=DurabilityPolicy.VOLATILE)
-        reliable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
-                              reliability=ReliabilityPolicy.RELIABLE,
-                              durability=DurabilityPolicy.VOLATILE)
-        receipt_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
-                                 reliability=ReliabilityPolicy.RELIABLE,
-                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        tf_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=100,
-                            reliability=ReliabilityPolicy.BEST_EFFORT,
-                            durability=DurabilityPolicy.VOLATILE)
-        tf_static_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
-                                   reliability=ReliabilityPolicy.RELIABLE,
-                                   durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self._subs = [
-            self.node.create_subscription(Clock, "/clock", self._clock_cb, reliable),
-            self.node.create_subscription(LaserScan, "/scan", self._scan, scan_qos),
-            self.node.create_subscription(Odometry, "/wheel/odometry_raw", self._wheel, reliable),
-            self.node.create_subscription(Imu, "/imu/data", self._imu, reliable),
-            self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, reliable),
-            self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl, reliable),
-            self.node.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._lifecycle_cb, reliable),
-            self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos),
-            self.node.create_subscription(Twist, "/mecanum/nav2_candidate_cmd", self._candidate, reliable),
-            self.node.create_subscription(Twist, "/cmd_vel", self._cmd_vel, reliable),
-            self.node.create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd", self._accepted, reliable),
-            self.node.create_subscription(SafetyState, "/mecanum/safety_state", self._safety, reliable),
-            self.node.create_subscription(OccupancyGrid, "/map", self._map, reliable),
-            self.node.create_subscription(TFMessage, "/tf", self._tf, tf_qos,
-                                          **{"with_info": True}),
-            self.node.create_subscription(TFMessage, "/tf_static", self._tf_static,
-                                          tf_static_qos, **{"with_info": True}),
-        ]
-        self.safety_reset_client = self.node.create_client(Trigger, "/mecanum/safety/request_reset")
-        self.safety_rearm_client = self.node.create_client(Trigger, "/mecanum/safety/rearm")
-        self.lifecycle_clients = {name: self.node.create_client(GetState, f"/{name}/get_state")
-                                  for name in ("map_server", "amcl", "planner_server",
-                                               "controller_server", "behavior_server", "bt_navigator")}
+        self._subs = []
+        try:
+            self.node.set_parameters([
+                rclpy.parameter.Parameter('use_sim_time', value=True)
+            ])
+            self.tf_buffer = Buffer(node=self.node)
+            self.tf_listener = TransformListener(
+                self.tf_buffer, self.node, spin_thread=False
+            )
+            self.compute_path_client = ActionClient(
+                self.node, ComputePathToPose, '/compute_path_to_pose'
+            )
+            self.navigate_client = ActionClient(self.node, NavigateToPose, '/navigate_to_pose')
+            scan_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
+                                  reliability=ReliabilityPolicy.BEST_EFFORT,
+                                  durability=DurabilityPolicy.VOLATILE)
+            reliable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
+                                  reliability=ReliabilityPolicy.RELIABLE,
+                                  durability=DurabilityPolicy.VOLATILE)
+            receipt_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                     reliability=ReliabilityPolicy.RELIABLE,
+                                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            tf_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=100,
+                                reliability=ReliabilityPolicy.BEST_EFFORT,
+                                durability=DurabilityPolicy.VOLATILE)
+            tf_static_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                       reliability=ReliabilityPolicy.RELIABLE,
+                                       durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self._subs = [
+                self.node.create_subscription(Clock, '/clock', self._clock_cb, reliable),
+                self.node.create_subscription(
+                    LaserScan, "/scan", self._scan, scan_qos
+                ),
+                self.node.create_subscription(Odometry, "/wheel/odometry_raw", self._wheel, reliable),
+                self.node.create_subscription(Imu, "/imu/data", self._imu, reliable),
+                self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, reliable),
+                self.node.create_subscription(
+                    PoseWithCovarianceStamped, "/amcl_pose", self._amcl,
+                    reliable
+                ),
+                self.node.create_subscription(
+                    SafetyLifecycleState, "/mecanum/safety_lifecycle_state",
+                    self._lifecycle_cb, reliable
+                ),
+                self.node.create_subscription(
+                    FinalIssuedCommandReceipt, "/mecanum/final_issued_command",
+                    self._receipt, receipt_qos
+                ),
+                self.node.create_subscription(
+                    Twist, "/mecanum/nav2_candidate_cmd", self._candidate,
+                    reliable
+                ),
+                self.node.create_subscription(Twist, '/cmd_vel', self._cmd_vel, reliable),
+                self.node.create_subscription(
+                    CommandEnvelope, "/mecanum/safety_accepted_cmd",
+                    self._accepted, reliable
+                ),
+                self.node.create_subscription(
+                    SafetyState, "/mecanum/safety_state", self._safety,
+                    reliable
+                ),
+                self.node.create_subscription(
+                    OccupancyGrid, '/map', self._map, reliable
+                ),
+                self.node.create_subscription(
+                    TFMessage, '/tf', self._tf, tf_qos
+                ),
+                self.node.create_subscription(
+                    TFMessage, '/tf_static', self._tf_static, tf_static_qos
+                ),
+            ]
+            self.safety_reset_client = self.node.create_client(Trigger, '/mecanum/safety/request_reset')
+            self.safety_rearm_client = self.node.create_client(Trigger, '/mecanum/safety/rearm')
+            self.lifecycle_clients = {
+                name: self.node.create_client(GetState, f'/{name}/get_state')
+                for name in (
+                    'map_server', 'amcl', 'planner_server',
+                    'controller_server', 'behavior_server', 'bt_navigator',
+                )
+            }
+
+        except BaseException:
+            try:
+                self.node.destroy_node()
+            except Exception:
+                pass
+            self._subs.clear()
+            raise
 
     @staticmethod
     def _stamp(value: Any) -> int:
@@ -143,6 +188,7 @@ class Step07ResearchObserver:
                        self.localization):
             stream.clear()
         self.tf_edge_owners.clear()
+        self.tf_edge_unresolved.clear()
 
     @staticmethod
     def _insert_ordered(stream: deque[StampedFact], fact: StampedFact) -> None:
@@ -225,7 +271,7 @@ class Step07ResearchObserver:
         self._record_tf_edges("/tf_static", msg, message_info)
 
     def _record_tf_edges(self, topic: str, msg: Any, message_info: Any) -> None:
-        owner = "UNKNOWN"
+        owner = None
         try:
             publisher_gid = bytes(message_info.publisher_gid)
             endpoints = self.node.get_publishers_info_by_topic(topic)
@@ -238,7 +284,15 @@ class Step07ResearchObserver:
         with self._lock:
             for item in msg.transforms:
                 key = (str(item.header.frame_id), str(item.child_frame_id))
-                self.tf_edge_owners.setdefault(key, set()).add(owner)
+                if owner is None:
+                    # Discovery may not have exposed endpoint metadata yet.
+                    # Do not retain UNKNOWN as a second owner; require a later
+                    # locally mapped edge observation before accepting it.
+                    self.tf_edge_unresolved.add(key)
+                    self.tf_edge_owners.pop(key, None)
+                else:
+                    self.tf_edge_owners.setdefault(key, set()).add(owner)
+                    self.tf_edge_unresolved.discard(key)
 
     def _wheel(self, msg: Any) -> None:
         if not self._valid_odom(msg):

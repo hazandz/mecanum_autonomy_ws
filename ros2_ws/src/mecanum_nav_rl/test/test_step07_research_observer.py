@@ -1,10 +1,11 @@
 """Offline boundary and production method checks for the in-process adapter."""
 
+import ast
+import inspect
+import math
 import sys
 import threading
-import ast
 from collections import deque
-import math
 from types import SimpleNamespace
 
 from mecanum_nav_rl.observations import step07_research_observer as observer_module
@@ -34,6 +35,118 @@ def test_observer_admission_context_is_static_config_plus_real_lifecycle_identit
     context = Context(5, 2, 3, "f" * 64)
     assert context == Context(5, 2, 3, "f" * 64)
     assert context != Context(5, 2, 4, "f" * 64)
+
+
+def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
+    """Install fakes whose subscription API rejects unapproved keywords."""
+    from types import ModuleType
+
+    created = {}
+
+    class FakeNode:
+        def __init__(self, name, *, parameter_overrides):
+            self.name = name
+            self.destroyed = False
+            self.subscriptions = []
+            self.subscription_calls = 0
+            created['node'] = self
+
+        def set_parameters(self, parameters):
+            return [SimpleNamespace(successful=True) for _ in parameters]
+
+        def create_subscription(self, msg_type, topic, callback, qos_profile):
+            self.subscription_calls += 1
+            if self.subscription_calls == fail_subscription_at:
+                raise RuntimeError('strict fake subscription failure')
+            entity = SimpleNamespace(
+                msg_type=msg_type,
+                topic=topic,
+                callback=callback,
+                qos_profile=qos_profile,
+            )
+            self.subscriptions.append(entity)
+            return entity
+
+        def create_client(self, srv_type, name):
+            return SimpleNamespace(service_type=srv_type, name=name)
+
+        def destroy_node(self):
+            self.destroyed = True
+
+    class FakeQoS:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def module(name, **attrs):
+        value = ModuleType(name)
+        value.__dict__.update(attrs)
+        monkeypatch.setitem(sys.modules, name, value)
+        return value
+
+    module(
+        'rclpy',
+        parameter=SimpleNamespace(Parameter=lambda *a, **k: (a, k)),
+        clock=SimpleNamespace(
+            ClockType=SimpleNamespace(ROS_TIME=1, STEADY_TIME=2)
+        ),
+    )
+    module('rclpy.action', ActionClient=lambda *a, **k: SimpleNamespace())
+    module(
+        'rclpy.duration',
+        Duration=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    module('rclpy.node', Node=FakeNode)
+    module('rclpy.qos', QoSProfile=FakeQoS,
+           DurabilityPolicy=SimpleNamespace(VOLATILE=1, TRANSIENT_LOCAL=2),
+           HistoryPolicy=SimpleNamespace(KEEP_LAST=1),
+           ReliabilityPolicy=SimpleNamespace(BEST_EFFORT=1, RELIABLE=2))
+    for package, submodule, names in (
+        ('sensor_msgs', 'msg', ('LaserScan', 'Imu')),
+        ('nav_msgs', 'msg', ('Odometry', 'Path', 'OccupancyGrid')),
+        ('tf2_msgs', 'msg', ('TFMessage',)),
+        ('geometry_msgs', 'msg', ('PoseWithCovarianceStamped', 'Twist')),
+        ('rosgraph_msgs', 'msg', ('Clock',)),
+        ('nav2_msgs', 'action', ('ComputePathToPose', 'NavigateToPose')),
+        (
+            'mecanum_nav_rl_interfaces', 'msg',
+            (
+                'SafetyLifecycleState', 'FinalIssuedCommandReceipt',
+                'CommandEnvelope', 'SafetyState',
+            ),
+        ),
+        ('std_srvs', 'srv', ('Trigger',)),
+        ('lifecycle_msgs', 'srv', ('GetState',)),
+    ):
+        parent = module(package)
+        child = module(
+            f'{package}.{submodule}',
+            **{name: type(name, (), {}) for name in names},
+        )
+        setattr(parent, submodule, child)
+    module('tf2_ros', Buffer=lambda **kwargs: SimpleNamespace(),
+           TransformListener=lambda *a, **k: SimpleNamespace())
+    return created
+
+
+def test_observer_constructor_uses_jazzy_callback_and_cleans_node(monkeypatch):
+    """Use strict fake subscriptions and verify constructor rollback."""
+    created = _install_strict_fake_ros(monkeypatch)
+    observer_module.Step07ResearchObserver(config_hash='c' * 64)
+    node = created['node']
+    by_topic = {item.topic: item.callback for item in node.subscriptions}
+    assert len(inspect.signature(by_topic['/tf']).parameters) == 2
+    assert len(inspect.signature(by_topic['/tf_static']).parameters) == 2
+
+    failed = _install_strict_fake_ros(monkeypatch, fail_subscription_at=2)
+    try:
+        observer_module.Step07ResearchObserver(config_hash='c' * 64)
+    except RuntimeError as error:
+        assert str(error) == 'strict fake subscription failure'
+    else:
+        raise AssertionError(
+            'strict create_subscription accepted an invalid API keyword'
+        )
+    assert failed['node'].destroyed is True
 
 
 def _lifecycle_message(*, sec, barrier_sec, sequence=4, generation=3, epoch=2,
@@ -129,3 +242,33 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     message.pose.pose.position.x = math.inf
     observer._amcl(message)
     assert len(observer.localization) == 1
+
+
+def test_tf_owner_metadata_can_resolve_after_initial_discovery_gap():
+    """Keep unresolved TF discovery separate from a later mapped endpoint."""
+    observer = object.__new__(observer_module.Step07ResearchObserver)
+    observer._lock = threading.RLock()
+    observer.tf_edge_owners = {}
+    observer.tf_edge_unresolved = set()
+    edge = SimpleNamespace(
+        header=SimpleNamespace(frame_id='map'), child_frame_id='odom'
+    )
+    message = SimpleNamespace(transforms=[edge])
+    endpoint_gid = b'endpoint-gid'
+    observer.node = SimpleNamespace(
+        get_publishers_info_by_topic=lambda _topic: []
+    )
+
+    observer._record_tf_edges(
+        '/tf', message, SimpleNamespace(publisher_gid=endpoint_gid)
+    )
+    assert observer.tf_edge_unresolved == {('map', 'odom')}
+    assert observer.tf_edge_owners == {}
+
+    endpoint = SimpleNamespace(endpoint_gid=endpoint_gid, node_name='amcl')
+    observer.node.get_publishers_info_by_topic = lambda _topic: [endpoint]
+    observer._record_tf_edges(
+        '/tf', message, SimpleNamespace(publisher_gid=endpoint_gid)
+    )
+    assert observer.tf_edge_unresolved == set()
+    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}

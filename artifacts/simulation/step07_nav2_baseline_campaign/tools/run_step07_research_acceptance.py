@@ -236,16 +236,26 @@ class ProcessOwner:
             return None
         members = []
         try:
-            for entry in proc.iterdir():
-                if not entry.name.isdigit():
-                    continue
+            entries = tuple(proc.iterdir())
+        except OSError:
+            return None
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
                 raw = (entry / "stat").read_text(encoding="ascii")
+            except FileNotFoundError:
+                # A process can exit between enumeration and stat read.
+                continue
+            except OSError:
+                return None
+            try:
                 fields = raw[raw.rfind(")")+2:].split()
                 state, group = fields[0], int(fields[2])
                 if group == pgid:
                     members.append((int(entry.name), state))
-        except (OSError, ValueError, IndexError):
-            return None
+            except (ValueError, IndexError):
+                return None
         return tuple(members)
 
     @staticmethod
@@ -262,79 +272,163 @@ class ProcessOwner:
         except ProcessLookupError:
             return
 
-    def stop_one(self, owned: OwnedProcess, *, grace_s: float = 5.0) -> dict[str, Any]:
+    @staticmethod
+    def _poll_and_reap(process: subprocess.Popen[bytes]) -> int | None:
+        result = process.poll()
+        if result is not None:
+            try:
+                process.wait(timeout=0)
+            except (subprocess.TimeoutExpired, ChildProcessError):
+                pass
+        return result
+
+    @staticmethod
+    def _wait_launcher_exit(
+        process: subprocess.Popen[bytes], deadline: float
+    ) -> int | None:
+        result = ProcessOwner._poll_and_reap(process)
+        if result is None:
+            try:
+                result = process.wait(
+                    timeout=max(0.0, deadline-time.monotonic())
+                )
+            except (subprocess.TimeoutExpired, ChildProcessError):
+                result = ProcessOwner._poll_and_reap(process)
+        return result
+
+    @classmethod
+    def _wait_for_group_empty(
+        cls, owned: OwnedProcess, deadline: float
+    ) -> tuple[bool, tuple[tuple[int, str], ...] | None]:
+        members: tuple[tuple[int, str], ...] | None = None
+        while True:
+            cls._poll_and_reap(owned.process)
+            members = cls._group_members(owned.pgid)
+            if members is None or not members:
+                return members == (), members
+            if time.monotonic() >= deadline:
+                return False, members
+            time.sleep(min(0.02, max(0.0, deadline-time.monotonic())))
+
+    def stop_one(self, owned: OwnedProcess, *, grace_s: float = 5.0,
+                 deadline: float | None = None) -> dict[str, Any]:
         if owned.stopped:
-            return {"name": owned.name, "returncode": owned.process.poll(), "stopped": True}
-        result: dict[str, Any] = {"name": owned.name, "returncode": owned.process.poll(),
-                                  "stopped": False}
+            return {
+                'name': owned.name,
+                'returncode': self._poll_and_reap(owned.process),
+                'stopped': True,
+            }
+        result: dict[str, Any] = {
+            'name': owned.name,
+            'returncode': self._poll_and_reap(owned.process),
+            'stopped': False,
+        }
+        initial_members = self._group_members(owned.pgid)
+        if initial_members is None:
+            result['group_inspection_error'] = (
+                'OWNED_PROCESS_GROUP_STATUS_UNKNOWN'
+            )
+            return result
+        if not initial_members and result['returncode'] is not None:
+            owned.stopped = True
+            result.update({'stopped': True, 'group_members': []})
+            return result
         try:
             self._signal_owned_group(owned, signal.SIGINT)
         except RuntimeError as error:
             result["group_inspection_error"] = str(error)
             return result
-        deadline = time.monotonic() + grace_s
-        while time.monotonic() < deadline:
-            members = self._group_members(owned.pgid)
-            if members == ():
-                if owned.process.poll() is None:
-                    try:
-                        result["returncode"] = owned.process.wait(timeout=max(0.01, deadline-time.monotonic()))
-                    except subprocess.TimeoutExpired:
-                        pass
-                owned.stopped = owned.process.poll() is not None
-                result.update({"returncode": owned.process.poll(), "stopped": owned.stopped,
-                               "group_members": []})
-                if not owned.stopped:
-                    result["sigint_timeout"] = True
-                return result
-            if members is None:
-                result["group_inspection_error"] = "OWNED_PROCESS_GROUP_STATUS_UNKNOWN"
-                return result
-            time.sleep(0.02)
-        result.update({"sigint_timeout": True, "stopped": False,
-                       "group_members": list(self._group_members(owned.pgid) or ())})
+        local_deadline = time.monotonic()+max(0.0, grace_s)
+        if deadline is not None:
+            local_deadline = min(local_deadline, deadline)
+        empty, members = self._wait_for_group_empty(owned, local_deadline)
+        if members is None:
+            result['group_inspection_error'] = (
+                'OWNED_PROCESS_GROUP_STATUS_UNKNOWN'
+            )
+            return result
+        if empty:
+            result['returncode'] = self._wait_launcher_exit(
+                owned.process, local_deadline
+            )
+            owned.stopped = result['returncode'] is not None
+            result.update({'stopped': owned.stopped, 'group_members': []})
+            if not owned.stopped:
+                result['sigint_timeout'] = True
+        else:
+            result.update({'sigint_timeout': True, 'stopped': False,
+                           'group_members': list(members)})
         return result
 
     def stop_all(self, order: Iterable[str] | None = None, *, grace_s: float = 2.0,
-                 capture_finalized: Callable[[], bool] = lambda: False) -> list[dict[str, Any]]:
+                 capture_finalized: Callable[[], bool] = lambda: False,
+                 deadline: float | None = None) -> list[dict[str, Any]]:
         lookup = {p.name: p for p in self.processes}
         names = tuple(order or reversed([p.name for p in self.processes]))
-        results = [self.stop_one(lookup[name], grace_s=grace_s)
-                   for name in names if name in lookup]
-        pending = {item["name"]: item for item in results if item.get("sigint_timeout")}
-        if pending and capture_finalized():
-            for name, item in pending.items():
-                owned = lookup[name]
-                self._signal_owned_group(owned, signal.SIGTERM)
-                try:
-                    item["returncode"] = owned.process.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    item["returncode"] = owned.process.poll()
-                members = self._group_members(owned.pgid)
-                item["group_members"] = list(members or ())
-                item["stopped"] = members == () and owned.process.poll() is not None
-                item["sigterm_escalated_after_finalize"] = True
-                self.warnings.append(f"{name}: launcher-managed SIGTERM after capture finalize")
-                owned.stopped = item["stopped"]
-                if not item["stopped"]:
+        results: list[dict[str, Any]] = []
+        for name in names:
+            if name not in lookup:
+                continue
+            try:
+                item = self.stop_one(
+                    lookup[name], grace_s=grace_s, deadline=deadline
+                )
+            except Exception as error:
+                item = {'name': name, 'stopped': False,
+                        'cleanup_error': f"{type(error).__name__}:{error}"}
+            results.append(item)
+        for item in results:
+            if not item.get('sigint_timeout'):
+                continue
+            name = item['name']
+            owned = lookup[name]
+            try:
+                can_term = capture_finalized()
+                if can_term:
+                    self._signal_owned_group(owned, signal.SIGTERM)
+                    item['sigterm_escalated_after_finalize'] = True
+                    self.warnings.append(
+                        f'{name}: launcher-managed SIGTERM '
+                        'after capture finalize'
+                    )
+                    fallback_deadline = time.monotonic()+2.0
+                    if deadline is not None:
+                        fallback_deadline = min(fallback_deadline, deadline)
+                    empty, members = self._wait_for_group_empty(
+                        owned, fallback_deadline
+                    )
+                    if members is None:
+                        raise RuntimeError(
+                            'OWNED_PROCESS_GROUP_STATUS_UNKNOWN'
+                        )
+                    item['group_members'] = list(members)
+                    item['returncode'] = self._wait_launcher_exit(
+                        owned.process, fallback_deadline
+                    )
+                    item['stopped'] = empty and item['returncode'] is not None
+                    owned.stopped = item['stopped']
+                if not item.get('stopped'):
                     self._signal_owned_group(owned, signal.SIGKILL)
                     item["sigkill_required"] = True
-                    members = self._group_members(owned.pgid)
-                    item["group_members"] = list(members or ())
-                    item["stopped"] = members == () and owned.process.poll() is not None
+                    kill_deadline = time.monotonic()+1.0
+                    if deadline is not None:
+                        kill_deadline = min(kill_deadline, deadline)
+                    empty, members = self._wait_for_group_empty(
+                        owned, kill_deadline
+                    )
+                    if members is None:
+                        raise RuntimeError(
+                            'OWNED_PROCESS_GROUP_STATUS_UNKNOWN_AFTER_SIGKILL'
+                        )
+                    item['group_members'] = list(members)
+                    item['returncode'] = self._wait_launcher_exit(
+                        owned.process, kill_deadline
+                    )
+                    item['stopped'] = empty and item['returncode'] is not None
                     owned.stopped = item["stopped"]
-        elif pending:
-            # Containment targets only the exact process groups this runner
-            # created. Missing finalized capture makes A10 fail independently.
-            for name, item in pending.items():
-                owned = lookup[name]
-                self._signal_owned_group(owned, signal.SIGKILL)
-                item["sigkill_required"] = True
-                members = self._group_members(owned.pgid)
-                item["group_members"] = list(members or ())
-                item["returncode"] = owned.process.poll()
-                item["stopped"] = members == () and item["returncode"] is not None
-                owned.stopped = item["stopped"]
+            except Exception as error:
+                item['stopped'] = False
+                item['cleanup_error'] = f"{type(error).__name__}:{error}"
         return results
 
 
@@ -698,6 +792,13 @@ class ResearchAcceptanceRunner:
         self.state.stage = "A4_TF"
         self._wait_for(lambda: self._tf_chain_usable(self.observer.odometry[-1].stamp_ns), deadline,
             stage="A4_TF", component="tf2", reason="REQUIRED_TF_CHAIN_UNAVAILABLE_AT_SENSOR_STAMP")
+        self._wait_for(
+            self._tf_ownership_ready,
+            deadline,
+            stage='A4_TF',
+            component='tf_publishers',
+            reason='TF_EDGE_OWNER_METADATA_UNRESOLVED',
+        )
         owner_map = self._observed_tf_owners()
         self.state.facts["A4"] = {"pass": True, "reason": "TF_CHAIN_AVAILABLE_AT_SENSOR_TIMESTAMP",
             "measured": {"edges": ["map->odom", "odom->base_link", "base_link->lidar_frame"],
@@ -753,11 +854,41 @@ class ResearchAcceptanceRunner:
         for edge, owner in expected.items():
             owners = self.observer.tf_edge_owners.get(edge, set())
             normalized = {str(name).strip("/").lower() for name in owners}
+            if (edge in getattr(self.observer, 'tf_edge_unresolved', set())
+                    or not normalized):
+                raise AcceptanceFailure(
+                    'A4_TF', 'tf_publishers',
+                    f'TF_EDGE_OWNER_UNRESOLVED:{edge[0]}->{edge[1]}',
+                )
             if normalized != {owner}:
-                raise AcceptanceFailure("A4_TF", "tf_publishers",
-                    f"TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:{sorted(normalized)}")
+                raise AcceptanceFailure(
+                    'A4_TF', 'tf_publishers',
+                    f'TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:{sorted(normalized)}',
+                )
             observed[f"{edge[0]}->{edge[1]}"] = next(iter(owners))
         return observed
+
+    def _tf_ownership_ready(self) -> bool:
+        expected = {('map', 'odom'): 'amcl',
+                    ('odom', 'base_link'): 'ekf_filter_node',
+                    ('base_link', 'lidar_frame'): 'robot_state_publisher'}
+        unresolved = getattr(self.observer, 'tf_edge_unresolved', set())
+        for edge, owner in expected.items():
+            if edge in unresolved:
+                return False
+            owners = {
+                str(name).strip('/').lower()
+                for name in self.observer.tf_edge_owners.get(edge, set())
+            }
+            if not owners:
+                return False
+            if owners != {owner}:
+                raise AcceptanceFailure(
+                    'A4_TF', 'tf_publishers',
+                    f'TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:'
+                    f'{sorted(owners)}',
+                )
+        return True
 
     def _send_one_plan(self) -> None:
         from mecanum_nav_rl.observations.step07_research_acceptance import PathSnapshot
@@ -855,10 +986,22 @@ class ResearchAcceptanceRunner:
         life = self.observer.lifecycle
         if life is None or life.context != context or self.observer.context != context:
             return False
-        return (life.value["primary_state"] == 2 and life.value["barrier_state"] == 1
-            and life.value["motion_permitted"]
+        barrier_matches = (
+            not hasattr(self, 'goal_barrier_sequence')
+            or (
+                self.observer.barrier_sequence == self.goal_barrier_sequence
+                and self.observer.barrier_stamp_ns
+                == self.goal_barrier_stamp_ns
+            )
+        )
+        return (
+            barrier_matches
+            and life.value['primary_state'] == 2
+            and life.value['barrier_state'] == 1
+            and life.value['motion_permitted']
             and 0 <= now_steady_ns-life.received_steady_ns <= 500_000_000
-            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000)
+            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000
+        )
 
     def _assert_live_mission_health(self, context: Any, stage: str) -> None:
         observer = self.observer
@@ -878,13 +1021,106 @@ class ResearchAcceptanceRunner:
             if (fact.context != context or not 0 <= now_steady-fact.received_steady_ns <= limit
                     or not 0 <= now_ros-fact.stamp_ns <= limit):
                 raise AcceptanceFailure(stage, name, f"{name.upper()}_STALE_OR_WRONG_CONTEXT")
+        from mecanum_nav_rl.observations.step07_research_acceptance import (
+            lidar_sectors,
+        )
+        from mecanum_nav_rl.observations.step07_research_observer import (
+            Step07ResearchObserver,
+        )
+        scan = observer.scans[-1]
+        if scan.frame_id != 'lidar_frame':
+            raise AcceptanceFailure(stage, 'scan', 'SCAN_FRAME_INVALID')
+        try:
+            lidar_sectors(
+                scan.value.ranges,
+                angle_min=scan.value.angle_min,
+                angle_increment=scan.value.angle_increment,
+                range_min=scan.value.range_min,
+                range_max=scan.value.range_max,
+                frame_id=scan.frame_id,
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise AcceptanceFailure(
+                stage, 'scan', 'SCAN_VALUES_INVALID'
+            ) from error
+        if not Step07ResearchObserver._valid_odom(observer.wheel[-1].value):
+            raise AcceptanceFailure(
+                stage, 'wheel_odometry', 'WHEEL_ODOMETRY_INVALID'
+            )
+        if not Step07ResearchObserver._valid_odom(observer.odometry[-1].value):
+            raise AcceptanceFailure(
+                stage, 'filtered_odometry', 'FILTERED_ODOMETRY_INVALID'
+            )
+        imu = observer.imu[-1]
+        try:
+            vectors = (
+                imu.value.angular_velocity.x,
+                imu.value.angular_velocity.y,
+                imu.value.angular_velocity.z,
+                imu.value.linear_acceleration.x,
+                imu.value.linear_acceleration.y,
+                imu.value.linear_acceleration.z,
+                *imu.value.angular_velocity_covariance,
+                *imu.value.linear_acceleration_covariance,
+                *imu.value.orientation_covariance,
+            )
+            valid_imu = (
+                imu.frame_id == 'base_link'
+                and all(math.isfinite(float(value)) for value in vectors)
+                and all(
+                    imu.value.angular_velocity_covariance[i] >= 0
+                    for i in (0, 4, 8)
+                )
+                and all(
+                    imu.value.linear_acceleration_covariance[i] >= 0
+                    for i in (0, 4, 8)
+                )
+            )
+        except (AttributeError, TypeError, IndexError, ValueError):
+            valid_imu = False
+        if not valid_imu:
+            raise AcceptanceFailure(
+                stage, 'imu', 'IMU_VALUES_OR_FRAME_INVALID'
+            )
+        localization_ok, localization_reason = self._localization_ok()
+        if not localization_ok:
+            raise AcceptanceFailure(
+                stage, 'localization',
+                localization_reason or 'LOCALIZATION_HEALTH_INVALID',
+            )
+
+    def _record_live_health_failure(self, error: AcceptanceFailure) -> None:
+        reason = error.reason
+        measured = {'pass': False, 'reason': reason}
+        if error.component in {
+            'clock', 'safety_lifecycle', 'scan', 'wheel_odometry', 'imu'
+        }:
+            self.state.facts['A2'] = measured
+        if error.component == 'filtered_odometry':
+            self.state.facts['A3'] = measured
+        if error.component == 'localization':
+            self.state.facts['A5'] = measured
+        self.state.facts['A7'] = measured
+        self.state.facts['A9'] = measured
+        self.state.stage = error.stage
+        self.state.fail(error.component, reason)
+
+    def _check_live_mission_health(self, context: Any, stage: str) -> None:
+        try:
+            self._assert_live_mission_health(context, stage)
+        except AcceptanceFailure as error:
+            self._record_live_health_failure(error)
+            raise
 
     def _collect_one_observation(self, deadline: float) -> bool:
         from mecanum_nav_rl.observations.step07_research_acceptance import (
-            make_observation, select_actual_receipt, select_scan_odom_pair,
+            lidar_sectors, make_observation, select_actual_receipt,
+            select_scan_odom_pair,
         )
         observer = self.observer
-        self._assert_live_mission_health(self.path_snapshot.context, "A7_OBSERVATION")
+        self._check_live_mission_health(
+            self.path_snapshot.context, 'A7_OBSERVATION'
+        )
         cutoff = observer.node.get_clock().now().nanoseconds
         if cutoff <= 0 or observer.context != self.path_snapshot.context:
             raise AcceptanceFailure("A7_OBSERVATION", "context_or_clock", "INVALID_OBSERVATION_CONTEXT")
@@ -947,7 +1183,7 @@ class ResearchAcceptanceRunner:
             return False
         reference, progress, reference_receive_ns = reference_result
         now_steady = time.monotonic_ns()
-        self._assert_live_mission_health(pinned_context, "A7_OBSERVATION")
+        self._check_live_mission_health(pinned_context, 'A7_OBSERVATION')
         if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
                 or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
             raise AcceptanceFailure("A7_OBSERVATION", "lifecycle",
@@ -1051,6 +1287,9 @@ class ResearchAcceptanceRunner:
         action_result = None
         while self._remaining(overall_sample_deadline) > 0:
             self._raise_executor_error("A7_OBSERVATION")
+            self._check_live_mission_health(
+                self.path_snapshot.context, 'A7_OBSERVATION'
+            )
             if len(self.state.valid_observations) < 5:
                 self._collect_one_observation(overall_sample_deadline)
             self._command_chain_fact()
@@ -1071,6 +1310,36 @@ class ResearchAcceptanceRunner:
             while len(self.state.valid_observations) < 5 and self._remaining(sample_deadline) > 0:
                 self._collect_one_observation(sample_deadline)
                 time.sleep(0.01)
+        final_tf_deadline = min(
+            self.now_steady()+0.2, self.started_steady+480.0
+        )
+        try:
+            self._wait_for(
+                self._tf_ownership_ready,
+                final_tf_deadline,
+                stage='A4_TF',
+                component='tf_publishers',
+                reason='TF_EDGE_OWNER_METADATA_UNRESOLVED',
+            )
+            if (
+                not self.observer.odometry
+                or not self._tf_chain_usable(
+                    self.observer.odometry[-1].stamp_ns
+                )
+            ):
+                raise AcceptanceFailure(
+                    'A4_TF', 'tf2',
+                    'FINAL_TF_CHAIN_UNAVAILABLE_AT_ODOMETRY_STAMP',
+                )
+            self.state.facts['A4'] = {
+                'pass': True,
+                'reason': 'TF_OWNER_AND_CHAIN_VALID_AT_MISSION_END',
+                'measured': {'owners': self._observed_tf_owners()},
+            }
+        except AcceptanceFailure as error:
+            self.state.facts['A4'] = {'pass': False, 'reason': error.reason}
+            self.state.fail(error.component, error.reason)
+            raise
         self.state.facts["A7"] = {"pass": len(self.state.valid_observations) >= 5,
             "reason": "FIVE_VALID_OBSERVATIONS" if len(self.state.valid_observations) >= 5 else "VALID_OBSERVATION_COUNT_BELOW_FIVE",
             "measured": {"valid_count": len(self.state.valid_observations)}}
@@ -1116,7 +1385,11 @@ class ResearchAcceptanceRunner:
         start_ros_ns = None
         last_pair = None
         while self._remaining(deadline) > 0 and self.observer.clock_ns > 0:
-            if self.observer.clock_rollback:
+            try:
+                self._check_live_mission_health(
+                    self.path_snapshot.context, 'A9_NAVIGATION_OUTCOME'
+                )
+            except AcceptanceFailure:
                 return False
             if not self.observer.localization or not self.observer.odometry:
                 time.sleep(0.02); continue
@@ -1129,10 +1402,26 @@ class ResearchAcceptanceRunner:
             pose = loc["pose"]
             linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
             angular = abs(odom.twist.twist.angular.z)
-            ok = (healthy and math.hypot(pose[0]+4.0, pose[1]) <= 0.15
-                  and linear <= 0.03 and angular <= 0.05
-                  and now_steady-loc["received_steady_ns"] <= 2_000_000_000
-                  and now_steady-odom_fact.received_steady_ns <= 250_000_000)
+            owner_ready = self._tf_ownership_ready()
+            context = self.path_snapshot.context
+            ok = (
+                healthy
+                and owner_ready
+                and loc.get('frame_id') == 'map'
+                and odom_fact.context == context
+                and odom.header.frame_id == 'odom'
+                and odom.child_frame_id == 'base_link'
+                and 0 <= now_ros-loc['stamp_ns'] <= 2_000_000_000
+                and 0 <= now_ros-odom_fact.stamp_ns <= 250_000_000
+                and 0 <= now_steady-loc['received_steady_ns']
+                <= 2_000_000_000
+                and 0 <= now_steady-odom_fact.received_steady_ns
+                <= 250_000_000
+                and self._tf_chain_usable(odom_fact.stamp_ns)
+                and math.hypot(pose[0]+4.0, pose[1]) <= 0.15
+                and linear <= 0.03
+                and angular <= 0.05
+            )
             pair = (loc["stamp_ns"], odom_fact.stamp_ns)
             if not ok:
                 start_ros_ns = None
@@ -1146,19 +1435,30 @@ class ResearchAcceptanceRunner:
         return False
 
     def _command_chain_fact(self) -> dict[str, Any]:
+        graph = self.observer.graph_snapshot()
+        publishers = graph['topics'].get('/cmd_vel', {}).get('publishers', ())
+        sole = (
+            len(publishers) == 1
+            and str(publishers[0][0]).strip('/').lower()
+            == 'final_twist_publisher'
+        )
         retained = self.state.facts.get("command_chain_episode")
         if isinstance(retained, Mapping):
-            return dict(retained)
-        graph = self.observer.graph_snapshot()
-        publishers = graph["topics"].get("/cmd_vel", {}).get("publishers", ())
+            if sole:
+                return dict(retained)
+            return {
+                'pass': False,
+                'reason': 'FINAL_CMD_VEL_OWNER_NOT_SOLE_AT_CONCLUSION',
+                'measured': {
+                    'cmd_vel_publishers': [p[0] for p in publishers]
+                },
+            }
         candidates = tuple(self.observer.nav2_candidates)
         envelopes = tuple(self.observer.accepted_envelopes)
         receipts = tuple(self.observer.receipts)
         commands = tuple(self.observer.cmd_vel_commands)
         safety_states = tuple(self.observer.safety_states)
         nonzero = lambda c: all(math.isfinite(float(v)) for v in c) and any(abs(float(v)) > 1e-6 for v in c)
-        sole = (len(publishers) == 1
-                and publishers[0][0].lower() == "final_twist_publisher")
         context = self.path_snapshot.context if self.path_snapshot is not None else None
         for receipt in reversed(receipts):
             rv = receipt.value
@@ -1216,20 +1516,28 @@ class ResearchAcceptanceRunner:
         if self.observer is None:
             return False
         try:
+            shutdown_deadline = getattr(
+                self, 'shutdown_deadline', self.now_steady()+20.0
+            )
             if self.navigation_goal_handle is not None:
                 result_future = self.navigation_goal_handle.get_result_async()
                 if not result_future.done():
                     cancel_future = self.navigation_goal_handle.cancel_goal_async()
-                    self._wait_future(cancel_future, self.now_steady()+2.0,
-                        stage="A10_SHUTDOWN", component="navigate_cancel")
+                    self._wait_future(
+                        cancel_future,
+                        min(self.now_steady()+2.0, shutdown_deadline),
+                        stage='A10_SHUTDOWN', component='navigate_cancel',
+                    )
                     self.log("navigate", "cancel requested during shutdown")
             request_ros_ns = self.observer.node.get_clock().now().nanoseconds
             future = self.observer.request_safe_stop()
-            response = self._wait_future(future, self.now_steady()+2.0,
-                stage="A10_SHUTDOWN", component="safety_reset")
+            response = self._wait_future(
+                future, min(self.now_steady()+2.0, shutdown_deadline),
+                stage='A10_SHUTDOWN', component='safety_reset',
+            )
             if not response.success:
                 return False
-            deadline = self.now_steady()+2.0
+            deadline = min(self.now_steady()+2.0, shutdown_deadline)
             while self.now_steady() < deadline:
                 for receipt in reversed(self.observer.receipts):
                     if (receipt.context == self.observer.context and receipt.stamp_ns > request_ros_ns
@@ -1331,10 +1639,18 @@ class ResearchAcceptanceRunner:
         if self.shutdown_completed:
             return self.state.cleanup
         self.state.stage = "SHUTDOWN"
+        now = self.now_steady()
+        self.shutdown_deadline = min(
+            now+20.0, getattr(self, 'started_steady', now)+480.0
+        )
         safe_stop = self._safe_stop()
         try:
-            processes = self.process_owner.stop_all(("composite", "bootstrap", "recorder"),
-                grace_s=2.0, capture_finalized=self._capture_finalized)
+            processes = self.process_owner.stop_all(
+                ('composite', 'bootstrap', 'recorder'),
+                grace_s=2.0,
+                capture_finalized=self._capture_finalized,
+                deadline=self.shutdown_deadline,
+            )
         except Exception as error:
             processes = [{"name": "process_cleanup", "stopped": False,
                           "error": f"{type(error).__name__}:{error}"}]
@@ -1379,7 +1695,12 @@ class ResearchAcceptanceRunner:
             except Exception as error:
                 errors.append(f"remove_node:{type(error).__name__}:{error}")
             try:
-                self.executor.shutdown(timeout_sec=2.0)
+                remaining = max(
+                    0.0,
+                    getattr(self, 'shutdown_deadline', self.now_steady()+2.0)
+                    - self.now_steady(),
+                )
+                self.executor.shutdown(timeout_sec=min(2.0, remaining))
             except Exception as error:
                 errors.append(f"executor_shutdown:{type(error).__name__}:{error}")
         if self.rclpy is not None:
@@ -1390,7 +1711,12 @@ class ResearchAcceptanceRunner:
                 errors.append(f"rclpy_shutdown:{type(error).__name__}:{error}")
         if self.executor_thread is not None:
             try:
-                self.executor_thread.join(timeout=2.0)
+                remaining = max(
+                    0.0,
+                    getattr(self, 'shutdown_deadline', self.now_steady()+2.0)
+                    - self.now_steady(),
+                )
+                self.executor_thread.join(timeout=min(2.0, remaining))
             except Exception as error:
                 errors.append(f"executor_join:{type(error).__name__}:{error}")
         stopped = self.executor_thread is None or not self.executor_thread.is_alive()
