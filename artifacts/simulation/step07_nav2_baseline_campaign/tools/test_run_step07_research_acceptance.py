@@ -12,10 +12,11 @@ from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
-
+import run_step07_research_acceptance as runner_module  # noqa: I201
 from run_step07_research_acceptance import (
     AcceptanceFailure, atomic_json, CampaignState, CAPTURE_TOPICS, load_json,
-    OwnedProcess, ProcessOwner, REQUIRED_RECORDER_TOPICS, ResearchAcceptanceRunner,
+    OwnedProcess, ProcessOwner, REQUIRED_NAV2_LIFECYCLE_NODES,
+    REQUIRED_RECORDER_TOPICS, ResearchAcceptanceRunner,
     validate_resolved_config, verify_runtime_authorization,
 )
 
@@ -462,9 +463,8 @@ def test_execute_checks_upstream_before_recorder_and_never_missions_after_failur
     assert report['overall'] == 'FAIL'
     assert runner.state.primary_failure['stage'] == 'A6_NAV2'
     assert runner.state.primary_failure['component'] == 'amcl'
-    assert (
-        runner.state.primary_failure['primary_failure']
-        == 'REQUIRED_NAV2_NODE_MISSING:amcl'
+    assert runner.state.primary_failure['primary_failure'].startswith(
+        'NAV2_LIFECYCLE_CLIENT_SET_INVALID:'
     )
 
 
@@ -1502,3 +1502,379 @@ def test_command_chain_requires_actual_cmd_vel_and_sole_final_publisher():
         runner.path_snapshot = SimpleNamespace(context=context)
         runner.state = CampaignState()
         assert runner._command_chain_fact()["pass"] is False
+
+
+class _Nav2FakeClock:
+    def __init__(self):
+        self.value = 0.0
+        self.callbacks = []
+
+    def __call__(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.value += seconds
+        for callback in tuple(self.callbacks):
+            callback(self.value)
+
+
+class _Nav2FakeFuture:
+    def __init__(self, clock, client, response, ready_at, error=None):
+        self.clock = clock
+        self.client = client
+        self.response = response
+        self.ready_at = ready_at
+        self.error = error
+        self.released = False
+
+    def _release(self):
+        if not self.released:
+            self.released = True
+            self.client.outstanding -= 1
+
+    def done(self):
+        ready = self.clock() >= self.ready_at
+        if ready:
+            self._release()
+        return ready
+
+    def exception(self):
+        return self.error
+
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+class _Nav2FakeClient:
+    def __init__(self, clock, *, service_ready_at=0.0, node_ready_at=0.0,
+                 responses=None):
+        self.clock = clock
+        self.service_ready_at = service_ready_at
+        self.node_ready_at = node_ready_at
+        self.responses = list(responses or [(3, 'active', 0.0)])
+        self.calls = 0
+        self.outstanding = 0
+        self.max_outstanding = 0
+        self.removed = []
+        self.futures = []
+
+    def service_is_ready(self):
+        return self.clock() >= self.service_ready_at
+
+    def call_async(self, _request):
+        index = min(self.calls, len(self.responses) - 1)
+        state_id, label, latency = self.responses[index]
+        self.calls += 1
+        if state_id is None or isinstance(state_id, SimpleNamespace):
+            response = state_id
+        else:
+            response = SimpleNamespace(
+                current_state=SimpleNamespace(id=state_id, label=label)
+            )
+        self.outstanding += 1
+        self.max_outstanding = max(self.max_outstanding, self.outstanding)
+        future = _Nav2FakeFuture(
+            self.clock, self, response, self.clock() + latency
+        )
+        self.futures.append(future)
+        return future
+
+    def remove_pending_request(self, future):
+        self.removed.append(future)
+        future._release()
+
+
+def _nav2_lifecycle_fixture(monkeypatch, *, service_ready_at=None,
+                            node_ready_at=None, responses=None):
+    service_ready_at = service_ready_at or {}
+    node_ready_at = node_ready_at or {}
+    responses = responses or {}
+    clock = _Nav2FakeClock()
+    clients = {
+        name: _Nav2FakeClient(
+            clock,
+            service_ready_at=service_ready_at.get(name, 0.0),
+            node_ready_at=node_ready_at.get(name, 0.0),
+            responses=responses.get(name),
+        )
+        for name in REQUIRED_NAV2_LIFECYCLE_NODES
+    }
+    observer = SimpleNamespace(
+        lifecycle_clients=clients,
+        _GetState=SimpleNamespace(Request=lambda: object()),
+        executor_error=None,
+        wait_for_actions=lambda timeout_sec: True,
+        graph_snapshot=lambda: {
+            'nodes': {name for name, client in clients.items()
+                      if clock() >= client.node_ready_at},
+            'topics': {},
+        },
+    )
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = observer
+    runner.process_owner = SimpleNamespace(processes=[])
+    runner.now_steady = clock
+    runner.started_steady = 0.0
+    runner.state = CampaignState()
+    runner.log_stream = None
+    monkeypatch.setattr(runner_module.time, 'sleep', clock.sleep)
+    return runner, observer, clients, clock
+
+
+def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
+    now_ns = time.monotonic_ns()
+    odom_value = SimpleNamespace(
+        header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link',
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(position=SimpleNamespace(x=0.0, y=0.0)),
+            covariance=[0.0] * 36,
+        ),
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                linear=SimpleNamespace(x=0.0, y=0.0),
+                angular=SimpleNamespace(z=0.0),
+            ),
+            covariance=[0.0] * 36,
+        ),
+    )
+    observer.clock_ns = 10
+    observer.clock_advance_count = 2
+    observer.localization = []
+    observer.scans = [SimpleNamespace(received_steady_ns=now_ns)]
+    observer.wheel = [SimpleNamespace(received_steady_ns=now_ns)]
+    observer.imu = [SimpleNamespace(received_steady_ns=now_ns)]
+    observer.odometry = [
+        SimpleNamespace(stamp_ns=1, value=odom_value),
+        SimpleNamespace(stamp_ns=2, value=odom_value),
+    ]
+    topics = {'/odometry/filtered': {'publishers': (('ekf_filter_node',),)}}
+    observer.graph_snapshot = lambda: {
+        'nodes': {name for name, client in observer.lifecycle_clients.items()
+                  if clock() >= client.node_ready_at},
+        'topics': topics,
+    }
+    runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
+    runner.config = {'map_identity': {'map_id': 'test_map'}}
+    runner._topic_samples_ready = lambda: True
+    runner._localization_ok = lambda: (True, None)
+    runner._tf_chain_usable = lambda _stamp: True
+    runner._tf_ownership_ready = lambda: True
+    runner._observed_tf_owners = lambda: {
+        'map->odom': 'amcl', 'odom->base_link': 'ekf_filter_node',
+        'base_link->lidar_frame': 'robot_state_publisher',
+    }
+    runner._startup_rearm = lambda _deadline: rearm_calls.append(clock())
+
+
+def test_production_wait_ready_requeries_until_all_six_are_active(
+    monkeypatch,
+):
+    """Startup re-queries non-active states until every Nav2 node is Active."""
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={'map_server': [(1, 'unconfigured', 0.0),
+                                  (2, 'inactive', 0.0),
+                                  (3, 'active', 0.0)]},
+    )
+    rearm_calls = []
+    _prepare_production_startup(
+        runner, observer, clock, rearm_calls=rearm_calls)
+
+    runner._wait_ready()
+
+    assert clients['map_server'].calls == 3
+    assert runner.state.facts['A6']['pass'] is True
+    assert set(
+        runner.state.facts['A6']['measured']['lifecycle_states']) == set(
+        REQUIRED_NAV2_LIFECYCLE_NODES
+    )
+    assert all(
+        x['id'] == 3 for x in
+        runner.state.facts['A6']['measured']['lifecycle_states'].values())
+    assert rearm_calls and rearm_calls[0] >= clock()
+
+
+def test_production_wait_ready_waits_for_delayed_services_and_nodes(
+    monkeypatch,
+):
+    """Action discovery alone does not satisfy lifecycle readiness."""
+    delays = {name: index * 0.1 for index, name in
+              enumerate(REQUIRED_NAV2_LIFECYCLE_NODES)}
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch, service_ready_at=delays, node_ready_at=delays,
+    )
+    rearm_calls = []
+    _prepare_production_startup(
+        runner, observer, clock, rearm_calls=rearm_calls)
+    actions = []
+    observer.wait_for_actions = (
+        lambda timeout_sec: actions.append(timeout_sec) or True)
+
+    runner._wait_ready()
+
+    assert actions
+    assert clock() >= max(delays.values())
+    assert all(client.calls == 1 for client in clients.values())
+    assert rearm_calls and rearm_calls[0] >= max(delays.values())
+
+
+def test_nav2_missing_graph_node_times_out_with_node_state_and_cleans_pending(
+    monkeypatch,
+):
+    """Missing node times out and cleans pending work."""
+    runner, _observer, clients, _clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        node_ready_at={'amcl': 10.0},
+        responses={'controller_server': [(3, 'active', 1.0)]},
+    )
+
+    with pytest.raises(
+            AcceptanceFailure,
+            match=('NAV2_LIFECYCLE_STARTUP_DEADLINE_EXPIRED:'
+                   'amcl:NODE_NOT_DISCOVERED')):
+        runner._wait_nav2_ready(0.25)
+
+    failure = runner.state.facts['A6']
+    assert failure['pass'] is False
+    assert failure['measured']['node'] == 'amcl'
+    assert failure['measured']['state']['label'] == 'NODE_NOT_DISCOVERED'
+    assert clients['controller_server'].removed
+    assert all(client.outstanding == 0 for client in clients.values())
+
+
+def test_nav2_inactive_node_times_out_with_last_state_and_no_request_storm(
+    monkeypatch,
+):
+    """An inactive node is re-queried at a bounded cadence until timeout."""
+    runner, _observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={'planner_server': [(2, 'inactive', 0.0)]},
+    )
+
+    with pytest.raises(
+            AcceptanceFailure,
+            match=(r'NAV2_LIFECYCLE_STARTUP_DEADLINE_EXPIRED:'
+                   r'planner_server:inactive\(2\)')):
+        runner._wait_nav2_ready(0.31)
+
+    measured = runner.state.facts['A6']['measured']
+    assert measured['node'] == 'planner_server'
+    assert measured['state'] == {'id': 2, 'label': 'inactive'}
+    assert clients['planner_server'].calls <= 4
+    assert max(client.max_outstanding for client in clients.values()) == 1
+
+
+@pytest.mark.parametrize(
+    'client_map',
+    [
+        {},
+        {name: _Nav2FakeClient(_Nav2FakeClock())
+         for name in REQUIRED_NAV2_LIFECYCLE_NODES[:-1]},
+    ],
+    ids=['empty', 'missing-node'],
+)
+def test_nav2_empty_or_missing_lifecycle_client_set_cannot_pass(
+    monkeypatch, client_map,
+):
+    """A missing or empty lifecycle client set cannot satisfy A6."""
+    runner, observer, _clients, _clock = _nav2_lifecycle_fixture(monkeypatch)
+    observer.lifecycle_clients = client_map
+
+    with pytest.raises(
+            AcceptanceFailure, match='NAV2_LIFECYCLE_CLIENT_SET_INVALID'):
+        runner._wait_nav2_ready(1.0)
+
+    assert runner.state.facts['A6']['pass'] is False
+
+
+@pytest.mark.parametrize(
+    'response',
+    [None,
+     SimpleNamespace(current_state=SimpleNamespace(id=255, label='bogus')),
+     SimpleNamespace(current_state=SimpleNamespace(id=3, label='inactive'))],
+    ids=['missing-current-state', 'unknown-state', 'id-label-mismatch'],
+)
+def test_nav2_invalid_get_state_response_fails_closed(monkeypatch, response):
+    """Malformed state responses fail closed and leave no pending request."""
+    runner, observer, clients, _clock = _nav2_lifecycle_fixture(monkeypatch)
+    clients['amcl'].responses = [(response, 'ignored', 0.0)]
+
+    with pytest.raises(
+            AcceptanceFailure, match='NAV2_GET_STATE_RESPONSE_INVALID:amcl'):
+        runner._wait_nav2_ready(1.0)
+
+    assert runner.state.facts['A6']['pass'] is False
+    assert runner.state.facts['A6']['measured']['node'] == 'amcl'
+    assert (runner.state.facts['A6']['measured']['state']['label']
+            == 'INVALID_RESPONSE')
+    assert all(client.outstanding == 0 for client in clients.values())
+
+
+def test_nav2_deadline_expired_with_active_responses_still_fails(monkeypatch):
+    """An Active response observed after the deadline does not pass A6."""
+    runner, _observer, _clients, _clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={name: [(3, 'active', 0.1)]
+                   for name in REQUIRED_NAV2_LIFECYCLE_NODES},
+    )
+
+    with pytest.raises(
+            AcceptanceFailure,
+            match=(r'NAV2_LIFECYCLE_STARTUP_DEADLINE_EXPIRED:'
+                   r'bt_navigator:active\(3\)')):
+        runner._wait_nav2_ready(0.1)
+
+    assert runner.state.facts['A6']['pass'] is False
+    assert runner.state.facts['A6']['measured']['state'] == {
+        'id': 3, 'label': 'active',
+    }
+
+
+@pytest.mark.parametrize(
+    'failure_kind', ['process_exit', 'executor_exception'])
+def test_nav2_wait_failure_cleans_pending_and_blocks_later_gates(
+    monkeypatch, failure_kind,
+):
+    """Startup exceptions clean up and block all later gates."""
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={'controller_server': [(3, 'active', 1.0)]},
+    )
+    rearm_calls = []
+    _prepare_production_startup(
+        runner, observer, clock, rearm_calls=rearm_calls)
+    calls = []
+    runner.start_observer = lambda: calls.append('observer')
+    runner.start_runtime_children = lambda: calls.append('children')
+    runner._graph_ready_for_recording = (
+        lambda: calls.append('recorder') or True)
+    runner._mission = lambda: calls.append('mission')
+    runner.output = None
+    runner.shutdown = lambda: calls.append('cleanup')
+    runner.evaluate_and_write = lambda: {'overall': 'FAIL'}
+    runner.close = lambda: None
+
+    if failure_kind == 'process_exit':
+        runner.process_owner.processes = [SimpleNamespace(
+            name='composite',
+            process=SimpleNamespace(
+                poll=lambda: 23 if clock() >= 0.15 else None),
+        )]
+    else:
+        clock.callbacks.append(
+            lambda now: setattr(
+                observer, 'executor_error', RuntimeError('executor stopped'))
+            if now >= 0.15 else None
+        )
+
+    report = runner.execute()
+
+    assert report['overall'] == 'FAIL'
+    assert runner.state.primary_failure['stage'] == 'A6_NAV2'
+    assert 'recorder' not in calls and 'mission' not in calls
+    assert 'cleanup' in calls
+    assert not rearm_calls
+    assert clients['controller_server'].removed
+    assert all(client.outstanding == 0 for client in clients.values())

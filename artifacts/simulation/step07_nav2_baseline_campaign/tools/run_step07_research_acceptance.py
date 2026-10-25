@@ -50,6 +50,16 @@ REQUIRED_RECORDER_TOPICS = (
     '/mecanum/nav2_candidate_cmd', '/mecanum/safety_accepted_cmd', '/cmd_vel',
     '/mecanum/final_issued_command',
 )
+REQUIRED_NAV2_LIFECYCLE_NODES = (
+    'map_server', 'amcl', 'planner_server', 'controller_server',
+    'behavior_server', 'bt_navigator',
+)
+NAV2_LIFECYCLE_STATE_LABELS = {
+    0: 'unknown', 1: 'unconfigured', 2: 'inactive', 3: 'active',
+    4: 'finalized', 10: 'configuring', 11: 'cleaningup',
+    12: 'shuttingdown', 13: 'activating', 14: 'deactivating',
+    15: 'errorprocessing',
+}
 
 
 class AcceptanceFailure(RuntimeError):
@@ -711,6 +721,168 @@ class ResearchAcceptanceRunner:
                 raise AcceptanceFailure(self.state.stage, child.name,
                     f"OWNED_LAUNCH_EXITED:{code}")
 
+    def _wait_nav2_ready(self, deadline: float) -> dict[str, dict[str, Any]]:
+        """Chờ action discovery và trạng thái Active của đủ sáu Nav2 node."""
+        self.state.stage = 'A6_NAV2'
+        observer = self.observer
+        required = set(REQUIRED_NAV2_LIFECYCLE_NODES)
+        clients = getattr(observer, 'lifecycle_clients', None)
+        pending: dict[str, Any] = {}
+        states: dict[str, dict[str, Any]] = {}
+        service_available: dict[str, bool] = {}
+        graph_nodes: set[str] = set()
+
+        def state_snapshot() -> dict[str, dict[str, Any]]:
+            snapshot = {}
+            for name in REQUIRED_NAV2_LIFECYCLE_NODES:
+                if name in states:
+                    snapshot[name] = dict(states[name])
+                elif name not in graph_nodes:
+                    snapshot[name] = {
+                        'id': None, 'label': 'NODE_NOT_DISCOVERED'}
+                elif service_available.get(name) is False:
+                    snapshot[name] = {
+                        'id': None, 'label': 'SERVICE_UNAVAILABLE'}
+                else:
+                    snapshot[name] = {'id': None, 'label': 'NO_RESPONSE'}
+            return snapshot
+
+        def fail(component: str, reason: str) -> None:
+            snapshot = state_snapshot()
+            self.state.facts['A6'] = {
+                'pass': False, 'reason': reason,
+                'measured': {'node': component,
+                             'state': snapshot.get(
+                                 component, {'label': 'NOT_A_NAV2_NODE'}),
+                             'lifecycle_states': snapshot},
+            }
+            raise AcceptanceFailure('A6_NAV2', component, reason)
+
+        client_names = set(clients) if isinstance(clients, Mapping) else set()
+        if not isinstance(clients, Mapping) or client_names != required:
+            missing = sorted(required - client_names)
+            extra = sorted(client_names - required)
+            component = missing[0] if missing else 'lifecycle_clients'
+            reason = ('NAV2_LIFECYCLE_CLIENT_SET_INVALID:'
+                      f'missing={missing}:extra={extra}')
+            fail(component, reason)
+
+        try:
+            def actions_ready() -> bool:
+                self._check_launch_processes()
+                return observer.wait_for_actions(timeout_sec=0.1)
+
+            self._wait_for(
+                actions_ready, deadline, stage='A6_NAV2',
+                component='action_servers',
+                reason='NAV2_ACTION_SERVER_UNAVAILABLE',
+            )
+
+            while True:
+                self._raise_executor_error('A6_NAV2')
+                self._check_launch_processes()
+                graph = observer.graph_snapshot()
+                valid_nodes = isinstance(
+                    graph.get('nodes') if isinstance(graph, Mapping) else None,
+                    (set, frozenset, list, tuple),
+                )
+                if not isinstance(graph, Mapping) or not valid_nodes:
+                    fail('lifecycle_graph', 'NAV2_NODE_GRAPH_RESPONSE_INVALID')
+                graph_nodes = set(graph['nodes'])
+
+                for name in tuple(pending):
+                    future = pending[name]
+                    if not future.done():
+                        continue
+                    del pending[name]
+                    error = future.exception()
+                    if error is not None:
+                        reason = (f'NAV2_GET_STATE_EXCEPTION:{name}:'
+                                  f'{type(error).__name__}:{error}')
+                        fail(name, reason)
+                    response = future.result()
+                    current_state = getattr(response, 'current_state', None)
+                    state_id = getattr(current_state, 'id', None)
+                    label = getattr(current_state, 'label', None)
+                    invalid_id = (not isinstance(state_id, int)
+                                  or isinstance(state_id, bool)
+                                  or state_id not in
+                                  NAV2_LIFECYCLE_STATE_LABELS)
+                    invalid_label = (not isinstance(label, str)
+                                     or not label.strip())
+                    label_mismatch = (not invalid_id and not invalid_label
+                                      and label.strip().lower()
+                                      != NAV2_LIFECYCLE_STATE_LABELS[state_id])
+                    if invalid_id or invalid_label or label_mismatch:
+                        safe_id = (state_id if isinstance(
+                            state_id, (int, float, str, type(None))) else None)
+                        states[name] = {
+                            'id': safe_id, 'label': 'INVALID_RESPONSE'}
+                        fail(name, f'NAV2_GET_STATE_RESPONSE_INVALID:{name}')
+                    states[name] = {'id': state_id, 'label': label.strip()}
+
+                now = self.now_steady()
+                all_active = (required <= graph_nodes and all(
+                    states.get(name, {}).get('id') == 3
+                    for name in REQUIRED_NAV2_LIFECYCLE_NODES
+                ))
+                if now >= deadline:
+                    unresolved = next(
+                        (name for name in REQUIRED_NAV2_LIFECYCLE_NODES
+                         if name not in graph_nodes
+                         or states.get(name, {}).get('id') != 3),
+                        REQUIRED_NAV2_LIFECYCLE_NODES[-1],
+                    )
+                    status = state_snapshot()[unresolved]['label']
+                    if unresolved in states:
+                        status = (f"{states[unresolved]['label']}"
+                                  f"({states[unresolved]['id']})")
+                    reason = (f'NAV2_LIFECYCLE_STARTUP_DEADLINE_EXPIRED:'
+                              f'{unresolved}:{status}')
+                    fail(unresolved, reason)
+                if all_active:
+                    return {
+                        name: dict(states[name])
+                        for name in REQUIRED_NAV2_LIFECYCLE_NODES}
+
+                for name in REQUIRED_NAV2_LIFECYCLE_NODES:
+                    if (name not in graph_nodes
+                            or states.get(name, {}).get('id') == 3
+                            or name in pending):
+                        continue
+                    client = clients[name]
+                    service_available[name] = bool(client.service_is_ready())
+                    if not service_available[name]:
+                        continue
+                    future = client.call_async(observer._GetState.Request())
+                    methods = ('done', 'exception', 'result')
+                    if future is None or not all(
+                            callable(getattr(future, method, None))
+                            for method in methods):
+                        fail(name, f'NAV2_GET_STATE_FUTURE_INVALID:{name}')
+                    pending[name] = future
+
+                remaining = deadline - self.now_steady()
+                if remaining <= 0:
+                    continue
+                time.sleep(min(0.1, remaining))
+        except AcceptanceFailure as error:
+            if not (self.state.facts.get('A6', {}).get('pass') is False):
+                snapshot = state_snapshot()
+                component = error.component
+                self.state.facts['A6'] = {
+                    'pass': False, 'reason': error.reason,
+                    'measured': {'node': component,
+                                 'state': snapshot.get(
+                                     component,
+                                     {'label': 'NOT_A_NAV2_NODE'}),
+                                 'lifecycle_states': snapshot},
+                }
+            raise
+        finally:
+            for name, future in tuple(pending.items()):
+                clients[name].remove_pending_request(future)
+
     def _a1_asset_check(self) -> dict[str, Any]:
         import xml.etree.ElementTree as ET
         world = self.repository / "ros2_ws/src/ROBOT_URDF_final_description/launch/tugbot_depot.sdf"
@@ -775,25 +947,12 @@ class ResearchAcceptanceRunner:
         self.state.facts["A3"] = {"pass": True, "reason": "EKF_FILTERED_ODOMETRY_ADVANCING",
             "measured": {"samples": len(odoms), "frame_id": "odom", "child_frame_id": "base_link"}}
 
-        nodes = graph["nodes"]
-        required = {"map_server", "amcl", "planner_server", "controller_server",
-                    "behavior_server", "bt_navigator"}
-        missing_nodes = sorted(required - nodes)
-        if missing_nodes:
-            component = 'amcl' if 'amcl' in missing_nodes else missing_nodes[0]
-            raise AcceptanceFailure('A6_NAV2', component,
-                                    f'REQUIRED_NAV2_NODE_MISSING:{component}')
-        self._wait_for(lambda: self.observer.wait_for_actions(timeout_sec=0.1), deadline,
-            stage="A6_NAV2", component="action_servers", reason="NAV2_ACTION_SERVER_UNAVAILABLE")
-        lifecycle_futures = self.observer.query_lifecycle_states()
-        lifecycle_active = {}
-        for name, future in lifecycle_futures.items():
-            response = self._wait_future(future, deadline, stage="A6_NAV2", component=f"{name}_lifecycle")
-            lifecycle_active[name] = int(response.current_state.id) == 3
-        if not all(lifecycle_active.values()):
-            raise AcceptanceFailure("A6_NAV2", "lifecycle", "REQUIRED_NAV2_NODE_NOT_ACTIVE")
+        lifecycle_states = self._wait_nav2_ready(deadline)
         self.state.facts["A6"] = {"pass": True, "reason": "NAV2_NODES_AND_ACTION_SERVERS_READY",
-                                  "measured": {"nodes": sorted(required)}}
+                                  'measured': {
+                                      'nodes': sorted(
+                                          REQUIRED_NAV2_LIFECYCLE_NODES),
+                                      'lifecycle_states': lifecycle_states}}
         self.state.stage = "A5_LOCALIZATION"
         localization_ok, localization_reason = self._localization_ok()
         if not localization_ok:
