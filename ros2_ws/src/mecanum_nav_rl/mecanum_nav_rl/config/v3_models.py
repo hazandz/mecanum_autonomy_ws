@@ -10,7 +10,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, StrictBool, StrictInt,
+                      model_serializer, model_validator)
 from pydantic.types import StringConstraints
 
 
@@ -196,6 +197,19 @@ class NavigationContractV3(ConfigModelV3):
     goal_type: Literal["position_only"]
     goal_settle_contract_id: IdentifierV3
     step07_acceptance: "Step07AcceptancePolicyV3 | None" = None
+
+    @model_validator(mode="after")
+    def reject_explicit_null_step07_policy(self) -> "NavigationContractV3":
+        if "step07_acceptance" in self.model_fields_set and self.step07_acceptance is None:
+            raise ValueError("navigation.step07_acceptance must be omitted, not null")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_step07_policy(self, handler):
+        data = handler(self)
+        if self.step07_acceptance is None:
+            data.pop("step07_acceptance", None)
+        return data
 
 
 class Step07AcceptancePolicyV3(ConfigModelV3):

@@ -15,6 +15,7 @@ from mecanum_nav_rl.config.v3_compiler import (
     ApprovedExperimentOverrideV3,
     ApprovedMeasuredRegistryV3,
     compile_v3_config,
+    compile_resolved_document_v3,
     deep_merge_v3,
 )
 from mecanum_nav_rl.config.v3_hashing import (
@@ -189,6 +190,31 @@ def test_valid_five_layer_merge_is_immutable_and_non_mutating() -> None:
     assert base == before
     with pytest.raises(Exception):
         config.runtime.use_sim_time = False  # type: ignore[misc]
+
+
+def test_non_target_step07_policy_omission_round_trips_without_null_or_hash_change():
+    config = _compile()
+    payload = hash_payload_from_resolved_v3(config)
+    assert "step07_acceptance" not in payload["navigation"]
+    round_trip = compile_resolved_document_v3(payload)
+    assert round_trip.provenance.config_hash == config.provenance.config_hash
+    assert "step07_acceptance" not in hash_payload_from_resolved_v3(round_trip)["navigation"]
+
+
+def test_explicit_null_step07_policy_is_rejected():
+    invalid = _base_layer()
+    invalid["navigation"]["step07_acceptance"] = None
+    with pytest.raises(ValidationError, match="must be omitted, not null"):
+        _compile(invalid)
+
+
+def test_target_step07_policy_participates_in_global_hash_and_round_trips():
+    config = _compile(runtime={"runtime": {"runtime_profile": "sim_eval", "use_sim_time": True}},
+        navigation={"runtime": {"navigation_mode": "NAV2_BASELINE"}})
+    payload = hash_payload_from_resolved_v3(config)
+    assert payload["navigation"]["step07_acceptance"]["observation_samples_minimum"] == 5
+    assert config_v3_sha256(payload) == config.provenance.config_hash
+    assert compile_resolved_document_v3(payload).provenance.config_hash == config.provenance.config_hash
 
 
 def test_deep_merge_is_nested_deterministic_and_non_mutating() -> None:

@@ -78,7 +78,9 @@ def test_gazebo_source_has_exact_static_ydlidar_x3_pro_ray_sensor():
     assert len(sensors) == 1
     sensor = sensors[0]
     assert sensor.attrib == {"name": "YDLIDAR_X3_PRO", "type": "gpu_lidar"}
-    assert [child.tag for child in sensor] == ["topic", "update_rate", "ray"]
+    assert [child.tag for child in sensor] == ["frame_id", "gz_frame_id", "topic", "update_rate", "ray"]
+    assert sensor.findtext("frame_id") == "lidar_frame"
+    assert sensor.findtext("gz_frame_id") == "lidar_frame"
     assert sensor.findtext("topic") == "scan"
     assert sensor.findtext("update_rate") == "6.0"
 
@@ -106,7 +108,7 @@ def test_gazebo_source_has_exact_static_ydlidar_x3_pro_ray_sensor():
 
     subtree = ET.tostring(sensor, encoding="unicode").lower()
     for forbidden in (
-        "pose", "plugin", "frame_id", "tf", "noise", "always_on", "visualize",
+        "pose", "plugin", "tf", "noise", "always_on", "visualize",
         "vertical", "rplidar_a1m8_1", "base_scan", "rplidar_link",
         "static_transform_publisher", "tf_bridge", "frame_alias",
         "ros_gz_bridge", "ros_gz", "sensor_msgs", "laserscan", "profile",

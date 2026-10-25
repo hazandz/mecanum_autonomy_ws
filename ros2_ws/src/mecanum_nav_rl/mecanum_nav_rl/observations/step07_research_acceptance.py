@@ -13,6 +13,32 @@ from typing import Any, Callable, Iterable, Mapping
 import numpy as np
 
 
+def qos_endpoints_compatible(
+    offered_reliability: object,
+    offered_durability: object,
+    requested_reliability: object,
+    requested_durability: object,
+) -> bool:
+    """Check known ROS QoS compatibility; unknown metadata is not a mismatch.
+
+    Values use rmw enums: RELIABLE=1, BEST_EFFORT=2, TRANSIENT_LOCAL=1,
+    VOLATILE=2. SYSTEM_DEFAULT/UNKNOWN values remain undecided and still
+    require actual message delivery for admission.
+    """
+    try:
+        offered_rel = int(offered_reliability)
+        requested_rel = int(requested_reliability)
+        offered_dur = int(offered_durability)
+        requested_dur = int(requested_durability)
+    except (TypeError, ValueError):
+        return True
+    if offered_rel in {1, 2} and requested_rel == 1 and offered_rel != 1:
+        return False
+    if offered_dur in {1, 2} and requested_dur == 1 and offered_dur != 1:
+        return False
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class Context:
     episode_generation: int
@@ -131,12 +157,14 @@ class ClockRollbackGuard:
 def select_actual_receipt(receipts: Iterable[StampedFact], *, cutoff_ns: int,
                           now_steady_ns: int, freshness_ns: int,
                           after_barrier_ns: int, context: Context,
+                          now_ros_ns: int | None = None,
                           accepted_sources: tuple[int, ...] = (1, 2, 3, 4)) -> StampedFact | None:
     """Admit a real final-publisher receipt after the barrier and capture cut."""
     eligible = []
     for receipt in receipts:
         if (receipt.context != context or not after_barrier_ns < receipt.stamp_ns <= cutoff_ns
                 or not 0 <= now_steady_ns-receipt.received_steady_ns <= freshness_ns
+                or (now_ros_ns is not None and not 0 <= now_ros_ns-receipt.stamp_ns <= freshness_ns)
                 or not isinstance(receipt.value, Mapping)):
             continue
         command = receipt.value.get("command")
@@ -155,15 +183,17 @@ def select_scan_odom_pair(
     cutoff_ns: int, now_steady_ns: int, scan_freshness_ns: int,
     odom_freshness_ns: int, sync_tolerance_ns: int,
     scan_barrier_ns: int, odom_barrier_ns: int, context: Context,
-    used_pairs: set[tuple[int, int]],
+    used_pairs: set[tuple[int, int]], now_ros_ns: int | None = None,
 ) -> tuple[StampedFact, StampedFact] | None:
     """Select the latest new, synchronized, post-barrier actual pair."""
     eligible_scan = [f for f in scans if f.context == context
                      and scan_barrier_ns < f.stamp_ns <= cutoff_ns
-                     and 0 <= now_steady_ns - f.received_steady_ns <= scan_freshness_ns]
+                     and 0 <= now_steady_ns - f.received_steady_ns <= scan_freshness_ns
+                     and (now_ros_ns is None or 0 <= now_ros_ns-f.stamp_ns <= scan_freshness_ns)]
     eligible_odom = [f for f in odometry if f.context == context
                      and odom_barrier_ns < f.stamp_ns <= cutoff_ns
-                     and 0 <= now_steady_ns - f.received_steady_ns <= odom_freshness_ns]
+                     and 0 <= now_steady_ns - f.received_steady_ns <= odom_freshness_ns
+                     and (now_ros_ns is None or 0 <= now_ros_ns-f.stamp_ns <= odom_freshness_ns)]
     candidates = []
     for scan in eligible_scan:
         for odom in eligible_odom:
@@ -258,6 +288,32 @@ def project_lookahead(path: PathSnapshot, *, robot_xy: tuple[float, float],
             bearing = math.atan2(dy, dx)
             return progress, min(distance / 5.0, 1.0), bearing
     raise ValueError("lookahead projection could not be resolved")
+
+
+def transform_map_path_to_base(poses_xy: Iterable[tuple[float, float]], *,
+                               translation: tuple[float, float, float],
+                               rotation_xyzw: tuple[float, float, float, float]
+                               ) -> tuple[tuple[float, float], ...]:
+    """Apply the exact map-to-base TF transform to a copied planar path."""
+    tx, ty, tz = map(float, translation)
+    qx, qy, qz, qw = map(float, rotation_xyzw)
+    if not all(math.isfinite(v) for v in (tx, ty, tz, qx, qy, qz, qw)):
+        raise ValueError("TF translation/quaternion must be finite")
+    norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+    if norm <= 1e-12:
+        raise ValueError("TF quaternion has zero norm")
+    qx, qy, qz, qw = qx/norm, qy/norm, qz/norm, qw/norm
+    result = []
+    for x_value, y_value in poses_xy:
+        x, y = float(x_value), float(y_value)
+        if not math.isfinite(x) or not math.isfinite(y):
+            raise ValueError("path contains non-finite pose")
+        # q * [x,y,0] * q^-1, then add translation, per lookup_transform
+        # target=base_link, source=map.
+        rx = (1 - 2*(qy*qy + qz*qz))*x + 2*(qx*qy - qz*qw)*y
+        ry = 2*(qx*qy + qz*qw)*x + (1 - 2*(qx*qx + qz*qz))*y
+        result.append((rx + tx, ry + ty))
+    return tuple(result)
 
 
 def make_observation(scan_values: Iterable[float], *, scan_angle_min: float,

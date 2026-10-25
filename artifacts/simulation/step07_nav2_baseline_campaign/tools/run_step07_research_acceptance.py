@@ -101,6 +101,8 @@ def verify_runtime_authorization(path: Path, *, commit: str, config_hash: str,
         raise AcceptanceFailure("PREFLIGHT", "authorization", "OWNER_AUTHORIZATION_BINDING_MISMATCH")
     if auth.get("owner_authorized") is not True:
         raise AcceptanceFailure("PREFLIGHT", "authorization", "OWNER_RUNTIME_AUTHORIZATION_REQUIRED")
+    if auth.get("sim_estop_release_authorized") is not True:
+        raise AcceptanceFailure("PREFLIGHT", "authorization", "SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED")
     return auth
 
 
@@ -162,6 +164,8 @@ def validate_resolved_config(document: Mapping[str, Any], *, expected_hash: str 
     compiled = compile_resolved_document_v3(unhashed)
     if compiled.runtime.runtime_profile.value != PROFILE or compiled.runtime.navigation_mode.value != MODE:
         raise ValueError("resolved config is not sim_eval/NAV2_BASELINE")
+    if declared != compiled.provenance.config_hash:
+        raise ValueError("declared config_hash does not match compiled global config_hash")
     if compiled.navigation.step07_acceptance is None:
         raise ValueError("resolved config lacks Step07 global-hash acceptance policy")
     return compiled.provenance.config_hash
@@ -206,6 +210,7 @@ class OwnedProcess:
     process: subprocess.Popen[bytes]
     started_steady: float
     log_stream: Any
+    pgid: int
     stopped: bool = False
 
 
@@ -219,32 +224,76 @@ class ProcessOwner:
         process = subprocess.Popen(tuple(command), cwd=cwd, env=dict(env),
                                    stdin=subprocess.DEVNULL, stdout=runtime_log,
                                    stderr=subprocess.STDOUT, start_new_session=True)
-        owned = OwnedProcess(name, process, time.monotonic(), runtime_log)
+        owned = OwnedProcess(name, process, time.monotonic(), runtime_log, process.pid)
         self.processes.append(owned)
         return owned
 
     @staticmethod
+    def _group_members(pgid: int) -> tuple[tuple[int, str], ...] | None:
+        """Inspect only the owned process group through procfs; None means unknown."""
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return None
+        members = []
+        try:
+            for entry in proc.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                raw = (entry / "stat").read_text(encoding="ascii")
+                fields = raw[raw.rfind(")")+2:].split()
+                state, group = fields[0], int(fields[2])
+                if group == pgid:
+                    members.append((int(entry.name), state))
+        except (OSError, ValueError, IndexError):
+            return None
+        return tuple(members)
+
+    @staticmethod
     def _signal_owned_group(owned: OwnedProcess, sig: int) -> None:
-        if owned.process.poll() is not None:
+        members = ProcessOwner._group_members(owned.pgid)
+        if members is None:
+            raise RuntimeError(f"cannot verify owned process group: {owned.name}")
+        if not members:
             return
         try:
-            if os.getpgid(owned.process.pid) != owned.process.pid:
-                raise RuntimeError(f"owned process is no longer its process-group leader: {owned.name}")
-            os.killpg(owned.process.pid, sig)
+            if owned.pgid != owned.process.pid:
+                raise RuntimeError(f"owned process group identity is invalid: {owned.name}")
+            os.killpg(owned.pgid, sig)
         except ProcessLookupError:
             return
 
     def stop_one(self, owned: OwnedProcess, *, grace_s: float = 5.0) -> dict[str, Any]:
         if owned.stopped:
             return {"name": owned.name, "returncode": owned.process.poll(), "stopped": True}
-        self._signal_owned_group(owned, signal.SIGINT)
+        result: dict[str, Any] = {"name": owned.name, "returncode": owned.process.poll(),
+                                  "stopped": False}
         try:
-            code = owned.process.wait(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            return {"name": owned.name, "returncode": None, "sigint_timeout": True,
-                    "stopped": False}
-        owned.stopped = True
-        return {"name": owned.name, "returncode": code, "stopped": True}
+            self._signal_owned_group(owned, signal.SIGINT)
+        except RuntimeError as error:
+            result["group_inspection_error"] = str(error)
+            return result
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline:
+            members = self._group_members(owned.pgid)
+            if members == ():
+                if owned.process.poll() is None:
+                    try:
+                        result["returncode"] = owned.process.wait(timeout=max(0.01, deadline-time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        pass
+                owned.stopped = owned.process.poll() is not None
+                result.update({"returncode": owned.process.poll(), "stopped": owned.stopped,
+                               "group_members": []})
+                if not owned.stopped:
+                    result["sigint_timeout"] = True
+                return result
+            if members is None:
+                result["group_inspection_error"] = "OWNED_PROCESS_GROUP_STATUS_UNKNOWN"
+                return result
+            time.sleep(0.02)
+        result.update({"sigint_timeout": True, "stopped": False,
+                       "group_members": list(self._group_members(owned.pgid) or ())})
+        return result
 
     def stop_all(self, order: Iterable[str] | None = None, *, grace_s: float = 2.0,
                  capture_finalized: Callable[[], bool] = lambda: False) -> list[dict[str, Any]]:
@@ -259,12 +308,33 @@ class ProcessOwner:
                 self._signal_owned_group(owned, signal.SIGTERM)
                 try:
                     item["returncode"] = owned.process.wait(timeout=2.0)
-                    item["stopped"] = True
-                    item["sigterm_escalated_after_finalize"] = True
-                    self.warnings.append(f"{name}: launcher-managed SIGTERM after capture finalize")
-                    owned.stopped = True
                 except subprocess.TimeoutExpired:
-                    item["owned_orphan"] = True
+                    item["returncode"] = owned.process.poll()
+                members = self._group_members(owned.pgid)
+                item["group_members"] = list(members or ())
+                item["stopped"] = members == () and owned.process.poll() is not None
+                item["sigterm_escalated_after_finalize"] = True
+                self.warnings.append(f"{name}: launcher-managed SIGTERM after capture finalize")
+                owned.stopped = item["stopped"]
+                if not item["stopped"]:
+                    self._signal_owned_group(owned, signal.SIGKILL)
+                    item["sigkill_required"] = True
+                    members = self._group_members(owned.pgid)
+                    item["group_members"] = list(members or ())
+                    item["stopped"] = members == () and owned.process.poll() is not None
+                    owned.stopped = item["stopped"]
+        elif pending:
+            # Containment targets only the exact process groups this runner
+            # created. Missing finalized capture makes A10 fail independently.
+            for name, item in pending.items():
+                owned = lookup[name]
+                self._signal_owned_group(owned, signal.SIGKILL)
+                item["sigkill_required"] = True
+                members = self._group_members(owned.pgid)
+                item["group_members"] = list(members or ())
+                item["returncode"] = owned.process.poll()
+                item["stopped"] = members == () and item["returncode"] is not None
+                owned.stopped = item["stopped"]
         return results
 
 
@@ -322,8 +392,11 @@ class ResearchAcceptanceRunner:
         self.action_accept_ns = 0
         self.goal_barrier_sequence = 0
         self.goal_barrier_stamp_ns = 0
+        self.authorization: dict[str, Any] = {}
+        self.rearm_requested = False
         self.mission_deadline_steady = 0.0
         self.shutdown_results: list[dict[str, Any]] = []
+        self.shutdown_completed = False
 
     def preflight(self) -> None:
         self.state.stage = "PREFLIGHT"
@@ -335,7 +408,7 @@ class ResearchAcceptanceRunner:
         self.config_hash = validate_resolved_config(self.config)
         if not self.partition.strip():
             raise AcceptanceFailure("PREFLIGHT", "partition", "GZ_PARTITION_REQUIRED")
-        verify_runtime_authorization(self.authorization_path, commit=self.commit,
+        self.authorization = verify_runtime_authorization(self.authorization_path, commit=self.commit,
                                     config_hash=self.config_hash, run_id=self.run_id,
                                     output_target=self.output_target)
         if self.output_target.exists():
@@ -383,6 +456,8 @@ class ResearchAcceptanceRunner:
     def start_runtime_children(self) -> None:
         if self.output is None:
             raise RuntimeError("preflight must create the output target first")
+        if self.authorization.get("sim_estop_release_authorized") is not True:
+            raise AcceptanceFailure("PREFLIGHT", "authorization", "SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED")
         env = dict(os.environ)
         env["GZ_PARTITION"] = self.partition
         env["ROS_DOMAIN_ID"] = env.get("ROS_DOMAIN_ID", "0")
@@ -395,10 +470,12 @@ class ResearchAcceptanceRunner:
         self.process_owner.start("composite", self._launch(
             "mecanum_nav_bringup", "sim_eval_nav2_baseline_system.launch.py",
             {"gz_partition": self.partition, "start_bootstrap": "false",
-             "canonical_map_root": str(self.map_root), "fuel_cache_root": str(self.fuel_cache_root), **common}),
+             "canonical_map_root": str(self.map_root), "fuel_cache_root": str(self.fuel_cache_root),
+             "sim_estop_release_authorized": "true", **common}),
             env=env, runtime_log=self.log_stream, cwd=self.repository)
         qos = self.repository / "ros2_ws/src/mecanum_nav_bringup/config/recording/step07_research_qos.yaml"
         bag_command = ["ros2", "bag", "record", "--storage", "sqlite3", "--use-sim-time",
+                       "--include-hidden-topics",
                        "--output", str(self.output / "capture" / "step07"),
                        "--qos-profile-overrides-path", str(qos), *CAPTURE_TOPICS]
         self.process_owner.start("recorder", bag_command, env=env,
@@ -416,15 +493,23 @@ class ResearchAcceptanceRunner:
         self.executor = MultiThreadedExecutor(num_threads=4)
         self.executor.add_node(self.observer.node)
         import threading
-        self.executor_thread = threading.Thread(target=self.executor.spin,
+        self.executor_thread = threading.Thread(target=self._spin_executor,
             name="step07-observer-executor", daemon=False)
         self.executor_thread.start()
+
+    def _spin_executor(self) -> None:
+        try:
+            self.executor.spin()
+        except BaseException as error:
+            self.observer.executor_error = error
 
     def _remaining(self, deadline: float) -> float:
         return max(0.0, deadline - self.now_steady())
 
     def _wait_future(self, future: Any, deadline: float, *, stage: str, component: str) -> Any:
+        self._raise_executor_error(stage)
         while not future.done():
+            self._raise_executor_error(stage)
             if self._remaining(deadline) <= 0:
                 raise AcceptanceFailure(stage, component, "STEADY_DEADLINE_EXPIRED")
             time.sleep(min(0.01, self._remaining(deadline)))
@@ -435,10 +520,19 @@ class ResearchAcceptanceRunner:
 
     def _wait_for(self, predicate: Callable[[], bool], deadline: float, *,
                   stage: str, component: str, reason: str) -> None:
-        while not predicate():
+        while True:
+            self._raise_executor_error(stage)
+            if predicate():
+                return
             if self._remaining(deadline) <= 0:
                 raise AcceptanceFailure(stage, component, reason)
             time.sleep(min(0.02, self._remaining(deadline)))
+
+    def _raise_executor_error(self, stage: str | None = None) -> None:
+        error = getattr(self.observer, "executor_error", None) if self.observer is not None else None
+        if error is not None:
+            raise AcceptanceFailure(stage or self.state.stage, "observer_executor",
+                                    f"EXECUTOR_EXCEPTION:{type(error).__name__}:{error}")
 
     def _graph_ready_for_recording(self) -> bool:
         ready, missing = self.observer.recording_ready(CAPTURE_TOPICS)
@@ -454,9 +548,24 @@ class ResearchAcceptanceRunner:
         if observer.clock_ns <= 0 or observer.clock_advance_count < 2 or observer.lifecycle is None:
             return False
         life = observer.lifecycle
-        if (life.value["barrier_state"] != 1 or not life.value["motion_permitted"]
-                or now_steady-life.received_steady_ns > 500_000_000):
+        ros_age = observer.clock_ns - life.stamp_ns
+        if life.value["barrier_state"] == 3:
+            raise AcceptanceFailure("STARTUP", "safety_lifecycle", "SAFETY_LIFECYCLE_FAULT")
+        if (life.value["primary_state"] != 2
+                or life.value["barrier_state"] not in (1, 2)
+                or now_steady-life.received_steady_ns > 500_000_000
+                or not 0 <= ros_age <= 500_000_000):
             return False
+        graph = observer.graph_snapshot()
+        incompatible = self._known_qos_mismatches(graph)
+        if incompatible:
+            raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "qos",
+                                    f"KNOWN_QOS_INCOMPATIBILITY:{','.join(incompatible)}")
+        lifecycle_publishers = graph["topics"].get(
+            "/mecanum/safety_lifecycle_state", {}).get("publishers", ())
+        if len(lifecycle_publishers) != 1 or lifecycle_publishers[0][0] != "safety_lifecycle":
+            raise AcceptanceFailure("STARTUP", "safety_lifecycle_owner",
+                                    "LIFECYCLE_PUBLISHER_OWNER_MISMATCH")
         if not observer.scans or not observer.wheel or not observer.imu or not observer.odometry:
             return False
         scan = observer.scans[-1].value
@@ -468,10 +577,18 @@ class ResearchAcceptanceRunner:
                 or imu.header.frame_id != "base_link" or odom.header.frame_id != "odom"
                 or odom.child_frame_id != "base_link"):
             raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "sensor_frames", "SENSOR_TYPE_OR_FRAME_INVALID")
-        return (now_steady-observer.scans[-1].received_steady_ns <= 500_000_000
-                and now_steady-observer.wheel[-1].received_steady_ns <= 200_000_000
-                and now_steady-observer.imu[-1].received_steady_ns <= 200_000_000
-                and now_steady-observer.odometry[-1].received_steady_ns <= 250_000_000)
+        from mecanum_nav_rl.observations.step07_research_acceptance import lidar_sectors
+        try:
+            lidar_sectors(scan.ranges, angle_min=scan.angle_min,
+                angle_increment=scan.angle_increment, range_min=scan.range_min,
+                range_max=scan.range_max, frame_id=scan.header.frame_id)
+        except (TypeError, ValueError) as error:
+            raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "scan", f"SCAN_INVALID:{error}") from error
+        facts = (observer.scans[-1], observer.wheel[-1], observer.imu[-1], observer.odometry[-1])
+        limits = (500_000_000, 200_000_000, 200_000_000, 250_000_000)
+        return all(0 <= now_steady-f.received_steady_ns <= limit
+                   and 0 <= observer.clock_ns-f.stamp_ns <= limit
+                   for f, limit in zip(facts, limits))
 
     def _goal_pose(self) -> Any:
         from geometry_msgs.msg import PoseStamped
@@ -581,9 +698,35 @@ class ResearchAcceptanceRunner:
         self.state.stage = "A4_TF"
         self._wait_for(lambda: self._tf_chain_usable(self.observer.odometry[-1].stamp_ns), deadline,
             stage="A4_TF", component="tf2", reason="REQUIRED_TF_CHAIN_UNAVAILABLE_AT_SENSOR_STAMP")
+        owner_map = self._observed_tf_owners()
         self.state.facts["A4"] = {"pass": True, "reason": "TF_CHAIN_AVAILABLE_AT_SENSOR_TIMESTAMP",
             "measured": {"edges": ["map->odom", "odom->base_link", "base_link->lidar_frame"],
-                         "owners": ["amcl", "ekf", "robot_state_publisher"]}}
+                         "owners": owner_map}}
+        self._startup_rearm(deadline)
+
+    def _startup_rearm(self, deadline: float) -> None:
+        if self.authorization.get("sim_estop_release_authorized") is not True:
+            raise AcceptanceFailure("STARTUP", "authorization", "SIM_ESTOP_RELEASE_AUTHORIZATION_REQUIRED")
+        if self.rearm_requested:
+            raise AcceptanceFailure("STARTUP", "safety_lifecycle", "STARTUP_REARM_ALREADY_REQUESTED")
+        self.rearm_requested = True
+        rearm_future = self.observer.request_rearm()
+        rearm_response = self._wait_future(rearm_future, deadline, stage="STARTUP_REARM",
+                                           component="safety_rearm")
+        if not rearm_response.success:
+            raise AcceptanceFailure("STARTUP_REARM", "safety_rearm", "SAFETY_REARM_REFUSED")
+        self._wait_for(lambda: self._lifecycle_ready(), deadline, stage="STARTUP_REARM",
+            component="safety_lifecycle", reason="SAFETY_READY_AFTER_REARM_TIMEOUT")
+
+    def _lifecycle_ready(self) -> bool:
+        life = self.observer.lifecycle
+        if life is None:
+            return False
+        now_steady = time.monotonic_ns()
+        return (life.context == self.observer.context and life.value["primary_state"] == 2
+            and life.value["barrier_state"] == 1 and life.value["motion_permitted"]
+            and 0 <= now_steady-life.received_steady_ns <= 500_000_000
+            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000)
 
     def _localization_ok(self) -> tuple[bool, str | None]:
         from mecanum_nav_rl.observations.step07_research_acceptance import localization_health
@@ -601,6 +744,20 @@ class ResearchAcceptanceRunner:
             return True
         except Exception:
             return False
+
+    def _observed_tf_owners(self) -> dict[str, str]:
+        expected = {("map", "odom"): "amcl",
+                    ("odom", "base_link"): "ekf_filter_node",
+                    ("base_link", "lidar_frame"): "robot_state_publisher"}
+        observed: dict[str, str] = {}
+        for edge, owner in expected.items():
+            owners = self.observer.tf_edge_owners.get(edge, set())
+            normalized = {str(name).strip("/").lower() for name in owners}
+            if normalized != {owner}:
+                raise AcceptanceFailure("A4_TF", "tf_publishers",
+                    f"TF_EDGE_OWNER_MISMATCH:{edge[0]}->{edge[1]}:{sorted(normalized)}")
+            observed[f"{edge[0]}->{edge[1]}"] = next(iter(owners))
+        return observed
 
     def _send_one_plan(self) -> None:
         from mecanum_nav_rl.observations.step07_research_acceptance import PathSnapshot
@@ -639,43 +796,95 @@ class ResearchAcceptanceRunner:
 
     def _lookup_local_reference(self, odom_stamp_ns: int, odom_receive_ns: int,
                                 cutoff_ns: int, deadline: float) -> tuple[tuple[float, float, float], float, int] | None:
-        from mecanum_nav_rl.observations.step07_research_acceptance import PathSnapshot, project_lookahead
+        from mecanum_nav_rl.observations.step07_research_acceptance import (
+            PathSnapshot, project_lookahead, transform_map_path_to_base,
+        )
         from rclpy.time import Time
         pending_deadline = min(self.now_steady()+0.200, deadline)
         tf = None
+        tf_error: str | None = None
         query = Time(nanoseconds=odom_stamp_ns, clock_type=self.rclpy.clock.ClockType.ROS_TIME)
         while tf is None and self.now_steady() < pending_deadline:
             try:
                 tf = self.observer.tf_buffer.lookup_transform("base_link", "map", query,
                     timeout=self.observer._Duration(seconds=0.0))
             except Exception:
+                tf_error = "exact-time lookup unavailable"
                 time.sleep(0.005)
-        if tf is None or self.observer.clock_ns < cutoff_ns:
+        if (tf is None or self.observer.clock_ns < cutoff_ns or self.observer.clock_rollback
+                or self._remaining(deadline) <= 0 or self.observer.context != self.path_snapshot.context
+                or self.observer.lifecycle is None):
+            self.log("tf", f"local reference unavailable: stamp={odom_stamp_ns} cutoff={cutoff_ns} error={tf_error}")
             return None
-        if time.monotonic_ns()-odom_receive_ns > 250_000_000:
+        now_steady = time.monotonic_ns()
+        lifecycle = self.observer.lifecycle
+        if (not 0 <= now_steady-odom_receive_ns <= 250_000_000
+                or not 0 <= now_steady-lifecycle.received_steady_ns <= 500_000_000
+                or not 0 <= self.observer.clock_ns-lifecycle.stamp_ns <= 500_000_000
+                or lifecycle.context != self.path_snapshot.context
+                or lifecycle.value["primary_state"] != 2
+                or lifecycle.value["barrier_state"] != 1
+                or not lifecycle.value["motion_permitted"]):
+            self.log("tf", "local reference rejected: stale odometry/lifecycle or invalid context")
             return None
         tr = tf.transform.translation
         q = tf.transform.rotation
-        yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
-        c, s = math.cos(yaw), math.sin(yaw)
-        poses_base = tuple((c*x+s*y-tr.x, -s*x+c*y-tr.y)
-                           for x, y in self.path_snapshot.poses_xy)
+        poses_base = transform_map_path_to_base(self.path_snapshot.poses_xy,
+            translation=(tr.x, tr.y, tr.z), rotation_xyzw=(q.x, q.y, q.z, q.w))
         path = PathSnapshot(poses_base, self.path_snapshot.request_id, self.path_snapshot.goal_xy,
             self.path_snapshot.map_id, self.path_snapshot.map_content_hash,
             self.path_snapshot.context, self.path_snapshot.received_steady_ns,
             min(self.path_snapshot.expires_steady_ns, int(deadline*1_000_000_000)))
-        progress, distance_feature, bearing = project_lookahead(path, robot_xy=(0.0,0.0),
-            previous_arc_m=self.last_progress_arc, now_steady_ns=time.monotonic_ns())
+        try:
+            progress, distance_feature, bearing = project_lookahead(path, robot_xy=(0.0,0.0),
+                previous_arc_m=self.last_progress_arc, now_steady_ns=time.monotonic_ns())
+        except ValueError as error:
+            self.log("observation", f"local reference unavailable: {error}")
+            return None
+        committed_steady = time.monotonic_ns()
+        if (committed_steady-odom_receive_ns > 250_000_000
+                or self._remaining(deadline) <= 0 or self.observer.context != self.path_snapshot.context
+                or self.observer.barrier_sequence != self.goal_barrier_sequence
+                or self.observer.clock_rollback):
+            self.log("tf", "local reference expired before commit")
+            return None
         return ((distance_feature, math.sin(bearing), math.cos(bearing)),
-                progress, time.monotonic_ns())
+                progress, committed_steady)
+
+    def _mission_lifecycle_valid(self, context: Any, now_steady_ns: int) -> bool:
+        life = self.observer.lifecycle
+        if life is None or life.context != context or self.observer.context != context:
+            return False
+        return (life.value["primary_state"] == 2 and life.value["barrier_state"] == 1
+            and life.value["motion_permitted"]
+            and 0 <= now_steady_ns-life.received_steady_ns <= 500_000_000
+            and 0 <= self.observer.clock_ns-life.stamp_ns <= 500_000_000)
+
+    def _assert_live_mission_health(self, context: Any, stage: str) -> None:
+        observer = self.observer
+        if observer.clock_rollback or observer.clock_ns <= 0:
+            raise AcceptanceFailure(stage, "clock", "SIM_CLOCK_INVALID_OR_ROLLED_BACK")
+        now_ros, now_steady = observer.clock_ns, time.monotonic_ns()
+        if not self._mission_lifecycle_valid(context, now_steady):
+            raise AcceptanceFailure(stage, "safety_lifecycle", "LIFECYCLE_NOT_READY_OR_STALE")
+        required = ((observer.scans, 500_000_000, "scan"),
+                    (observer.wheel, 200_000_000, "wheel_odometry"),
+                    (observer.imu, 200_000_000, "imu"),
+                    (observer.odometry, 250_000_000, "filtered_odometry"))
+        for stream, limit, name in required:
+            if not stream:
+                raise AcceptanceFailure(stage, name, f"{name.upper()}_MISSING")
+            fact = stream[-1]
+            if (fact.context != context or not 0 <= now_steady-fact.received_steady_ns <= limit
+                    or not 0 <= now_ros-fact.stamp_ns <= limit):
+                raise AcceptanceFailure(stage, name, f"{name.upper()}_STALE_OR_WRONG_CONTEXT")
 
     def _collect_one_observation(self, deadline: float) -> bool:
         from mecanum_nav_rl.observations.step07_research_acceptance import (
             make_observation, select_actual_receipt, select_scan_odom_pair,
         )
         observer = self.observer
-        if observer.clock_rollback:
-            raise AcceptanceFailure("A7_OBSERVATION", "clock", "SIM_CLOCK_ROLLBACK")
+        self._assert_live_mission_health(self.path_snapshot.context, "A7_OBSERVATION")
         cutoff = observer.node.get_clock().now().nanoseconds
         if cutoff <= 0 or observer.context != self.path_snapshot.context:
             raise AcceptanceFailure("A7_OBSERVATION", "context_or_clock", "INVALID_OBSERVATION_CONTEXT")
@@ -688,32 +897,70 @@ class ResearchAcceptanceRunner:
             cutoff_ns=cutoff, now_steady_ns=now_steady, scan_freshness_ns=500_000_000,
             odom_freshness_ns=250_000_000, sync_tolerance_ns=50_000_000,
             scan_barrier_ns=barrier_ns, odom_barrier_ns=barrier_ns,
-            context=self.path_snapshot.context, used_pairs=self.used_pairs)
+            context=self.path_snapshot.context, used_pairs=self.used_pairs, now_ros_ns=cutoff)
         if pair is None:
             return False
         scan_fact, odom_fact = pair
         receipt = select_actual_receipt(tuple(observer.receipts), cutoff_ns=cutoff,
             now_steady_ns=time.monotonic_ns(), freshness_ns=500_000_000,
-            after_barrier_ns=barrier_ns, context=self.path_snapshot.context)
+            after_barrier_ns=barrier_ns, context=self.path_snapshot.context, now_ros_ns=cutoff)
         if receipt is None:
             return False
         pinned_context = self.path_snapshot.context
         if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
                 or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
             raise AcceptanceFailure("A7_OBSERVATION", "lifecycle", "LIFECYCLE_CONTEXT_CHANGED_DURING_MISSION")
+        if not self._mission_lifecycle_valid(pinned_context, time.monotonic_ns()):
+            raise AcceptanceFailure("A7_OBSERVATION", "safety_lifecycle", "LIFECYCLE_NOT_READY_OR_STALE")
+        pre_tf_now_steady = time.monotonic_ns()
+        if (scan_fact.frame_id != "lidar_frame" or odom_fact.frame_id != "base_link"
+                or odom_fact.value.header.frame_id != "odom"
+                or odom_fact.value.child_frame_id != "base_link"
+                or scan_fact.context != pinned_context or odom_fact.context != pinned_context
+                or receipt.context != pinned_context
+                or not 0 <= cutoff-scan_fact.stamp_ns <= 500_000_000
+                or not 0 <= cutoff-odom_fact.stamp_ns <= 250_000_000
+                or not 0 <= cutoff-receipt.stamp_ns <= 500_000_000
+                or not 0 <= pre_tf_now_steady-scan_fact.received_steady_ns <= 500_000_000
+                or not 0 <= pre_tf_now_steady-odom_fact.received_steady_ns <= 250_000_000
+                or not 0 <= pre_tf_now_steady-receipt.received_steady_ns <= 500_000_000
+                or self._remaining(deadline) <= 0):
+            return False
+        try:
+            lidar_sectors(scan_fact.value.ranges, angle_min=scan_fact.value.angle_min,
+                angle_increment=scan_fact.value.angle_increment, range_min=scan_fact.value.range_min,
+                range_max=scan_fact.value.range_max, frame_id=scan_fact.frame_id)
+        except (TypeError, ValueError) as error:
+            self.state.facts["rejected_observations"] = self.state.facts.get("rejected_observations", 0)+1
+            reasons = self.state.facts.setdefault("rejection_reasons", {})
+            reasons[str(error)] = reasons.get(str(error), 0)+1
+            return False
         reference_result = self._lookup_local_reference(odom_fact.stamp_ns, odom_fact.received_steady_ns,
                                                         cutoff, deadline)
         if reference_result is None:
+            if (observer.context != pinned_context
+                    or observer.barrier_sequence != self.goal_barrier_sequence
+                    or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns
+                    or observer.clock_rollback):
+                raise AcceptanceFailure("A7_OBSERVATION", "lifecycle",
+                                        "LIFECYCLE_OR_CLOCK_CONTEXT_CHANGED_DURING_TF_LOOKUP")
             return False
         reference, progress, reference_receive_ns = reference_result
         now_steady = time.monotonic_ns()
+        self._assert_live_mission_health(pinned_context, "A7_OBSERVATION")
+        if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
+                or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns):
+            raise AcceptanceFailure("A7_OBSERVATION", "lifecycle",
+                                    "LIFECYCLE_BARRIER_CHANGED_DURING_TF_LOOKUP")
         if (observer.context != pinned_context or observer.barrier_sequence != self.goal_barrier_sequence
                 or observer.barrier_stamp_ns != self.goal_barrier_stamp_ns or observer.clock_rollback
-                or now_steady-scan_fact.received_steady_ns > 500_000_000
-                or now_steady-odom_fact.received_steady_ns > 250_000_000
-                or now_steady-receipt.received_steady_ns > 500_000_000
-                or scan_fact.stamp_ns > cutoff or odom_fact.stamp_ns > cutoff
-                or receipt.stamp_ns > cutoff or observer.clock_ns < cutoff
+                or not 0 <= now_steady-scan_fact.received_steady_ns <= 500_000_000
+                or not 0 <= now_steady-odom_fact.received_steady_ns <= 250_000_000
+                or not 0 <= now_steady-receipt.received_steady_ns <= 500_000_000
+                or not 0 <= observer.clock_ns-scan_fact.stamp_ns <= 500_000_000
+                or not 0 <= observer.clock_ns-odom_fact.stamp_ns <= 250_000_000
+                or not 0 <= observer.clock_ns-receipt.stamp_ns <= 500_000_000
+                or not self._mission_lifecycle_valid(pinned_context, now_steady)
                 or self._remaining(deadline) <= 0):
             return False
         scan = scan_fact.value
@@ -751,6 +998,31 @@ class ResearchAcceptanceRunner:
         self.last_progress_arc = progress
         return True
 
+    @staticmethod
+    def _known_qos_mismatches(graph: Mapping[str, Any]) -> tuple[str, ...]:
+        """Reject known reliability/durability incompatibility; unknown is undecided."""
+        from mecanum_nav_rl.observations.step07_research_acceptance import qos_endpoints_compatible
+
+        required = {"/scan", "/wheel/odometry_raw", "/imu/data", "/odometry/filtered",
+                    "/tf", "/tf_static", "/mecanum/safety_lifecycle_state",
+                    "/mecanum/safety_state", "/mecanum/nav2_candidate_cmd",
+                    "/mecanum/safety_accepted_cmd", "/cmd_vel",
+                    "/mecanum/final_issued_command"}
+        incompatible: list[str] = []
+        for topic in sorted(required):
+            facts = graph.get("topics", {}).get(topic, {})
+            for publisher in facts.get("publishers", ()):
+                for subscription in facts.get("subscriptions", ()):
+                    if len(publisher) < 6 or len(subscription) < 6:
+                        continue
+                    if not qos_endpoints_compatible(publisher[3], publisher[4],
+                                                    subscription[3], subscription[4]):
+                        incompatible.append(topic)
+                        break
+                if topic in incompatible:
+                    break
+        return tuple(incompatible)
+
     def _mission(self) -> None:
         self._send_one_plan()
         goal = self._goal_pose()
@@ -778,8 +1050,10 @@ class ResearchAcceptanceRunner:
         overall_sample_deadline = min(self.started_steady+460.0, sent_steady+240.0)
         action_result = None
         while self._remaining(overall_sample_deadline) > 0:
+            self._raise_executor_error("A7_OBSERVATION")
             if len(self.state.valid_observations) < 5:
                 self._collect_one_observation(overall_sample_deadline)
+            self._command_chain_fact()
             if result_future.done():
                 action_result = result_future.result()
                 break
@@ -787,6 +1061,8 @@ class ResearchAcceptanceRunner:
             time.sleep(0.01)
         if action_result is None:
             self.state.facts["A9"] = {"pass": False, "reason": "NAVIGATION_DEADLINE_OR_NO_RESULT"}
+            self.state.stage = "A9_NAVIGATION_OUTCOME"
+            self.state.fail("navigate_to_pose", "NAVIGATION_DEADLINE_OR_NO_RESULT")
         else:
             self.log("navigate", f"result status={action_result.status}")
             self.state.facts["A9"] = self._navigation_outcome(action_result)
@@ -870,33 +1146,71 @@ class ResearchAcceptanceRunner:
         return False
 
     def _command_chain_fact(self) -> dict[str, Any]:
+        retained = self.state.facts.get("command_chain_episode")
+        if isinstance(retained, Mapping):
+            return dict(retained)
         graph = self.observer.graph_snapshot()
         publishers = graph["topics"].get("/cmd_vel", {}).get("publishers", ())
         candidates = tuple(self.observer.nav2_candidates)
         envelopes = tuple(self.observer.accepted_envelopes)
         receipts = tuple(self.observer.receipts)
-        nonzero = lambda c: any(abs(float(v)) > 1e-6 for v in c)
-        candidate = next((x for x in candidates if nonzero(x.value)), None)
-        receipt = next((x for x in reversed(receipts) if x.context == self.path_snapshot.context
-                        and x.value["source"] == 2 and nonzero(x.value["command"])), None)
-        envelope = next((x for x in reversed(envelopes) if x.context == self.path_snapshot.context
-                         and x.value["source"] == 2), None)
-        safety = next((x for x in reversed(self.observer.safety_states)
-                       if x.value["active_command_source"] == 2), None)
-        matched = bool(candidate and envelope and receipt and safety
-            and envelope.value["sequence"] == receipt.value.get("sequence")
-            and envelope.value["source"] == receipt.value.get("source")
-            and envelope.value["source_instance_id"] == receipt.value.get("source_instance_id")
-            and tuple(safety.value["final_command"]) == tuple(receipt.value["command"])
-            and safety.value["active_command_source"] == receipt.value["source"]
-            and receipt.stamp_ns >= envelope.stamp_ns)
-        sole = len(publishers) == 1 and "final_twist_publisher" in publishers[0][0].lower()
-        passed = matched and sole
-        return {"pass": passed, "reason": "NAV2_SAFETY_FINAL_RECEIPT_CHAIN" if passed else "COMMAND_CHAIN_NOT_CORRELATED",
+        commands = tuple(self.observer.cmd_vel_commands)
+        safety_states = tuple(self.observer.safety_states)
+        nonzero = lambda c: all(math.isfinite(float(v)) for v in c) and any(abs(float(v)) > 1e-6 for v in c)
+        sole = (len(publishers) == 1
+                and publishers[0][0].lower() == "final_twist_publisher")
+        context = self.path_snapshot.context if self.path_snapshot is not None else None
+        for receipt in reversed(receipts):
+            rv = receipt.value
+            if (receipt.context != context or rv.get("source") != 2
+                    or not nonzero(rv.get("command", ()))
+                    or type(rv.get("final_publish_sequence")) is not int
+                    or rv["final_publish_sequence"] <= 0
+                    or type(rv.get("publisher_instance")) is not int
+                    or rv["publisher_instance"] <= 0):
+                continue
+            for envelope in reversed(envelopes):
+                ev = envelope.value
+                if (envelope.context != receipt.context or ev.get("source") != rv.get("source")
+                        or ev.get("sequence") != rv.get("sequence")
+                        or ev.get("source_instance_id") != rv.get("source_instance_id")
+                        or tuple(ev.get("command", ())) != tuple(rv["command"])
+                        or not (0 < envelope.stamp_ns <= receipt.stamp_ns)):
+                    continue
+                matching_safety = [s for s in safety_states
+                    if s.context == receipt.context
+                    and s.value.get("active_command_source") == 2
+                    and s.value.get("command_valid") is True
+                    and s.value.get("motion_permitted") is True
+                    and tuple(s.value.get("final_command", ())) == tuple(ev["command"])
+                    and 0 < s.stamp_ns <= receipt.stamp_ns
+                    and abs(s.stamp_ns-envelope.stamp_ns) <= 500_000_000]
+                matching_cmd = [c for c in commands
+                    if c.context == receipt.context
+                    and tuple(c.value) == tuple(rv["command"])
+                    and abs(c.received_steady_ns-receipt.received_steady_ns) <= 250_000_000]
+                matching_candidate = [c for c in candidates
+                    if c.context == receipt.context and nonzero(c.value)
+                    and 0 <= envelope.received_steady_ns-c.received_steady_ns <= 500_000_000]
+                if matching_safety and matching_cmd and matching_candidate and sole:
+                    episode = {"pass": True, "reason": "NAV2_SAFETY_FINAL_RECEIPT_CHAIN",
+                        "measured": {"cmd_vel_publishers": [p[0] for p in publishers],
+                            "candidate_command": list(matching_candidate[-1].value),
+                            "safety_decision_command": list(matching_safety[-1].value["final_command"]),
+                            "accepted_envelope_command": list(ev["command"]),
+                            "actual_cmd_vel": list(matching_cmd[-1].value),
+                            "receipt_command": list(rv["command"]),
+                            "sequence": rv["sequence"],
+                            "source_instance_id": rv["source_instance_id"],
+                            "final_publish_sequence": rv["final_publish_sequence"],
+                            "receipt_stamp_ns": receipt.stamp_ns}}
+                    self.state.facts["command_chain_episode"] = episode
+                    return episode
+        return {"pass": False, "reason": "COMMAND_CHAIN_NOT_CORRELATED",
             "measured": {"cmd_vel_publishers": [p[0] for p in publishers],
-                         "nonzero_nav2_candidate": bool(candidate),
-                         "matched_envelope_receipt": bool(matched),
-                         "receipt_sequence": receipt.value["final_publish_sequence"] if receipt else None}}
+                "nonzero_nav2_candidate": any(x.context == context and nonzero(x.value) for x in candidates),
+                "actual_cmd_vel_observed": bool(commands),
+                "matched_envelope_receipt": False}}
 
     def _safe_stop(self) -> bool:
         if self.observer is None:
@@ -929,6 +1243,7 @@ class ResearchAcceptanceRunner:
 
     def execute(self) -> dict[str, Any]:
         """Run one authorized campaign. This function is not called in offline delivery."""
+        report: dict[str, Any] | None = None
         try:
             self.start_observer()
             self.start_runtime_children()
@@ -944,38 +1259,36 @@ class ResearchAcceptanceRunner:
         except Exception as error:
             self.state.fail("runner", f"{type(error).__name__}:{error}")
             self.log("runner", f"unhandled failure {type(error).__name__}: {error}")
-        for index in range(1, 10):
-            key = f"A{index}"
-            if key not in self.state.facts:
-                self.state.facts[key] = {"pass": False,
-                    "reason": f"NOT_EVALUATED_DUE_TO_{self.state.stage}"}
-        self.state.stage = "A10_SHUTDOWN"
-        self._safe_stop()
-        self.shutdown_results = self.process_owner.stop_all(
-            ("composite", "bootstrap", "recorder"), grace_s=2.0,
-            capture_finalized=self._capture_finalized)
-        self.state.facts["capture_finalized"] = self._capture_finalized()
-        self.state.facts["A10"] = {"pass": self.state.facts.get("safe_stop_verified") is True
-            and self.state.facts["capture_finalized"] is True
-            and all(p.process.poll() is not None for p in self.process_owner.processes)
-            and not any(p.get("sigkill_required") for p in self.shutdown_results),
-            "reason": "SHUTDOWN_CONTRACT_MET" if self.state.facts.get("safe_stop_verified")
-                and self.state.facts["capture_finalized"] else "SHUTDOWN_CONTRACT_NOT_MET",
-            "measured": {"safe_stop_verified": self.state.facts.get("safe_stop_verified") is True,
-                         "capture_finalized": self.state.facts["capture_finalized"],
-                         "owned_orphans": [p.name for p in self.process_owner.processes if p.process.poll() is None]}}
-        report = self.evaluate_and_write()
-        if self.output:
-            identity = load_json(self.output / "identity.json")
-            identity["end_time_utc"] = datetime.now(timezone.utc).isoformat()
-            atomic_json(self.output / "identity.json", identity)
-        if self.observer:
-            self.executor.remove_node(self.observer.node)
-            self.observer.destroy()
-            self.executor.shutdown(timeout_sec=2.0)
-            self.executor_thread.join(timeout=2.0)
-            if self.rclpy.ok(): self.rclpy.shutdown()
-        return report
+        finally:
+            for index in range(1, 10):
+                key = f"A{index}"
+                if key not in self.state.facts:
+                    self.state.facts[key] = {"pass": False,
+                        "reason": f"NOT_EVALUATED_DUE_TO_{self.state.stage}"}
+            self.state.stage = "A10_SHUTDOWN"
+            self.shutdown()
+            try:
+                report = self.evaluate_and_write()
+            except Exception as error:
+                self.state.fail("report", f"REPORT_FINALIZATION_FAILED:{type(error).__name__}:{error}")
+                self.state.facts["A10"] = {"pass": False, "reason": "REPORT_FINALIZATION_FAILED",
+                    "measured": {**self.state.cleanup, "report_error": f"{type(error).__name__}:{error}"}}
+                self.log("report", f"finalization failed: {type(error).__name__}: {error}")
+                try:
+                    report = self.evaluate_and_write()
+                except Exception as retry_error:
+                    self.log("report", f"failure report could not be written: {retry_error}")
+                    report = {"overall": "FAIL", "acceptance": {},
+                              "primary_failure": self.state.primary_failure}
+            if self.output:
+                try:
+                    identity = load_json(self.output / "identity.json")
+                    identity["end_time_utc"] = datetime.now(timezone.utc).isoformat()
+                    atomic_json(self.output / "identity.json", identity)
+                except Exception as error:
+                    self.log("identity", f"end time write failed: {error}")
+            self.close()
+        return report or {"overall": "FAIL", "acceptance": {}}
 
     def _capture_finalized(self) -> bool:
         if not self.output:
@@ -989,6 +1302,13 @@ class ResearchAcceptanceRunner:
     def evaluate_and_write(self) -> dict[str, Any]:
         from mecanum_nav_rl.observations.step07_research_acceptance import evaluate_a1_a10
         self.state.stage = "FINALIZE"
+        failed = next(((key, value) for key, value in self.state.facts.items()
+                       if key in {f"A{i}" for i in range(1, 11)}
+                       and isinstance(value, Mapping) and value.get("pass") is False), None)
+        if failed is not None and self.state.primary_failure is None:
+            key, fact = failed
+            self.state.stage = f"{key}_ACCEPTANCE"
+            self.state.fail(key.lower(), str(fact.get("reason", "ACCEPTANCE_CONDITION_FAILED")))
         report = evaluate_a1_a10({**self.state.facts,
                                   "primary_failure": self.state.primary_failure,
                                   "warnings": self.state.warnings,
@@ -1000,7 +1320,7 @@ class ResearchAcceptanceRunner:
         metrics.update({"valid_observations": len(self.state.valid_observations),
                         "rejected_observations": self.state.facts.get("rejected_observations", 0),
                         "rejection_reasons": self.state.facts.get("rejection_reasons", {}),
-                        "safety_interventions": self.state.facts.get("safety_interventions", 0)})
+                        "safety_interventions": self.state.facts.get("safety_interventions")})
         if self.output:
             atomic_json(self.output / "acceptance.json", report)
             atomic_json(self.output / "metrics.json", metrics)
@@ -1008,23 +1328,79 @@ class ResearchAcceptanceRunner:
 
     def shutdown(self) -> dict[str, Any]:
         """Cleanup verdict is separate from the functional A1-A9 outcome."""
+        if self.shutdown_completed:
+            return self.state.cleanup
         self.state.stage = "SHUTDOWN"
-        # Concrete ROS observer invokes the SafetyLifecycle reset service and
-        # verifies a published zero receipt before these process groups stop.
-        processes = self.process_owner.stop_all(("composite", "bootstrap", "recorder"),
-            grace_s=2.0, capture_finalized=self._capture_finalized)
-        self.state.cleanup = {"completed": all(x.get("stopped") for x in processes),
+        safe_stop = self._safe_stop()
+        try:
+            processes = self.process_owner.stop_all(("composite", "bootstrap", "recorder"),
+                grace_s=2.0, capture_finalized=self._capture_finalized)
+        except Exception as error:
+            processes = [{"name": "process_cleanup", "stopped": False,
+                          "error": f"{type(error).__name__}:{error}"}]
+        capture_finalized = self._capture_finalized()
+        executor_stopped = self._stop_executor()
+        owned_members = {p.name: self.process_owner._group_members(p.pgid)
+                         for p in self.process_owner.processes}
+        orphans = {name: list(members or ()) for name, members in owned_members.items()
+                   if members is None or members}
+        self.state.facts["capture_finalized"] = capture_finalized
+        self.state.cleanup = {"completed": all(x.get("stopped") for x in processes)
+                                  and not orphans and executor_stopped,
                               "processes": processes,
                               "warnings": list(self.process_owner.warnings),
-                              "safe_stop_verified": self.state.facts.get("safe_stop_verified") is True,
-                              "capture_finalized": self.state.facts.get("capture_finalized") is True,
-                              "owned_orphans": [x["name"] for x in processes if x.get("returncode") is None]}
+                              "safe_stop_verified": safe_stop,
+                              "capture_finalized": capture_finalized,
+                              "executor_stopped": executor_stopped,
+                              "owned_orphans": orphans}
         a10 = self.state.cleanup["completed"] and self.state.cleanup["safe_stop_verified"] \
             and self.state.cleanup["capture_finalized"] and not self.state.cleanup["owned_orphans"] \
             and not any(x.get("sigkill_required") for x in processes)
         self.state.facts["A10"] = {"pass": bool(a10), "reason": "CLEANUP_VERIFIED" if a10 else "SHUTDOWN_CONTRACT_NOT_MET",
                                     "measured": self.state.cleanup}
+        self.shutdown_completed = True
         return self.state.cleanup
+
+    def _stop_executor(self) -> bool:
+        if self.observer is None:
+            if self.rclpy is not None:
+                try:
+                    if self.rclpy.ok():
+                        self.rclpy.shutdown()
+                except Exception as error:
+                    self.state.cleanup.setdefault("errors", []).append(
+                        f"rclpy_shutdown:{type(error).__name__}:{error}")
+                    return False
+            return self.executor_thread is None
+        errors = []
+        if self.executor is not None:
+            try:
+                self.executor.remove_node(self.observer.node)
+            except Exception as error:
+                errors.append(f"remove_node:{type(error).__name__}:{error}")
+            try:
+                self.executor.shutdown(timeout_sec=2.0)
+            except Exception as error:
+                errors.append(f"executor_shutdown:{type(error).__name__}:{error}")
+        if self.rclpy is not None:
+            try:
+                if self.rclpy.ok():
+                    self.rclpy.shutdown()
+            except Exception as error:
+                errors.append(f"rclpy_shutdown:{type(error).__name__}:{error}")
+        if self.executor_thread is not None:
+            try:
+                self.executor_thread.join(timeout=2.0)
+            except Exception as error:
+                errors.append(f"executor_join:{type(error).__name__}:{error}")
+        stopped = self.executor_thread is None or not self.executor_thread.is_alive()
+        try:
+            self.observer.destroy()
+        except Exception as error:
+            errors.append(f"observer_destroy:{type(error).__name__}:{error}")
+        if errors:
+            self.state.cleanup.setdefault("errors", []).extend(errors)
+        return stopped and not errors
 
     def close(self) -> None:
         if self.log_stream:

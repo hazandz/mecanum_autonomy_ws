@@ -10,6 +10,8 @@ from mecanum_nav_rl.observations.step07_research_acceptance import (
     ClockRollbackGuard, lidar_sectors, localization_health, make_observation,
     mission_settled, normalized_twist, project_lookahead,
     select_actual_receipt, select_scan_odom_pair,
+    transform_map_path_to_base,
+    qos_endpoints_compatible,
 )
 
 
@@ -48,6 +50,13 @@ def test_lidar_accepts_positive_infinity_no_return_with_valid_metadata():
     result = lidar_sectors(ranges, angle_min=-math.pi, angle_increment=2*math.pi/360,
                            range_min=0.1, range_max=10.0, frame_id="lidar_frame")
     assert len(result) == 72 and all(0 <= x <= 1 for x in result)
+
+
+def test_qos_compatibility_rejects_known_mismatch_but_keeps_unknown_metadata_undecided():
+    assert not qos_endpoints_compatible(2, 2, 1, 2)  # best effort offer vs reliable request
+    assert not qos_endpoints_compatible(1, 2, 1, 1)  # volatile offer vs transient request
+    assert qos_endpoints_compatible(3, 3, 1, 1)  # unknown endpoint metadata
+    assert qos_endpoints_compatible(1, 1, 2, 2)  # stronger offer satisfies weaker request
 
 
 def test_lidar_maps_out_of_range_positive_returns_to_no_return():
@@ -111,6 +120,19 @@ def test_pair_rejects_stale_future_context_and_skew():
         scan_barrier_ns=0, odom_barrier_ns=0, context=CTX, used_pairs=set()) is None
 
 
+def test_pair_admission_rejects_stale_ros_stamp_even_when_local_receive_is_fresh():
+    scan = fact(900, receive=1_000)
+    odom = fact(900, receive=1_000)
+    assert select_scan_odom_pair([scan], [odom], cutoff_ns=2_000, now_steady_ns=1_000,
+        scan_freshness_ns=500, odom_freshness_ns=250, sync_tolerance_ns=50,
+        scan_barrier_ns=0, odom_barrier_ns=0, context=CTX, used_pairs=set(),
+        now_ros_ns=2_000) is None
+    receipt = fact(900, {"command": (0.1, 0.0, 0.0), "sequence": 8, "source": 2},
+                   receive=1_000, identity=(8,))
+    assert select_actual_receipt([receipt], cutoff_ns=2_000, now_steady_ns=1_000,
+        freshness_ns=500, after_barrier_ns=0, context=CTX, now_ros_ns=2_000) is None
+
+
 def test_bounded_facts_orders_deduplicates_and_evicts():
     stream = BoundedFacts(2)
     assert stream.insert(fact(3, identity=(3,)))
@@ -165,6 +187,19 @@ def test_lookahead_window_prevents_unbounded_branch_jump():
     with pytest.raises(ValueError, match="bounded search"):
         project_lookahead(path, robot_xy=(2.,1.), previous_arc_m=0.1, now_steady_ns=1,
                           forward_window_m=0.2)
+
+
+@pytest.mark.parametrize(("poses", "translation", "rotation", "expected"), [
+    (((2., 0.),), (0., 0., 0.), (0., 0., 0., 1.), ((2., 0.),)),
+    (((2., 0.),), (-1., 0., 0.), (0., 0., 0., 1.), ((1., 0.),)),
+    (((1., 0.),), (0., 0., 0.), (0., 0., math.sqrt(.5), math.sqrt(.5)), ((0., 1.),)),
+    (((2., 0.),), (-1., 1., 0.), (0., 0., math.sqrt(.5), math.sqrt(.5)), ((-1., 3.),)),
+])
+def test_exact_map_to_base_tf_applies_rotation_then_translation(poses, translation, rotation, expected):
+    actual = transform_map_path_to_base(poses, translation=translation,
+                                        rotation_xyzw=rotation)
+    assert [value for point in actual for value in point] == pytest.approx(
+        [value for point in expected for value in point])
 
 
 def test_localization_health_checks_covariance_freshness_and_jumps():

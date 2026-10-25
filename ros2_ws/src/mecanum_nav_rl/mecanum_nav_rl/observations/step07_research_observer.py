@@ -26,6 +26,7 @@ class Step07ResearchObserver:
                                ReliabilityPolicy)
         from sensor_msgs.msg import LaserScan, Imu
         from nav_msgs.msg import Odometry, Path
+        from tf2_msgs.msg import TFMessage
         from geometry_msgs.msg import PoseWithCovarianceStamped
         from geometry_msgs.msg import Twist
         from rosgraph_msgs.msg import Clock
@@ -47,6 +48,7 @@ class Step07ResearchObserver:
         self._config_hash = config_hash
         self.context: Context | None = None
         self.barrier_stamp_ns = 0
+        self.barrier_event_stamp_ns = 0
         self.barrier_sequence = 0
         self.clock_ns = 0
         self.clock_advance_count = 0
@@ -57,15 +59,18 @@ class Step07ResearchObserver:
         self.imu: deque[StampedFact] = deque(maxlen=64)
         self.receipts: deque[StampedFact] = deque(maxlen=64)
         self.nav2_candidates: deque[StampedFact] = deque(maxlen=64)
+        self.cmd_vel_commands: deque[StampedFact] = deque(maxlen=64)
         self.accepted_envelopes: deque[StampedFact] = deque(maxlen=64)
         self.safety_states: deque[StampedFact] = deque(maxlen=64)
         self.lifecycle: StampedFact | None = None
+        self.executor_error: BaseException | None = None
         self.localization: deque[dict[str, Any]] = deque(maxlen=64)
         self.clock_rollback = False
         self.clock_guard = ClockRollbackGuard((self._clear_buffers,))
         self.path_result: Any = None
         self.action_events: deque[dict[str, Any]] = deque(maxlen=128)
         self.map_message: Any = None
+        self.tf_edge_owners: dict[tuple[str, str], set[str]] = {}
         self.node = Node(node_name, parameter_overrides=[])
         self.node.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=True)])
         self.tf_buffer = Buffer(node=self.node)
@@ -81,6 +86,12 @@ class Step07ResearchObserver:
         receipt_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                                  reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        tf_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=100,
+                            reliability=ReliabilityPolicy.BEST_EFFORT,
+                            durability=DurabilityPolicy.VOLATILE)
+        tf_static_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                   reliability=ReliabilityPolicy.RELIABLE,
+                                   durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._subs = [
             self.node.create_subscription(Clock, "/clock", self._clock_cb, reliable),
             self.node.create_subscription(LaserScan, "/scan", self._scan, scan_qos),
@@ -91,11 +102,17 @@ class Step07ResearchObserver:
             self.node.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._lifecycle_cb, reliable),
             self.node.create_subscription(FinalIssuedCommandReceipt, "/mecanum/final_issued_command", self._receipt, receipt_qos),
             self.node.create_subscription(Twist, "/mecanum/nav2_candidate_cmd", self._candidate, reliable),
+            self.node.create_subscription(Twist, "/cmd_vel", self._cmd_vel, reliable),
             self.node.create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd", self._accepted, reliable),
             self.node.create_subscription(SafetyState, "/mecanum/safety_state", self._safety, reliable),
             self.node.create_subscription(OccupancyGrid, "/map", self._map, reliable),
+            self.node.create_subscription(TFMessage, "/tf", self._tf, tf_qos,
+                                          **{"with_info": True}),
+            self.node.create_subscription(TFMessage, "/tf_static", self._tf_static,
+                                          tf_static_qos, **{"with_info": True}),
         ]
         self.safety_reset_client = self.node.create_client(Trigger, "/mecanum/safety/request_reset")
+        self.safety_rearm_client = self.node.create_client(Trigger, "/mecanum/safety/rearm")
         self.lifecycle_clients = {name: self.node.create_client(GetState, f"/{name}/get_state")
                                   for name in ("map_server", "amcl", "planner_server",
                                                "controller_server", "behavior_server", "bt_navigator")}
@@ -121,9 +138,11 @@ class Step07ResearchObserver:
 
     def _clear_buffers(self) -> None:
         for stream in (self.scans, self.odometry, self.wheel, self.imu, self.receipts,
-                       self.nav2_candidates, self.accepted_envelopes, self.safety_states,
+                       self.nav2_candidates, self.cmd_vel_commands,
+                       self.accepted_envelopes, self.safety_states,
                        self.localization):
             stream.clear()
+        self.tf_edge_owners.clear()
 
     @staticmethod
     def _insert_ordered(stream: deque[StampedFact], fact: StampedFact) -> None:
@@ -158,6 +177,16 @@ class Step07ResearchObserver:
             self._insert_ordered(self.nav2_candidates, StampedFact(stamp, self._steady_ns(), "base_link",
                 value, context, (stamp, value)))
 
+    def _cmd_vel(self, msg: Any) -> None:
+        stamp = self._receive_ns()
+        context = self.context
+        if context is None:
+            return
+        value = (float(msg.linear.x), float(msg.linear.y), float(msg.angular.z))
+        with self._lock:
+            self._insert_ordered(self.cmd_vel_commands, StampedFact(stamp, self._steady_ns(),
+                "base_link", value, context, (stamp, value)))
+
     def _accepted(self, msg: Any) -> None:
         stamp = self._stamp(msg.header.stamp)
         context = Context(int(msg.episode_generation), int(msg.reset_epoch),
@@ -189,17 +218,53 @@ class Step07ResearchObserver:
         with self._lock:
             self.map_message = msg
 
+    def _tf(self, msg: Any, message_info: Any) -> None:
+        self._record_tf_edges("/tf", msg, message_info)
+
+    def _tf_static(self, msg: Any, message_info: Any) -> None:
+        self._record_tf_edges("/tf_static", msg, message_info)
+
+    def _record_tf_edges(self, topic: str, msg: Any, message_info: Any) -> None:
+        owner = "UNKNOWN"
+        try:
+            publisher_gid = bytes(message_info.publisher_gid)
+            endpoints = self.node.get_publishers_info_by_topic(topic)
+            matches = [endpoint.node_name for endpoint in endpoints
+                       if bytes(endpoint.endpoint_gid) == publisher_gid]
+            if len(matches) == 1:
+                owner = str(matches[0])
+        except (AttributeError, TypeError, ValueError):
+            pass
+        with self._lock:
+            for item in msg.transforms:
+                key = (str(item.header.frame_id), str(item.child_frame_id))
+                self.tf_edge_owners.setdefault(key, set()).add(owner)
+
     def _wheel(self, msg: Any) -> None:
+        if not self._valid_odom(msg):
+            return
         fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
         if fact:
             with self._lock: self._insert_ordered(self.wheel, fact)
 
     def _imu(self, msg: Any) -> None:
+        vectors = (
+            msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z,
+            msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
+            *msg.angular_velocity_covariance, *msg.linear_acceleration_covariance,
+            *msg.orientation_covariance)
+        if (msg.header.frame_id != "base_link"
+                or not all(math.isfinite(float(value)) for value in vectors)
+                or any(msg.angular_velocity_covariance[i] < 0 for i in (0, 4, 8))
+                or any(msg.linear_acceleration_covariance[i] < 0 for i in (0, 4, 8))):
+            return
         fact = self._fact(msg, msg.header.frame_id, msg, (self._stamp(msg.header.stamp),))
         if fact:
             with self._lock: self._insert_ordered(self.imu, fact)
 
     def _odom(self, msg: Any) -> None:
+        if not self._valid_odom(msg):
+            return
         fact = self._fact(msg, msg.child_frame_id, msg, (self._stamp(msg.header.stamp),))
         if fact:
             with self._lock: self._insert_ordered(self.odometry, fact)
@@ -207,8 +272,15 @@ class Step07ResearchObserver:
     def _amcl(self, msg: Any) -> None:
         pose = msg.pose.pose
         q = pose.orientation
-        yaw = math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z))
         covariance = msg.pose.covariance
+        values = (pose.position.x, pose.position.y, pose.position.z,
+                  q.x, q.y, q.z, q.w, *covariance)
+        q_norm = math.sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)
+        if (msg.header.frame_id != "map" or not all(math.isfinite(float(v)) for v in values)
+                or not 0.9 <= q_norm <= 1.1
+                or any(float(covariance[index]) < 0 for index in (0, 7, 35))):
+            return
+        yaw = math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z))
         with self._lock:
             item = {
                 "stamp_ns": self._stamp(msg.header.stamp), "received_steady_ns": self._steady_ns(),
@@ -220,27 +292,54 @@ class Step07ResearchObserver:
                 items.sort(key=lambda value: value["stamp_ns"])
                 self.localization.clear(); self.localization.extend(items[-64:])
 
+    @staticmethod
+    def _valid_odom(msg: Any) -> bool:
+        pose = msg.pose.pose
+        twist = msg.twist.twist
+        q = pose.orientation
+        values = (pose.position.x, pose.position.y, pose.position.z, q.x, q.y, q.z, q.w,
+            twist.linear.x, twist.linear.y, twist.linear.z,
+            twist.angular.x, twist.angular.y, twist.angular.z,
+            *msg.pose.covariance, *msg.twist.covariance)
+        norm = math.sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)
+        return (msg.header.frame_id == "odom" and msg.child_frame_id == "base_link"
+            and all(math.isfinite(float(value)) for value in values)
+            and 0.9 <= norm <= 1.1
+            and all(msg.pose.covariance[i] >= 0 for i in (0, 7, 14, 21, 28, 35))
+            and all(msg.twist.covariance[i] >= 0 for i in (0, 7, 14, 21, 28, 35)))
+
     def _lifecycle_cb(self, msg: Any) -> None:
         stamp = self._stamp(msg.header.stamp)
-        barrier_stamp = self._stamp(msg.barrier_stamp)
+        heartbeat_barrier_stamp = self._stamp(msg.barrier_stamp)
         observed_context = Context(int(msg.episode_generation), int(msg.reset_epoch),
                                    int(msg.runtime_generation), self._config_hash)
         with self._lock:
             prior = self.lifecycle
             prior_value = prior.value if prior else None
             prior_context = prior.context if prior else None
-            if (prior_value is not None and
-                    (barrier_stamp != self.barrier_stamp
-                     or (prior_value.barrier_state, msg.barrier_state) in ((1, 2), (2, 1), (1, 3), (3, 1)))):
+            sequence = int(msg.sequence)
+            primary_state = int(msg.primary_state)
+            barrier_state = int(msg.barrier_state)
+            context_changed = prior_context is not None and prior_context != observed_context
+            event_changed = (prior_value is None or context_changed
+                or prior_value["sequence"] != sequence
+                or prior_value["primary_state"] != primary_state
+                or prior_value["barrier_state"] != barrier_state)
+            # SafetyLifecycleCore.refresh() republishes a changing barrier_stamp
+            # on every heartbeat. Pin the event's header stamp instead; freshness
+            # continues to use StampedFact.stamp_ns/received_steady_ns.
+            if event_changed:
                 self.barrier_sequence += 1
-            self.barrier_stamp_ns = barrier_stamp
+                self.barrier_event_stamp_ns = stamp
+            self.barrier_stamp_ns = self.barrier_event_stamp_ns
             self.context = observed_context
-            value = {"primary_state": int(msg.primary_state), "barrier_state": int(msg.barrier_state),
+            value = {"primary_state": primary_state, "barrier_state": barrier_state,
                      "motion_permitted": bool(msg.motion_permitted), "reason": str(msg.reason),
-                     "sequence": int(msg.sequence), "barrier_stamp_ns": barrier_stamp}
+                     "sequence": sequence, "barrier_stamp_ns": heartbeat_barrier_stamp,
+                     "barrier_event_stamp_ns": self.barrier_event_stamp_ns}
             self.lifecycle = StampedFact(stamp, self._steady_ns(), msg.header.frame_id,
-                                         value, observed_context, (int(msg.sequence),))
-            if prior_context is not None and prior_context != observed_context:
+                                         value, observed_context, (sequence,))
+            if context_changed:
                 self.action_events.append({"event": "LIFECYCLE_CONTEXT_CHANGED", "stamp_ns": stamp})
 
     def _receipt(self, msg: Any) -> None:
@@ -307,6 +406,11 @@ class Step07ResearchObserver:
         """Ask existing SafetyLifecycle to enter its non-ready/reset path."""
         request = self._Trigger.Request()
         return self.safety_reset_client.call_async(request)
+
+    def request_rearm(self) -> Any:
+        """Use the existing explicit startup rearm service exactly once per runner."""
+        request = self._Trigger.Request()
+        return self.safety_rearm_client.call_async(request)
 
     def query_lifecycle_states(self) -> dict[str, Any]:
         """Issue direct GetState service calls; no CLI output parsing."""

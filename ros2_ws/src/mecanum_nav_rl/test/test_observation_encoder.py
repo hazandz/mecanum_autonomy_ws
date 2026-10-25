@@ -200,7 +200,10 @@ def test_production_observation_sources_have_no_prohibited_runtime_or_truth_impo
         "gymnasium",
     }
 
-    for source_path in observations_dir.glob("*.py"):
+    pure_sources = ("encoder.py", "snapshot.py", "v3_observation_assembler.py",
+                    "v3_snapshot_types.py", "step07_research_acceptance.py")
+    for source_name in pure_sources:
+        source_path = observations_dir / source_name
         source_text = source_path.read_text(encoding="utf-8")
         assert "GroundTruthSample" not in source_text, source_path
         tree = ast.parse(source_text)
@@ -212,3 +215,11 @@ def test_production_observation_sources_have_no_prohibited_runtime_or_truth_impo
             else:
                 continue
             assert prohibited_roots.isdisjoint(roots), source_path
+
+    # The ROS observer is the permitted adapter boundary. It keeps ROS imports
+    # inside construction/callback code and is not part of the pure-core scan.
+    adapter_tree = ast.parse((observations_dir / "step07_research_observer.py").read_text(encoding="utf-8"))
+    assert not any(isinstance(node, (ast.Import, ast.ImportFrom))
+        and ((isinstance(node, ast.Import) and any(alias.name.split(".")[0] in prohibited_roots for alias in node.names))
+             or (isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in prohibited_roots))
+        for node in adapter_tree.body)

@@ -56,6 +56,19 @@ def _config(
 ) -> ResolvedConfigV3:
     """Build a complete test-only resolved v3 object without tokens."""
 
+    navigation_values = {
+        "planner_owner": "Nav2PlannerServer",
+        "controller_owner": "PPO",
+        "path_validity_contract_id": "test_path_v1",
+        "local_reference_contract_id": "test_reference_v1",
+        "goal_type": "position_only",
+        "goal_settle_contract_id": "test_settle_v1",
+    }
+    if profile is RuntimeProfileV3.SIM_EVAL and mode is NavigationModeV3.NAV2_BASELINE:
+        navigation_values["step07_acceptance"] = Step07AcceptancePolicyV3.model_validate(
+            __import__("yaml").safe_load((Path(__file__).parents[1] /
+                "config/v3/step07_research_acceptance.yaml").read_text(encoding="utf-8")))
+
     return ResolvedConfigV3(
         schema_version="3.0",
         project=ProjectIdentityV3(
@@ -108,19 +121,7 @@ def _config(
             lifecycle_contract_id="test_localization_lifecycle_v1",
             covariance_jump_contract_id="test_localization_health_v1",
         ),
-        navigation=NavigationContractV3(
-            planner_owner="Nav2PlannerServer",
-            controller_owner="PPO",
-            path_validity_contract_id="test_path_v1",
-            local_reference_contract_id="test_reference_v1",
-            goal_type="position_only",
-            goal_settle_contract_id="test_settle_v1",
-            step07_acceptance=(Step07AcceptancePolicyV3.model_validate(
-                __import__("yaml").safe_load((Path(__file__).parents[1] /
-                    "config/v3/step07_research_acceptance.yaml").read_text(encoding="utf-8")))
-                if profile is RuntimeProfileV3.SIM_EVAL and mode is NavigationModeV3.NAV2_BASELINE
-                else None),
-        ),
+        navigation=NavigationContractV3(**navigation_values),
         observation=ObservationContractV3(
             schema_id="obs-v3-l72-g3-t3-c3-f32",
             dtype="float32",

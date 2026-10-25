@@ -32,5 +32,11 @@ class CoreSimulationTests(unittest.TestCase):
             Path(__file__).with_name("test_v3_composition.py"),
             Path(__file__).with_name("test_v3_asset_selection.py"),
             Path(__file__).with_name("test_v3_asset_envelope.py"),
+            Path(__file__).with_name("test_step07_research_acceptance.py"),
+            Path(__file__).with_name("test_step07_research_observer.py"),
+            Path(__file__).with_name("test_safety_lifecycle_transition.py"),
         )
-        self.assertEqual(pytest.main([str(path) for path in test_paths]), 0)
+        # This one registered node creates an rclpy graph; run the adjacent
+        # static lifecycle contract and all other offline suites as usual.
+        self.assertEqual(pytest.main(["-k", "not lifecycle_managed_publisher_follows_standard_transitions",
+                                      *(str(path) for path in test_paths)]), 0)

@@ -1851,3 +1851,14 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Evidence ceiling | `IMPLEMENTED_OFFLINE_ONLY`; no runtime evidence, Gate B result, HIL, real readiness, or integration |
 | Current status | Roadmap Step 7 `NOT_STARTED`; Gate B `NOT_STARTED`; `RUNTIME_AUTHORIZATION = NOT_GRANTED`; `REAL_READY = NOT_CLAIMED` |
 | Next action | Independent candidate audit, then separate Owner integration authorization and separate runtime authorization; neither is granted here |
+
+
+### STEP07 same-candidate audit findings F1–F7 closure — offline only
+
+| Field | Record |
+|---|---|
+| Candidate | Existing branch `step07-research-runtime-simplification`; follow-up commit parent is audit commit `5916e267f1a0687fe75a76ff9890a849c1ea284c`; original implementation base remains `fdc0e299515bda2286832aabec635948629517b5`. |
+| Disposition | F1 lifecycle heartbeat/event and executor exception handling; F2 hidden rosbag topics, explicit sim-only E-stop authorization and startup rearm ordering; F3 exact `base_link <- map` path transform; F4 dual-clock admission, observed TF ownership, known QoS compatibility and actual delivery; F5 causal command-chain matching; F6 unified owned-group cleanup/A10; F7 config hash round-trip and honest failure/metric facts. |
+| Offline checks | Fresh external five-package build PASS; RL+bringup selection 978 passed, with only `test_safety_lifecycle_transition.py::test_lifecycle_managed_publisher_follows_standard_transitions` excluded because it calls `rclpy.init()`; pure import test separately 1 passed because its process-global `sys.modules` assertion is affected by package-wide adapter collection. Active Step-7 tools 29 passed; changed lidar/TF test 7 passed; base bridge 121 passed; interface tests 8 passed. Full robot-description test selection: 28 passed, three unrelated existing copyright/flake8/probe-world failures; changed lidar test passed independently. |
+| Identity and policy | Global config hash `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f`; no acceptance threshold or Safety limit changed. |
+| Boundary and next order | `IMPLEMENTED_OFFLINE_ONLY`; no runtime/runner/campaign, ROS graph, Gazebo/Nav2 launch, guard, HIL, hardware, or integration. Runtime authorization is not granted; Gate B is not started; `REAL_READY` is not claimed. Owner order: exact-commit audit → separate runtime authorization → one official run → review → separate integration authorization. `RUN005_FORENSIC_CAMPAIGN=RETIRED_AS_ACTIVE_ACCEPTANCE_MODEL`; historical records preserved; Invocation_021 root cause unresolved. |
