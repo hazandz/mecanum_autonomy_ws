@@ -244,31 +244,92 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     assert len(observer.localization) == 1
 
 
-def test_tf_owner_metadata_can_resolve_after_initial_discovery_gap():
-    """Keep unresolved TF discovery separate from a later mapped endpoint."""
+def _tf_owner_observer():
     observer = object.__new__(observer_module.Step07ResearchObserver)
     observer._lock = threading.RLock()
     observer.tf_edge_owners = {}
-    observer.tf_edge_unresolved = set()
-    edge = SimpleNamespace(
-        header=SimpleNamespace(frame_id='map'), child_frame_id='odom'
-    )
-    message = SimpleNamespace(transforms=[edge])
-    endpoint_gid = b'endpoint-gid'
+    observer.tf_edge_unresolved = {}
+    endpoints = {}
     observer.node = SimpleNamespace(
-        get_publishers_info_by_topic=lambda _topic: []
+        get_publishers_info_by_topic=lambda topic: endpoints.get(topic, []))
+    return observer, endpoints
+
+
+def _send_tf_owner(observer, publisher_gid, edge=('map', 'odom')):
+    transform = SimpleNamespace(
+        header=SimpleNamespace(frame_id=edge[0]), child_frame_id=edge[1]
+    )
+    observer._tf(
+        SimpleNamespace(transforms=[transform]),
+        SimpleNamespace(publisher_gid=publisher_gid),
     )
 
-    observer._record_tf_edges(
-        '/tf', message, SimpleNamespace(publisher_gid=endpoint_gid)
-    )
-    assert observer.tf_edge_unresolved == {('map', 'odom')}
+
+def _tf_endpoint(gid, node_name):
+    return SimpleNamespace(endpoint_gid=gid, node_name=node_name)
+
+
+def test_tf_owner_unknown_source_resolves_only_after_its_endpoint_appears():
+    """Resolve an unknown edge source by matching its own publisher GID."""
+    observer, endpoints = _tf_owner_observer()
+    gid_a = b'publisher-a'
+    _send_tf_owner(observer, gid_a)
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_a}}
     assert observer.tf_edge_owners == {}
 
-    endpoint = SimpleNamespace(endpoint_gid=endpoint_gid, node_name='amcl')
-    observer.node.get_publishers_info_by_topic = lambda _topic: [endpoint]
-    observer._record_tf_edges(
-        '/tf', message, SimpleNamespace(publisher_gid=endpoint_gid)
-    )
-    assert observer.tf_edge_unresolved == set()
+    endpoints['/tf'] = [_tf_endpoint(gid_a, 'amcl')]
+    _send_tf_owner(observer, gid_a)
+    assert observer.tf_edge_unresolved == {}
+    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}
+
+
+def test_tf_owner_unknown_does_not_clear_known_or_wrong_owners():
+    """An unresolved source cannot erase or mask owners already observed."""
+    observer, endpoints = _tf_owner_observer()
+    gid_amcl, gid_wrong, gid_unknown = b'amcl', b'wrong', b'unknown'
+    endpoints['/tf'] = [_tf_endpoint(gid_amcl, 'amcl')]
+    _send_tf_owner(observer, gid_amcl)
+    endpoints['/tf'] = [_tf_endpoint(gid_wrong, 'other_localizer')]
+    _send_tf_owner(observer, gid_wrong)
+
+    endpoints['/tf'] = []
+    _send_tf_owner(observer, gid_unknown)
+    endpoints['/tf'] = [_tf_endpoint(gid_amcl, 'amcl')]
+    _send_tf_owner(observer, gid_amcl)
+    assert observer.tf_edge_owners[('map', 'odom')] == {
+        'amcl', 'other_localizer'}
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_unknown}}
+
+
+def test_tf_owner_message_from_other_publisher_cannot_resolve_unknown_source():
+    """A known AMCL endpoint does not resolve another publisher's GID."""
+    observer, endpoints = _tf_owner_observer()
+    gid_a, gid_b = b'amcl-source', b'unknown-source'
+    _send_tf_owner(observer, gid_b)
+    endpoints['/tf'] = [_tf_endpoint(gid_a, 'amcl')]
+    _send_tf_owner(observer, gid_a)
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
+    assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}
+
+
+def test_tf_owner_unknown_source_resolving_to_wrong_owner_stays_observable():
+    """Resolving a source to a wrong node records that owner for rejection."""
+    observer, endpoints = _tf_owner_observer()
+    gid_b = b'wrong-source'
+    _send_tf_owner(observer, gid_b)
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
+    endpoints['/tf'] = [_tf_endpoint(gid_b, 'other_localizer')]
+    _send_tf_owner(observer, gid_b)
+    assert observer.tf_edge_unresolved == {}
+    assert observer.tf_edge_owners == {('map', 'odom'): {'other_localizer'}}
+
+
+def test_tf_owner_repeated_metadata_for_valid_publisher_is_idempotent():
+    """Repeated metadata for one valid publisher is idempotent."""
+    observer, endpoints = _tf_owner_observer()
+    gid = b'amcl-source'
+    endpoints['/tf'] = [_tf_endpoint(gid, 'amcl')]
+    _send_tf_owner(observer, gid)
+    _send_tf_owner(observer, gid)
+    assert observer.tf_edge_unresolved == {}
     assert observer.tf_edge_owners == {('map', 'odom'): {'amcl'}}

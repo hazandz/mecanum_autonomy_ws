@@ -422,17 +422,123 @@ def test_startup_rearm_refusal_and_missing_authorization_fail_closed():
     assert calls == ["rearm"]
 
 
-def test_tf_owner_admission_uses_observed_edges_and_rejects_duplicate_or_wrong_publishers():
+def _runner_with_tf_owner_observer():
+    from mecanum_nav_rl.observations.step07_research_observer import (
+        Step07ResearchObserver,
+    )
+
+    observer = object.__new__(Step07ResearchObserver)
+    observer._lock = threading.RLock()
+    observer.tf_edge_owners = {}
+    observer.tf_edge_unresolved = {}
+    endpoints = {}
+    observer.node = SimpleNamespace(
+        get_publishers_info_by_topic=lambda topic: endpoints.get(topic, []),
+    )
     runner = object.__new__(ResearchAcceptanceRunner)
-    runner.observer = SimpleNamespace(tf_edge_owners={
-        ("map", "odom"): {"amcl"}, ("odom", "base_link"): {"ekf_filter_node"},
-        ("base_link", "lidar_frame"): {"robot_state_publisher"}})
-    owners = runner._observed_tf_owners()
-    assert owners == {"map->odom": "amcl", "odom->base_link": "ekf_filter_node",
-                      "base_link->lidar_frame": "robot_state_publisher"}
-    runner.observer.tf_edge_owners[("map", "odom")].add("other_localizer")
-    with pytest.raises(AcceptanceFailure, match="TF_EDGE_OWNER_MISMATCH"):
+    runner.observer = observer
+    return runner, endpoints
+
+
+def _send_tf_owner_fact(observer, edge, gid):
+    transform = SimpleNamespace(
+        header=SimpleNamespace(frame_id=edge[0]), child_frame_id=edge[1])
+    observer._tf(
+        SimpleNamespace(transforms=[transform]),
+        SimpleNamespace(publisher_gid=gid),
+    )
+
+
+def _tf_owner_endpoint(gid, node_name):
+    return SimpleNamespace(endpoint_gid=gid, node_name=node_name)
+
+
+def _record_non_map_tf_edges(observer, endpoints):
+    for edge, gid, owner in (
+            (('odom', 'base_link'), b'ekf', 'ekf_filter_node'),
+            (('base_link', 'lidar_frame'), b'rsp', 'robot_state_publisher')):
+        endpoints['/tf'] = [_tf_owner_endpoint(gid, owner)]
+        _send_tf_owner_fact(observer, edge, gid)
+
+
+def test_tf_owner_unknown_source_resolves_and_runner_accepts_all_three_edges():
+    """Admit all required TF edges after the exact source resolves."""
+    runner, endpoints = _runner_with_tf_owner_observer()
+    observer = runner.observer
+    _record_non_map_tf_edges(observer, endpoints)
+    gid = b'amcl-source'
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid}}
+    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    assert runner._tf_ownership_ready() is True
+    assert runner._observed_tf_owners() == {
+        'map->odom': 'amcl', 'odom->base_link': 'ekf_filter_node',
+        'base_link->lidar_frame': 'robot_state_publisher'}
+
+
+def test_tf_owner_unknown_source_does_not_resolve_from_other_publisher():
+    """Keep one publisher unresolved when a different publisher is mapped."""
+    runner, endpoints = _runner_with_tf_owner_observer()
+    observer = runner.observer
+    _record_non_map_tf_edges(observer, endpoints)
+    gid_a, gid_b = b'amcl-source', b'other-source'
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_b)
+    endpoints['/tf'] = [_tf_owner_endpoint(gid_a, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_a)
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_b}}
+    assert runner._tf_ownership_ready() is False
+    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_UNRESOLVED'):
         runner._observed_tf_owners()
+
+
+def test_tf_owner_mismatch_survives_unknown_gap_and_runner_rejects_it():
+    """Retain wrong owner evidence across an unknown discovery interval."""
+    runner, endpoints = _runner_with_tf_owner_observer()
+    observer = runner.observer
+    _record_non_map_tf_edges(observer, endpoints)
+    gid_amcl, gid_wrong, gid_unknown = b'amcl', b'wrong', b'unknown'
+    endpoints['/tf'] = [_tf_owner_endpoint(gid_amcl, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_amcl)
+    endpoints['/tf'] = [_tf_owner_endpoint(gid_wrong, 'other_localizer')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_wrong)
+    endpoints['/tf'] = []
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_unknown)
+    endpoints['/tf'] = [_tf_owner_endpoint(gid_amcl, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_amcl)
+    assert observer.tf_edge_owners[('map', 'odom')] == {
+        'amcl', 'other_localizer'}
+    assert observer.tf_edge_unresolved == {('map', 'odom'): {gid_unknown}}
+    endpoints['/tf'] = [_tf_owner_endpoint(gid_unknown, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid_unknown)
+    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
+        runner._tf_ownership_ready()
+
+
+def test_tf_unknown_source_resolving_to_wrong_owner_is_rejected():
+    """Reject a source after resolving its endpoint to a wrong node."""
+    runner, endpoints = _runner_with_tf_owner_observer()
+    observer = runner.observer
+    _record_non_map_tf_edges(observer, endpoints)
+    gid = b'wrong-source'
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'other_localizer')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    with pytest.raises(AcceptanceFailure, match='TF_EDGE_OWNER_MISMATCH'):
+        runner._tf_ownership_ready()
+
+
+def test_tf_repeated_valid_endpoint_metadata_is_idempotent():
+    """Count repeated observations from the same endpoint only once."""
+    runner, endpoints = _runner_with_tf_owner_observer()
+    observer = runner.observer
+    _record_non_map_tf_edges(observer, endpoints)
+    gid = b'amcl-source'
+    endpoints['/tf'] = [_tf_owner_endpoint(gid, 'amcl')]
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    _send_tf_owner_fact(observer, ('map', 'odom'), gid)
+    assert observer.tf_edge_owners[('map', 'odom')] == {'amcl'}
+    assert runner._tf_ownership_ready() is True
 
 
 def test_shutdown_a10_requires_safe_stop_capture_finalization_and_owned_cleanup():

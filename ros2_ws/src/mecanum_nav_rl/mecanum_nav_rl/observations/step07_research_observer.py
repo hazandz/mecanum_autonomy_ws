@@ -14,6 +14,14 @@ from typing import Any
 from .step07_research_acceptance import ClockRollbackGuard, Context, StampedFact
 
 
+_REQUIRED_TF_EDGES = {
+    ('map', 'odom'),
+    ('odom', 'base_link'),
+    ('base_link', 'lidar_frame'),
+}
+_TF_OWNER_SOURCE_CAPACITY = 64
+
+
 class Step07ResearchObserver:
     """ROS subscriptions, exact-time TF lookup, and direct Nav2 action clients."""
 
@@ -71,7 +79,7 @@ class Step07ResearchObserver:
         self.action_events: deque[dict[str, Any]] = deque(maxlen=128)
         self.map_message: Any = None
         self.tf_edge_owners: dict[tuple[str, str], set[str]] = {}
-        self.tf_edge_unresolved: set[tuple[str, str]] = set()
+        self.tf_edge_unresolved: dict[tuple[str, str], set[bytes | None]] = {}
         self.node = Node(node_name, parameter_overrides=[])
         self._subs = []
         try:
@@ -272,6 +280,7 @@ class Step07ResearchObserver:
 
     def _record_tf_edges(self, topic: str, msg: Any, message_info: Any) -> None:
         owner = None
+        publisher_gid = None
         try:
             publisher_gid = bytes(message_info.publisher_gid)
             endpoints = self.node.get_publishers_info_by_topic(topic)
@@ -284,15 +293,37 @@ class Step07ResearchObserver:
         with self._lock:
             for item in msg.transforms:
                 key = (str(item.header.frame_id), str(item.child_frame_id))
+                if key not in _REQUIRED_TF_EDGES:
+                    continue
+                unresolved = self.tf_edge_unresolved.setdefault(key, set())
                 if owner is None:
-                    # Discovery may not have exposed endpoint metadata yet.
-                    # Do not retain UNKNOWN as a second owner; require a later
-                    # locally mapped edge observation before accepting it.
-                    self.tf_edge_unresolved.add(key)
-                    self.tf_edge_owners.pop(key, None)
+                    # Keep unresolved state on its source; a different
+                    # publisher's discovery must not resolve this observation.
+                    if publisher_gid in unresolved:
+                        continue
+                    known_sources = sum(
+                        source is not None for source in unresolved
+                    )
+                    if (publisher_gid is not None
+                            and known_sources < _TF_OWNER_SOURCE_CAPACITY):
+                        unresolved.add(publisher_gid)
+                    else:
+                        # None remains a bounded, permanent fail-closed marker
+                        # when source metadata is missing or capacity is full.
+                        unresolved.add(None)
                 else:
-                    self.tf_edge_owners.setdefault(key, set()).add(owner)
-                    self.tf_edge_unresolved.discard(key)
+                    if publisher_gid is None:
+                        unresolved.add(None)
+                        continue
+                    unresolved.discard(publisher_gid)
+                    owners = self.tf_edge_owners.setdefault(key, set())
+                    if (owner in owners
+                            or len(owners) < _TF_OWNER_SOURCE_CAPACITY):
+                        owners.add(owner)
+                    else:
+                        unresolved.add(None)
+                if not unresolved:
+                    self.tf_edge_unresolved.pop(key, None)
 
     def _wheel(self, msg: Any) -> None:
         if not self._valid_odom(msg):
