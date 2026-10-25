@@ -1561,6 +1561,8 @@ class _Nav2FakeClient:
         self.futures = []
 
     def service_is_ready(self):
+        if callable(self.service_ready_at):
+            return bool(self.service_ready_at(self.clock()))
         return self.clock() >= self.service_ready_at
 
     def call_async(self, _request):
@@ -1718,6 +1720,133 @@ def test_production_wait_ready_waits_for_delayed_services_and_nodes(
     assert clock() >= max(delays.values())
     assert all(client.calls == 1 for client in clients.values())
     assert rearm_calls and rearm_calls[0] >= max(delays.values())
+
+
+def test_nav2_round_requeries_active_nodes_and_requires_full_active_round(
+    monkeypatch,
+):
+    """An Active result from a failed round cannot satisfy the next round."""
+    runner, _observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={
+            'map_server': [(3, 'active', 0.0), (2, 'inactive', 0.0),
+                           (3, 'active', 0.0)],
+            'planner_server': [(2, 'inactive', 0.0), (3, 'active', 0.0),
+                               (3, 'active', 0.0)],
+        },
+    )
+
+    result = runner._wait_nav2_ready(1.0)
+
+    assert clients['map_server'].calls == 3
+    assert clients['planner_server'].calls == 3
+    assert all(result[name]['id'] == 3
+               for name in REQUIRED_NAV2_LIFECYCLE_NODES)
+    assert clock() < 1.0
+
+
+def test_nav2_alternating_rounds_timeout_without_mission(monkeypatch):
+    """Alternating states time out before recorder or mission gates."""
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={
+            'map_server': [(3, 'active', 0.0), (2, 'inactive', 0.0),
+                           (3, 'active', 0.0), (2, 'inactive', 0.0)],
+            'amcl': [(2, 'inactive', 0.0), (3, 'active', 0.0),
+                     (2, 'inactive', 0.0), (3, 'active', 0.0)],
+        },
+    )
+    rearm_calls = []
+    _prepare_production_startup(
+        runner, observer, clock, rearm_calls=rearm_calls)
+    runner.started_steady = -459.55
+    calls = []
+    runner.start_observer = lambda: calls.append('observer')
+    runner.start_runtime_children = lambda: calls.append('children')
+    runner._graph_ready_for_recording = (
+        lambda: calls.append('recorder') or True)
+    runner._mission = lambda: calls.append('mission')
+    runner.shutdown = lambda: calls.append('cleanup')
+    runner.output = None
+    runner.evaluate_and_write = lambda: {'overall': 'FAIL'}
+    runner.close = lambda: None
+
+    report = runner.execute()
+
+    assert report['overall'] == 'FAIL'
+    assert runner.state.primary_failure['stage'] == 'A6_NAV2'
+    assert 'recorder' not in calls and 'mission' not in calls
+    assert not rearm_calls
+    assert clients['map_server'].calls >= 3
+    assert clients['amcl'].calls >= 3
+    assert max(client.max_outstanding for client in clients.values()) == 1
+
+
+def test_nav2_node_requeried_after_disappear_and_reappear(monkeypatch):
+    """A returning node must answer again after disappearing mid-round."""
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={
+            'map_server': [(3, 'active', 0.0), (2, 'inactive', 0.0),
+                           (3, 'active', 0.0)],
+            'controller_server': [(3, 'active', 0.4), (3, 'active', 0.0)],
+        },
+    )
+
+    def graph_snapshot():
+        nodes = {name for name, client in clients.items()
+                 if clock() >= client.node_ready_at}
+        if 0.15 <= clock() < 0.3:
+            nodes.discard('map_server')
+        return {'nodes': nodes, 'topics': {}}
+
+    observer.graph_snapshot = graph_snapshot
+
+    result = runner._wait_nav2_ready(1.5)
+
+    assert clients['map_server'].calls == 3
+    assert result['map_server'] == {'id': 3, 'label': 'active'}
+    assert clock() >= 0.5
+
+
+def test_nav2_all_active_after_failed_round_continues_startup(monkeypatch):
+    """A later complete Active round allows startup to continue."""
+    runner, observer, clients, clock = _nav2_lifecycle_fixture(
+        monkeypatch,
+        responses={
+            'amcl': [(2, 'inactive', 0.0), (3, 'active', 0.0)],
+        },
+    )
+    rearm_calls = []
+    _prepare_production_startup(
+        runner, observer, clock, rearm_calls=rearm_calls)
+
+    runner._wait_ready()
+
+    assert runner.state.facts['A6']['pass'] is True
+    assert clients['amcl'].calls == 2
+    assert rearm_calls and rearm_calls[0] >= clock()
+
+
+def test_nav2_action_server_must_remain_ready_at_conclusion(monkeypatch):
+    """Readiness requires action discovery at the final conclusion check."""
+    runner, observer, _clients, _clock = _nav2_lifecycle_fixture(monkeypatch)
+    action_results = iter((True, True, False, False))
+    action_timeouts = []
+
+    def wait_for_actions(timeout_sec):
+        action_timeouts.append(timeout_sec)
+        return next(action_results, False)
+
+    observer.wait_for_actions = wait_for_actions
+
+    with pytest.raises(
+            AcceptanceFailure, match='NAV2_ACTION_SERVER_UNAVAILABLE'):
+        runner._wait_nav2_ready(0.15)
+
+    assert runner.state.facts['A6']['pass'] is False
+    assert action_timeouts and all(
+        timeout == 0.0 for timeout in action_timeouts)
 
 
 def test_nav2_missing_graph_node_times_out_with_node_state_and_cleans_pending(
