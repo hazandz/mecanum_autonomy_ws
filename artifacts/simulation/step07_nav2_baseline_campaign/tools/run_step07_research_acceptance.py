@@ -791,7 +791,11 @@ class ResearchAcceptanceRunner:
                 measured = getattr(self, '_last_sensor_health_failure', None)
                 if (measured is not None
                         and getattr(self, '_last_sensor_health_stage', None) == stage):
-                    raise AcceptanceFailure(stage, component, reason, measured=measured)
+                    failure_reason = reason
+                    if stage == 'A5_LOCALIZATION':
+                        failure_reason = str(measured.get('reason', reason))
+                    raise AcceptanceFailure(
+                        stage, component, failure_reason, measured=measured)
                 raise AcceptanceFailure(stage, component, reason)
             time.sleep(min(0.02, self._remaining(deadline)))
 
@@ -1411,12 +1415,42 @@ class ResearchAcceptanceRunner:
             self._wait_for(lambda: self._localization_ok()[0], deadline, stage="A5_LOCALIZATION",
                            component="amcl", reason=localization_reason or "LOCALIZATION_NOT_HEALTHY")
         localization_snapshot = self._sensor_health_snapshot()
+        localization_ros_now = self._node_ros_now_ns()
+        localization_steady_now = time.monotonic_ns()
+        localization_fact, localization_failure = (
+            self._select_localization_health_fact(
+                localization_snapshot,
+                context=localization_snapshot.get('context'),
+                ros_now_ns=localization_ros_now,
+                steady_now_ns=localization_steady_now,
+            )
+        )
+        if localization_failure is not None or localization_fact is None:
+            measured = localization_failure or {
+                'reason': 'INPUT_MISSING',
+                'stream': 'localization',
+                'evaluation_ros_time_ns': localization_ros_now,
+                'evaluation_steady_time_ns': localization_steady_now,
+            }
+            raise AcceptanceFailure(
+                'A5_LOCALIZATION', 'amcl', str(measured['reason']),
+                measured=measured,
+            )
         self.state.facts['A5'] = {
             'pass': True,
             'reason': 'AMCL_LOCALIZATION_HEALTH_VALID',
             'measured': {
                 'samples': len(localization_snapshot['localization']),
                 'map_id': self.config['map_identity']['map_id'],
+                'selected_pose': self._localization_health_measurement(
+                    localization_fact, ros_now_ns=localization_ros_now,
+                    steady_now_ns=localization_steady_now,
+                    expected_context=localization_snapshot['context'],
+                    predecessor=self._localization_predecessor(
+                        localization_snapshot['localization'],
+                        localization_fact,
+                    ),
+                ),
             },
         }
         # Required TF edges are checked at the same fresh filtered-odometry stamps.
@@ -1677,10 +1711,53 @@ class ResearchAcceptanceRunner:
             measured['reason'] = invalid_reason
             self._remember_sensor_health_failure('STARTUP_REARM', measured)
             return False
+        localization_fact, localization_failure = (
+            self._select_localization_health_fact(
+                snapshot, context=context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady,
+            )
+        )
+        if localization_failure is not None or localization_fact is None:
+            self._remember_sensor_health_failure(
+                'STARTUP_REARM', localization_failure or {
+                    'reason': 'INPUT_MISSING', 'stream': 'localization',
+                    'evaluation_ros_time_ns': now_ros,
+                    'evaluation_steady_time_ns': now_steady,
+                    'ros_limit_ns': 2_000_000_000,
+                    'steady_receive_limit_ns': 2_000_000_000,
+                    'expected_context': self._context_measured(context),
+                    'observed_context': None,
+                },
+            )
+            return False
+        if localization_fact['stamp_ns'] <= self.startup_barrier_stamp_ns:
+            measured = self._localization_health_measurement(
+                localization_fact, ros_now_ns=now_ros,
+                steady_now_ns=now_steady, expected_context=context,
+                predecessor=self._localization_predecessor(
+                    snapshot['localization'], localization_fact),
+            )
+            measured['reason'] = 'INPUT_NOT_AFTER_REARM_BARRIER'
+            self._remember_sensor_health_failure('STARTUP_REARM', measured)
+            return False
         self._last_sensor_health_failure = None
+        self._last_sensor_health_stage = None
         self._last_sensor_health_success = {
             'snapshot': snapshot, 'ros_now_ns': now_ros,
-            'steady_now_ns': now_steady, 'facts': selected,
+            'steady_now_ns': now_steady,
+            'facts': {**selected, 'localization': localization_fact},
+        }
+        self.state.facts['A5'] = {
+            'pass': True, 'reason': 'AMCL_LOCALIZATION_HEALTH_VALID',
+            'measured': {
+                'selected_pose': self._localization_health_measurement(
+                    localization_fact, ros_now_ns=now_ros,
+                    steady_now_ns=now_steady, expected_context=context,
+                    predecessor=self._localization_predecessor(
+                        snapshot['localization'], localization_fact),
+                ),
+                'map_id': self.config['map_identity']['map_id'],
+            },
         }
         return True
 
@@ -1724,21 +1801,207 @@ class ResearchAcceptanceRunner:
             and life.value["barrier_state"] == 1 and life.value["motion_permitted"]
             and snapshot['context'] == fact.context)
 
+    @staticmethod
+    def _localization_predecessor(
+            facts: Iterable[Mapping[str, Any]],
+            selected: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        selected_stamp = selected.get('stamp_ns')
+        context = selected.get('context')
+        predecessors = [fact for fact in facts
+                        if fact.get('context') == context
+                        and type(fact.get('stamp_ns')) is int
+                        and fact['stamp_ns'] < selected_stamp]
+        return max(predecessors, key=lambda fact: fact['stamp_ns']) if predecessors else None
+
+    @classmethod
+    def _localization_health_measurement(
+            cls, fact: Mapping[str, Any], *, ros_now_ns: int,
+            steady_now_ns: int, expected_context: Any,
+            predecessor: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        measured = cls._health_fact_measurement(
+            'localization', fact, ros_now_ns=ros_now_ns,
+            steady_now_ns=steady_now_ns, ros_limit_ns=2_000_000_000,
+            steady_limit_ns=2_000_000_000,
+            expected_context=expected_context,
+        )
+        measured['frame_id'] = fact.get('frame_id')
+        pose = fact.get('pose')
+        covariance = fact.get('covariance')
+
+        def finite_values(values: Any) -> list[float | None] | None:
+            if not isinstance(values, (tuple, list)):
+                return None
+            result = []
+            for value in values:
+                try:
+                    number = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    result.append(None)
+                else:
+                    result.append(number if math.isfinite(number) else None)
+            return result
+        measured['pose_xy_yaw'] = finite_values(pose)
+        measured['covariance_diagonal'] = finite_values(covariance)
+        if predecessor is not None:
+            previous_pose = predecessor.get('pose')
+            previous_stamp = predecessor.get('stamp_ns')
+            measured['predecessor'] = {
+                'message_stamp_ns': previous_stamp,
+                'frame_id': predecessor.get('frame_id'),
+                'pose_xy_yaw': finite_values(previous_pose),
+                'covariance_diagonal': finite_values(
+                    predecessor.get('covariance')),
+                'observed_context': cls._context_measured(
+                    predecessor.get('context')),
+            }
+            try:
+                valid_jump_values = (
+                    isinstance(pose, (tuple, list)) and len(pose) == 3
+                    and all(math.isfinite(float(value)) for value in pose)
+                    and isinstance(previous_pose, (tuple, list))
+                    and len(previous_pose) == 3
+                    and all(math.isfinite(float(value))
+                            for value in previous_pose)
+                )
+            except (TypeError, ValueError, OverflowError):
+                valid_jump_values = False
+            if (valid_jump_values and type(previous_stamp) is int
+                    and type(fact.get('stamp_ns')) is int
+                    and fact['stamp_ns'] > previous_stamp):
+                dt_s = (fact['stamp_ns']-previous_stamp)/1e9
+                pose_values = tuple(float(value) for value in pose)
+                previous_values = tuple(
+                    float(value) for value in previous_pose)
+                distance = math.hypot(
+                    pose_values[0]-previous_values[0],
+                    pose_values[1]-previous_values[1],
+                )
+                yaw = abs((pose_values[2]-previous_values[2]
+                           + math.pi) % (2*math.pi)-math.pi)
+                measured['pose_jump'] = {
+                    'dt_s': dt_s,
+                    'translation_m': distance,
+                    'translation_limit_m': 0.50+0.35*dt_s,
+                    'yaw_rad': yaw,
+                    'yaw_limit_rad': 0.50+1.0*dt_s,
+                }
+        return measured
+
+    def _select_localization_health_fact(
+            self, snapshot: Mapping[str, Any], *, context: Any,
+            ros_now_ns: int, steady_now_ns: int,
+    ) -> tuple[Mapping[str, Any] | None, dict[str, Any] | None]:
+        from mecanum_nav_rl.observations.step07_research_acceptance import (
+            localization_health,
+        )
+        fact, failure = self._select_fresh_health_fact(
+            tuple(snapshot.get('localization', ())), stream='localization',
+            context=context, ros_now_ns=ros_now_ns,
+            steady_now_ns=steady_now_ns, ros_limit_ns=2_000_000_000,
+            steady_limit_ns=2_000_000_000,
+        )
+        if failure is not None or fact is None:
+            return None, failure
+        if type(fact.get('stamp_ns')) is not int or fact['stamp_ns'] <= 0:
+            measured = self._localization_health_measurement(
+                fact, ros_now_ns=ros_now_ns, steady_now_ns=steady_now_ns,
+                expected_context=context,
+                predecessor=self._localization_predecessor(
+                    snapshot.get('localization', ()), fact),
+            )
+            measured['reason'] = 'ROS_TIMESTAMP_INVALID'
+            return None, measured
+
+        predecessor = self._localization_predecessor(
+            snapshot.get('localization', ()), fact)
+        if (predecessor is not None
+                and (type(predecessor.get('stamp_ns')) is not int
+                     or predecessor['stamp_ns'] <= 0)):
+            measured = self._localization_health_measurement(
+                fact, ros_now_ns=ros_now_ns,
+                steady_now_ns=steady_now_ns, expected_context=context,
+                predecessor=predecessor,
+            )
+            measured['reason'] = 'PREDECESSOR_ROS_TIMESTAMP_INVALID'
+            return None, measured
+        for candidate, is_selected in ((predecessor, False), (fact, True)):
+            if candidate is None:
+                continue
+            measured = self._localization_health_measurement(
+                fact, ros_now_ns=ros_now_ns, steady_now_ns=steady_now_ns,
+                expected_context=context, predecessor=predecessor,
+            )
+            prefix = '' if is_selected else 'PREDECESSOR_'
+            if candidate.get('frame_id') != 'map':
+                measured['reason'] = f'{prefix}LOCALIZATION_FRAME_INVALID'
+                return None, measured
+            pose = candidate.get('pose')
+            try:
+                valid_pose = (isinstance(pose, (tuple, list)) and len(pose) == 3
+                              and all(math.isfinite(float(value)) for value in pose))
+            except (TypeError, ValueError, OverflowError):
+                valid_pose = False
+            if not valid_pose:
+                measured['reason'] = f'{prefix}LOCALIZATION_VALUES_INVALID'
+                return None, measured
+            covariance = candidate.get('covariance')
+            try:
+                valid_covariance = (
+                    isinstance(covariance, (tuple, list))
+                    and len(covariance) == 3
+                    and all(math.isfinite(float(value))
+                            and 0.0 <= float(value) <= 0.25
+                            for value in covariance)
+                )
+            except (TypeError, ValueError, OverflowError):
+                valid_covariance = False
+            if not valid_covariance:
+                measured['reason'] = f'{prefix}LOCALIZATION_COVARIANCE_INVALID'
+                return None, measured
+
+        ordered = ((predecessor, fact) if predecessor is not None else (fact,))
+        healthy, reason = localization_health(
+            ordered, now_ros_ns=ros_now_ns, max_age_ns=2_000_000_000,
+            now_steady_ns=steady_now_ns, max_covariance=0.25,
+        )
+        if not healthy:
+            measured = self._localization_health_measurement(
+                fact, ros_now_ns=ros_now_ns, steady_now_ns=steady_now_ns,
+                expected_context=context, predecessor=predecessor,
+            )
+            measured['reason'] = reason or 'LOCALIZATION_HEALTH_INVALID'
+            return None, measured
+        return fact, None
+
     def _localization_ok(
             self, snapshot: Mapping[str, Any] | None = None, *,
             ros_now_ns: int | None = None, steady_now_ns: int | None = None,
-    ) -> tuple[bool, str | None]:
-        from mecanum_nav_rl.observations.step07_research_acceptance import localization_health
+            context: Any = None) -> tuple[bool, str | None]:
         if snapshot is None:
             snapshot = self._sensor_health_snapshot()
         now_ros = self._node_ros_now_ns() if ros_now_ns is None else ros_now_ns
         if getattr(self, '_node_ros_rollback', False):
             return False, 'SIM_CLOCK_ROLLBACK'
         if now_ros <= 0:
-            return False, "CLOCK_NOT_POSITIVE"
+            return False, 'CLOCK_NOT_POSITIVE'
         steady_now = time.monotonic_ns() if steady_now_ns is None else steady_now_ns
-        return localization_health(snapshot['localization'], now_ros_ns=now_ros,
-            max_age_ns=2_000_000_000, now_steady_ns=steady_now, max_covariance=0.25)
+        expected_context = snapshot.get('context') if context is None else context
+        fact, failure = self._select_localization_health_fact(
+            snapshot, context=expected_context, ros_now_ns=now_ros,
+            steady_now_ns=steady_now,
+        )
+        if failure is not None or fact is None:
+            reason = str((failure or {}).get('reason', 'LOCALIZATION_HEALTH_INVALID'))
+            self._remember_sensor_health_failure(
+                getattr(self.state, 'stage', 'LOCALIZATION'),
+                failure or {'reason': reason},
+            )
+            return False, reason
+        if getattr(self, '_last_sensor_health_stage', None) == getattr(
+                self.state, 'stage', None):
+            self._last_sensor_health_failure = None
+            self._last_sensor_health_stage = None
+        return True, None
 
     def _tf_chain_usable(self, stamp_ns: int) -> bool:
         try:
@@ -2214,14 +2477,25 @@ class ResearchAcceptanceRunner:
             raise AcceptanceFailure(
                 stage, 'imu', 'IMU_VALUES_OR_FRAME_INVALID'
             )
-        localization_ok, localization_reason = self._localization_ok(
-            snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady
-        )
-        if not localization_ok:
-            raise AcceptanceFailure(
-                stage, 'localization',
-                localization_reason or 'LOCALIZATION_HEALTH_INVALID',
+        localization_fact, localization_failure = (
+            self._select_localization_health_fact(
+                snapshot, context=context, ros_now_ns=now_ros,
+                steady_now_ns=now_steady,
             )
+        )
+        if localization_failure is not None or localization_fact is None:
+            measured = localization_failure or {
+                'reason': 'INPUT_MISSING', 'stream': 'localization',
+                'evaluation_ros_time_ns': now_ros,
+                'evaluation_steady_time_ns': now_steady,
+                'ros_limit_ns': 2_000_000_000,
+                'steady_receive_limit_ns': 2_000_000_000,
+                'expected_context': self._context_measured(context),
+                'observed_context': None,
+            }
+            self._raise_sensor_health_failure(
+                stage, 'localization', measured)
+        selected['localization'] = localization_fact
         self._last_sensor_health_failure = None
         self._last_sensor_health_stage = None
         return snapshot, now_ros, now_steady
@@ -2568,28 +2842,32 @@ class ResearchAcceptanceRunner:
         ros_now = self._node_ros_now_ns()
         steady_now = time.monotonic_ns()
         context = self.path_snapshot.context
-        pose_fact, pose_failure = self._select_fresh_health_fact(
-            snapshot['localization'], stream='localization', context=context,
-            ros_now_ns=ros_now, steady_now_ns=steady_now,
-            ros_limit_ns=2_000_000_000, steady_limit_ns=2_000_000_000,
+        pose_fact, pose_failure = self._select_localization_health_fact(
+            snapshot, context=context, ros_now_ns=ros_now,
+            steady_now_ns=steady_now,
         )
         odom_fact, odom_failure = self._select_fresh_health_fact(
             snapshot['odometry'], stream='filtered_odometry', context=context,
             ros_now_ns=ros_now, steady_now_ns=steady_now,
             ros_limit_ns=250_000_000, steady_limit_ns=250_000_000,
         )
-        health, reason = self._localization_ok(
-            snapshot, ros_now_ns=ros_now, steady_now_ns=steady_now
-        )
         if pose_fact is None or odom_fact is None:
             failure = pose_failure or odom_failure
-            return {"pass": False,
-                    "reason": (failure or {}).get(
+            if pose_failure is not None:
+                self._remember_sensor_health_failure(
+                    'A9_NAVIGATION_OUTCOME', pose_failure)
+                self.log(
+                    'localization',
+                    f"{pose_failure['reason']} measured="
+                    f'{json.dumps(pose_failure, sort_keys=True)}',
+                )
+            return {'pass': False,
+                    'reason': (failure or {}).get(
                         'reason', 'NAVIGATION_RESULT_MISSING_POSE_OR_ODOMETRY'),
-                    "measured": failure or {}}
+                    'measured': failure or {}}
         pose = pose_fact
         odom = odom_fact.value
-        x, y, _ = pose["pose"]
+        x, y, _ = pose['pose']
         linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
         angular = abs(odom.twist.twist.angular.z)
         settled = self._wait_for_settle(min(self.now_steady()+20.0,
@@ -2597,10 +2875,9 @@ class ResearchAcceptanceRunner:
         snapshot = self._sensor_health_snapshot()
         ros_now = self._node_ros_now_ns()
         steady_now = time.monotonic_ns()
-        pose_fact, pose_failure = self._select_fresh_health_fact(
-            snapshot['localization'], stream='localization', context=context,
-            ros_now_ns=ros_now, steady_now_ns=steady_now,
-            ros_limit_ns=2_000_000_000, steady_limit_ns=2_000_000_000,
+        pose_fact, pose_failure = self._select_localization_health_fact(
+            snapshot, context=context, ros_now_ns=ros_now,
+            steady_now_ns=steady_now,
         )
         odom_fact, odom_failure = self._select_fresh_health_fact(
             snapshot['odometry'], stream='filtered_odometry', context=context,
@@ -2615,23 +2892,31 @@ class ResearchAcceptanceRunner:
                     "measured": failure or {}}
         pose = pose_fact
         odom = odom_fact.value
-        health, reason = self._localization_ok(
-            snapshot, ros_now_ns=ros_now, steady_now_ns=steady_now
-        )
         x, y, _ = pose["pose"]
         linear = math.hypot(odom.twist.twist.linear.x, odom.twist.twist.linear.y)
         angular = abs(odom.twist.twist.angular.z)
-        passed = (status == 4 and math.hypot(x+4.0,y) <= 0.15 and linear <= 0.03
-                  and angular <= 0.05 and health and settled)
-        reason_value = "NAVIGATION_SUCCEEDED_SETTLED" if passed else (
-            reason or "NAVIGATION_TERMINAL_OR_SETTLE_CRITERION_FAILED")
-        self.state.metrics.update({"navigation_result_status": status,
-            "final_position_error_m": math.hypot(x+4.0,y), "final_linear_speed_mps": linear,
-            "final_angular_speed_radps": angular})
-        return {"pass": passed, "reason": reason_value,
-                "measured": {"status": status, "position_error_m": math.hypot(x+4.0,y),
-                    "linear_speed_mps": linear, "angular_speed_radps": angular,
-                    "localization_health": health, "settled": settled}}
+        passed = (status == 4 and math.hypot(x+4.0, y) <= 0.15 and linear <= 0.03
+                  and angular <= 0.05 and settled)
+        reason_value = 'NAVIGATION_SUCCEEDED_SETTLED' if passed else (
+            'NAVIGATION_TERMINAL_OR_SETTLE_CRITERION_FAILED')
+        position_error = math.hypot(x+4.0, y)
+        self.state.metrics.update({
+            'navigation_result_status': status,
+            'final_position_error_m': position_error,
+            'final_linear_speed_mps': linear,
+            'final_angular_speed_radps': angular,
+        })
+        measured = {
+            'status': status, 'position_error_m': position_error,
+            'linear_speed_mps': linear, 'angular_speed_radps': angular,
+            'localization_health': True, 'settled': settled,
+        }
+        if (not settled
+                and 'sensor_health_failure' in self.state.facts):
+            measured['sensor_health_failure'] = self.state.facts[
+                'sensor_health_failure']
+        return {'pass': passed, 'reason': reason_value,
+                'measured': measured}
 
     def _wait_for_settle(self, deadline: float) -> bool:
         """Observe advancing fresh AMCL/filtered-odom facts for one ROS second."""
@@ -2652,11 +2937,9 @@ class ResearchAcceptanceRunner:
                 )
             except AcceptanceFailure:
                 return False
-            loc, loc_failure = self._select_fresh_health_fact(
-                snapshot['localization'], stream='localization',
-                context=self.path_snapshot.context, ros_now_ns=now_ros,
-                steady_now_ns=now_steady, ros_limit_ns=2_000_000_000,
-                steady_limit_ns=2_000_000_000,
+            loc, loc_failure = self._select_localization_health_fact(
+                snapshot, context=self.path_snapshot.context,
+                ros_now_ns=now_ros, steady_now_ns=now_steady,
             )
             odom_fact, odom_failure = self._select_fresh_health_fact(
                 snapshot['odometry'], stream='filtered_odometry',
@@ -2678,10 +2961,7 @@ class ResearchAcceptanceRunner:
             owner_ready = self._tf_ownership_ready()
             context = self.path_snapshot.context
             ok = (
-                self._localization_ok(
-                    snapshot, ros_now_ns=now_ros,
-                    steady_now_ns=now_steady)[0]
-                and owner_ready
+                owner_ready
                 and loc.get('frame_id') == 'map'
                 and odom_fact.context == context
                 and odom.header.frame_id == 'odom'

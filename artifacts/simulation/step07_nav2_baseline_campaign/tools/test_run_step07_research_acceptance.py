@@ -1620,6 +1620,309 @@ def test_production_health_uses_node_ros_clock_not_cached_clock(monkeypatch):
         )
 
 
+def _localization_fact(context, *, stamp_ns, received_steady_ns, pose=(0.0, 0.0, 0.0),
+                       frame_id='map', covariance=(0.01, 0.01, 0.01)):
+    return {
+        'stamp_ns': stamp_ns,
+        'received_steady_ns': received_steady_ns,
+        'frame_id': frame_id,
+        'pose': pose,
+        'covariance': covariance,
+        'context': context,
+    }
+
+
+def test_production_localization_selects_fresh_pose_before_future_newest(monkeypatch):
+    """A future newest AMCL fact cannot hide an earlier eligible same-context pose."""
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    snapshot = runner._sensor_health_snapshot()
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    fresh = _localization_fact(
+        runner.path_snapshot.context, stamp_ns=now_ros-10_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        pose=(-0.25, 0.1, 0.0),
+    )
+    future = _localization_fact(
+        runner.path_snapshot.context, stamp_ns=now_ros+10_000_000,
+        received_steady_ns=now_steady,
+        pose=(20.0, 0.0, 0.0),
+    )
+    snapshot['localization'] = (fresh, future)
+
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+    ) == (True, None)
+
+
+def test_production_localization_future_only_and_age_limits_fail_closed(monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    cases = (
+        (_localization_fact(context, stamp_ns=now_ros+1,
+                            received_steady_ns=now_steady),
+         'ROS_TIMESTAMP_FUTURE'),
+        (_localization_fact(context, stamp_ns=now_ros-2_000_000_001,
+                            received_steady_ns=now_steady),
+         'ROS_AGE_EXCEEDED'),
+        (_localization_fact(context, stamp_ns=now_ros-1,
+                            received_steady_ns=now_steady-2_000_000_001),
+         'RECEIVE_AGE_EXCEEDED'),
+    )
+    for fact, reason in cases:
+        snapshot = runner._sensor_health_snapshot()
+        snapshot['localization'] = (fact,)
+        ok, observed = runner._localization_ok(
+            snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+        )
+        assert not ok and observed == reason
+
+
+def test_production_localization_rejects_wrong_context_and_selected_invalid_covariance(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    wrong = _localization_fact(
+        type(context)(context.episode_generation, context.reset_epoch,
+                      context.runtime_generation+1, context.config_hash),
+        stamp_ns=now_ros-1, received_steady_ns=now_steady,
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (wrong,)
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+    ) == (False, 'CONTEXT_MISMATCH')
+
+    good = _localization_fact(
+        context, stamp_ns=now_ros-20_000_000,
+        received_steady_ns=now_steady-20_000_000,
+    )
+    newest_bad = _localization_fact(
+        context, stamp_ns=now_ros-10_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        covariance=(0.26, 0.01, 0.01),
+    )
+    snapshot['localization'] = (good, newest_bad)
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+    ) == (False, 'LOCALIZATION_COVARIANCE_INVALID')
+
+
+def test_production_localization_checks_future_pose_jump_when_clock_reaches_it(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    prior = _localization_fact(
+        context, stamp_ns=now_ros-100_000_000,
+        received_steady_ns=now_steady-100_000_000,
+    )
+    future = _localization_fact(
+        context, stamp_ns=now_ros+100_000_000,
+        received_steady_ns=now_steady,
+        pose=(10.0, 0.0, 0.0),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (prior, future)
+    assert runner._localization_ok(
+        snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+    ) == (True, None)
+    ok, reason = runner._localization_ok(
+        snapshot, ros_now_ns=future['stamp_ns'], steady_now_ns=now_steady,
+    )
+    assert not ok and reason == 'LOCALIZATION_TRANSLATION_JUMP'
+
+
+@pytest.mark.parametrize(('mutation', 'expected'), [
+    ('frame', 'LOCALIZATION_FRAME_INVALID'),
+    ('jump', 'LOCALIZATION_TRANSLATION_JUMP'),
+])
+def test_production_localization_does_not_fallback_past_invalid_newest_eligible(
+        monkeypatch, mutation, expected):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    earlier = _localization_fact(
+        context, stamp_ns=now_ros-20_000_000,
+        received_steady_ns=now_steady-20_000_000,
+    )
+    newest = _localization_fact(
+        context, stamp_ns=now_ros-10_000_000,
+        received_steady_ns=now_steady-10_000_000,
+        frame_id='odom' if mutation == 'frame' else 'map',
+        pose=(5.0, 0.0, 0.0) if mutation == 'jump' else (0.0, 0.0, 0.0),
+    )
+    snapshot = runner._sensor_health_snapshot()
+    snapshot['localization'] = (earlier, newest)
+    ok, reason = runner._localization_ok(
+        snapshot, ros_now_ns=now_ros, steady_now_ns=now_steady,
+    )
+    assert not ok and reason == expected
+
+
+def test_production_localization_snapshot_is_stable_across_callback_and_clock_change(
+        monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    observer = runner.observer
+    cutoff = observer.node_ros_clock_ns
+    steady = time.monotonic_ns()
+    selected = _localization_fact(
+        runner.path_snapshot.context, stamp_ns=cutoff-1,
+        received_steady_ns=steady-1,
+    )
+    observer.localization.clear()
+    observer.localization.append(selected)
+    snapshot = runner._sensor_health_snapshot()
+    observer.node_ros_clock_ns = cutoff-100_000_000
+    observer.clock_ns = cutoff+100_000_000
+    observer.localization.append(_localization_fact(
+        runner.path_snapshot.context, stamp_ns=cutoff+1,
+        received_steady_ns=steady,
+    ))
+
+    fact, failure = runner._select_localization_health_fact(
+        snapshot, context=runner.path_snapshot.context,
+        ros_now_ns=cutoff, steady_now_ns=steady,
+    )
+    assert failure is None and fact == selected
+
+
+def test_production_live_health_uses_selected_localization_pose(monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    snapshot = runner._sensor_health_snapshot()
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    fresh = _localization_fact(
+        context, stamp_ns=now_ros-10_000_000,
+        received_steady_ns=now_steady-10_000_000,
+    )
+    future = _localization_fact(
+        context, stamp_ns=now_ros+1,
+        received_steady_ns=now_steady,
+        pose=(50.0, 0.0, 0.0),
+    )
+    snapshot['localization'] = (fresh, future)
+
+    checked, _, _ = runner._assert_live_mission_health(
+        context, 'A7_OBSERVATION', snapshot=snapshot,
+        now_ros_ns=now_ros, now_steady_ns=now_steady,
+    )
+    assert checked['localization'] == (fresh, future)
+
+
+def test_navigation_outcome_uses_pose_that_passed_localization_health(monkeypatch):
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    now_ros = runner.observer.node_ros_clock_ns
+    now_steady = time.monotonic_ns()
+    context = runner.path_snapshot.context
+    runner.observer.localization.clear()
+    runner.observer.localization.extend((
+        _localization_fact(
+            context, stamp_ns=now_ros-10_000_000,
+            received_steady_ns=now_steady-10_000_000,
+            pose=(-3.9, 0.0, 0.0),
+        ),
+        _localization_fact(
+            context, stamp_ns=now_ros+1,
+            received_steady_ns=now_steady,
+            pose=(100.0, 0.0, 0.0),
+        ),
+    ))
+    runner.observer.odometry[-1].value.twist.twist.linear.x = 0.0
+    runner.observer.odometry[-1].value.twist.twist.linear.y = 0.0
+    runner.observer.odometry[-1].value.twist.twist.angular.z = 0.0
+    runner.started_steady = 0.0
+    runner.mission_deadline_steady = 100.0
+    runner.now_steady = lambda: 1.0
+    runner._wait_for_settle = lambda _deadline: True
+
+    outcome = runner._navigation_outcome(
+        SimpleNamespace(status=4, result=SimpleNamespace())
+    )
+
+    assert outcome['pass'] is True
+    assert outcome['measured']['position_error_m'] == pytest.approx(0.1)
+    assert runner.state.metrics['final_position_error_m'] == pytest.approx(0.1)
+
+
+def test_settle_uses_eligible_localization_pose_when_newest_is_future(monkeypatch):
+    from dataclasses import replace
+    from mecanum_nav_rl.observations.step07_research_acceptance import StampedFact
+
+    runner = _production_observation_runner(monkeypatch)
+    runner._update_test_observation(0)
+    observer = runner.observer
+    context = runner.path_snapshot.context
+    ros = [observer.node_ros_clock_ns]
+    steady = [time.monotonic_ns()]
+    runner.now_steady = lambda: steady[0]/1e9
+    runner.started_steady = runner.now_steady()-10.0
+    runner.mission_deadline_steady = runner.now_steady()+3.0
+    runner._tf_ownership_ready = lambda: True
+    runner._tf_chain_usable = lambda _stamp: True
+    runner.goal_barrier_sequence = 7
+    runner.goal_barrier_stamp_ns = 1
+
+    def refresh():
+        steady[0] += 100_000_000
+        ros[0] += 100_000_000
+        observer.node_ros_clock_ns = ros[0]
+        observer.clock_ns = ros[0]-500_000_000  # cache deliberately differs
+        life = observer.lifecycle
+        observer.lifecycle = StampedFact(
+            ros[0], steady[0], 'base_link', life.value, context,
+        )
+        for stream_name, frame in (
+                ('scans', 'lidar_frame'), ('wheel', 'odom'),
+                ('imu', 'base_link'), ('odometry', 'base_link')):
+            stream = getattr(observer, stream_name)
+            fact = stream[-1]
+            stamp = ros[0]-10_000_000
+            value = fact.value
+            if stream_name == 'odometry':
+                value.header.stamp_ns = stamp
+            stream.clear()
+            stream.append(replace(
+                fact, stamp_ns=stamp, received_steady_ns=steady[0],
+                frame_id=frame, value=value, context=context,
+            ))
+        odom = observer.odometry[-1]
+        odom.value.twist.twist.linear.x = 0.0
+        odom.value.twist.twist.linear.y = 0.0
+        odom.value.twist.twist.angular.z = 0.0
+        observer.localization.clear()
+        observer.localization.extend((
+            _localization_fact(
+                context, stamp_ns=ros[0]-10_000_000,
+                received_steady_ns=steady[0], pose=(-4.0, 0.0, 0.0),
+            ),
+            _localization_fact(
+                context, stamp_ns=ros[0]+100_000_000,
+                received_steady_ns=steady[0], pose=(100.0, 0.0, 0.0),
+            ),
+        ))
+
+    monkeypatch.setattr(runner_module.time, 'monotonic_ns', lambda: steady[0])
+    monkeypatch.setattr(runner_module.time, 'sleep', lambda _seconds: refresh())
+    assert runner._wait_for_settle(runner.now_steady()+2.0) is True
+    assert ros[0] >= observer.localization[0]['stamp_ns']
+
+
 def test_production_health_reports_receive_age_when_ros_clock_is_paused(monkeypatch):
     """Keep steady receive-age enforcement active with paused ROS time."""
     runner = _production_observation_runner(monkeypatch)
@@ -2239,7 +2542,9 @@ def _nav2_lifecycle_fixture(monkeypatch, *, service_ready_at=None,
 
 
 def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
+    from mecanum_nav_rl.observations.step07_research_acceptance import Context
     now_ns = time.monotonic_ns()
+    context = Context(0, 0, 0, 'a' * 64)
     odom_value = SimpleNamespace(
         header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link',
         pose=SimpleNamespace(
@@ -2256,7 +2561,12 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
     )
     observer.clock_ns = 10
     observer.clock_advance_count = 2
-    observer.localization = []
+    observer.context = context
+    observer.localization = [_localization_fact(
+        context, stamp_ns=9, received_steady_ns=now_ns,
+    )]
+    observer.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=observer.clock_ns)))
     observer.scans = [SimpleNamespace(received_steady_ns=now_ns)]
     observer.wheel = [SimpleNamespace(received_steady_ns=now_ns)]
     observer.imu = [SimpleNamespace(received_steady_ns=now_ns)]
@@ -2265,12 +2575,12 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
         SimpleNamespace(stamp_ns=2, value=odom_value),
     ]
     observer.sensor_health_snapshot = lambda: {
-        'context': None, 'barrier_sequence': 0, 'barrier_stamp_ns': 0,
+        'context': observer.context, 'barrier_sequence': 0, 'barrier_stamp_ns': 0,
         'clock_rollback': False, 'clock_ns': 10, 'clock_advance_count': 2,
         'lifecycle': None, 'scans': tuple(observer.scans),
         'wheel': tuple(observer.wheel), 'imu': tuple(observer.imu),
         'odometry': tuple(observer.odometry), 'receipts': (),
-        'localization': tuple(observer.localization),
+        'localization': tuple(dict(fact) for fact in observer.localization),
     }
     topics = {'/odometry/filtered': {'publishers': (('ekf_filter_node',),)}}
     observer.graph_snapshot = lambda: {
@@ -2290,7 +2600,8 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
             'imu': observer.imu[0], 'filtered_odometry': observer.odometry[-1],
         },
     }
-    runner._localization_ok = lambda: (True, None)
+    runner._last_node_ros_now_ns = 9
+    runner._node_ros_advance_count = 2
     runner._tf_chain_usable = lambda _stamp: True
     runner._tf_ownership_ready = lambda: True
     runner._tf_a4_ready = lambda stamp: (
@@ -2453,6 +2764,26 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     Observer._wheel(observer, wheel)
     Observer._imu(observer, imu)
 
+    def amcl(stamp_ns, *, x=0.0, y=0.0, yaw=0.0):
+        from types import SimpleNamespace
+        half = yaw/2.0
+        covariance = [0.0]*36
+        covariance[0] = covariance[7] = covariance[35] = 0.01
+        return SimpleNamespace(
+            header=SimpleNamespace(
+                stamp=SimpleNamespace(
+                    sec=stamp_ns//1_000_000_000,
+                    nanosec=stamp_ns % 1_000_000_000,
+                ), frame_id='map'),
+            pose=SimpleNamespace(pose=SimpleNamespace(
+                position=SimpleNamespace(x=x, y=y, z=0.0),
+                orientation=SimpleNamespace(
+                    x=0.0, y=0.0, z=math.sin(half), w=math.cos(half)),
+            ), covariance=covariance),
+        )
+
+    Observer._amcl(observer, amcl(sample_stamp))
+
     def odom(stamp_ns):
         return SimpleNamespace(
             header=SimpleNamespace(frame_id='odom'),
@@ -2507,6 +2838,8 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
                 range_max=10.0,
             )
             Observer._scan(observer, post_scan)
+        if 'localization' in streams:
+            Observer._amcl(observer, amcl(post_stamp))
 
     observer._test_publish_post_rearm_sensors = publish_post_rearm_sensors
     runner = object.__new__(ResearchAcceptanceRunner)
@@ -2524,7 +2857,6 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     runner._node_ros_advance_count = 2
     runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
     runner._wait_nav2_ready = lambda _deadline: {}
-    runner._localization_ok = lambda *args, **kwargs: (True, None)
     runner._a4_current_ready = lambda: True
     runner._last_tf_a4_evidence = {'fixture': 'offline'}
     calls = {'rearm': 0, 'recorder': 0, 'mission': 0}
@@ -2548,7 +2880,8 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
             publish_identity(core.rearm(clock.ros_ns))
             if deliver_post_rearm_sensors:
                 streams = (
-                    ('scan', 'wheel_odometry', 'imu', 'filtered_odometry')
+                    ('scan', 'wheel_odometry', 'imu', 'filtered_odometry',
+                     'localization')
                     if deliver_post_rearm_sensors is True
                     else tuple(deliver_post_rearm_sensors)
                 )
@@ -2675,6 +3008,11 @@ def test_post_rearm_sensor_callbacks_arriving_in_order_admit_mission(
                 and fact.stamp_ns > runner.startup_barrier_stamp_ns
                 for fact in facts
             )
+        assert any(
+            fact['context'] == runner.startup_context
+            and fact['stamp_ns'] > runner.startup_barrier_stamp_ns
+            for fact in snapshot['localization']
+        )
 
     def send_compute(*_args, **_kwargs):
         assert_post_rearm_snapshot()
@@ -2694,21 +3032,26 @@ def test_post_rearm_sensor_callbacks_arriving_in_order_admit_mission(
     runner._collect_one_observation = lambda _deadline: False
     runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
     scan_delivered = False
+    localization_delivered = False
 
     def deliver_scan_after_other_inputs():
-        nonlocal scan_delivered
-        if scan_delivered:
-            return
+        nonlocal scan_delivered, localization_delivered
         assert actions == {'compute_path': 0, 'navigate': 0}
-        scan_delivered = True
-        clock.on_sleep = None
-        observer._test_publish_post_rearm_sensors(('scan',))
+        if not scan_delivered:
+            scan_delivered = True
+            observer._test_publish_post_rearm_sensors(('scan',))
+            return
+        if not localization_delivered:
+            localization_delivered = True
+            clock.on_sleep = None
+            observer._test_publish_post_rearm_sensors(('localization',))
 
     clock.on_sleep = deliver_scan_after_other_inputs
     report = runner.execute()
 
     assert report['overall'] == 'OFFLINE_TEST_ONLY'
     assert scan_delivered
+    assert localization_delivered
     assert core.snapshot().runtime_generation == 1
     assert observer.context.runtime_generation == 1
     assert all(
@@ -2718,6 +3061,42 @@ def test_post_rearm_sensor_callbacks_arriving_in_order_admit_mission(
     assert calls['rearm'] == 1
     assert calls['recorder'] == 1
     assert actions == {'compute_path': 1, 'navigate': 1}
+
+
+def test_post_rearm_current_sensors_wait_for_current_context_amcl_before_actions(
+        monkeypatch):
+    """Generation-one sensors cannot admit actions while AMCL is generation zero."""
+    runner, observer, core, clock, calls, _publish = (
+        _safety_core_startup_runner(
+            monkeypatch,
+            deliver_post_rearm_sensors=(
+                'scan', 'wheel_odometry', 'imu', 'filtered_odometry'),
+        ))
+    actions = {'compute_path': 0, 'navigate': 0}
+    observer.send_compute_path = lambda *_args, **_kwargs: (
+        actions.update(compute_path=actions['compute_path']+1))
+    observer.send_navigation = lambda *_args, **_kwargs: (
+        actions.update(navigate=actions['navigate']+1))
+    runner._mission = ResearchAcceptanceRunner._mission.__get__(runner)
+
+    def refresh_non_amcl_inputs():
+        clock.seconds += 0.08
+        observer._test_publish_post_rearm_sensors((
+            'scan', 'wheel_odometry', 'imu', 'filtered_odometry'))
+    clock.on_sleep = refresh_non_amcl_inputs
+
+    runner.execute()
+
+    measured = runner.state.primary_failure['measured']
+    assert runner.state.primary_failure['primary_failure'] == (
+        'POST_REARM_INPUT_READINESS_TIMEOUT')
+    assert measured['stream'] == 'localization'
+    assert measured['reason'] == 'CONTEXT_MISMATCH'
+    assert measured['expected_context']['runtime_generation'] == 1
+    assert measured['observed_context']['runtime_generation'] == 0
+    assert core.snapshot().runtime_generation == 1
+    assert calls == {'rearm': 1, 'recorder': 0, 'mission': 0}
+    assert actions == {'compute_path': 0, 'navigate': 0}
 
 
 @pytest.mark.parametrize(('mutation', 'measured_reason'), [
