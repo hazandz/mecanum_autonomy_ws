@@ -15,6 +15,7 @@ from launch.event_handlers import OnProcessStart
 from launch_ros.actions import Node, LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.events import matches_action
 from lifecycle_msgs.msg import Transition
 
@@ -150,10 +151,19 @@ def _actions(context):
         Node(package="nav2_map_server", executable="map_server", name="map_server",
              parameters=[{"use_sim_time": True, "frame_id": "map", "yaml_filename": map_yaml}], output="screen"),
         Node(package="nav2_amcl", executable="amcl", name="amcl",
-             parameters=[amcl_config, {"use_sim_time": True, "set_initial_pose": True,
-                 "initial_pose.x": pose["initial_pose_map_x"],
-                 "initial_pose.y": pose["initial_pose_map_y"],
-                 "initial_pose.yaw": pose["initial_pose_map_yaw"]}], output="screen"),
+             parameters=[
+                 amcl_config,
+                 {
+                     'use_sim_time': True,
+                     'set_initial_pose': True,
+                     'initial_pose.x': ParameterValue(
+                         pose['initial_pose_map_x'], value_type=float),
+                     'initial_pose.y': ParameterValue(
+                         pose['initial_pose_map_y'], value_type=float),
+                     'initial_pose.yaw': ParameterValue(
+                         pose['initial_pose_map_yaw'], value_type=float),
+                 },
+             ], output='screen'),
         Node(package="nav2_planner", executable="planner_server", name="planner_server",
              parameters=[nav_config, {"use_sim_time": True}], output="screen"),
         Node(package="nav2_controller", executable="controller_server", name="controller_server",

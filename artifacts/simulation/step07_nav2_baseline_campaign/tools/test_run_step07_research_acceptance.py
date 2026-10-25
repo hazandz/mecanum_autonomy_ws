@@ -14,8 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from run_step07_research_acceptance import (
-    AcceptanceFailure, CampaignState, OwnedProcess, ProcessOwner, ResearchAcceptanceRunner,
-    atomic_json, load_json, validate_resolved_config, verify_runtime_authorization,
+    AcceptanceFailure, atomic_json, CampaignState, CAPTURE_TOPICS, load_json,
+    OwnedProcess, ProcessOwner, REQUIRED_RECORDER_TOPICS, ResearchAcceptanceRunner,
+    validate_resolved_config, verify_runtime_authorization,
 )
 
 
@@ -371,7 +372,193 @@ def test_authorized_estop_release_is_forwarded_to_composite_launch(tmp_path, mon
     assert "sim_estop_release_authorized:=true" in composite
     recorder = next(command for name, command in runner.process_owner.started if name == "recorder")
     assert "--include-hidden-topics" in recorder
-    assert "/navigate_to_pose/_action/status" in recorder
+    assert '--include-unpublished-topics' in recorder
+    assert '/navigate_to_pose/_action/status' in recorder
+    assert '/navigate_to_pose/_action/feedback' in recorder
+    for topic in REQUIRED_RECORDER_TOPICS:
+        assert topic in recorder
+    assert '/initialpose' in CAPTURE_TOPICS
+    assert '/initialpose' not in REQUIRED_RECORDER_TOPICS
+    assert '/navigate_to_pose/_action/status' not in REQUIRED_RECORDER_TOPICS
+    assert '/mecanum/nav2_candidate_cmd' in REQUIRED_RECORDER_TOPICS
+    assert '/cmd_vel' in REQUIRED_RECORDER_TOPICS
+    assert '/mecanum/final_issued_command' in REQUIRED_RECORDER_TOPICS
+
+
+def test_recorder_readiness_uses_only_explicit_pre_goal_topics_and_checks_processes():
+    calls = []
+
+    class Observer:
+        def recording_ready(self, topics):
+            calls.append(tuple(topics))
+            return False, ('/map',)
+
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.observer = Observer()
+    runner.state = CampaignState(stage='RECORDER')
+    runner.process_owner = SimpleNamespace(processes=[])
+    runner.log_stream = None
+    assert runner._graph_ready_for_recording() is False
+    assert calls == [REQUIRED_RECORDER_TOPICS]
+    assert '/initialpose' not in calls[0]
+    assert '/navigate_to_pose/_action/status' not in calls[0]
+
+    class Exited:
+        name = 'recorder'
+        process = SimpleNamespace(poll=lambda: 0)
+
+    runner.process_owner.processes = [Exited()]
+    with pytest.raises(AcceptanceFailure) as error:
+        runner._graph_ready_for_recording()
+    assert error.value.stage == 'RECORDER'
+    assert error.value.component == 'recorder'
+    assert 'OWNED_LAUNCH_EXITED' in error.value.reason
+    assert len(calls) == 1
+
+
+def test_execute_checks_upstream_before_recorder_and_never_missions_after_failure():
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState()
+    runner.started_steady = time.monotonic()
+    runner.now_steady = time.monotonic
+    now_ns = time.monotonic_ns()
+    odom_value = SimpleNamespace(
+        header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link',
+        pose=SimpleNamespace(pose=SimpleNamespace(position=SimpleNamespace(x=0.0, y=0.0)),
+                             covariance=[0.0] * 36),
+        twist=SimpleNamespace(twist=SimpleNamespace(
+            linear=SimpleNamespace(x=0.0, y=0.0), angular=SimpleNamespace(z=0.0)),
+            covariance=[0.0] * 36),
+    )
+    runner.observer = SimpleNamespace(
+        executor_error=None, clock_ns=100, clock_advance_count=2,
+        scans=[SimpleNamespace(received_steady_ns=now_ns, frame_id='lidar_frame')],
+        wheel=[SimpleNamespace(received_steady_ns=now_ns, value=SimpleNamespace(
+            header=SimpleNamespace(frame_id='odom'), child_frame_id='base_link'))],
+        imu=[SimpleNamespace(received_steady_ns=now_ns)],
+        odometry=[SimpleNamespace(stamp_ns=1, value=odom_value),
+                  SimpleNamespace(stamp_ns=2, value=odom_value)],
+        graph_snapshot=lambda: {
+            'topics': {'/odometry/filtered': {'publishers': (('ekf_filter_node',),)}},
+            'nodes': {'map_server', 'planner_server', 'controller_server',
+                      'behavior_server', 'bt_navigator'},
+        },
+    )
+    runner.output = None
+    runner.log_stream = None
+    runner.process_owner = SimpleNamespace(processes=[])
+    calls = []
+
+    runner.start_observer = lambda: calls.append('observer')
+    runner.start_runtime_children = lambda: calls.append('children')
+    runner._a1_asset_check = lambda: {'pass': True, 'measured': {}}
+    runner._topic_samples_ready = lambda: calls.append('upstream') or True
+    runner._graph_ready_for_recording = lambda: calls.append('recorder') or True
+    runner._mission = lambda: calls.append('mission')
+    runner.shutdown = lambda: calls.append('shutdown')
+
+    report = runner.execute()
+    assert calls == ['observer', 'children', 'upstream', 'shutdown']
+    assert report['overall'] == 'FAIL'
+    assert runner.state.primary_failure['stage'] == 'A6_NAV2'
+    assert runner.state.primary_failure['component'] == 'amcl'
+    assert (
+        runner.state.primary_failure['primary_failure']
+        == 'REQUIRED_NAV2_NODE_MISSING:amcl'
+    )
+
+
+def test_execute_runs_mission_only_after_upstream_and_required_recorder_ready():
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState()
+    runner.started_steady = time.monotonic()
+    runner.now_steady = time.monotonic
+    runner.observer = None
+    runner.output = None
+    runner.log_stream = None
+    calls = []
+
+    def append_call(name):
+        def callback():
+            calls.append(name)
+        return callback
+
+    runner.start_observer = append_call('observer')
+    runner.start_runtime_children = append_call('children')
+    runner._wait_ready = append_call('upstream')
+
+    def recorder_ready():
+        calls.append('recorder')
+        return True
+
+    runner._graph_ready_for_recording = recorder_ready
+    runner._mission = append_call('mission')
+    runner.shutdown = append_call('shutdown')
+
+    runner.execute()
+    assert calls == ['observer', 'children', 'upstream', 'recorder', 'mission', 'shutdown']
+
+
+def test_recorder_exit_or_missing_required_subscription_fails_before_mission():
+    class Process:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+        def poll(self):
+            return self.returncode
+
+    for failure in ('exited', 'missing_subscription'):
+        runner = object.__new__(ResearchAcceptanceRunner)
+        runner.state = CampaignState()
+        runner.started_steady = 0.0
+        runner.now_steady = lambda: 60.0
+        runner.observer = SimpleNamespace(recording_ready=lambda _topics: (False, ('/map',)))
+        runner.process_owner = SimpleNamespace(processes=[])
+        runner.output = None
+        runner.log_stream = None
+        calls = []
+
+        def append_call(name):
+            def callback():
+                calls.append(name)
+            return callback
+
+        runner.start_observer = append_call('observer')
+        runner.start_runtime_children = append_call('children')
+        runner._wait_ready = append_call('upstream')
+        runner._mission = append_call('mission')
+        runner.shutdown = append_call('shutdown')
+        if failure == 'exited':
+            runner.process_owner.processes = [
+                SimpleNamespace(name='recorder', process=Process(1))]
+
+        report = runner.execute()
+        assert 'mission' not in calls
+        assert report['overall'] == 'FAIL'
+        assert runner.state.primary_failure['stage'] == 'RECORDER'
+        if failure == 'exited':
+            assert runner.state.primary_failure['component'] == 'recorder'
+            assert 'OWNED_LAUNCH_EXITED' in runner.state.primary_failure['primary_failure']
+        else:
+            assert runner.state.primary_failure['component'] == 'recorder'
+            assert (
+                runner.state.primary_failure['primary_failure']
+                == 'RECORDER_SUBSCRIPTIONS_NOT_READY'
+            )
+
+
+def test_owned_startup_process_exit_is_reported_before_recorder_gate():
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState(stage='STARTUP')
+    runner.process_owner = SimpleNamespace(processes=[SimpleNamespace(
+        name='composite', process=SimpleNamespace(poll=lambda: 23))])
+    runner.observer = SimpleNamespace()
+
+    with pytest.raises(AcceptanceFailure) as error:
+        runner._topic_samples_ready()
+    assert error.value.stage == 'STARTUP'
+    assert error.value.component == 'composite'
+    assert 'OWNED_LAUNCH_EXITED:23' == error.value.reason
 
 
 def test_startup_rearm_requests_once_and_waits_for_fresh_ready_lifecycle():

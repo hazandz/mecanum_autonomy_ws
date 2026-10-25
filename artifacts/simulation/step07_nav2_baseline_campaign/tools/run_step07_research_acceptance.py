@@ -43,6 +43,13 @@ CAPTURE_TOPICS = (
     "/mecanum/final_issued_command", "/navigate_to_pose/_action/status",
     "/navigate_to_pose/_action/feedback",
 )
+REQUIRED_RECORDER_TOPICS = (
+    '/clock', '/scan', '/wheel/odometry_raw', '/imu/data', '/odometry/filtered',
+    '/tf', '/tf_static', '/map', '/amcl_pose',
+    '/mecanum/safety_lifecycle_state', '/mecanum/safety_state',
+    '/mecanum/nav2_candidate_cmd', '/mecanum/safety_accepted_cmd', '/cmd_vel',
+    '/mecanum/final_issued_command',
+)
 
 
 class AcceptanceFailure(RuntimeError):
@@ -570,6 +577,7 @@ class ResearchAcceptanceRunner:
         qos = self.repository / "ros2_ws/src/mecanum_nav_bringup/config/recording/step07_research_qos.yaml"
         bag_command = ["ros2", "bag", "record", "--storage", "sqlite3", "--use-sim-time",
                        "--include-hidden-topics",
+                       '--include-unpublished-topics',
                        "--output", str(self.output / "capture" / "step07"),
                        "--qos-profile-overrides-path", str(qos), *CAPTURE_TOPICS]
         self.process_owner.start("recorder", bag_command, env=env,
@@ -629,12 +637,14 @@ class ResearchAcceptanceRunner:
                                     f"EXECUTOR_EXCEPTION:{type(error).__name__}:{error}")
 
     def _graph_ready_for_recording(self) -> bool:
-        ready, missing = self.observer.recording_ready(CAPTURE_TOPICS)
+        self._check_launch_processes()
+        ready, missing = self.observer.recording_ready(REQUIRED_RECORDER_TOPICS)
         if not ready:
             self.log("recorder", f"waiting for recorder subscriptions; missing={','.join(missing[:4])}")
         return ready
 
     def _topic_samples_ready(self) -> bool:
+        self._check_launch_processes()
         observer = self.observer
         if observer.clock_rollback:
             raise AcceptanceFailure("A2_CLOCK_AND_SENSORS", "clock", "SIM_CLOCK_ROLLBACK")
@@ -768,8 +778,11 @@ class ResearchAcceptanceRunner:
         nodes = graph["nodes"]
         required = {"map_server", "amcl", "planner_server", "controller_server",
                     "behavior_server", "bt_navigator"}
-        if not required.issubset(nodes):
-            raise AcceptanceFailure("A6_NAV2", "ros_graph", "REQUIRED_NAV2_NODES_MISSING")
+        missing_nodes = sorted(required - nodes)
+        if missing_nodes:
+            component = 'amcl' if 'amcl' in missing_nodes else missing_nodes[0]
+            raise AcceptanceFailure('A6_NAV2', component,
+                                    f'REQUIRED_NAV2_NODE_MISSING:{component}')
         self._wait_for(lambda: self.observer.wait_for_actions(timeout_sec=0.1), deadline,
             stage="A6_NAV2", component="action_servers", reason="NAV2_ACTION_SERVER_UNAVAILABLE")
         lifecycle_futures = self.observer.query_lifecycle_states()
@@ -1555,10 +1568,11 @@ class ResearchAcceptanceRunner:
         try:
             self.start_observer()
             self.start_runtime_children()
-            self._wait_for(self._graph_ready_for_recording, min(self.started_steady+60.0,
-                self.started_steady+460.0), stage="RECORDER", component="ros_graph",
-                reason="RECORDER_SUBSCRIPTIONS_NOT_READY")
             self._wait_ready()
+            self.state.stage = 'RECORDER'
+            self._wait_for(self._graph_ready_for_recording, min(self.started_steady+60.0,
+                self.started_steady+460.0), stage='RECORDER', component='recorder',
+                reason="RECORDER_SUBSCRIPTIONS_NOT_READY")
             self._mission()
         except AcceptanceFailure as error:
             self.state.stage = error.stage

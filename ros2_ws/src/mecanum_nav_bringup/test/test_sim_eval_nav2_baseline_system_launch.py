@@ -288,3 +288,66 @@ def test_actual_node_parameter_files_parse_with_jazzy_c_parser_without_ros_graph
         shares["mecanum_nav_bringup"] / "config/state_estimation/ekf_sim.yaml",
     }
     assert shares["mecanum_nav_bringup"] / "config/lifecycle/sim_eval_nav2_baseline.runtime.yaml" not in checked
+
+
+def test_amcl_initial_pose_launch_parameters_are_always_floats(monkeypatch):
+    from launch import LaunchContext
+    from launch_ros.actions import Node
+    from launch_ros.utilities import evaluate_parameters
+
+    module = _composite_module()
+    description = Path('/tmp/step07-launch-description')
+    shares = {
+        'ROBOT_URDF_final_description': description,
+        'mecanum_nav_bringup': ROOT / 'ros2_ws/src/mecanum_nav_bringup',
+        'mecanum_nav_rl': ROOT / 'ros2_ws/src/mecanum_nav_rl',
+    }
+    monkeypatch.setattr(module, 'get_package_share_directory', lambda name: str(shares[name]))
+
+    # Replace only the Fuel preflight module lookup; keep production _actions,
+    # LaunchContext, LaunchConfiguration and launch_ros parameter evaluation.
+    class BootstrapModule:
+        @staticmethod
+        def validate_fuel_cache(*_args):
+            return None
+
+    class Loader:
+        @staticmethod
+        def exec_module(_module):
+            return None
+
+    class BootstrapSpec:
+        loader = Loader()
+
+    monkeypatch.setattr(module.importlib.util, 'spec_from_file_location',
+                        lambda *_args: BootstrapSpec())
+    monkeypatch.setattr(module.importlib.util, 'module_from_spec',
+                        lambda _spec: BootstrapModule())
+
+    cases = (
+        ('0', '0.0', '-1.25'),
+        ('0.375', '-2', '1.5707963'),
+    )
+    for pose in cases:
+        context = LaunchContext()
+        context.launch_configurations.update({
+            'gz_partition': 'offline_launch_test',
+            'start_bootstrap': 'false',
+            'canonical_map_root': str(ROOT / 'artifacts/maps/warehouse_map2'),
+            'fuel_cache_root': '/unused/offline-test',
+            'sim_estop_release_authorized': 'false',
+            'initial_pose_map_x': pose[0],
+            'initial_pose_map_y': pose[1],
+            'initial_pose_map_yaw': pose[2],
+        })
+        actions = module._actions(context)
+        amcl = next(action for action in actions
+                    if isinstance(action, Node)
+                    and action.node_package == 'nav2_amcl'
+                    and action.node_executable == 'amcl')
+        evaluated = evaluate_parameters(context, amcl._Node__parameters)
+        values = next(item for item in evaluated if isinstance(item, dict))
+        keys = ('initial_pose.x', 'initial_pose.y', 'initial_pose.yaw')
+        for key, raw in zip(keys, pose):
+            assert type(values[key]) is float
+            assert values[key] == float(raw)
