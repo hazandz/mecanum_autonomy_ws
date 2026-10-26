@@ -2,6 +2,9 @@ from types import SimpleNamespace
 import importlib
 import inspect
 import math
+import sys
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pytest
 import rclpy.node
@@ -63,7 +66,8 @@ def test_lifecycle_qos_matches_existing_owner_and_reset_is_async_coalesced():
             self.calls += 1
             return Future()
     from std_srvs.srv import Trigger
-    adapter=SimpleNamespace(_session=Session(),_reset_client=Client(),_reset_future=None)
+    adapter=SimpleNamespace(_session=Session(),_reset_client=Client(),_reset_future=None,
+                            _lifecycle_baseline_observed=True)
     UartBridgeNode._request_owner_reset(adapter)
     UartBridgeNode._request_owner_reset(adapter)
     assert adapter._reset_client.calls == 1
@@ -313,3 +317,275 @@ def test_constructor_failure_cleans_session_and_node(monkeypatch):
     assert made["sessions"][0].shutdown_calls == 1
     assert made["transports"][0].open_calls == 0
     assert _FaithfulNodeBase.instances[before].destroyed
+
+
+class _R2Transport:
+    """Fake UART transport; production BridgeSession vẫn được dùng trong test."""
+    def __init__(self):
+        self.is_open = False
+        self.open_calls = 0
+        self.close_calls = 0
+        self.rx = bytearray()
+        self.writes = []
+    def open(self):
+        self.open_calls += 1
+        self.is_open = True
+        return True
+    def close(self):
+        self.close_calls += 1
+        self.is_open = False
+    def read(self, max_bytes=256):
+        result = bytes(self.rx[:max_bytes])
+        del self.rx[:max_bytes]
+        return result
+    def write(self, data):
+        self.writes.append(bytes(data))
+        return len(data)
+    def inject(self, data): self.rx.extend(data)
+
+
+class _R2Future:
+    def __init__(self, done=False): self.is_done = done
+    def done(self): return self.is_done
+    def result(self): return SimpleNamespace(success=True)
+
+
+class _R2ResetClient:
+    def __init__(self, on_call=None, ready=True, future_done=False):
+        self.on_call = on_call
+        self.ready = ready
+        self.future = _R2Future(future_done)
+        self.calls = 0
+    def service_is_ready(self): return self.ready
+    def call_async(self, request):
+        from std_srvs.srv import Trigger
+        assert isinstance(request, Trigger.Request)
+        self.calls += 1
+        if self.on_call is not None:
+            self.on_call()
+        return self.future
+
+
+def _safety_lifecycle_core_type():
+    path = Path(__file__).resolve().parents[4] / (
+        "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py")
+    spec = spec_from_file_location("u5_r2_test_safety_contract", path)
+    module = module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.SafetyLifecycleCore
+
+
+def _safety_snapshot_message(snapshot):
+    message = SafetyLifecycleState()
+    message.episode_generation = snapshot.episode_generation
+    message.reset_epoch = snapshot.reset_epoch
+    message.runtime_generation = snapshot.runtime_generation
+    message.sequence = snapshot.sequence
+    message.primary_state = {
+        "Unconfigured": SafetyLifecycleState.PRIMARY_UNCONFIGURED,
+        "Inactive": SafetyLifecycleState.PRIMARY_INACTIVE,
+        "Active": SafetyLifecycleState.PRIMARY_ACTIVE,
+    }[snapshot.primary_state.value]
+    message.barrier_state = {
+        "INIT": SafetyLifecycleState.BARRIER_INIT,
+        "READY": SafetyLifecycleState.BARRIER_READY,
+        "NON_READY": SafetyLifecycleState.BARRIER_NON_READY,
+        "FAULT": SafetyLifecycleState.BARRIER_FAULT,
+    }[snapshot.barrier_state.value]
+    message.motion_permitted = snapshot.motion_permitted
+    return message
+
+
+def _new_r2_production_session_node(monkeypatch, steady):
+    transport = _R2Transport()
+    monkeypatch.setattr(rclpy.node, "Node", _FaithfulNodeBase)
+    module = importlib.reload(bridge_node_module)
+    monkeypatch.setattr(module, "SerialTransport", lambda port: transport)
+    monkeypatch.setattr(module, "load_manifest", lambda path: {"fixture": True})
+    monkeypatch.setattr(module, "communication_config_valid", lambda manifest: True)
+    monkeypatch.setattr(module, "manifest_digest", lambda manifest: bytes(range(32)))
+    monkeypatch.setattr(module, "wheel_geometry", lambda manifest: {
+        "wheel_diameter_m": 0.097, "wheelbase_m": 0.216, "track_m": 0.190,
+        "ticks_per_wheel_revolution": 937.2, "encoder_tick_signs": (1, 1, 1, 1)})
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=steady))
+    return module.UartBridgeNode(), module, transport
+
+
+def _deliver_owner_snapshot(node, core):
+    node._on_lifecycle(_safety_snapshot_message(core.snapshot()))
+
+
+def _decode_config_request(frame):
+    from mecanum_base_bridge.uart_v1_codec import decode_frame, parse_config_request
+    return parse_config_request(decode_frame(frame).payload)
+
+
+def test_owner_reset_waits_for_late_baseline_then_configures_non_ready_session(monkeypatch):
+    from mecanum_base_bridge.bridge_session import SessionState
+    from mecanum_base_bridge.protocol_constants import (
+        CONFIG_ACCEPTED, MESSAGE_COMMAND, MESSAGE_CONFIG, MESSAGE_TELEMETRY,
+        REJECT_NONE)
+    from mecanum_base_bridge.uart_v1_codec import (
+        ConfigStatusPacket, TelemetryPacket, build_wire_frame,
+        serialize_config_status, serialize_telemetry)
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    steady = _SteadyClock(0.0)
+    node, _module, transport = _new_r2_production_session_node(monkeypatch, steady)
+    def reset_after_baseline():
+        baseline = node._session._baseline_identity
+        assert baseline is not None and baseline.reset_epoch == 0 and not baseline.ready
+        core.begin_reset(1)
+        _deliver_owner_snapshot(node, core)
+    client = _R2ResetClient(on_call=reset_after_baseline)
+    node._reset_client = client
+
+    # Startup can open the port, but repeated ticks cannot consume reset work
+    # before a first owner snapshot has established the epoch baseline.
+    for _ in range(4):
+        node._io_tick()
+    assert transport.open_calls == 1
+    assert client.calls == 0
+    assert node._session._owner_reset_pending
+
+    _deliver_owner_snapshot(node, core)  # epoch 0, INIT/NON_READY owner baseline
+    node._io_tick()
+    assert client.calls == 1
+    assert node._session._owner_reset_pending is False
+    assert node._session.state == SessionState.PORT_OPEN
+    assert transport.writes == []  # reset response alone has not made an epoch
+
+    node._io_tick()  # observe Owner's epoch 1 / NON_READY snapshot, then CONFIG
+    assert node._session._identity.reset_epoch == 1
+    assert not node._session._identity.ready
+    assert node._session.state == SessionState.CONFIGURING
+    request = _decode_config_request(transport.writes[-1])
+    assert request.reset_epoch == 1
+
+    accepted = ConfigStatusPacket(request.config_sequence, request.reset_epoch,
+                                  request.hardware_config_hash, 44,
+                                  CONFIG_ACCEPTED, REJECT_NONE)
+    transport.inject(build_wire_frame(MESSAGE_CONFIG, serialize_config_status(accepted)))
+    steady.value += 0.001
+    node._io_tick()
+    assert node._session.state == SessionState.CONFIGURING  # status alone is not ACTIVE
+
+    first = TelemetryPacket(1, 44, 1, 1000, 0, 0, 0, 0, 0, 0, 0)
+    transport.inject(build_wire_frame(MESSAGE_TELEMETRY, serialize_telemetry(first)))
+    steady.value += 0.001
+    node._io_tick()
+    assert node._session.state == SessionState.ACTIVE
+    # NON_READY owner and absence of fresh post-activation cmd_vel block COMMAND.
+    assert [_decode_frame_type(frame) for frame in transport.writes] == [MESSAGE_CONFIG]
+    from geometry_msgs.msg import Twist
+    node._on_cmd_vel(Twist())
+    steady.value += 0.020
+    node._io_tick()
+    assert all(_decode_frame_type(frame) != MESSAGE_COMMAND for frame in transport.writes)
+    node.destroy_node()
+
+
+def _decode_frame_type(frame):
+    from mecanum_base_bridge.uart_v1_codec import decode_frame
+    return decode_frame(frame).message_type
+
+
+def test_baseline_before_port_open_uses_same_reset_path(monkeypatch):
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    steady = _SteadyClock(0.0)
+    node, _module, transport = _new_r2_production_session_node(monkeypatch, steady)
+    def reset_after_baseline():
+        baseline = node._session._baseline_identity
+        assert baseline is not None and baseline.reset_epoch == 0 and not baseline.ready
+        core.begin_reset(1)
+        _deliver_owner_snapshot(node, core)
+    client = _R2ResetClient(on_call=reset_after_baseline)
+    node._reset_client = client
+
+    _deliver_owner_snapshot(node, core)
+    node._io_tick()
+    assert transport.open_calls == 1 and client.calls == 0
+    assert node._session._owner_reset_pending
+    node._io_tick()
+    assert client.calls == 1
+    node._io_tick()
+    assert node._session.state.value == "CONFIGURING"
+    assert _decode_config_request(transport.writes[-1]).reset_epoch == 1
+    node.destroy_node()
+
+
+def test_stale_or_invalid_baseline_keeps_reset_pending_until_fresh_snapshot(monkeypatch):
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    steady = _SteadyClock(0.0)
+    node, _module, _transport = _new_r2_production_session_node(monkeypatch, steady)
+    client = _R2ResetClient()
+    node._reset_client = client
+    node._io_tick()  # open and queue owner reset
+    assert node._session._owner_reset_pending
+
+    stale = _safety_snapshot_message(core.snapshot())
+    node._on_lifecycle(stale)
+    steady.value = 1.0  # lifecycle timeout is 0.6 s
+    node._io_tick()
+    assert client.calls == 0 and node._session._owner_reset_pending
+
+    invalid = _safety_snapshot_message(core.snapshot())
+    invalid.reset_epoch = -1
+    node._on_lifecycle(invalid)
+    node._io_tick()
+    assert client.calls == 0 and node._session._owner_reset_pending
+
+    _deliver_owner_snapshot(node, core)  # fresh same-sequence baseline is accepted
+    node._io_tick()
+    assert client.calls == 1
+    node.destroy_node()
+
+
+def test_reset_request_survives_unready_service_and_inflight_call_is_coalesced(monkeypatch):
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    steady = _SteadyClock(0.0)
+    node, _module, _transport = _new_r2_production_session_node(monkeypatch, steady)
+    client = _R2ResetClient(ready=False)
+    node._reset_client = client
+    node._io_tick()
+    _deliver_owner_snapshot(node, core)
+    node._io_tick()
+    assert client.calls == 0 and node._session._owner_reset_pending
+
+    client.ready = True
+    node._io_tick()
+    assert client.calls == 1 and not node._session._owner_reset_pending
+    node._io_tick()
+    node._io_tick()
+    assert client.calls == 1
+    node.destroy_node()
+
+
+def test_successful_service_response_without_new_epoch_does_not_start_config(monkeypatch):
+    from mecanum_base_bridge.bridge_session import SessionState
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    steady = _SteadyClock(0.0)
+    node, _module, transport = _new_r2_production_session_node(monkeypatch, steady)
+    client = _R2ResetClient(future_done=True)  # success response, no owner snapshot
+    node._reset_client = client
+    node._io_tick()
+    _deliver_owner_snapshot(node, core)
+    node._io_tick()
+    assert client.calls == 1
+    for _ in range(3): node._io_tick()
+    assert client.future.result().success
+    assert node._session.state == SessionState.PORT_OPEN
+    assert transport.writes == []
+    assert node._session._await_owner_reset
+
+    reset = core.begin_reset(1)
+    node._on_lifecycle(_safety_snapshot_message(reset))
+    node._io_tick()
+    assert node._session.state == SessionState.CONFIGURING
+    assert _decode_config_request(transport.writes[-1]).reset_epoch == 1
+    node.destroy_node()

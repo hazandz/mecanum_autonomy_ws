@@ -85,6 +85,7 @@ class UartBridgeNode(Node):
                                           monotonic=self._steady_clock)
             self._owner_message = None
             self._owner_received_at = 0.0
+            self._lifecycle_baseline_observed = False
             self._last_generation = None
             self._reset_future = None
             self._latest_report = None
@@ -120,6 +121,8 @@ class UartBridgeNode(Node):
                                      message.angular.z, self._steady_clock())
 
     def _request_owner_reset(self) -> None:
+        if not self._lifecycle_baseline_observed:
+            return
         if self._reset_future is not None and not self._reset_future.done():
             return
         if self._reset_client.service_is_ready() and self._session.take_owner_reset_request():
@@ -128,9 +131,32 @@ class UartBridgeNode(Node):
     def _io_tick(self) -> None:
         now = self._steady_clock()
         if self._owner_message is not None:
-            identity = lifecycle_identity(self._owner_message, self._owner_received_at, now,
-                                          self._lifecycle_timeout)
-            self._session.observe_lifecycle_snapshot(identity)
+            try:
+                message = self._owner_message
+                uint_fields = ((message.reset_epoch, 0xFFFFFFFF),
+                               (message.runtime_generation, 0xFFFFFFFF),
+                               (message.sequence, 0xFFFFFFFFFFFFFFFF))
+                valid_states = (
+                    message.primary_state in (
+                        SafetyLifecycleState.PRIMARY_UNCONFIGURED,
+                        SafetyLifecycleState.PRIMARY_INACTIVE,
+                        SafetyLifecycleState.PRIMARY_ACTIVE),
+                    message.barrier_state in (
+                        SafetyLifecycleState.BARRIER_INIT,
+                        SafetyLifecycleState.BARRIER_READY,
+                        SafetyLifecycleState.BARRIER_NON_READY,
+                        SafetyLifecycleState.BARRIER_FAULT),
+                    type(message.motion_permitted) is bool,
+                )
+                if (any(type(value) is not int or not 0 <= value <= maximum
+                        for value, maximum in uint_fields) or not all(valid_states)):
+                    raise ValueError("lifecycle snapshot fields are invalid")
+                identity = lifecycle_identity(self._owner_message, self._owner_received_at, now,
+                                              self._lifecycle_timeout)
+                observed = self._session.observe_lifecycle_snapshot(identity)
+                self._lifecycle_baseline_observed = bool(identity.fresh and observed)
+            except (TypeError, ValueError, OverflowError):
+                self._lifecycle_baseline_observed = False
         self._request_owner_reset()
         self._session.io_once()
         for _ in range(8):
