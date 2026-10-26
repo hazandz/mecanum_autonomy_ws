@@ -752,13 +752,23 @@ class ResearchAcceptanceRunner:
         self.rclpy = rclpy
         if not rclpy.ok():
             rclpy.init(args=None)
-        self.observer = Step07ResearchObserver(config_hash=self.config_hash)
+        self.observer = self._create_observer(Step07ResearchObserver)
         self.executor = MultiThreadedExecutor(num_threads=4)
         self.executor.add_node(self.observer.node)
         import threading
         self.executor_thread = threading.Thread(target=self._spin_executor,
             name="step07-observer-executor", daemon=False)
         self.executor_thread.start()
+
+    def _create_observer(self, observer_type: Callable[..., Any]) -> Any:
+        """Pass the resolved Step-7 normalization policy explicitly."""
+        policy = self.config['navigation']['step07_acceptance']
+        return observer_type(
+            config_hash=self.config_hash,
+            amcl_yaw_covariance_roundoff_tolerance_rad2=(
+                policy['amcl_yaw_covariance_roundoff_tolerance_rad2']
+            ),
+        )
 
     def _spin_executor(self) -> None:
         try:
@@ -1842,6 +1852,12 @@ class ResearchAcceptanceRunner:
             return result
         measured['pose_xy_yaw'] = finite_values(pose)
         measured['covariance_diagonal'] = finite_values(covariance)
+        measured['raw_covariance_diagonal'] = finite_values(
+            fact.get('raw_covariance', covariance)
+        )
+        measured['covariance_roundoff_corrected'] = bool(
+            fact.get('covariance_roundoff_corrected', False)
+        )
         if predecessor is not None:
             previous_pose = predecessor.get('pose')
             previous_stamp = predecessor.get('stamp_ns')
@@ -1851,6 +1867,11 @@ class ResearchAcceptanceRunner:
                 'pose_xy_yaw': finite_values(previous_pose),
                 'covariance_diagonal': finite_values(
                     predecessor.get('covariance')),
+                'raw_covariance_diagonal': finite_values(
+                    predecessor.get('raw_covariance',
+                                    predecessor.get('covariance'))),
+                'covariance_roundoff_corrected': bool(
+                    predecessor.get('covariance_roundoff_corrected', False)),
                 'observed_context': cls._context_measured(
                     predecessor.get('context')),
             }

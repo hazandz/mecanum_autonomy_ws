@@ -78,6 +78,51 @@ def test_runner_rejects_declared_config_hash_mismatch():
         validate_resolved_config(document)
 
 
+def test_runner_passes_resolved_amcl_roundoff_policy_to_observer_constructor():
+    """Pass the resolved policy as an explicit observer keyword."""
+    runner = object.__new__(ResearchAcceptanceRunner)
+    tolerance = 1e-12
+    runner.config_hash = 'd' * 64
+    runner.config = {'navigation': {'step07_acceptance': {
+        'amcl_yaw_covariance_roundoff_tolerance_rad2': tolerance,
+    }}}
+
+    class FakeObserver:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    observer = runner._create_observer(FakeObserver)
+    assert observer.kwargs == {
+        'config_hash': 'd' * 64,
+        'amcl_yaw_covariance_roundoff_tolerance_rad2': tolerance,
+    }
+
+
+def test_localization_measurement_retains_raw_and_effective_covariance():
+    """Report raw and effective covariance from the selected fact."""
+    from mecanum_nav_rl.observations.step07_research_acceptance import Context
+
+    context = Context(1, 2, 3, 'a' * 64)
+    measured = ResearchAcceptanceRunner._localization_health_measurement(
+        {
+            'stamp_ns': 1_000_000_000,
+            'received_steady_ns': 2_000_000_000,
+            'frame_id': 'map',
+            'pose': (0.0, 0.0, 0.0),
+            'covariance': (0.01, 0.02, 0.0),
+            'raw_covariance': (0.01, 0.02, -2.5e-14),
+            'covariance_roundoff_corrected': True,
+            'context': context,
+        },
+        ros_now_ns=1_100_000_000,
+        steady_now_ns=2_100_000_000,
+        expected_context=context,
+    )
+    assert measured['covariance_diagonal'] == [0.01, 0.02, 0.0]
+    assert measured['raw_covariance_diagonal'] == [0.01, 0.02, -2.5e-14]
+    assert measured['covariance_roundoff_corrected'] is True
+
+
 def test_failed_acceptance_sets_primary_failure_and_unmeasured_metric_is_null():
     runner = object.__new__(ResearchAcceptanceRunner)
     runner.state = CampaignState(stage="A9_NAVIGATION_OUTCOME",
@@ -2731,7 +2776,9 @@ def _prepare_production_startup(runner, observer, clock, *, rearm_calls):
 
 def _safety_core_startup_runner(monkeypatch, *, authorized=True,
                                 rearm_behavior='apply',
-                                deliver_post_rearm_sensors=True):
+                                deliver_post_rearm_sensors=True,
+                                yaw_covariance=0.01,
+                                roundoff_tolerance=None):
     """Build a real production startup path around the pure Safety core."""
     from collections import deque
     from mecanum_nav_rl.observations.step07_research_observer import (
@@ -2772,6 +2819,7 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
     observer = object.__new__(Step07ResearchObserver)
     observer._lock = threading.RLock()
     observer._config_hash = 'a' * 64
+    observer._amcl_yaw_covariance_roundoff_tolerance_rad2 = roundoff_tolerance
     observer._steady_ns = clock.steady_ns
     observer.lifecycle = None
     observer.context = None
@@ -2883,7 +2931,8 @@ def _safety_core_startup_runner(monkeypatch, *, authorized=True,
         from types import SimpleNamespace
         half = yaw/2.0
         covariance = [0.0]*36
-        covariance[0] = covariance[7] = covariance[35] = 0.01
+        covariance[0] = covariance[7] = 0.01
+        covariance[35] = yaw_covariance
         return SimpleNamespace(
             header=SimpleNamespace(
                 stamp=SimpleNamespace(
@@ -3035,6 +3084,27 @@ def test_production_wait_ready_rearms_real_nonready_core_before_mission(
     assert report['overall'] == 'OFFLINE_TEST_ONLY'
     assert core.snapshot().barrier_state.value == 'READY'
     assert observer.lifecycle.value['motion_permitted'] is True
+    assert calls == {'rearm': 1, 'recorder': 1, 'mission': 1}
+
+
+def test_production_post_rearm_admission_accepts_bounded_amcl_yaw_roundoff(
+        monkeypatch):
+    """Admit post-rearm inputs after bounded yaw normalization."""
+    runner, observer, core, _clock, calls, _publish = (
+        _safety_core_startup_runner(
+            monkeypatch, yaw_covariance=-2.4868995751603352e-14,
+            roundoff_tolerance=1e-12))
+
+    report = runner.execute()
+
+    fact = next(item for item in observer.localization
+                if item['context'].runtime_generation == 1)
+    assert report['overall'] == 'OFFLINE_TEST_ONLY'
+    assert fact['raw_covariance'] == (
+        0.01, 0.01, -2.4868995751603352e-14)
+    assert fact['covariance'] == (0.01, 0.01, 0.0)
+    assert fact['covariance_roundoff_corrected'] is True
+    assert core.snapshot().runtime_generation == 1
     assert calls == {'rearm': 1, 'recorder': 1, 'mission': 1}
 
 

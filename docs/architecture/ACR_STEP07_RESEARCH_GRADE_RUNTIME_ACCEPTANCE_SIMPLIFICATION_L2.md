@@ -40,6 +40,16 @@ This method establishes configured ownership and compatible live graph topology 
 
 The mission uses the `nav2_controller::StoppedGoalChecker` contract: XY tolerance 0.15 m, yaw tolerance π, stopped linear 0.03 m/s, stopped angular 0.05 rad/s, `stateful=false`; the final-yaw rotate critic is not an acceptance condition. Campaign deadline is 480 s steady, with up to 20 s reserved for shutdown. All waits are bounded by that deadline.
 
+### AMCL yaw-variance roundoff amendment (same Decision ID)
+
+For the Step-7 `sim_eval` / `NAV2_BASELINE` research observer only, the approved numerical input tolerance is `epsilon = 1e-12 rad²` for AMCL covariance diagonal index 35 (yaw variance). A finite raw value in `[-epsilon, 0)` is represented locally as effective `0.0`; a value below `-epsilon`, NaN, or infinity is rejected. Values at or above zero are retained. Covariance indices 0 and 7 remain strictly nonnegative. No other covariance, quaternion, freshness, pose-jump, or matrix projection tolerance is introduced.
+
+The read-only Run 007 capture contains 838 of 839 `/amcl_pose` records with raw yaw variance `-2.4868995751603352e-14 rad²`; this is within the approved bound. This observation motivates only the bounded yaw-diagonal handling recorded here and does not reconstruct the historical observer callback timeline or change Run 007's FAIL result.
+
+The raw ROS message remains unchanged. The localization fact and existing measured pose report retain raw and effective diagonal values plus a correction flag. The effective yaw variance continues through the existing `0..0.25` selected-pose check; frame, context, freshness, predecessor/jump and admission requirements are unchanged. The `amcl_yaw_covariance_roundoff_tolerance_rad2` field is part of the hashed `navigation.step07_acceptance` policy and accepts only the approved finite value. Callers that do not pass the policy retain strict-zero callback behavior.
+
+This amendment changes the resolved configuration identity through the existing global compiler/hash only; it does not change the hash algorithm. The compiler-derived identity changes from `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f` to `501a661b1ebde9b846325cc589927823e101375a6a189fcf84cac9ac8bf0aabe`. It is limited to offline implementation and grants no runtime, integration, HIL, hardware, or deployment authorization. Historical Run 007 evidence and its FAIL outcome remain immutable.
+
 ## Runtime adapter and direct evidence model
 
 The runner owns bootstrap, composite and rosbag process groups. One observer runs in the runner process and supplies typed facts to the pure evaluator. The recorder stores only the explicit approved topic set, including hidden action topics, with simulation time and configured QoS overrides. `identity.json`, `resolved_config.json`, `runtime.log`, `capture/`, `acceptance.json`, and `metrics.json` are the only six evidence heads. JSON writes are finite and atomic; duplicate JSON keys are rejected on input. No source-file pins, sidecars, per-sample hashes, native lifecycle retention, or manifest hierarchy is part of active acceptance.

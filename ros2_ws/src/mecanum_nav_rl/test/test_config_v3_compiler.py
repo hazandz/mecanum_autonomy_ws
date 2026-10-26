@@ -213,8 +213,12 @@ def test_target_step07_policy_participates_in_global_hash_and_round_trips():
         navigation={"runtime": {"navigation_mode": "NAV2_BASELINE"}})
     payload = hash_payload_from_resolved_v3(config)
     assert payload["navigation"]["step07_acceptance"]["observation_samples_minimum"] == 5
+    assert payload['navigation']['step07_acceptance'][
+        'amcl_yaw_covariance_roundoff_tolerance_rad2'] == 1e-12
     assert config_v3_sha256(payload) == config.provenance.config_hash
-    assert compile_resolved_document_v3(payload).provenance.config_hash == config.provenance.config_hash
+    round_trip = compile_resolved_document_v3(payload)
+    assert round_trip.provenance.config_hash == config.provenance.config_hash
+    assert hash_payload_from_resolved_v3(round_trip) == payload
 
 
 def test_deep_merge_is_nested_deterministic_and_non_mutating() -> None:

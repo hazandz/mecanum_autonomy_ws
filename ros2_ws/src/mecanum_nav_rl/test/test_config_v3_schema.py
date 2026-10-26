@@ -229,6 +229,21 @@ def test_invalid_profile_mode_pair_fails_closed() -> None:
         )
 
 
+@pytest.mark.parametrize('value', [
+    True, '1e-12', None, 0.0, -1e-12, 1e-6, nan, inf, -inf,
+])
+def test_step07_yaw_roundoff_tolerance_is_strict_finite_and_fixed(value):
+    """Reject coercible, nonfinite, or unauthorized tolerance values."""
+    import yaml
+    policy_path = (
+        Path(__file__).parents[1] / 'config/v3/step07_research_acceptance.yaml'
+    )
+    policy = yaml.safe_load(policy_path.read_text(encoding='utf-8'))
+    policy['amcl_yaw_covariance_roundoff_tolerance_rad2'] = value
+    with pytest.raises(ValidationError):
+        Step07AcceptancePolicyV3.model_validate(policy)
+
+
 @pytest.mark.parametrize(
     ("profile", "mode"),
     (

@@ -26,6 +26,8 @@ StrictPositiveFiniteFloatV3 = Annotated[
     float, Field(strict=True, gt=0.0, allow_inf_nan=False)
 ]
 
+AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2 = 1e-12
+
 
 class ConfigModelV3(BaseModel):
     """Strict immutable base for every architecture-target config model."""
@@ -243,11 +245,17 @@ class Step07AcceptancePolicyV3(ConfigModelV3):
     localization_translation_jump_speed_mps: StrictPositiveFiniteFloatV3
     localization_yaw_jump_base_rad: StrictPositiveFiniteFloatV3
     localization_yaw_jump_speed_radps: StrictPositiveFiniteFloatV3
+    amcl_yaw_covariance_roundoff_tolerance_rad2: StrictFiniteFloatV3
     observation_twist_scales: tuple[StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3]
     require_nonzero_nav2_command: StrictBool
 
     @model_validator(mode="after")
     def validate_policy_values(self) -> "Step07AcceptancePolicyV3":
+        if (self.amcl_yaw_covariance_roundoff_tolerance_rad2
+                != AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2):
+            raise ValueError(
+                'Step07 AMCL yaw covariance roundoff tolerance is not approved'
+            )
         expected = {
             "scan": 500, "wheel_ingress": 200, "imu_ingress": 200,
             "filtered_odometry": 250, "lifecycle": 500, "receipt": 500,

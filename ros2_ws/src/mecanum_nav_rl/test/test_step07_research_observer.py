@@ -8,6 +8,8 @@ import threading
 from collections import deque
 from types import SimpleNamespace
 
+import pytest
+
 from mecanum_nav_rl.observations import step07_research_observer as observer_module
 from mecanum_nav_rl.observations.step07_research_acceptance import Context
 
@@ -131,8 +133,9 @@ def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
 def test_observer_constructor_uses_jazzy_callback_and_cleans_node(monkeypatch):
     """Use strict fake subscriptions and verify constructor rollback."""
     created = _install_strict_fake_ros(monkeypatch)
-    observer_module.Step07ResearchObserver(config_hash='c' * 64)
+    observer = observer_module.Step07ResearchObserver(config_hash='c' * 64)
     node = created['node']
+    assert observer._amcl_yaw_covariance_roundoff_tolerance_rad2 is None
     by_topic = {item.topic: item.callback for item in node.subscriptions}
     assert len(inspect.signature(by_topic['/tf']).parameters) == 2
     assert len(inspect.signature(by_topic['/tf_static']).parameters) == 2
@@ -243,6 +246,113 @@ def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
     message.pose.pose.position.x = math.inf
     observer._amcl(message)
     assert len(observer.localization) == 1
+
+
+def _amcl_test_observer(*, tolerance=None):
+    observer = object.__new__(observer_module.Step07ResearchObserver)
+    observer._lock = threading.RLock()
+    observer._steady_ns = lambda: 100
+    observer.localization = deque(maxlen=64)
+    observer.context = Context(5, 2, 3, 'c' * 64)
+    observer._amcl_yaw_covariance_roundoff_tolerance_rad2 = tolerance
+    return observer
+
+
+def _amcl_covariance_message(yaw_variance):
+    covariance = [0.0] * 36
+    covariance[35] = yaw_variance
+    return SimpleNamespace(
+        header=SimpleNamespace(frame_id='map',
+                               stamp=SimpleNamespace(sec=1, nanosec=0)),
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            ),
+            covariance=covariance,
+        ),
+    )
+
+
+@pytest.mark.parametrize('raw_yaw_variance', [
+    -1e-12, math.nextafter(-1e-12, 0.0),
+])
+def test_amcl_yaw_roundoff_policy_is_opt_in_and_preserves_raw_message(
+        raw_yaw_variance):
+    """Normalize only bounded yaw roundoff without mutating the message."""
+    epsilon = 1e-12
+    message = _amcl_covariance_message(raw_yaw_variance)
+    original = list(message.pose.covariance)
+    strict = _amcl_test_observer()
+    strict._amcl(message)
+    assert strict.localization == deque()
+
+    normalized = _amcl_test_observer(tolerance=epsilon)
+    normalized._amcl(message)
+    fact = normalized.localization[0]
+    assert fact['covariance'] == (0.0, 0.0, 0.0)
+    assert fact['raw_covariance'] == (0.0, 0.0, raw_yaw_variance)
+    assert fact['covariance_roundoff_corrected'] is True
+    assert message.pose.covariance == original
+
+
+@pytest.mark.parametrize('yaw_variance', [
+    math.nextafter(-1e-12, -math.inf), -1e-6, -0.01,
+    math.nan, math.inf, -math.inf,
+])
+def test_amcl_yaw_roundoff_policy_rejects_out_of_boundary_and_nonfinite(
+        yaw_variance):
+    """Reject yaw variance below the bound and all nonfinite values."""
+    observer = _amcl_test_observer(tolerance=1e-12)
+    observer._amcl(_amcl_covariance_message(yaw_variance))
+    assert len(observer.localization) == 0
+
+
+@pytest.mark.parametrize('index', [0, 7])
+def test_amcl_yaw_roundoff_policy_keeps_xy_covariance_strictly_nonnegative(
+        index):
+    """Keep X/Y covariance diagonals strict even with yaw tolerance."""
+    message = _amcl_covariance_message(-1e-15)
+    message.pose.covariance[index] = -1e-15
+    observer = _amcl_test_observer(tolerance=1e-12)
+    observer._amcl(message)
+    assert len(observer.localization) == 0
+
+
+@pytest.mark.parametrize('yaw_variance', [0.0, 1e-15, 0.25])
+def test_amcl_yaw_roundoff_policy_preserves_nonnegative_covariance(
+        yaw_variance):
+    """Preserve nonnegative yaw variance without marking correction."""
+    observer = _amcl_test_observer(tolerance=1e-12)
+    message = _amcl_covariance_message(yaw_variance)
+    observer._amcl(message)
+    fact = observer.localization[0]
+    assert fact['covariance'] == (0.0, 0.0, yaw_variance)
+    assert fact['raw_covariance'] == (0.0, 0.0, yaw_variance)
+    assert fact['covariance_roundoff_corrected'] is False
+
+
+def test_amcl_roundoff_policy_still_rejects_invalid_frame_and_quaternion():
+    """Keep frame and quaternion admission checks unchanged."""
+    observer = _amcl_test_observer(tolerance=1e-12)
+    wrong_frame = _amcl_covariance_message(-1e-15)
+    wrong_frame.header.frame_id = 'odom'
+    observer._amcl(wrong_frame)
+    bad_quaternion = _amcl_covariance_message(-1e-15)
+    bad_quaternion.pose.pose.orientation.w = 0.0
+    observer._amcl(bad_quaternion)
+    assert len(observer.localization) == 0
+
+
+def test_constructor_rejects_unapproved_amcl_tolerance():
+    """Reject arbitrary caller tolerances before constructing a ROS node."""
+    with pytest.raises(
+            ValueError,
+            match='AMCL_YAW_COVARIANCE_ROUNDOFF_POLICY_INVALID'):
+        observer_module.Step07ResearchObserver(
+            config_hash='c' * 64,
+            amcl_yaw_covariance_roundoff_tolerance_rad2=1e-6,
+        )
 
 
 def test_amcl_snapshot_pins_context_across_callback_interleaving():

@@ -11,6 +11,10 @@ import math
 import threading
 from typing import Any
 
+from mecanum_nav_rl.config.v3_models import (
+    AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2,
+)
+
 from .step07_research_acceptance import ClockRollbackGuard, Context, StampedFact
 
 
@@ -24,7 +28,22 @@ _REQUIRED_TF_EDGES = {
 class Step07ResearchObserver:
     """ROS subscriptions, exact-time TF lookup, and direct Nav2 action clients."""
 
-    def __init__(self, *, config_hash: str, node_name: str = "step07_research_runner") -> None:
+    def __init__(
+        self,
+        *,
+        config_hash: str,
+        node_name: str = 'step07_research_runner',
+        amcl_yaw_covariance_roundoff_tolerance_rad2: float | None = None,
+    ) -> None:
+        """Create ROS subscriptions and apply an optional validated policy."""
+        if amcl_yaw_covariance_roundoff_tolerance_rad2 is not None and (
+                type(amcl_yaw_covariance_roundoff_tolerance_rad2) is not float
+                or not math.isfinite(
+                    amcl_yaw_covariance_roundoff_tolerance_rad2
+                )
+                or amcl_yaw_covariance_roundoff_tolerance_rad2
+                != AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2):
+            raise ValueError('AMCL_YAW_COVARIANCE_ROUNDOFF_POLICY_INVALID')
         import rclpy
         from rclpy.action import ActionClient
         from rclpy.duration import Duration
@@ -53,6 +72,9 @@ class Step07ResearchObserver:
         self._GetState = GetState
         self._lock = threading.RLock()
         self._config_hash = config_hash
+        self._amcl_yaw_covariance_roundoff_tolerance_rad2 = (
+            amcl_yaw_covariance_roundoff_tolerance_rad2
+        )
         self.context: Context | None = None
         self.barrier_stamp_ns = 0
         self.barrier_event_stamp_ns = 0
@@ -348,8 +370,24 @@ class Step07ResearchObserver:
         q_norm = math.sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)
         if (msg.header.frame_id != "map" or not all(math.isfinite(float(v)) for v in values)
                 or not 0.9 <= q_norm <= 1.1
-                or any(float(covariance[index]) < 0 for index in (0, 7, 35))):
+                or any(float(covariance[index]) < 0 for index in (0, 7))):
             return
+        raw_covariance = tuple(
+            float(covariance[index]) for index in (0, 7, 35)
+        )
+        yaw_variance = raw_covariance[2]
+        covariance_roundoff_corrected = False
+        if yaw_variance < 0.0:
+            tolerance = getattr(
+                self, '_amcl_yaw_covariance_roundoff_tolerance_rad2', None
+            )
+            if tolerance is None or yaw_variance < -tolerance:
+                return
+            yaw_variance = 0.0
+            covariance_roundoff_corrected = True
+        effective_covariance = (
+            raw_covariance[0], raw_covariance[1], yaw_variance
+        )
         yaw = math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z))
         with self._lock:
             context = self.context
@@ -358,7 +396,9 @@ class Step07ResearchObserver:
             item = {
                 "stamp_ns": self._stamp(msg.header.stamp), "received_steady_ns": self._steady_ns(),
                 "frame_id": msg.header.frame_id, "pose": (pose.position.x, pose.position.y, yaw),
-                "covariance": (covariance[0], covariance[7], covariance[35]),
+                'covariance': effective_covariance,
+                'raw_covariance': raw_covariance,
+                'covariance_roundoff_corrected': covariance_roundoff_corrected,
                 'context': context,
             }
             if not any(old["stamp_ns"] == item["stamp_ns"] for old in self.localization):
