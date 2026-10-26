@@ -46,6 +46,7 @@ class Step07ResearchObserver:
             raise ValueError('AMCL_YAW_COVARIANCE_ROUNDOFF_POLICY_INVALID')
         import rclpy
         from rclpy.action import ActionClient
+        from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
         from rclpy.duration import Duration
         from rclpy.node import Node
         from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
@@ -101,6 +102,9 @@ class Step07ResearchObserver:
         self.map_message: Any = None
         self.tf_observed_edges: set[tuple[str, str]] = set()
         self.node = Node(node_name, parameter_overrides=[])
+        self._filtered_odometry_callback_group = (
+            MutuallyExclusiveCallbackGroup()
+        )
         self._subs = []
         try:
             self.node.set_parameters([
@@ -136,7 +140,10 @@ class Step07ResearchObserver:
                 ),
                 self.node.create_subscription(Odometry, "/wheel/odometry_raw", self._wheel, reliable),
                 self.node.create_subscription(Imu, "/imu/data", self._imu, reliable),
-                self.node.create_subscription(Odometry, "/odometry/filtered", self._odom, reliable),
+                self.node.create_subscription(
+                    Odometry, "/odometry/filtered", self._odom, reliable,
+                    callback_group=self._filtered_odometry_callback_group
+                ),
                 self.node.create_subscription(
                     PoseWithCovarianceStamped, "/amcl_pose", self._amcl,
                     reliable

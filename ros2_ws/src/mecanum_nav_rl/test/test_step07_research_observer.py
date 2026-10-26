@@ -42,8 +42,13 @@ def test_observer_admission_context_is_static_config_plus_real_lifecycle_identit
 def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
     """Install fakes whose subscription API rejects unapproved keywords."""
     from types import ModuleType
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
     created = {}
+
+    class FakeSubscription:
+        def __init__(self, **values):
+            self.__dict__.update(values)
 
     class FakeNode:
         def __init__(self, name, *, parameter_overrides):
@@ -56,15 +61,17 @@ def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
         def set_parameters(self, parameters):
             return [SimpleNamespace(successful=True) for _ in parameters]
 
-        def create_subscription(self, msg_type, topic, callback, qos_profile):
+        def create_subscription(self, msg_type, topic, callback, qos_profile,
+                                *, callback_group=None):
             self.subscription_calls += 1
             if self.subscription_calls == fail_subscription_at:
                 raise RuntimeError('strict fake subscription failure')
-            entity = SimpleNamespace(
+            entity = FakeSubscription(
                 msg_type=msg_type,
                 topic=topic,
                 callback=callback,
                 qos_profile=qos_profile,
+                callback_group=callback_group,
             )
             self.subscriptions.append(entity)
             return entity
@@ -92,6 +99,8 @@ def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
             ClockType=SimpleNamespace(ROS_TIME=1, STEADY_TIME=2)
         ),
     )
+    module('rclpy.callback_groups',
+           MutuallyExclusiveCallbackGroup=MutuallyExclusiveCallbackGroup)
     module('rclpy.action', ActionClient=lambda *a, **k: SimpleNamespace())
     module(
         'rclpy.duration',
@@ -132,11 +141,20 @@ def _install_strict_fake_ros(monkeypatch, *, fail_subscription_at=None):
 
 def test_observer_constructor_uses_jazzy_callback_and_cleans_node(monkeypatch):
     """Use strict fake subscriptions and verify constructor rollback."""
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
     created = _install_strict_fake_ros(monkeypatch)
     observer = observer_module.Step07ResearchObserver(config_hash='c' * 64)
     node = created['node']
     assert observer._amcl_yaw_covariance_roundoff_tolerance_rad2 is None
     by_topic = {item.topic: item.callback for item in node.subscriptions}
+    by_subscription = {item.topic: item for item in node.subscriptions}
+    assert (by_subscription['/odometry/filtered'].callback_group
+            is observer._filtered_odometry_callback_group)
+    assert isinstance(observer._filtered_odometry_callback_group,
+                      MutuallyExclusiveCallbackGroup)
+    assert all(item.callback_group is None for item in node.subscriptions
+               if item.topic != '/odometry/filtered')
     assert len(inspect.signature(by_topic['/tf']).parameters) == 2
     assert len(inspect.signature(by_topic['/tf_static']).parameters) == 2
 
@@ -150,6 +168,47 @@ def test_observer_constructor_uses_jazzy_callback_and_cleans_node(monkeypatch):
             'strict create_subscription accepted an invalid API keyword'
         )
     assert failed['node'].destroyed is True
+
+
+def test_filtered_odometry_group_isolated_and_mutually_exclusive(monkeypatch):
+    """Exercise Jazzy group admission directly without initializing ROS."""
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
+    created = _install_strict_fake_ros(monkeypatch)
+    observer = observer_module.Step07ResearchObserver(config_hash='c' * 64)
+    filtered = next(item for item in created['node'].subscriptions
+                    if item.topic == '/odometry/filtered')
+    default_group = MutuallyExclusiveCallbackGroup()
+
+    class Entity:
+        pass
+
+    default_entity = Entity()
+    odom_sibling = Entity()
+    default_group.add_entity(default_entity)
+    default_group.add_entity(filtered)
+
+    # Baseline coupling: a busy default group excludes its other callback.
+    assert default_group.beginning_execution(default_entity)
+    assert not default_group.beginning_execution(filtered)
+    default_group.ending_execution(default_entity)
+
+    # The filtered callback has a distinct group and can be admitted while
+    # the node's default group remains occupied.
+    odom_group = filtered.callback_group
+    assert odom_group is not default_group
+    odom_group.add_entity(filtered)
+    odom_group.add_entity(odom_sibling)
+    assert default_group.beginning_execution(default_entity)
+    assert odom_group.beginning_execution(filtered)
+
+    # Mutually exclusive semantics still block concurrent work in this group.
+    assert not odom_group.beginning_execution(odom_sibling)
+    odom_group.ending_execution(filtered)
+    assert odom_group.beginning_execution(odom_sibling)
+    odom_group.ending_execution(odom_sibling)
+    default_group.ending_execution(default_entity)
+    assert observer._filtered_odometry_callback_group is odom_group
 
 
 def _lifecycle_message(*, sec, barrier_sec, sequence=4, generation=3, epoch=2,
@@ -225,6 +284,74 @@ def test_production_odometry_admission_rejects_wrong_frame_nonfinite_and_invalid
     assert not observer_module.Step07ResearchObserver._valid_odom(invalid_value)
     invalid_covariance = _valid_odom_message(); invalid_covariance.pose.covariance[0] = -1.0
     assert not observer_module.Step07ResearchObserver._valid_odom(invalid_covariance)
+
+
+def test_odom_fact_and_lifecycle_context_are_serialized_with_snapshot():
+    """Pin odometry identity while lifecycle waits on the insertion lock."""
+    observer = _bare_observer()
+    observer.context = Context(5, 2, 3, 'c' * 64)
+    observer.odometry = deque(maxlen=64)
+    observer.scans = deque(maxlen=64)
+    observer.wheel = deque(maxlen=64)
+    observer.imu = deque(maxlen=64)
+    observer.receipts = deque(maxlen=64)
+    observer.localization = deque(maxlen=64)
+    observer.clock_rollback = False
+    observer.clock_ns = 10_000_000_000
+    observer.clock_advance_count = 1
+    fact_started = threading.Event()
+    release_fact = threading.Event()
+    lifecycle_started = threading.Event()
+    lifecycle_finished = threading.Event()
+
+    def steady_time_inside_fact():
+        fact_started.set()
+        assert release_fact.wait(timeout=2)
+        return 9_000_000_000
+
+    observer._steady_ns = steady_time_inside_fact
+    odom_message = _valid_odom_message()
+    odom_message.header.stamp = SimpleNamespace(sec=10, nanosec=0)
+    odom_thread = threading.Thread(
+        target=observer._odom, args=(odom_message,)
+    )
+    lifecycle_errors = []
+
+    def update_lifecycle():
+        lifecycle_started.set()
+        try:
+            observer._lifecycle_cb(_lifecycle_message(
+                sec=11, barrier_sec=10, runtime=6, sequence=5,
+                generation=5, permitted=True,
+            ))
+        except BaseException as error:
+            lifecycle_errors.append(error)
+        finally:
+            lifecycle_finished.set()
+
+    lifecycle_thread = threading.Thread(target=update_lifecycle)
+
+    odom_thread.start()
+    assert fact_started.wait(timeout=2)
+    # _odom has captured its context and is still in _lock while constructing
+    # the StampedFact; the lifecycle callback cannot mutate that identity yet.
+    assert not observer._lock.acquire(blocking=False)
+    lifecycle_thread.start()
+    assert lifecycle_started.wait(timeout=2)
+    release_fact.set()
+    odom_thread.join(timeout=2)
+    lifecycle_thread.join(timeout=2)
+
+    assert not odom_thread.is_alive()
+    assert not lifecycle_thread.is_alive()
+    assert lifecycle_finished.is_set()
+    assert lifecycle_errors == []
+    snapshot = observer.sensor_health_snapshot()
+    assert len(snapshot['odometry']) == 1
+    assert (snapshot['odometry'][0].context
+            == Context(5, 2, 3, 'c' * 64))
+    assert snapshot['context'] == Context(5, 2, 6, 'c' * 64)
+    assert snapshot['lifecycle'].context == snapshot['context']
 
 
 def test_amcl_callback_does_not_admit_nonfinite_pose_or_invalid_quaternion():
