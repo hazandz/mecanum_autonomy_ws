@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- U4 bổ sung session engine Pi thuần, generator hash RFC8785 cho manifest và
+  kiểm thử offline; chưa có node ROS, telemetry runtime, HIL hoặc motor.
 - Adds a bounded, single-owner pyserial byte transport with explicit port
   selection and caller-controlled reconnect attempts.
 - Adds fake-backend offline transport tests to the package test runner.

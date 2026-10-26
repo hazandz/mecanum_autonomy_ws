@@ -34,6 +34,8 @@ class CommandSemantics:
             return CommandDecision(False, False, None, 'non_finite_command')
         if command.reset_epoch != self.configured_reset_epoch:
             return CommandDecision(False, False, None, 'wrong_reset_epoch')
+        if command.command_sequence == 0:
+            return CommandDecision(False, False, None, 'zero_sequence')
         if (self.last_accepted_command_sequence is not None and
                 command.command_sequence <= self.last_accepted_command_sequence):
             return CommandDecision(False, False, None, 'duplicate_or_backward_sequence')

@@ -1,9 +1,11 @@
 #include "communication_runtime.h"
+#include "control_safety_runtime.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,12 +21,13 @@ static uint8_t transmitted[16][MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
 static uint16_t transmitted_size[16];
 static uint32_t transmitted_timeout[16];
 static bool in_isr, in_task;
-static TaskHandle_t created_task, current_task;
+static TaskHandle_t created_task, control_task, current_task;
 static unsigned critical_api_calls, queue_api_calls, task_api_calls, queue_create_calls, task_create_calls;
 typedef enum { INJECT_NONE, INJECT_CANDIDATE_RECEIVE, INJECT_TX_RECEIVE,
                INJECT_STATUS_SEND, INJECT_TELEMETRY_SEND } inject_target_t;
 static inject_target_t inject_fault_after_dequeue, inject_fault_after_send;
 static bool inject_fault_during_transmit;
+static bool inject_fault_during_rearm;
 static struct fake_queue { UBaseType_t length, item_size, head, count; uint8_t *storage; } queues[3];
 static struct fake_queue *candidate_queue_fake, *tx_queue_fake;
 static unsigned queue_count;
@@ -46,14 +49,23 @@ TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name, uint32_t
                                StaticTask_t *control)
 {
     assert(!in_isr); ++task_create_calls;
-    assert(entry != NULL && strcmp(name, "UARTComm") == 0 && depth == 512U);
-    assert(arg == NULL && priority == 24U && stack != NULL && control != NULL);
-    created_task = (TaskHandle_t)control;
-    return created_task;
+    assert(entry != NULL && depth == 512U);
+    assert(arg == NULL && stack != NULL && control != NULL);
+    if (strcmp(name, "UARTComm") == 0) {
+        assert(priority == 24U);
+        created_task = (TaskHandle_t)control;
+        return created_task;
+    }
+    assert(strcmp(name, "CtrlSafe") == 0 && priority == 40U);
+    control_task = (TaskHandle_t)control;
+    return control_task;
 }
 void vTaskNotifyGiveFromISR(TaskHandle_t task, BaseType_t *woken) { assert(in_isr && task != NULL); *woken = pdTRUE; }
 uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t ticks) { (void)clear; (void)ticks; return 0U; }
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { assert(!in_isr); ++task_api_calls; return current_task; }
+TickType_t xTaskGetTickCount(void) { assert(!in_isr); return fake_tick; }
+void vTaskDelayUntil(TickType_t *last_wake, TickType_t increment)
+{ assert(!in_isr && last_wake != NULL); *last_wake += increment; }
 QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage, StaticQueue_t *control)
 {
     assert(!in_isr); ++queue_create_calls;
@@ -105,7 +117,14 @@ HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_IT(UART_HandleTypeDef *uart, uint8_t 
 {
     assert(!in_isr || uart != NULL);
     assert(uart != NULL && uart->Instance == USART6);
-    active_rx = data; active_rx_capacity = size; ++receive_calls; return receive_status;
+    active_rx = data; active_rx_capacity = size; ++receive_calls;
+    if (inject_fault_during_rearm) {
+        inject_fault_during_rearm = false;
+        uart->ErrorCode = HAL_UART_ERROR_ORE;
+        in_isr = true; HAL_UART_ErrorCallback(uart); in_isr = false;
+        uart->ErrorCode = HAL_UART_ERROR_NONE;
+    }
+    return receive_status;
 }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *uart)
 { assert(!in_isr && uart != NULL); ++abort_calls; return HAL_OK; }
@@ -163,6 +182,183 @@ static void service_task(void)
     current_task = created_task;
     communication_runtime_service_once();
     current_task = NULL;
+}
+
+static void service_control_task(void)
+{
+    current_task = control_task;
+    control_safety_runtime_service_once();
+    current_task = NULL;
+}
+
+static size_t make_command_frame(uint32_t sequence, uint32_t epoch, uint8_t *wire)
+{
+    mecanum_uart_v1_command_t command = {sequence, epoch, 0.25F, -0.5F, 0.75F};
+    uint8_t payload[MECANUM_UART_V1_COMMAND_PAYLOAD_LENGTH];
+    size_t size = 0U;
+    assert(mecanum_uart_v1_serialize_command(&command, payload, sizeof(payload)) == MECANUM_UART_V1_OK);
+    assert(mecanum_uart_v1_build_wire_frame(MECANUM_UART_V1_MESSAGE_COMMAND, payload,
+        sizeof(payload), wire, MECANUM_UART_V1_COBS_BUFFER_MINIMUM, &size) == MECANUM_UART_V1_OK);
+    return size;
+}
+
+static int run_control_safety_case(void)
+{
+    uint8_t hash[32], wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM], byte = 0x55U;
+    size_t size;
+    control_safety_snapshot_t snapshot;
+    mecanum_uart_v1_frame_t frame;
+    mecanum_uart_v1_config_status_t status;
+    unsigned reads;
+    memset(hash, 0xA5, sizeof(hash));
+    uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    assert(communication_runtime_prepare(&uart));
+    assert(control_safety_runtime_start(hash, true, UINT64_C(123)));
+    assert(communication_runtime_arm_rx()); /* Tạo owner/task/queue trước khi arm RX. */
+
+    size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, 100U);
+    in_task = true; service_task(); in_task = false;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.configured && snapshot.telemetry_allowed && !snapshot.motor_enabled);
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
+    in_task = true; service_task(); in_task = false;
+    assert(transmit_calls == 1U);
+    assert(mecanum_uart_v1_decode_wire_frame(transmitted[0], transmitted_size[0], &frame) == MECANUM_UART_V1_OK);
+    assert(mecanum_uart_v1_parse_config_status(frame.payload, frame.payload_length, &status) == MECANUM_UART_V1_OK);
+    assert(status.config_status == MECANUM_UART_V1_CONFIG_ACCEPTED && status.mcu_boot_id == 123U);
+    assert(status.reset_epoch == UINT32_MAX && status.config_sequence == 17U);
+
+    /* Bỏ command cũ trong queue, không đổi accepted history. */
+    size = make_command_frame(1U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 110U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 310U;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.last_accepted_command_sequence == 0U);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_INVALID) != 0U);
+
+    /* Từ chối sequence 0; command dương mới xóa invalid indication. */
+    size = make_command_frame(0U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 311U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 312U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.last_accepted_command_sequence == 0U);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_INVALID) != 0U);
+    size = make_command_frame(1U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 313U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 314U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.last_accepted_command_sequence == 1U);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_INVALID) == 0U);
+
+    /* Watchdog timeout giữ configured session và accepted history. */
+    fake_tick = 512U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE);
+    fake_tick = 513U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
+    assert(snapshot.configured && snapshot.telemetry_allowed);
+    assert(snapshot.last_accepted_command_sequence == 1U);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_TIMEOUT) != 0U);
+
+    /* CONFIG hợp lệ cùng epoch là cách duy nhất thoát watchdog SAFE_STOP. */
+    size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, 515U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 516U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
+    assert(snapshot.last_accepted_command_sequence == 0U && snapshot.mcu_fault_bits == 0U);
+
+    /* Recovery UART giữ boot ID nhưng vô hiệu session và bỏ công việc đang chờ. */
+    for (unsigned i = 0U; i < COMMUNICATION_RUNTIME_RX_PENDING_CHUNKS; ++i) receive_chunk(&byte, 1U, 600U + i);
+    receive_chunk(&byte, 1U, 605U);
+    fake_tick = 700U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP && !snapshot.configured);
+    assert(!snapshot.telemetry_allowed && snapshot.mcu_boot_id == 123U);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_TRANSPORT) != 0U);
+    inject_fault_during_rearm = true;
+    in_task = true; service_task(); in_task = false;
+    assert(!communication_runtime_is_usable()); /* HAL_OK không xóa được lỗi ISR chen vào. */
+    reads = receive_calls;
+    fake_tick = 1699U; in_task = true; service_task(); in_task = false;
+    assert(receive_calls == reads); /* giới hạn lần thử lại tối thiểu một giây */
+    fake_tick = 1700U; in_task = true; service_task(); in_task = false;
+    assert(communication_runtime_is_usable());
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(!snapshot.configured && !snapshot.telemetry_allowed && snapshot.mcu_boot_id == 123U);
+    size = make_command_frame(2U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 1701U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 1702U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(!snapshot.configured && snapshot.last_accepted_command_sequence == 0U);
+    return 0;
+}
+
+static int run_interop_peer(const char *hash_hex, const char *boot_text)
+{
+    char line[256];
+    uint8_t hash[32];
+    uint64_t boot_id = (uint64_t)strtoull(boot_text, NULL, 10);
+    unsigned i;
+    if (strlen(hash_hex) != 64U || boot_id == 0U) return 3;
+    for (i = 0U; i < 32U; ++i) {
+        unsigned value;
+        if (sscanf(&hash_hex[i * 2U], "%2x", &value) != 1) return 3;
+        hash[i] = (uint8_t)value;
+    }
+    uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    if (!communication_runtime_prepare(&uart)
+        || !control_safety_runtime_start(hash, true, boot_id)
+        || !communication_runtime_arm_rx()) return 4;
+    puts("READY"); fflush(stdout);
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+        unsigned long tick;
+        char *hex, *end;
+        uint8_t bytes[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+        size_t count = 0U, before_tx = transmit_calls;
+        control_safety_snapshot_t snapshot;
+        if (sscanf(line, "%lu", &tick) != 1) return 5;
+        hex = strchr(line, ' ');
+        if (hex == NULL) return 5;
+        ++hex;
+        end = strpbrk(hex, "\r\n"); if (end != NULL) *end = '\0';
+        if ((strlen(hex) % 2U) != 0U || strlen(hex) > sizeof(bytes) * 2U) return 5;
+        while (hex[count * 2U] != '\0') {
+            unsigned value;
+            if (sscanf(&hex[count * 2U], "%2x", &value) != 1) return 5;
+            bytes[count++] = (uint8_t)value;
+        }
+        if (count == 0U) return 5;
+        fake_tick = (uint32_t)tick;
+        receive_chunk(bytes, (uint16_t)count, fake_tick);
+        in_task = true; service_task(); in_task = false;
+        service_control_task();
+        in_task = true; service_task(); in_task = false;
+        if (!control_safety_runtime_copy_snapshot(&snapshot)) return 6;
+        printf("RESULT boot=%" PRIu64 " epoch=%" PRIu32 " accepted=%" PRIu32
+               " state=%u faults=%" PRIu32 " configured=%u telemetry=%u tx=",
+               snapshot.mcu_boot_id, snapshot.reset_epoch,
+               snapshot.last_accepted_command_sequence, (unsigned)snapshot.state,
+               snapshot.mcu_fault_bits, snapshot.configured ? 1U : 0U,
+               snapshot.telemetry_allowed ? 1U : 0U);
+        if (transmit_calls == before_tx) puts("-");
+        else {
+            for (i = 0U; i < transmitted_size[before_tx]; ++i)
+                printf("%02x", transmitted[before_tx][i]);
+            putchar('\n');
+        }
+        fflush(stdout);
+    }
+    return 0;
 }
 
 static int run_fault_case(const char *name)
@@ -280,6 +476,10 @@ int main(int argc, char **argv)
     mecanum_uart_v1_telemetry_t telemetry = {0};
     UART_HandleTypeDef foreign = { &(USART_TypeDef){0}, 0U };
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    if ((argc == 4) && (strcmp(argv[1], "--interop") == 0))
+        return run_interop_peer(argv[2], argv[3]);
+    if ((argc == 2) && (strcmp(argv[1], "u4-session-runtime") == 0))
+        return run_control_safety_case();
     if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
         in_isr = true;
         assert(!communication_runtime_start(&uart));

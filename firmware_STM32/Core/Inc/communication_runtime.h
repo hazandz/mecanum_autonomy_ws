@@ -33,6 +33,12 @@ typedef struct {
 
 /* API này chỉ gọi trong task context; lời gọi từ ISR bị từ chối. */
 bool communication_runtime_start(UART_HandleTypeDef *uart);
+bool communication_runtime_prepare(UART_HandleTypeDef *uart);
+bool communication_runtime_arm_rx(void);
+bool communication_runtime_request_recovery(void);
+bool communication_runtime_recovery_complete(void);
+bool communication_runtime_is_started(void);
+bool communication_runtime_is_faulted(void);
 /* Các API công khai bên dưới chỉ dành cho task context, không gọi từ ISR. */
 bool communication_runtime_is_usable(void);
 bool communication_runtime_take_candidate(communication_candidate_t *candidate);

@@ -149,7 +149,8 @@ static void test_command_rejections_and_golden_i7_i9(void)
     assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
     assert(session.last_accepted_command_sequence == accepted_sequence);
     assert(!decision.config_status_available);
-    assert(memcmp(&session, &before, sizeof(session)) == 0);
+    assert(session.last_accepted_command_sequence == before.last_accepted_command_sequence);
+    assert(session.semantic_command_fault);
 
     /* Golden I8: backward sequence. */
     command.command_sequence = UINT32_C(0x1020303f);
@@ -160,7 +161,8 @@ static void test_command_rejections_and_golden_i7_i9(void)
     assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
     assert(session.last_accepted_command_sequence == accepted_sequence);
     assert(!decision.config_status_available);
-    assert(memcmp(&session, &before, sizeof(session)) == 0);
+    assert(session.last_accepted_command_sequence == before.last_accepted_command_sequence);
+    assert(session.semantic_command_fault);
 
     /* Golden I9: wrong reset epoch. */
     command = make_command(UINT32_C(0x10203041), UINT32_C(0x11223345));
@@ -170,7 +172,8 @@ static void test_command_rejections_and_golden_i7_i9(void)
     assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
     assert(session.last_accepted_command_sequence == accepted_sequence);
     assert(!decision.config_status_available);
-    assert(memcmp(&session, &before, sizeof(session)) == 0);
+    assert(session.last_accepted_command_sequence == before.last_accepted_command_sequence);
+    assert(session.semantic_command_fault);
 }
 
 static void test_nonfinite_watchdog_and_recovery(void)
@@ -190,19 +193,22 @@ static void test_nonfinite_watchdog_and_recovery(void)
            == CONTROL_SAFETY_SESSION_REJECT_NONFINITE_COMMAND);
     assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
     assert(!session.has_last_accepted_command);
-    assert(memcmp(&session, &before, sizeof(session)) == 0);
+    assert(session.last_accepted_command_sequence == before.last_accepted_command_sequence);
+    assert(session.semantic_command_fault);
     command.vx_mps = INFINITY;
     before = session;
     assert(control_safety_session_handle_command(&session, &command, &decision));
     assert(decision.internal_reject_reason
            == CONTROL_SAFETY_SESSION_REJECT_NONFINITE_COMMAND);
-    assert(memcmp(&session, &before, sizeof(session)) == 0);
+    assert(session.last_accepted_command_sequence == before.last_accepted_command_sequence);
+    assert(session.semantic_command_fault);
 
     command = make_command(UINT32_C(0x10203040), epoch);
     assert(control_safety_session_handle_command(&session, &command, &decision));
     assert(control_safety_session_handle_watchdog_expired(&session, &decision));
     assert(control_safety_session_get_state(&session) == CONTROL_SAFETY_SESSION_SAFE_STOP);
-    assert(!session.has_last_accepted_command);
+    assert(session.has_last_accepted_command);
+    assert(session.last_accepted_command_sequence == command.command_sequence);
     assert(decision.logical_zero_command_requested);
     assert(decision.logical_motor_disable_requested);
     assert(!decision.config_status_available);
@@ -223,6 +229,24 @@ static void test_nonfinite_watchdog_and_recovery(void)
     assert(control_safety_session_get_state(&session)
            == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
     assert(!session.has_last_accepted_command);
+    assert(session.last_accepted_command_sequence == 0U);
+}
+
+static void test_zero_sequence_is_rejected_without_history_or_watchdog_change(void)
+{
+    control_safety_session_t session = make_session(true);
+    control_safety_session_decision_t decision;
+    mecanum_uart_v1_command_t command = make_command(0U, 0U);
+    control_safety_session_t before;
+    configure_valid_session(&session, 0U);
+    before = session;
+    assert(control_safety_session_handle_command(&session, &command, &decision));
+    assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
+    assert(decision.internal_reject_reason == CONTROL_SAFETY_SESSION_REJECT_ZERO_SEQUENCE);
+    assert(session.last_accepted_command_sequence == 0U);
+    assert(!session.has_last_accepted_command);
+    assert(memcmp(&session, &before, sizeof(session)) != 0); /* semantic fault is latched */
+    assert(session.semantic_command_fault);
 }
 
 int main(void)
@@ -231,6 +255,7 @@ int main(void)
     test_config_rejections_preserve_session();
     test_command_rejections_and_golden_i7_i9();
     test_nonfinite_watchdog_and_recovery();
+    test_zero_sequence_is_rejected_without_history_or_watchdog_change();
 
     puts("ControlSafety/session host tests passed: CONFIG, I6-I9, watchdog, and recovery.");
     return 0;

@@ -26,6 +26,7 @@ typedef enum {
     CONTROL_SAFETY_SESSION_REJECT_SAFE_STOP,
     CONTROL_SAFETY_SESSION_REJECT_WRONG_EPOCH,
     CONTROL_SAFETY_SESSION_REJECT_NONFINITE_COMMAND,
+    CONTROL_SAFETY_SESSION_REJECT_ZERO_SEQUENCE,
     CONTROL_SAFETY_SESSION_REJECT_DUPLICATE_SEQUENCE,
     CONTROL_SAFETY_SESSION_REJECT_BACKWARD_SEQUENCE,
     CONTROL_SAFETY_SESSION_REJECT_LOCAL_CONFIG_INVALID,
@@ -50,12 +51,14 @@ typedef struct {
     uint64_t mcu_boot_id;
     bool has_last_accepted_command;
     uint32_t last_accepted_command_sequence;
+    bool configured;
+    bool semantic_command_fault;
 } control_safety_session_t;
 
 /*
- * The current hardware profile is DRAFT, so the real firmware caller must
- * inject local_config_valid=false.  Host tests may inject true solely to test
- * this logical state machine.
+ * Tính hợp lệ giao tiếp được tách khỏi phê duyệt motor và hình học TBD.
+ * Manifest DRAFT có thể cấp hash cấu hình UART hợp lệ; giá trị này không
+ * cho phép bật motor. Caller truyền tính hợp lệ giao tiếp đã sinh.
  */
 bool control_safety_session_init(
     control_safety_session_t *session,
@@ -76,6 +79,9 @@ bool control_safety_session_handle_command(
 bool control_safety_session_handle_watchdog_expired(
     control_safety_session_t *session,
     control_safety_session_decision_t *decision);
+
+/* Vô hiệu hóa eligibility khi transport mất; giữ nguyên boot ID. */
+void control_safety_session_invalidate_transport(control_safety_session_t *session);
 
 control_safety_session_state_t control_safety_session_get_state(
     const control_safety_session_t *session);

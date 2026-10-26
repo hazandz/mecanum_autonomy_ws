@@ -7,6 +7,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "communication_runtime.h"
+#include "control_safety_runtime.h"
+#include "boot_id.h"
+#include "generated_hardware_config.h"
 #include "safety_io.h"
 /* USER CODE END Includes */
 
@@ -506,8 +509,14 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+  uint64_t boot_id;
   (void)argument;
-  if (!communication_runtime_start(&huart6)) Error_Handler();
+  /* Glue phát triển U4: tạo boot ID và cả hai owner trước khi arm UART RX. */
+  if (!boot_id_allocate_hal(&boot_id)) Error_Handler();
+  if (!communication_runtime_prepare(&huart6)) Error_Handler();
+  if (!control_safety_runtime_start(mecanum_hardware_config_hash,
+      MECANUM_COMMUNICATION_CONFIG_VALID != 0U, boot_id)) Error_Handler();
+  if (!communication_runtime_arm_rx()) Error_Handler();
   osThreadExit();
   /* USER CODE END 5 */
 }

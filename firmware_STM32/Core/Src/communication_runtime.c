@@ -32,8 +32,13 @@ static StaticTask_t task_control;
 static StackType_t task_stack[COMMUNICATION_RUNTIME_TASK_STACK_WORDS];
 static TaskHandle_t communication_task;
 static bool started;
+static bool rx_armed;
 static bool transport_fault;
 static bool fault_cleanup_done;
+static bool recovery_requested;
+static bool recovery_attempted;
+static uint32_t recovery_last_attempt;
+static uint32_t fault_generation;
 static uint8_t frame_accumulator[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
 static size_t frame_length;
 static bool discard_until_delimiter;
@@ -53,6 +58,7 @@ static void latch_fault_task(void)
 {
     taskENTER_CRITICAL();
     transport_fault = true;
+    ++fault_generation;
     taskEXIT_CRITICAL();
 }
 
@@ -60,6 +66,7 @@ static void latch_fault_isr(BaseType_t *higher_priority_task_woken)
 {
     UBaseType_t mask = taskENTER_CRITICAL_FROM_ISR();
     transport_fault = true;
+    ++fault_generation;
     taskEXIT_CRITICAL_FROM_ISR(mask);
     if (communication_task != NULL) {
         vTaskNotifyGiveFromISR(communication_task, higher_priority_task_woken);
@@ -77,11 +84,15 @@ static bool fault_is_latched_isr(void)
 
 bool communication_runtime_is_usable(void)
 {
+    bool armed;
     if (__get_IPSR() != 0U) return false;
-    return started && !fault_is_latched();
+    taskENTER_CRITICAL();
+    armed = rx_armed;
+    taskEXIT_CRITICAL();
+    return started && armed && !fault_is_latched();
 }
 
-bool communication_runtime_start(UART_HandleTypeDef *uart)
+bool communication_runtime_prepare(UART_HandleTypeDef *uart)
 {
     if (__get_IPSR() != 0U) return false;
     if ((uart == NULL) || (uart->Instance != USART6) || started) {
@@ -107,12 +118,57 @@ bool communication_runtime_start(UART_HandleTypeDef *uart)
         started = false;
         return false;
     }
+    return true;
+}
+
+bool communication_runtime_arm_rx(void)
+{
+    if ((__get_IPSR() != 0U) || !started || rx_armed || fault_is_latched()) return false;
     if (HAL_UARTEx_ReceiveToIdle_IT(bound_uart, hal_rx_buffer,
                                     COMMUNICATION_RUNTIME_RX_CHUNK_BYTES) != HAL_OK) {
         latch_fault_task();
         return false;
     }
+    taskENTER_CRITICAL();
+    rx_armed = true;
+    taskEXIT_CRITICAL();
     return true;
+}
+
+bool communication_runtime_start(UART_HandleTypeDef *uart)
+{
+    return communication_runtime_prepare(uart) && communication_runtime_arm_rx();
+}
+
+bool communication_runtime_request_recovery(void)
+{
+    if ((__get_IPSR() != 0U) || !started) return false;
+    taskENTER_CRITICAL();
+    recovery_requested = true;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+bool communication_runtime_recovery_complete(void)
+{
+    bool armed;
+    if (__get_IPSR() != 0U) return false;
+    taskENTER_CRITICAL();
+    armed = rx_armed;
+    taskEXIT_CRITICAL();
+    return started && armed && !fault_is_latched();
+}
+
+bool communication_runtime_is_started(void)
+{
+    if (__get_IPSR() != 0U) return false;
+    return started;
+}
+
+bool communication_runtime_is_faulted(void)
+{
+    if (__get_IPSR() != 0U) return false;
+    return fault_is_latched();
 }
 
 bool communication_runtime_take_candidate(communication_candidate_t *candidate)
@@ -232,14 +288,61 @@ void communication_runtime_service_once(void)
     if (__get_IPSR() != 0U) return;
     if (!started || (xTaskGetCurrentTaskHandle() != communication_task)) return;
     if (fault_is_latched()) {
+        bool requested;
+        bool cleanup_attempted_now = false;
+        uint32_t now = HAL_GetTick();
+        bool due;
+        taskENTER_CRITICAL();
+        requested = recovery_requested;
+        taskEXIT_CRITICAL();
+        due = !recovery_attempted
+            || ((uint32_t)(now - recovery_last_attempt) >= UINT32_C(1000));
         if (!fault_cleanup_done) {
-            (void)HAL_UART_AbortReceive(bound_uart);
+            HAL_StatusTypeDef abort_status;
+            if (requested && !due) return;
+            abort_status = HAL_UART_AbortReceive(bound_uart);
+            cleanup_attempted_now = requested;
+            if (abort_status != HAL_OK) {
+                recovery_attempted = true;
+                recovery_last_attempt = now;
+            }
+            if (abort_status != HAL_OK) return;
+            taskENTER_CRITICAL();
+            rx_armed = false;
+            taskEXIT_CRITICAL();
             (void)xQueueReset(rx_queue);
             (void)xQueueReset(candidate_queue);
             (void)xQueueReset(tx_queue);
             frame_length = 0U;
             discard_until_delimiter = true;
             fault_cleanup_done = true;
+        }
+        if (requested && (cleanup_attempted_now || due)) {
+                uint32_t generation;
+                HAL_StatusTypeDef status;
+                (void)xQueueReset(rx_queue);
+                (void)xQueueReset(candidate_queue);
+                (void)xQueueReset(tx_queue);
+                frame_length = 0U;
+                discard_until_delimiter = false;
+                taskENTER_CRITICAL();
+                generation = fault_generation;
+                taskEXIT_CRITICAL();
+                status = HAL_UARTEx_ReceiveToIdle_IT(bound_uart, hal_rx_buffer,
+                    COMMUNICATION_RUNTIME_RX_CHUNK_BYTES);
+                recovery_attempted = true;
+                recovery_last_attempt = now;
+                taskENTER_CRITICAL();
+                if ((status == HAL_OK) && (fault_generation == generation)) {
+                    transport_fault = false;
+                    fault_cleanup_done = false;
+                    recovery_requested = false;
+                    rx_armed = true;
+                } else {
+                    transport_fault = true;
+                    rx_armed = false;
+                }
+                taskEXIT_CRITICAL();
         }
         return;
     }

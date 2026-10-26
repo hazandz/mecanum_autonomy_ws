@@ -7,8 +7,8 @@ là lớp USART6/FreeRTOS dùng codec đó: ISR chỉ chép chunk RX, chụp HAL
 latch lỗi và đánh thức task; `CommunicationTask` (tên RTOS `UARTComm`) sở hữu
 parser, validation transport và mọi lời gọi UART TX. Task chạy ưu tiên ban đầu
 24, stack 512 words; đây là ngân sách khởi đầu, chưa phải phép đo stack hoặc
-thời gian trên phần cứng. Task semantic `ControlSafetyTask` tương lai phải có
-ưu tiên cao hơn. U3 chưa tạo task semantic hoặc producer telemetry.
+thời gian trên phần cứng. Ở U3, task semantic và producer telemetry chưa có;
+U4 thêm `ControlSafetyTask` với ưu tiên cao hơn.
 
 HAL nhận tối đa 128 byte mỗi lần. RX có bốn chunk pending, mỗi chunk tối đa
 128 byte và kèm tick callback: tổng payload chờ tối đa 512 byte, nhưng chỉ
@@ -59,26 +59,75 @@ thuộc U6; consolidation production, audit và integration thuộc U7.
 6. U6 — Physical UART / HIL acceptance.
 7. U7 — Clean production consolidation + audit + integration.
 
-## Kiểm thử offline và ARM link
+## U4 — CONFIG/COMMAND, watchdog, boot identity và recovery ngoại tuyến
+
+`ControlSafetyTask` là owner duy nhất của session, CONFIG/COMMAND acceptance,
+epoch, accepted sequence, watchdog và state. Task dùng static allocation,
+priority 40, stack 512 words, chu kỳ 5 ms và tối đa tám candidate mỗi lượt.
+Đây là budget ban đầu, chưa phải số đo HIL. Task kiểm tra watchdog trước khi
+đọc backlog; COMMAND nhận quá 200 ms từ HAL RX tick không thể refresh. Watchdog
+SAFE_STOP giữ configured session và accepted sequence; chỉ CONFIG hợp lệ mới
+reset lịch sử này. Sequence COMMAND 0 bị từ chối, sequence tăng nghiêm ngặt,
+không wrap và không có response frame.
+
+CONFIG_STATUS được enqueue trước khi snapshot cho phép telemetry. U4 không tạo
+TelemetryTask hoặc producer TELEMETRY; A1 vẫn bắt buộc status trước mọi
+telemetry tương lai. Snapshot chỉ cung cấp state, configured, boot ID, epoch,
+accepted sequence, fault bits và telemetry permission cho U5. `motor_enabled`
+luôn false; không gọi PID/KIN, PWM, direction hoặc motor enable. Fault bits
+chỉ dùng các giá trị đã có: transport 1, command timeout 256, command invalid
+512. Watchdog timeout giữ đến CONFIG hợp lệ; invalid-command indication được
+xóa bởi COMMAND hợp lệ tiếp theo.
+
+Transport recovery chỉ bắt đầu sau khi ControlSafety đã vào SAFE_STOP và vô
+hiệu configured eligibility. CommunicationTask hủy RX, xóa queues/parser và
+rearm tối đa mỗi giây; generation counter ngăn HAL_OK xóa ISR fault mới. Thành
+công phục hồi UART không khôi phục session hoặc command cũ. Boot ID dùng thuật
+toán hẹp trên sector 7 đã reserve: 32768 cell 32-bit, marker 0, dirty/torn cell
+được tiêu thụ, hole/full/program/readback lỗi đều fail closed; không erase,
+wrap hoặc reclaim. HAL ghi marker bằng bốn lần program byte, kiểm readback và
+giữ/khôi phục trạng thái data cache. Không có power-fail hoặc retention proof
+trên silicon.
+
+Generator U4 dùng manifest duy nhất, SHA-256 trên
+`mecanum_hardware_config_hash/v1\0` + RFC8785 JCS của toàn mapping. CMake ARM
+bắt buộc `MECANUM_HARDWARE_MANIFEST`; header và JSON được sinh trong build
+directory. `communication_config_valid` chỉ xác nhận UART/profile identity,
+không xác nhận hình học/sign TBD hoặc motor approval. `approval.yaml` vẫn là
+evidence độc lập và motor permission tiếp tục false.
+
+Test liên thông chạy Pi session engine và C runtime/codec thật trên host. Các
+TELEMETRY fixtures được tạo trong test từ snapshot/tick giả định và được gắn
+nhãn synthetic; chúng không chứng minh producer MCU hoặc A1 trên phần cứng.
+Không có ROS node, launch, TelemetryTask, encoder snapshot runtime,
+`/wheel/odometry_raw` hoặc heartbeat publisher trong U4.
+
+## Lệnh kiểm thử offline và ARM link U4
 
 Từ repository root, host test chạy với fake HAL/FreeRTOS, không mở UART hoặc
 khởi chạy RTOS thật:
 
 ```sh
-cmake -S firmware_STM32 -B /tmp/wp07-u3-repair-host -DCMAKE_BUILD_TYPE=Debug
-cmake --build /tmp/wp07-u3-repair-host --parallel 2
-ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u3-repair-host --output-on-failure
+cmake -S firmware_STM32 -B /tmp/wp07-u4-host -DCMAKE_BUILD_TYPE=Debug \
+  -DPython3_EXECUTABLE=/tmp/wp07-u4-venv/bin/python
+cmake --build /tmp/wp07-u4-host --parallel 2
+ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u4-host --output-on-failure
+PYTHONPATH=ros2_ws/src/mecanum_base_bridge \
+WP07_U4_INTEROP_PEER=/tmp/wp07-u4-host/test_communication_runtime \
+/tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test -q
 ```
 
 ARM build cần `arm-none-eabi-gcc` đã cài cùng HAL, CMSIS và FreeRTOS vendored:
 
 ```sh
 ARM_GCC=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc
-cmake -S firmware_STM32 -B /tmp/wp07-u3-repair-arm -DSTM32_ARM_BUILD=ON \
+cmake -S firmware_STM32 -B /tmp/wp07-u4-arm -DSTM32_ARM_BUILD=ON \
   -DCMAKE_BUILD_TYPE=MinSizeRel \
   -DCMAKE_C_COMPILER="$ARM_GCC" \
-  -DCMAKE_ASM_COMPILER="$ARM_GCC"
-cmake --build /tmp/wp07-u3-repair-arm --parallel 4
+  -DCMAKE_ASM_COMPILER="$ARM_GCC" \
+  -DPython3_EXECUTABLE=/tmp/wp07-u4-venv/bin/python \
+  -DMECANUM_HARDWARE_MANIFEST="$PWD/artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml"
+cmake --build /tmp/wp07-u4-arm --parallel 4
 ```
 
 Mỗi build directory giữ executable, map và CTest binary riêng; mọi đường dẫn

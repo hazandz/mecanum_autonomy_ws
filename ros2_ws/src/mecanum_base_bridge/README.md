@@ -38,3 +38,40 @@ The normative byte contract and expected vectors remain in
 `docs/Pi_STM32_UART_v1_Golden_Vectors.md`. Passing codec or transport tests
 does not establish the complete L2 design, runtime approval, HIL, motor safety,
 or deployment readiness.
+
+## U4 — phiên giao tiếp thuần Python, chỉ kiểm thử ngoại tuyến
+
+`BridgeSession` nối với `SerialTransport` và codec đã có, nhưng không tạo node,
+topic, message hay service ROS. Caller cung cấp cổng tường minh qua transport,
+đồng hồ monotonic và lifecycle identity do `SafetyLifecycle` sở hữu. Engine
+không tự cấp epoch, gọi reset/rearm hoặc giữ FIFO command; chỉ cache lệnh mới
+nhất. Các state duy nhất là `DISCONNECTED`, `PORT_OPEN`, `CONFIGURING` và
+`ACTIVE`.
+
+Một lượt `io_once()` đọc tối đa 256 byte, giữ frame có giới hạn codec, xử lý
+timer và phát nhiều nhất một COMMAND. CONFIG dùng timeout 500 ms, tối đa ba
+lần gửi với sequence tương quan riêng; sau CONFIG_STATUS được chấp nhận, engine
+đợi TELEMETRY đầu tiên khớp boot ID/epoch trong 200 ms. Chỉ TELEMETRY hợp lệ
+mới đưa engine sang ACTIVE; status đơn lẻ hoặc telemetry đến trước status
+không kích hoạt phiên. COMMAND bắt đầu ở sequence 1, giới hạn 50 Hz, dùng
+`cmd_vel` mới nhận sau ACTIVE với freshness nhỏ hơn 100 ms. Lệnh stale/không
+hợp lệ làm sạch cache và dừng luồng; engine không tạo lệnh zero.
+
+Lỗi, mismatch hoặc timeout đóng transport, xóa frame/cache/baseline, yêu cầu
+owner reset đã coalesce và chờ ít nhất 1 giây trước lần mở lại. Sau reconnect
+phải nhận lifecycle identity mới rồi bắt tay lại; UART được mở lại không có
+nghĩa MCU đã rearm chuyển động. `mcu_fault_bits` được giữ riêng với
+`transport_healthy` do Pi quan sát. API `take_accepted_telemetry()` cùng cờ
+`continuity_reset` là seam cho U5.
+
+`hardware_config.py` đọc duy nhất hardware manifest, từ chối YAML có key trùng,
+tag/anchor/alias/merge hoặc giá trị ngoài JSON, rồi tính SHA-256 theo domain
+separator và RFC8785 JCS. Header C và JSON Pi được sinh cùng một lần từ cùng
+mapping. Manifest DRAFT vẫn có thể xác nhận cấu hình giao tiếp; giá trị hình
+học/sign TBD và `approval.yaml` không được chuyển thành quyền motor. Cần
+`PyYAML>=6,<7` và `rfc8785==0.1.4` trong extra `hardware-config`.
+
+Bằng chứng U4 chỉ là `OFFLINE_ONLY`: test liên thông dùng peer C native và
+TELEMETRY synthetic chỉ trong test. Chưa có `bridge_node`, ROS endpoint,
+TelemetryTask/producer thật, HIL, xác minh cổng vật lý hoặc quyền bật motor.
+Phiên bản package vẫn `0.3.0`; mục U4 tiếp tục nằm dưới `Unreleased`.

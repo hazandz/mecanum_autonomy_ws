@@ -8,4 +8,6 @@ TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name, uint32_t
 void vTaskNotifyGiveFromISR(TaskHandle_t task, BaseType_t *woken);
 uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t ticks);
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
+TickType_t xTaskGetTickCount(void);
+void vTaskDelayUntil(TickType_t *last_wake, TickType_t increment);
 #endif

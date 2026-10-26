@@ -80,6 +80,8 @@ bool control_safety_session_handle_config(
 
     session->configured_reset_epoch = request->reset_epoch;
     clear_accepted_command(session);
+    session->configured = true;
+    session->semantic_command_fault = false;
     session->state = CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED;
     decision->logical_motor_disable_requested = true;
     populate_config_status(session, request, MECANUM_UART_V1_CONFIG_ACCEPTED,
@@ -108,20 +110,29 @@ bool control_safety_session_handle_command(
         return true;
     }
     if (command->reset_epoch != session->configured_reset_epoch) {
+        session->semantic_command_fault = true;
         decision->internal_reject_reason = CONTROL_SAFETY_SESSION_REJECT_WRONG_EPOCH;
         return true;
     }
+    if (command->command_sequence == UINT32_C(0)) {
+        session->semantic_command_fault = true;
+        decision->internal_reject_reason = CONTROL_SAFETY_SESSION_REJECT_ZERO_SEQUENCE;
+        return true;
+    }
     if (!mecanum_uart_v1_command_is_finite(command)) {
+        session->semantic_command_fault = true;
         decision->internal_reject_reason = CONTROL_SAFETY_SESSION_REJECT_NONFINITE_COMMAND;
         return true;
     }
     if (session->has_last_accepted_command) {
         if (command->command_sequence == session->last_accepted_command_sequence) {
+            session->semantic_command_fault = true;
             decision->internal_reject_reason =
                 CONTROL_SAFETY_SESSION_REJECT_DUPLICATE_SEQUENCE;
             return true;
         }
         if (command->command_sequence < session->last_accepted_command_sequence) {
+            session->semantic_command_fault = true;
             decision->internal_reject_reason =
                 CONTROL_SAFETY_SESSION_REJECT_BACKWARD_SEQUENCE;
             return true;
@@ -130,6 +141,7 @@ bool control_safety_session_handle_command(
 
     session->has_last_accepted_command = true;
     session->last_accepted_command_sequence = command->command_sequence;
+    session->semantic_command_fault = false;
     session->state = CONTROL_SAFETY_SESSION_COMMAND_ACTIVE;
     decision->command_accepted = true;
     decision->watchdog_refresh_requested = true;
@@ -144,11 +156,19 @@ bool control_safety_session_handle_watchdog_expired(
         return false;
     }
     clear_decision(decision);
-    clear_accepted_command(session);
     session->state = CONTROL_SAFETY_SESSION_SAFE_STOP;
     decision->logical_zero_command_requested = true;
     decision->logical_motor_disable_requested = true;
     return true;
+}
+
+void control_safety_session_invalidate_transport(control_safety_session_t *session)
+{
+    if (session == NULL) return;
+    session->configured = false;
+    clear_accepted_command(session);
+    session->semantic_command_fault = false;
+    session->state = CONTROL_SAFETY_SESSION_SAFE_STOP;
 }
 
 control_safety_session_state_t control_safety_session_get_state(

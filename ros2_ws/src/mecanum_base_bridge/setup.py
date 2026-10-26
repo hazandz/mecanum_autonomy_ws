@@ -23,6 +23,7 @@ setup(
         ]),
     ],
     install_requires=['setuptools', 'pyserial==3.5'],
+    extras_require={'hardware-config': ['PyYAML>=6,<7', 'rfc8785==0.1.4']},
     zip_safe=True,
     maintainer='Hazan',
     maintainer_email='hazard@example.com',
