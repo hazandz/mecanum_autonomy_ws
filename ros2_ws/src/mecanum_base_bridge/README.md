@@ -52,17 +52,21 @@ Engine không tự cấp epoch, gọi reset/rearm hoặc giữ FIFO command; ch�
 lệnh mới nhất. Các state duy nhất là `DISCONNECTED`, `PORT_OPEN`,
 `CONFIGURING` và `ACTIVE`.
 
-Một lượt `io_once()` đọc tối đa 256 byte, giữ frame có giới hạn codec, xử lý
-timer và phát nhiều nhất một COMMAND. Trước accepted CONFIG_STATUS, CONFIG
-dùng timeout 500 ms, tối đa ba lần gửi với sequence tăng xuyên reconnect. Sau
-accepted status đầu tiên, retry CONFIG dừng và engine đợi TELEMETRY đầu tiên
-khớp boot ID/epoch tối đa 200 ms; status trùng không gia hạn hạn chờ.
+Một lượt `io_once()` dùng cùng đồng hồ monotonic được inject, đọc tối đa 256
+byte, giữ frame có giới hạn codec và phát nhiều nhất một COMMAND. Deadline được
+kiểm trước khi đọc, sau khi read trả về và trước khi dispatch; đúng tại hạn đã
+hết nên RX đến muộn không thể gia hạn phiên. Trước accepted CONFIG_STATUS,
+CONFIG dùng timeout 500 ms, tối đa ba lần gửi với sequence tăng xuyên
+reconnect; status của attempt hết hạn không được nhận. Sau accepted status đầu
+tiên, retry CONFIG dừng và engine đợi TELEMETRY đầu tiên khớp boot ID/epoch tối
+đa 200 ms; status trùng không gia hạn hạn chờ.
 CONFIG_REJECTED kết thúc handshake đó. Chỉ TELEMETRY đã kiểm đủ session,
 fault mask, E-stop byte, ACK, sequence và MCU time mới được xuất hoặc kích
 ACTIVE. Status đơn lẻ hoặc telemetry đến trước status không kích hoạt phiên.
 COMMAND bắt đầu ở sequence 1, giới hạn 50 Hz, dùng
-`cmd_vel` mới nhận sau ACTIVE với freshness nhỏ hơn 100 ms. Lệnh stale/không
-hợp lệ làm sạch cache và dừng luồng; engine không tạo lệnh zero.
+`cmd_vel` mới nhận sau ACTIVE với timestamp số hữu hạn trong cùng miền
+monotonic và freshness nhỏ hơn 100 ms. Timestamp sai kiểu, NaN hoặc vô cực làm
+sạch cache; lệnh stale/không hợp lệ dừng luồng và engine không tạo lệnh zero.
 
 Lỗi session hoặc timeout đóng transport, xóa frame/cache/baseline, yêu cầu
 owner reset đã coalesce và chờ ít nhất 1 giây trước lần mở lại. Owner reset

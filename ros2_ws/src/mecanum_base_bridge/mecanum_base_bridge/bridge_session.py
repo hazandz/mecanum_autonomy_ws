@@ -252,7 +252,17 @@ class BridgeSession:
 
     def receive_cmd_vel(self, vx: float, vy: float, wz: float,
                         received_at: Optional[float] = None) -> bool:
-        now = self._clock() if received_at is None else received_at
+        """Nhận lệnh với timestamp cùng miền monotonic; timestamp lỗi xóa cache."""
+        try:
+            timestamp = self._clock() if received_at is None else received_at
+            if type(timestamp) not in (int, float):
+                raise ValueError('command timestamp must be numeric')
+            now = float(timestamp)
+            if not math.isfinite(now):
+                raise ValueError('command timestamp must be finite')
+        except (TypeError, ValueError, OverflowError):
+            self._latest_cmd = None
+            return False
         identity = self._identity
         if (self.state != SessionState.ACTIVE or identity is None or not self._identity_fresh
                 or not identity.ready or now <= self._active_at):
@@ -288,9 +298,32 @@ class BridgeSession:
         self._continuity_reset = False
         return value
 
-    def io_once(self, now: Optional[float] = None) -> None:
-        """Đọc hữu hạn, cập nhật timer và phát tối đa một COMMAND."""
-        current = self._clock() if now is None else now
+    def _service_deadlines(self, now: float) -> bool:
+        """Hết hạn trước khi đọc/chấp nhận RX hoặc phát COMMAND."""
+        if self.state == SessionState.ACTIVE:
+            if now >= self._telemetry_deadline:
+                self._invalidate(now, transport_failure=False)
+                return False
+        elif self.state == SessionState.CONFIGURING:
+            if self._config_rejected:
+                return True
+            if self._accepted_status is not None:
+                deadline = self._first_telemetry_deadline
+                if deadline is None or now >= deadline:
+                    self._invalidate(now, transport_failure=False)
+                    return False
+            elif now >= self._config_sent_at + self.CONFIG_TIMEOUT:
+                if self._config_attempts >= 3:
+                    self._invalidate(now, transport_failure=False)
+                    return False
+                self._send_config(now)
+                if self.state == SessionState.DISCONNECTED:
+                    return False
+        return self.state != SessionState.DISCONNECTED
+
+    def io_once(self) -> None:
+        """Dùng cùng monotonic clock cho deadline, RX timestamp và COMMAND."""
+        current = self._clock()
         if self.state == SessionState.DISCONNECTED:
             if current >= self._reconnect_at:
                 self.start()
@@ -299,28 +332,20 @@ class BridgeSession:
             self._invalidate(current, transport_failure=True)
             return
         try:
+            if not self._service_deadlines(current):
+                return
             chunk = self._transport.read(max_bytes=256)
+            current = self._clock()
+            if not self._service_deadlines(current):
+                return
             if not isinstance(chunk, bytes) or len(chunk) > 256:
                 raise OSError('transport returned an invalid bounded read chunk')
             if chunk:
                 self._consume(chunk, current)
-            if self.state == SessionState.CONFIGURING:
-                if self._config_rejected:
-                    return
-                if self._accepted_status is not None:
-                    if (self._first_telemetry_deadline is not None
-                            and current >= self._first_telemetry_deadline):
-                        self._invalidate(current, transport_failure=False)
-                        return
-                elif current - self._config_sent_at >= self.CONFIG_TIMEOUT:
-                    if self._config_attempts >= 3:
-                        self._invalidate(current, transport_failure=False)
-                        return
-                    self._send_config(current)
+            current = self._clock()
+            if not self._service_deadlines(current):
+                return
             if self.state == SessionState.ACTIVE:
-                if current >= self._telemetry_deadline:
-                    self._invalidate(current, transport_failure=False)
-                    return
                 self._send_command_if_due(current)
         except Exception:
             self._invalidate(current, transport_failure=True)
@@ -333,6 +358,10 @@ class BridgeSession:
                     self._handle_frame(bytes(self._frames) + b'\x00', now)
                 self._frames.clear()
                 self._discard = False
+                if self.state == SessionState.DISCONNECTED:
+                    self._frames.clear()
+                    self._discard = False
+                    return
             elif not self._discard:
                 if len(self._frames) >= MAX_WIRE_FRAME_LENGTH - 1:
                     self._frames.clear()

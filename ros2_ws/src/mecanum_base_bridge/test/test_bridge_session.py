@@ -126,6 +126,155 @@ def test_command_freshness_boundary_never_synthesizes_zero(age, sent):
         assert len(transport.writes) == 1
 
 
+def test_valid_active_telemetry_just_before_deadline_is_accepted():
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    deadline = session._telemetry_deadline
+    transport.inject(telemetry(2, tick=101))
+    clock.value = deadline - 0.000001
+    session.io_once()
+    report = session.take_accepted_telemetry()
+    assert session.state == SessionState.ACTIVE
+    assert report is not None and report.packet.telemetry_sequence == 2
+    assert session._telemetry_deadline > deadline
+
+
+@pytest.mark.parametrize(('late_by', 'coalesced'), [
+    (0.0, False), (0.001, False), (0.0, True),
+])
+def test_expired_active_deadline_precedes_rx_and_command_dispatch(late_by, coalesced):
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    assert session.continuity_reset  # lấy cờ đặt baseline ban đầu
+    deadline = session._telemetry_deadline
+    clock.value = deadline - 0.001
+    assert session.receive_cmd_vel(0.3, -0.2, 0.1)
+    if coalesced:
+        transport.inject(telemetry(2, tick=101) + telemetry(3, tick=102))
+    else:
+        transport.inject(telemetry(2, tick=101))
+    clock.value = deadline + late_by
+    session.io_once()
+    assert session.state == SessionState.DISCONNECTED
+    assert not transport.is_open
+    assert session.take_accepted_telemetry() is None
+    assert len(transport.writes) == 1  # lệnh mới còn cache nhưng chưa được phát
+    assert session.continuity_reset
+    assert session.take_owner_reset_request()
+    assert not session.take_owner_reset_request()
+
+
+@pytest.mark.parametrize(('at', 'accepted', 'attempts'), [
+    (0.499999, True, 1), (0.500000, False, 2), (0.500001, False, 2),
+])
+def test_config_status_must_arrive_before_current_attempt_deadline(at, accepted, attempts):
+    clock, transport, session = new_session()
+    transport.inject(status_for(sequence=1))
+    clock.value = at
+    session.io_once()
+    assert (session._accepted_status is not None) is accepted
+    assert session._config_attempts == attempts
+    if accepted:
+        assert session.state == SessionState.CONFIGURING
+        assert len(transport.writes) == 1
+    else:
+        retry = parse_config_request(decode_frame(transport.writes[-1]).payload)
+        assert retry.config_sequence == 2
+
+
+def test_config_deadline_retries_only_three_correlated_attempts_before_rx():
+    clock, transport, session = new_session()
+    for attempt, deadline in ((2, 0.500), (3, 1.000)):
+        transport.inject(status_for(sequence=attempt - 1))
+        clock.value = deadline
+        session.io_once()
+        assert session.state == SessionState.CONFIGURING
+        request = parse_config_request(decode_frame(transport.writes[-1]).payload)
+        assert request.config_sequence == attempt
+        assert session._accepted_status is None
+    transport.inject(status_for(sequence=3))
+    clock.value = 1.500
+    session.io_once()
+    assert session.state == SessionState.DISCONNECTED
+    assert session._config_sequence == 3
+    assert len(transport.writes) == 3
+    assert session.take_accepted_telemetry() is None
+
+
+def test_timeout_reconnect_requires_new_owner_epoch_and_never_resumes_command():
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    old_deadline = session._telemetry_deadline
+    clock.value = old_deadline - 0.001
+    assert session.receive_cmd_vel(0.3, 0.2, 0.1)
+    transport.inject(telemetry(2, tick=101))
+    clock.value = old_deadline
+    session.io_once()
+    assert session.state == SessionState.DISCONNECTED
+    assert session._latest_cmd is None
+    assert session.take_accepted_telemetry() is None
+    assert session.take_owner_reset_request()
+
+    clock.value = old_deadline + session.RECONNECT_INTERVAL
+    session.io_once()
+    assert session.state == SessionState.PORT_OPEN
+    assert len(transport.writes) == 1
+    assert not session.take_owner_reset_request()
+    session.observe_lifecycle_snapshot(LifecycleIdentity(2, 0, False, 4, True))
+    request = parse_config_request(decode_frame(transport.writes[-1]).payload)
+    assert request.reset_epoch == 2
+    # Gói cũ còn trong RX giả không được dùng làm telemetry đầu của session mới.
+    transport.inject(status_for(sequence=request.config_sequence, epoch=2))
+    clock.value += 0.001
+    session.io_once()
+    assert session.state == SessionState.CONFIGURING
+    assert session.take_accepted_telemetry() is None
+    transport.inject(telemetry(1, epoch=2, tick=101))
+    clock.value += 0.001
+    session.io_once()
+    session.observe_lifecycle_snapshot(LifecycleIdentity(2, 1, True, 5, True))
+    clock.value += 0.001
+    session.io_once()
+    assert session.state == SessionState.ACTIVE
+    assert len(transport.writes) == 2  # lệnh cache từ epoch 1 đã bị xóa
+    assert session.receive_cmd_vel(-0.1, 0.25, 0.2, received_at=clock.value + 0.001)
+    clock.value += 0.001
+    session.io_once()
+    command = parse_command(decode_frame(transport.writes[-1]).payload)
+    assert command.command_sequence == 1 and command.reset_epoch == 2
+    assert (command.vx_mps, command.vy_mps, command.wz_radps) == pytest.approx((-0.1, 0.25, 0.2))
+
+
+@pytest.mark.parametrize('timestamp', [
+    pytest.param(float('nan'), id='nan'),
+    pytest.param(float('inf'), id='positive-infinity'),
+    pytest.param(float('-inf'), id='negative-infinity'),
+    pytest.param('not-a-timestamp', id='string'),
+    pytest.param(True, id='bool'),
+    pytest.param(object(), id='object'),
+])
+def test_invalid_command_timestamp_clears_cache_and_valid_command_recovers(timestamp):
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    assert session.receive_cmd_vel(0.1, 0.2, 0.3, received_at=0.004)
+    assert session._latest_cmd is not None
+    assert not session.receive_cmd_vel(-0.4, 0.1, 0.2, received_at=timestamp)
+    assert session._latest_cmd is None
+
+    # Telemetry hợp lệ giữ phiên sống để cô lập kiểm tra freshness.
+    clock.value = 0.010
+    transport.inject(telemetry(2, tick=101))
+    session.io_once()
+    assert session.state == SessionState.ACTIVE
+    assert len(transport.writes) == 1
+    assert session.receive_cmd_vel(-0.4, 0.1, 0.2, received_at=0.011)
+    clock.value = 0.011
+    session.io_once()
+    command = parse_command(decode_frame(transport.writes[-1]).payload)
+    assert command.command_sequence == 1
+    assert (command.vx_mps, command.vy_mps, command.wz_radps) == pytest.approx((-0.4, 0.1, 0.2))
+
+
 def test_command_rate_no_burst_zero_is_real_and_sequence_exhaustion_stops():
     clock, transport, session = new_session()
     activate(clock, transport, session)

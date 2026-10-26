@@ -24,7 +24,8 @@
     "parent": "f2b219e64566e6b903eccd45a518df66059f4f1d",
     "canonical_development_base": "fdc0e299515bda2286832aabec635948629517b5",
     "final_commit_sha": "NOT_YET_CREATED; evidence intentionally does not self-reference the final commit",
-    "repair_parent": "8551c94442cd6c74001439bc4ddae43d5a747ea7"
+    "repair_parent": "8551c94442cd6c74001439bc4ddae43d5a747ea7",
+    "current_repair_parent": "976700a223ea2de0c7b925728c02a1c6b11aca73"
   },
   "live_refs": {
     "coordinator_preflight_readback": {
@@ -71,6 +72,14 @@
       "repository_push_permission": true,
       "push_attempts_at_evidence_update": 0,
       "source": "gh auth status, gh api user, and gh api repository permissions; no credential material recorded."
+    },
+    "r1_r2_repair_preflight": {
+      "integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "step07-research-runtime-simplification": "6ebb5eea487653e91c84a9be1f84f11e4af3b1ea",
+      "uart_development_branch": "976700a223ea2de0c7b925728c02a1c6b11aca73",
+      "readback": "Fresh read-only git ls-remote before repair; integration remains canonical base, UART remote equals expected parent.",
+      "step7_scope": "Step-7 advanced during this repair. Read-only diff f11da278346c6a49f3485d4aa2b2443703a1ce7b..6ebb5eea487653e91c84a9be1f84f11e4af3b1ea changed step07 observer source/test plus campaign/governance paths; no U4 allowlist or UART authority overlap.",
+      "earlier_readback": "f11da278346c6a49f3485d4aa2b2443703a1ce7b, read before the Step-7 advance."
     }
   },
   "authority_sha256": {
@@ -366,12 +375,12 @@
     "firmware_STM32/Test/test_uart_session_interop.py": "715d95c895f1e00e68792e90bc73a13106df4c1eab8e303a94c011da7446f3ac",
     "firmware_STM32/Test/test_watchdog.c": "d9f4d0acdf1e475e6dbd04e8d60c12348b9aaec728ab84b4e1134d4dae1cb47f",
     "ros2_ws/src/mecanum_base_bridge/CHANGELOG.md": "acfd846286a4f33fd3c73eec58f9fb0173a8aab73decd767d65ce07f61f6e8c7",
-    "ros2_ws/src/mecanum_base_bridge/README.md": "8de09e74496e05021898c2119f5680ebf18e9e2887b6f3dcea5cfae083040a60",
-    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py": "967511ec6257727bf2fabc2fe5a66f79fcc5135ee77c110e04f5a6f5d7d9e833",
+    "ros2_ws/src/mecanum_base_bridge/README.md": "ab7ad8f79d8547ceebfc6e1ed3a8f2d1e77ab5447fcc269579c65fd409ffc22d",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py": "01ac14bc9df8c612815953fcabfd92ca9376b505adf4ad8fba0bc523d8da3aac",
     "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/command_semantics.py": "e8d74688422eaeef50c7d70ff5799a4b7e72569e2ec5885e1186c0f83f0fdba7",
     "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/hardware_config.py": "cf7e3603ece537c4603ba63c03d6cdd06e5c03e5a48f12a3befca3d3989b6778",
     "ros2_ws/src/mecanum_base_bridge/setup.py": "610b41630f4a1f22beb921bc1ad622cac1364cf4387aea19f4dc8bebafd3a3ec",
-    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py": "60079dfe7ee9b29cf7bc4be5adb01e84c9174f282b1c3e97fa8bf581895cc768",
+    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py": "a4cfe1be58ee828e7b9d5bc0ca28db9899d3728def506975744de14b01c1f25c",
     "ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py": "a46310619ca7e8037a083266bd2169605f9e2295f3591eeccc76a707da363394",
     "ros2_ws/src/mecanum_base_bridge/test/test_hardware_config.py": "71aeb470da86a563632fe1ece7aefed0282e5d93030793623f77982153e3d078"
   },
@@ -453,6 +462,86 @@
     "ros2_ws/src/mecanum_base_bridge/README.md",
     "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py",
     "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py",
+    "docs/governance/evidence/WP07_U4_CONFIG_COMMAND_SESSION_OFFLINE.json"
+  ],
+  "audit_history_976700a": {
+    "exact_sha": "976700a223ea2de0c7b925728c02a1c6b11aca73",
+    "result": "FAIL",
+    "findings": [
+      "R1",
+      "R2"
+    ],
+    "provenance": "Independent audit result supplied by Owner in the current repair authorization.",
+    "historical_results_bound_here": {
+      "python_bridge_tests": 203,
+      "native_ctest": 25,
+      "arm_elf_map": "Historical ARM build and inspection results remain those recorded above for 976700a; no ARM rebuild is claimed for this Pi-only repair."
+    },
+    "previous_finding_N1": "Closed by the audit referenced in the current authorization; approval.yaml and its recorded hash were not changed."
+  },
+  "current_repair": {
+    "candidate_id": "WP07_U4_CONFIG_COMMAND_SESSION_OFFLINE",
+    "parent": "976700a223ea2de0c7b925728c02a1c6b11aca73",
+    "scope_findings": [
+      "R1",
+      "R2"
+    ],
+    "r1": "io_once checks timer phase deadlines before read, after read and before COMMAND dispatch using the injected monotonic clock. Exact deadlines expire before any RX frame can be accepted. CONFIG retries happen at expired attempt deadlines before reading stale status; first TELEMETRY still uses its separate 200 ms deadline from accepted status. Invalidation closes transport, clears session cache/report/parser and coalesces owner reset.",
+    "r2": "receive_cmd_vel validates a numeric finite timestamp before caching. Invalid type, NaN or infinity clears the latest command and fails closed; no fallback timestamp is substituted.",
+    "red_parent": {
+      "source_commit": "976700a223ea2de0c7b925728c02a1c6b11aca73",
+      "parent_module_blob": "6051310fc931d98995869fc98a4738d4ec9ff09e",
+      "command": "PYTHONPATH=/tmp/wp07-u4-r1r2-red/pkg /tmp/wp07-u4-venv/bin/python -m pytest /tmp/wp07-u4-r1r2-red/tests/test_bridge_session.py -q -k \"valid_active_telemetry_just_before_deadline or expired_active_deadline or config_status_must_arrive or config_deadline_retries or timeout_reconnect or invalid_command_timestamp\"",
+      "exit_code": 1,
+      "passed": 3,
+      "failed": 12,
+      "deselected": 60,
+      "result": "RED reproduced using parent source copied into /tmp; the worktree parent source and Git history were not modified."
+    },
+    "green_targeted": {
+      "command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py -q -k \"valid_active_telemetry_just_before_deadline or expired_active_deadline or config_status_must_arrive or config_deadline_retries or timeout_reconnect or invalid_command_timestamp\"",
+      "exit_code": 0,
+      "passed": 15,
+      "failed": 0,
+      "deselected": 60
+    },
+    "final_verification": {
+      "python_bridge_suite": {
+        "command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge WP07_U4_INTEROP_PEER=/tmp/wp07-u4-host-final/test_communication_runtime ASAN_OPTIONS=detect_leaks=0 /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+        "exit_code": 0,
+        "passed": 218,
+        "failed": 0,
+        "skipped": 0,
+        "test_colcon_runner_included": true,
+        "actual_python_c_interop_peer": "/tmp/wp07-u4-host-final/test_communication_runtime"
+      },
+      "native_ctest": {
+        "build_command": "cmake --build /tmp/wp07-u4-host-final --parallel 4",
+        "test_command": "ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u4-host-final --output-on-failure",
+        "build_exit_code": 0,
+        "test_exit_code": 0,
+        "passed": 25,
+        "failed": 0,
+        "skipped": 0,
+        "uart_session_interop": "CTest case 25/25 passed using actual Pi engine and native C communication/control runtime.",
+        "sanitizers": "ASan and UBSan remained enabled; LeakSanitizer disabled because this environment reports a ptrace limitation."
+      },
+      "firmware_unchanged": {
+        "command": "git diff --quiet 976700a223ea2de0c7b925728c02a1c6b11aca73 -- firmware_STM32",
+        "exit_code": 0,
+        "result": "All firmware source and build configuration bytes identical to repair parent; ARM rebuild was not required or claimed."
+      },
+      "whitespace": {
+        "command": "git -c core.whitespace=cr-at-eol diff --check",
+        "exit_code": 0
+      }
+    },
+    "delivery_audit_status": "PENDING"
+  },
+  "latest_repair_changed_paths": [
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py",
+    "ros2_ws/src/mecanum_base_bridge/README.md",
     "docs/governance/evidence/WP07_U4_CONFIG_COMMAND_SESSION_OFFLINE.json"
   ]
 }
