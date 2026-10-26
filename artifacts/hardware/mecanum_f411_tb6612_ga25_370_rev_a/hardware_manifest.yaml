@@ -10,18 +10,18 @@ wheel_order:
 
 kinematics:
   wheel_diameter_m:
-    value: null
-    status: TBD_MEASURED
+    value: 0.097
+    status: OWNER_CONFIRMED
   wheel_radius_m:
-    value: null
+    value: 0.0485
     derived_from: kinematics.wheel_diameter_m
-    status: TBD_MEASURED
+    status: OWNER_CONFIRMED
   wheelbase_m:
-    value: null
-    status: TBD_MEASURED
+    value: 0.216
+    status: OWNER_CONFIRMED
   track_m:
-    value: null
-    status: TBD_MEASURED
+    value: 0.190
+    status: OWNER_CONFIRMED
   roller_orientation:
     value: x_configuration
     status: LOCKED
@@ -38,12 +38,8 @@ encoders:
     value: null
     status: TBD_MEASURED
   ticks_per_wheel_revolution:
-    value: null
-    derived_formula: >
-      counts_per_channel_per_motor_revolution *
-      quadrature_decode_multiplier *
-      gear_ratio_motor_to_wheel
-    status: TBD_MEASURED
+    value: 937.2
+    status: OWNER_CONFIRMED
   cumulative_tick_order:
     - FL
     - FR

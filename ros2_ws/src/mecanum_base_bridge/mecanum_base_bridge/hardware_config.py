@@ -106,6 +106,36 @@ def communication_config_valid(manifest: dict[str, Any]) -> bool:
     )
 
 
+def wheel_geometry(manifest: dict[str, Any], require_signs: bool = True) -> dict[str, Any]:
+    """Return geometry only when all wheel signs are explicitly resolved."""
+    try:
+        kin = manifest["kinematics"]
+        enc = manifest["encoders"]
+        signs = manifest["wheel_sign_mapping"]
+        values = {
+            "wheel_diameter_m": kin["wheel_diameter_m"]["value"],
+            "wheel_radius_m": kin["wheel_radius_m"]["value"],
+            "wheelbase_m": kin["wheelbase_m"]["value"],
+            "track_m": kin["track_m"]["value"],
+            "ticks_per_wheel_revolution": enc["ticks_per_wheel_revolution"]["value"],
+        }
+        resolved_signs = [signs[name]["encoder_tick_sign"]["value"]
+                          for name in EXPECTED_WHEEL_ORDER]
+    except (KeyError, TypeError) as exc:
+        raise HardwareConfigError("manifest lacks wheel geometry/sign fields") from exc
+    if any(type(value) not in (int, float) for value in values.values()):
+        raise HardwareConfigError("wheel geometry is unresolved")
+    signs_valid = all(type(sign) is int and sign in (-1, 1) for sign in resolved_signs)
+    if require_signs and not signs_valid:
+        raise HardwareConfigError("wheel encoder signs are unresolved")
+    if any(value <= 0 for value in values.values()):
+        raise HardwareConfigError("wheel geometry must be positive")
+    if abs(values["wheel_radius_m"] * 2.0 - values["wheel_diameter_m"]) > 1e-12:
+        raise HardwareConfigError("wheel radius does not match diameter")
+    return {**values, "encoder_tick_signs": resolved_signs if signs_valid else None,
+            "rotational_lever_arm_m": (values["wheelbase_m"] + values["track_m"]) / 2.0}
+
+
 def manifest_digest(manifest: dict[str, Any]) -> bytes:
     try:
         return hashlib.sha256(DOMAIN + rfc8785.dumps(manifest)).digest()
@@ -139,6 +169,7 @@ def generate(manifest_path: str | Path, header_path: str | Path, json_path: str 
         "wheel_order": manifest["wheel_order"],
         "protocol_version": manifest["uart"]["protocol_version"],
         "hash_contract": manifest["hash_contract"],
+        "wheel_geometry": wheel_geometry(manifest, require_signs=False),
     }
     header = Path(header_path)
     metadata = Path(json_path)

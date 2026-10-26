@@ -139,3 +139,13 @@ Mỗi build directory giữ executable, map và CTest binary riêng; mọi đư�
 đều ngoài source tree. Đây chỉ là
 compile/link và kiểm tra tĩnh offline; không chạy ELF, flash, mở serial, chạy
 ROS/Gazebo/Nav2, motor hoặc HIL.
+
+## U5 encoder và telemetry
+
+TIM2 FL/TIM5 FR dùng bộ đếm 32 bit; TIM1 RL/TIM4 RR dùng 16 bit. Encoder counting-only bắt đầu sau peripheral init; callback TIM10 lấy mẫu 1 ms và mở rộng modular delta thành cumulative signed `int64`. Exact half-range và tràn `int64` làm snapshot invalid. Giả định displacement giữa hai mẫu nhỏ hơn nửa range; kiểm thử offline không chứng minh lịch scheduler hoặc không bỏ wrap trên hardware. Snapshot dùng critical section ngắn và thời gian HAL tick 64 bit, độ phân giải 1 ms biểu diễn bằng microsecond, không phải microsecond precision.
+
+`TelemetryTask` static, 50 Hz, priority 8 dưới ControlSafetyTask, chỉ enqueue snapshot khi CONFIG/telemetry permission và các input đều hợp lệ. Revision session được so sánh trước/sau khi chụp để loại snapshot qua CONFIG replacement. CommunicationTask vẫn là sole UART TX owner; không có delta/FK hay velocity trên STM32. Sequence không wrap; boot ID giữ nguyên qua CONFIG/recovery.
+
+Manifest geometry Owner-confirmed: diameter 0.097 m, radius 0.0485 m, wheelbase 0.216 m, track 0.190 m, 937.2 tick/vòng, K=0.203 m. Dấu encoder chưa xác nhận. Hardware manifest không có pin/polarity E-stop auxiliary; API `safety_io_read_estop_aux()` trả invalid nên production telemetry không phát giá trị E-stop giả. Test seam dùng synthetic inputs và không phải hardware evidence. Motor output/permission vẫn disabled. U6 phải xác nhận encoder signs, E-stop mapping, UART vật lý, flash retention và timing; U7 phải reconcile development glue trước consolidation.
+
+U5 native gate: `cmake -S firmware_STM32 -B /tmp/wp07-u5-host -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/tmp/wp07-u4-venv/bin/python`, `cmake --build /tmp/wp07-u5-host --parallel 2` và `ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u5-host --output-on-failure`. ARM gate giữ U4 flags/toolchain/manifest, dùng `/tmp/wp07-u5-arm`; map và ELF nằm trong build directory này. Leak detection được tắt do LeakSanitizer không chạy được trong host ptrace sandbox.

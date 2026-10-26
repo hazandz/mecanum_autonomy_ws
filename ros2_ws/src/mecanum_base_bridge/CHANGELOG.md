@@ -4,6 +4,8 @@
 
 - U4 bổ sung session engine Pi thuần, generator hash RFC8785 cho manifest và
   kiểm thử offline; chưa có node ROS, telemetry runtime, HIL hoặc motor.
+- U5 thêm adapter UART, `/wheel/odometry_raw` và Heartbeat ROS; dấu encoder
+  và ánh xạ E-stop vẫn chưa được xác nhận nên không có bằng chứng hardware.
 - Adds a bounded, single-owner pyserial byte transport with explicit port
   selection and caller-controlled reconnect attempts.
 - Adds fake-backend offline transport tests to the package test runner.

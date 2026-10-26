@@ -6,7 +6,7 @@ import pytest
 import rfc8785
 
 from mecanum_base_bridge.hardware_config import (
-    DOMAIN, HardwareConfigError, generate, load_manifest, manifest_digest,
+    DOMAIN, HardwareConfigError, generate, load_manifest, manifest_digest, wheel_geometry,
 )
 
 
@@ -36,11 +36,16 @@ def test_generator_outputs_same_raw_digest_to_header_and_pi_json(tmp_path):
     assert metadata['hardware_config_hash_hex'] == digest
     assert metadata['communication_config_valid'] is True
     assert metadata['wheel_order'] == ['FL', 'FR', 'RL', 'RR']
+    assert metadata['wheel_geometry']['wheel_diameter_m'] == 0.097
+    assert metadata['wheel_geometry']['ticks_per_wheel_revolution'] == 937.2
+    assert metadata['wheel_geometry']['encoder_tick_signs'] is None
     assert ', '.join(f'0x{b:02X}U' for b in bytes.fromhex(digest)) in header_text
     assert 'MECANUM_COMMUNICATION_CONFIG_VALID 1U' in header_text
-    # DRAFT motion geometry remains null/TBD; validity is communication-only.
+    # Owner geometry is present; unresolved signs still fail motion startup.
     manifest = load_manifest(MANIFEST)
-    assert manifest['kinematics']['wheel_diameter_m']['value'] is None
+    assert manifest['kinematics']['wheel_diameter_m']['value'] == 0.097
+    with pytest.raises(HardwareConfigError, match='signs are unresolved'):
+        wheel_geometry(manifest)
 
 
 @pytest.mark.parametrize('text', [

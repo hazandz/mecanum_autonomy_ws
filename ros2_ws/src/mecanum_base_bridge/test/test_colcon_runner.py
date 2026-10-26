@@ -19,6 +19,9 @@ class PhaseACodecAndTransportTests(unittest.TestCase):
             str(test_dir / 'test_transport.py'),
             str(test_dir / 'test_bridge_session.py'),
             str(test_dir / 'test_hardware_config.py'),
+            str(test_dir / 'test_wheel_odometry.py'),
+            str(test_dir / 'test_heartbeat.py'),
+            str(test_dir / 'test_uart_bridge_node.py'),
         ]
         if os.environ.get('WP07_U4_INTEROP_PEER'):
             repo_root = test_dir.parents[3]

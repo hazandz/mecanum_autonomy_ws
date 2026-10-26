@@ -16,6 +16,7 @@ static TaskHandle_t owner_task;
 static bool started;
 static bool telemetry_allowed;
 static uint32_t mcu_fault_bits;
+static uint32_t snapshot_revision;
 
 static void control_safety_task(void *argument)
 {
@@ -35,6 +36,7 @@ bool control_safety_runtime_start(const uint8_t local_hash[32], bool config_vali
     command_watchdog_init(&watchdog, CONTROL_SAFETY_RUNTIME_WATCHDOG_MS);
     telemetry_allowed = false;
     mcu_fault_bits = 0U;
+    snapshot_revision = 0U;
     owner_task = xTaskCreateStatic(control_safety_task, "CtrlSafe",
         CONTROL_SAFETY_RUNTIME_TASK_STACK_WORDS, NULL,
         CONTROL_SAFETY_RUNTIME_TASK_PRIORITY, task_stack, &task_control);
@@ -113,6 +115,9 @@ void control_safety_runtime_service_once(void)
     communication_candidate_t candidate;
     if ((__get_IPSR() != 0U) || !started
         || (xTaskGetCurrentTaskHandle() != owner_task)) return;
+    taskENTER_CRITICAL();
+    ++snapshot_revision;
+    taskEXIT_CRITICAL();
     if (!communication_runtime_is_started()) return;
     if (communication_runtime_is_faulted()) {
         transport_failure();
@@ -147,6 +152,27 @@ bool control_safety_runtime_copy_snapshot(control_safety_snapshot_t *out)
     out->reset_epoch = session.configured_reset_epoch;
     out->last_accepted_command_sequence = session.last_accepted_command_sequence;
     out->mcu_fault_bits = mcu_fault_bits;
+    out->snapshot_revision = snapshot_revision;
     taskEXIT_CRITICAL();
     return true;
+}
+
+bool control_safety_runtime_enqueue_telemetry_if_current(
+    const control_safety_snapshot_t *expected,
+    const mecanum_uart_v1_telemetry_t *telemetry)
+{
+    bool queued = false;
+    if ((__get_IPSR() != 0U) || expected == NULL || telemetry == NULL || !started) return false;
+    /* Giao dịch queue-copy ngắn; không serialize hoặc truyền trong critical section. */
+    taskENTER_CRITICAL();
+    if (snapshot_revision == expected->snapshot_revision
+        && session.configured && telemetry_allowed
+        && session.configured_reset_epoch == expected->reset_epoch
+        && session.mcu_boot_id == expected->mcu_boot_id
+        && session.last_accepted_command_sequence == expected->last_accepted_command_sequence
+        && mcu_fault_bits == expected->mcu_fault_bits) {
+        queued = communication_runtime_enqueue_telemetry(telemetry);
+    }
+    taskEXIT_CRITICAL();
+    return queued;
 }

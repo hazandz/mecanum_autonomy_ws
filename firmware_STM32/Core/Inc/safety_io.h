@@ -18,6 +18,8 @@
 #ifndef SAFETY_IO_H
 #define SAFETY_IO_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,6 +37,12 @@ void safety_io_init_safe(void);
   *         of this firmware request.
   */
 void safety_io_force_motor_disabled(void);
+
+/**
+ * Đọc E-stop phụ chỉ khi có ánh xạ GPIO/polarity đã được xác nhận.
+ * Bản phần cứng hiện tại chưa có ánh xạ; trả false và không tạo giá trị giả.
+ */
+bool safety_io_read_estop_aux(bool *active);
 
 #ifdef __cplusplus
 }

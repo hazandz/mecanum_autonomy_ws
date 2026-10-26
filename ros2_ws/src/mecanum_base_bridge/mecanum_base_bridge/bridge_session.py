@@ -1,6 +1,7 @@
 """Session UART thuần Python; identity lifecycle luôn do SafetyLifecycle sở hữu."""
 
 from dataclasses import dataclass
+from collections import deque
 from enum import Enum
 import math
 import struct
@@ -64,6 +65,7 @@ class BridgeSession:
     RECONNECT_INTERVAL = 1.0
     COMMAND_PERIOD = 0.020
     COMMAND_FRESHNESS = 0.100
+    ACCEPTED_TELEMETRY_CAPACITY = 8
 
     def __init__(self, transport, hardware_config_hash: bytes,
                  monotonic: Callable[[], float] = time.monotonic):
@@ -98,7 +100,7 @@ class BridgeSession:
         self._last_acknowledged_command = 0
         self._telemetry_sequence: Optional[int] = None
         self._mcu_time: Optional[int] = None
-        self._accepted_telemetry: Optional[AcceptedTelemetry] = None
+        self._accepted_telemetry = deque(maxlen=self.ACCEPTED_TELEMETRY_CAPACITY)
         self._continuity_reset = True
         self._reconnect_at = 0.0
         self._config_rejected = False
@@ -287,10 +289,17 @@ class BridgeSession:
         """Generation đổi chỉ xóa lệnh mới nhất; reset do owner sở hữu."""
         self._latest_cmd = None
 
+    def shutdown(self) -> None:
+        """Đóng transport ở shutdown mà không tổng hợp lệnh zero."""
+        self._clear_session_data(clear_owner=False)
+        self.transport_healthy = False
+        try:
+            self._transport.close()
+        finally:
+            self.state = SessionState.DISCONNECTED
+
     def take_accepted_telemetry(self) -> Optional[AcceptedTelemetry]:
-        result = self._accepted_telemetry
-        self._accepted_telemetry = None
-        return result
+        return self._accepted_telemetry.popleft() if self._accepted_telemetry else None
 
     @property
     def continuity_reset(self) -> bool:
@@ -486,11 +495,18 @@ class BridgeSession:
             self.state = SessionState.ACTIVE
             self._active_at = now
             self._first_telemetry_deadline = None
-        self._accepted_telemetry = report
+        self._queue_accepted_telemetry(report)
         if packet.mcu_fault_bits & (FAULT_TRANSPORT | FAULT_MCU_COMMAND_TIMEOUT):
             self._invalidate(now, transport_failure=False)
             self.mcu_fault_bits = packet.mcu_fault_bits
-            self._accepted_telemetry = report
+            self._queue_accepted_telemetry(report)
+
+    def _queue_accepted_telemetry(self, report: AcceptedTelemetry) -> None:
+        if len(self._accepted_telemetry) >= self.ACCEPTED_TELEMETRY_CAPACITY:
+            self._accepted_telemetry.clear()
+            self._continuity_reset = True
+            return
+        self._accepted_telemetry.append(report)
 
     def _send_command_if_due(self, now: float) -> None:
         identity = self._identity
@@ -514,7 +530,7 @@ class BridgeSession:
 
     def _mark_continuity_gap(self) -> None:
         self._continuity_reset = True
-        self._accepted_telemetry = None
+        self._accepted_telemetry.clear()
 
     def _clear_session_data(self, clear_owner: bool) -> None:
         self._frames.clear()
@@ -524,7 +540,7 @@ class BridgeSession:
         self._latest_cmd = None
         self._telemetry_sequence = None
         self._mcu_time = None
-        self._accepted_telemetry = None
+        self._accepted_telemetry.clear()
         self._highest_command_sent = 0
         self._last_acknowledged_command = 0
         self._command_sequence = 1

@@ -31,6 +31,13 @@ if(NOT STM32_ARM_BUILD)
   add_test(NAME watchdog COMMAND test_watchdog)
   add_executable(test_boot_id Test/test_boot_id.c Core/Src/boot_id.c)
   add_test(NAME boot_id COMMAND test_boot_id)
+  add_executable(test_encoder Test/test_encoder.c Core/Src/encoder.c)
+  target_compile_definitions(test_encoder PRIVATE MECANUM_HOST_TEST=1)
+  add_test(NAME encoder COMMAND test_encoder)
+  add_test(NAME encoder_start_failure COMMAND test_encoder start-failure)
+  add_test(NAME encoder_int64_overflow COMMAND test_encoder overflow)
+  add_executable(test_telemetry Test/test_telemetry.c Core/Src/telemetry.c)
+  add_test(NAME telemetry COMMAND test_telemetry)
   add_executable(test_communication_runtime Test/test_communication_runtime.c
     Core/Src/communication_runtime.c Core/Src/communication.c
     Core/Src/control_safety_session.c Core/Src/control_safety_runtime.c
@@ -82,6 +89,8 @@ add_executable(stm32_uart_runtime
   ${FW}/Core/Src/stm32f4xx_it.c
   ${FW}/Core/Src/system_stm32f4xx.c
   ${FW}/Core/Src/safety_io.c
+  ${FW}/Core/Src/encoder.c
+  ${FW}/Core/Src/telemetry.c
   ${FW}/Core/Src/communication.c
   ${FW}/Core/Src/communication_runtime.c
   ${FW}/Core/Src/control_safety_session.c

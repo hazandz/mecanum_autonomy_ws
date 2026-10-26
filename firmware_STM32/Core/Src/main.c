@@ -11,6 +11,8 @@
 #include "boot_id.h"
 #include "generated_hardware_config.h"
 #include "safety_io.h"
+#include "encoder.h"
+#include "telemetry.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -96,6 +98,7 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   safety_io_init_safe();
+  if (!encoder_start(&htim2, &htim5, &htim1, &htim4)) Error_Handler();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -516,6 +519,7 @@ void StartDefaultTask(void *argument)
   if (!communication_runtime_prepare(&huart6)) Error_Handler();
   if (!control_safety_runtime_start(mecanum_hardware_config_hash,
       MECANUM_COMMUNICATION_CONFIG_VALID != 0U, boot_id)) Error_Handler();
+  if (!telemetry_runtime_start()) Error_Handler();
   if (!communication_runtime_arm_rx()) Error_Handler();
   osThreadExit();
   /* USER CODE END 5 */
@@ -536,6 +540,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM10)
   {
     HAL_IncTick();
+    encoder_sample_1ms();
   }
   /* USER CODE BEGIN Callback 1 */
   /* USER CODE END Callback 1 */

@@ -129,6 +129,7 @@ def test_command_freshness_boundary_never_synthesizes_zero(age, sent):
 def test_valid_active_telemetry_just_before_deadline_is_accepted():
     clock, transport, session = new_session()
     activate(clock, transport, session)
+    session.take_accepted_telemetry()  # Consumer đã lấy mẫu baseline đầu.
     deadline = session._telemetry_deadline
     transport.inject(telemetry(2, tick=101))
     clock.value = deadline - 0.000001
@@ -788,6 +789,7 @@ def test_bad_crc_clears_pending_report_latches_continuity_and_keeps_high_water()
     clock, transport, session = new_session()
     activate(clock, transport, session)
     assert session.continuity_reset
+    session.take_accepted_telemetry()  # Không để baseline cũ che mẫu kế tiếp.
     transport.inject(telemetry(2, tick=101))
     clock.value = 0.010
     session.io_once()
@@ -832,8 +834,38 @@ def test_oversize_frame_latches_continuity_and_pending_old_telemetry_is_cleared_
     session.io_once()
     assert session.continuity_reset
     assert session.take_accepted_telemetry() is None
-
     transport.fail_read = True
     clock.value = 0.020
     session.io_once()
     assert session.take_accepted_telemetry() is None
+
+
+def test_coalesced_telemetry_reports_are_preserved_in_bounded_order():
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    session.take_accepted_telemetry()
+    transport.inject(telemetry(2, tick=101) + telemetry(3, tick=102))
+    clock.value = 0.010
+    session.io_once()
+    assert session.take_accepted_telemetry().packet.telemetry_sequence == 2
+    assert session.take_accepted_telemetry().packet.telemetry_sequence == 3
+
+
+def test_accepted_report_overflow_drops_backlog_and_resets_continuity():
+    clock, transport, session = new_session()
+    activate(clock, transport, session)
+    session.take_accepted_telemetry()
+    for sequence in range(2, 11):
+        transport.inject(telemetry(sequence, tick=100 + sequence))
+        clock.value += 0.010
+        session.io_once()
+    assert session.continuity_reset
+    assert session.take_accepted_telemetry() is None
+
+
+def test_shutdown_closes_transport_clears_command_and_never_synthesizes_zero():
+    clock, transport, session = new_session()
+    session.shutdown()
+    assert not transport.is_open and transport.close_calls == 1
+    assert session.state == SessionState.DISCONNECTED
+    assert transport.writes and len(transport.writes) == 1  # chỉ CONFIG từ handshake

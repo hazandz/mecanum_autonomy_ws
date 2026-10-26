@@ -91,3 +91,17 @@ Bằng chứng U4 chỉ là `OFFLINE_ONLY`: test liên thông dùng peer C nativ
 TELEMETRY synthetic chỉ trong test. Chưa có `bridge_node`, ROS endpoint,
 TelemetryTask/producer thật, HIL, xác minh cổng vật lý hoặc quyền bật motor.
 Phiên bản package vẫn `0.3.0`; mục U4 tiếp tục nằm dưới `Unreleased`.
+
+## U5 — telemetry encoder, wheel odometry và Heartbeat
+
+U5 nối encoder TIM2/TIM5 (32 bit), TIM1/TIM4 (16 bit), bộ mở rộng signed cumulative `int64` lấy mẫu trong callback TIM10 1 ms, và `TelemetryTask` 50 Hz. Task so sánh revision session trước/sau snapshot, chỉ enqueue sau CONFIG accepted và mọi input hợp lệ. CommunicationTask vẫn là chủ sở hữu duy nhất UART TX; status CONFIG phải đứng trước telemetry trong FIFO. Ticks MCU là raw cumulative, không tính delta/velocity/FK trên STM32. Đây là code offline, chưa xác nhận scheduling, missed wraps hoặc timing trên phần cứng.
+
+Manifest chứa geometry Owner-confirmed: diameter 0.097 m, radius 0.0485 m, wheelbase 0.216 m, track 0.190 m và 937.2 tick/vòng; K=0.203 m. Counts/channel và gear ratio vẫn TBD. Dấu encoder vẫn TBD nên node từ chối khởi tạo wheel odometry và không dùng dấu mặc định. Manifest generator dùng cùng RFC8785 hash cho Pi/STM32; approval.yaml không tham gia digest. Chưa có GPIO/polarity E-stop phụ được xác nhận: `safety_io_read_estop_aux()` trả invalid, vì vậy firmware không phát telemetry production với E-stop giả.
+
+Pi dùng session U4 và codec hiện có, giữ tối đa 8 accepted reports; overflow xóa baseline. FK chỉ dùng hai snapshot hợp lệ liền kề cùng boot/epoch, dấu được áp dụng một lần, tính delta tick integer trước float, rồi tích phân SE(2). MCU time tạo dt vận tốc; ROS receive stamp dùng cho header. Gaps giữ pose và xóa baseline; không phát delta/zero tổng hợp. Covariance là giá trị kỹ thuật ban đầu, chưa calibration. Output là `/wheel/odometry_raw` với frame `odom`/`base_link`; node không phát TF, không sửa EKF/bringup và không tự chạy trong Sim-Eval.
+
+`mecanum_uart_bridge` yêu cầu `serial_device` và đường dẫn `hardware_manifest` tường minh, `use_sim_time=false`, dùng SingleThreadedExecutor, lifecycle QoS Reliable/Volatile, lifecycle freshness 0.6 s (publisher hiện có chạy 5 Hz), IO timer 5 ms và Heartbeat 10 Hz. Reset gọi service hiện có async/coalesced; không gọi rearm. Heartbeat dùng `SOURCE_MCU`; Pi-observed loss không thêm MCU fault bit, còn MCU fault chỉ được sao chép từ telemetry đã xác thực và còn fresh. Endpoint Heartbeat mặc định `/mcu/heartbeat` chỉ là endpoint component; consumer chưa được bringup tích hợp.
+
+Unit/host tests có thể dùng ticks, lifecycle và E-stop synthetic có nhãn; đó không phải ROS runtime hay hardware evidence. E-stop mapping, encoder signs, U6 physical UART/HIL và U7 clean production consolidation/audit/integration vẫn còn. Motor permission luôn false; chưa có Gate 3/4, deploy_real hoặc robot validation.
+
+Build package/interface ngoại tuyến (không chạy node): `colcon --log-base /tmp/wp07-u5-roslog build --base-paths ros2_ws/src --build-base /tmp/wp07-u5-rosbuild --install-base /tmp/wp07-u5-rosinstall --packages-up-to mecanum_base_bridge --symlink-install`. Chạy Python suite cần venv U4 cùng ROS Jazzy Python paths đã cài; CTest/native và ARM build commands U4 vẫn dùng cùng CMake modes, đổi output directory thành `/tmp/wp07-u5-host` và `/tmp/wp07-u5-arm`. ROS package build không phải ROS runtime evidence.

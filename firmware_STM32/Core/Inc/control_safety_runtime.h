@@ -13,6 +13,7 @@
 #define CONTROL_SAFETY_RUNTIME_WATCHDOG_MS 200U
 
 #define MECANUM_FAULT_TRANSPORT UINT32_C(1)
+#define MECANUM_FAULT_ESTOP_ACTIVE UINT32_C(2)
 #define MECANUM_FAULT_MCU_COMMAND_TIMEOUT UINT32_C(256)
 #define MECANUM_FAULT_MCU_COMMAND_INVALID UINT32_C(512)
 
@@ -25,11 +26,16 @@ typedef struct {
     uint32_t reset_epoch;
     uint32_t last_accepted_command_sequence;
     uint32_t mcu_fault_bits;
+    uint32_t snapshot_revision;
 } control_safety_snapshot_t;
 
 bool control_safety_runtime_start(const uint8_t local_hash[32], bool communication_config_valid,
                                   uint64_t boot_id);
 void control_safety_runtime_service_once(void);
 bool control_safety_runtime_copy_snapshot(control_safety_snapshot_t *snapshot);
+/* Đưa telemetry vào TX FIFO chỉ khi snapshot session vẫn thuộc giao dịch này. */
+bool control_safety_runtime_enqueue_telemetry_if_current(
+    const control_safety_snapshot_t *snapshot,
+    const mecanum_uart_v1_telemetry_t *telemetry);
 
 #endif

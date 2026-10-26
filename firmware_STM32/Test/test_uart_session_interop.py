@@ -12,6 +12,7 @@ import time
 
 from mecanum_base_bridge.bridge_session import BridgeSession, LifecycleIdentity, SessionState
 from mecanum_base_bridge.hardware_config import load_manifest, manifest_digest
+from mecanum_base_bridge.wheel_odometry import WheelOdometry
 from mecanum_base_bridge.protocol_constants import MESSAGE_CONFIG, MESSAGE_TELEMETRY
 from mecanum_base_bridge.uart_v1_codec import (
     TelemetryPacket, build_wire_frame, decode_frame, serialize_telemetry,
@@ -132,10 +133,24 @@ def test_python_session_and_actual_c_runtime_interoperate():
         clock.value = 0.003
         pi.io_once()
         assert pi.state == SessionState.ACTIVE
+        first = pi.take_accepted_telemetry()
+        assert first is not None
+        wheel_odom = WheelOdometry(0.097, 0.216, 0.190, 937.2, (1, 1, 1, 1))
+        assert wheel_odom.update(first.packet, 1_000_000_000) is None
+        # Mẫu thứ hai là fixture synthetic của kiểm thử, không phải MCU producer.
+        transport.inject(build_wire_frame(MESSAGE_TELEMETRY, serialize_telemetry(
+            TelemetryPacket(2, int(result['boot']), int(result['epoch']), 201,
+                            100, 100, 100, 100, 0, 0, 0))))
+        clock.value = 0.004
+        pi.io_once()
+        second = pi.take_accepted_telemetry()
+        assert second is not None
+        odom_sample = wheel_odom.update(second.packet, 1_004_000_000)
+        assert odom_sample is not None and odom_sample.x > 0.0
         assert not pi.receive_cmd_vel(0.2, -0.1, 0.3, received_at=0.003)
         ready = core.rearm(4)
         pi.observe_lifecycle_snapshot(_owner_identity(ready))
-        clock.value = 0.004
+        clock.value = 0.005
         assert pi.receive_cmd_vel(0.2, -0.1, 0.3, received_at=clock.value)
         pi.io_once()
         command_wire = transport.writes[-1]

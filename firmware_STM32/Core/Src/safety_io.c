@@ -10,6 +10,7 @@
 #include "safety_io.h"
 
 #include "main.h"
+#include <stdbool.h>
 
 /* TIM3 is generated and initialized by main.c before safety_io_init_safe(). */
 extern TIM_HandleTypeDef htim3;
@@ -54,4 +55,10 @@ void safety_io_force_motor_disabled(void)
 void safety_io_init_safe(void)
 {
   safety_io_force_motor_disabled();
+}
+
+bool safety_io_read_estop_aux(bool *active)
+{
+  (void)active;
+  return false;
 }
