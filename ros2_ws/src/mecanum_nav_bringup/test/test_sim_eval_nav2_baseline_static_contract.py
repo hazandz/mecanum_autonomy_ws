@@ -1,6 +1,8 @@
 """Offline boundary checks for the Step-6 sim_eval baseline source."""
-from pathlib import Path
+import json
+import math
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import yaml
 
@@ -82,3 +84,94 @@ def test_research_goal_checker_and_amcl_health_baseline_parse():
     amcl = yaml.safe_load((ROOT / "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml").read_text())["amcl"]["ros__parameters"]
     assert amcl["update_min_d"] == amcl["update_min_a"] == 0.0
     assert amcl["set_initial_pose"] is True
+
+
+def test_sim_eval_dwb_translation_bound_matches_approved_axis_envelope():
+    """Keep DWB's planar bound equal to the approved component envelope."""
+    navigation_path = (
+        ROOT / 'ros2_ws/src/mecanum_nav_bringup/config/navigation/'
+        'sim_eval_nav2_baseline.runtime.yaml'
+    )
+    navigation = yaml.safe_load(navigation_path.read_text(encoding='utf-8'))
+    follow_path = navigation['controller_server']['ros__parameters'][
+        'FollowPath'
+    ]
+    safety_path = (
+        ROOT / 'ros2_ws/src/mecanum_nav_rl/config/safety/'
+        'sim_eval_nav2_baseline_safety.yaml'
+    )
+    safety = yaml.safe_load(safety_path.read_text(encoding='utf-8'))
+    resolved_path = (
+        ROOT / 'ros2_ws/src/mecanum_nav_rl/config/v3/resolved/'
+        'sim_eval_nav2_baseline.resolved.json'
+    )
+    resolved = json.loads(resolved_path.read_text(encoding='utf-8'))
+
+    max_speed_xy = follow_path['max_speed_xy']
+    assert isinstance(max_speed_xy, (int, float))
+    assert not isinstance(max_speed_xy, bool)
+    assert math.isfinite(max_speed_xy) and max_speed_xy > 0.0
+
+    max_vx = resolved['motion_limits']['max_vx_mps']
+    max_vy = resolved['motion_limits']['max_vy_mps']
+    assert follow_path['max_vel_x'] == max_vx
+    assert max_vx == safety['limits']['velocity'][0]
+    assert follow_path['max_vel_y'] == max_vy
+    assert max_vy == safety['limits']['velocity'][1]
+    assert follow_path['min_vel_x'] == -max_vx
+    assert follow_path['min_vel_y'] == -max_vy
+    assert math.isclose(
+        max_speed_xy,
+        math.hypot(max_vx, max_vy),
+        rel_tol=0.0,
+        abs_tol=1e-15,
+    )
+
+
+def _nav2_1_3_12_speed_is_valid(
+    vx: float,
+    vy: float,
+    wz: float,
+    max_speed_xy: float,
+    min_speed_xy: float = 0.0,
+    min_speed_theta: float = 0.0,
+) -> bool:
+    """Offline reproduction of the tagged Nav2 1.3.12 predicate."""
+    float_epsilon = 1.1920928955078125e-7
+    velocity_squared = vx * vx + vy * vy
+    if (
+        max_speed_xy >= 0.0
+        and velocity_squared > max_speed_xy * max_speed_xy + float_epsilon
+    ):
+        return False
+    if (
+        min_speed_xy >= 0.0
+        and velocity_squared + float_epsilon < min_speed_xy * min_speed_xy
+        and min_speed_theta >= 0.0
+        and abs(wz) + float_epsilon < min_speed_theta
+    ):
+        return False
+    if velocity_squared == 0.0 and wz == 0.0:
+        return False
+    return True
+
+
+def test_nav2_speed_predicate_default_zero_and_approved_bound():
+    """Test kinematic admissibility, not collision or critic ranking."""
+    bound = 0.32015621187164245
+    assert not _nav2_1_3_12_speed_is_valid(0.1, 0.0, 0.0, 0.0)
+
+    for vx, vy in (
+        (0.1, 0.0),
+        (-0.1, 0.0),
+        (0.0, 0.1),
+        (0.0, -0.1),
+        (0.25, 0.20),
+        (0.25, -0.20),
+        (-0.25, 0.20),
+        (-0.25, -0.20),
+    ):
+        assert _nav2_1_3_12_speed_is_valid(vx, vy, 0.0, bound)
+
+    assert not _nav2_1_3_12_speed_is_valid(0.26, 0.20, 0.0, bound)
+    assert _nav2_1_3_12_speed_is_valid(0.0, 0.0, 0.1, bound)

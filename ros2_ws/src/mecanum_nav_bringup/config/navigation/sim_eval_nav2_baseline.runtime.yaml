@@ -33,6 +33,7 @@ controller_server:
       max_vel_x: 0.25
       min_vel_y: -0.20
       max_vel_y: 0.20
+      max_speed_xy: 0.32015621187164245
       max_vel_theta: 0.80
       acc_lim_x: 0.50
       acc_lim_y: 0.50
