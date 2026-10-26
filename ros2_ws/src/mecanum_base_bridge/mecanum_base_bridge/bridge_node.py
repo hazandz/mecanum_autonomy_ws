@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import replace
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -155,8 +156,12 @@ class UartBridgeNode(Node):
                                               self._lifecycle_timeout)
                 observed = self._session.observe_lifecycle_snapshot(identity)
                 self._lifecycle_baseline_observed = bool(identity.fresh and observed)
-            except (TypeError, ValueError, OverflowError):
+            except (AttributeError, TypeError, ValueError, OverflowError):
                 self._lifecycle_baseline_observed = False
+                known_identity = self._session._identity
+                if known_identity is not None:
+                    self._session.observe_lifecycle_snapshot(
+                        replace(known_identity, fresh=False))
         self._request_owner_reset()
         self._session.io_once()
         for _ in range(8):

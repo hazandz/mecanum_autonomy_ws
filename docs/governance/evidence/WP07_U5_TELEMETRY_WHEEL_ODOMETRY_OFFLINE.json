@@ -398,7 +398,7 @@
     "NO_PHASE_1_COMPLETION"
   ],
   "PEP_Ledger_Registry_modified": false,
-  "independent_audit": "PENDING_FOR_R2_FOLLOWUP; e5b50396af6a55f14f7cf798041532a757ef62fc audit FAIL R2 with R1 CLOSED",
+  "independent_audit": "PENDING_FOR_R3_FOLLOWUP; 493f5a914f3f413ce60e370012284cfebf4b8b08 audit FAIL R3; R1/R2 CLOSED",
   "final_commit_SHA": null,
   "allowlist_check": {
     "changed_count": 34,
@@ -439,18 +439,28 @@
     "historical_21774_native_ctest_passed": 29,
     "historical_21774_arm_result": "retained in prior verification section and bound to 21774af1; not reused as repair build",
     "latest_audit": {
-      "candidate_sha": "e5b50396af6a55f14f7cf798041532a757ef62fc",
+      "candidate_sha": "493f5a914f3f413ce60e370012284cfebf4b8b08",
       "result": "FAIL",
-      "finding": "R2 — adapter consumed/dispatched owner reset before BridgeSession had observed a fresh valid lifecycle baseline; a delayed/stale baseline could leave the session unable to progress.",
-      "root_pattern": "service dispatch was ordered before lifecycle observation and had no baseline gate",
-      "R1_status": "CLOSED by prior repair; ROS Node clock ownership remains intact"
+      "finding": "R3 — invalid lifecycle fields blocked only reset dispatch; BridgeSession retained READY/fresh owner identity and cached command eligibility.",
+      "root_pattern": "adapter rejected lifecycle fields without invalidating the production BridgeSession freshness path",
+      "R1_status": "CLOSED",
+      "R2_status": "CLOSED"
     },
     "R1_followup_audit": {
       "candidate_sha": "7bb269771f9816865ecff1c062896518dcc38bb3",
       "result": "FAIL",
       "finding": "R1 — UartBridgeNode overwrote rclpy.Node._clock with time.monotonic; Node.get_clock/create_timer rely on the ROS clock object.",
       "root_pattern": "adapter steady-clock injection reused a Node-owned field, violating the base-class clock contract"
-    }
+    },
+    "R2_followup_audit": {
+      "candidate_sha": "e5b50396af6a55f14f7cf798041532a757ef62fc",
+      "result": "FAIL",
+      "finding": "R2 — adapter consumed/dispatched owner reset before BridgeSession had observed a fresh valid lifecycle baseline; a delayed/stale baseline could leave the session unable to progress.",
+      "root_pattern": "service dispatch was ordered before lifecycle observation and had no baseline gate",
+      "R1_status": "CLOSED by prior repair; ROS Node clock ownership remains intact"
+    },
+    "historical_493f5a9_python_passed": 253,
+    "historical_493f5a9_native_ctest_passed": 33
   },
   "repair": {
     "repair_parent": "21774af1f5931edd7fc32fe534476e9d1d521e60",
@@ -872,5 +882,89 @@
       "step07-research-runtime-simplification": "5892e317310443f2ba1ee9214ff86552f260530c",
       "uart_branch": "e5b50396af6a55f14f7cf798041532a757ef62fc"
     }
+  },
+  "repair_r3": {
+    "repair_parent": "493f5a914f3f413ce60e370012284cfebf4b8b08",
+    "canonical_base": "fdc0e299515bda2286832aabec635948629517b5",
+    "repair_candidate_sha": null,
+    "scope": [
+      "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py",
+      "ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py",
+      "docs/governance/evidence/WP07_U5_TELEMETRY_WHEEL_ODOMETRY_OFFLINE.json"
+    ],
+    "disposition": "Khi snapshot lifecycle không hợp lệ, adapter đánh dấu identity owner đã biết là stale bằng BridgeSession.observe_lifecycle_snapshot; epoch, generation và provenance giữ nguyên. Production BridgeSession freshness path xóa latest command và khóa COMMAND eligibility. Không có baseline/identity thì reset vẫn pending; lifecycle snapshot hợp lệ sau đó chỉ khôi phục gating hiện hữu và cần cmd_vel mới.",
+    "red_on_parent": {
+      "method": "Archive đúng parent 493f5a914f3f413ce60e370012284cfebf4b8b08 vào /tmp/wp07-u5-r3-red; chép regression mới vào package tạm; không sửa lịch sử hoặc source parent trong worktree.",
+      "command": "PYTHONPATH=/tmp/wp07-u5-r3-red/ros2_ws/src/mecanum_base_bridge:/tmp/wp07-u5-r2-final-install/mecanum_nav_rl_interfaces/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages:/usr/lib/python3/dist-packages PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/wp07-u4-venv/bin/python -m pytest /tmp/wp07-u5-r3-red/ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py -q -k invalid_lifecycle_snapshot_revokes_ready_command_eligibility",
+      "exit_code": 1,
+      "failed": 4,
+      "passed": 0,
+      "deselected": 17,
+      "failure_summary": "Tất cả bốn biến thể primary_state, barrier_state, reset_epoch và sequence để session._identity_fresh=True sau snapshot không hợp lệ; command eligibility/cache không bị thu hồi."
+    },
+    "green_targeted": {
+      "command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge:/tmp/wp07-u5-r2-final-install/mecanum_nav_rl_interfaces/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages:/usr/lib/python3/dist-packages PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py -q -k 'invalid_lifecycle_snapshot_revokes_ready_command_eligibility or owner_reset or baseline_before_port or stale_or_invalid_baseline or reset_request_survives or successful_service_response or constructor_initializes_with_existing_sim_time or adapter_keeps_ros_clock'",
+      "exit_code": 0,
+      "passed": 11,
+      "failed": 0,
+      "deselected": 10
+    },
+    "verification": {
+      "bridge_pytest": {
+        "command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge:/tmp/wp07-u5-r2-final-install/mecanum_nav_rl_interfaces/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages:/usr/lib/python3/dist-packages WP07_U4_INTEROP_PEER=/tmp/wp07-u5-host/test_communication_runtime ASAN_OPTIONS=detect_leaks=0 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+        "exit_code": 0,
+        "passed": 257,
+        "failed": 0,
+        "skipped": 0,
+        "runner_and_actual_Python_C_interop_included": true
+      },
+      "native_CTest": {
+        "command": "ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u5-host --output-on-failure",
+        "exit_code": 0,
+        "passed": 33,
+        "failed": 0,
+        "skipped": 0,
+        "ASan_UBSan": "enabled by existing CMake capability configuration",
+        "LeakSanitizer": "disabled because host ptrace sandbox prevents its use"
+      },
+      "offline_package_build": {
+        "command": "colcon --log-base /tmp/wp07-u5-r3-log build --base-paths ros2_ws/src --build-base /tmp/wp07-u5-r3-build --install-base /tmp/wp07-u5-r3-install --packages-up-to mecanum_base_bridge --symlink-install",
+        "exit_code": 0,
+        "packages_finished": [
+          "mecanum_nav_rl_interfaces",
+          "mecanum_base_bridge"
+        ],
+        "ROS_node_DDS_launch_executed": false
+      },
+      "firmware_and_build_configuration_byte_identical_to_parent": true,
+      "firmware_diff_command": "git diff --name-only 493f5a914f3f413ce60e370012284cfebf4b8b08 -- firmware_STM32",
+      "firmware_diff_paths": [],
+      "ARM_rebuild": "NOT_RUN; no firmware/build configuration changed. Prior ARM results remain historical only and are not a new build for this repair.",
+      "diff_check": {
+        "command": "git -c core.whitespace=cr-at-eol diff --check",
+        "exit_code": 0
+      },
+      "incremental_changed_paths": [
+        "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py",
+        "ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py",
+        "docs/governance/evidence/WP07_U5_TELEMETRY_WHEEL_ODOMETRY_OFFLINE.json"
+      ],
+      "outside_allowlist": [],
+      "protected_scope": "No changes to firmware/build configuration, manifest/approval, protocol/codec/session/transport, Step-7, PID/KIN, shared governance or historical evidence other than the existing U5 JSON.",
+      "offline_test_doubles": "ROS Node/lifecycle messages/service/future/transport/clocks are offline fakes; production BridgeSession and pure SafetyLifecycleCore run in regression tests. This is not ROS/DDS runtime evidence.",
+      "ROS_node_DDS_launch_hardware_serial_flash_HIL_motor_executed": false,
+      "evidence_ceiling": "OFFLINE_ONLY"
+    },
+    "final_source_sha256": {
+      "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py": "0fc410f5f5908823365c26d34d93ea1bf89f315b266cb327eef8d8c12a643c39",
+      "ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py": "a5f86ede65441d95d9c0445629cab9cc60c8a3105369cfbb7656f3612d89cd7d"
+    },
+    "live_refs_preflight": {
+      "integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "step07-research-runtime-simplification": "5892e317310443f2ba1ee9214ff86552f260530c",
+      "wp07-pi5-stm32-uart-parallel-fdc0e299": "493f5a914f3f413ce60e370012284cfebf4b8b08"
+    },
+    "independent_audit_of_followup": "PENDING",
+    "final_commit_SHA": null
   }
 }

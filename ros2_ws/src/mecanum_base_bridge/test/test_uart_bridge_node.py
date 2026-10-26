@@ -589,3 +589,159 @@ def test_successful_service_response_without_new_epoch_does_not_start_config(mon
     assert node._session.state == SessionState.CONFIGURING
     assert _decode_config_request(transport.writes[-1]).reset_epoch == 1
     node.destroy_node()
+
+
+@pytest.mark.parametrize(("invalid_field", "invalid_value"), [
+    ("primary_state", 255),
+    ("barrier_state", 255),
+    ("reset_epoch", -1),
+    ("sequence", -1),
+])
+def test_invalid_lifecycle_snapshot_revokes_ready_command_eligibility(
+        monkeypatch, invalid_field, invalid_value):
+    from mecanum_base_bridge.bridge_session import SessionState
+    from mecanum_base_bridge.protocol_constants import (
+        CONFIG_ACCEPTED, MESSAGE_COMMAND, MESSAGE_CONFIG, MESSAGE_TELEMETRY,
+        REJECT_NONE)
+    from mecanum_base_bridge.uart_v1_codec import (
+        ConfigStatusPacket, TelemetryPacket, build_wire_frame, decode_frame,
+        serialize_config_status, serialize_telemetry)
+    Core = _safety_lifecycle_core_type()
+    core = Core()
+    core.configure(1)
+    core.activate(2)
+    initial_ready = core.rearm(3)
+    assert initial_ready.motion_permitted
+    steady = _SteadyClock(0.0)
+    node, _module, transport = _new_r2_production_session_node(monkeypatch, steady)
+
+    def owner_reset():
+        core.begin_reset(4)
+        _deliver_owner_snapshot(node, core)
+
+    node._reset_client = _R2ResetClient(on_call=owner_reset)
+    _deliver_owner_snapshot(node, core)
+    node._io_tick()  # baseline observed before port opens
+    node._io_tick()  # coalesced owner reset, now that baseline exists
+    node._io_tick()  # Owner's epoch 1 / NON_READY snapshot starts CONFIG
+    request = _decode_config_request(transport.writes[-1])
+
+    status = ConfigStatusPacket(request.config_sequence, request.reset_epoch,
+                                request.hardware_config_hash, 44,
+                                CONFIG_ACCEPTED, REJECT_NONE)
+    transport.inject(build_wire_frame(MESSAGE_CONFIG, serialize_config_status(status)))
+    steady.value = 0.001
+    node._io_tick()
+    first = TelemetryPacket(1, 44, 1, 1000, 0, 0, 0, 0, 0, 0, 0)
+    transport.inject(build_wire_frame(MESSAGE_TELEMETRY, serialize_telemetry(first)))
+    steady.value = 0.002
+    node._io_tick()
+    assert node._session.state == SessionState.ACTIVE
+    assert not node._session._identity.ready
+
+    ready = core.rearm(5)
+    assert ready.motion_permitted and ready.reset_epoch == 1
+    ready_message = _safety_snapshot_message(ready)
+    node._on_lifecycle(ready_message)
+    steady.value = 0.003
+    node._io_tick()
+    assert node._session._identity.ready and node._session._identity_fresh
+
+    def tick_with_fresh_telemetry(now, telemetry_sequence, mcu_time_us):
+        steady.value = now
+        packet = TelemetryPacket(telemetry_sequence, 44, 1, mcu_time_us,
+                                 0, 0, 0, 0, 0, 0, 0)
+        transport.inject(build_wire_frame(MESSAGE_TELEMETRY,
+                                          serialize_telemetry(packet)))
+        node._io_tick()
+        assert node._session.state == SessionState.ACTIVE
+
+    from geometry_msgs.msg import Twist
+    def twist(value):
+        message = Twist()
+        message.linear.x = value
+        message.linear.y = 0.0
+        message.angular.z = 0.0
+        return message
+
+    # Tạo phiên READY và lịch gửi lệnh trước dữ liệu lifecycle không hợp lệ.
+    steady.value = 0.030
+    node._on_cmd_vel(twist(0.1))
+    node._io_tick()
+    command_count = sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+                        for frame in transport.writes)
+    assert command_count == 1
+    steady.value = 0.040
+    node._on_cmd_vel(twist(0.7))
+    assert node._session._latest_cmd is not None
+
+    ready_message = _safety_snapshot_message(ready)
+    invalid = SimpleNamespace(
+        reset_epoch=ready_message.reset_epoch,
+        runtime_generation=ready_message.runtime_generation,
+        sequence=ready_message.sequence,
+        primary_state=ready_message.primary_state,
+        barrier_state=ready_message.barrier_state,
+        motion_permitted=ready_message.motion_permitted)
+    setattr(invalid, invalid_field, invalid_value)
+    steady.value = 0.050
+    node._on_lifecycle(invalid)
+    tick_with_fresh_telemetry(0.050, 2, 51_000)
+    assert not node._session._identity_fresh
+    assert node._session._latest_cmd is None
+    assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+               for frame in transport.writes) == command_count
+
+    # Lệnh mới vẫn bị từ chối khi snapshot Owner còn không hợp lệ.
+    steady.value = 0.060
+    node._on_cmd_vel(twist(-0.4))
+    assert node._session._latest_cmd is None
+    tick_with_fresh_telemetry(0.060, 3, 61_000)
+    assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+               for frame in transport.writes) == command_count
+
+    # Snapshot lỗi lặp lại cùng telemetry mới giữ phiên hoạt động để cô lập
+    # điều kiện lifecycle khỏi timeout command/telemetry.
+    for index, now in enumerate((0.10, 0.15, 0.20, 0.25), start=4):
+        node._on_lifecycle(invalid)
+        node._on_cmd_vel(twist(-0.2))
+        tick_with_fresh_telemetry(now, index, 61_000 + (index - 3) * 50_000)
+        assert node._session._latest_cmd is None
+        assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+                   for frame in transport.writes) == command_count
+
+    # Snapshot Owner hợp lệ chỉ khôi phục eligibility hiện tại; cache cũ vẫn
+    # rỗng và chỉ cmd_vel mới được gửi.
+    _deliver_owner_snapshot(node, core)
+    tick_with_fresh_telemetry(0.30, 8, 311_000)
+    assert node._session._identity_fresh and node._session._identity.ready
+    assert node._session._latest_cmd is None
+    assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+               for frame in transport.writes) == command_count
+    steady.value = 0.31
+    node._on_cmd_vel(twist(0.25))
+    tick_with_fresh_telemetry(0.31, 9, 321_000)
+    command_count += 1
+    assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+               for frame in transport.writes) == command_count
+    sent = [decode_frame(frame) for frame in transport.writes
+            if decode_frame(frame).message_type == MESSAGE_COMMAND]
+    from mecanum_base_bridge.uart_v1_codec import parse_command
+    assert parse_command(sent[-1].payload).vx_mps == pytest.approx(0.25)
+
+    # Snapshot READY hết freshness cũng phải thu hồi eligibility trước khi gửi.
+    for index, now in enumerate((0.35, 0.40, 0.45, 0.50, 0.55, 0.60,
+                                 0.65, 0.70, 0.75, 0.80, 0.85), start=10):
+        node._on_cmd_vel(twist(0.3))
+        tick_with_fresh_telemetry(now, index, 321_000 + (index - 9) * 50_000)
+    assert node._session._identity_fresh
+    before_stale = sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+                       for frame in transport.writes)
+    steady.value = 0.95  # Quá lifecycle timeout tính từ snapshot hợp lệ tại 0.30.
+    node._on_cmd_vel(twist(0.6))
+    tick_with_fresh_telemetry(0.95, 21, 921_000)
+    assert not node._session._identity_fresh
+    assert node._session._latest_cmd is None
+    assert sum(decode_frame(frame).message_type == MESSAGE_COMMAND
+               for frame in transport.writes) == before_stale
+    node.destroy_node()
