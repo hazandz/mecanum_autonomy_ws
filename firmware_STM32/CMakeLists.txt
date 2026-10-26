@@ -41,15 +41,20 @@ if(NOT STM32_ARM_BUILD)
   add_executable(test_communication_runtime Test/test_communication_runtime.c
     Core/Src/communication_runtime.c Core/Src/communication.c
     Core/Src/control_safety_session.c Core/Src/control_safety_runtime.c
-    Core/Src/command_watchdog.c Core/Src/boot_id.c)
+    Core/Src/command_watchdog.c Core/Src/boot_id.c
+    Core/Src/encoder.c Core/Src/telemetry.c)
+  target_compile_definitions(test_communication_runtime PRIVATE MECANUM_HOST_TEST=1)
   target_compile_options(test_communication_runtime PRIVATE -Wno-missing-field-initializers)
   add_test(NAME communication_runtime COMMAND test_communication_runtime)
   add_test(NAME control_safety_runtime COMMAND test_communication_runtime u4-session-runtime)
+  foreach(case revision config-ticks recovery invalid-input)
+    add_test(NAME telemetry_runtime_${case} COMMAND test_communication_runtime u5-telemetry-${case})
+  endforeach()
   foreach(case rearm-busy rearm-error invalid-size rx-error-pe rx-error-fe rx-error-ne rx-error-ore tx-timeout tx-error tx-full rx-full candidate-full fault-after-tx-dequeue fault-after-candidate-dequeue fault-during-tx fault-after-status-enqueue fault-after-telemetry-enqueue isr-public-apis)
     add_test(NAME communication_runtime_${case} COMMAND test_communication_runtime ${case})
   endforeach()
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  add_test(NAME uart_session_interop COMMAND ${Python3_EXECUTABLE}
+  add_test(NAME uart_session_interop COMMAND ${Python3_EXECUTABLE} -m pytest -q
     ${FW}/Test/test_uart_session_interop.py)
   set_tests_properties(uart_session_interop PROPERTIES
     ENVIRONMENT "PYTHONPATH=${FW}/../ros2_ws/src/mecanum_base_bridge;WP07_U4_INTEROP_PEER=$<TARGET_FILE:test_communication_runtime>")

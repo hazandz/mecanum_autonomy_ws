@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import math
 from typing import Optional
 
+INT64_MIN = -(1 << 63)
+INT64_MAX = (1 << 63) - 1
+
 
 @dataclass(frozen=True)
 class WheelOdometrySample:
@@ -47,7 +50,7 @@ class WheelOdometry:
         if continuity_reset:
             self.reset_baseline()
         ticks = (packet.ticks_fl, packet.ticks_fr, packet.ticks_rl, packet.ticks_rr)
-        if any(type(v) is not int or not -(1 << 63) <= v < (1 << 63) for v in ticks):
+        if any(type(v) is not int or not INT64_MIN <= v <= INT64_MAX for v in ticks):
             self.reset_baseline()
             return None
         current = (packet.mcu_boot_id, packet.reset_epoch, packet.telemetry_sequence,
@@ -63,6 +66,11 @@ class WheelOdometry:
             self._previous = current
             return None
         raw_deltas = tuple(ticks[i] - old_ticks[i] for i in range(4))
+        if any(delta < INT64_MIN or delta > INT64_MAX for delta in raw_deltas):
+            # Counter jump vượt khả năng biểu diễn signed int64: không đổi pose;
+            # mẫu mới chỉ là baseline cho cặp adjacent tiếp theo.
+            self._previous = current
+            return None
         wheel = tuple(float(raw_deltas[i] * self._signs[i]) * self._distance_per_tick for i in range(4))
         dx = sum(wheel) / 4.0
         dy = (-wheel[0] + wheel[1] + wheel[2] - wheel[3]) / 4.0

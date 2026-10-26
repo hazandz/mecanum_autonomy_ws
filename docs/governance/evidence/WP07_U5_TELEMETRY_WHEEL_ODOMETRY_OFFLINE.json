@@ -398,7 +398,7 @@
     "NO_PHASE_1_COMPLETION"
   ],
   "PEP_Ledger_Registry_modified": false,
-  "independent_audit": "PENDING",
+  "independent_audit": "PENDING_FOR_REPAIR_COMMIT; prior candidate 21774af1 audit FAIL is recorded under audit_history",
   "final_commit_SHA": null,
   "allowlist_check": {
     "changed_count": 34,
@@ -423,5 +423,209 @@
     "U5": "offline candidate implementation; current audit pending",
     "U6": "physical UART and HIL pending",
     "U7": "clean production consolidation, independent audit and integration pending"
+  },
+  "audit_history": {
+    "audited_candidate_sha": "21774af1f5931edd7fc32fe534476e9d1d521e60",
+    "independent_audit_result": "FAIL",
+    "findings": [
+      "F1 constructor duplicate use_sim_time declaration and startup validation/cleanup",
+      "F2 unresolved wheel signs did not fail closed before session activity",
+      "F3 signed-int64 counter discontinuity was treated as motion",
+      "F4 native peer did not exercise production C encoder/telemetry producer path",
+      "F5 heartbeat lost fresh MCU fault provenance after session invalidation",
+      "N1 encoder sampling call was outside the existing USER CODE block"
+    ],
+    "historical_21774_python_passed": 232,
+    "historical_21774_native_ctest_passed": 29,
+    "historical_21774_arm_result": "retained in prior verification section and bound to 21774af1; not reused as repair build"
+  },
+  "repair": {
+    "repair_parent": "21774af1f5931edd7fc32fe534476e9d1d521e60",
+    "canonical_base": "fdc0e299515bda2286832aabec635948629517b5",
+    "repair_candidate_sha": null,
+    "owner_token": "OWNER_APPROVED_WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2_REV_A_20261025",
+    "amendment": "A1 — NO_PRECONFIG_TELEMETRY",
+    "red_on_parent": {
+      "method": "copied audit regression tests to /tmp/wp07-u5-audit-red and ran them against parent production Python source; repository history/worktree was not changed for RED",
+      "command": "PYTHONPATH=/tmp/wp07-u5-audit-red/ros2_ws/src/mecanum_base_bridge:/tmp/wp07-u5-rosinstall/mecanum_nav_rl_interfaces/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages:/usr/lib/python3/dist-packages PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/wp07-u4-venv/bin/python -m pytest /tmp/wp07-u5-audit-red/ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py /tmp/wp07-u5-audit-red/ros2_ws/src/mecanum_base_bridge/test/test_wheel_odometry.py /tmp/wp07-u5-audit-red/ros2_ws/src/mecanum_base_bridge/test/test_heartbeat.py -q -k 'constructor or int64_counter_discontinuity or large_int64_adjacent or heartbeat_preserves or heartbeat_drops_stale or heartbeat_does_not_relabel'",
+      "exit_code": 1,
+      "failed": 11,
+      "passed": 3,
+      "deselected": 11,
+      "reproduced": [
+        "duplicate use_sim_time declaration",
+        "both signed-int64 discontinuity directions",
+        "fresh MCU fault report loss after session invalidation"
+      ]
+    },
+    "green_on_repair_source": {
+      "targeted_command": "/tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py ros2_ws/src/mecanum_base_bridge/test/test_wheel_odometry.py ros2_ws/src/mecanum_base_bridge/test/test_heartbeat.py -q",
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0
+    },
+    "verification": {
+      "bridge_pytest_command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge:/tmp/wp07-u5-rosinstall/mecanum_nav_rl_interfaces/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages:/usr/lib/python3/dist-packages WP07_U4_INTEROP_PEER=/tmp/wp07-u5-host/test_communication_runtime ASAN_OPTIONS=detect_leaks=0 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+      "bridge_pytest": {
+        "exit_code": 0,
+        "passed": 247,
+        "failed": 0,
+        "skipped": 0,
+        "runner_and_actual_python_c_interop_included": true
+      },
+      "native_ctest_command": "ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u5-host --output-on-failure",
+      "native_ctest": {
+        "exit_code": 0,
+        "passed": 33,
+        "failed": 0,
+        "skipped": 0,
+        "ASan_UBSan": "enabled by CMake capability check",
+        "LeakSanitizer": "disabled because it fails under host ptrace sandbox"
+      },
+      "arm_build_command": "cmake --build /tmp/wp07-u5-arm --parallel 4",
+      "arm_build": {
+        "exit_code": 0,
+        "compiler": "arm-none-eabi-gcc 14.3.1",
+        "ELF": "/tmp/wp07-u5-arm/stm32_uart_runtime.elf",
+        "map": "/tmp/wp07-u5-arm/stm32_uart_runtime.map",
+        "text_bytes": 23564,
+        "data_bytes": 48,
+        "bss_bytes": 29104,
+        "flash_load_end": "0x08005c44",
+        "sector7_start": "0x08060000",
+        "data_bss_end": "0x20006be0",
+        "reserved_heap_stack_end": "0x200071e0",
+        "RAM_limit": "0x20020000",
+        "strong_symbols_present": [
+          "USART6_IRQHandler",
+          "encoder_sample_1ms",
+          "telemetry_runtime_start",
+          "telemetry_runtime_service_once",
+          "control_safety_runtime_start",
+          "control_safety_runtime_enqueue_telemetry_if_current",
+          "HAL_UART_Transmit"
+        ],
+        "forbidden_symbols_absent": [
+          "motor_bench",
+          "encoder_diag",
+          "PID",
+          "KIN",
+          "HAL_UARTEx_ReceiveToIdle_DMA"
+        ],
+        "Test_fakes_in_ARM_target": false,
+        "ELF_executed": false
+      },
+      "colcon_command": "colcon --log-base /tmp/wp07-u5-repair-roslog build --base-paths ros2_ws/src --build-base /tmp/wp07-u5-repair-rosbuild --install-base /tmp/wp07-u5-repair-rosinstall --packages-up-to mecanum_base_bridge --symlink-install",
+      "colcon": {
+        "exit_code": 0,
+        "packages_finished": [
+          "mecanum_nav_rl_interfaces",
+          "mecanum_base_bridge"
+        ],
+        "ROS_node_DDS_launch_executed": false,
+        "warning": "Unrelated existing package name ROBOT_URDF_final_description does not follow ROS naming convention"
+      },
+      "diff_check": {
+        "command": "git -c core.whitespace=cr-at-eol diff --check",
+        "exit_code": 0
+      },
+      "incremental_changed_paths": [
+        "firmware_STM32/CMakeLists.txt",
+        "firmware_STM32/Core/Src/main.c",
+        "firmware_STM32/Test/test_communication_runtime.c",
+        "firmware_STM32/Test/test_uart_session_interop.py",
+        "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py",
+        "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/telemetry_state.py",
+        "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/wheel_odometry.py",
+        "ros2_ws/src/mecanum_base_bridge/test/test_heartbeat.py",
+        "ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py",
+        "ros2_ws/src/mecanum_base_bridge/test/test_wheel_odometry.py"
+      ],
+      "outside_repair_allowlist": [],
+      "U4_protected_regressions": "included in full Python and CTest results",
+      "protected_firmware_except_USER_CODE_main": "byte-identical to repair parent",
+      "main_c_CRLF_preserved": true,
+      "U2_U4_transport_session_codec_manifest_approval_PID_KIN_Step7_governance_and_historical_evidence_unchanged": true
+    },
+    "final_repair_source_sha256": {
+      "firmware_STM32/CMakeLists.txt": "c00443a37109a417d53348cf6b7f55bc2538068a24b5f490942f86e45bf79288",
+      "firmware_STM32/Core/Src/main.c": "8f396164b18073aab12449c209ed44d8dc27d89655b7eefce9eab29047ab6551",
+      "firmware_STM32/Test/test_communication_runtime.c": "28fc33d77b9ce7ccf9f51f1d98408c33f31fc4e8eb5d16eedd1448c75efd3d65",
+      "firmware_STM32/Test/test_uart_session_interop.py": "3a8d982c1ced02bfeeaa18578af7831911ad8bd4c9a767335426b6ed8333ed1e",
+      "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py": "5269fd7df37ed8f90dcb0e620486275355de905683d38bbe15a0907f8bd6231d",
+      "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/telemetry_state.py": "ad5b1bf26e4f96972ebb23ff84ae7a6e2057d1778adb2bbe85459caa3ab3e960",
+      "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/wheel_odometry.py": "a0e45cec73034ede1cc48d466b7d96a4b824461bdb7b1fc44430ce94fa840746",
+      "ros2_ws/src/mecanum_base_bridge/test/test_heartbeat.py": "fbfa0e1877241e34094bccfe5c4e9c1da63e7d89cb06901252388589c480c507",
+      "ros2_ws/src/mecanum_base_bridge/test/test_uart_bridge_node.py": "982ced330548109adf57ecbfd393c5811195892811b7070d2e810b6ad212115b",
+      "ros2_ws/src/mecanum_base_bridge/test/test_wheel_odometry.py": "3d3cd7330f8ba9551f6a31f66020a9d0cfea15641854738cffbbc96a60a8b449"
+    },
+    "hardware_limitations": [
+      "encoder signs remain unresolved and startup rejects geometry without signs",
+      "E-stop auxiliary input mapping/polarity remains unavailable; production telemetry is withheld",
+      "no hardware scheduling, encoder wrap, UART, HIL, motor, or runtime behavior was exercised"
+    ],
+    "evidence_level": "OFFLINE_ONLY",
+    "independent_audit_of_repair": "PENDING",
+    "audit_pass_or_hardware_complete_claimed": false,
+    "live_refs": {
+      "readback_method": "no-proxy process-scoped GitHub/Git read-only lookups",
+      "integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "step07-research-runtime-simplification": "5892e317310443f2ba1ee9214ff86552f260530c",
+      "wp07-pi5-stm32-uart-parallel-fdc0e299": "21774af1f5931edd7fc32fe534476e9d1d521e60",
+      "github_login": "hazandz",
+      "push_permission": true,
+      "step7_scope_check": {
+        "compared_from": "fdc0e299515bda2286832aabec635948629517b5",
+        "changed_paths": [
+          "artifacts/simulation/step07_nav2_baseline_campaign/tools/conftest.py",
+          "artifacts/simulation/step07_nav2_baseline_campaign/tools/run_step07_research_acceptance.py",
+          "artifacts/simulation/step07_nav2_baseline_campaign/tools/test_run_step07_research_acceptance.py",
+          "docs/architecture/ACR_STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2.md",
+          "docs/governance/CANONICAL_SOURCE_REGISTRY.md",
+          "docs/governance/PROJECT_EXECUTION_PLAN.md",
+          "docs/governance/PROJECT_PROGRESS_LEDGER.md",
+          "ros2_ws/src/ROBOT_URDF_final_description/launch/sim_eval_nav2_baseline_bootstrap.launch.py",
+          "ros2_ws/src/ROBOT_URDF_final_description/test/test_navigation_v1_lidar_frame_tf_contract.py",
+          "ros2_ws/src/ROBOT_URDF_final_description/test/test_sim_eval_nav2_baseline_bootstrap_launch.py",
+          "ros2_ws/src/ROBOT_URDF_final_description/test/test_sim_eval_scan_probe_bootstrap_launch.py",
+          "ros2_ws/src/mecanum_nav_bringup/config/localization/amcl_omni.yaml",
+          "ros2_ws/src/mecanum_nav_bringup/config/navigation/sim_eval_nav2_baseline.runtime.yaml",
+          "ros2_ws/src/mecanum_nav_bringup/config/recording/step07_research_qos.yaml",
+          "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_nav2_baseline_system.launch.py",
+          "ros2_ws/src/mecanum_nav_bringup/launch/sim_eval_tf_ekf_state_estimation.launch.py",
+          "ros2_ws/src/mecanum_nav_bringup/package.xml",
+          "ros2_ws/src/mecanum_nav_bringup/setup.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_dependency_lock_schema.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_static_contract.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_nav2_baseline_system_launch.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_static_profile_contract.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_runtime_contract.py",
+          "ros2_ws/src/mecanum_nav_bringup/test/test_sim_eval_tf_ekf_state_estimation_launch.py",
+          "ros2_ws/src/mecanum_nav_rl/config/safety/sim_eval_nav2_baseline_safety.yaml",
+          "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_eval_nav2_baseline.resolved.json",
+          "ros2_ws/src/mecanum_nav_rl/config/v3/step07_research_acceptance.yaml",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_models.py",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/config/v3_validators.py",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_research_acceptance.py",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/observations/step07_research_observer.py",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py",
+          "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py",
+          "ros2_ws/src/mecanum_nav_rl/package.xml",
+          "ros2_ws/src/mecanum_nav_rl/setup.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_colcon_runner.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_assets.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_compiler.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_config_v3_schema.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_final_twist_publisher_static.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_observation_encoder.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_runtime_safety_contract.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_step07_research_acceptance.py",
+          "ros2_ws/src/mecanum_nav_rl/test/test_step07_research_observer.py"
+        ],
+        "U5_source_or_UART_authority_overlap": false,
+        "shared_governance_changes_are_step7_only_and_not_copied_or_modified": true
+      }
+    }
   }
 }

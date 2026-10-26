@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Transcript ngoại tuyến giữa Pi engine và C runtime native; telemetry là dữ liệu tổng hợp."""
+"""Interop offline: giữ fixture U4 và nối U5 tới producer TELEMETRY C thật."""
 
 from collections import deque
 import importlib.util
+import math
 import os
 from pathlib import Path
 import selectors
 import subprocess
 import sys
 import time
+
+import pytest
 
 from mecanum_base_bridge.bridge_session import BridgeSession, LifecycleIdentity, SessionState
 from mecanum_base_bridge.hardware_config import load_manifest, manifest_digest
@@ -76,6 +79,15 @@ def _read_line(process, timeout=2.0):
 
 def _send(process, tick, frame):
     process.stdin.write(f'{tick} {frame.hex()}\n'.encode('ascii'))
+    process.stdin.flush()
+    line = _read_line(process)
+    assert line.startswith('RESULT '), line
+    fields = dict(part.split('=', 1) for part in line.split()[1:])
+    return fields
+
+
+def _send_sample(process, tick, fl, fr, rl, rr):
+    process.stdin.write(f'SAMPLE {tick} {fl} {fr} {rl} {rr}\n'.encode('ascii'))
     process.stdin.flush()
     line = _read_line(process)
     assert line.startswith('RESULT '), line
@@ -163,6 +175,75 @@ def test_python_session_and_actual_c_runtime_interoperate():
         assert duplicate['accepted'] == '1'
         assert int(duplicate['faults']) & 512
         assert duplicate['tx'] == '-'
+        proc.stdin.close()
+        return_code = proc.wait(timeout=2.0)
+        error_text = proc.stderr.read().decode('utf-8', errors='replace')
+        assert return_code == 0, error_text
+    finally:
+        if proc.poll() is None:
+            proc.kill(); proc.wait(timeout=1.0)
+
+
+def test_production_c_encoder_telemetry_queue_codec_and_pi_fk_interoperate():
+    peer = os.environ.get('WP07_U4_INTEROP_PEER')
+    assert peer and Path(peer).is_file(), 'CTest/acceptance must provide the native C peer executable'
+    digest = manifest_digest(load_manifest(MANIFEST))
+    child_env = os.environ.copy()
+    asan = child_env.get('ASAN_OPTIONS', '')
+    if 'detect_leaks=' not in asan:
+        asan = f'{asan}:detect_leaks=0' if asan else 'detect_leaks=0'
+    child_env['ASAN_OPTIONS'] = asan
+    proc = subprocess.Popen([peer, '--interop-u5', digest.hex(), '123'],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, bufsize=0, env=child_env)
+    try:
+        assert _read_line(proc) == 'READY'
+        clock, transport = Clock(), FakeTransport()
+        pi = BridgeSession(transport, digest, clock)
+        core = _lifecycle_core()()
+        core.configure(1)
+        baseline = core.activate(2)
+        assert pi.start()
+        pi.observe_lifecycle_snapshot(_owner_identity(baseline))
+        reset = core.begin_reset(3)
+        assert not reset.motion_permitted and reset.reset_epoch == 1
+        assert pi.confirm_owner_reset(_owner_identity(reset))
+
+        # C xử lý CONFIG, producer enqueue status rồi snapshot ticks; TX FIFO
+        # serialize cả hai frame qua CommunicationTask.
+        result = _send(proc, 100, transport.writes[-1])
+        wire_frames = [bytes.fromhex(item) for item in result['tx'].split(',')]
+        decoded_types = [decode_frame(frame).message_type for frame in wire_frames]
+        assert decoded_types == [MESSAGE_CONFIG, MESSAGE_TELEMETRY]
+        transport.inject(b''.join(wire_frames))
+        clock.value = 0.001
+        pi.io_once()
+        assert pi.state == SessionState.ACTIVE
+        first = pi.take_accepted_telemetry()
+        assert first is not None
+        assert (first.packet.ticks_fl, first.packet.ticks_fr,
+                first.packet.ticks_rl, first.packet.ticks_rr) == (0, 0, 0, 0)
+
+        # Chỉ hardware counters giả được inject; TELEMETRY bytes phát sinh từ
+        # encoder.c + telemetry.c + queue/codec C thật, không serialize ở Python.
+        sample_result = _send_sample(proc, 120, 100, 100, 100, 100)
+        sample_wires = [bytes.fromhex(item) for item in sample_result['tx'].split(',')]
+        assert len(sample_wires) == 1
+        assert decode_frame(sample_wires[0]).message_type == MESSAGE_TELEMETRY
+        transport.inject(sample_wires[0])
+        clock.value = 0.020
+        pi.io_once()
+        second = pi.take_accepted_telemetry()
+        assert second is not None
+        assert (second.packet.ticks_fl, second.packet.ticks_fr,
+                second.packet.ticks_rl, second.packet.ticks_rr) == (100, 100, 100, 100)
+        wheel_odom = WheelOdometry(0.097, 0.216, 0.190, 937.2, (1, 1, 1, 1))
+        assert wheel_odom.update(first.packet, 1_000_000_000) is None
+        sample = wheel_odom.update(second.packet, 1_020_000_000)
+        assert sample is not None
+        assert sample.x == pytest.approx(100 * math.pi * 0.097 / 937.2)
+        assert sample.y == pytest.approx(0.0, abs=1e-15)
+
         proc.stdin.close()
         return_code = proc.wait(timeout=2.0)
         error_text = proc.stderr.read().decode('utf-8', errors='replace')

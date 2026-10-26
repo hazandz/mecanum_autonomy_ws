@@ -64,7 +64,49 @@ def test_continuity_reset_and_invalid_stamp_do_not_bridge_gap():
 
 def test_large_int64_adjacent_difference_is_computed_before_float():
     model = odom()
-    model.update(packet(1, (-(1 << 63) + 1,) * 4, time_us=1000), 1_000_000_000)
-    result = model.update(packet(2, ((1 << 63) - 1,) * 4, time_us=1_001_000),
+    scale = math.pi * .097 / 937.2
+    base = (1 << 62) + 12345
+    model.update(packet(1, (base,) * 4, time_us=1000), 1_000_000_000)
+    result = model.update(packet(2, (base + 1,) * 4, time_us=1_001_000),
                           1_001_000_000)
-    assert result is not None and math.isfinite(result.x)
+    assert result is not None and result.x == pytest.approx(scale)
+
+
+@pytest.mark.parametrize("start,end", [
+    (-(1 << 63) + 1, (1 << 63) - 1),
+    ((1 << 63) - 1, -(1 << 63) + 1),
+])
+def test_int64_counter_discontinuity_resets_baseline_without_pose_change(start, end):
+    model = odom()
+    scale = math.pi * .097 / 937.2
+    assert model.update(packet(1, (0, 0, 0, 0), time_us=1000), 1_000_000_000) is None
+    first = model.update(packet(2, (10, 10, 10, 10), time_us=101000), 1_100_000_000)
+    assert first is not None
+    pose_before = (first.x, first.y, first.yaw)
+    assert model.update(packet(4, (start,) * 4, time_us=201000), 1_200_000_000) is None
+    assert model.update(packet(5, (end,) * 4, time_us=301000), 1_300_000_000) is None
+    assert (model._x, model._y, model._yaw) == pytest.approx(pose_before)
+    next_ticks = end - 7 if end > 0 else end + 7
+    result = model.update(packet(6, (next_ticks,) * 4, time_us=401000), 1_400_000_000)
+    assert result is not None
+    expected = -7 * scale if end > 0 else 7 * scale
+    assert result.x == pytest.approx(pose_before[0] + expected)
+
+
+def test_mixed_se2_increment_matches_analytic_result():
+    model = odom()
+    scale = math.pi * .097 / 937.2
+    wheel = (0.0, 200.0 * scale, 100.0 * scale, 0.0)
+    dx = sum(wheel) / 4.0
+    dy = (-wheel[0] + wheel[1] + wheel[2] - wheel[3]) / 4.0
+    dtheta = (-wheel[0] + wheel[1] - wheel[2] + wheel[3]) / (4.0 * .203)
+    a = math.sin(dtheta) / dtheta
+    b = (1.0 - math.cos(dtheta)) / dtheta
+    expected_x = a * dx - b * dy
+    expected_y = b * dx + a * dy
+    model.update(packet(1, (0, 0, 0, 0), time_us=1000), 1_000_000_000)
+    sample = model.update(packet(2, (0, 200, 100, 0), time_us=101000), 1_100_000_000)
+    assert sample is not None
+    assert sample.x == pytest.approx(expected_x, rel=1e-12, abs=1e-15)
+    assert sample.y == pytest.approx(expected_y, rel=1e-12, abs=1e-15)
+    assert sample.yaw == pytest.approx(dtheta, rel=1e-12, abs=1e-15)

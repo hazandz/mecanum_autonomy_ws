@@ -48,49 +48,63 @@ def lifecycle_qos_profile():
 class UartBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("mecanum_uart_bridge")
-        self.declare_parameter("use_sim_time", False)
-        self.declare_parameter("serial_device", "")
-        self.declare_parameter("hardware_manifest", "")
-        self.declare_parameter("heartbeat_topic", HEARTBEAT_TOPIC)
-        self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
-        if bool(self.get_parameter("use_sim_time").value):
-            raise ValueError("UART hardware adapter requires use_sim_time=false")
-        port = str(self.get_parameter("serial_device").value)
-        manifest_path = str(self.get_parameter("hardware_manifest").value)
-        if not port.strip() or not manifest_path.strip():
-            raise ValueError("serial_device and hardware_manifest must be supplied explicitly")
-        manifest = load_manifest(manifest_path)
-        if not communication_config_valid(manifest):
-            raise HardwareConfigError("manifest communication profile is unsupported")
-        digest = manifest_digest(manifest)
-        self._wheel_odom = None
+        self._transport = None
+        self._session = None
         try:
+            # Jazzy Node/TimeSource thường khai báo use_sim_time từ constructor.
+            if not self.has_parameter("use_sim_time"):
+                self.declare_parameter("use_sim_time", False)
+            self.declare_parameter("serial_device", "")
+            self.declare_parameter("hardware_manifest", "")
+            self.declare_parameter("heartbeat_topic", HEARTBEAT_TOPIC)
+            self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
+            if bool(self.get_parameter("use_sim_time").value):
+                raise ValueError("UART hardware adapter requires use_sim_time=false")
+            port = str(self.get_parameter("serial_device").value)
+            manifest_path = str(self.get_parameter("hardware_manifest").value)
+            if not port.strip() or not manifest_path.strip():
+                raise ValueError("serial_device and hardware_manifest must be supplied explicitly")
+            try:
+                lifecycle_timeout = float(self.get_parameter("lifecycle_timeout_s").value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("lifecycle_timeout_s must be finite and positive") from exc
+            if not math.isfinite(lifecycle_timeout) or lifecycle_timeout <= 0.0:
+                raise ValueError("lifecycle_timeout_s must be finite and positive")
+            manifest = load_manifest(manifest_path)
+            if not communication_config_valid(manifest):
+                raise HardwareConfigError("manifest communication profile is unsupported")
+            digest = manifest_digest(manifest)
             geometry = wheel_geometry(manifest)
             self._wheel_odom = WheelOdometry(
                 geometry["wheel_diameter_m"], geometry["wheelbase_m"], geometry["track_m"],
                 geometry["ticks_per_wheel_revolution"], tuple(geometry["encoder_tick_signs"]))
-        except HardwareConfigError as exc:
-            self.get_logger().error(f"Wheel odometry unavailable: {exc}")
-        self._clock = time.monotonic
-        self._transport = SerialTransport(port)
-        self._session = BridgeSession(self._transport, digest, monotonic=self._clock)
-        self._owner_message = None
-        self._owner_received_at = 0.0
-        self._last_generation = None
-        self._reset_future = None
-        self._latest_report = None
-        self._heartbeat_sequence = 0
-        self._lifecycle_timeout = float(self.get_parameter("lifecycle_timeout_s").value)
-        qos = lifecycle_qos_profile()
-        self._odom_pub = self.create_publisher(Odometry, ODOMETRY_TOPIC, 10)
-        self._heartbeat_pub = self.create_publisher(
-            Heartbeat, str(self.get_parameter("heartbeat_topic").value), 10)
-        self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
-        self.create_subscription(SafetyLifecycleState, LIFECYCLE_TOPIC,
-                                 self._on_lifecycle, qos)
-        self._reset_client = self.create_client(Trigger, RESET_SERVICE)
-        self.create_timer(0.005, self._io_tick)
-        self.create_timer(0.1, self._heartbeat_tick)
+            self._clock = time.monotonic
+            self._lifecycle_timeout = lifecycle_timeout
+            self._transport = SerialTransport(port)
+            self._session = BridgeSession(self._transport, digest, monotonic=self._clock)
+            self._owner_message = None
+            self._owner_received_at = 0.0
+            self._last_generation = None
+            self._reset_future = None
+            self._latest_report = None
+            self._heartbeat_sequence = 0
+            qos = lifecycle_qos_profile()
+            self._odom_pub = self.create_publisher(Odometry, ODOMETRY_TOPIC, 10)
+            self._heartbeat_pub = self.create_publisher(
+                Heartbeat, str(self.get_parameter("heartbeat_topic").value), 10)
+            self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
+            self.create_subscription(SafetyLifecycleState, LIFECYCLE_TOPIC,
+                                     self._on_lifecycle, qos)
+            self._reset_client = self.create_client(Trigger, RESET_SERVICE)
+            self.create_timer(0.005, self._io_tick)
+            self.create_timer(0.1, self._heartbeat_tick)
+        except Exception:
+            if self._session is not None:
+                self._session.shutdown()
+            elif self._transport is not None:
+                self._transport.close()
+            super().destroy_node()
+            raise
 
     def _on_lifecycle(self, message: SafetyLifecycleState) -> None:
         self._owner_message = message
@@ -153,9 +167,15 @@ class UartBridgeNode(Node):
         report = self._latest_report
         fresh = bool(report is not None and now >= report.pi_receive_time
                      and now - report.pi_receive_time < 0.2)
+        identity = self._session._identity
+        owner_epoch = None if identity is None else identity.reset_epoch
+        if report is not None and (owner_epoch is None
+                                   or report.packet.reset_epoch != owner_epoch):
+            report = None
+            fresh = False
         health = telemetry_health(self._session.state == SessionState.ACTIVE, fresh, report)
         state = make_heartbeat(self._heartbeat_sequence,
-            self._session._identity.reset_epoch if self._session._identity is not None else 0,
+            report.packet.reset_epoch if report is not None else (owner_epoch or 0),
             health.active, health.fresh, report if health.fresh else None,
             self._session.transport_healthy)
         message = Heartbeat()

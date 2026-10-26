@@ -536,11 +536,11 @@ void StartDefaultTask(void *argument)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
+  if (htim->Instance == TIM10) encoder_sample_1ms();
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM10)
   {
     HAL_IncTick();
-    encoder_sample_1ms();
   }
   /* USER CODE BEGIN Callback 1 */
   /* USER CODE END Callback 1 */

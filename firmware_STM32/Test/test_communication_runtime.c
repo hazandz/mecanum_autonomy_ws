@@ -1,8 +1,11 @@
 #include "communication_runtime.h"
 #include "control_safety_runtime.h"
+#include "encoder.h"
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "safety_io.h"
 #include "task.h"
+#include "telemetry.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -11,6 +14,7 @@
 #include <string.h>
 
 USART_TypeDef fake_usart6;
+TIM_TypeDef fake_tim[5];
 static UART_HandleTypeDef uart;
 static uint32_t fake_tick = UINT32_MAX - 3U;
 static HAL_StatusTypeDef receive_status = HAL_OK, transmit_status = HAL_OK;
@@ -21,7 +25,11 @@ static uint8_t transmitted[16][MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
 static uint16_t transmitted_size[16];
 static uint32_t transmitted_timeout[16];
 static bool in_isr, in_task;
-static TaskHandle_t created_task, control_task, current_task;
+static TaskHandle_t created_task, control_task, telemetry_task_handle, current_task;
+static bool estop_input_valid, estop_input_active;
+static bool replace_config_during_estop_read;
+static uint8_t replacement_config_wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+static size_t replacement_config_wire_size;
 static unsigned critical_api_calls, queue_api_calls, task_api_calls, queue_create_calls, task_create_calls;
 typedef enum { INJECT_NONE, INJECT_CANDIDATE_RECEIVE, INJECT_TX_RECEIVE,
                INJECT_STATUS_SEND, INJECT_TELEMETRY_SEND } inject_target_t;
@@ -38,6 +46,9 @@ void fake_task_exit_critical(void) { assert(!in_isr); ++critical_api_calls; }
 UBaseType_t fake_task_enter_critical_from_isr(void) { assert(in_isr); return 0U; }
 void fake_task_exit_critical_from_isr(UBaseType_t mask) { assert(in_isr); (void)mask; }
 void fake_yield_from_isr(BaseType_t woken) { assert(in_isr); (void)woken; ++yields; }
+static void receive_chunk(const uint8_t *bytes, uint16_t size, uint32_t tick);
+static void service_task(void);
+static void service_control_task(void);
 static void inject_uart_fault(void)
 {
     uart.ErrorCode = HAL_UART_ERROR_ORE;
@@ -49,8 +60,13 @@ TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name, uint32_t
                                StaticTask_t *control)
 {
     assert(!in_isr); ++task_create_calls;
-    assert(entry != NULL && depth == 512U);
-    assert(arg == NULL && stack != NULL && control != NULL);
+    assert(entry != NULL && arg == NULL && stack != NULL && control != NULL);
+    if (strcmp(name, "Telemetry") == 0) {
+        assert(depth == 384U && priority == 8U);
+        telemetry_task_handle = (TaskHandle_t)control;
+        return telemetry_task_handle;
+    }
+    assert(depth == 512U);
     if (strcmp(name, "UARTComm") == 0) {
         assert(priority == 24U);
         created_task = (TaskHandle_t)control;
@@ -113,6 +129,23 @@ BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait)
 }
 BaseType_t xQueueReset(QueueHandle_t q) { assert(!in_isr); ++queue_api_calls; q->head = 0U; q->count = 0U; return pdPASS; }
 uint32_t HAL_GetTick(void) { return fake_tick; }
+HAL_StatusTypeDef HAL_TIM_Encoder_Start(TIM_HandleTypeDef *timer, uint32_t channel)
+{ assert(timer != NULL && channel == TIM_CHANNEL_ALL); return HAL_OK; }
+HAL_StatusTypeDef HAL_TIM_Encoder_Stop(TIM_HandleTypeDef *timer, uint32_t channel)
+{ assert(timer != NULL && channel == TIM_CHANNEL_ALL); return HAL_OK; }
+bool safety_io_read_estop_aux(bool *active)
+{
+    if (replace_config_during_estop_read) {
+        replace_config_during_estop_read = false;
+        assert(replacement_config_wire_size > 0U);
+        receive_chunk(replacement_config_wire, (uint16_t)replacement_config_wire_size, fake_tick);
+        in_task = true; service_task(); in_task = false;
+        service_control_task();
+    }
+    if (!estop_input_valid || active == NULL) return false;
+    *active = estop_input_active;
+    return true;
+}
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t size)
 {
     assert(!in_isr || uart != NULL);
@@ -189,6 +222,130 @@ static void service_control_task(void)
     current_task = control_task;
     control_safety_runtime_service_once();
     current_task = NULL;
+}
+
+static bool service_telemetry_task(void)
+{
+    bool result;
+    current_task = telemetry_task_handle;
+    in_task = true;
+    result = telemetry_runtime_service_once();
+    in_task = false;
+    current_task = NULL;
+    return result;
+}
+
+static void prepare_u5_test_runtime(const uint8_t hash[32], uint64_t boot_id)
+{
+    TIM_HandleTypeDef fl = {TIM2}, fr = {TIM5}, rl = {TIM1}, rr = {TIM4};
+    memset(fake_tim, 0, sizeof(fake_tim));
+    fake_tick = 100U;
+    uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    estop_input_valid = true; estop_input_active = false;
+    assert(communication_runtime_prepare(&uart));
+    assert(control_safety_runtime_start(hash, true, boot_id));
+    assert(encoder_start(&fl, &fr, &rl, &rr));
+    assert(telemetry_runtime_start());
+    assert(encoder_sample_raw(0U, 0U, 0U, 0U, fake_tick));
+    assert(communication_runtime_arm_rx());
+}
+
+static void accept_u5_test_config(uint8_t *wire)
+{
+    size_t size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, fake_tick);
+    in_task = true; service_task(); in_task = false;
+    service_control_task();
+    in_task = true; service_task(); in_task = false; /* CONFIG_STATUS first. */
+    assert(transmit_calls > 0U);
+    {
+        mecanum_uart_v1_frame_t frame;
+        assert(mecanum_uart_v1_decode_wire_frame(transmitted[transmit_calls - 1U],
+            transmitted_size[transmit_calls - 1U], &frame) == MECANUM_UART_V1_OK);
+        assert(frame.message_type == MECANUM_UART_V1_MESSAGE_CONFIG);
+    }
+}
+
+static int run_u5_telemetry_case(const char *name)
+{
+    uint8_t hash[32], wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+    size_t size;
+    mecanum_uart_v1_frame_t frame;
+    mecanum_uart_v1_telemetry_t decoded;
+    memset(hash, 0xA5, sizeof(hash));
+    prepare_u5_test_runtime(hash, 123U);
+    if (strcmp(name, "u5-telemetry-revision") == 0) {
+        accept_u5_test_config(wire);
+        size = make_config_frame(replacement_config_wire);
+        replacement_config_wire_size = size;
+        replace_config_during_estop_read = true;
+        fake_tick += 20U;
+        assert(!service_telemetry_task()); /* Revision changed before enqueue. */
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 2U);
+        assert(mecanum_uart_v1_decode_wire_frame(transmitted[1], transmitted_size[1],
+            &frame) == MECANUM_UART_V1_OK);
+        assert(frame.message_type == MECANUM_UART_V1_MESSAGE_CONFIG);
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 2U); /* No stale TELEMETRY followed replacement status. */
+        return 0;
+    }
+    if (strcmp(name, "u5-telemetry-config-ticks") == 0) {
+        accept_u5_test_config(wire);
+        fake_tick += 20U;
+        assert(encoder_sample_raw(77U, 77U, 77U, 77U, fake_tick));
+        assert(service_telemetry_task());
+        in_task = true; service_task(); in_task = false;
+        assert(mecanum_uart_v1_decode_wire_frame(transmitted[transmit_calls - 1U],
+            transmitted_size[transmit_calls - 1U], &frame) == MECANUM_UART_V1_OK);
+        assert(frame.message_type == MECANUM_UART_V1_MESSAGE_TELEMETRY);
+        assert(mecanum_uart_v1_parse_telemetry(frame.payload, frame.payload_length,
+            &decoded) == MECANUM_UART_V1_OK);
+        assert(decoded.ticks_fl == 77 && decoded.ticks_fr == 77
+            && decoded.ticks_rl == 77 && decoded.ticks_rr == 77);
+        accept_u5_test_config(wire); /* CONFIG reset must not reset encoders. */
+        fake_tick += 20U;
+        assert(encoder_sample_raw(77U, 77U, 77U, 77U, fake_tick));
+        assert(service_telemetry_task());
+        in_task = true; service_task(); in_task = false;
+        assert(mecanum_uart_v1_decode_wire_frame(transmitted[transmit_calls - 1U],
+            transmitted_size[transmit_calls - 1U], &frame) == MECANUM_UART_V1_OK);
+        assert(mecanum_uart_v1_parse_telemetry(frame.payload, frame.payload_length,
+            &decoded) == MECANUM_UART_V1_OK);
+        assert(decoded.ticks_fl == 77 && decoded.ticks_fr == 77
+            && decoded.ticks_rl == 77 && decoded.ticks_rr == 77);
+        return 0;
+    }
+    if (strcmp(name, "u5-telemetry-recovery") == 0) {
+        accept_u5_test_config(wire);
+        fake_tick += 20U;
+        assert(service_telemetry_task()); /* Pending old-session TX item. */
+        inject_uart_fault();
+        service_control_task();
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 1U); /* Pending telemetry discarded, not replayed. */
+        fake_tick += 1000U;
+        in_task = true; service_task(); in_task = false;
+        assert(communication_runtime_is_usable());
+        assert(!service_telemetry_task()); /* Session remains invalid until CONFIG. */
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 1U);
+        return 0;
+    }
+    if (strcmp(name, "u5-telemetry-invalid-input") == 0) {
+        accept_u5_test_config(wire);
+        estop_input_valid = false;
+        fake_tick += 20U;
+        assert(!service_telemetry_task());
+        estop_input_valid = true;
+        assert(!encoder_sample_raw(UINT32_C(0x80000000), 0U, 0U, 0U, fake_tick));
+        assert(!service_telemetry_task());
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 1U); /* Only CONFIG_STATUS; no fabricated input report. */
+        return 0;
+    }
+    assert(!"unknown U5 telemetry case");
+    return 2;
 }
 
 static size_t make_command_frame(uint32_t sequence, uint32_t epoch, uint8_t *wire)
@@ -380,6 +537,101 @@ static int run_interop_peer(const char *hash_hex, const char *boot_text)
     return 0;
 }
 
+static void print_interop_result(size_t first_tx)
+{
+    control_safety_snapshot_t snapshot;
+    unsigned i;
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    printf("RESULT boot=%" PRIu64 " epoch=%" PRIu32 " accepted=%" PRIu32
+           " configured=%u telemetry=%u tx=",
+           snapshot.mcu_boot_id, snapshot.reset_epoch,
+           snapshot.last_accepted_command_sequence,
+           snapshot.configured ? 1U : 0U, snapshot.telemetry_allowed ? 1U : 0U);
+    if (transmit_calls == first_tx) putchar('-');
+    for (i = (unsigned)first_tx; i < transmit_calls; ++i) {
+        unsigned j;
+        if (i != (unsigned)first_tx) putchar(',');
+        for (j = 0U; j < transmitted_size[i]; ++j) printf("%02x", transmitted[i][j]);
+    }
+    putchar('\n');
+    fflush(stdout);
+}
+
+static int run_telemetry_interop_peer(const char *hash_hex, const char *boot_text)
+{
+    char line[256];
+    uint8_t hash[32];
+    uint64_t boot_id = (uint64_t)strtoull(boot_text, NULL, 10);
+    TIM_HandleTypeDef fl = {TIM2}, fr = {TIM5}, rl = {TIM1}, rr = {TIM4};
+    unsigned i;
+    if (strlen(hash_hex) != 64U || boot_id == 0U) return 3;
+    for (i = 0U; i < 32U; ++i) {
+        unsigned value;
+        if (sscanf(&hash_hex[i * 2U], "%2x", &value) != 1) return 3;
+        hash[i] = (uint8_t)value;
+    }
+    memset(fake_tim, 0, sizeof(fake_tim));
+    fake_tick = 100U;
+    estop_input_valid = true;
+    estop_input_active = false;
+    uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    if (!communication_runtime_prepare(&uart)
+        || !control_safety_runtime_start(hash, true, boot_id)
+        || !encoder_start(&fl, &fr, &rl, &rr)
+        || !telemetry_runtime_start()
+        || !encoder_sample_raw(0U, 0U, 0U, 0U, fake_tick)
+        || !communication_runtime_arm_rx()) return 4;
+    current_task = created_task;
+    assert(!telemetry_runtime_service_once()); /* Chỉ owner TelemetryTask được service. */
+    current_task = NULL;
+    assert(!service_telemetry_task() && transmit_calls == 0U); /* Chưa CONFIG. */
+    puts("READY"); fflush(stdout);
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+        size_t before_tx = transmit_calls;
+        if (strncmp(line, "SAMPLE ", 7U) == 0) {
+            unsigned long tick;
+            unsigned fl_raw, fr_raw, rl_raw, rr_raw;
+            if (sscanf(line + 7U, "%lu %u %u %u %u", &tick,
+                       &fl_raw, &fr_raw, &rl_raw, &rr_raw) != 5) return 5;
+            fake_tick = (uint32_t)tick;
+            if (!encoder_sample_raw(fl_raw, fr_raw, rl_raw, rr_raw, fake_tick)
+                || !service_telemetry_task()) return 6;
+            in_task = true; service_task(); in_task = false;
+            print_interop_result(before_tx);
+            continue;
+        }
+        {
+            unsigned long tick;
+            char *hex, *end;
+            uint8_t bytes[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+            size_t count = 0U;
+            if (sscanf(line, "%lu", &tick) != 1) return 5;
+            hex = strchr(line, ' ');
+            if (hex == NULL) return 5;
+            ++hex;
+            end = strpbrk(hex, "\r\n"); if (end != NULL) *end = '\0';
+            if ((strlen(hex) % 2U) != 0U || strlen(hex) > sizeof(bytes) * 2U) return 5;
+            while (hex[count * 2U] != '\0') {
+                unsigned value;
+                if (sscanf(&hex[count * 2U], "%2x", &value) != 1) return 5;
+                bytes[count++] = (uint8_t)value;
+            }
+            if (count == 0U) return 5;
+            fake_tick = (uint32_t)tick;
+            receive_chunk(bytes, (uint16_t)count, fake_tick);
+            in_task = true; service_task(); in_task = false;
+            service_control_task();
+            if (service_telemetry_task()) {
+                in_task = true; service_task(); service_task(); in_task = false;
+            } else {
+                in_task = true; service_task(); in_task = false;
+            }
+            print_interop_result(before_tx);
+        }
+    }
+    return 0;
+}
+
 static int run_fault_case(const char *name)
 {
     uint8_t byte = 0x55U;
@@ -497,6 +749,10 @@ int main(int argc, char **argv)
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     if ((argc == 4) && (strcmp(argv[1], "--interop") == 0))
         return run_interop_peer(argv[2], argv[3]);
+    if ((argc == 4) && (strcmp(argv[1], "--interop-u5") == 0))
+        return run_telemetry_interop_peer(argv[2], argv[3]);
+    if ((argc == 2) && (strncmp(argv[1], "u5-telemetry-", 13U) == 0))
+        return run_u5_telemetry_case(argv[1]);
     if ((argc == 2) && (strcmp(argv[1], "u4-session-runtime") == 0))
         return run_control_safety_case();
     if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
