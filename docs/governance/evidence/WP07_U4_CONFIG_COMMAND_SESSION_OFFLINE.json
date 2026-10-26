@@ -23,7 +23,8 @@
     "origin_push": "https://github.com/hazandz/mecanum_autonomy_ws.git",
     "parent": "f2b219e64566e6b903eccd45a518df66059f4f1d",
     "canonical_development_base": "fdc0e299515bda2286832aabec635948629517b5",
-    "final_commit_sha": "NOT_YET_CREATED; evidence intentionally does not self-reference the final commit"
+    "final_commit_sha": "NOT_YET_CREATED; evidence intentionally does not self-reference the final commit",
+    "repair_parent": "8551c94442cd6c74001439bc4ddae43d5a747ea7"
   },
   "live_refs": {
     "coordinator_preflight_readback": {
@@ -52,6 +53,24 @@
         "wp07-pi5-stm32-uart-parallel-fdc0e299": "f2b219e64566e6b903eccd45a518df66059f4f1d"
       },
       "verified_before_commit_and_push": true
+    },
+    "repair_preflight_readback": {
+      "integration/implementation": "fdc0e299515bda2286832aabec635948629517b5",
+      "step07-research-runtime-simplification": "f11da278346c6a49f3485d4aa2b2443703a1ce7b",
+      "uart_development_branch": "8551c94442cd6c74001439bc4ddae43d5a747ea7",
+      "source": "Fresh read-only git ls-remote from the delivery environment immediately before commit; all three refs resolved."
+    },
+    "step7_repair_scope_check": {
+      "changed_paths_checked": true,
+      "u4_source_or_uart_authority_intersection": false,
+      "notes": "Step-7 changed campaign/launch/config and its governance records; no U4 allowlisted source or UART authority document overlap. No Step-7 paths were modified."
+    },
+    "repair_delivery_preflight": {
+      "gh_auth_status_exit_code": 0,
+      "active_account": "hazandz",
+      "repository_push_permission": true,
+      "push_attempts_at_evidence_update": 0,
+      "source": "gh auth status, gh api user, and gh api repository permissions; no credential material recorded."
     }
   },
   "authority_sha256": {
@@ -63,7 +82,7 @@
     "docs/governance/PROJECT_EXECUTION_PLAN.md": "9ebfc6e3c3ce473f5776b74f89ac3ec0167d7e185155ee1505ebe5b84b4dd5ab",
     "docs/governance/CANONICAL_SOURCE_REGISTRY.md": "60c8c80752a818555451ab8667ada1aff0981c79b3a6ab2d7322865c982e73a3",
     "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml": "3899fa5dfaac72fd69c42a00327ab9aef470900737d487865689912eec5c51ff",
-    "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/approval.yaml": "691e4348de02d1015f75ce54ce45992fb7b913a853d0cfca862621684a299bd1"
+    "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/approval.yaml": "691e4348de02d1015f75ce54ce45992fb7b913a853d0cfaa862621684a299bd1"
   },
   "hardware_config": {
     "manifest": "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml",
@@ -137,6 +156,109 @@
     "whitespace_check": {
       "command": "git -c core.whitespace=cr-at-eol diff --check",
       "exit_code": 0
+    },
+    "historical_result_binding": {
+      "source_candidate_sha": "8551c94442cd6c74001439bc4ddae43d5a747ea7",
+      "note": "Historical 161 Python / 25 CTest result counts below remain bound to 8551c944... and are not reused as this repair final run."
+    },
+    "repair_red_green": {
+      "red_parent": "8551c94442cd6c74001439bc4ddae43d5a747ea7",
+      "red_regressions": [
+        {
+          "case": "F1 same-epoch runtime_generation/readiness change cannot confirm owner reset",
+          "command": "PYTHONPATH=/tmp/wp07-u4-audit-red/pkg python3 - << heredoc: parent BridgeSession baseline epoch 7/gen 4/NON_READY, then confirm epoch 7/gen 5/READY",
+          "exit_code": 1,
+          "observed": "Parent returned True for confirm_owner_reset without a new reset_epoch; regression assertion failed as expected."
+        },
+        {
+          "case": "F5 transport invalidation retains accepted-command history",
+          "command": "ulimit -c 0; /tmp/wp07-u4-audit-red/f5_parent_test",
+          "exit_code": 134,
+          "observed": "Parent aborted at assertion session.has_last_accepted_command after transport invalidation."
+        }
+      ],
+      "green_regressions": {
+        "python_bridge_session": "59 passed as part of repair final Python suite.",
+        "control_safety_session_and_runtime": "Covered by full 25/25 native CTest, including seq7 retained across transport fault, seq8 rejected before CONFIG, and valid CONFIG clearing history."
+      }
+    },
+    "repair_final_verification": {
+      "python_bridge_suite": {
+        "command": "PYTHONPATH=ros2_ws/src/mecanum_base_bridge WP07_U4_INTEROP_PEER=/tmp/wp07-u4-host-final/test_communication_runtime ASAN_OPTIONS=detect_leaks=0 /tmp/wp07-u4-venv/bin/python -m pytest ros2_ws/src/mecanum_base_bridge/test -q",
+        "exit_code": 0,
+        "passed": 203,
+        "failed": 0,
+        "skipped": 0,
+        "includes_test_colcon_runner": true
+      },
+      "native_ctest": {
+        "build_command": "cmake --build /tmp/wp07-u4-host-final --parallel 4",
+        "test_command": "ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u4-host-final --output-on-failure",
+        "build_exit_code": 0,
+        "test_exit_code": 0,
+        "passed": 25,
+        "failed": 0,
+        "skipped": 0,
+        "interop": "uart_session_interop ran as CTest 25/25 with actual Pi engine and native C communication/control runtime; test-only telemetry remains synthetic and labeled.",
+        "sanitizers": "AddressSanitizer and UndefinedBehaviorSanitizer enabled in the native build. Leak detection was disabled because this environment previously reports LeakSanitizer cannot operate under ptrace; this limitation remains."
+      },
+      "arm_rebuild_and_inspection": {
+        "build_command": "cmake --build /tmp/wp07-u4-arm-final --parallel 4",
+        "exit_code": 0,
+        "elf": "/tmp/wp07-u4-arm-final/stm32_uart_runtime.elf",
+        "map": "/tmp/wp07-u4-arm-final/stm32_uart_runtime.map",
+        "arm_none_eabi_size": {
+          "text": 21696,
+          "data": 48,
+          "bss": 27360,
+          "total": 49104
+        },
+        "load_ranges_readelf": [
+          {
+            "paddr": "0x08000000",
+            "filesz": "0x054c8",
+            "memsz": "0x054c8"
+          },
+          {
+            "paddr": "0x080054c8",
+            "filesz": "0x00030",
+            "memsz": "0x06510"
+          },
+          {
+            "paddr": "0x080054f8",
+            "filesz": "0x00000",
+            "memsz": "0x00600"
+          }
+        ],
+        "flash_file_backed_end": "0x080054f8",
+        "sector7_boundary": "0x08060000",
+        "ram_end_including_heap_stack": "0x20006b10",
+        "ram_limit": "0x20020000",
+        "result": "PASS; current repair ELF and map inspected; file-backed flash stays below sector 7 and RAM segment ends within 128 KiB.",
+        "required_symbols_present": [
+          "USART6_IRQHandler",
+          "communication_runtime_prepare",
+          "communication_runtime_arm_rx",
+          "communication_runtime_service_once",
+          "control_safety_runtime_start",
+          "control_safety_runtime_service_once",
+          "boot_id_allocate_hal",
+          "StartDefaultTask"
+        ],
+        "excluded_runtime_symbols_absent": [
+          "motor_bench",
+          "encoder_diag",
+          "PID",
+          "KIN",
+          "HAL_UARTEx_ReceiveToIdle_DMA"
+        ],
+        "test_fakes_in_arm_include_path": false,
+        "ELF_executed_or_hardware_used": false
+      },
+      "whitespace_check": {
+        "command": "git -c core.whitespace=cr-at-eol diff --check",
+        "exit_code": 0
+      }
     }
   },
   "tool_versions": {
@@ -228,28 +350,28 @@
     "firmware_STM32/Core/Inc/command_watchdog.h": "67e8fd484f374cc9f1fac96b385c31660b8caac20ba44cccf8664bfae6b60c72",
     "firmware_STM32/Core/Inc/communication_runtime.h": "2adbdd380469381d86d4f108e4331dd35af83f779f9d3458e1e08fdbf7636ec5",
     "firmware_STM32/Core/Inc/control_safety_runtime.h": "f104bc8b3712b94b43a3a0c45721910d9dce42f769bf678997613181bc7ee288",
-    "firmware_STM32/Core/Inc/control_safety_session.h": "1899ad618f14c8f290fedf86e9387ad636231cf65a8cccab214e2d9f1ee5c51a",
+    "firmware_STM32/Core/Inc/control_safety_session.h": "877d7b4b8b9ef28eebb528f6b6e7c014321a64ef5353fdd6d4914046d0edbc88",
     "firmware_STM32/Core/Src/boot_id.c": "20360d1d1ef362a645f3b25483a6ddc789ee3dcbb04ec76129195fbd82744fef",
     "firmware_STM32/Core/Src/boot_id_hal.c": "48f1746d1c5cca0961006710adb290063a11d8eaa46b476a8107c4d85ddaf19c",
     "firmware_STM32/Core/Src/command_watchdog.c": "03c839e1928294463a39dc51b2056813d8756384d181344a0f49ffd676081f3f",
     "firmware_STM32/Core/Src/communication_runtime.c": "9c66933362d2ff1f178f62c7408ac10cf74065a38fcdb57878dced1de3329d84",
     "firmware_STM32/Core/Src/control_safety_runtime.c": "175e1e005a523984069ba489fc5d5dfa5b789239efa304b1d7503714301c1d8e",
-    "firmware_STM32/Core/Src/control_safety_session.c": "3bb48164eb1c50a2a82b7d054920ad1cdd3f3f4f5962990161a512ebd8da7303",
+    "firmware_STM32/Core/Src/control_safety_session.c": "f52d921039efed407c2109e9d158b25b0d5167c71e358864d7ad9c17661ab9d5",
     "firmware_STM32/Core/Src/main.c": "30de63bb183c680739fc33848f6e729c3de52cd36ce1eb307dbcdc48b129d759",
-    "firmware_STM32/README.md": "a8e8d9cf932510d8f21afff279e0d89dc1e90280bd75c2e7b255a593d7fe63ee",
+    "firmware_STM32/README.md": "4bc9f6952908ae76a071948f7b3a720805b6962ce2db9844a19fde4cece4a416",
     "firmware_STM32/Test/fakes/task.h": "9712b5efc7b4becd179051c91adc554ff3921072150c1e573a605598db50f9b7",
     "firmware_STM32/Test/test_boot_id.c": "bc8a8172c85aa260504f6d96ea1d71af2826904423d5afcacdfa54f147815bed",
-    "firmware_STM32/Test/test_communication_runtime.c": "27ec6d37fdb19ef2f65b5df61eafe6d5de128c39e985f3b520d57ced1e4b34cb",
-    "firmware_STM32/Test/test_control_safety_session.c": "c639256614cb1961644c7e7d63284c98debdcaf6a219a7a20ba3b64b52c1fc27",
-    "firmware_STM32/Test/test_uart_session_interop.py": "85b9a7a5d6b5e023c9e6ec98a18648b5693846b2044564c64a23e7e3cfe0460c",
+    "firmware_STM32/Test/test_communication_runtime.c": "b7e63ac78e3b5f807182084192cb73ab3395242ccc4a8b27d8afdfdbca511c79",
+    "firmware_STM32/Test/test_control_safety_session.c": "5e1c0985e791b4302449a7c96bfb551cd25aff4dec670e559e155c6d00f46e6d",
+    "firmware_STM32/Test/test_uart_session_interop.py": "715d95c895f1e00e68792e90bc73a13106df4c1eab8e303a94c011da7446f3ac",
     "firmware_STM32/Test/test_watchdog.c": "d9f4d0acdf1e475e6dbd04e8d60c12348b9aaec728ab84b4e1134d4dae1cb47f",
     "ros2_ws/src/mecanum_base_bridge/CHANGELOG.md": "acfd846286a4f33fd3c73eec58f9fb0173a8aab73decd767d65ce07f61f6e8c7",
-    "ros2_ws/src/mecanum_base_bridge/README.md": "8f24095f35850fe8434f14ae10aa5188e35f7e2f19750980706a3dda243f32df",
-    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py": "46f5a78152fb17b8bda3ac5520d66c49ed2455be2b417d5c47c8f6f49ef5b420",
+    "ros2_ws/src/mecanum_base_bridge/README.md": "8de09e74496e05021898c2119f5680ebf18e9e2887b6f3dcea5cfae083040a60",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py": "967511ec6257727bf2fabc2fe5a66f79fcc5135ee77c110e04f5a6f5d7d9e833",
     "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/command_semantics.py": "e8d74688422eaeef50c7d70ff5799a4b7e72569e2ec5885e1186c0f83f0fdba7",
     "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/hardware_config.py": "cf7e3603ece537c4603ba63c03d6cdd06e5c03e5a48f12a3befca3d3989b6778",
     "ros2_ws/src/mecanum_base_bridge/setup.py": "610b41630f4a1f22beb921bc1ad622cac1364cf4387aea19f4dc8bebafd3a3ec",
-    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py": "47657c41e590fde80ab34db2a6120492dc46d6ab45690b6bee2b3dbba8554abd",
+    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py": "60079dfe7ee9b29cf7bc4be5adb01e84c9174f282b1c3e97fa8bf581895cc768",
     "ros2_ws/src/mecanum_base_bridge/test/test_colcon_runner.py": "a46310619ca7e8037a083266bd2169605f9e2295f3591eeccc76a707da363394",
     "ros2_ws/src/mecanum_base_bridge/test/test_hardware_config.py": "71aeb470da86a563632fe1ece7aefed0282e5d93030793623f77982153e3d078"
   },
@@ -261,7 +383,8 @@
     "hardware_manifest_and_approval": "unchanged",
     "PEP_LEDGER_REGISTRY_and_L2_decision": "unchanged",
     "Step7_PID_KIN_bench_encoder_diagnostic_vendor": "unchanged",
-    "main_worktree": "unchanged; HEAD f7f98c683d59cf4c62e462da9f37d4ffb2455c80; untracked docs/architecture/proposals preserved"
+    "main_worktree": "unchanged; HEAD f7f98c683d59cf4c62e462da9f37d4ffb2455c80; untracked docs/architecture/proposals preserved",
+    "repair_verification": "U2/U3 candidate files, codecs/golden vectors, manifest/approval.yaml, PEP/Ledger/Registry, Step-7 source, PID/KIN and HOT_SHARED firmware glue remain unmodified by this repair."
   },
   "roadmap": {
     "U1": "Authority + UART V1 closure — approved",
@@ -297,5 +420,39 @@
       "gh api repos/hazandz/mecanum_autonomy_ws --jq .permissions.push"
     ],
     "all_exit_codes": 0
-  }
+  },
+  "approval_yaml_hash_recheck": {
+    "audit_finding": "Independent audit of 8551c94442cd6c74001439bc4ddae43d5a747ea reported N1 failure.",
+    "method": "git show 8551c94442cd6c74001439bc4ddae43d5a747ea7:artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/approval.yaml | sha256sum; git rev-parse 8551c94442cd6c74001439bc4ddae43d5a747ea7:artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/approval.yaml",
+    "git_blob_oid_sha1": "5dad3c96233714a001e03011ed61053d8902880c",
+    "content_sha256": "691e4348de02d1015f75ce54ce45992fb7b913a853d0cfaa862621684a299bd1",
+    "evidence_value_matches_recomputed_content_sha256": true,
+    "approval_yaml_modified": false,
+    "disposition": "N1 was reported by the independent audit. The approval.yaml content SHA-256 has been rebound to the exact Git blob at repair parent; the recomputed digest equals the SHA-256 value recorded in authority_sha256. approval.yaml itself remains unchanged."
+  },
+  "independent_audit_history": {
+    "audited_sha": "8551c94442cd6c74001439bc4ddae43d5a747ea7",
+    "result": "FAIL",
+    "findings": [
+      "F1",
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "N1"
+    ],
+    "provenance": "Coordinator-provided independent audit result; executor does not claim or perform the independent audit."
+  },
+  "repair_changed_paths": [
+    "firmware_STM32/Core/Inc/control_safety_session.h",
+    "firmware_STM32/Core/Src/control_safety_session.c",
+    "firmware_STM32/README.md",
+    "firmware_STM32/Test/test_communication_runtime.c",
+    "firmware_STM32/Test/test_control_safety_session.c",
+    "firmware_STM32/Test/test_uart_session_interop.py",
+    "ros2_ws/src/mecanum_base_bridge/README.md",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py",
+    "docs/governance/evidence/WP07_U4_CONFIG_COMMAND_SESSION_OFFLINE.json"
+  ]
 }

@@ -166,7 +166,6 @@ void control_safety_session_invalidate_transport(control_safety_session_t *sessi
 {
     if (session == NULL) return;
     session->configured = false;
-    clear_accepted_command(session);
     session->semantic_command_fault = false;
     session->state = CONTROL_SAFETY_SESSION_SAFE_STOP;
 }

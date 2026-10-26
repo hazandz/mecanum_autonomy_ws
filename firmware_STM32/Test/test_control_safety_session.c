@@ -249,6 +249,41 @@ static void test_zero_sequence_is_rejected_without_history_or_watchdog_change(vo
     assert(session.semantic_command_fault);
 }
 
+static void test_transport_invalidation_retains_accepted_history(void)
+{
+    control_safety_session_t session = make_session(true);
+    control_safety_session_decision_t decision;
+    mecanum_uart_v1_command_t command;
+    const uint64_t boot_id = session.mcu_boot_id;
+
+    configure_valid_session(&session, UINT32_C(0));
+    command = make_command(UINT32_C(7), UINT32_C(0));
+    assert(control_safety_session_handle_command(&session, &command, &decision));
+    assert(decision.command_accepted && session.last_accepted_command_sequence == 7U);
+
+    control_safety_session_invalidate_transport(&session);
+    assert(!session.configured);
+    assert(control_safety_session_get_state(&session) == CONTROL_SAFETY_SESSION_SAFE_STOP);
+    assert(session.has_last_accepted_command);
+    assert(session.last_accepted_command_sequence == 7U);
+    assert(session.mcu_boot_id == boot_id);
+
+    command.command_sequence = UINT32_C(8);
+    assert(control_safety_session_handle_command(&session, &command, &decision));
+    assert(!decision.command_accepted && !decision.watchdog_refresh_requested);
+    assert(session.last_accepted_command_sequence == 7U);
+
+    /* Chỉ CONFIG hợp lệ mới xóa history về NO_COMMAND_ACCEPTED_YET. */
+    {
+        const mecanum_uart_v1_config_request_t request = make_request(UINT32_C(0), UINT32_C(0));
+        assert(control_safety_session_handle_config(&session, &request, &decision));
+        assert(decision.config_status.config_status == MECANUM_UART_V1_CONFIG_ACCEPTED);
+    }
+    assert(!session.has_last_accepted_command);
+    assert(session.last_accepted_command_sequence == 0U);
+    assert(session.mcu_boot_id == boot_id);
+}
+
 int main(void)
 {
     test_valid_config_and_repeated_config();
@@ -256,6 +291,7 @@ int main(void)
     test_command_rejections_and_golden_i7_i9();
     test_nonfinite_watchdog_and_recovery();
     test_zero_sequence_is_rejected_without_history_or_watchdog_change();
+    test_transport_invalidation_retains_accepted_history();
 
     puts("ControlSafety/session host tests passed: CONFIG, I6-I9, watchdog, and recovery.");
     return 0;

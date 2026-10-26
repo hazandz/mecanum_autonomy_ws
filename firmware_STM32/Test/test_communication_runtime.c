@@ -276,6 +276,14 @@ static int run_control_safety_case(void)
     assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
     assert(snapshot.last_accepted_command_sequence == 0U && snapshot.mcu_fault_bits == 0U);
 
+    /* Gán history rõ ràng trước transport fault để kiểm tra bảo toàn sequence. */
+    size = make_command_frame(7U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 517U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 518U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.configured && snapshot.last_accepted_command_sequence == 7U);
+
     /* Recovery UART giữ boot ID nhưng vô hiệu session và bỏ công việc đang chờ. */
     for (unsigned i = 0U; i < COMMUNICATION_RUNTIME_RX_PENDING_CHUNKS; ++i) receive_chunk(&byte, 1U, 600U + i);
     receive_chunk(&byte, 1U, 605U);
@@ -283,6 +291,8 @@ static int run_control_safety_case(void)
     assert(control_safety_runtime_copy_snapshot(&snapshot));
     assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP && !snapshot.configured);
     assert(!snapshot.telemetry_allowed && snapshot.mcu_boot_id == 123U);
+    assert(snapshot.last_accepted_command_sequence == 7U);
+    assert(!snapshot.motor_enabled);
     assert((snapshot.mcu_fault_bits & MECANUM_FAULT_TRANSPORT) != 0U);
     inject_fault_during_rearm = true;
     in_task = true; service_task(); in_task = false;
@@ -299,7 +309,16 @@ static int run_control_safety_case(void)
     in_task = true; service_task(); in_task = false;
     fake_tick = 1702U; service_control_task();
     assert(control_safety_runtime_copy_snapshot(&snapshot));
-    assert(!snapshot.configured && snapshot.last_accepted_command_sequence == 0U);
+    assert(!snapshot.configured && snapshot.last_accepted_command_sequence == 7U);
+
+    /* COMMAND 8 không thể tự reconfigure; CONFIG hợp lệ mới xóa history. */
+    size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, 1703U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 1704U; service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.configured && snapshot.telemetry_allowed && !snapshot.motor_enabled);
+    assert(snapshot.last_accepted_command_sequence == 0U);
     return 0;
 }
 

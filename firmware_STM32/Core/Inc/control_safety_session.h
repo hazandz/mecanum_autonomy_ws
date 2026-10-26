@@ -80,7 +80,10 @@ bool control_safety_session_handle_watchdog_expired(
     control_safety_session_t *session,
     control_safety_session_decision_t *decision);
 
-/* Vô hiệu hóa eligibility khi transport mất; giữ nguyên boot ID. */
+/*
+ * Vô hiệu hóa eligibility khi transport mất; giữ boot ID và accepted-command
+ * history đến CONFIG hợp lệ tiếp theo hoặc boot mới.
+ */
 void control_safety_session_invalidate_transport(control_safety_session_t *session);
 
 control_safety_session_state_t control_safety_session_get_state(

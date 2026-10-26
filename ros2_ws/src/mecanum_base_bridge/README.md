@@ -43,26 +43,38 @@ or deployment readiness.
 
 `BridgeSession` nối với `SerialTransport` và codec đã có, nhưng không tạo node,
 topic, message hay service ROS. Caller cung cấp cổng tường minh qua transport,
-đồng hồ monotonic và lifecycle identity do `SafetyLifecycle` sở hữu. Engine
-không tự cấp epoch, gọi reset/rearm hoặc giữ FIFO command; chỉ cache lệnh mới
-nhất. Các state duy nhất là `DISCONNECTED`, `PORT_OPEN`, `CONFIGURING` và
-`ACTIVE`.
+đồng hồ monotonic và lifecycle identity do `SafetyLifecycle` sở hữu. Snapshot
+đầu chỉ lập baseline; CONFIG chỉ bắt đầu sau khi owner cấp `reset_epoch` khác
+baseline đang chờ. Snapshot phải hợp lệ, mới và có sequence không lùi; trạng
+thái motion `NON_READY` vẫn cho phép CONFIG. Cùng epoch đổi `ready` hoặc
+`runtime_generation` không hoàn tất reset; generation chỉ xóa command cache.
+Engine không tự cấp epoch, gọi reset/rearm hoặc giữ FIFO command; chỉ cache
+lệnh mới nhất. Các state duy nhất là `DISCONNECTED`, `PORT_OPEN`,
+`CONFIGURING` và `ACTIVE`.
 
 Một lượt `io_once()` đọc tối đa 256 byte, giữ frame có giới hạn codec, xử lý
-timer và phát nhiều nhất một COMMAND. CONFIG dùng timeout 500 ms, tối đa ba
-lần gửi với sequence tương quan riêng; sau CONFIG_STATUS được chấp nhận, engine
-đợi TELEMETRY đầu tiên khớp boot ID/epoch trong 200 ms. Chỉ TELEMETRY hợp lệ
-mới đưa engine sang ACTIVE; status đơn lẻ hoặc telemetry đến trước status
-không kích hoạt phiên. COMMAND bắt đầu ở sequence 1, giới hạn 50 Hz, dùng
+timer và phát nhiều nhất một COMMAND. Trước accepted CONFIG_STATUS, CONFIG
+dùng timeout 500 ms, tối đa ba lần gửi với sequence tăng xuyên reconnect. Sau
+accepted status đầu tiên, retry CONFIG dừng và engine đợi TELEMETRY đầu tiên
+khớp boot ID/epoch tối đa 200 ms; status trùng không gia hạn hạn chờ.
+CONFIG_REJECTED kết thúc handshake đó. Chỉ TELEMETRY đã kiểm đủ session,
+fault mask, E-stop byte, ACK, sequence và MCU time mới được xuất hoặc kích
+ACTIVE. Status đơn lẻ hoặc telemetry đến trước status không kích hoạt phiên.
+COMMAND bắt đầu ở sequence 1, giới hạn 50 Hz, dùng
 `cmd_vel` mới nhận sau ACTIVE với freshness nhỏ hơn 100 ms. Lệnh stale/không
 hợp lệ làm sạch cache và dừng luồng; engine không tạo lệnh zero.
 
-Lỗi, mismatch hoặc timeout đóng transport, xóa frame/cache/baseline, yêu cầu
-owner reset đã coalesce và chờ ít nhất 1 giây trước lần mở lại. Sau reconnect
-phải nhận lifecycle identity mới rồi bắt tay lại; UART được mở lại không có
-nghĩa MCU đã rearm chuyển động. `mcu_fault_bits` được giữ riêng với
-`transport_healthy` do Pi quan sát. API `take_accepted_telemetry()` cùng cờ
-`continuity_reset` là seam cho U5.
+Lỗi session hoặc timeout đóng transport, xóa frame/cache/baseline, yêu cầu
+owner reset đã coalesce và chờ ít nhất 1 giây trước lần mở lại. Owner reset
+được xác nhận trong backoff được giữ qua lần mở lại, không yêu cầu reset lần
+hai. CRC/malformed/oversize và telemetry sai làm cờ `continuity_reset` được
+giữ đến khi U5 lấy; frame lỗi không gia hạn telemetry timeout và không xóa
+high-water guard trong cùng session. Sau reconnect phải nhận epoch mới rồi
+bắt tay lại; UART được mở lại không có nghĩa MCU đã rearm chuyển động.
+`mcu_fault_bits` chấp nhận đúng các bit contract 1, 2, 256, 512, 1024, 2048,
+4096; bit policy/IMU/reserved bị loại. Pi-observed loss vẫn tách khỏi MCU
+report. API `take_accepted_telemetry()` cùng cờ `continuity_reset` là seam
+cho U5.
 
 `hardware_config.py` đọc duy nhất hardware manifest, từ chối YAML có key trùng,
 tag/anchor/alias/merge hoặc giá trị ngoài JSON, rồi tính SHA-256 theo domain

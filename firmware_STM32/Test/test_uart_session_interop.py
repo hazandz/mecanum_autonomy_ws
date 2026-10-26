@@ -2,10 +2,12 @@
 """Transcript ngoại tuyến giữa Pi engine và C runtime native; telemetry là dữ liệu tổng hợp."""
 
 from collections import deque
+import importlib.util
 import os
 from pathlib import Path
 import selectors
 import subprocess
+import sys
 import time
 
 from mecanum_base_bridge.bridge_session import BridgeSession, LifecycleIdentity, SessionState
@@ -18,6 +20,20 @@ from mecanum_base_bridge.uart_v1_codec import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml'
+SAFETY_LIFECYCLE_SOURCE = ROOT / 'ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_contract.py'
+
+
+def _lifecycle_core():
+    spec = importlib.util.spec_from_file_location('u4_interop_safety_contract', SAFETY_LIFECYCLE_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.SafetyLifecycleCore
+
+
+def _owner_identity(snapshot):
+    return LifecycleIdentity(snapshot.reset_epoch, snapshot.runtime_generation,
+                             snapshot.motion_permitted, snapshot.sequence, True)
 
 
 class Clock:
@@ -82,9 +98,14 @@ def test_python_session_and_actual_c_runtime_interoperate():
         assert _read_line(proc) == 'READY'
         clock, transport = Clock(), FakeTransport()
         pi = BridgeSession(transport, digest, clock)
+        core = _lifecycle_core()()
+        core.configure(1)
+        baseline = core.activate(2)
         assert pi.start()
-        pi.observe_lifecycle_snapshot(LifecycleIdentity(0, 0, False))
-        assert pi.confirm_owner_reset(LifecycleIdentity(0, 1, True))
+        pi.observe_lifecycle_snapshot(_owner_identity(baseline))
+        reset = core.begin_reset(3)
+        assert not reset.motion_permitted and reset.reset_epoch == 1
+        assert pi.confirm_owner_reset(_owner_identity(reset))
         config_wire = transport.writes[-1]
         assert decode_frame(config_wire).message_type == MESSAGE_CONFIG
         result = _send(proc, 100, config_wire)
@@ -111,6 +132,9 @@ def test_python_session_and_actual_c_runtime_interoperate():
         clock.value = 0.003
         pi.io_once()
         assert pi.state == SessionState.ACTIVE
+        assert not pi.receive_cmd_vel(0.2, -0.1, 0.3, received_at=0.003)
+        ready = core.rearm(4)
+        pi.observe_lifecycle_snapshot(_owner_identity(ready))
         clock.value = 0.004
         assert pi.receive_cmd_vel(0.2, -0.1, 0.3, received_at=clock.value)
         pi.io_once()

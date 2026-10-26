@@ -75,9 +75,14 @@ TelemetryTask hoặc producer TELEMETRY; A1 vẫn bắt buộc status trước m
 telemetry tương lai. Snapshot chỉ cung cấp state, configured, boot ID, epoch,
 accepted sequence, fault bits và telemetry permission cho U5. `motor_enabled`
 luôn false; không gọi PID/KIN, PWM, direction hoặc motor enable. Fault bits
-chỉ dùng các giá trị đã có: transport 1, command timeout 256, command invalid
-512. Watchdog timeout giữ đến CONFIG hợp lệ; invalid-command indication được
-xóa bởi COMMAND hợp lệ tiếp theo.
+chỉ dùng các giá trị đã có theo contract: transport 1, E-stop 2, command
+timeout 256, command invalid 512, control loop 1024, motor driver 2048 và
+encoder 4096. Không phát policy, IMU hoặc reserved bits khi chưa có owner input.
+Watchdog timeout giữ đến CONFIG hợp lệ; invalid-command indication được xóa
+bởi COMMAND hợp lệ tiếp theo. Transport invalidation đặt `configured=false`
+và `SAFE_STOP`, nhưng giữ accepted-command history cùng boot ID; COMMAND mới
+không khôi phục eligibility trước CONFIG hợp lệ. Chỉ boot mới hoặc CONFIG hợp
+lệ mới xóa history về sequence 0.
 
 Transport recovery chỉ bắt đầu sau khi ControlSafety đã vào SAFE_STOP và vô
 hiệu configured eligibility. CommunicationTask hủy RX, xóa queues/parser và
