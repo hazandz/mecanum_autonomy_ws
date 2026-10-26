@@ -78,10 +78,11 @@ class UartBridgeNode(Node):
             self._wheel_odom = WheelOdometry(
                 geometry["wheel_diameter_m"], geometry["wheelbase_m"], geometry["track_m"],
                 geometry["ticks_per_wheel_revolution"], tuple(geometry["encoder_tick_signs"]))
-            self._clock = time.monotonic
+            self._steady_clock = time.monotonic
             self._lifecycle_timeout = lifecycle_timeout
             self._transport = SerialTransport(port)
-            self._session = BridgeSession(self._transport, digest, monotonic=self._clock)
+            self._session = BridgeSession(self._transport, digest,
+                                          monotonic=self._steady_clock)
             self._owner_message = None
             self._owner_received_at = 0.0
             self._last_generation = None
@@ -108,7 +109,7 @@ class UartBridgeNode(Node):
 
     def _on_lifecycle(self, message: SafetyLifecycleState) -> None:
         self._owner_message = message
-        self._owner_received_at = self._clock()
+        self._owner_received_at = self._steady_clock()
         generation = int(message.runtime_generation)
         if self._last_generation is not None and generation != self._last_generation:
             self._session.request_rearm_generation()
@@ -116,7 +117,7 @@ class UartBridgeNode(Node):
 
     def _on_cmd_vel(self, message: Twist) -> None:
         self._session.receive_cmd_vel(message.linear.x, message.linear.y,
-                                     message.angular.z, self._clock())
+                                     message.angular.z, self._steady_clock())
 
     def _request_owner_reset(self) -> None:
         if self._reset_future is not None and not self._reset_future.done():
@@ -125,7 +126,7 @@ class UartBridgeNode(Node):
             self._reset_future = self._reset_client.call_async(Trigger.Request())
 
     def _io_tick(self) -> None:
-        now = self._clock()
+        now = self._steady_clock()
         if self._owner_message is not None:
             identity = lifecycle_identity(self._owner_message, self._owner_received_at, now,
                                           self._lifecycle_timeout)
@@ -163,7 +164,7 @@ class UartBridgeNode(Node):
         self._odom_pub.publish(msg)
 
     def _heartbeat_tick(self) -> None:
-        now = self._clock()
+        now = self._steady_clock()
         report = self._latest_report
         fresh = bool(report is not None and now >= report.pi_receive_time
                      and now - report.pi_receive_time < 0.2)

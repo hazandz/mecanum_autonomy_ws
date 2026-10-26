@@ -84,7 +84,7 @@ class _HeartbeatPublisher:
 def _heartbeat_adapter(clock, session, accepted, owner_epoch):
     from builtin_interfaces.msg import Time
     return SimpleNamespace(
-        _clock=clock,
+        _steady_clock=clock,
         _session=session,
         _latest_report=accepted,
         _owner_message=SimpleNamespace(reset_epoch=owner_epoch),
