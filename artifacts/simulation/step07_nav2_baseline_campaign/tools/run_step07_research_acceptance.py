@@ -3012,11 +3012,12 @@ class ResearchAcceptanceRunner:
         return False
 
     def _command_chain_fact(self) -> dict[str, Any]:
-        graph = self.observer.graph_snapshot()
-        publishers = graph['topics'].get('/cmd_vel', {}).get('publishers', ())
+        publishers = self.observer.node.get_publishers_info_by_topic(
+            '/cmd_vel')
+        publisher_names = [p.node_name for p in publishers]
         sole = (
             len(publishers) == 1
-            and str(publishers[0][0]).strip('/').lower()
+            and str(publishers[0].node_name).strip('/').lower()
             == 'final_twist_publisher'
         )
         retained = self.state.facts.get("command_chain_episode")
@@ -3027,7 +3028,7 @@ class ResearchAcceptanceRunner:
                 'pass': False,
                 'reason': 'FINAL_CMD_VEL_OWNER_NOT_SOLE_AT_CONCLUSION',
                 'measured': {
-                    'cmd_vel_publishers': [p[0] for p in publishers]
+                    'cmd_vel_publishers': publisher_names
                 },
             }
         candidates = tuple(self.observer.nav2_candidates)
@@ -3071,7 +3072,7 @@ class ResearchAcceptanceRunner:
                     and 0 <= envelope.received_steady_ns-c.received_steady_ns <= 500_000_000]
                 if matching_safety and matching_cmd and matching_candidate and sole:
                     episode = {"pass": True, "reason": "NAV2_SAFETY_FINAL_RECEIPT_CHAIN",
-                        "measured": {"cmd_vel_publishers": [p[0] for p in publishers],
+                        "measured": {"cmd_vel_publishers": publisher_names,
                             "candidate_command": list(matching_candidate[-1].value),
                             "safety_decision_command": list(matching_safety[-1].value["final_command"]),
                             "accepted_envelope_command": list(ev["command"]),
@@ -3084,7 +3085,7 @@ class ResearchAcceptanceRunner:
                     self.state.facts["command_chain_episode"] = episode
                     return episode
         return {"pass": False, "reason": "COMMAND_CHAIN_NOT_CORRELATED",
-            "measured": {"cmd_vel_publishers": [p[0] for p in publishers],
+            "measured": {"cmd_vel_publishers": publisher_names,
                 "nonzero_nav2_candidate": any(x.context == context and nonzero(x.value) for x in candidates),
                 "actual_cmd_vel_observed": bool(commands),
                 "matched_envelope_receipt": False}}

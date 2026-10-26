@@ -2471,6 +2471,22 @@ def test_full_a6_is_recorded_only_after_path_success_and_navigate_acceptance():
             == 'PATH_SUCCEEDED_AND_NAVIGATE_GOAL_ACCEPTED')
 
 
+def _command_chain_observer(publisher_query, **facts):
+    observer = SimpleNamespace(
+        node=SimpleNamespace(get_publishers_info_by_topic=publisher_query),
+        graph_snapshot=lambda: pytest.fail('full graph scan called'),
+        nav2_candidates=[], accepted_envelopes=[], safety_states=[],
+        receipts=[], cmd_vel_commands=[],
+    )
+    for name, value in facts.items():
+        setattr(observer, name, value)
+    return observer
+
+
+def _publisher(node_name):
+    return SimpleNamespace(node_name=node_name)
+
+
 def test_command_episode_rechecks_current_publisher():
     """Recheck the actual sole publisher when accepting a retained episode."""
     runner = object.__new__(ResearchAcceptanceRunner)
@@ -2478,20 +2494,13 @@ def test_command_episode_rechecks_current_publisher():
         'pass': True, 'reason': 'earlier causal episode', 'measured': {},
     }
     runner.state = CampaignState(facts={'command_chain_episode': episode})
-    runner.observer = SimpleNamespace(
-        graph_snapshot=lambda: {
-            'topics': {
-                '/cmd_vel': {
-                    'publishers': (
-                        ('other_publisher', '/', 'geometry_msgs/msg/Twist'),
-                    ),
-                },
-            },
-        }
-    )
+    calls = []
+    runner.observer = _command_chain_observer(
+        lambda topic: calls.append(topic) or [_publisher('other_publisher')])
     result = runner._command_chain_fact()
     assert result['pass'] is False
     assert result['reason'] == 'FINAL_CMD_VEL_OWNER_NOT_SOLE_AT_CONCLUSION'
+    assert calls == ['/cmd_vel']
 
 
 def test_command_chain_correlates_actual_episode_and_retains_success_after_zero_command():
@@ -2512,8 +2521,9 @@ def test_command_chain_correlates_actual_episode_and_retains_success_after_zero_
         "source_instance_id": 11, "command": (0.0, 0.0, 0.0), "final_publish_sequence": 45,
         "publisher_instance": 55}, context)
     actual = StampedFact(1250, 1260, "base_link", command, context)
-    observer = SimpleNamespace(graph_snapshot=lambda: {"topics": {"/cmd_vel": {
-        "publishers": (("final_twist_publisher", "/", "geometry_msgs/msg/Twist"),)}}},
+    query_calls = []
+    observer = _command_chain_observer(
+        lambda topic: query_calls.append(topic) or [_publisher('final_twist_publisher')],
         nav2_candidates=[candidate], accepted_envelopes=[envelope, unrelated_latest],
         safety_states=[safety], receipts=[receipt, zero_receipt], cmd_vel_commands=[actual])
     runner = object.__new__(ResearchAcceptanceRunner)
@@ -2524,6 +2534,7 @@ def test_command_chain_correlates_actual_episode_and_retains_success_after_zero_
     assert episode["pass"] is True
     assert episode["measured"]["sequence"] == 9
     assert runner._command_chain_fact() == episode
+    assert query_calls == ['/cmd_vel', '/cmd_vel']
 
 
 @pytest.mark.parametrize("mutation", ["sequence", "source_instance", "payload", "context"])
@@ -2536,8 +2547,8 @@ def test_command_chain_rejects_mismatched_identity_payload_or_context(mutation):
     sequence = 8 if mutation == "sequence" else 9
     instance = 12 if mutation == "source_instance" else 11
     envelope_command = (0.2, 0.0, 0.0) if mutation == "payload" else command
-    observer = SimpleNamespace(graph_snapshot=lambda: {"topics": {"/cmd_vel": {
-        "publishers": (("final_twist_publisher", "/", "geometry_msgs/msg/Twist"),)}}},
+    observer = _command_chain_observer(
+        lambda _topic: [_publisher('final_twist_publisher')],
         nav2_candidates=[StampedFact(900, 900, "base_link", (0.2, 0.0, 0.0), context)],
         accepted_envelopes=[StampedFact(1000, 1100, "base_link", {"source": 2,
             "sequence": sequence, "source_instance_id": instance,
@@ -2567,17 +2578,68 @@ def test_command_chain_requires_actual_cmd_vel_and_sole_final_publisher():
     receipt = StampedFact(1300, 1300, "base_link", {"source": 2, "sequence": 9,
         "source_instance_id": 11, "command": command, "final_publish_sequence": 44,
         "publisher_instance": 55}, context)
-    for publishers, commands in [((("final_twist_publisher", "/", "Twist"),), []),
-                                 ((("other_node", "/", "Twist"),),
-                                  [StampedFact(1250, 1260, "base_link", command, context)])]:
-        observer = SimpleNamespace(graph_snapshot=lambda p=publishers: {"topics": {"/cmd_vel": {"publishers": p}}},
+    cases = [
+        (['final_twist_publisher'], True),
+        ([], False),
+        (['other_node'], False),
+        (['final_twist_publisher', 'final_twist_publisher'], False),
+    ]
+    actual = [StampedFact(1250, 1260, "base_link", command, context)]
+    for publisher_names, expected in cases:
+        query_calls = []
+
+        def query(topic, names=publisher_names):
+            query_calls.append(topic)
+            return [_publisher(name) for name in names]
+
+        observer = _command_chain_observer(
+            query,
             nav2_candidates=[candidate], accepted_envelopes=[envelope], safety_states=[safety],
-            receipts=[receipt], cmd_vel_commands=commands)
+            receipts=[receipt], cmd_vel_commands=actual)
         runner = object.__new__(ResearchAcceptanceRunner)
         runner.observer = observer
         runner.path_snapshot = SimpleNamespace(context=context)
         runner.state = CampaignState()
-        assert runner._command_chain_fact()["pass"] is False
+        assert runner._command_chain_fact()["pass"] is expected
+        assert query_calls == ['/cmd_vel']
+
+
+def test_command_chain_requeries_direct_owner_for_retained_episode_changes():
+    """Recheck the live owner on every retained-episode evaluation."""
+    episode = {'pass': True, 'reason': 'retained', 'measured': {}}
+    answers = [[_publisher('final_twist_publisher')],
+               [_publisher('final_twist_publisher'), _publisher('intruder')],
+               []]
+    calls = []
+
+    def query(topic):
+        calls.append(topic)
+        return answers.pop(0)
+
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState(facts={'command_chain_episode': episode})
+    runner.observer = _command_chain_observer(query)
+    assert runner._command_chain_fact() == episode
+    assert runner._command_chain_fact()['pass'] is False
+    assert runner._command_chain_fact()['pass'] is False
+    assert calls == ['/cmd_vel', '/cmd_vel', '/cmd_vel']
+
+
+def test_command_chain_query_exception_no_retained_fallback():
+    """Fail closed when a current owner query raises."""
+    episode = {'pass': True, 'reason': 'retained', 'measured': {}}
+    calls = []
+
+    def query(topic):
+        calls.append(topic)
+        raise RuntimeError('graph query unavailable')
+
+    runner = object.__new__(ResearchAcceptanceRunner)
+    runner.state = CampaignState(facts={'command_chain_episode': episode})
+    runner.observer = _command_chain_observer(query)
+    with pytest.raises(RuntimeError, match='graph query unavailable'):
+        runner._command_chain_fact()
+    assert calls == ['/cmd_vel']
 
 
 class _Nav2FakeClock:
