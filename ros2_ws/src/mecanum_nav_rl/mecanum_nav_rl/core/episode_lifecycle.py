@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 from numbers import Real
-from threading import RLock
 
 from mecanum_nav_rl.core.goal_facts import (
     GoalFactJoinMode,
@@ -21,7 +20,16 @@ from mecanum_nav_rl.core.goal_facts import (
     TaskOracleResult,
     TaskOracleStatus,
 )
+from mecanum_nav_rl.core.issued_command_cutoff import (
+    CutoffSelection,
+    CutoffStatus,
+    ReceiptSource,
+    ReceiptStreamBinding,
+)
 from mecanum_nav_rl.core.lifecycle_types import (
+    CORE_TRANSACTION_LOCK,
+    CommittedGoalSettleState,
+    CommittedTaskHistorySample,
     EpisodeLifecycleIdentity,
     ExactObservationProvenance,
     PendingScenarioSession,
@@ -119,19 +127,69 @@ class ResetZeroReceipt:
     publish_stamp_ns: int
     source: str
     final_issued_command: PreviousNormalizedCommand
+    selection: CutoffSelection
+    stream_binding: ReceiptStreamBinding
 
     def __post_init__(self) -> None:
+        """Kiểm tra receipt zero đã chọn cùng cutoff và stream."""
         if type(self.receipt_id) is not str or not self.receipt_id:
-            raise ValueError("receipt_id must be non-empty")
+            raise ValueError('receipt_id must be non-empty')
         if not isinstance(self.lifecycle, EpisodeLifecycleIdentity):
-            raise TypeError("lifecycle must be EpisodeLifecycleIdentity")
-        object.__setattr__(self,"publish_stamp_ns",_require_non_negative_integer("publish_stamp_ns",self.publish_stamp_ns))
-        if self.source != "SAFE_STOP":
-            raise ValueError("reset zero receipt source must be SAFE_STOP")
-        if not isinstance(self.final_issued_command,PreviousNormalizedCommand):
-            raise TypeError("final_issued_command must be PreviousNormalizedCommand")
-        if any(v != 0.0 for v in (self.final_issued_command.vx,self.final_issued_command.vy,self.final_issued_command.wz)):
-            raise ValueError("reset receipt must carry the actual zero payload")
+            raise TypeError('lifecycle must be EpisodeLifecycleIdentity')
+        object.__setattr__(
+            self, 'publish_stamp_ns',
+            _require_non_negative_integer(
+                'publish_stamp_ns', self.publish_stamp_ns
+            )
+        )
+        if self.source != 'SAFE_STOP':
+            raise ValueError('reset zero receipt source must be SAFE_STOP')
+        if not isinstance(
+            self.final_issued_command, PreviousNormalizedCommand
+        ):
+            raise TypeError(
+                'final_issued_command must be PreviousNormalizedCommand'
+            )
+        if any(
+            v != 0.0 for v in (
+                self.final_issued_command.vx, self.final_issued_command.vy,
+                self.final_issued_command.wz
+            )
+        ):
+            raise ValueError(
+                'reset receipt must carry the actual zero payload'
+            )
+        if (
+            not isinstance(self.selection, CutoffSelection)
+            or self.selection.status is not CutoffStatus.READY
+        ):
+            raise ValueError('reset receipt requires a READY cutoff selection')
+        if not isinstance(self.stream_binding, ReceiptStreamBinding):
+            raise TypeError(
+                'reset receipt requires its ingress stream binding'
+            )
+        selected = self.selection.receipt
+        if selected is None or self.selection.cutoff_ros_ns is None:
+            raise ValueError('reset cutoff selection is incomplete')
+        if (
+            selected.receipt_key != self.receipt_id
+            or selected.lifecycle != self.lifecycle
+            or selected.final_publisher_instance_id
+            != self.stream_binding.final_publisher_instance_id
+            or selected.session_id != self.stream_binding.session_id
+            or selected.ingress_config_hash != self.stream_binding.config_hash
+            or selected.frame_id != self.stream_binding.frame_id
+            or self.stream_binding.lifecycle != self.lifecycle
+            or selected.source is not ReceiptSource.SAFE_STOP
+            or any(value != 0.0 for value in selected.final_command)
+        ):
+            raise ValueError(
+                'reset receipt does not match selected stream zero'
+            )
+        if self.publish_stamp_ns != selected.publish_stamp_ns:
+            raise ValueError(
+                'reset receipt timestamp differs from cutoff selection'
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,11 +251,18 @@ class ResetCommitFacts:
                 "previous_issued_command must be a PreviousNormalizedCommand"
             )
         if not isinstance(self.zero_receipt, ResetZeroReceipt):
-            raise ValueError("reset requires an actual published zero receipt")
+            raise ValueError('reset requires an actual published zero receipt')
         if self.zero_receipt.lifecycle != self.identity:
-            raise ValueError("reset zero receipt lifecycle does not match facts")
-        if self.zero_receipt.final_issued_command != self.previous_issued_command:
-            raise ValueError("reset history must equal the published zero receipt payload")
+            raise ValueError(
+                'reset zero receipt lifecycle does not match facts'
+            )
+        if (
+            self.zero_receipt.final_issued_command
+            != self.previous_issued_command
+        ):
+            raise ValueError(
+                'reset history must equal the published zero receipt payload'
+            )
         if any(
             component != 0.0
             for component in (
@@ -357,6 +422,8 @@ class EpisodeLifecycleSnapshot:
     consumed_receipt_ids: tuple[str, ...]
     active_transition_identity: TransitionIdentity | None
     committed_transition_ids: tuple[str, ...]
+    goal_settle_state: CommittedGoalSettleState | None
+    task_history: tuple[CommittedTaskHistorySample, ...]
     reset_in_progress: bool
     step_in_progress: bool
 
@@ -382,13 +449,16 @@ class EpisodeLifecycle:
     """
 
     def __init__(self) -> None:
-        self._lock = RLock()
+        self._lock = CORE_TRANSACTION_LOCK
         self._state = EpisodeLifecycleState.UNINITIALIZED
         self._identity: EpisodeLifecycleIdentity | None = None
+        self._last_authoritative_identity: EpisodeLifecycleIdentity | None = (
+            None
+        )
         self._step_index: int | None = None
         self._pending_scenario_session_binding: ScenarioSessionBinding | None = None
         self._pending_rearm_session: PendingScenarioSession | None = None
-        self._pending_rearm_previous_identity: EpisodeLifecycleIdentity | None = None
+        self._pending_rearm_previous_identity = None
         self._committed_scenario_session_binding: ScenarioSessionBinding | None = None
         self._reward_baseline: CommittedRewardBaseline | None = None
         self._reset_commit_facts: ResetCommitFacts | None = None
@@ -400,6 +470,8 @@ class EpisodeLifecycle:
         self._consumed_receipt_ids: tuple[str, ...] = ()
         self._active_transition_identity: TransitionIdentity | None = None
         self._committed_transition_ids: tuple[str, ...] = ()
+        self._goal_settle_state: CommittedGoalSettleState | None = None
+        self._task_history: tuple[CommittedTaskHistorySample, ...] = ()
         self._reset_in_progress = False
         self._step_in_progress = False
 
@@ -428,6 +500,7 @@ class EpisodeLifecycle:
                 raise LifecycleStateError("reset and step transactions cannot overlap")
             self._validate_new_reset_identity(identity)
             self._identity = identity
+            self._last_authoritative_identity = identity
             self._state = EpisodeLifecycleState.RESETTING
             self._pending_rearm_session = None
             self._pending_rearm_previous_identity = None
@@ -436,14 +509,20 @@ class EpisodeLifecycle:
             self._reset_in_progress = True
             return self._result(EpisodeOperationStatus.RESET_STARTED)
 
-    def begin_reset_pending(self, session: PendingScenarioSession) -> EpisodeLifecycleResult:
-        """Begin rearm without guessing the post-rearm generation or epoch."""
+    def begin_reset_pending(
+        self, session: PendingScenarioSession
+    ) -> EpisodeLifecycleResult:
+        """Bắt đầu rearm mà không đoán generation hoặc epoch kế tiếp."""
         if not isinstance(session, PendingScenarioSession):
-            raise TypeError("session must be PendingScenarioSession")
+            raise TypeError('session must be PendingScenarioSession')
         with self._lock:
             if self._reset_in_progress or self._step_in_progress:
-                raise LifecycleStateError("reset and step transactions cannot overlap")
-            self._pending_rearm_previous_identity = self._identity
+                raise LifecycleStateError(
+                    'reset and step transactions cannot overlap'
+                )
+            self._pending_rearm_previous_identity = (
+                self._last_authoritative_identity
+            )
             self._state = EpisodeLifecycleState.RESETTING
             self._identity = None
             self._clear_episode_facts()
@@ -451,27 +530,46 @@ class EpisodeLifecycle:
             self._reset_in_progress = True
             return self._result(EpisodeOperationStatus.RESET_STARTED)
 
-    def finalize_rearm(self, identity: EpisodeLifecycleIdentity) -> EpisodeLifecycleResult:
-        """Bind the authoritative post-rearm lifecycle identity supplied by owner."""
+    def finalize_rearm(
+        self, identity: EpisodeLifecycleIdentity
+    ) -> EpisodeLifecycleResult:
+        """Bind identity post-rearm authoritative do owner cung cấp."""
         if not isinstance(identity, EpisodeLifecycleIdentity):
-            raise TypeError("identity must be EpisodeLifecycleIdentity")
+            raise TypeError('identity must be EpisodeLifecycleIdentity')
         with self._lock:
-            if not self._reset_in_progress or self._pending_rearm_session is None:
-                raise LifecycleStateError("there is no pending identity binding")
+            if (
+                not self._reset_in_progress
+                or self._pending_rearm_session is None
+            ):
+                raise LifecycleStateError(
+                    'there is no pending identity binding'
+                )
             prior = self._pending_rearm_previous_identity
             if prior is not None:
-                if identity.episode_generation <= prior.episode_generation or identity.reset_epoch <= prior.reset_epoch:
-                    raise LifecycleIdentityError("stale", "authoritative rearm identity must advance generation and reset epoch")
+                if (
+                    identity.episode_generation <= prior.episode_generation
+                    or identity.reset_epoch <= prior.reset_epoch
+                ):
+                    raise LifecycleIdentityError(
+                        'stale',
+                        'authoritative rearm identity must advance generation '
+                        'and reset epoch'
+                    )
                 if identity.runtime_generation < prior.runtime_generation:
-                    raise LifecycleIdentityError("stale", "authoritative runtime generation cannot decrease")
-            session=self._pending_rearm_session
-            self._identity=identity
-            self._pending_rearm_session=None
-            self._pending_rearm_previous_identity=None
-            self._pending_scenario_session_binding=ScenarioSessionBinding(
-                identity,session.scenario_id,session.scenario_version,
-                session.scenario_content_sha256,session.gazebo_world_name,
-                session.world_file_sha256,session.coordinate_reference_id)
+                    raise LifecycleIdentityError(
+                        'stale',
+                        'authoritative runtime generation cannot decrease'
+                    )
+            session = self._pending_rearm_session
+            self._identity = identity
+            self._last_authoritative_identity = identity
+            self._pending_rearm_session = None
+            self._pending_rearm_previous_identity = None
+            self._pending_scenario_session_binding = ScenarioSessionBinding(
+                identity, session.scenario_id, session.scenario_version,
+                session.scenario_content_sha256, session.gazebo_world_name,
+                session.world_file_sha256, session.coordinate_reference_id
+            )
             return self._result(EpisodeOperationStatus.RESET_STARTED)
 
     def wait_for_initial_observation(
@@ -577,7 +675,13 @@ class EpisodeLifecycle:
             self._staged_contact_candidate = candidate
             return self._result(EpisodeOperationStatus.CONTACT_STAGED)
 
-    def commit_step(self, candidate: StepCommitCandidate) -> EpisodeLifecycleResult:
+    def commit_step(
+        self,
+        candidate: StepCommitCandidate,
+        *,
+        goal_settle_state: CommittedGoalSettleState | None = None,
+        task_history_sample: CommittedTaskHistorySample | None = None,
+    ) -> EpisodeLifecycleResult:
         """Atomically commit validated goal progress and other transition facts."""
 
         with self._lock:
@@ -598,6 +702,71 @@ class EpisodeLifecycle:
                 previous_committed_sim_time_ns=goal_fact.provenance.source_timestamp_ns,
                 scenario_session_binding=goal_fact.provenance.scenario_session_binding,
             )
+            if (goal_settle_state is None) != (task_history_sample is None):
+                return self._abort_step_locked(
+                    'goal settle state and task sample must commit together'
+                )
+            new_goal_settle_state = self._goal_settle_state
+            new_task_history = self._task_history
+            if goal_settle_state is not None:
+                if (
+                    type(goal_settle_state) is not CommittedGoalSettleState
+                    or type(
+                        task_history_sample
+                    ) is not CommittedTaskHistorySample
+                    or goal_settle_state.lifecycle != validated.identity
+                    or task_history_sample.lifecycle != validated.identity
+                    or (
+                        goal_settle_state.task_id,
+                        goal_settle_state.session_id,
+                        goal_settle_state.goal_id,
+                        goal_settle_state.goal_xy_m,
+                    )
+                    != (
+                        task_history_sample.task_id,
+                        task_history_sample.session_id,
+                        task_history_sample.goal_id,
+                        task_history_sample.goal_xy_m,
+                    )
+                    or not task_history_sample.required_health_valid
+                ):
+                    return self._abort_step_locked(
+                        'committed task history context is invalid'
+                    )
+                new_goal_settle_state = goal_settle_state
+                current_key = (
+                    task_history_sample.lifecycle,
+                    task_history_sample.task_id,
+                    task_history_sample.session_id,
+                    task_history_sample.goal_id,
+                    task_history_sample.goal_xy_m,
+                )
+                prior_samples = tuple(
+                    sample for sample in self._task_history
+                    if (
+                        sample.lifecycle,
+                        sample.task_id,
+                        sample.session_id,
+                        sample.goal_id,
+                        sample.goal_xy_m,
+                    ) == current_key
+                )
+                samples = (*prior_samples, task_history_sample)
+                window_start_ns = (
+                    task_history_sample.ros_time_ns - 10_000_000_000
+                )
+                before_window = tuple(
+                    sample for sample in samples
+                    if sample.ros_time_ns <= window_start_ns
+                )
+                after_window = tuple(
+                    sample for sample in samples
+                    if sample.ros_time_ns > window_start_ns
+                )
+                new_task_history = (
+                    (*before_window[-1:], *after_window)
+                    if before_window else after_window
+                )
             old_contact = self._staged_contact_candidate
             consumed_event_id = old_contact.event_id if old_contact is not None else None
             if consumed_event_id is not None:
@@ -619,6 +788,8 @@ class EpisodeLifecycle:
             self._previous_issued_command = validated.command_receipt.final_issued_command
             self._last_committed_command_receipt = validated.command_receipt
             self._last_committed_goal_progress = goal_progress
+            self._goal_settle_state = new_goal_settle_state
+            self._task_history = new_task_history
             self._step_index = validated.step_index
             self._state = validated.committed_state
             self._staged_contact_candidate = None
@@ -630,6 +801,37 @@ class EpisodeLifecycle:
                 goal_progress_input=goal_progress,
             )
 
+    def _prepare_step_reward_facts(
+        self, candidate: StepCommitCandidate
+    ) -> tuple[
+        CommittedRewardBaseline,
+        PreviousNormalizedCommand,
+        GoalProgressInput,
+        CommittedGoalSettleState | None,
+        tuple[CommittedTaskHistorySample, ...],
+        int,
+    ]:
+        """Xác thực step và đọc before-state mà không sửa state."""
+        with self._lock:
+            _, goal_progress = self._validate_step_candidate(candidate)
+            baseline = self._reward_baseline
+            previous_command = self._previous_issued_command
+            if not isinstance(baseline, CommittedRewardBaseline):
+                raise ValueError('step requires a committed reward baseline')
+            if not isinstance(previous_command, PreviousNormalizedCommand):
+                raise ValueError('step requires a committed previous command')
+            if self._reset_commit_facts is None:
+                raise ValueError('step requires a committed reset timestamp')
+            return (
+                baseline,
+                previous_command,
+                goal_progress,
+                self._goal_settle_state,
+                self._task_history,
+                self._reset_commit_facts.observation_provenance
+                .observation_timestamp_ns,
+            )
+
     def abort_step(self, reason: str) -> EpisodeLifecycleResult:
         """Abort before commit; retain committed before-state and do not consume contact."""
 
@@ -639,15 +841,16 @@ class EpisodeLifecycle:
             return self._abort_step_locked(reason)
 
     def _validate_new_reset_identity(self, identity: EpisodeLifecycleIdentity) -> None:
-        if self._identity is None:
+        prior = self._last_authoritative_identity
+        if prior is None:
             return
-        if identity.episode_generation <= self._identity.episode_generation:
+        if identity.episode_generation <= prior.episode_generation:
             raise LifecycleIdentityError(
                 "stale", "new reset episode_generation must strictly increase"
             )
-        if identity.reset_epoch <= self._identity.reset_epoch:
+        if identity.reset_epoch <= prior.reset_epoch:
             raise LifecycleIdentityError("stale", "new reset_epoch must strictly increase")
-        if identity.runtime_generation < self._identity.runtime_generation:
+        if identity.runtime_generation < prior.runtime_generation:
             raise LifecycleIdentityError("stale", "runtime_generation cannot decrease")
 
     def _require_identity(self, identity: EpisodeLifecycleIdentity) -> None:
@@ -706,16 +909,42 @@ class EpisodeLifecycle:
         if not isinstance(candidate.previous_issued_command, PreviousNormalizedCommand):
             raise TypeError("reset requires a PreviousNormalizedCommand")
         if not isinstance(candidate.zero_receipt, ResetZeroReceipt):
-            raise ValueError("observation0 requires an actual zero receipt")
-        if candidate.zero_receipt.lifecycle != candidate.identity:
-            raise ValueError("zero receipt lifecycle must match reset identity")
-        reset_barrier=_require_non_negative_integer("reset_barrier_ros_ns",candidate.reset_barrier_ros_ns)
-        if candidate.zero_receipt.publish_stamp_ns <= reset_barrier:
-            raise ValueError("zero receipt must follow the reset barrier")
-        if candidate.zero_receipt.publish_stamp_ns > provenance.observation_timestamp_ns:
-            raise ValueError("zero receipt must be issued at or before observation0 cutoff")
-        if candidate.zero_receipt.final_issued_command != candidate.previous_issued_command:
-            raise ValueError("observation0 command history must come from the selected zero receipt")
+            raise ValueError('observation0 requires an actual zero receipt')
+        zero = candidate.zero_receipt
+        selection = zero.selection
+        if zero.lifecycle != candidate.identity:
+            raise ValueError(
+                'zero receipt lifecycle must match reset identity'
+            )
+        reset_barrier = _require_non_negative_integer(
+            'reset_barrier_ros_ns', candidate.reset_barrier_ros_ns
+        )
+        if selection.status is not CutoffStatus.READY:
+            raise ValueError(
+                'observation0 requires a ready receipt cutoff selection'
+            )
+        if (
+            selection.cutoff_ros_ns != provenance.observation_timestamp_ns or
+            selection.reset_barrier_ros_ns != reset_barrier or
+            selection.stream_binding is None or
+            selection.stream_binding.lifecycle != candidate.identity or
+            selection.receipt is None or
+            selection.receipt.receipt_key != zero.receipt_id
+        ):
+            raise ValueError(
+                'reset zero selection does not bind this cutoff and reset'
+            )
+        if zero.publish_stamp_ns <= reset_barrier:
+            raise ValueError('zero receipt must follow the reset barrier')
+        if zero.publish_stamp_ns > provenance.observation_timestamp_ns:
+            raise ValueError(
+                'zero receipt must be issued at or before observation0 cutoff'
+            )
+        if zero.final_issued_command != candidate.previous_issued_command:
+            raise ValueError(
+                'observation0 command history must come from '
+                'the selected zero receipt'
+            )
         return ResetCommitFacts(
             identity=candidate.identity,
             observation_provenance=provenance,
@@ -828,6 +1057,8 @@ class EpisodeLifecycle:
         self._consumed_receipt_ids = ()
         self._active_transition_identity = None
         self._committed_transition_ids = ()
+        self._goal_settle_state = None
+        self._task_history = ()
 
     def _snapshot(self) -> EpisodeLifecycleSnapshot:
         return EpisodeLifecycleSnapshot(
@@ -846,6 +1077,8 @@ class EpisodeLifecycle:
             consumed_receipt_ids=self._consumed_receipt_ids,
             active_transition_identity=self._active_transition_identity,
             committed_transition_ids=self._committed_transition_ids,
+            goal_settle_state=self._goal_settle_state,
+            task_history=self._task_history,
             reset_in_progress=self._reset_in_progress,
             step_in_progress=self._step_in_progress,
         )
@@ -882,7 +1115,7 @@ __all__ = (
     "LifecycleStateError",
     "ResetCommitCandidate",
     "ResetCommitFacts",
-    "ResetZeroReceipt",
+    'ResetZeroReceipt',
     "ScenarioSessionBinding",
     "StepCommitCandidate",
     "TransitionIdentity",

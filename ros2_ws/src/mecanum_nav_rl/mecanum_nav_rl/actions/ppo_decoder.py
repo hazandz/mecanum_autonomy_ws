@@ -60,10 +60,11 @@ class V3ActionScales:
     max_wz_radps: float
 
     def __post_init__(self) -> None:
-        for name in ("max_vx_mps", "max_vy_mps", "max_wz_radps"):
+        """Kiểm tra các thang vận tốc V3 đều hữu hạn và dương."""
+        for name in ('max_vx_mps', 'max_vy_mps', 'max_wz_radps'):
             value = _require_finite_real(name, getattr(self, name))
             if value <= 0.0:
-                raise ValueError(f"{name} must be positive")
+                raise ValueError(f'{name} must be positive')
             object.__setattr__(self, name, value)
 
 
@@ -144,23 +145,33 @@ class PpoActionDecoder:
         return PpoActionDecodeResult(PpoActionDecodeStatus.READY, normalized_action, command)
 
     @staticmethod
-    def decode_v3(raw_action: object, scales: V3ActionScales) -> PpoActionDecodeResult:
-        """Decode against explicitly bound V3 scales, without Config V1 fallback."""
+    def decode_v3(
+        raw_action: object, scales: V3ActionScales
+    ) -> PpoActionDecodeResult:
+        """Giải mã action bằng thang V3 đã bind tường minh."""
         if not isinstance(scales, V3ActionScales):
-            return PpoActionDecodeResult(PpoActionDecodeStatus.INVALID_CONFIGURATION, None, None)
+            return PpoActionDecodeResult(
+                PpoActionDecodeStatus.INVALID_CONFIGURATION, None, None
+            )
         parsed = PpoActionDecoder._parse_raw_action(raw_action)
         if isinstance(parsed, PpoActionDecodeStatus):
             return PpoActionDecodeResult(parsed, None, None)
         try:
             action = NormalizedPpoAction(*parsed)
         except ValueError:
-            return PpoActionDecodeResult(PpoActionDecodeStatus.OUT_OF_BOUNDS, None, None)
+            return PpoActionDecodeResult(
+                PpoActionDecodeStatus.OUT_OF_BOUNDS, None, None
+            )
         except TypeError:
-            return PpoActionDecodeResult(PpoActionDecodeStatus.INVALID_INPUT, None, None)
+            return PpoActionDecodeResult(
+                PpoActionDecodeStatus.INVALID_INPUT, None, None
+            )
         command = VelocityCommand(action.vx * scales.max_vx_mps,
                                   action.vy * scales.max_vy_mps,
                                   action.wz * scales.max_wz_radps)
-        return PpoActionDecodeResult(PpoActionDecodeStatus.READY, action, command)
+        return PpoActionDecodeResult(
+            PpoActionDecodeStatus.READY, action, command
+        )
 
     @staticmethod
     def _parse_raw_action(

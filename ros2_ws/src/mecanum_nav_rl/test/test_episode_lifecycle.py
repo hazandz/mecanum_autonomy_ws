@@ -6,8 +6,6 @@ import ast
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
-import pytest
-
 from mecanum_nav_rl.core.episode_lifecycle import (
     CommandReceiptSnapshot,
     ContactCandidateSnapshot,
@@ -23,9 +21,20 @@ from mecanum_nav_rl.core.episode_lifecycle import (
     StepCommitCandidate,
     TransitionIdentity,
 )
-from mecanum_nav_rl.core.lifecycle_types import PendingScenarioSession, policy_transition_identity
-from mecanum_nav_rl.observations.previous_command import PreviousNormalizedCommand
+from mecanum_nav_rl.core.issued_command_cutoff import (
+    IssuedCommandReceiptView,
+    ReceiptSource,
+    ReceiptStreamBinding,
+    select_reset_zero_at_cutoff,
+)
+from mecanum_nav_rl.core.lifecycle_types import (
+    PendingScenarioSession,
+    policy_transition_identity,
+)
 from mecanum_nav_rl.core.scenario_session import ScenarioSessionBinding
+from mecanum_nav_rl.observations.previous_command import (
+    PreviousNormalizedCommand,
+)
 from mecanum_nav_rl.tasks.training_task_oracle import (
     GoalFactJoinMode,
     GoalFactProvenance,
@@ -33,6 +42,8 @@ from mecanum_nav_rl.tasks.training_task_oracle import (
     TaskOracleResult,
     TaskOracleStatus,
 )
+
+import pytest
 
 
 def _identity(generation: int) -> EpisodeLifecycleIdentity:
@@ -164,6 +175,28 @@ def _reset_candidate(
                 mode=GoalFactJoinMode.RESET_OBSERVATION0,
                 binding=binding or _binding(identity),
             )
+    cutoff = observation.observation_timestamp_ns
+    publish_stamp = max(1, cutoff - 1)
+    evaluation_now = max(cutoff + 1, publish_stamp + 1)
+    stream = ReceiptStreamBinding(
+        90, 'reset-session', 'a' * 64, identity, 'base_link'
+    )
+    zero = IssuedCommandReceiptView(
+        publish_stamp, 90, 1, ReceiptSource.SAFE_STOP, 8, 1, 0, '', identity,
+        'reset-session', 'a' * 64, (0.0, 0.0, 0.0), evaluation_now - 1,
+        'base_link', True
+    )
+    adjacent = IssuedCommandReceiptView(
+        cutoff + 1, 90, 2, ReceiptSource.SAFE_STOP, 8, 2, 0, '', identity,
+        'reset-session', 'a' * 64, (0.0, 0.0, 0.0), evaluation_now,
+        'base_link', True
+    )
+    selection = select_reset_zero_at_cutoff(
+        (zero, adjacent), binding=stream,
+        cutoff_ros_ns=cutoff, evaluation_ros_now_ns=evaluation_now,
+        evaluation_steady_now_ns=evaluation_now,
+        reset_barrier_ros_ns=0, physical_scales=(0.25, 0.2, 0.8)
+    )
     return ResetCommitCandidate(
         identity=identity,
         observation_provenance=observation,
@@ -175,8 +208,8 @@ def _reset_candidate(
         ),
         reset_barrier_ros_ns=0,
         zero_receipt=ResetZeroReceipt(
-            "test-published-zero-receipt", identity, 50, "SAFE_STOP",
-            PreviousNormalizedCommand(0.0, 0.0, 0.0),
+            zero.receipt_key, identity, zero.publish_stamp_ns, 'SAFE_STOP',
+            PreviousNormalizedCommand(0.0, 0.0, 0.0), selection, stream
         ),
     )
 
@@ -1292,37 +1325,200 @@ def test_lifecycle_source_has_no_tasks_dependency_even_locally() -> None:
 
 
 def test_observation0_requires_zero_receipt_after_reset_barrier() -> None:
-    identity=_identity(0)
-    lifecycle=EpisodeLifecycle()
-    lifecycle.begin_reset(identity,_binding(identity))
+    """Bắt buộc receipt zero thật sau barrier reset."""
+    identity = _identity(0)
+    lifecycle = EpisodeLifecycle()
+    lifecycle.begin_reset(identity, _binding(identity))
     lifecycle.wait_for_initial_observation(identity)
-    candidate=_reset_candidate(identity)
-    bad=replace(candidate,zero_receipt=None)
-    result=lifecycle.commit_reset(bad)
+    candidate = _reset_candidate(identity)
+    bad = replace(candidate, zero_receipt=None)
+    result = lifecycle.commit_reset(bad)
     assert result.status is EpisodeOperationStatus.RESET_ABORT
     assert result.snapshot.reward_baseline is None
 
 
-def test_rearm_binds_authoritative_identity_without_guessing_generation() -> None:
-    lifecycle=EpisodeLifecycle()
-    first=_identity(0)
-    _commit_reset(lifecycle,first)
-    session=PendingScenarioSession("scenario","1","a"*64,"world","b"*64,"local-frame")
-    pending=lifecycle.begin_reset_pending(session)
+def test_reset_zero_waits_for_adjacent_receipt() -> None:
+    """Keep reset pending until the real adjacent receipt is available."""
+    identity = _identity(0)
+    lifecycle = EpisodeLifecycle()
+    lifecycle.begin_reset(identity, _binding(identity))
+    lifecycle.wait_for_initial_observation(identity)
+    candidate = _reset_candidate(identity)
+    selection = candidate.zero_receipt.selection
+    before = lifecycle.snapshot
+    pending = select_reset_zero_at_cutoff(
+        (selection.receipt,), binding=selection.stream_binding,
+        cutoff_ros_ns=selection.cutoff_ros_ns,
+        evaluation_ros_now_ns=selection.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=selection.evaluation_steady_now_ns,
+        reset_barrier_ros_ns=selection.reset_barrier_ros_ns,
+        physical_scales=selection.physical_scales,
+    )
+    assert pending.status.value == 'pending'
+    assert lifecycle.snapshot == before
+    committed = lifecycle.commit_reset(candidate)
+    assert committed.status is EpisodeOperationStatus.RESET_COMMITTED
+    expected_zero = PreviousNormalizedCommand(0.0, 0.0, 0.0)
+    assert committed.snapshot.previous_issued_command == expected_zero
+    selected = candidate.zero_receipt.selection.receipt
+    assert selected.source is ReceiptSource.SAFE_STOP
+    with pytest.raises(LifecycleStateError):
+        lifecycle.commit_reset(candidate)
+    assert lifecycle.snapshot == committed.snapshot
+
+
+def test_reset_zero_replacement_keeps_lifecycle_pending() -> None:
+    """Do not admit the earlier zero after a later pre-cutoff publication."""
+    identity = _identity(0)
+    lifecycle = EpisodeLifecycle()
+    lifecycle.begin_reset(identity, _binding(identity))
+    lifecycle.wait_for_initial_observation(identity)
+    candidate = _reset_candidate(identity)
+    selection = candidate.zero_receipt.selection
+    zero = selection.receipt
+    cutoff = selection.cutoff_ros_ns
+    later = replace(
+        selection.adjacent_receipt,
+        publish_stamp_ns=cutoff,
+        source=ReceiptSource.POLICY,
+        source_instance_id=7,
+        step_index=1,
+        transition_id='transition-1',
+        final_command=(0.1, 0.0, 0.0),
+    )
+    boundary = replace(
+        selection.adjacent_receipt,
+        final_publish_sequence=later.final_publish_sequence + 1,
+        publish_stamp_ns=cutoff + 1,
+        source_sequence=later.source_sequence + 1,
+    )
+    before = lifecycle.snapshot
+    rejected = select_reset_zero_at_cutoff(
+        (zero, later, boundary),
+        binding=selection.stream_binding,
+        cutoff_ros_ns=cutoff,
+        evaluation_ros_now_ns=selection.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=selection.evaluation_steady_now_ns,
+        reset_barrier_ros_ns=selection.reset_barrier_ros_ns,
+        physical_scales=selection.physical_scales,
+    )
+    assert rejected.status.value == 'rejected'
+    assert lifecycle.snapshot == before
+
+
+@pytest.mark.parametrize('mismatch', ['cutoff', 'reset_barrier'])
+def test_reset_rejects_cutoff_or_barrier_mismatch(
+    mismatch: str,
+) -> None:
+    """Reject cutoff or barrier proof from another observation0 context."""
+    identity = _identity(0)
+    lifecycle = EpisodeLifecycle()
+    lifecycle.begin_reset(identity, _binding(identity))
+    lifecycle.wait_for_initial_observation(identity)
+    candidate = _reset_candidate(identity)
+    if mismatch == 'cutoff':
+        provenance = _provenance(identity, 101)
+        goal_result = _goal_result(
+            identity, provenance, 2.5,
+            mode=GoalFactJoinMode.RESET_OBSERVATION0,
+            binding=_binding(identity),
+        )
+        invalid = replace(
+            candidate,
+            observation_provenance=provenance,
+            goal_result=goal_result,
+        )
+    else:
+        invalid = replace(candidate, reset_barrier_ros_ns=1)
+    result = lifecycle.commit_reset(invalid)
+    assert result.status is EpisodeOperationStatus.RESET_ABORT
+    assert result.snapshot.reward_baseline is None
+    assert result.snapshot.previous_issued_command is None
+    assert result.snapshot.step_index is None
+    assert result.snapshot.consumed_receipt_ids == ()
+    assert result.snapshot.committed_transition_ids == ()
+
+
+def test_old_lifecycle_reset_selection_is_rejected() -> None:
+    """Reject a ready selection retained from the previous lifecycle."""
+    old_identity = _identity(0)
+    new_identity = EpisodeLifecycleIdentity(9, 12, 4)
+    lifecycle = EpisodeLifecycle()
+    _commit_reset(lifecycle, old_identity)
+    old_candidate = _reset_candidate(old_identity)
+    session = PendingScenarioSession(
+        'scenario', '1', 'a' * 64, 'world', 'b' * 64, 'local-frame'
+    )
+    lifecycle.begin_reset_pending(session)
+    lifecycle.finalize_rearm(new_identity)
+    lifecycle.wait_for_initial_observation(new_identity)
+    new_candidate = _reset_candidate(new_identity)
+    stale_selection = replace(
+        new_candidate, zero_receipt=old_candidate.zero_receipt
+    )
+    result = lifecycle.commit_reset(stale_selection)
+    assert result.status is EpisodeOperationStatus.RESET_ABORT
+    assert result.snapshot.identity == new_identity
+    assert result.snapshot.reward_baseline is None
+
+
+def test_rearm_binds_authoritative_identity_without_guessing_generation(
+) -> None:
+    """Bind lifecycle identity authoritative sau rearm."""
+    lifecycle = EpisodeLifecycle()
+    first = _identity(0)
+    _commit_reset(lifecycle, first)
+    session = PendingScenarioSession(
+        'scenario', '1', 'a' * 64, 'world', 'b' * 64, 'local-frame'
+    )
+    pending = lifecycle.begin_reset_pending(session)
     assert pending.snapshot.identity is None
-    authoritative=EpisodeLifecycleIdentity(9,12,4)
-    bound=lifecycle.finalize_rearm(authoritative)
+    authoritative = EpisodeLifecycleIdentity(9, 12, 4)
+    bound = lifecycle.finalize_rearm(authoritative)
     assert bound.snapshot.identity == authoritative
-    assert bound.snapshot.pending_scenario_session_binding.lifecycle_identity == authoritative
+    assert (
+        bound.snapshot.pending_scenario_session_binding.lifecycle_identity
+        == authoritative
+    )
 
 
-def test_policy_transition_token_is_stable_uuid5_from_session_lifecycle_and_source_key() -> None:
-    identity=_identity(4)
-    first=policy_transition_identity(identity=identity,session_id="session-A",
-        source_instance_id=123,source_sequence=8,step_index=1)
-    repeated=policy_transition_identity(identity=identity,session_id="session-A",
-        source_instance_id=123,source_sequence=8,step_index=1)
-    other=policy_transition_identity(identity=identity,session_id="session-A",
-        source_instance_id=123,source_sequence=9,step_index=2)
-    assert first==repeated and first.transition_id==str(__import__("uuid").UUID(first.transition_id))
-    assert len(first.transition_id)==36 and first.transition_id!=other.transition_id
+def test_authoritative_identity_survives_reset_abort_and_retry() -> None:
+    """Giữ identity trước reset để chặn generation cũ sau retry."""
+    lifecycle = EpisodeLifecycle()
+    first = _identity(0)
+    _commit_reset(lifecycle, first)
+    session = PendingScenarioSession(
+        'scenario', '1', 'a' * 64, 'world', 'b' * 64, 'local-frame'
+    )
+    lifecycle.begin_reset_pending(session)
+    lifecycle.abort_reset('injected reset abort')
+    lifecycle.begin_reset_pending(session)
+    with pytest.raises(LifecycleIdentityError):
+        lifecycle.finalize_rearm(first)
+    newer = EpisodeLifecycleIdentity(9, 12, 4)
+    result = lifecycle.finalize_rearm(newer)
+    assert result.snapshot.identity == newer
+    assert result.snapshot.reward_baseline is None
+
+
+def test_policy_transition_uuid5_identity_is_stable() -> None:
+    """Ánh xạ khóa POLICY ổn định thành UUIDv5 cho mỗi transition."""
+    identity = _identity(4)
+    first = policy_transition_identity(
+        identity=identity, session_id='session-A',
+        source_instance_id=123, source_sequence=8, step_index=1
+    )
+    repeated = policy_transition_identity(
+        identity=identity, session_id='session-A',
+        source_instance_id=123, source_sequence=8, step_index=1
+    )
+    other = policy_transition_identity(
+        identity=identity, session_id='session-A',
+        source_instance_id=123, source_sequence=9, step_index=2
+    )
+    assert first == repeated
+    assert first.transition_id == str(
+        __import__('uuid').UUID(first.transition_id)
+    )
+    assert len(first.transition_id) == 36
+    assert first.transition_id != other.transition_id
