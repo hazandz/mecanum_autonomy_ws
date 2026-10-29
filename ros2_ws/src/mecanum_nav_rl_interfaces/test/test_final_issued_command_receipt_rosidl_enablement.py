@@ -21,14 +21,18 @@ EXPECTED_RECEIPT_SHA256 = (
 HISTORICAL_RECEIPT_SHA256 = (
     "0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a"
 )
-EXPECTED_INTERFACE_FILES = [
+# Live ROSIDL inventory for package version 2.6.0.
+EXPECTED_LIVE_INTERFACE_FILES = [
     "msg/Heartbeat.msg",
     "msg/SafetyState.msg",
     "msg/NavigationState.msg",
     "msg/CommandEnvelope.msg",
     "msg/FinalIssuedCommandReceipt.msg",
     "msg/SafetyLifecycleState.msg",
+    'msg/LocalTrainingSafetyInput.msg',
+    'msg/SimulationContactState.msg',
 ]
+# This list belongs to the immutable historical WP-06 evidence packet.
 EXPECTED_ALLOWLIST = [
     "ros2_ws/src/mecanum_nav_rl_interfaces/CMakeLists.txt",
     "ros2_ws/src/mecanum_nav_rl_interfaces/package.xml",
@@ -62,14 +66,15 @@ def test_receipt_hash_and_rosidl_interface_list_are_exact() -> None:
     )
     assert generation is not None
     interfaces = re.findall(r'"(msg/[^"\n]+\.msg)"', generation.group(1))
-    assert interfaces == EXPECTED_INTERFACE_FILES
+    assert len(interfaces) == len(set(interfaces))
+    assert interfaces == EXPECTED_LIVE_INTERFACE_FILES
     assert cmake.count('"msg/FinalIssuedCommandReceipt.msg"') == 1
     assert "ament_add_pytest_test(test_final_issued_command_receipt_rosidl_enablement" in cmake
 
 
 def test_version_and_no_runtime_executable_or_library() -> None:
     package = ET.parse(PACKAGE_ROOT / "package.xml").getroot()
-    assert package.findtext("version") == "2.5.0"
+    assert package.findtext('version') == '2.6.0'
     cmake = (PACKAGE_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_executable(" not in cmake
     assert "add_library(" not in cmake

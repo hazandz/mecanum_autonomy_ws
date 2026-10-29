@@ -1,8 +1,16 @@
 runtime:
   navigation_mode: LOCAL_TRAINING
 navigation:
-  local_controller_owner: PPO
-  path_planner_owner:
-    field_path: navigation.path_planner_owner
-    token: FIXED_ARCH
-    reference_id: local_training_no_nav2_controller
+  planner_owner: NONE
+  controller_owner: PPO
+  path_validity_contract_id: LOCAL_TASK_GOAL_NO_PATH
+  local_reference_contract_id: B1_LOCAL_TRAINING_NOISY_ODOMETRY_REFERENCE
+  goal_type: position_only
+  goal_settle_contract_id: B1_LOCAL_TRAINING_ORACLE_SETTLE
+  local_training:
+    planner_owner: NONE
+    controller_owner: PPO
+    goal_source: LOCAL_TASK_GOAL
+    requires_amcl: false
+    requires_nav2: false
+    requires_follow_path: false

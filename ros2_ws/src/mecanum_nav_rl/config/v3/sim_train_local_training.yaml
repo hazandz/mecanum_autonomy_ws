@@ -1,0 +1,14 @@
+schema_version: "3.1"
+profile: profiles/sim_train.yaml
+mode: modes/local_training.yaml
+composition:
+  base: local_training/base.yaml
+  frames: local_training/frames.yaml
+  topics_qos: local_training/topics_qos.yaml
+  state_localization: local_training/state_localization.yaml
+  system_contracts: local_training/system_contracts.yaml
+asset_binding_input:
+  status: UNRESOLVED
+  scenario_id: B2_TRAINING_SCENARIO_REQUIRED
+  world_id: b2_training_arena
+  manifest_sha256: REQUIRED_BUILD_INPUT

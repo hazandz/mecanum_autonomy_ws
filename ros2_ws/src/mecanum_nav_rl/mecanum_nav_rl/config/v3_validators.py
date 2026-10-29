@@ -27,11 +27,26 @@ def validate_resolved_config_v3(config: ResolvedConfigV3) -> None:
         or config.runtime.navigation_mode.value != "NAV2_BASELINE"
     ):
         raise ValueError("Step07 acceptance policy is restricted to sim_eval/NAV2_BASELINE")
-    if config.frames_tf.odom_to_base_link_authority != "EKF":
+    if config.schema_version == '3.1':
+        if config.frames_tf.odom_to_base_link_authority is not None:
+            raise ValueError(
+                'LOCAL_TRAINING must not advertise a TF odometry authority'
+            )
+        if config.frames_tf.map_to_odom_authority is not None:
+            raise ValueError(
+                'LOCAL_TRAINING must not advertise map to odom authority'
+            )
+    elif config.frames_tf.odom_to_base_link_authority != 'EKF':
         raise ValueError("only EKF may own odom to base_link")
     if config.frames_tf.base_link_to_lidar_authority != "robot_state_publisher":
         raise ValueError("robot_state_publisher must own base_link to lidar")
-    if config.frames_tf.map_to_odom_authority != config.localization.provider:
+    if (
+        config.schema_version != '3.1'
+        and (
+            config.frames_tf.map_to_odom_authority
+            != config.localization.provider
+        )
+    ):
         raise ValueError("map to odom authority must match localization provider")
     if not config.topics_qos:
         raise ValueError("resolved v3 config requires at least one topic/QoS contract")

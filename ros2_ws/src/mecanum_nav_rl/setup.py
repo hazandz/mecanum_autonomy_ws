@@ -14,6 +14,7 @@ _V3_CONFIG_DATA_FILES = [
             "config/v3/frames.yaml",
             "config/v3/acceptance.yaml",
             "config/v3/measurements.yaml",
+            'config/v3/sim_train_local_training.yaml',
         ],
     ),
     (
@@ -32,6 +33,16 @@ _V3_CONFIG_DATA_FILES = [
             "config/v3/modes/mapping.yaml",
             "config/v3/modes/nav2_baseline.yaml",
             "config/v3/modes/hybrid_ai_local.yaml",
+        ],
+    ),
+    (
+        'share/mecanum_nav_rl/config/v3/local_training',
+        [
+            'config/v3/local_training/base.yaml',
+            'config/v3/local_training/frames.yaml',
+            'config/v3/local_training/topics_qos.yaml',
+            'config/v3/local_training/state_localization.yaml',
+            'config/v3/local_training/system_contracts.yaml',
         ],
     ),
     (

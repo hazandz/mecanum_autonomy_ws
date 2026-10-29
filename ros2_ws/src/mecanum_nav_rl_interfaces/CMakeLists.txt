@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CommandEnvelope.msg"
   "msg/FinalIssuedCommandReceipt.msg"
   "msg/SafetyLifecycleState.msg"
+  "msg/LocalTrainingSafetyInput.msg"
+  "msg/SimulationContactState.msg"
   DEPENDENCIES
     std_msgs
     geometry_msgs
@@ -34,6 +36,9 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_safety_lifecycle_state_interface
     test/test_safety_lifecycle_state_interface.py
+  )
+  ament_add_pytest_test(test_local_training_interfaces
+    test/test_local_training_interfaces.py
   )
 endif()
 

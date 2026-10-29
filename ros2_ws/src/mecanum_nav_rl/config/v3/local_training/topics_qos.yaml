@@ -1,0 +1,36 @@
+topics_qos:
+  - name: /scan
+    message_type: sensor_msgs/msg/LaserScan
+    publisher_owner: SIM_SENSOR_SOURCE
+    subscriber_owner: LOCAL_TRAINING_INGRESS
+    qos_profile_id: RELIABLE_VOLATILE_KEEP_LAST_10
+    frame_contract_id: lidar_frame_to_base_link_static_extrinsic
+    freshness_policy_id: SCAN_ROS_AND_STEADY_AGE_500MS
+  - name: /mecanum/local_training/safety_input
+    message_type: mecanum_nav_rl_interfaces/msg/LocalTrainingSafetyInput
+    publisher_owner: SESSION_BOUND_LOCAL_TRAINING_INGRESS
+    subscriber_owner: LOCAL_TRAINING_SAFETY_AND_BACKEND_ADMISSION
+    qos_profile_id: RELIABLE_VOLATILE_KEEP_LAST_10
+    frame_contract_id: base_link_no_pose_or_goal
+    freshness_policy_id: SESSION_IDENTITY_AND_LOCAL_STEADY_RECEIVE_TIME
+  - name: /mecanum/local_training/backend_state
+    message_type: mecanum_nav_rl_interfaces/msg/SimulationContactState
+    publisher_owner: NATIVE_B2_BACKEND
+    subscriber_owner: LOCAL_TRAINING_INGRESS
+    qos_profile_id: RELIABLE_VOLATILE_KEEP_LAST_50
+    frame_contract_id: world
+    freshness_policy_id: BACKEND_STATUS_RECEIVE_AGE_200MS_WHILE_RUNNING
+  - name: /cmd_vel
+    message_type: geometry_msgs/msg/Twist
+    publisher_owner: FinalTwistPublisher
+    subscriber_owner: NATIVE_B2_BACKEND_CAPTURE
+    qos_profile_id: B2_BACKEND_COMMAND_CAPTURE
+    frame_contract_id: base_link_planar_twist
+    freshness_policy_id: FINAL_COMMAND_TIMEOUT_100MS_STEADY
+  - name: /mecanum/final_issued_command
+    message_type: mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt
+    publisher_owner: FinalTwistPublisher
+    subscriber_owner: NATIVE_B2_BACKEND
+    qos_profile_id: RECEIPT_V2_EXISTING_CONTRACT
+    frame_contract_id: base_link_planar_twist_and_publication_identity
+    freshness_policy_id: ACTUATOR_WATCHDOG_100MS_STEADY

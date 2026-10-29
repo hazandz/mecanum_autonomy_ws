@@ -1,0 +1,9 @@
+state_estimation:
+  provider: INTERNAL_SIMULATED_ODOMETRY
+  policy_pose_source: NOISY_SIMULATED_ODOMETRY
+  ground_truth_policy_access: false
+localization:
+  provider: NOT_APPLICABLE_LOCAL_TRAINING
+  map_id: null
+  lifecycle_contract_id: null
+  covariance_jump_contract_id: null

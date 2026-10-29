@@ -1,0 +1,40 @@
+uint16 SCHEMA_VERSION=1
+
+uint32 FAULT_CONTEXT=1
+uint32 FAULT_COMMAND_SEQUENCE=2
+uint32 FAULT_COMMAND_STALE=4
+uint32 FAULT_COMMAND_INVALID=8
+uint32 FAULT_CONTACT_COVERAGE=16
+uint32 FAULT_CONTACT_CLASSIFICATION=32
+uint32 FAULT_CLOCK=64
+uint32 FAULT_ACTUATOR=128
+uint32 FAULT_QUEUE=256
+
+std_msgs/Header header
+uint16 schema_version
+string<=64 session_id
+string<=64 config_hash
+
+uint64 backend_instance_id
+uint64 status_sequence
+uint64 episode_generation
+uint32 reset_epoch
+uint32 runtime_generation
+
+uint64 physics_iteration
+uint64 required_collision_mask
+uint64 observed_collision_mask
+bool coverage_complete
+bool contact_source_healthy
+bool contact_active
+
+bool paused
+bool actuator_inhibited
+bool local_zero_override
+uint32 fault_flags
+
+bool applied_receipt_valid
+uint64 applied_final_publisher_instance_id
+uint64 applied_final_publish_sequence
+uint64 applied_physics_iteration
+builtin_interfaces/Time applied_sim_stamp

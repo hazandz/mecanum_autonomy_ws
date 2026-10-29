@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
 import os
+from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from mecanum_nav_rl.config.v3_policy import (
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _V3_ROOT = _PACKAGE_ROOT / "config" / "v3"
+_V3_SHARE_DESTINATION = 'share/mecanum_nav_rl/config/v3'
 _REQUIRED_ASSETS = (
     "base.yaml",
     "profiles/sim_train.yaml",
@@ -41,7 +43,50 @@ _REQUIRED_ASSETS = (
     "measurements.yaml",
     "algorithms/ppo.yaml",
     "step07_research_acceptance.yaml",
+    'sim_train_local_training.yaml',
+    'local_training/base.yaml',
+    'local_training/frames.yaml',
+    'local_training/topics_qos.yaml',
+    'local_training/state_localization.yaml',
+    'local_training/system_contracts.yaml',
 )
+_EXPECTED_V3_INSTALL_MAPPING = {
+    'config/v3/base.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/topics.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/qos.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/frames.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/acceptance.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/measurements.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/sim_train_local_training.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/step07_research_acceptance.yaml': _V3_SHARE_DESTINATION,
+    'config/v3/profiles/sim_train.yaml': f'{_V3_SHARE_DESTINATION}/profiles',
+    'config/v3/profiles/sim_eval.yaml': f'{_V3_SHARE_DESTINATION}/profiles',
+    'config/v3/profiles/deploy_sim.yaml': f'{_V3_SHARE_DESTINATION}/profiles',
+    'config/v3/profiles/deploy_real.yaml': f'{_V3_SHARE_DESTINATION}/profiles',
+    'config/v3/modes/local_training.yaml': f'{_V3_SHARE_DESTINATION}/modes',
+    'config/v3/modes/mapping.yaml': f'{_V3_SHARE_DESTINATION}/modes',
+    'config/v3/modes/nav2_baseline.yaml': f'{_V3_SHARE_DESTINATION}/modes',
+    'config/v3/modes/hybrid_ai_local.yaml': f'{_V3_SHARE_DESTINATION}/modes',
+    'config/v3/algorithms/ppo.yaml': f'{_V3_SHARE_DESTINATION}/algorithms',
+    'config/v3/resolved/sim_eval_nav2_baseline.resolved.json': (
+        f'{_V3_SHARE_DESTINATION}/resolved'
+    ),
+    'config/v3/local_training/base.yaml': (
+        f'{_V3_SHARE_DESTINATION}/local_training'
+    ),
+    'config/v3/local_training/frames.yaml': (
+        f'{_V3_SHARE_DESTINATION}/local_training'
+    ),
+    'config/v3/local_training/topics_qos.yaml': (
+        f'{_V3_SHARE_DESTINATION}/local_training'
+    ),
+    'config/v3/local_training/state_localization.yaml': (
+        f'{_V3_SHARE_DESTINATION}/local_training'
+    ),
+    'config/v3/local_training/system_contracts.yaml': (
+        f'{_V3_SHARE_DESTINATION}/local_training'
+    ),
+}
 _TOKEN_LITERALS = {
     "FIXED_ARCH",
     "SIM_BASELINE",
@@ -77,6 +122,88 @@ def _walk_tokens(value: object) -> tuple[Mapping[str, object], ...]:
         for nested in value:
             found.extend(_walk_tokens(nested))
     return tuple(found)
+
+
+def _load_v3_config_data_files() -> list[tuple[str, list[str]]]:
+    setup_path = _PACKAGE_ROOT / 'setup.py'
+    setup_tree = ast.parse(
+        setup_path.read_text(encoding='utf-8'), filename=str(setup_path)
+    )
+    data_files_node = next(
+        node.value
+        for node in setup_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == '_V3_CONFIG_DATA_FILES'
+            for target in node.targets
+        )
+    )
+    return ast.literal_eval(data_files_node)
+
+
+def _assert_v3_install_mapping(
+    data_files: list[tuple[str, list[str]]],
+) -> None:
+    declared = [
+        (source, destination)
+        for destination, sources in data_files
+        if destination.startswith(_V3_SHARE_DESTINATION)
+        for source in sources
+    ]
+    source_paths = [source for source, _ in declared]
+    assert len(declared) == len(set(declared)), (
+        'duplicate V3 asset declaration'
+    )
+    assert len(source_paths) == len(set(source_paths)), (
+        'duplicate V3 source path'
+    )
+    assert dict(declared) == _EXPECTED_V3_INSTALL_MAPPING
+
+
+def test_v3_install_mapping_rejects_missing_training_fragment() -> None:
+    """Reject a declared V3 package that omits one training YAML file."""
+    data_files = deepcopy(_load_v3_config_data_files())
+    local_training = next(
+        sources
+        for destination, sources in data_files
+        if destination == f'{_V3_SHARE_DESTINATION}/local_training'
+    )
+    local_training.remove('config/v3/local_training/frames.yaml')
+    with pytest.raises(AssertionError):
+        _assert_v3_install_mapping(data_files)
+
+
+def test_v3_install_mapping_rejects_wrong_destination() -> None:
+    """Reject a training fragment installed into the wrong share directory."""
+    data_files = deepcopy(_load_v3_config_data_files())
+    local_training = next(
+        sources
+        for destination, sources in data_files
+        if destination == f'{_V3_SHARE_DESTINATION}/local_training'
+    )
+    local_training.remove('config/v3/local_training/frames.yaml')
+    data_files.append(
+        (
+            _V3_SHARE_DESTINATION,
+            ['config/v3/local_training/frames.yaml'],
+        )
+    )
+    with pytest.raises(AssertionError):
+        _assert_v3_install_mapping(data_files)
+
+
+def test_v3_install_mapping_rejects_duplicate_declaration() -> None:
+    """Reject duplicate source declarations in the V3 package assets."""
+    data_files = deepcopy(_load_v3_config_data_files())
+    local_training = next(
+        sources
+        for destination, sources in data_files
+        if destination == f'{_V3_SHARE_DESTINATION}/local_training'
+    )
+    local_training.append('config/v3/local_training/frames.yaml')
+    with pytest.raises(AssertionError):
+        _assert_v3_install_mapping(data_files)
 
 
 def test_all_required_v3_assets_exist_and_parse_fail_closed() -> None:
@@ -202,37 +329,27 @@ def test_after_build_every_v3_asset_is_installed_with_identical_content() -> Non
     else:
         pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_OUTSIDE_WORKTREE")
 
-    setup_path = _PACKAGE_ROOT / "setup.py"
-    setup_tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-    data_files_node = next(
-        node.value
-        for node in setup_tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "_V3_CONFIG_DATA_FILES" for target in node.targets)
-    )
-    declared_data_files = ast.literal_eval(data_files_node)
-    declared_assets: list[tuple[str, str]] = []
-    for destination, sources in declared_data_files:
-        if destination.startswith("share/mecanum_nav_rl/config/v3"):
-            for source in sources:
-                declared_assets.append((destination, source))
-    assert declared_assets, "setup.py must declare V3 config assets"
-    assert "config/v3/resolved/sim_eval_nav2_baseline.resolved.json" in {
-        source for _, source in declared_assets
-    }
+    declared_data_files = _load_v3_config_data_files()
+    _assert_v3_install_mapping(declared_data_files)
 
-    package_prefixes = (install_base / "mecanum_nav_rl", install_base)
-    for destination, source_name in declared_assets:
+    from ament_index_python.packages import get_package_share_directory
+
+    installed_share = Path(
+        get_package_share_directory('mecanum_nav_rl')
+    ).resolve()
+    try:
+        installed_share.relative_to(install_base.resolve())
+    except ValueError:
+        pytest.fail(f'AMENT_SHARE_OUTSIDE_INSTALL_BASE: {installed_share}')
+
+    for source_name in _EXPECTED_V3_INSTALL_MAPPING:
         source = _PACKAGE_ROOT / source_name
         assert source.is_file(), source
-        installed_candidates = [prefix / destination / Path(source_name).name for prefix in package_prefixes]
-        installed = next(
-            (candidate for candidate in installed_candidates if candidate.is_file()),
-            installed_candidates[0],
-        )
+        relative_asset = Path(source_name).relative_to('config/v3')
+        installed = installed_share / 'config' / 'v3' / relative_asset
         try:
             installed.resolve().relative_to(install_base.resolve())
         except ValueError:
-            pytest.fail(f"INSTALL_CLOSURE_PATH_ESCAPES_BASE: {installed}")
+            pytest.fail(f'INSTALL_CLOSURE_PATH_ESCAPES_BASE: {installed}')
         assert installed.is_file(), installed
         assert installed.read_bytes() == source.read_bytes(), (source, installed)

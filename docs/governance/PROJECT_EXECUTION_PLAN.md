@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.15` Roadmap B B1 offline implementation review snapshot |
+| Revision | `0.10.16` Roadmap B B2.1 packaging correction scope |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -19,6 +19,16 @@
 - This plan controls implementation sequencing, dependency, Git delivery and progress reporting only.
 - This plan cannot change frozen TF, Ground Truth, hybrid Nav2/PPO, holonomic `vy`, safety, artifact or deploy-real contracts.
 - Any architecture change requires an approved ACR or explicit user decision; it must not be hidden as a plan update.
+
+### Roadmap B B2.1 packaging correction — offline scope
+
+Theo prompt Owner ngày 2026-10-29, lát cắt sửa packaging/test tiếp tục cùng
+candidate B2.1 và bổ sung `setup.py` cùng regression test ROSIDL lịch sử vào
+allowlist. Chỉ build ngoại tuyến riêng `mecanum_nav_rl_interfaces` và
+`mecanum_nav_rl` bằng dependency underlay sẵn có; build/install/log ở thư mục
+tạm ngoài repository. Đây là quyền kiểm tra source và install closure, không
+phải runtime, không đổi trạng thái B2.1/B2/Gate và không thay thế audit độc
+lập.
 
 ## Current static audit snapshot
 
@@ -1040,3 +1050,25 @@ PEP-001 rev.0.10.15 is a review-branch snapshot only; it makes no PEP work
 package, Roadmap B milestone, runtime, integration or Gate status transition.
 Its candidate commit is the consolidated B1 delivery commit containing this
 record; the commit SHA is established only by that delivery.
+
+## Roadmap B B2.1 — Owner-authorized offline candidate
+
+The Owner execution instruction for exact base
+`bbd5a3c68e6745b5d143688266e044fa25093390` identifies B1 as `CLOSED` and
+integrated. This explicit Owner statement is recorded without inferring audit
+PASS from ancestry. The older Roadmap B B1 planning notes above remain historical
+snapshots and are not rewritten.
+
+B2.1 scope is schema 3.1 `sim_train` / `LOCAL_TRAINING`, two public message
+declarations, pure V3 model/validator/composition/compiler support, focused
+offline tests, and the existing Roadmap B ACR/governance routing. B2.1 does not
+create world/scenario assets, a resolved production config, a native backend,
+GUI, runtime producers/consumers, reset or actuator behavior. The approved D1-D8
+semantics and simulation-only values are detailed in the existing
+`ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2` ACR.
+
+`roadmap-b-b21-config-interfaces` is an offline candidate at the exact Owner
+base above. Candidate source and offline verification do not change a PEP status
+or establish Gate 1, runtime, training, HIL, integration, or real readiness.
+B2.1 delivery is pending required checks and independent exact-commit audit;
+B2.2/B2.3 remain unimplemented. Do not start runtime work from this note.

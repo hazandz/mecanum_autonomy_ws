@@ -1,0 +1,24 @@
+schema_version: "3.1"
+project:
+  project_id: mecanum_nav_drl
+  robot_model_id: ROBOT_URDF_final
+  architecture_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
+provenance:
+  config_hash_algorithm: sha256
+  resolution_policy_id: v3_mode_specific_strict_no_unresolved_tokens
+  source_manifest_sha256: 7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1
+observation:
+  input_profile:
+    schema_id: obs-v3-l72-g3-t3-c3-f32
+    dtype: float32
+    lidar_sector_count: 72
+    local_reference_components: [distance, sin_bearing, cos_bearing]
+    measured_twist_components: [vx, vy, wz]
+    previous_final_issued_command_components: [vx, vy, wz]
+    dimension: 81
+map_identity:
+  map_id: b2_training_arena
+  training_binding:
+    scenario_id: B2_TRAINING_SCENARIO_REQUIRED
+    world_id: b2_training_arena
+    binding_status: UNRESOLVED

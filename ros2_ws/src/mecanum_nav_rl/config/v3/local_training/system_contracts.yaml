@@ -1,0 +1,144 @@
+command_safety:
+  command_envelope_contract_id: mecanum.command-envelope/v1
+  safety_supervisor_owner: SafetySupervisor
+  final_twist_publisher_owner: FinalTwistPublisher
+  final_command_topic: /cmd_vel
+  safety_policy_id: B2_LOCAL_TRAINING_SIMULATION_ONLY
+reward:
+  contract_id: ROADMAP_B_B1_REWARD_V3_BASELINE
+  contract_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
+training:
+  algorithm_id: PPO
+  contract_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
+  local_training:
+    schema_id: mecanum.local_training/v1
+    backend_id: NATIVE_B2_BACKEND_PENDING
+    observation_schema_id: obs-v3-l72-g3-t3-c3-f32
+    command_components: [vx, vy, wz]
+    max_vx_mps: 0.25
+    max_vy_mps: 0.20
+    max_wz_radps: 0.80
+    max_planar_speed_mps: 0.32015621187164245
+    max_accel_xy_mps2: 0.50
+    max_accel_yaw_radps2: 1.0
+    max_jerk_xy_mps3: 2.0
+    max_jerk_yaw_radps3: 4.0
+    safety_period_ms: 20
+    policy_ttl_ms: 200
+    final_command_timeout_ms: 100
+    actuator_watchdog_ms: 100
+    scan_max_age_ms: 500
+    odometry_max_age_ms: 250
+    oracle_max_age_ms: 250
+    lifecycle_max_age_ms: 500
+    b1_receipt_max_age_ms: 500
+    backend_status_receive_age_ms: 200
+    robot_bounding_radius_m: 0.35
+    clearance_margin_m: 0.05
+    geometry_reserve_m: 0.02
+    ros_scan_age_budget_s: 0.50
+    steady_pipeline_budget_s: 0.10
+    ros_steady_advance_envelope: 2.0
+    physics_step_s: 0.01
+    clock_quantization_reserve_s: 0.01
+    proposed_braking_deceleration_mps2: 0.50
+    braking_jerk_mps3: 2.0
+    stopping_distance_m: 0.9062243132582557
+    stopping_distance_limit_m: 0.92
+    noise_profile_id: B2_NOISE_N0_V1
+    position_bias_sigma_m: 0.005
+    yaw_bias_sigma_rad: 0.010
+    position_drift_sigma_m_per_tick: 0.0001
+    yaw_drift_sigma_rad_per_tick: 0.0001
+    linear_velocity_noise_sigma_mps: 0.003
+    yaw_rate_noise_sigma_radps: 0.005
+    noise_input_rate_hz: 100.0
+    noise_delay_samples: 0
+    noise_dropout_probability: 0.0
+    negative_delay_profile_id: B2_NOISE_DELAY_V1
+    negative_delay_samples: 30
+    negative_dropout_profile_id: B2_NOISE_DROP_V1
+    negative_dropout_probability: 1.0
+    world_seed: 20261029
+    soak_seed_base: 2026102900
+    soak_episode_count: 30
+    fault_seed_base: 2026103000
+    world_id: b2_training_arena
+    robot_entity: mecanum_b2
+    arena_size_m: [8.0, 8.0]
+    wall_height_m: 1.0
+    wall_thickness_m: 0.20
+    obstacle_center_xy_m: [2.5, 0.0]
+    obstacle_size_xyz_m: [0.20, 1.0, 1.0]
+    sensor_profile_id: B2_GENERIC_2D_V1
+    lidar_rate_hz: 10.0
+    lidar_beam_count: 500
+    lidar_min_range_m: 0.10
+    lidar_max_range_m: 8.0
+    lidar_frame: lidar_frame
+    ground_truth_rate_hz: 100.0
+    exact_scan_odometry_pairing: true
+    pairing_tolerance_ns: 0
+    buffer_capacity: 64
+    reference_source: GT_ODOM_2D
+    policy_reference_source: NOISY_EMULATOR_ODOMETRY
+    world_to_task_mapping: IDENTITY_XY_YAW
+    nominal_collection_period_s: 0.10
+    successful_reset_count: 30
+    issued_policy_command_count: 1000
+    collection_cutoff_semantics: CENSORED_EXPOSURE_NOT_TERMINAL
+    baseline_controller: Nav2_DWB_NOT_RUN_IN_LOCAL_TRAINING
+    physics_target_realtime_factor: 1.0
+    spawn_xyz_yaw: [0.0, 0.0, 0.10, 0.0]
+    contact_probe_size_m: 0.10
+    contact_probe_mass_kg: 1.0
+    scan_angle_min_rad: -3.141592653589793
+    scan_angle_max_rad: 3.141592653589793
+    scenario_soak_start_xy_yaw: [0.0, 0.0, 0.0]
+    scenario_soak_goal_xy: [2.0, 2.0]
+    scenario_goal_settle_zero_command: [0.0, 0.0, 0.0]
+    scenario_contact_start_xy_yaw: [0.0, 0.0, 0.0]
+    scenario_contact_goal_xy: [2.0, 2.0]
+    reset_total_deadline_steady_s: 15.0
+    reset_standstill_phase_deadline_steady_s: 5.0
+    reset_braking_target_ros_s: 2.0
+    reset_service_timeout_s: 1.0
+    reset_pause_resume_timeout_s: 2.0
+    reset_xy_tolerance_m: 0.01
+    reset_yaw_tolerance_rad: 0.02
+    reset_roll_pitch_tolerance_rad: 0.05
+    reset_z_tolerance_m: 0.02
+    standstill_linear_speed_mps: 0.01
+    standstill_angular_speed_radps: 0.02
+    standstill_duration_ros_s: 0.20
+    standstill_minimum_samples: 21
+    reset_footprint_clearance_expansion_m: 0.05
+    ingress_queue_capacity: 128
+    maximum_tracked_collisions: 64
+    clock_unintended_stall_zero_ms: 200
+    clock_stall_infrastructure_abort_ms: 1000
+    observation0_requires_post_barrier_zero_receipt: true
+    receipt_is_publication_evidence_only: true
+    backend_status_not_actuator_ack: true
+    paused_contact_heartbeat_advances_coverage: false
+    spawn_pose_proposal_test_only: true
+    scenario_soak_id: B2_SOAK_V1
+    scenario_goal_settle_id: B2_GOAL_SETTLE_V1
+    scenario_goal_settle_position_xy: [0.0, 0.0]
+    scenario_contact_id: B2_CONTACT_V1
+    soak_first_episode_count: 10
+    soak_first_episode_steps: 34
+    soak_remaining_episode_count: 20
+    soak_remaining_episode_steps: 33
+    motion_coverage_required: [forward, reverse, lateral, rotation, diagonal, mixed]
+    evaluation_horizon: TASK_HORIZON
+    reset_control_service: /world/b2_training_arena/control
+    reset_pose_service: /world/b2_training_arena/set_pose
+    reset_pose_service_type: ros_gz_interfaces/srv/SetEntityPose
+evaluation:
+  contract_id: ROADMAP_B_EVALUATION_HORIZON
+  contract_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204
+  final_evaluation: false
+acceptance:
+  contract_id: ROADMAP_B_B2_BOUNDED_SOAK_PENDING_ASSET_BINDING
+  contract_sha256: 432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204

@@ -1875,3 +1875,28 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Evidence status at authoring | Candidate implementation and required offline verification are pending; no completion/audit/integration/runtime/Gate 1 assertion. |
 | Dependencies | B2 simulation substrate and bounded soak; B3 Gym/PPO correctness smoke before first optimizer update. Both remain `NOT_STARTED`. |
 | Boundary | Roadmap B only. Architecture DOCX and frozen/runtime contracts are not changed. No Gate 1 soak, simulator, evaluation, training, Gate 3/4, HIL, hardware or integration. |
+
+
+### Roadmap B B2.1 configuration and interface contracts — offline candidate
+
+| Field | Record |
+|---|---|
+| Owner status input | The 2026-10-29 execution prompt explicitly identifies B1 as `CLOSED` and integrated at the selected base. This is an Owner statement, not an ancestry-derived audit claim. Earlier ledger entries remain byte-preserved historical records. |
+| Decision / ACR | Existing ID `ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`; Owner-approved D1-D8 B2.1 amendment. No new Decision ID. |
+| Work package | `ROADMAP_B_B21_CONFIG_INTERFACES`; mode-specific schema 3.1, two interface declarations, pure config compiler/composition/validation, tests, and ACR/governance routing. |
+| Candidate identity | Branch `roadmap-b-b21-config-interfaces`; base `bbd5a3c68e6745b5d143688266e044fa25093390`; sole-parent requirement `e087e4841c9d7824c1a3ce4f077712876ded2d83`. |
+| Evidence boundary | Offline candidate only until exact checks and delivery; no runtime, training, Gate 1, Gate 3/4, HIL, hardware, or `REAL_READY` claim. No production resolved hash without bound scenario/world assets. |
+| Dependencies | B2.2 simulator substrate and B2.3 integration are not implemented. Independent exact-commit audit remains required. |
+| Next action | Complete only authorized offline checks and candidate delivery if every precondition passes; then stop for independent audit. |
+
+
+### Roadmap B B2.1 packaging correction authorization — 2026-10-29
+
+| Field | Record |
+|---|---|
+| Owner instruction | Continuation prompt authorizes a bounded offline packaging and interface-regression correction within the existing B2.1 L2 scope. |
+| Candidate identity | Branch `roadmap-b-b21-config-interfaces`; base and required HEAD `bbd5a3c68e6745b5d143688266e044fa25093390`; no new branch or base. |
+| Added scope | `mecanum_nav_rl/setup.py`, the historical WP-06 ROSIDL regression test, and strengthened V3 asset install-closure tests; the original candidate files remain under the existing allowlist. |
+| Build permission | Build only `mecanum_nav_rl_interfaces` and `mecanum_nav_rl` with existing dependencies; build/install/log output must remain in a fresh temporary directory outside the repository. No runtime authority is granted. |
+| Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records scope only and makes no build, test, delivery, audit, integration, Gate, or runtime claim. Earlier Ledger bytes remain unchanged. |
+| Next action | Complete the explicitly authorized offline checks; stop before delivery if any required check or identity precondition fails. |

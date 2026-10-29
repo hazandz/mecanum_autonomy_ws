@@ -2,6 +2,21 @@
 
 All notable changes to `mecanum_nav_rl_interfaces` are documented in this file.
 
+## [2.6.0] - Unreleased
+
+### Added
+
+- Added `LocalTrainingSafetyInput.msg` as a session-bound, safety-only noisy
+  twist/admission contract; it contains no pose, task goal, or raw Ground Truth.
+- Added `SimulationContactState.msg` as a backend status/contact-coverage
+  contract. These declarations do not implement publishers, consumers,
+  watchdogs, contact processing, or actuator behavior.
+
+### Boundary
+
+- Interface generation and offline declaration checks do not establish runtime
+  behavior, Gate 1, training, or safety acceptance.
+
 ## [2.5.0] - Unreleased
 
 ### Added

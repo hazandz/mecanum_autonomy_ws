@@ -1,0 +1,9 @@
+frames_tf:
+  map_frame: null
+  odom_frame: null
+  base_frame: base_link
+  lidar_frame: lidar_frame
+  map_to_odom_authority: null
+  odom_to_base_link_authority: null
+  base_link_to_lidar_authority: robot_state_publisher
+  ground_truth_isolation_policy_id: B2_HIDDEN_GT_POLICY_REFERENCE_ONLY

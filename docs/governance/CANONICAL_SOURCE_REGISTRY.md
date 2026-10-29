@@ -20,6 +20,17 @@ remain `NOT_STARTED`; no Roadmap A or Step-7 status is changed.
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.
 
+### Roadmap B B2.1 packaging correction — candidate route
+
+Prompt Owner ngày 2026-10-29 mở rộng allowlist candidate B2.1 để route sáu
+training YAML qua `ros2_ws/src/mecanum_nav_rl/setup.py` và cập nhật regression
+test inventory live của ROSIDL. Test WP-06 lịch sử tiếp tục bảo vệ receipt và
+evidence lịch sử; allowlist trong packet đó vẫn là dữ liệu lịch sử, không phải
+allowlist B2.1. Build ngoại tuyến được giới hạn ở hai package interface và
+`mecanum_nav_rl`, với output tạm ngoài repository. Đây chỉ là route sở hữu và
+phạm vi evidence offline; chưa có claim build, audit, integration, runtime,
+Gate hoặc completion.
+
 ## WP04 OIC V3 technical activation — source-base snapshot and target authority
 
 The original L2 contract-candidate state is a historical snapshot at exact source base `5497b7e1938242422594f8150b06a32fe221ee70`: ACR revision 3 and Observation V3 Specification revision 5 were then the active base technical authority, while ACR revision 7 / Specification revision 9 and the new abstract contract and manifest were review-candidate records. The current technical-activation candidate is based on exact integration tip `23a7e21e320395091de4dd1b1700845355dc4391`; at that base ACR 3 / Specification 5 remain the active base authority and OIC V3 remains inactive pending this separate activation change-control.
@@ -947,3 +958,23 @@ Decision `STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2` is recorde
 ### STEP07 F1–F7 implementation follow-up — offline candidate
 
 Audit parent `5916e267f1a0687fe75a76ff9890a849c1ea284c` was corrected on the existing `step07-research-runtime-simplification` candidate. The L2 A1–A10 policy and global ResolvedConfigV3 hash are unchanged; verified hash remains `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f`. Offline evidence: fresh external five-package build PASS; RL/bringup selection 978 passed with only `test_safety_lifecycle_transition.py::test_lifecycle_managed_publisher_follows_standard_transitions` excluded because it calls `rclpy.init()`; the pure import test passed separately because its process-global `sys.modules` assertion is affected by package-wide adapter collection. Active Step-7 tools 29 passed; changed lidar/TF test 7 passed; base bridge 121 and interfaces 8 passed. The full robot-description suite had 28 passed and three unrelated existing lint/probe-world failures. Owner sequencing requires exact-commit audit and runtime authorization/run/review before a separate integration authorization. Runtime is not authorized, Gate B is not started, and historical Run005 records remain preserved; Invocation_021 root cause remains unresolved.
+
+## Roadmap B B2.1 — mode-specific config and interface candidate
+
+Owner execution instruction selects exact base
+`bbd5a3c68e6745b5d143688266e044fa25093390` and identifies B1 as closed and
+integrated. This is an explicit Owner statement; source ancestry alone is not
+audit evidence. The B1 candidate wording above is retained as its historical
+snapshot.
+
+B2.1 routes to the existing Decision ID
+`ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`. The approved amendment covers
+mode-specific schema 3.1, `LocalTrainingSafetyInput`,
+`SimulationContactState`, receipt-v2 as the separate simulation actuator
+carrier, independent backend watchdog/zero, contact coverage and post-
+observation0 admission, future B2.2 backend/body-motion ownership, the limited
+simulation stopping envelope, and optional GUI launcher semantics. Source is a
+candidate; offline checks and delivery have not been represented here as audit,
+Gate 1, runtime, training, or integration evidence. No resolved training hash
+exists because scenario/world assets are not bound. B2 remains open and B2.2/
+B2.3 remain unimplemented.

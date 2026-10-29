@@ -208,6 +208,57 @@ def _assert_no_caller_config_hash(merged: Mapping[str, object]) -> None:
         raise ValueError("caller must not supply provenance.config_hash")
 
 
+def _require_training_asset_binding(merged: Mapping[str, object]) -> None:
+    """Reject incomplete schema 3.1 before production hashing."""
+    if merged.get('schema_version') != '3.1':
+        return
+    runtime = merged.get('runtime')
+    if not isinstance(runtime, Mapping):
+        raise ValueError('schema 3.1 requires a runtime selection')
+    if runtime.get('runtime_profile') != 'sim_train':
+        raise ValueError('schema 3.1 is restricted to sim_train')
+    if runtime.get('navigation_mode') != 'LOCAL_TRAINING':
+        raise ValueError('schema 3.1 is restricted to LOCAL_TRAINING')
+    navigation = merged.get('navigation')
+    if not isinstance(navigation, Mapping):
+        raise ValueError('schema 3.1 requires typed LOCAL_TRAINING navigation')
+    local_navigation = navigation.get('local_training')
+    if not isinstance(local_navigation, Mapping):
+        raise ValueError('schema 3.1 requires typed LOCAL_TRAINING navigation')
+    if (
+        navigation.get('planner_owner') != 'NONE'
+        or navigation.get('controller_owner') != 'PPO'
+        or local_navigation.get('requires_nav2') is not False
+        or local_navigation.get('requires_amcl') is not False
+        or local_navigation.get('requires_follow_path') is not False
+    ):
+        raise ValueError(
+            'LOCAL_TRAINING cannot mix AMCL/Nav2/FollowPath authorities'
+        )
+    map_identity = merged.get('map_identity')
+    if not isinstance(map_identity, Mapping):
+        raise ValueError('schema 3.1 requires a training scenario binding')
+    binding = map_identity.get('training_binding')
+    if not isinstance(binding, Mapping):
+        raise ValueError('schema 3.1 requires an asset/scenario binding')
+    if binding.get('binding_status') != 'BOUND':
+        raise ValueError(
+            'production compiler rejects unresolved or TEST_ONLY assets'
+        )
+    manifest_hash = binding.get('asset_manifest_sha256')
+    if (
+        not isinstance(manifest_hash, str)
+        or len(manifest_hash) != 64
+        or any(
+            character not in '0123456789abcdef'
+            for character in manifest_hash
+        )
+    ):
+        raise ValueError(
+            'BOUND scenario requires lowercase asset manifest SHA-256'
+        )
+
+
 def compile_v3_config(
     *,
     base_layer: Mapping[str, object],
@@ -251,6 +302,7 @@ def compile_v3_config(
         validate_tokenized_input_v3(tokenized, context)
     if tokens:
         raise ValueError("unresolved tokenized input cannot enter ResolvedConfigV3")
+    _require_training_asset_binding(merged)
     _validate_motion_limit_source_class(
         merged,
         runtime_profile=context.runtime_profile,
@@ -278,6 +330,7 @@ def compile_resolved_document_v3(
     if "provenance" not in document or not isinstance(document["provenance"], dict):
         raise ValueError("resolved document requires provenance mapping")
     _assert_no_caller_config_hash(document)
+    _require_training_asset_binding(document)
     config_hash = config_v3_sha256(document)
     sealed = deepcopy(document)
     sealed["provenance"]["config_hash"] = config_hash  # type: ignore[index]
