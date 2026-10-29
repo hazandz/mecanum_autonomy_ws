@@ -1,5 +1,21 @@
 # Canonical Source Registry — Mecanum Nav2 DRL
 
+## Roadmap B L2 training-semantics amendment and B1 candidate
+
+The single approved Roadmap B amendment record is
+`docs/architecture/ACR_ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2.md`,
+Decision ID `ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`. It records the
+Owner-authorized Roadmap B profile, collection, transition, reward, termination
+and B1 boundary. It is an explicit amendment, not a claim that these details
+were already present in the frozen Architecture DOCX.
+
+`ROADMAP_B_B1_PURE_RL_TRANSITION_CONTRACTS` is an offline candidate based on
+`5892e317310443f2ba1ee9214ff86552f260530c`. Its source and tests, when
+delivered, can establish only offline implementation evidence pending
+independent audit. No Gate 1, runtime, training, Gate B, integration, HIL or
+real-readiness state is activated here. B2 substrate/soak and B3 Gym/PPO smoke
+remain `NOT_STARTED`; no Roadmap A or Step-7 status is changed.
+
 ## Registry role
 
 This registry identifies operational source selection. It does not override MECANUM_NAV_DRL_Architecture.docx, approved ACRs or explicit user decisions.

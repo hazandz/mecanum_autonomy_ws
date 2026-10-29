@@ -19,9 +19,11 @@ from mecanum_nav_rl.core.episode_lifecycle import (
     LifecycleIdentityError,
     LifecycleStateError,
     ResetCommitCandidate,
+    ResetZeroReceipt,
     StepCommitCandidate,
     TransitionIdentity,
 )
+from mecanum_nav_rl.core.lifecycle_types import PendingScenarioSession, policy_transition_identity
 from mecanum_nav_rl.observations.previous_command import PreviousNormalizedCommand
 from mecanum_nav_rl.core.scenario_session import ScenarioSessionBinding
 from mecanum_nav_rl.tasks.training_task_oracle import (
@@ -170,6 +172,11 @@ def _reset_candidate(
             previous_command
             if previous_command is not None
             else PreviousNormalizedCommand(0.0, 0.0, 0.0)
+        ),
+        reset_barrier_ros_ns=0,
+        zero_receipt=ResetZeroReceipt(
+            "test-published-zero-receipt", identity, 50, "SAFE_STOP",
+            PreviousNormalizedCommand(0.0, 0.0, 0.0),
         ),
     )
 
@@ -1282,3 +1289,40 @@ def test_lifecycle_source_has_no_tasks_dependency_even_locally() -> None:
         for alias in node.names
     )
     assert not any(module.startswith("mecanum_nav_rl.tasks") for module in imported_modules)
+
+
+def test_observation0_requires_zero_receipt_after_reset_barrier() -> None:
+    identity=_identity(0)
+    lifecycle=EpisodeLifecycle()
+    lifecycle.begin_reset(identity,_binding(identity))
+    lifecycle.wait_for_initial_observation(identity)
+    candidate=_reset_candidate(identity)
+    bad=replace(candidate,zero_receipt=None)
+    result=lifecycle.commit_reset(bad)
+    assert result.status is EpisodeOperationStatus.RESET_ABORT
+    assert result.snapshot.reward_baseline is None
+
+
+def test_rearm_binds_authoritative_identity_without_guessing_generation() -> None:
+    lifecycle=EpisodeLifecycle()
+    first=_identity(0)
+    _commit_reset(lifecycle,first)
+    session=PendingScenarioSession("scenario","1","a"*64,"world","b"*64,"local-frame")
+    pending=lifecycle.begin_reset_pending(session)
+    assert pending.snapshot.identity is None
+    authoritative=EpisodeLifecycleIdentity(9,12,4)
+    bound=lifecycle.finalize_rearm(authoritative)
+    assert bound.snapshot.identity == authoritative
+    assert bound.snapshot.pending_scenario_session_binding.lifecycle_identity == authoritative
+
+
+def test_policy_transition_token_is_stable_uuid5_from_session_lifecycle_and_source_key() -> None:
+    identity=_identity(4)
+    first=policy_transition_identity(identity=identity,session_id="session-A",
+        source_instance_id=123,source_sequence=8,step_index=1)
+    repeated=policy_transition_identity(identity=identity,session_id="session-A",
+        source_instance_id=123,source_sequence=8,step_index=1)
+    other=policy_transition_identity(identity=identity,session_id="session-A",
+        source_instance_id=123,source_sequence=9,step_index=2)
+    assert first==repeated and first.transition_id==str(__import__("uuid").UUID(first.transition_id))
+    assert len(first.transition_id)==36 and first.transition_id!=other.transition_id

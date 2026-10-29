@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.14` Step-7 Gate B authority/input closure survey review snapshot |
+| Revision | `0.10.15` Roadmap B B1 offline implementation review snapshot |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -1012,3 +1012,31 @@ Owner decision `STEP07_RESEARCH_GRADE_RUNTIME_ACCEPTANCE_SIMPLIFICATION_L2` is r
 Offline checks recorded for this candidate: five-package external build completed; RL test selection 727 passed/2 deselected; bringup test selection 237 passed/1 deselected; Fuel bootstrap 13 passed; bridge 121 passed; interface tests 8 passed; Step-7 tools 5 passed; focused pure core/observer suite 21 passed; changed Python files compiled and nine XML/YAML/JSON files parsed. The lifecycle unit test that initializes `rclpy` and creates a lifecycle node was not run in the final selections because this authorization prohibits ROS graph creation. An earlier broad RL invocation did execute that unit test before its graph-creating behavior was identified; no Gazebo, Nav2 launch, campaign runner, or simulator process was started. The stale pure-only Observation import test was deselected, the legacy nested-suite aggregator was excluded because it invokes that test internally, and one WP05 static source-hash assertion was excluded because it conflicts with the L2 source-identity model. Runtime acceptance, Gate B, HIL, real readiness, and integration remain unapproved; Step 7 and PEP work-package statuses are unchanged.
 
 Follow-up to audit parent `5916e267f1a0687fe75a76ff9890a849c1ea284c` closed F1–F7 within the same candidate. Final offline verification: five-package fresh external build PASS; RL+bringup 978 passed/one exact ROS-graph node excluded (`test_safety_lifecycle_transition.py::test_lifecycle_managed_publisher_follows_standard_transitions`, calls `rclpy.init()`); the pure-module import test passed separately because its process-global `sys.modules` assertion is affected by package-wide adapter collection. Active Step-7 tools 29 passed; changed lidar/TF test 7 passed; bridge 121 and interfaces 8 passed. Full robot-description suite had 28 passed and three unrelated existing lint/probe-world failures. Owner order is offline fixes → exact-commit audit → separate runtime authorization and one official run → result review → separate integration authorization. Candidate evidence remains `IMPLEMENTED_OFFLINE_ONLY`; runtime authorization is not granted, Gate B is not started, and no PEP or roadmap status transition is made.
+
+
+## Roadmap B — training semantics and B1 offline candidate
+
+The Owner-authorized L2 amendment is routed through the single record
+`docs/architecture/ACR_ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2.md`
+(`ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`). It records Roadmap B
+training profile/collection semantics and the pure B1 transaction contracts;
+it does not change the frozen Architecture DOCX or any public/runtime
+interface.
+
+`ROADMAP_B_B1_PURE_RL_TRANSITION_CONTRACTS` is an offline implementation
+candidate on branch `roadmap-b-b1-core-semantics`, based on exact remote
+`integration/implementation` SHA
+`5892e317310443f2ba1ee9214ff86552f260530c` verified by the execution prompt.
+B1 covers receipt-at-cutoff selection, noisy-odometry local
+reference, LOCAL_TRAINING goal health/settle, contact latch, reward,
+termination and atomic pure transition commit. This note does not assert
+independent audit, integration, runtime, training or Gate 1 pass and does not
+mark a Roadmap B milestone complete. B2 simulation substrate/soak and B3
+Gym/PPO smoke remain downstream and `NOT_STARTED`; B4–B8 are unchanged.
+
+At candidate authoring, offline checks and consolidated delivery are pending.
+The evidence ceiling is `IMPLEMENTATION_CANDIDATE_PENDING_OFFLINE_CHECKS_AND_INDEPENDENT_AUDIT`.
+PEP-001 rev.0.10.15 is a review-branch snapshot only; it makes no PEP work
+package, Roadmap B milestone, runtime, integration or Gate status transition.
+Its candidate commit is the consolidated B1 delivery commit containing this
+record; the commit SHA is established only by that delivery.

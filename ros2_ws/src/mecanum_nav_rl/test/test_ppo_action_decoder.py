@@ -13,6 +13,7 @@ from mecanum_nav_rl.actions.ppo_decoder import (
     NormalizedPpoAction,
     PpoActionDecodeStatus,
     PpoActionDecoder,
+    V3ActionScales,
 )
 from mecanum_nav_rl.config.models import (
     ActionConfig,
@@ -298,3 +299,18 @@ def test_production_decoder_has_no_runtime_or_ground_truth_imports() -> None:
         else:
             continue
         assert prohibited_roots.isdisjoint(roots), source_path
+
+
+def test_v3_decoder_uses_explicit_scales_and_preserves_lateral_action() -> None:
+    scales=V3ActionScales(0.25,0.20,0.80)
+    result=PpoActionDecoder.decode_v3((0.5,-0.75,0.25),scales)
+    assert result.status is PpoActionDecodeStatus.READY
+    assert result.command is not None
+    assert (result.command.vx,result.command.vy,result.command.wz)==pytest.approx((0.125,-0.15,0.2))
+
+
+@pytest.mark.parametrize("action",[(float("nan"),0,0),(0,float("inf"),0),(0,0,1.01)])
+def test_v3_decoder_rejects_nonfinite_and_out_of_bounds_without_clamp(action) -> None:
+    result=PpoActionDecoder.decode_v3(action,V3ActionScales(0.25,0.20,0.80))
+    assert result.status in {PpoActionDecodeStatus.INVALID_INPUT,PpoActionDecodeStatus.OUT_OF_BOUNDS}
+    assert result.command is None

@@ -1862,3 +1862,16 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Offline checks | Fresh external five-package build PASS; RL+bringup selection 978 passed, with only `test_safety_lifecycle_transition.py::test_lifecycle_managed_publisher_follows_standard_transitions` excluded because it calls `rclpy.init()`; pure import test separately 1 passed because its process-global `sys.modules` assertion is affected by package-wide adapter collection. Active Step-7 tools 29 passed; changed lidar/TF test 7 passed; base bridge 121 passed; interface tests 8 passed. Full robot-description test selection: 28 passed, three unrelated existing copyright/flake8/probe-world failures; changed lidar test passed independently. |
 | Identity and policy | Global config hash `7c66b50803ce7bd94d84a60ae14b9f9df4a8764402cb67c6135a951da33c8b1f`; no acceptance threshold or Safety limit changed. |
 | Boundary and next order | `IMPLEMENTED_OFFLINE_ONLY`; no runtime/runner/campaign, ROS graph, Gazebo/Nav2 launch, guard, HIL, hardware, or integration. Runtime authorization is not granted; Gate B is not started; `REAL_READY` is not claimed. Owner order: exact-commit audit → separate runtime authorization → one official run → review → separate integration authorization. `RUN005_FORENSIC_CAMPAIGN=RETIRED_AS_ACTIVE_ACCEPTANCE_MODEL`; historical records preserved; Invocation_021 root cause unresolved. |
+
+
+### Roadmap B B1 pure RL transition contracts — offline candidate
+
+| Field | Record |
+|---|---|
+| Decision / ACR | `ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`; `docs/architecture/ACR_ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2.md`; Owner-authorized Roadmap B L2 amendment |
+| Work package | `ROADMAP_B_B1_PURE_RL_TRANSITION_CONTRACTS` |
+| Candidate branch / exact base | `roadmap-b-b1-core-semantics` / `5892e317310443f2ba1ee9214ff86552f260530c` |
+| Scope | Pure offline receipt cutoff, LOCAL_TRAINING noisy-odometry reference and goal health, contact latch, reward/termination and transactional RL transition contracts. No environment, trainer or runtime adapter. |
+| Evidence status at authoring | Candidate implementation and required offline verification are pending; no completion/audit/integration/runtime/Gate 1 assertion. |
+| Dependencies | B2 simulation substrate and bounded soak; B3 Gym/PPO correctness smoke before first optimizer update. Both remain `NOT_STARTED`. |
+| Boundary | Roadmap B only. Architecture DOCX and frozen/runtime contracts are not changed. No Gate 1 soak, simulator, evaluation, training, Gate 3/4, HIL, hardware or integration. |
