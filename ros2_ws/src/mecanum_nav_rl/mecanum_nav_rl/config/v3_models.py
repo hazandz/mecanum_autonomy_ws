@@ -149,13 +149,26 @@ class RuntimeSelectionV3(ConfigModelV3):
 class FrameTfContractV3(ConfigModelV3):
     """Frame names and single-authority ownership declarations."""
 
-    map_frame: IdentifierV3 | None
-    odom_frame: IdentifierV3 | None
+    map_frame: IdentifierV3
+    odom_frame: IdentifierV3
     base_frame: IdentifierV3
     lidar_frame: IdentifierV3
-    map_to_odom_authority: IdentifierV3 | None
-    odom_to_base_link_authority: Literal['EKF'] | None
+    map_to_odom_authority: IdentifierV3
+    odom_to_base_link_authority: Literal['EKF']
     base_link_to_lidar_authority: Literal["robot_state_publisher"]
+    ground_truth_isolation_policy_id: IdentifierV3
+
+
+class LocalTrainingFrameTfContractV31(ConfigModelV3):
+    """Schema 3.1 frame declarations without invented map/odom authority."""
+
+    map_frame: None
+    odom_frame: None
+    base_frame: Literal['base_link']
+    lidar_frame: Literal['lidar_frame']
+    map_to_odom_authority: None
+    odom_to_base_link_authority: None
+    base_link_to_lidar_authority: Literal['robot_state_publisher']
     ground_truth_isolation_policy_id: IdentifierV3
 
 
@@ -847,7 +860,7 @@ class ResolvedConfigV3(ConfigModelV3):
     project: ProjectIdentityV3
     runtime: RuntimeSelectionV3
     provenance: ConfigProvenanceV3
-    frames_tf: FrameTfContractV3
+    frames_tf: FrameTfContractV3 | LocalTrainingFrameTfContractV31
     topics_qos: tuple[TopicQosContractV3, ...]
     state_estimation: (
         StateEstimationContractV3 | LocalTrainingStateEstimationV31
@@ -872,6 +885,7 @@ class ResolvedConfigV3(ConfigModelV3):
         if self.schema_version == '3.0' and (
             isinstance(self.state_estimation, LocalTrainingStateEstimationV31)
             or isinstance(self.localization, NotApplicableLocalizationV31)
+            or isinstance(self.frames_tf, LocalTrainingFrameTfContractV31)
         ):
             raise ValueError(
                 'schema 3.0 cannot use schema 3.1 training domains'
@@ -894,6 +908,10 @@ class ResolvedConfigV3(ConfigModelV3):
             if not isinstance(self.localization, NotApplicableLocalizationV31):
                 raise ValueError(
                     'schema 3.1 requires NOT_APPLICABLE_LOCAL_TRAINING'
+                )
+            if not isinstance(self.frames_tf, LocalTrainingFrameTfContractV31):
+                raise ValueError(
+                    'schema 3.1 requires the local-training frame contract'
                 )
             if self.training.local_training is None:
                 raise ValueError(

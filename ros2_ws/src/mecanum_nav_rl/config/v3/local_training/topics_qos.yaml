@@ -3,7 +3,7 @@ topics_qos:
     message_type: sensor_msgs/msg/LaserScan
     publisher_owner: SIM_SENSOR_SOURCE
     subscriber_owner: LOCAL_TRAINING_INGRESS
-    qos_profile_id: RELIABLE_VOLATILE_KEEP_LAST_10
+    qos_profile_id: BEST_EFFORT_VOLATILE_KEEP_LAST_5
     frame_contract_id: lidar_frame_to_base_link_static_extrinsic
     freshness_policy_id: SCAN_ROS_AND_STEADY_AGE_500MS
   - name: /mecanum/local_training/safety_input

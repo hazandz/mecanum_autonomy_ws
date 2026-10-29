@@ -6,7 +6,10 @@ project:
 provenance:
   config_hash_algorithm: sha256
   resolution_policy_id: v3_mode_specific_strict_no_unresolved_tokens
-  source_manifest_sha256: 7e0a380b0d8df32f9a4fc30dd0dbbe9ed08aafdcd5efb3764bccd844b98c1cb1
+  source_manifest_sha256:
+    field_path: provenance.source_manifest_sha256
+    token: REQUIRED_BUILD_INPUT
+    reference_id: b2_training_asset_manifest
 observation:
   input_profile:
     schema_id: obs-v3-l72-g3-t3-c3-f32
@@ -16,6 +19,11 @@ observation:
     measured_twist_components: [vx, vy, wz]
     previous_final_issued_command_components: [vx, vy, wz]
     dimension: 81
+action:
+  component_order: [vx, vy, wz]
+  dimension: 3
+  normalized_minimum: -1.0
+  normalized_maximum: 1.0
 map_identity:
   map_id: b2_training_arena
   training_binding:

@@ -20,7 +20,10 @@ from mecanum_nav_rl.config.v3_policy import (
     validate_profile_mode_v3,
     validate_tokenized_input_v3,
 )
-from mecanum_nav_rl.config.v3_validators import validate_resolved_config_v3
+from mecanum_nav_rl.config.v3_validators import (
+    validate_local_training_static_input_v3,
+    validate_resolved_config_v3,
+)
 
 
 @dataclass(frozen=True)
@@ -297,6 +300,7 @@ def compile_v3_config(
     context = _require_runtime_context(
         merged, output_stage=output_stage, gate4=gate4
     )
+    validate_local_training_static_input_v3(merged)
     tokens = _walk_tokens(merged)
     for tokenized in tokens:
         validate_tokenized_input_v3(tokenized, context)
@@ -330,6 +334,22 @@ def compile_resolved_document_v3(
     if "provenance" not in document or not isinstance(document["provenance"], dict):
         raise ValueError("resolved document requires provenance mapping")
     _assert_no_caller_config_hash(document)
+    validate_local_training_static_input_v3(document)
+    map_identity = document.get('map_identity')
+    binding = (
+        map_identity.get('training_binding')
+        if isinstance(map_identity, Mapping)
+        else None
+    )
+    if (
+        isinstance(binding, Mapping)
+        and binding.get('binding_status') == 'TEST_ONLY'
+    ):
+        _require_training_asset_binding(document)
+    if _walk_tokens(document):
+        raise ValueError(
+            'unresolved tokenized input cannot enter ResolvedConfigV3'
+        )
     _require_training_asset_binding(document)
     config_hash = config_v3_sha256(document)
     sealed = deepcopy(document)

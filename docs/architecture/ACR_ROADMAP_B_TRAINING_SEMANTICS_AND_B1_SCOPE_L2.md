@@ -10,10 +10,12 @@
 This ACR records approved Roadmap B amendments. These semantics are not
 represented as pre-existing text in `MECANUM_NAV_DRL_Architecture.docx`, which
 remains the highest architecture authority outside the explicit amendments
-below. No Architecture DOCX bytes, public ROS interface, Safety limit, global
-configuration hash algorithm, or current resolved configuration is changed.
-The amendment does not authorize runtime, training, integration, HIL, or real
-robot activity.
+below. No Architecture DOCX bytes, Safety limit, global configuration hash
+algorithm, or current resolved configuration is changed by the B1 historical
+scope. For B2, §5 is the explicit L2 exception approved by the Owner for two
+new public ROS message interfaces; this ACR amendment is not text that was
+already present in the frozen Architecture DOCX. The amendment does not
+authorize runtime, training, integration, HIL, or real robot activity.
 
 ## 2. Roadmap B profile and collection semantics
 
@@ -368,7 +370,10 @@ assets under `ROBOT_URDF_final_description`.
 Future launcher design has one `gui` argument defaulting to false and accepts
 only exact `true` or `false`; invalid values fail before any process starts.
 False is server-only. True starts the same server plus GUI-only process, using
-one world, robot, and backend. Proposed commands are
+one world, robot, and backend. GUI startup does not itself issue simulation
+control requests. The launcher contract does not wire GUI actions to play,
+pause, reset, set-pose, or rearm; this describes intended launcher behavior,
+not a security boundary imposed on GUI capabilities. Proposed commands are
 `gz sim --force-version 8 -s --headless-rendering <world>` and
 `gz sim --force-version 8 -g --gui-config <installed-config>`, with identical
 GZ partition/network/resource binding. Server retains Sensors/ogre2/headless
@@ -382,9 +387,10 @@ and `dialog_on_exit=false`; GUI is not a read-only security boundary.
 GUI startup failure is explicit and prevents collection; there is no silent
 fallback. GUI close/crash after opening is recorded separately; neither
 process auto-restarts and GUI exit alone does not change motion permission. A
-sensor/clock health fault still follows the existing fail-stop path. GUI cannot
-play, pause, reset, set pose, or rearm. Existing evidence records requested and
-actual GUI state and command. GUI adds no V3 root or config hash field, and no
+sensor/clock health fault still follows the existing fail-stop path. GUI
+interaction is not an authorized launcher control path for play, pause, reset,
+set pose, or rearm. Existing evidence records requested and actual GUI state
+and command. GUI adds no V3 root or config hash field, and no
 bit-identical trajectory/performance claim is made. GUI launch, assets,
 packaging, and runtime tests are deferred to B2.2/B2.3.
 

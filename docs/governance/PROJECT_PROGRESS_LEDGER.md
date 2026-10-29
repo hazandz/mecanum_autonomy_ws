@@ -1900,3 +1900,16 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Build permission | Build only `mecanum_nav_rl_interfaces` and `mecanum_nav_rl` with existing dependencies; build/install/log output must remain in a fresh temporary directory outside the repository. No runtime authority is granted. |
 | Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records scope only and makes no build, test, delivery, audit, integration, Gate, or runtime claim. Earlier Ledger bytes remain unchanged. |
 | Next action | Complete the explicitly authorized offline checks; stop before delivery if any required check or identity precondition fails. |
+
+
+### Roadmap B B2.1 schema-contract corrective authorization — 2026-10-29
+
+| Field | Record |
+|---|---|
+| Supersedes | `Roadmap B B2.1 packaging correction authorization — 2026-10-29`; supersedes its candidate identity description only for this follow-up lineage and does not rewrite that historical entry. |
+| Work package | `ROADMAP_B_B21_CONFIG_INTERFACES`; Owner-authorized offline corrective F1–F5 after exact-commit audit. |
+| Lineage | `original_base=bbd5a3c68e6745b5d143688266e044fa25093390`; `original_base_parent=e087e4841c9d7824c1a3ce4f077712876ded2d83`; `starting_candidate=c2c13d4bd22a0c9bd23914410a485bb431e7dc47`; `followup_parent=c2c13d4bd22a0c9bd23914410a485bb431e7dc47`. |
+| Scope | Canonical action root; schema 3.0 frame nullability compatibility; schema 3.1 cross-section checks; approved `/scan` QoS; unresolved B2 source-manifest provenance. ACR wording correction only. Existing interface/package semantics and D1–D8/GUI decisions remain unchanged. |
+| Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records authorization and scope, not test, build, delivery, audit, integration, Gate, or runtime results. B2.1 and B2 are not marked closed. |
+| Boundary | No runtime, training, evaluation, soak, backend, GUI implementation, production asset binding, integration, or B2.2/B2.3 work is authorized here. |
+| Next action | Complete only the specified offline checks and delivery if all exact identity and exit conditions pass; then stop for independent exact-follow-up audit. |
