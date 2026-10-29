@@ -1174,7 +1174,6 @@ def _is_bound_required_source_health_gap(
         health.estop_active,
         health.reset_pending,
         health.scan_valid,
-        health.measured_twist_valid,
         health.oracle_pose_valid,
         health.oracle_twist_valid,
         health.contact_source_healthy,
@@ -1186,6 +1185,24 @@ def _is_bound_required_source_health_gap(
         return False
     if any(stable_health_flags[9:12]):
         return False
+    if type(health.measured_twist_valid) is not bool:
+        return False
+    twist_result = context.measured_twist_result
+    expected_twist_status = {
+        SimulatedOdometryStatus.DELAYED:
+        MeasuredTwistFeatureStatus.ODOMETRY_DELAYED,
+        SimulatedOdometryStatus.DROPPED:
+        MeasuredTwistFeatureStatus.ODOMETRY_DROPPED,
+    }.get(odometry.snapshot.status)
+    twist_gap = (
+        expected_twist_status is not None
+        and type(twist_result) is MeasuredTwistFeatureResult
+        and twist_result.status is expected_twist_status
+        and twist_result.timestamp_ns == odometry.snapshot.timestamp_ns
+        and twist_result.odometry_sequence == odometry.snapshot.sequence
+        and twist_result.features is None
+        and health.measured_twist_valid is False
+    )
     odometry_gap = (
         odometry.snapshot.status in (
             SimulatedOdometryStatus.DELAYED,
@@ -1193,6 +1210,7 @@ def _is_bound_required_source_health_gap(
         )
         and odometry.snapshot.measurement is None
         and health.noisy_odometry_valid is False
+        and twist_gap
     )
     reference_gap = (
         type(local_result) is LocalReferenceResult

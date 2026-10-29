@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Barrier, Event, Thread
 
+from mecanum_nav_rl.config.models import MotionLimitsConfig, ObservationConfig
 from mecanum_nav_rl.core.episode_lifecycle import (
     CommandReceiptSnapshot,
     EpisodeLifecycle,
@@ -47,6 +48,7 @@ from mecanum_nav_rl.observations.local_training_reference import (
     build_local_training_reference,
 )
 from mecanum_nav_rl.observations.measured_twist import (
+    MeasuredTwistFeatureExtractor,
     MeasuredTwistFeatureResult,
     MeasuredTwistFeatureStatus,
 )
@@ -200,6 +202,59 @@ def _valid_v3_observation(identity, final_command):
     assembly = assemble_observation(inputs)
     assert assembly.ready and assembly.vector is not None
     return assembly.vector
+
+
+def _with_unavailable_odometry(context_value, status):
+    """Tạo reference và twist không sẵn sàng từ snapshot nguồn thực."""
+    source_snapshot = replace(
+        context_value.noisy_odometry_context.snapshot,
+        status=status,
+        measurement=None,
+    )
+    odometry = replace(
+        context_value.noisy_odometry_context,
+        snapshot=source_snapshot,
+    )
+    health = context_value.goal_sample.health
+    unavailable_twist = MeasuredTwistFeatureExtractor(
+        ObservationConfig(),
+        MotionLimitsConfig(max_vx_mps=0.25, max_vy_mps=0.2, max_wz_radps=0.8),
+    ).extract(source_snapshot)
+    binding = context_value.goal_sample.scenario_session_binding
+    unavailable_reference = build_local_training_reference(
+        LocalTrainingGoal(
+            context_value.expected_goal_xy_m[0],
+            context_value.expected_goal_xy_m[1],
+            binding.coordinate_reference_id,
+            binding.scenario_id,
+        ),
+        odometry,
+        evaluation_ros_now_ns=health.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=health.evaluation_steady_now_ns,
+        scan_timestamp_ns=context_value.lifecycle_candidate
+        .observation_provenance.odometry_timestamp_ns,
+        scan_lifecycle=context_value.transition_identity.identity,
+        scan_scenario_identity=binding.scenario_id,
+    )
+    assert not unavailable_reference.ready
+    assert not unavailable_twist.ready
+    assert unavailable_twist.features is None
+    unavailable_health = replace(
+        health,
+        noisy_odometry_valid=False,
+        reference_valid=False,
+        measured_twist_valid=False,
+    )
+    return replace(
+        context_value,
+        noisy_odometry_context=odometry,
+        local_reference_result=unavailable_reference,
+        measured_twist_result=unavailable_twist,
+        goal_sample=replace(
+            context_value.goal_sample,
+            health=unavailable_health,
+        ),
+    )
 
 
 def context(
@@ -1322,7 +1377,13 @@ def test_health_interruption_restarts_goal_settle_window(
     assert result.transition.reward.terms.terminal == 15.0
 
 
-def test_required_source_rejection_before_goal_evaluation_breaks_settle():
+@pytest.mark.parametrize(
+    'odometry_status',
+    [SimulatedOdometryStatus.DROPPED, SimulatedOdometryStatus.DELAYED],
+)
+def test_required_source_rejection_before_goal_evaluation_breaks_settle(
+    odometry_status,
+):
     """Odometry dropout bị bác bỏ vẫn phải ngắt cửa sổ settle hiện tại."""
     lifecycle, identity, first_token, first_candidate = ready_lifecycle()
     contact = ContactLatch()
@@ -1404,24 +1465,7 @@ def test_required_source_rejection_before_goal_evaluation_breaks_settle():
 
     token, candidate, valid_at_gap = goal_step(5, 2_050_000_000)
     before_rejection = lifecycle.snapshot
-    dropped_snapshot = replace(
-        valid_at_gap.noisy_odometry_context.snapshot,
-        status=SimulatedOdometryStatus.DROPPED,
-        measurement=None,
-    )
-    invalid_health = replace(
-        valid_at_gap.goal_sample.health,
-        noisy_odometry_valid=False,
-        reference_valid=False,
-    )
-    invalid = replace(
-        valid_at_gap,
-        noisy_odometry_context=replace(
-            valid_at_gap.noisy_odometry_context,
-            snapshot=dropped_snapshot,
-        ),
-        goal_sample=replace(valid_at_gap.goal_sample, health=invalid_health),
-    )
+    invalid = _with_unavailable_odometry(valid_at_gap, odometry_status)
     rejected = committer.commit(invalid)
     assert not rejected.committed
     assert rejected.reason == (
@@ -1500,22 +1544,8 @@ def test_early_required_source_rejection_preserves_contact_pulse():
     value = context(
         lifecycle, identity, token, candidate, None, contact, reason=None
     )
-    dropped = replace(
-        value.noisy_odometry_context.snapshot,
-        status=SimulatedOdometryStatus.DROPPED,
-        measurement=None,
-    )
-    invalid_health = replace(
-        value.goal_sample.health,
-        noisy_odometry_valid=False,
-        reference_valid=False,
-    )
-    invalid = replace(
-        value,
-        noisy_odometry_context=replace(
-            value.noisy_odometry_context, snapshot=dropped
-        ),
-        goal_sample=replace(value.goal_sample, health=invalid_health),
+    invalid = _with_unavailable_odometry(
+        value, SimulatedOdometryStatus.DROPPED
     )
     lifecycle_before = lifecycle.snapshot
     contact_before = contact.state
@@ -1537,6 +1567,67 @@ def test_early_required_source_rejection_preserves_contact_pulse():
     assert lifecycle_after.task_health_epoch > (
         lifecycle_after.committed_task_health_epoch
     )
+
+
+def test_bound_unavailable_reference_records_health_interruption():
+    """Reference stale thuộc đúng transition được ghi thành health gap."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(
+        lifecycle, identity, token, candidate, None, contact, reason=None
+    )
+    health = value.goal_sample.health
+    stale_received_steady = health.evaluation_steady_now_ns - 250_000_001
+    stale_odometry = replace(
+        value.noisy_odometry_context,
+        received_steady_ns=stale_received_steady,
+    )
+    binding = value.goal_sample.scenario_session_binding
+    stale_reference = build_local_training_reference(
+        LocalTrainingGoal(
+            value.expected_goal_xy_m[0],
+            value.expected_goal_xy_m[1],
+            binding.coordinate_reference_id,
+            binding.scenario_id,
+        ),
+        stale_odometry,
+        evaluation_ros_now_ns=health.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=health.evaluation_steady_now_ns,
+        scan_timestamp_ns=value.lifecycle_candidate
+        .observation_provenance.odometry_timestamp_ns,
+        scan_lifecycle=identity,
+        scan_scenario_identity=binding.scenario_id,
+    )
+    assert not stale_reference.ready
+    stale_health = replace(
+        health,
+        noisy_odometry_valid=False,
+        reference_valid=False,
+        noisy_odometry_received_steady_ns=stale_received_steady,
+        noisy_odom_steady_age_ns=(
+            health.evaluation_steady_now_ns - stale_received_steady
+        ),
+    )
+    invalid = replace(
+        value,
+        noisy_odometry_context=stale_odometry,
+        local_reference_result=stale_reference,
+        goal_sample=replace(value.goal_sample, health=stale_health),
+    )
+    before = lifecycle.snapshot
+
+    rejected = RLTransitionCommitter(lifecycle).commit(invalid)
+
+    assert not rejected.committed
+    assert rejected.reason == (
+        'a bound required observation source lost health'
+    )
+    after = lifecycle.snapshot
+    assert after.reward_baseline == before.reward_baseline
+    assert after.task_history == before.task_history
+    assert after.committed_transition_ids == before.committed_transition_ids
+    assert after.task_health_epoch > after.committed_task_health_epoch
 
 
 @pytest.mark.parametrize('gap_source', ['contact', 'noisy_odometry'])
@@ -1640,22 +1731,8 @@ def test_required_health_gap_clears_committed_stuck_trajectory(gap_source):
         )
     else:
         before_gap = lifecycle.snapshot
-        dropped = replace(
-            value.noisy_odometry_context.snapshot,
-            status=SimulatedOdometryStatus.DROPPED,
-            measurement=None,
-        )
-        bad_health = replace(
-            value.goal_sample.health,
-            noisy_odometry_valid=False,
-            reference_valid=False,
-        )
-        rejected = committer.commit(replace(
-            value,
-            noisy_odometry_context=replace(
-                value.noisy_odometry_context, snapshot=dropped
-            ),
-            goal_sample=replace(value.goal_sample, health=bad_health),
+        rejected = committer.commit(_with_unavailable_odometry(
+            value, SimulatedOdometryStatus.DROPPED
         ))
         assert not rejected.committed
         after_gap = lifecycle.snapshot
