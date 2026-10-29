@@ -300,36 +300,55 @@ def test_local_training_has_canonical_roots_and_action_contract() -> None:
 
 
 def test_schema_30_frame_contract_remains_non_nullable() -> None:
-    """Schema 3.0 continues to reject absent frame identity and authority."""
+    """Keep valid provenance while isolating frame and authority mutations."""
     document = json.loads(
         (
             Path(__file__).resolve().parents[1]
             / 'config/v3/resolved/sim_eval_nav2_baseline.resolved.json'
         ).read_text(encoding='utf-8')
     )
-    document.pop('provenance', {}).pop('config_hash', None)
-    for field in ('map_frame', 'odom_frame', 'map_to_odom_authority',
-                  'odom_to_base_link_authority'):
-        invalid = deepcopy(document)
+    document['provenance'].pop('config_hash', None)
+    assert isinstance(document.get('provenance'), dict)
+    valid_config = compile_resolved_document_v3(document)
+    assert valid_config.provenance.config_hash == _EXPECTED_SIM_EVAL_HASH
+    valid_document = deepcopy(document)
+
+    for field in (
+        'map_frame',
+        'odom_frame',
+        'map_to_odom_authority',
+        'odom_to_base_link_authority',
+    ):
+        invalid = deepcopy(valid_document)
         invalid['frames_tf'][field] = None
-        with pytest.raises((ValueError, ValidationError)):
+        assert invalid['provenance'] == valid_document['provenance']
+        with pytest.raises(ValidationError, match=field):
             compile_resolved_document_v3(invalid)
-    combined = deepcopy(document)
+
+    combined = deepcopy(valid_document)
     combined['frames_tf']['map_frame'] = None
     combined['frames_tf']['odom_frame'] = None
-    with pytest.raises((ValueError, ValidationError)):
+    assert combined['provenance'] == valid_document['provenance']
+    with pytest.raises(ValidationError, match='map_frame|odom_frame'):
         compile_resolved_document_v3(combined)
-    wrong_authority = deepcopy(document)
+
+    wrong_authority = deepcopy(valid_document)
     wrong_authority['frames_tf']['map_to_odom_authority'] = 'WRONG_AUTHORITY'
-    with pytest.raises((ValueError, ValidationError)):
+    assert wrong_authority['provenance'] == valid_document['provenance']
+    with pytest.raises(
+        ValueError, match='map to odom authority must match localization'
+    ):
         compile_resolved_document_v3(wrong_authority)
-    missing_authority = deepcopy(document)
+
+    missing_authority = deepcopy(valid_document)
     missing_authority['frames_tf'].pop('odom_to_base_link_authority')
-    with pytest.raises((ValueError, ValidationError)):
+    assert missing_authority['provenance'] == valid_document['provenance']
+    with pytest.raises(ValidationError, match='odom_to_base_link_authority'):
         compile_resolved_document_v3(missing_authority)
-    with pytest.raises(ValidationError):
+
+    with pytest.raises(ValidationError, match='map_frame'):
         FrameTfContractV3.model_validate(
-            {**document['frames_tf'], 'map_frame': None}
+            {**valid_document['frames_tf'], 'map_frame': None}
         )
     composed, _, _ = _compile_inputs()
     assert composed['frames_tf']['map_frame'] is None
