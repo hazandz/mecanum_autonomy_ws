@@ -54,6 +54,29 @@ class LifecycleStateError(RuntimeError):
     """Raised when reset/step operations are attempted in an invalid state."""
 
 
+def _validate_task_goal_binding(
+    task_id: object,
+    session_id: object,
+    goal_id: object,
+    goal_xy_m: object,
+) -> None:
+    """Kiểm identity task/session/goal và hình học goal đã bind."""
+    for name, value in (
+        ('task_id', task_id),
+        ('session_id', session_id),
+        ('goal_id', goal_id),
+    ):
+        if type(value) is not str or not value or value != value.strip():
+            raise ValueError(f'{name} must be a non-empty trimmed string')
+    if type(goal_xy_m) is not tuple or len(goal_xy_m) != 2:
+        raise TypeError('goal_xy_m must be a two-value tuple')
+    for value in goal_xy_m:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise TypeError('goal coordinates must be finite real values')
+        if not isfinite(float(value)):
+            raise ValueError('goal coordinates must be finite real values')
+
+
 class EpisodeLifecycleState(str, Enum):
     """Lifecycle state; RESETTING/WAITING states are not Gym transitions."""
 
@@ -206,6 +229,10 @@ class ResetCommitCandidate:
     observation_provenance: ExactObservationProvenance | None
     goal_result: object
     previous_issued_command: object
+    task_id: str
+    session_id: str
+    goal_id: str
+    goal_xy_m: tuple[float, float]
     reset_barrier_ros_ns: int = 0
     zero_receipt: ResetZeroReceipt | None = None
 
@@ -221,6 +248,10 @@ class ResetCommitFacts:
     scenario_session_binding: ScenarioSessionBinding
     previous_issued_command: PreviousNormalizedCommand
     zero_receipt: ResetZeroReceipt
+    task_id: str
+    session_id: str
+    goal_id: str
+    goal_xy_m: tuple[float, float]
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, EpisodeLifecycleIdentity):
@@ -252,6 +283,9 @@ class ResetCommitFacts:
             )
         if not isinstance(self.zero_receipt, ResetZeroReceipt):
             raise ValueError('reset requires an actual published zero receipt')
+        _validate_task_goal_binding(
+            self.task_id, self.session_id, self.goal_id, self.goal_xy_m
+        )
         if self.zero_receipt.lifecycle != self.identity:
             raise ValueError(
                 'reset zero receipt lifecycle does not match facts'
@@ -296,6 +330,10 @@ class CommittedRewardBaseline:
     previous_goal_distance_m: float
     previous_committed_sim_time_ns: int
     scenario_session_binding: ScenarioSessionBinding
+    task_id: str
+    session_id: str
+    goal_id: str
+    goal_xy_m: tuple[float, float]
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, EpisodeLifecycleIdentity):
@@ -319,6 +357,9 @@ class CommittedRewardBaseline:
         )
         if not isinstance(self.scenario_session_binding, ScenarioSessionBinding):
             raise TypeError("scenario_session_binding must be a ScenarioSessionBinding")
+        _validate_task_goal_binding(
+            self.task_id, self.session_id, self.goal_id, self.goal_xy_m
+        )
         if self.identity != self.scenario_session_binding.lifecycle_identity:
             raise ValueError("baseline and scenario session lifecycle do not match")
         if self.identity != self.observation_provenance.identity:
@@ -424,6 +465,10 @@ class EpisodeLifecycleSnapshot:
     committed_transition_ids: tuple[str, ...]
     goal_settle_state: CommittedGoalSettleState | None
     task_history: tuple[CommittedTaskHistorySample, ...]
+    task_health_epoch: int
+    committed_task_health_epoch: int
+    observed_contact_health_epoch: int
+    committed_contact_health_epoch: int
     reset_in_progress: bool
     step_in_progress: bool
 
@@ -472,6 +517,10 @@ class EpisodeLifecycle:
         self._committed_transition_ids: tuple[str, ...] = ()
         self._goal_settle_state: CommittedGoalSettleState | None = None
         self._task_history: tuple[CommittedTaskHistorySample, ...] = ()
+        self._task_health_epoch = 0
+        self._committed_task_health_epoch = 0
+        self._observed_contact_health_epoch = 0
+        self._committed_contact_health_epoch = 0
         self._reset_in_progress = False
         self._step_in_progress = False
 
@@ -608,6 +657,10 @@ class EpisodeLifecycle:
                 previous_goal_distance_m=facts.previous_goal_distance_m,
                 previous_committed_sim_time_ns=facts.previous_committed_sim_time_ns,
                 scenario_session_binding=facts.scenario_session_binding,
+                task_id=facts.task_id,
+                session_id=facts.session_id,
+                goal_id=facts.goal_id,
+                goal_xy_m=facts.goal_xy_m,
             )
             self._committed_scenario_session_binding = facts.scenario_session_binding
             self._pending_scenario_session_binding = None
@@ -681,6 +734,7 @@ class EpisodeLifecycle:
         *,
         goal_settle_state: CommittedGoalSettleState | None = None,
         task_history_sample: CommittedTaskHistorySample | None = None,
+        contact_health_epoch: int | None = None,
     ) -> EpisodeLifecycleResult:
         """Atomically commit validated goal progress and other transition facts."""
 
@@ -701,7 +755,31 @@ class EpisodeLifecycle:
                 previous_goal_distance_m=goal_fact.goal_distance_m,
                 previous_committed_sim_time_ns=goal_fact.provenance.source_timestamp_ns,
                 scenario_session_binding=goal_fact.provenance.scenario_session_binding,
+                task_id=self._reward_baseline.task_id,
+                session_id=self._reward_baseline.session_id,
+                goal_id=self._reward_baseline.goal_id,
+                goal_xy_m=self._reward_baseline.goal_xy_m,
             )
+            if contact_health_epoch is None:
+                next_contact_health_epoch = (
+                    self._committed_contact_health_epoch
+                )
+            elif (
+                type(contact_health_epoch) is not int
+                or contact_health_epoch < 0
+            ):
+                return self._abort_step_locked(
+                    'contact health epoch must be a non-negative integer'
+                )
+            else:
+                next_contact_health_epoch = contact_health_epoch
+            if (
+                next_contact_health_epoch
+                < self._committed_contact_health_epoch
+            ):
+                return self._abort_step_locked(
+                    'contact health epoch cannot move backward'
+                )
             if (goal_settle_state is None) != (task_history_sample is None):
                 return self._abort_step_locked(
                     'goal settle state and task sample must commit together'
@@ -751,6 +829,13 @@ class EpisodeLifecycle:
                         sample.goal_xy_m,
                     ) == current_key
                 )
+                if (
+                    self._task_health_epoch
+                    != self._committed_task_health_epoch
+                    or next_contact_health_epoch
+                    != self._committed_contact_health_epoch
+                ):
+                    prior_samples = ()
                 samples = (*prior_samples, task_history_sample)
                 window_start_ns = (
                     task_history_sample.ros_time_ns - 10_000_000_000
@@ -790,6 +875,12 @@ class EpisodeLifecycle:
             self._last_committed_goal_progress = goal_progress
             self._goal_settle_state = new_goal_settle_state
             self._task_history = new_task_history
+            self._committed_task_health_epoch = self._task_health_epoch
+            self._committed_contact_health_epoch = next_contact_health_epoch
+            self._observed_contact_health_epoch = max(
+                self._observed_contact_health_epoch,
+                next_contact_health_epoch,
+            )
             self._step_index = validated.step_index
             self._state = validated.committed_state
             self._staged_contact_candidate = None
@@ -809,6 +900,10 @@ class EpisodeLifecycle:
         GoalProgressInput,
         CommittedGoalSettleState | None,
         tuple[CommittedTaskHistorySample, ...],
+        int,
+        int,
+        int,
+        int,
         int,
     ]:
         """Xác thực step và đọc before-state mà không sửa state."""
@@ -830,7 +925,33 @@ class EpisodeLifecycle:
                 self._task_history,
                 self._reset_commit_facts.observation_provenance
                 .observation_timestamp_ns,
+                self._task_health_epoch,
+                self._committed_task_health_epoch,
+                self._observed_contact_health_epoch,
+                self._committed_contact_health_epoch,
             )
+
+    def note_task_health_interruption(
+        self,
+        identity: EpisodeLifecycleIdentity,
+        contact_health_epoch: int | None = None,
+    ) -> None:
+        """Record a health gap so the next valid task window starts anew."""
+        with self._lock:
+            self._require_identity(identity)
+            if contact_health_epoch is None:
+                self._task_health_epoch += 1
+                return
+            if (
+                type(contact_health_epoch) is not int
+                or contact_health_epoch < 0
+            ):
+                raise ValueError(
+                    'contact health epoch must be a non-negative integer'
+                )
+            if contact_health_epoch > self._observed_contact_health_epoch:
+                self._task_health_epoch += 1
+                self._observed_contact_health_epoch = contact_health_epoch
 
     def abort_step(self, reason: str) -> EpisodeLifecycleResult:
         """Abort before commit; retain committed before-state and do not consume contact."""
@@ -905,6 +1026,12 @@ class EpisodeLifecycle:
             raise ValueError("reset goal fact timestamp must match exact observation0")
         if goal_provenance.transition_identity is not None:
             raise ValueError("reset goal fact must not carry a transition identity")
+        _validate_task_goal_binding(
+            candidate.task_id,
+            candidate.session_id,
+            candidate.goal_id,
+            candidate.goal_xy_m,
+        )
         distance = _require_non_negative_finite_real("previous_goal_distance_m", goal_fact.goal_distance_m)
         if not isinstance(candidate.previous_issued_command, PreviousNormalizedCommand):
             raise TypeError("reset requires a PreviousNormalizedCommand")
@@ -953,6 +1080,10 @@ class EpisodeLifecycle:
             scenario_session_binding=goal_provenance.scenario_session_binding,
             previous_issued_command=candidate.previous_issued_command,
             zero_receipt=candidate.zero_receipt,
+            task_id=candidate.task_id,
+            session_id=candidate.session_id,
+            goal_id=candidate.goal_id,
+            goal_xy_m=candidate.goal_xy_m,
         )
 
     def _validate_step_candidate(
@@ -1059,6 +1190,10 @@ class EpisodeLifecycle:
         self._committed_transition_ids = ()
         self._goal_settle_state = None
         self._task_history = ()
+        self._task_health_epoch = 0
+        self._committed_task_health_epoch = 0
+        self._observed_contact_health_epoch = 0
+        self._committed_contact_health_epoch = 0
 
     def _snapshot(self) -> EpisodeLifecycleSnapshot:
         return EpisodeLifecycleSnapshot(
@@ -1079,6 +1214,12 @@ class EpisodeLifecycle:
             committed_transition_ids=self._committed_transition_ids,
             goal_settle_state=self._goal_settle_state,
             task_history=self._task_history,
+            task_health_epoch=self._task_health_epoch,
+            committed_task_health_epoch=self._committed_task_health_epoch,
+            observed_contact_health_epoch=self._observed_contact_health_epoch,
+            committed_contact_health_epoch=(
+                self._committed_contact_health_epoch
+            ),
             reset_in_progress=self._reset_in_progress,
             step_in_progress=self._step_in_progress,
         )

@@ -163,6 +163,10 @@ def _reset_candidate(
     previous_command: object | None = None,
     goal_result: object | None = None,
     binding: ScenarioSessionBinding | None = None,
+    task_id: str = 'task',
+    session_id: str = 'reset-session',
+    goal_id: str = 'goal',
+    goal_xy_m: tuple[float, float] = (0.0, 0.0),
 ) -> ResetCommitCandidate:
     observation = provenance or _provenance(identity, 100)
     if goal_result is None:
@@ -206,6 +210,10 @@ def _reset_candidate(
             if previous_command is not None
             else PreviousNormalizedCommand(0.0, 0.0, 0.0)
         ),
+        task_id=task_id,
+        session_id=session_id,
+        goal_id=goal_id,
+        goal_xy_m=goal_xy_m,
         reset_barrier_ros_ns=0,
         zero_receipt=ResetZeroReceipt(
             zero.receipt_key, identity, zero.publish_stamp_ns, 'SAFE_STOP',
@@ -338,12 +346,16 @@ def test_invalid_reset_goal_fact_or_provenance_aborts_and_clears_state() -> None
             observation_provenance=None,
             goal_result=TaskOracleResult(TaskOracleStatus.INVALID_PROVENANCE, None),
             previous_issued_command=PreviousNormalizedCommand(0.0, 0.0, 0.0),
+            task_id='task', session_id='reset-session', goal_id='goal',
+            goal_xy_m=(0.0, 0.0),
         ),
         ResetCommitCandidate(
             identity=_identity(0),
             observation_provenance=ExactObservationProvenance(_identity(0), 100, 99, 100),
             goal_result=TaskOracleResult(TaskOracleStatus.INVALID_PROVENANCE, None),
             previous_issued_command=PreviousNormalizedCommand(0.0, 0.0, 0.0),
+            task_id='task', session_id='reset-session', goal_id='goal',
+            goal_xy_m=(0.0, 0.0),
         ),
         _reset_candidate(
             _identity(0),
@@ -503,6 +515,10 @@ def test_reset_fail_closed_boundary_preserves_no_partial_candidate_state(case: s
             observation_provenance=observation,
             goal_result=goal_result,
             previous_issued_command=previous_command,
+            task_id='task',
+            session_id='reset-session',
+            goal_id='goal',
+            goal_xy_m=(0.0, 0.0),
         )
     )
 
@@ -1122,6 +1138,10 @@ def test_reset_requires_observation0_goal_fact_without_transition_token() -> Non
             observation_provenance=observation,
             goal_result=step_fact,
             previous_issued_command=PreviousNormalizedCommand(0.0, 0.0, 0.0),
+            task_id='task',
+            session_id='reset-session',
+            goal_id='goal',
+            goal_xy_m=(0.0, 0.0),
         )
     )
     assert result.status is EpisodeOperationStatus.RESET_ABORT

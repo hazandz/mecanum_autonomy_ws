@@ -117,6 +117,7 @@ def test_unhealthy_source_blocks_contact_consumption_until_new_healthy_fact():
     assert latch.observe(ContactFact(
         identity, 'touch', 1, True, True
     )).accepted
+    assert latch.state.health_epoch == 0
     unhealthy = latch.observe(ContactFact(
         identity, 'health-loss', 2, False, False
     ))
@@ -124,6 +125,7 @@ def test_unhealthy_source_blocks_contact_consumption_until_new_healthy_fact():
     assert unhealthy.state.contact_active
     assert unhealthy.state.collision_pulse_pending
     assert unhealthy.state.source_healthy is False
+    assert unhealthy.state.health_epoch == 1
     before = latch.state
     rejected = latch.commit_transition('step-1', identity)
     assert not rejected.accepted and latch.state == before
@@ -133,6 +135,7 @@ def test_unhealthy_source_blocks_contact_consumption_until_new_healthy_fact():
     assert restored.accepted
     assert not restored.state.contact_active
     assert restored.state.collision_pulse_pending
+    assert restored.state.health_epoch == 1
     consumed = latch.commit_transition('step-1', identity)
     assert consumed.accepted
     assert not consumed.state.contact_active

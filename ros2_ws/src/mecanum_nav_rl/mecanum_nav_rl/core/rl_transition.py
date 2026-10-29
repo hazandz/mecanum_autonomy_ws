@@ -57,6 +57,9 @@ from mecanum_nav_rl.rewards.manager import (
     TransitionRewardInput,
 )
 from mecanum_nav_rl.simulation.contact_latch import ContactLatch
+from mecanum_nav_rl.simulation.simulated_odometry import (
+    SimulatedOdometryStatus,
+)
 from mecanum_nav_rl.tasks.local_training_goal import (
     GoalSettleResult,
     GoalSettleState,
@@ -167,6 +170,37 @@ class RLTransitionCommitter:
             try:
                 if not isinstance(context, RLTransitionContext):
                     raise TypeError('context must be RLTransitionContext')
+                if isinstance(context.contact_latch, ContactLatch):
+                    contact_state = context.contact_latch.state
+                    lifecycle_state = self._lifecycle.snapshot
+                    if contact_state.health_epoch < max(
+                        lifecycle_state.observed_contact_health_epoch,
+                        lifecycle_state.committed_contact_health_epoch,
+                    ):
+                        raise ValueError('contact health epoch moved backward')
+                    if (
+                        contact_state.health_epoch
+                        > lifecycle_state.observed_contact_health_epoch
+                    ):
+                        self._lifecycle.note_task_health_interruption(
+                            context.transition_identity.identity,
+                            contact_state.health_epoch,
+                        )
+                        lifecycle_state = self._lifecycle.snapshot
+                    if (
+                        contact_state.source_healthy is False
+                        and lifecycle_state.task_health_epoch
+                        == lifecycle_state.committed_task_health_epoch
+                    ):
+                        self._lifecycle.note_task_health_interruption(
+                            context.transition_identity.identity
+                        )
+                        return TransitionCommitResult(
+                            False,
+                            None,
+                            'contact source health is invalid '
+                            'for this transition',
+                        )
                 (
                     baseline,
                     previous_command,
@@ -174,6 +208,10 @@ class RLTransitionCommitter:
                     goal_settle_state,
                     task_history,
                     reset_timestamp_ns,
+                    task_health_epoch,
+                    committed_task_health_epoch,
+                    observed_contact_health_epoch,
+                    committed_contact_health_epoch,
                 ) = (
                     self._lifecycle._prepare_step_reward_facts(
                         context.lifecycle_candidate
@@ -187,6 +225,10 @@ class RLTransitionCommitter:
                     goal_settle_state,
                     task_history,
                     reset_timestamp_ns,
+                    task_health_epoch,
+                    committed_task_health_epoch,
+                    observed_contact_health_epoch,
+                    committed_contact_health_epoch,
                 )
             except (
                 TypeError,
@@ -211,6 +253,9 @@ class RLTransitionCommitter:
                         prepared.goal_settle_result
                     ),
                     task_history_sample=prepared.task_history_sample,
+                    contact_health_epoch=(
+                        prepared.contact_latch.state.health_epoch
+                    ),
                 )
             except LifecycleStateError as error:
                 return TransitionCommitResult(False, None, str(error))
@@ -245,8 +290,8 @@ class RLTransitionCommitter:
             self._committed = (*self._committed, committed)
             return TransitionCommitResult(True, committed)
 
-    @staticmethod
     def _prepare(
+        self,
         context: RLTransitionContext,
         reward_baseline: CommittedRewardBaseline,
         previous_command: PreviousNormalizedCommand,
@@ -254,6 +299,10 @@ class RLTransitionCommitter:
         committed_goal_state: CommittedGoalSettleState | None,
         committed_task_history: tuple[CommittedTaskHistorySample, ...],
         reset_timestamp_ns: int,
+        task_health_epoch: int,
+        committed_task_health_epoch: int,
+        observed_contact_health_epoch: int,
+        committed_contact_health_epoch: int,
     ) -> RLTransitionContext:
         if not isinstance(context, RLTransitionContext):
             raise TypeError('context must be RLTransitionContext')
@@ -353,9 +402,22 @@ class RLTransitionCommitter:
             or issuance_receipt.publish_stamp_ns > selection.cutoff_ros_ns
             or issuance_receipt.final_publish_sequence
             > selected.final_publish_sequence
+            or issuance_receipt.publish_stamp_ns
+            <= max(
+                selection.reset_barrier_ros_ns,
+                selection.action_barrier_ros_ns,
+            )
         ):
             raise ValueError(
                 'POLICY issuance is outside the selected receipt stream'
+            )
+        if (
+            issuance_receipt.final_publish_sequence
+            == selected.final_publish_sequence
+            and issuance_receipt != selected
+        ):
+            raise ValueError(
+                'POLICY issuance conflicts with the selected publication'
             )
         ros_age = (
             selection.evaluation_ros_now_ns
@@ -528,10 +590,34 @@ class RLTransitionCommitter:
             raise ValueError(
                 'expected task/session/goal identity is incomplete'
             )
+        if (
+            reward_baseline.task_id,
+            reward_baseline.session_id,
+            reward_baseline.goal_id,
+            reward_baseline.goal_xy_m,
+        ) != (
+            context.expected_task_id,
+            context.expected_session_id,
+            context.expected_goal_id,
+            context.expected_goal_xy_m,
+        ):
+            raise ValueError(
+                'reward baseline task and goal differ from current task facts'
+            )
         if context.expected_session_id != binding.session_id:
             raise ValueError(
                 'task session differs from the selected receipt stream'
             )
+        contact_state = context.contact_latch.state
+        if contact_state.health_epoch < observed_contact_health_epoch:
+            raise ValueError('contact health epoch moved backward')
+        health_continuity = (
+            task_health_epoch == committed_task_health_epoch
+            and contact_state.health_epoch == committed_contact_health_epoch
+        )
+        if not health_continuity:
+            committed_goal_state = None
+            committed_task_history = ()
         if committed_goal_state is None:
             previous_settle_state = GoalSettleState()
         else:
@@ -572,6 +658,9 @@ class RLTransitionCommitter:
             expected_goal_xy_m=context.expected_goal_xy_m,
         )
         if not goal_health.healthy:
+            self._lifecycle.note_task_health_interruption(
+                context.transition_identity.identity
+            )
             raise ValueError(
                 goal_health.reason
                 or 'current LOCAL_TRAINING health is invalid'
@@ -656,7 +745,6 @@ class RLTransitionCommitter:
         )
         if elapsed_ros_ns < 0:
             raise ValueError('episode ROS time precedes committed reset')
-        contact_state = context.contact_latch.state
         if contact_state.source_healthy is False:
             raise ValueError(
                 'contact source health is invalid for this transition'
@@ -898,11 +986,52 @@ def _validate_v3_observation(
         or twist_result.status is not MeasuredTwistFeatureStatus.READY
         or twist_result.timestamp_ns != snapshot.timestamp_ns
         or twist_result.odometry_sequence != snapshot.sequence
-        or tuple(float(value) for value in twist_result.features)
-        != tuple(twist.components)
     ):
         raise ValueError(
             'measured twist does not come from selected odometry snapshot'
+        )
+    measurement = snapshot.measurement
+    scales = context.cutoff_selection.physical_scales
+    if (
+        snapshot.status is not SimulatedOdometryStatus.VALID
+        or measurement is None
+        or type(scales) is not tuple
+        or len(scales) != 3
+    ):
+        raise ValueError(
+            'selected noisy odometry or V3 twist scales are incomplete'
+        )
+    physical_twist = (
+        measurement.vx_mps,
+        measurement.vy_mps,
+        measurement.wz_radps,
+    )
+    expected_twist = []
+    for axis, (physical_value, scale) in enumerate(
+        zip(physical_twist, scales, strict=True)
+    ):
+        if (
+            isinstance(physical_value, bool)
+            or not isinstance(physical_value, (int, float))
+            or not np.isfinite(physical_value)
+            or isinstance(scale, bool)
+            or not isinstance(scale, (int, float))
+            or not np.isfinite(scale)
+            or scale <= 0.0
+            or abs(physical_value) > scale
+        ):
+            raise ValueError(
+                f'selected noisy odometry twist axis {axis} is invalid'
+            )
+        expected_twist.append(float(physical_value) / float(scale))
+    expected_twist_tuple = tuple(expected_twist)
+    if (
+        tuple(float(value) for value in twist_result.features)
+        != expected_twist_tuple
+        or tuple(twist.components) != expected_twist_tuple
+    ):
+        raise ValueError(
+            'V3 measured twist differs from selected noisy odometry and scales'
         )
     assembled = assembly.vector
     if not np.array_equal(assembled, context.observation):

@@ -49,6 +49,7 @@ class ContactLatchState:
     last_event_sequence: int = 0
     seen_event_ids: tuple[str, ...] = ()
     source_healthy: bool | None = None
+    health_epoch: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,7 @@ class ContactLatch:
                     last_event_sequence=fact.event_sequence,
                     seen_event_ids=seen,
                     source_healthy=False,
+                    health_epoch=state.health_epoch + 1,
                 )
                 self._state = state
                 return ContactLatchResult(
@@ -127,6 +129,7 @@ class ContactLatch:
                     last_event_sequence=fact.event_sequence,
                     seen_event_ids=seen,
                     source_healthy=True,
+                    health_epoch=state.health_epoch,
                 )
             else:
                 state = ContactLatchState(
@@ -138,6 +141,7 @@ class ContactLatch:
                     last_event_sequence=fact.event_sequence,
                     seen_event_ids=seen,
                     source_healthy=True,
+                    health_epoch=state.health_epoch,
                 )
             self._state = state
             return ContactLatchResult(True, state)
@@ -176,6 +180,7 @@ class ContactLatch:
                 last_event_sequence=state.last_event_sequence,
                 seen_event_ids=state.seen_event_ids,
                 source_healthy=state.source_healthy,
+                health_epoch=state.health_epoch,
             )
             self._state = next_state
             return ContactLatchResult(True, next_state)

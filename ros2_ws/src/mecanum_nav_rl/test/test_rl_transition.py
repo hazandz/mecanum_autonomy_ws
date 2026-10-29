@@ -142,7 +142,8 @@ def ready_lifecycle():
         ResetCommitCandidate(
             identity, provenance,
             TaskOracleResult(TaskOracleStatus.READY, reset_fact),
-            PreviousNormalizedCommand(0, 0, 0), 0,
+            PreviousNormalizedCommand(0, 0, 0),
+            'task', 'session', 'goal', (0.0, 0.0), 0,
             ResetZeroReceipt(
                 reset_zero.receipt_key, identity,
                 reset_zero.publish_stamp_ns, 'SAFE_STOP',
@@ -206,25 +207,28 @@ def context(
     *, selected_source=ReceiptSource.POLICY, clearance_m=0.5,
     clearance_provenance=None, reason=TerminationReason.COLLISION,
     final_sequence=1, source_sequence=11,
-    policy_physical=(0.025, 0.04, 0.24), oracle_pose_xy=None
+    policy_physical=(0.025, 0.04, 0.24), oracle_pose_xy=None,
+    measured_twist=(0.0, 0.0, 0.0), twist_features_override=None,
+    task_id='task', session_id='session', goal_id='goal',
+    goal_xy_m=(0.0, 0.0),
 ):
     """Tạo dữ kiện transition nhất quán cho kiểm thử commit."""
     cutoff = candidate.observation_provenance.observation_timestamp_ns
     binding = ReceiptStreamBinding(
-        90, 'session', 'a' * 64, identity, 'base_link'
+        90, session_id, 'a' * 64, identity, 'base_link'
     )
     if selected_source is ReceiptSource.POLICY:
         policy_stamp = cutoff
         policy = IssuedCommandReceiptView(
             policy_stamp, 90, final_sequence, ReceiptSource.POLICY, 7,
             source_sequence, token.step_index, token.transition_id,
-            identity, 'session', 'a' * 64, policy_physical,
+            identity, session_id, 'a' * 64, policy_physical,
             policy_stamp, 'base_link', True
         )
         selected = policy
         trailing = IssuedCommandReceiptView(
             cutoff + 1, 90, final_sequence + 1, ReceiptSource.SAFE_STOP,
-            8, 1, 0, '', identity, 'session', 'a' * 64, (0, 0, 0),
+            8, 1, 0, '', identity, session_id, 'a' * 64, (0, 0, 0),
             cutoff + 1, 'base_link', True
         )
         receipts = (policy, trailing)
@@ -233,17 +237,17 @@ def context(
         policy = IssuedCommandReceiptView(
             policy_stamp, 90, final_sequence, ReceiptSource.POLICY, 7,
             source_sequence, token.step_index, token.transition_id,
-            identity, 'session', 'a' * 64, policy_physical,
+            identity, session_id, 'a' * 64, policy_physical,
             policy_stamp, 'base_link', True
         )
         selected = IssuedCommandReceiptView(
             cutoff, 90, final_sequence + 1, ReceiptSource.SAFE_STOP, 8,
-            1, 0, '', identity, 'session', 'a' * 64, (0, 0, 0),
+            1, 0, '', identity, session_id, 'a' * 64, (0, 0, 0),
             cutoff, 'base_link', True
         )
         trailing = IssuedCommandReceiptView(
             cutoff + 1, 90, final_sequence + 2,
-            ReceiptSource.SAFE_STOP, 8, 2, 0, '', identity, 'session',
+            ReceiptSource.SAFE_STOP, 8, 2, 0, '', identity, session_id,
             'a' * 64, (0, 0, 0), cutoff + 1, 'base_link', True
         )
         receipts = (policy, selected, trailing)
@@ -266,13 +270,14 @@ def context(
     baseline = lifecycle.snapshot.reward_baseline
     previous_command = lifecycle.snapshot.previous_issued_command
     current_fact = candidate.goal_result.fact
-    task_id, session_id, goal_id = ('task', 'session', 'goal')
-    goal_xy = (0.0, 0.0)
+    goal_xy = goal_xy_m
     pose_x, pose_y = (
         (-current_fact.goal_distance_m, 0.0)
         if oracle_pose_xy is None else oracle_pose_xy
     )
-    measured_goal_distance = float(np.hypot(pose_x, pose_y))
+    measured_goal_distance = float(np.hypot(
+        pose_x - goal_xy[0], pose_y - goal_xy[1]
+    ))
     if measured_goal_distance != current_fact.goal_distance_m:
         current_fact = replace(
             current_fact, goal_distance_m=measured_goal_distance
@@ -283,7 +288,9 @@ def context(
     scenario_binding = current_fact.provenance.scenario_session_binding
     odometry = SimulatedOdometrySnapshot(
         cutoff, SimulatedOdometryStatus.VALID, 100 + token.step_index,
-        SimulatedOdometryMeasurement(pose_x, pose_y, 0.0, 0.0, 0.0, 0.0),
+        SimulatedOdometryMeasurement(
+            pose_x, pose_y, 0.0, *measured_twist
+        ),
     )
     evaluation_ros_now = selection.evaluation_ros_now_ns
     evaluation_steady_now = selection.evaluation_steady_now_ns
@@ -357,7 +364,17 @@ def context(
         body_vx_mps=0.0, body_vy_mps=0.0, body_wz_radps=0.0,
         health=health,
     )
-    settle_before = lifecycle.snapshot.goal_settle_state
+    lifecycle_snapshot = lifecycle.snapshot
+    contact_snapshot = contact.state
+    health_continuity = (
+        lifecycle_snapshot.task_health_epoch
+        == lifecycle_snapshot.committed_task_health_epoch
+        and contact_snapshot.health_epoch
+        == lifecycle_snapshot.committed_contact_health_epoch
+    )
+    settle_before = (
+        lifecycle_snapshot.goal_settle_state if health_continuity else None
+    )
     if settle_before is None:
         settle_state = GoalSettleState()
     else:
@@ -393,9 +410,20 @@ def context(
         scan_scenario_identity=scenario_binding.scenario_id,
     )
     assert reference_result.ready
+    twist_scales = selection.physical_scales
+    twist_features = (
+        tuple(
+            physical / scale
+            for physical, scale in zip(
+                measured_twist, twist_scales, strict=True
+            )
+        )
+        if twist_features_override is None
+        else twist_features_override
+    )
     twist_result = MeasuredTwistFeatureResult(
         MeasuredTwistFeatureStatus.READY, cutoff, odometry.sequence,
-        (0.0, 0.0, 0.0),
+        twist_features,
     )
     common = (
         identity.episode_generation, identity.reset_epoch,
@@ -439,7 +467,9 @@ def context(
             sample.ros_time_ns, sample.x_m, sample.y_m,
             sample.true_goal_distance_m, sample.required_health_valid
         )
-        for sample in lifecycle.snapshot.task_history
+        for sample in (
+            lifecycle_snapshot.task_history if health_continuity else ()
+        )
         if (sample.lifecycle == identity and sample.task_id == task_id
             and sample.session_id == session_id and sample.goal_id == goal_id
             and sample.goal_xy_m == goal_xy)
@@ -738,7 +768,7 @@ def test_reset_after_commit_uses_same_boundary_and_clears_old_contact_identity(
     def paused_commit_step(step_candidate, **commit_kwargs):
         entered_commit.set()
         assert release_commit.wait(timeout=2)
-        return original_commit_step(step_candidate)
+        return original_commit_step(step_candidate, **commit_kwargs)
 
     monkeypatch.setattr(lifecycle, 'commit_step', paused_commit_step)
     commit_results = []
@@ -817,7 +847,21 @@ def test_unhealthy_contact_source_rejects_transition_without_consuming_state():
     rejected = committer.commit(fact)
 
     assert not rejected.committed
-    assert lifecycle.snapshot == lifecycle_before
+    lifecycle_after = lifecycle.snapshot
+    assert lifecycle_after.reward_baseline == lifecycle_before.reward_baseline
+    assert lifecycle_after.previous_issued_command == (
+        lifecycle_before.previous_issued_command
+    )
+    assert lifecycle_after.consumed_receipt_ids == (
+        lifecycle_before.consumed_receipt_ids
+    )
+    assert lifecycle_after.committed_transition_ids == (
+        lifecycle_before.committed_transition_ids
+    )
+    assert lifecycle_after.task_history == lifecycle_before.task_history
+    assert lifecycle_after.task_health_epoch > (
+        lifecycle_before.task_health_epoch
+    )
     assert contact.state == contact_before
     assert contact.state.collision_pulse_pending
     assert committer.committed == ()
@@ -1139,6 +1183,240 @@ def test_goal_termination_comes_from_same_task_settle_across_commits():
     assert transitions[-1].command_history == (0.0, 0.0, 0.0)
 
 
+@pytest.mark.parametrize('attempt_during_health_loss', [False, True])
+def test_health_interruption_restarts_goal_settle_window(
+    attempt_during_health_loss,
+):
+    """Health gap cắt settle dù commit trong lúc lỗi hay không."""
+    lifecycle, identity, first_token, first_candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    committer = RLTransitionCommitter(lifecycle)
+
+    def goal_step(step, timestamp, first=None):
+        if first is None:
+            token = TransitionIdentity(identity, step, f'health-step-{step}')
+            lifecycle.begin_step(token)
+            provenance = ExactObservationProvenance(
+                identity, timestamp, timestamp, timestamp
+            )
+            binding = lifecycle.snapshot.committed_scenario_session_binding
+            candidate = StepCommitCandidate(
+                token,
+                provenance,
+                TaskOracleResult(TaskOracleStatus.READY, GoalOracleFact(
+                    0.0,
+                    False,
+                    GoalFactProvenance(
+                        GoalFactJoinMode.STEP_TRANSITION,
+                        binding,
+                        provenance,
+                        timestamp,
+                        token,
+                    ),
+                )),
+                CommandReceiptSnapshot(
+                    token,
+                    f'health-candidate-{step}',
+                    PreviousNormalizedCommand(0.0, 0.0, 0.0),
+                ),
+            )
+        else:
+            token = first_token
+            provenance = ExactObservationProvenance(
+                identity, timestamp, timestamp, timestamp
+            )
+            fact = first.goal_result.fact
+            candidate = replace(
+                first,
+                observation_provenance=provenance,
+                goal_result=TaskOracleResult(TaskOracleStatus.READY, replace(
+                    fact,
+                    goal_distance_m=0.0,
+                    goal_reached=False,
+                    provenance=GoalFactProvenance(
+                        GoalFactJoinMode.STEP_TRANSITION,
+                        lifecycle.snapshot.committed_scenario_session_binding,
+                        provenance,
+                        timestamp,
+                        token,
+                    ),
+                )),
+            )
+        value = context(
+            lifecycle,
+            identity,
+            token,
+            candidate,
+            None,
+            contact,
+            selected_source=ReceiptSource.SAFE_STOP,
+            final_sequence=step * 10,
+            source_sequence=10 + step,
+            oracle_pose_xy=(0.0, 0.0),
+        )
+        return token, candidate, value
+
+    for step in range(1, 5):
+        timestamp = 1_200_000_000 + (step - 1) * 250_000_000
+        if step == 1:
+            token, candidate, value = goal_step(
+                step, timestamp, first_candidate
+            )
+        else:
+            token, candidate, value = goal_step(step, timestamp)
+        result = committer.commit(value)
+        assert result.committed, result.reason
+    assert lifecycle.snapshot.goal_settle_state.settled_since_ros_ns == (
+        1_200_000_000
+    )
+
+    assert not contact.observe(ContactFact(
+        identity, 'health-gap', 1, False, False
+    )).accepted
+    next_timestamp = 2_200_000_000
+    token, candidate, value = goal_step(5, next_timestamp)
+    if attempt_during_health_loss:
+        rejected = committer.commit(value)
+        assert not rejected.committed
+        before_recovery = lifecycle.snapshot
+        assert (
+            before_recovery.reward_baseline.previous_committed_sim_time_ns
+            == 1_950_000_000
+        )
+        assert (
+            before_recovery.task_history[-1].ros_time_ns
+            == 1_950_000_000
+        )
+    assert contact.observe(ContactFact(
+        identity, 'health-restored', 2, False, True
+    )).accepted
+    value = context(
+        lifecycle,
+        identity,
+        token,
+        candidate,
+        None,
+        contact,
+        selected_source=ReceiptSource.SAFE_STOP,
+        final_sequence=50,
+        source_sequence=15,
+        oracle_pose_xy=(0.0, 0.0),
+    )
+    recovered = committer.commit(value)
+    assert recovered.committed, recovered.reason
+    assert not recovered.transition.goal_settle_result.success
+    assert recovered.transition.termination.reason is None
+    assert recovered.transition.reward.terms.terminal == 0.0
+    assert lifecycle.snapshot.goal_settle_state.settled_since_ros_ns == (
+        next_timestamp
+    )
+
+    for step in range(6, 10):
+        timestamp = next_timestamp + (step - 5) * 250_000_000
+        token, candidate, value = goal_step(step, timestamp)
+        result = committer.commit(value)
+        assert result.committed, result.reason
+    assert result.transition.goal_settle_result.success
+    assert result.transition.termination.reason is TerminationReason.GOAL
+    assert result.transition.reward.terms.terminal == 15.0
+
+
+def test_contact_health_gap_clears_committed_stuck_trajectory():
+    """STUCK không được nối trajectory qua health loss của contact source."""
+    lifecycle, identity, first_token, first_candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    committer = RLTransitionCommitter(lifecycle)
+
+    def stuck_step(step, timestamp, first=False):
+        if first:
+            token = first_token
+            provenance = ExactObservationProvenance(
+                identity, timestamp, timestamp, timestamp
+            )
+            fact = first_candidate.goal_result.fact
+            candidate = replace(
+                first_candidate,
+                observation_provenance=provenance,
+                goal_result=TaskOracleResult(TaskOracleStatus.READY, replace(
+                    fact,
+                    goal_distance_m=1.0,
+                    goal_reached=False,
+                    provenance=GoalFactProvenance(
+                        GoalFactJoinMode.STEP_TRANSITION,
+                        lifecycle.snapshot.committed_scenario_session_binding,
+                        provenance,
+                        timestamp,
+                        token,
+                    ),
+                )),
+            )
+        else:
+            token = TransitionIdentity(identity, step, f'stuck-step-{step}')
+            lifecycle.begin_step(token)
+            provenance = ExactObservationProvenance(
+                identity, timestamp, timestamp, timestamp
+            )
+            candidate = StepCommitCandidate(
+                token,
+                provenance,
+                TaskOracleResult(TaskOracleStatus.READY, GoalOracleFact(
+                    1.0,
+                    False,
+                    GoalFactProvenance(
+                        GoalFactJoinMode.STEP_TRANSITION,
+                        lifecycle.snapshot.committed_scenario_session_binding,
+                        provenance,
+                        timestamp,
+                        token,
+                    ),
+                )),
+                CommandReceiptSnapshot(
+                    token,
+                    f'stuck-candidate-{step}',
+                    PreviousNormalizedCommand(0.0, 0.0, 0.0),
+                ),
+            )
+        return context(
+            lifecycle,
+            identity,
+            token,
+            candidate,
+            None,
+            contact,
+            selected_source=ReceiptSource.SAFE_STOP,
+            final_sequence=step * 10,
+            source_sequence=100 + step,
+            oracle_pose_xy=(-1.0, 0.0),
+        )
+
+    for step in range(1, 41):
+        timestamp = 1_200_000_000 + (step - 1) * 250_000_000
+        value = stuck_step(step, timestamp, first=(step == 1))
+        result = committer.commit(value)
+        assert result.committed, result.reason
+        assert result.transition.termination.reason is None
+    assert lifecycle.snapshot.task_history[0].ros_time_ns <= 1_200_000_000
+
+    assert not contact.observe(ContactFact(
+        identity, 'stuck-health-loss', 1, False, False
+    )).accepted
+    assert contact.observe(ContactFact(
+        identity, 'stuck-health-restored', 2, False, True
+    )).accepted
+    value = stuck_step(41, 11_200_000_000)
+
+    recovered = committer.commit(value)
+
+    assert recovered.committed, recovered.reason
+    assert recovered.transition.termination.reason is None
+    assert recovered.transition.reward.terms.terminal == 0.0
+    assert tuple(
+        sample.ros_time_ns for sample in lifecycle.snapshot.task_history
+    ) == (11_200_000_000,)
+
+
 def test_forged_goal_termination_and_reward_reject_without_commit():
     """Không chấp nhận goal hoặc reward terminal bị caller giả."""
     lifecycle, identity, token, candidate = ready_lifecycle()
@@ -1167,6 +1445,157 @@ def test_forged_goal_termination_and_reward_reject_without_commit():
     rejected = RLTransitionCommitter(lifecycle).commit(forged)
     assert not rejected.committed
     assert lifecycle.snapshot == before
+    assert contact.state == contact_before
+
+
+@pytest.mark.parametrize(
+    ('field', 'replacement'),
+    [
+        ('goal_id', 'another-goal'),
+        ('goal_xy_m', (1.0, 0.0)),
+        ('task_id', 'another-task'),
+        ('session_id', 'another-session'),
+    ],
+)
+def test_reward_rejects_task_goal_changed_since_reset_baseline(
+    field, replacement
+):
+    """Không dùng baseline reset cho task, session hoặc goal khác."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    contact.observe(ContactFact(identity, 'kept-pulse', 1, True, True))
+    changed_goal = context(
+        lifecycle,
+        identity,
+        token,
+        candidate,
+        None,
+        contact,
+        reason=None,
+        **{field: replacement},
+    )
+    before = lifecycle.snapshot
+    contact_before = contact.state
+
+    result = RLTransitionCommitter(lifecycle).commit(changed_goal)
+
+    assert not result.committed
+    assert lifecycle.snapshot == before
+    assert contact.state == contact_before
+
+
+def test_reset_bound_goal_facts_seed_the_first_reward_baseline():
+    """First-step reward dùng đúng task-goal binding tại reset."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    baseline = lifecycle.snapshot.reward_baseline
+    assert baseline is not None
+    assert (
+        baseline.task_id,
+        baseline.session_id,
+        baseline.goal_id,
+        baseline.goal_xy_m,
+    ) == ('task', 'session', 'goal', (0.0, 0.0))
+    contact = ContactLatch()
+    contact.reset(identity)
+    first = context(
+        lifecycle, identity, token, candidate, None, contact, reason=None
+    )
+
+    result = RLTransitionCommitter(lifecycle).commit(first)
+
+    assert result.committed
+    assert result.transition.reward.baseline_distance_m == 2.0
+    assert result.transition.reward.terms.progress == pytest.approx(0.2)
+
+
+def test_twist_features_are_recomputed_from_selected_noisy_measurement():
+    """Không chấp nhận twist zero giả khi noisy odometry đo vx khác zero."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(
+        lifecycle, identity, token, candidate, None, contact, reason=None,
+        measured_twist=(0.05, 0.0, 0.0),
+        twist_features_override=(0.0, 0.0, 0.0),
+    )
+    before = lifecycle.snapshot
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert not result.committed
+    assert lifecycle.snapshot == before
+
+
+def test_valid_lateral_twist_is_recomputed_from_selected_v3_scales():
+    """Giữ vy và tính V3 measured twist theo scales đã chọn."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(
+        lifecycle, identity, token, candidate, None, contact, reason=None,
+        measured_twist=(0.0, 0.1, 0.0),
+    )
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert result.committed
+    assert result.transition.observation[75:78].tolist() == [0.0, 0.5, 0.0]
+
+
+def test_wrong_measured_twist_normalization_is_rejected():
+    """Từ chối result không khớp scale V3 của cutoff selection."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(
+        lifecycle, identity, token, candidate, None, contact, reason=None,
+        measured_twist=(0.05, 0.0, 0.0),
+        twist_features_override=(0.1, 0.0, 0.0),
+    )
+    before = lifecycle.snapshot
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert not result.committed
+    assert lifecycle.snapshot == before
+
+
+@pytest.mark.parametrize('corruption', ['same_sequence', 'pre_action_barrier'])
+def test_policy_issuance_proof_must_match_cutoff_publication_and_barrier(
+    corruption,
+):
+    """Không nhận POLICY proof xung đột với STOP hoặc trước action barrier."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(
+        lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.SAFE_STOP, reason=None,
+    )
+    selected = value.cutoff_selection.receipt
+    if corruption == 'same_sequence':
+        bad_proof = replace(
+            value.policy_issuance_receipt,
+            final_publish_sequence=selected.final_publish_sequence,
+        )
+        value = replace(value, policy_issuance_receipt=bad_proof)
+    else:
+        barrier = value.policy_issuance_receipt.publish_stamp_ns
+        value = replace(
+            value,
+            cutoff_selection=replace(
+                value.cutoff_selection, action_barrier_ros_ns=barrier
+            ),
+        )
+    before = lifecycle.snapshot
+    contact_before = contact.state
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert not result.committed
+    assert lifecycle.snapshot == before
+    assert contact.state == contact_before
     assert contact.state == contact_before
     assert lifecycle.snapshot.goal_settle_state is None
     assert lifecycle.snapshot.task_history == ()
