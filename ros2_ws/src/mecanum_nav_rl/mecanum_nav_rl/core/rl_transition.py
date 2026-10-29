@@ -13,7 +13,12 @@ from mecanum_nav_rl.core.episode_lifecycle import (
     LifecycleStateError,
     StepCommitCandidate,
 )
-from mecanum_nav_rl.core.goal_facts import TaskOracleResult, TaskOracleStatus
+from mecanum_nav_rl.core.goal_facts import (
+    GoalFactJoinMode,
+    GoalFactProvenance,
+    TaskOracleResult,
+    TaskOracleStatus,
+)
 from mecanum_nav_rl.core.issued_command_cutoff import (
     CutoffSelection,
     CutoffStatus,
@@ -63,6 +68,7 @@ from mecanum_nav_rl.simulation.simulated_odometry import (
 from mecanum_nav_rl.tasks.local_training_goal import (
     GoalSettleResult,
     GoalSettleState,
+    LocalTrainingHealth,
     OracleGoalSample,
     evaluate_local_training_goal,
 )
@@ -133,6 +139,10 @@ class TransitionCommitResult:
     committed: bool
     transition: CommittedRLTransition | None
     reason: str | None = None
+
+
+class _RequiredSourceHealthGap(ValueError):
+    """Typed rejection for a bound required-input health interruption."""
 
 
 class RLTransitionCommitter:
@@ -230,6 +240,11 @@ class RLTransitionCommitter:
                     observed_contact_health_epoch,
                     committed_contact_health_epoch,
                 )
+            except _RequiredSourceHealthGap as error:
+                self._lifecycle.note_task_health_interruption(
+                    context.transition_identity.identity
+                )
+                return TransitionCommitResult(False, None, str(error))
             except (
                 TypeError,
                 ValueError,
@@ -468,7 +483,12 @@ class RLTransitionCommitter:
             )
         )
         copied = _validate_v3_observation(
-            context, provenance, binding.config_hash, selected_command
+            context,
+            provenance,
+            binding.config_hash,
+            selected_command,
+            reward_baseline,
+            goal_progress,
         )
         prior_command = tuple(
             float(value) for value in np.asarray((
@@ -870,7 +890,12 @@ def _committed_goal_state(result):
 
 
 def _validate_v3_observation(
-    context, provenance, config_hash, selected_command
+    context,
+    provenance,
+    config_hash,
+    selected_command,
+    reward_baseline,
+    goal_progress,
 ):
     inputs = context.observation_inputs
     if type(inputs) is not ValidatedObservationInputs:
@@ -944,6 +969,18 @@ def _validate_v3_observation(
     ):
         raise ValueError(
             'noisy odometry does not bind the selected sensor pair'
+        )
+    if _is_bound_required_source_health_gap(
+        context,
+        provenance,
+        reward_baseline,
+        goal_progress,
+        binding,
+        odometry,
+        local_result,
+    ):
+        raise _RequiredSourceHealthGap(
+            'a bound required observation source lost health'
         )
     if (
         type(local_result) is not LocalReferenceResult
@@ -1043,6 +1080,126 @@ def _validate_v3_observation(
     if copied.shape != (81,) or not np.isfinite(copied).all():
         raise ValueError('assembled V3 observation is invalid')
     return copied
+
+
+def _is_bound_required_source_health_gap(
+    context,
+    provenance,
+    reward_baseline,
+    goal_progress,
+    binding,
+    odometry,
+    local_result,
+) -> bool:
+    """Identify only a health loss bound to this admitted task and cutoff."""
+    sample = context.goal_sample
+    health = sample.health
+    identity = context.transition_identity.identity
+    selection = context.cutoff_selection
+    candidate = context.lifecycle_candidate
+    goal_result = candidate.goal_result
+    if (
+        type(health) is not LocalTrainingHealth
+        or type(goal_result) is not TaskOracleResult
+        or goal_result.status is not TaskOracleStatus.READY
+        or goal_result.fact is None
+        or type(goal_result.fact.provenance) is not GoalFactProvenance
+    ):
+        return False
+    fact_provenance = goal_result.fact.provenance
+    if (
+        fact_provenance.join_mode is not GoalFactJoinMode.STEP_TRANSITION
+        or fact_provenance.transition_identity
+        != context.transition_identity
+        or fact_provenance.scenario_session_binding != binding
+        or fact_provenance.observation_provenance != provenance
+        or fact_provenance.source_timestamp_ns
+        != provenance.observation_timestamp_ns
+    ):
+        return False
+    if (
+        goal_progress.transition_identity != context.transition_identity
+        or goal_progress.scenario_session_binding != binding
+        or reward_baseline.scenario_session_binding != binding
+        or context.expected_task_id != reward_baseline.task_id
+        or context.expected_session_id != reward_baseline.session_id
+        or context.expected_goal_id != reward_baseline.goal_id
+        or context.expected_goal_xy_m != reward_baseline.goal_xy_m
+    ):
+        return False
+    lifecycle_key = (
+        identity.episode_generation,
+        identity.reset_epoch,
+        identity.runtime_generation,
+    )
+    if (
+        sample.lifecycle_key != lifecycle_key
+        or sample.scenario_session_binding != binding
+        or sample.task_id != context.expected_task_id
+        or sample.session_id != context.expected_session_id
+        or sample.goal_id != context.expected_goal_id
+        or (sample.goal_x_m, sample.goal_y_m) != context.expected_goal_xy_m
+        or sample.timestamp_ns != provenance.observation_timestamp_ns
+        or sample.received_steady_ns != health.oracle_received_steady_ns
+        or health.scenario_session_binding != binding
+        or health.task_id != context.expected_task_id
+        or health.session_id != context.expected_session_id
+        or health.goal_id != context.expected_goal_id
+        or (health.goal_x_m, health.goal_y_m) != context.expected_goal_xy_m
+        or health.lifecycle_key != lifecycle_key
+        or health.context_matches is not True
+        or health.cutoff_ros_ns != selection.cutoff_ros_ns
+        or health.evaluation_ros_now_ns != selection.evaluation_ros_now_ns
+        or health.evaluation_steady_now_ns
+        != selection.evaluation_steady_now_ns
+        or health.scan_timestamp_ns != provenance.scan_timestamp_ns
+        or health.noisy_odometry_timestamp_ns
+        != provenance.odometry_timestamp_ns
+        or health.reference_timestamp_ns != provenance.odometry_timestamp_ns
+        or health.noisy_odometry_received_steady_ns
+        != odometry.received_steady_ns
+    ):
+        return False
+    stable_health_flags = (
+        health.simulator_valid,
+        health.clock_valid,
+        health.reset_complete,
+        health.scenario_identity_valid,
+        health.world_identity_valid,
+        health.session_identity_valid,
+        health.lifecycle_valid,
+        health.barrier_valid,
+        health.safety_ready,
+        health.safety_fault,
+        health.estop_active,
+        health.reset_pending,
+        health.scan_valid,
+        health.measured_twist_valid,
+        health.oracle_pose_valid,
+        health.oracle_twist_valid,
+        health.contact_source_healthy,
+        health.receipt_valid,
+    )
+    if any(type(value) is not bool for value in stable_health_flags):
+        return False
+    if not all(stable_health_flags[:9] + stable_health_flags[12:]):
+        return False
+    if any(stable_health_flags[9:12]):
+        return False
+    odometry_gap = (
+        odometry.snapshot.status in (
+            SimulatedOdometryStatus.DELAYED,
+            SimulatedOdometryStatus.DROPPED,
+        )
+        and odometry.snapshot.measurement is None
+        and health.noisy_odometry_valid is False
+    )
+    reference_gap = (
+        type(local_result) is LocalReferenceResult
+        and local_result.ready is False
+        and health.reference_valid is False
+    )
+    return odometry_gap or reference_gap
 
 
 __all__ = (
