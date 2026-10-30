@@ -425,3 +425,38 @@ noise, reset, interface, or hash semantics. This correction remains a source
 candidate until required offline checks, delivery, and independent exact-commit
 audit; it does not assert package build, test, audit, integration, Gate, or
 runtime results in advance.
+
+## 8. B2.2 simulation substrate — Owner-authorized offline implementation
+
+Under the existing L2 Decision ID, B2.2 owns the native `mecanum_sim_backend`
+package, B2-only robot/world assets, body-motion surrogate, receipt admission
+and independent zero watchdog, simulation measurements/contact coverage,
+trusted ports and reset adapters, launch/bridge/GUI process ownership, and
+asset-bound scenarios plus resolved training configurations. The implementation
+must preserve the existing B1 and B2.1 contracts, use the receipt-v2 payload as
+the sole atomic actuator carrier, keep backend admission inhibited by default,
+and never synthesize a command publisher, lifecycle transition, receipt, or
+observation0 owned by B2.3.
+
+The body-motion controller is a simulation surrogate, not a physical mecanum
+drive or validated braking model. Commands preserve body `vx`, `vy`, and `wz`;
+measurements come from post-physics pose and velocity, with world/body conversion
+using measured orientation. Missing or invalid measurements fail closed. Contact
+coverage is bound to the installed asset manifest and actual physics iterations;
+an unverified sensor component, incomplete coverage, queue overflow, or
+unclassifiable wheel-floor contact is unhealthy. Reset adapters return service
+acknowledgments and measured facts, but do not rearm or open POLICY.
+
+The B2.2 offline implementation scope includes native and exact Python tests,
+fresh external builds of only the five named packages, static asset closure,
+scenario/manifest/config generation from source assets, and install-byte checks.
+These activities do not authorize ROS graph execution, Gazebo, launch, GUI
+observation, motion, reset against a live world, training, evaluation, soak,
+HIL, hardware, Gate acceptance, or real-robot claims. GUI acknowledgment in
+offline tests may use injected fakes; production acknowledgment remains an
+explicit Owner action after the separately authorized first observation.
+
+B2.2 remains within the Owner-approved L2 scope. Independent exact-commit
+audit is required before any next step. B2.3 and runtime are separate scopes;
+B2 remains open. This ACR section records approved contract and scope, not test,
+build, audit, integration, Gate, or runtime results.

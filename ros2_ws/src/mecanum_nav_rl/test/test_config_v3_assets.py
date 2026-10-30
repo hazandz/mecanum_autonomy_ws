@@ -24,25 +24,25 @@ from mecanum_nav_rl.config.v3_policy import (
 
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-_V3_ROOT = _PACKAGE_ROOT / "config" / "v3"
+_V3_ROOT = _PACKAGE_ROOT / 'config' / 'v3'
 _V3_SHARE_DESTINATION = 'share/mecanum_nav_rl/config/v3'
 _REQUIRED_ASSETS = (
-    "base.yaml",
-    "profiles/sim_train.yaml",
-    "profiles/sim_eval.yaml",
-    "profiles/deploy_sim.yaml",
-    "profiles/deploy_real.yaml",
-    "modes/local_training.yaml",
-    "modes/mapping.yaml",
-    "modes/nav2_baseline.yaml",
-    "modes/hybrid_ai_local.yaml",
-    "topics.yaml",
-    "qos.yaml",
-    "frames.yaml",
-    "acceptance.yaml",
-    "measurements.yaml",
-    "algorithms/ppo.yaml",
-    "step07_research_acceptance.yaml",
+    'base.yaml',
+    'profiles/sim_train.yaml',
+    'profiles/sim_eval.yaml',
+    'profiles/deploy_sim.yaml',
+    'profiles/deploy_real.yaml',
+    'modes/local_training.yaml',
+    'modes/mapping.yaml',
+    'modes/nav2_baseline.yaml',
+    'modes/hybrid_ai_local.yaml',
+    'topics.yaml',
+    'qos.yaml',
+    'frames.yaml',
+    'acceptance.yaml',
+    'measurements.yaml',
+    'algorithms/ppo.yaml',
+    'step07_research_acceptance.yaml',
     'sim_train_local_training.yaml',
     'local_training/base.yaml',
     'local_training/frames.yaml',
@@ -71,6 +71,15 @@ _EXPECTED_V3_INSTALL_MAPPING = {
     'config/v3/resolved/sim_eval_nav2_baseline.resolved.json': (
         f'{_V3_SHARE_DESTINATION}/resolved'
     ),
+    'config/v3/resolved/sim_train_local_training_soak.resolved.json': (
+        f'{_V3_SHARE_DESTINATION}/resolved'
+    ),
+    'config/v3/resolved/sim_train_local_training_goal_settle.resolved.json': (
+        f'{_V3_SHARE_DESTINATION}/resolved'
+    ),
+    'config/v3/resolved/sim_train_local_training_contact.resolved.json': (
+        f'{_V3_SHARE_DESTINATION}/resolved'
+    ),
     'config/v3/local_training/base.yaml': (
         f'{_V3_SHARE_DESTINATION}/local_training'
     ),
@@ -88,11 +97,22 @@ _EXPECTED_V3_INSTALL_MAPPING = {
     ),
 }
 _TOKEN_LITERALS = {
-    "FIXED_ARCH",
-    "SIM_BASELINE",
-    "TBD_MEASURED",
-    "TBD_PROJECT_ACCEPTANCE",
-    "REQUIRED_BUILD_INPUT",
+    'FIXED_ARCH',
+    'SIM_BASELINE',
+    'TBD_MEASURED',
+    'TBD_PROJECT_ACCEPTANCE',
+    'REQUIRED_BUILD_INPUT',
+}
+_B2_SCENARIO_MAPPING = {
+    'scenarios/local_training/B2_SOAK_V1.json': (
+        'share/mecanum_nav_rl/scenarios/local_training'
+    ),
+    'scenarios/local_training/B2_GOAL_SETTLE_V1.json': (
+        'share/mecanum_nav_rl/scenarios/local_training'
+    ),
+    'scenarios/local_training/B2_CONTACT_V1.json': (
+        'share/mecanum_nav_rl/scenarios/local_training'
+    ),
 }
 
 
@@ -114,7 +134,7 @@ def _walk_values(value: object) -> tuple[object, ...]:
 def _walk_tokens(value: object) -> tuple[Mapping[str, object], ...]:
     found: list[Mapping[str, object]] = []
     if isinstance(value, Mapping):
-        if {"field_path", "token", "reference_id"}.issubset(value):
+        if {'field_path', 'token', 'reference_id'}.issubset(value):
             found.append(value)
         for nested in value.values():
             found.extend(_walk_tokens(nested))
@@ -140,6 +160,18 @@ def _load_v3_config_data_files() -> list[tuple[str, list[str]]]:
         )
     )
     return ast.literal_eval(data_files_node)
+
+
+def _load_rl_data_files_node() -> ast.Call:
+    setup_path = _PACKAGE_ROOT / 'setup.py'
+    tree = ast.parse(
+        setup_path.read_text(encoding='utf-8'), filename=str(setup_path),
+    )
+    return next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, 'id', None) == 'setup'
+    )
 
 
 def _assert_v3_install_mapping(
@@ -206,20 +238,82 @@ def test_v3_install_mapping_rejects_duplicate_declaration() -> None:
         _assert_v3_install_mapping(data_files)
 
 
+def test_scenario_install_mapping_is_explicit_and_unique() -> None:
+    """Each B2 scenario has one explicit package install mapping."""
+    setup_call = _load_rl_data_files_node()
+    data_files = next(
+        item.value for item in setup_call.keywords if item.arg == 'data_files'
+    )
+    scenario_entry = next(
+        item for item in data_files.elts
+        if (
+            isinstance(item, ast.Tuple)
+            and isinstance(item.elts[0], ast.Constant)
+            and item.elts[0].value
+            == 'share/' + 'mecanum_nav_rl/scenarios/local_training'
+        )
+    )
+    declared = ast.literal_eval(scenario_entry.elts[1])
+    assert len(declared) == len(set(declared))
+    assert {
+        source: 'share/mecanum_nav_rl/scenarios/local_training'
+        for source in declared
+    } == _B2_SCENARIO_MAPPING
+
+
+def test_after_build_b2_scenarios_and_resolved_configs_are_byte_equal(
+) -> None:
+    """Installed scenario and resolved bytes match current source bytes."""
+    raw_base = os.environ.get('MECANUM_NAV_RL_INSTALL_BASE')
+    if not raw_base:
+        pytest.fail('PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_REQUIRED')
+    install_base = Path(raw_base).resolve(strict=True)
+    from ament_index_python.packages import get_package_share_directory
+    installed_share = Path(
+        get_package_share_directory('mecanum_nav_rl'),
+    ).resolve(strict=True)
+    assert installed_share.is_relative_to(install_base)
+    sources = [
+        (f'ros2_ws/src/mecanum_nav_rl/{name}', name)
+        for name in _B2_SCENARIO_MAPPING
+    ]
+    sources.extend(
+        (
+            f'ros2_ws/src/mecanum_nav_rl/config/v3/resolved/{name}',
+            f'config/v3/resolved/{name}',
+        )
+        for name in (
+            'sim_train_local_training_soak.resolved.json',
+            'sim_train_local_training_goal_settle.resolved.json',
+            'sim_train_local_training_contact.resolved.json',
+        )
+    )
+    repository_root = _PACKAGE_ROOT.parents[2]
+    for source_rel, installed_rel in sources:
+        source = repository_root / source_rel
+        installed = installed_share / installed_rel
+        assert installed.resolve().is_relative_to(install_base)
+        assert source.is_file() and installed.is_file()
+        assert installed.read_bytes() == source.read_bytes()
+
+
 def test_all_required_v3_assets_exist_and_parse_fail_closed() -> None:
-    assert {path.relative_to(_V3_ROOT).as_posix() for path in _V3_ROOT.rglob("*.yaml")} == set(_REQUIRED_ASSETS)
+    assert {
+        path.relative_to(_V3_ROOT).as_posix()
+        for path in _V3_ROOT.rglob('*.yaml')
+    } == set(_REQUIRED_ASSETS)
     for relative_path in _REQUIRED_ASSETS:
         assert _asset(relative_path).is_file()
         assert isinstance(load_v3_yaml_mapping(_asset(relative_path)), dict)
 
 
 def test_assets_only_use_the_closed_token_taxonomy_and_no_placeholder_words() -> None:
-    forbidden_placeholders = {"TBD", "TODO", "null", "default", "unknown"}
+    forbidden_placeholders = {'TBD', 'TODO', 'null', 'default', 'unknown'}
     for relative_path in _REQUIRED_ASSETS:
         payload = load_v3_yaml_mapping(_asset(relative_path))
         for token in _walk_tokens(payload):
-            assert set(token) == {"field_path", "token", "reference_id"}
-            assert token["token"] in _TOKEN_LITERALS
+            assert set(token) == {'field_path', 'token', 'reference_id'}
+            assert token['token'] in _TOKEN_LITERALS
         strings = {value for value in _walk_values(payload) if isinstance(value, str)}
         assert not strings & forbidden_placeholders
 
@@ -228,13 +322,13 @@ def test_profile_assets_encode_the_exact_d03_time_and_mode_matrix() -> None:
     assert set(_VALID_NAVIGATION_MODES_BY_PROFILE_V3) == set(RuntimeProfileV3)
     for profile, expected_modes in _VALID_NAVIGATION_MODES_BY_PROFILE_V3.items():
         payload = load_v3_yaml_mapping(_asset(f"profiles/{profile.value}.yaml"))
-        runtime = payload["runtime"]
+        runtime = payload['runtime']
         assert isinstance(runtime, Mapping)
-        assert runtime["runtime_profile"] == profile.value
-        assert runtime["use_sim_time"] is (
+        assert runtime['runtime_profile'] == profile.value
+        assert runtime['use_sim_time'] is (
             profile is not RuntimeProfileV3.DEPLOY_REAL
         )
-        asset_mode_names = tuple(runtime["allowed_navigation_modes"])
+        asset_mode_names = tuple(runtime['allowed_navigation_modes'])
         asset_modes = frozenset(
             NavigationModeV3(mode_name) for mode_name in asset_mode_names
         )
@@ -242,7 +336,7 @@ def test_profile_assets_encode_the_exact_d03_time_and_mode_matrix() -> None:
         assert asset_modes == expected_modes
         for mode in asset_modes:
             validate_profile_mode_v3(profile, mode)
-    with pytest.raises(ValueError, match="not permitted"):
+    with pytest.raises(ValueError, match='not permitted'):
         validate_profile_mode_v3(
             RuntimeProfileV3.SIM_TRAIN, NavigationModeV3.NAV2_BASELINE
         )
@@ -250,36 +344,36 @@ def test_profile_assets_encode_the_exact_d03_time_and_mode_matrix() -> None:
 
 def test_mode_assets_only_encode_allowed_d03_mode_literals() -> None:
     expected = {
-        "local_training.yaml": "LOCAL_TRAINING",
-        "mapping.yaml": "MAPPING",
-        "nav2_baseline.yaml": "NAV2_BASELINE",
-        "hybrid_ai_local.yaml": "HYBRID_AI_LOCAL",
+        'local_training.yaml': 'LOCAL_TRAINING',
+        'mapping.yaml': 'MAPPING',
+        'nav2_baseline.yaml': 'NAV2_BASELINE',
+        'hybrid_ai_local.yaml': 'HYBRID_AI_LOCAL',
     }
     for filename, mode_name in expected.items():
         payload = load_v3_yaml_mapping(_asset(f"modes/{filename}"))
-        runtime = payload["runtime"]
+        runtime = payload['runtime']
         assert isinstance(runtime, Mapping)
-        assert runtime["navigation_mode"] == mode_name
+        assert runtime['navigation_mode'] == mode_name
         assert mode_name in {item.value for item in NavigationModeV3}
 
 
 def test_deploy_real_remains_tokenized_and_cannot_compile_as_resolved_config() -> None:
-    deploy_real = load_v3_yaml_mapping(_asset("profiles/deploy_real.yaml"))
+    deploy_real = load_v3_yaml_mapping(_asset('profiles/deploy_real.yaml'))
     tokens = _walk_tokens(deploy_real)
-    assert {token["token"] for token in tokens} >= {
-        "TBD_MEASURED",
-        "REQUIRED_BUILD_INPUT",
+    assert {token['token'] for token in tokens} >= {
+        'TBD_MEASURED',
+        'REQUIRED_BUILD_INPUT',
     }
     assert not any(
         isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in _walk_values(deploy_real.get("motion_limits"))
+        for value in _walk_values(deploy_real.get('motion_limits'))
     )
     with pytest.raises(ValueError):
         compile_v3_config(
-            base_layer=load_v3_yaml_mapping(_asset("base.yaml")),
+            base_layer=load_v3_yaml_mapping(_asset('base.yaml')),
             runtime_profile_layer=deploy_real,
             navigation_mode_layer=load_v3_yaml_mapping(
-                _asset("modes/nav2_baseline.yaml")
+                _asset('modes/nav2_baseline.yaml')
             ),
             experiment_override_layer=None,
             measured_hardware_registry_layer=None,
@@ -290,44 +384,51 @@ def test_deploy_real_remains_tokenized_and_cannot_compile_as_resolved_config() -
 
 def test_v3_assets_never_claim_runtime_or_real_robot_approval() -> None:
     prohibited_claims = (
-        "runtime ready",
-        "measured valid",
-        "gate 4 pass",
-        "hil pass",
-        "real robot validated",
+        'runtime ready',
+        'measured valid',
+        'gate 4 pass',
+        'hil pass',
+        'real robot validated',
     )
     for relative_path in _REQUIRED_ASSETS:
-        text = _asset(relative_path).read_text(encoding="utf-8").lower()
+        text = _asset(relative_path).read_text(encoding='utf-8').lower()
         assert not any(claim in text for claim in prohibited_claims)
 
 
 def test_v1_assets_remain_present_and_separate() -> None:
-    legacy_base = _PACKAGE_ROOT / "config" / "base.yaml"
-    legacy_profile = _PACKAGE_ROOT / "config" / "profiles" / "sim_train.yaml"
+    legacy_base = _PACKAGE_ROOT / 'config' / 'base.yaml'
+    legacy_profile = _PACKAGE_ROOT / 'config' / 'profiles' / 'sim_train.yaml'
     assert legacy_base.is_file()
     assert legacy_profile.is_file()
-    assert "schema_version: \"1.0\"" in legacy_base.read_text(encoding="utf-8")
+    assert 'schema_version: "1.0"' in legacy_base.read_text(encoding='utf-8')
 
 
 def test_after_build_every_v3_asset_is_installed_with_identical_content() -> None:
-    raw_install_base = os.environ.get("MECANUM_NAV_RL_INSTALL_BASE")
+    raw_install_base = os.environ.get('MECANUM_NAV_RL_INSTALL_BASE')
     if not raw_install_base:
         pytest.fail(
-            "PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_REQUIRED: "
-            "set MECANUM_NAV_RL_INSTALL_BASE to the external colcon install base"
+            'PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_REQUIRED: '
+            'set MECANUM_NAV_RL_INSTALL_BASE to the external '
+            'colcon install base'
         )
     install_base = Path(raw_install_base)
     if not install_base.is_absolute():
-        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_ABSOLUTE")
+        pytest.fail(
+            'PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_ABSOLUTE'
+        )
     if not install_base.is_dir():
-        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_EXIST_AS_DIRECTORY")
+        pytest.fail(
+            'PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_EXIST_AS_DIRECTORY'
+        )
     repository_root = _PACKAGE_ROOT.parents[2]
     try:
         install_base.resolve().relative_to(repository_root.resolve())
     except ValueError:
         pass
     else:
-        pytest.fail("PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_OUTSIDE_WORKTREE")
+        pytest.fail(
+            'PRECONDITION_MECANUM_NAV_RL_INSTALL_BASE_MUST_BE_OUTSIDE_WORKTREE'
+        )
 
     declared_data_files = _load_v3_config_data_files()
     _assert_v3_install_mapping(declared_data_files)

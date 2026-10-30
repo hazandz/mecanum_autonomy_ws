@@ -978,3 +978,23 @@ candidate; offline checks and delivery have not been represented here as audit,
 Gate 1, runtime, training, or integration evidence. No resolved training hash
 exists because scenario/world assets are not bound. B2 remains open and B2.2/
 B2.3 remain unimplemented.
+
+## Roadmap B B2.2 — simulation substrate candidate route
+
+The Owner-authorized work package `ROADMAP_B_B22_SIMULATION_SUBSTRATE` routes
+through the existing L2 Decision ID
+`ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`. Its exact source base is
+`ef9e0281cfb9de04d89a2698d6d7899bcde92803`; its work branch is
+`roadmap-b-b22-simulation-substrate`. Package ownership is `mecanum_sim_backend`
+for native receipt/contact simulation backend; `ROBOT_URDF_final_description`
+for B2-only world/model assets; `mecanum_nav_rl` for trusted simulation ports,
+reset adapters, asset binding and B1-compatible scenarios/configuration; and
+`mecanum_nav_bringup` for launch, bridge and GUI process supervision.
+
+The 58-path allowlist and exact offline checks are defined by the Owner prompt.
+Evidence ceiling is offline source/build/static/unit-test evidence. No Gate,
+runtime, training, sensor/contact operation, GUI observation, reset success,
+motion, HIL, hardware, integration, or real-readiness evidence is inferred.
+Three resolved configurations are permitted only when generated from the actual
+asset manifest and scenarios, and do not imply execution. B2.3 remains
+unimplemented; B2 remains open. This entry routes ownership and phase only.

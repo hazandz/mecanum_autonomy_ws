@@ -14,9 +14,25 @@ setup(
         ('share/' + package_name, ['package.xml']),
         # Copy các file cần thiết sang install
         (os.path.join('share', package_name, 'launch'), [entry for entry in glob('launch/*') if os.path.isfile(entry)]),
-        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
+        (os.path.join('share', package_name, 'urdf'), [
+            'urdf/ROBOT_URDF_final.xacro', 'urdf/ROBOT_URDF_final.gazebo',
+            'urdf/ROBOT_URDF_final.ros2control', 'urdf/materials.xacro',
+            'urdf/mecanum_b2_static.urdf',
+        ]),
         (os.path.join('share', package_name, 'meshes'), glob('meshes/*')),
         (os.path.join('share', package_name, 'models', 'ROBOT_URDF_final'), glob('models/ROBOT_URDF_final/*')),
+        (
+            os.path.join('share', package_name, 'worlds'),
+            ['worlds/b2_training_arena.sdf'],
+        ),
+        (os.path.join('share', package_name, 'models', 'mecanum_b2'), [
+            'models/mecanum_b2/model.config', 'models/mecanum_b2/model.sdf']),
+        (os.path.join('share', package_name, 'models', 'b2_contact_probe'), [
+            'models/b2_contact_probe/model.config',
+            'models/b2_contact_probe/model.sdf',
+        ]),
+        (os.path.join('share', package_name, 'manifests', 'b2'), [
+            '../../../artifacts/simulation/roadmap_b_b2/asset_manifest.json']),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
     ],

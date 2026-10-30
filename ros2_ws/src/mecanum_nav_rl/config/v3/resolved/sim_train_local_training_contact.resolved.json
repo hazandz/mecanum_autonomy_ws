@@ -1,0 +1,349 @@
+{
+  "acceptance": {
+    "contract_id": "ROADMAP_B_B2_BOUNDED_SOAK_PENDING_ASSET_BINDING",
+    "contract_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
+  },
+  "action": {
+    "component_order": [
+      "vx",
+      "vy",
+      "wz"
+    ],
+    "dimension": 3,
+    "normalized_maximum": 1.0,
+    "normalized_minimum": -1.0
+  },
+  "command_safety": {
+    "command_envelope_contract_id": "mecanum.command-envelope/v1",
+    "final_command_topic": "/cmd_vel",
+    "final_twist_publisher_owner": "FinalTwistPublisher",
+    "safety_policy_id": "B2_LOCAL_TRAINING_SIMULATION_ONLY",
+    "safety_supervisor_owner": "SafetySupervisor"
+  },
+  "evaluation": {
+    "contract_id": "ROADMAP_B_EVALUATION_HORIZON",
+    "contract_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "final_evaluation": false
+  },
+  "frames_tf": {
+    "base_frame": "base_link",
+    "base_link_to_lidar_authority": "robot_state_publisher",
+    "ground_truth_isolation_policy_id": "B2_HIDDEN_GT_POLICY_REFERENCE_ONLY",
+    "lidar_frame": "lidar_frame",
+    "map_frame": null,
+    "map_to_odom_authority": null,
+    "odom_frame": null,
+    "odom_to_base_link_authority": null
+  },
+  "localization": {
+    "covariance_jump_contract_id": null,
+    "lifecycle_contract_id": null,
+    "map_id": null,
+    "provider": "NOT_APPLICABLE_LOCAL_TRAINING"
+  },
+  "map_identity": {
+    "map_id": "b2_training_arena",
+    "training_binding": {
+      "asset_manifest_sha256": "8fa763f82d38075b6a794f5e3bbcd7ebacd022ec0bc74774b46d7e8d00ca3bfd",
+      "binding_status": "BOUND",
+      "scenario_id": "B2_CONTACT_V1",
+      "world_id": "b2_training_arena"
+    }
+  },
+  "motion_limits": {
+    "max_vx_mps": 0.25,
+    "max_vy_mps": 0.2,
+    "max_wz_radps": 0.8,
+    "source_class": "SIM_BASELINE",
+    "source_id": "ROADMAP_B_SIMULATION_LIMITS"
+  },
+  "navigation": {
+    "controller_owner": "PPO",
+    "goal_settle_contract_id": "B1_LOCAL_TRAINING_ORACLE_SETTLE",
+    "goal_type": "position_only",
+    "local_reference_contract_id": "B1_LOCAL_TRAINING_NOISY_ODOMETRY_REFERENCE",
+    "local_training": {
+      "controller_owner": "PPO",
+      "goal_source": "LOCAL_TASK_GOAL",
+      "planner_owner": "NONE",
+      "requires_amcl": false,
+      "requires_follow_path": false,
+      "requires_nav2": false
+    },
+    "path_validity_contract_id": "LOCAL_TASK_GOAL_NO_PATH",
+    "planner_owner": "NONE"
+  },
+  "observation": {
+    "input_profile": {
+      "dimension": 81,
+      "dtype": "float32",
+      "lidar_sector_count": 72,
+      "local_reference_components": [
+        "distance",
+        "sin_bearing",
+        "cos_bearing"
+      ],
+      "measured_twist_components": [
+        "vx",
+        "vy",
+        "wz"
+      ],
+      "previous_final_issued_command_components": [
+        "vx",
+        "vy",
+        "wz"
+      ],
+      "schema_id": "obs-v3-l72-g3-t3-c3-f32"
+    }
+  },
+  "project": {
+    "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "project_id": "mecanum_nav_drl",
+    "robot_model_id": "ROBOT_URDF_final"
+  },
+  "provenance": {
+    "config_hash": "7640e345fe2680468c34e6db1f6c64326ba8c854fd16c72b115eb20d8ac059e5",
+    "config_hash_algorithm": "sha256",
+    "resolution_policy_id": "v3_mode_specific_strict_no_unresolved_tokens",
+    "source_manifest_sha256": "8fa763f82d38075b6a794f5e3bbcd7ebacd022ec0bc74774b46d7e8d00ca3bfd"
+  },
+  "reward": {
+    "contract_id": "ROADMAP_B_B1_REWARD_V3_BASELINE",
+    "contract_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204"
+  },
+  "runtime": {
+    "navigation_mode": "LOCAL_TRAINING",
+    "runtime_profile": "sim_train",
+    "use_sim_time": true
+  },
+  "schema_version": "3.1",
+  "state_estimation": {
+    "ground_truth_policy_access": false,
+    "policy_pose_source": "NOISY_SIMULATED_ODOMETRY",
+    "provider": "INTERNAL_SIMULATED_ODOMETRY"
+  },
+  "topics_qos": [
+    {
+      "frame_contract_id": "lidar_frame_to_base_link_static_extrinsic",
+      "freshness_policy_id": "SCAN_ROS_AND_STEADY_AGE_500MS",
+      "message_type": "sensor_msgs/msg/LaserScan",
+      "name": "/scan",
+      "publisher_owner": "SIM_SENSOR_SOURCE",
+      "qos_profile_id": "BEST_EFFORT_VOLATILE_KEEP_LAST_5",
+      "subscriber_owner": "LOCAL_TRAINING_INGRESS"
+    },
+    {
+      "frame_contract_id": "base_link_no_pose_or_goal",
+      "freshness_policy_id": "SESSION_IDENTITY_AND_LOCAL_STEADY_RECEIVE_TIME",
+      "message_type": "mecanum_nav_rl_interfaces/msg/LocalTrainingSafetyInput",
+      "name": "/mecanum/local_training/safety_input",
+      "publisher_owner": "SESSION_BOUND_LOCAL_TRAINING_INGRESS",
+      "qos_profile_id": "RELIABLE_VOLATILE_KEEP_LAST_10",
+      "subscriber_owner": "LOCAL_TRAINING_SAFETY_AND_BACKEND_ADMISSION"
+    },
+    {
+      "frame_contract_id": "world",
+      "freshness_policy_id": "BACKEND_STATUS_RECEIVE_AGE_200MS_WHILE_RUNNING",
+      "message_type": "mecanum_nav_rl_interfaces/msg/SimulationContactState",
+      "name": "/mecanum/local_training/backend_state",
+      "publisher_owner": "NATIVE_B2_BACKEND",
+      "qos_profile_id": "RELIABLE_VOLATILE_KEEP_LAST_50",
+      "subscriber_owner": "LOCAL_TRAINING_INGRESS"
+    },
+    {
+      "frame_contract_id": "base_link_planar_twist",
+      "freshness_policy_id": "FINAL_COMMAND_TIMEOUT_100MS_STEADY",
+      "message_type": "geometry_msgs/msg/Twist",
+      "name": "/cmd_vel",
+      "publisher_owner": "FinalTwistPublisher",
+      "qos_profile_id": "B2_BACKEND_COMMAND_CAPTURE",
+      "subscriber_owner": "NATIVE_B2_BACKEND_CAPTURE"
+    },
+    {
+      "frame_contract_id": "base_link_planar_twist_and_publication_identity",
+      "freshness_policy_id": "ACTUATOR_WATCHDOG_100MS_STEADY",
+      "message_type": "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt",
+      "name": "/mecanum/final_issued_command",
+      "publisher_owner": "FinalTwistPublisher",
+      "qos_profile_id": "RECEIPT_V2_EXISTING_CONTRACT",
+      "subscriber_owner": "NATIVE_B2_BACKEND"
+    }
+  ],
+  "training": {
+    "algorithm_id": "PPO",
+    "contract_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "local_training": {
+      "actuator_watchdog_ms": 100,
+      "arena_size_m": [
+        8.0,
+        8.0
+      ],
+      "b1_receipt_max_age_ms": 500,
+      "backend_id": "NATIVE_B2_BACKEND_V1",
+      "backend_status_not_actuator_ack": true,
+      "backend_status_receive_age_ms": 200,
+      "baseline_controller": "Nav2_DWB_NOT_RUN_IN_LOCAL_TRAINING",
+      "braking_jerk_mps3": 2.0,
+      "buffer_capacity": 64,
+      "clearance_margin_m": 0.05,
+      "clock_quantization_reserve_s": 0.01,
+      "clock_stall_infrastructure_abort_ms": 1000,
+      "clock_unintended_stall_zero_ms": 200,
+      "collection_cutoff_semantics": "CENSORED_EXPOSURE_NOT_TERMINAL",
+      "command_components": [
+        "vx",
+        "vy",
+        "wz"
+      ],
+      "contact_probe_mass_kg": 1.0,
+      "contact_probe_size_m": 0.1,
+      "evaluation_horizon": "TASK_HORIZON",
+      "exact_scan_odometry_pairing": true,
+      "fault_seed_base": 2026103000,
+      "final_command_timeout_ms": 100,
+      "geometry_reserve_m": 0.02,
+      "ground_truth_rate_hz": 100.0,
+      "ingress_queue_capacity": 128,
+      "issued_policy_command_count": 1000,
+      "lidar_beam_count": 500,
+      "lidar_frame": "lidar_frame",
+      "lidar_max_range_m": 8.0,
+      "lidar_min_range_m": 0.1,
+      "lidar_rate_hz": 10.0,
+      "lifecycle_max_age_ms": 500,
+      "linear_velocity_noise_sigma_mps": 0.003,
+      "max_accel_xy_mps2": 0.5,
+      "max_accel_yaw_radps2": 1.0,
+      "max_jerk_xy_mps3": 2.0,
+      "max_jerk_yaw_radps3": 4.0,
+      "max_planar_speed_mps": 0.32015621187164245,
+      "max_vx_mps": 0.25,
+      "max_vy_mps": 0.2,
+      "max_wz_radps": 0.8,
+      "maximum_tracked_collisions": 64,
+      "motion_coverage_required": [
+        "forward",
+        "reverse",
+        "lateral",
+        "rotation",
+        "diagonal",
+        "mixed"
+      ],
+      "negative_delay_profile_id": "B2_NOISE_DELAY_V1",
+      "negative_delay_samples": 30,
+      "negative_dropout_probability": 1.0,
+      "negative_dropout_profile_id": "B2_NOISE_DROP_V1",
+      "noise_delay_samples": 0,
+      "noise_dropout_probability": 0.0,
+      "noise_input_rate_hz": 100.0,
+      "noise_profile_id": "B2_NOISE_N0_V1",
+      "nominal_collection_period_s": 0.1,
+      "observation0_requires_post_barrier_zero_receipt": true,
+      "observation_schema_id": "obs-v3-l72-g3-t3-c3-f32",
+      "obstacle_center_xy_m": [
+        2.5,
+        0.0
+      ],
+      "obstacle_size_xyz_m": [
+        0.2,
+        1.0,
+        1.0
+      ],
+      "odometry_max_age_ms": 250,
+      "oracle_max_age_ms": 250,
+      "pairing_tolerance_ns": 0,
+      "paused_contact_heartbeat_advances_coverage": false,
+      "physics_step_s": 0.01,
+      "physics_target_realtime_factor": 1.0,
+      "policy_reference_source": "NOISY_EMULATOR_ODOMETRY",
+      "policy_ttl_ms": 200,
+      "position_bias_sigma_m": 0.005,
+      "position_drift_sigma_m_per_tick": 0.0001,
+      "proposed_braking_deceleration_mps2": 0.5,
+      "receipt_is_publication_evidence_only": true,
+      "reference_source": "GT_ODOM_2D",
+      "reset_braking_target_ros_s": 2.0,
+      "reset_control_service": "/world/b2_training_arena/control",
+      "reset_footprint_clearance_expansion_m": 0.05,
+      "reset_pause_resume_timeout_s": 2.0,
+      "reset_pose_service": "/world/b2_training_arena/set_pose",
+      "reset_pose_service_type": "ros_gz_interfaces/srv/SetEntityPose",
+      "reset_roll_pitch_tolerance_rad": 0.05,
+      "reset_service_timeout_s": 1.0,
+      "reset_standstill_phase_deadline_steady_s": 5.0,
+      "reset_total_deadline_steady_s": 15.0,
+      "reset_xy_tolerance_m": 0.01,
+      "reset_yaw_tolerance_rad": 0.02,
+      "reset_z_tolerance_m": 0.02,
+      "robot_bounding_radius_m": 0.35,
+      "robot_entity": "mecanum_b2",
+      "ros_scan_age_budget_s": 0.5,
+      "ros_steady_advance_envelope": 2.0,
+      "safety_period_ms": 20,
+      "scan_angle_max_rad": 3.141592653589793,
+      "scan_angle_min_rad": -3.141592653589793,
+      "scan_max_age_ms": 500,
+      "scenario_contact_goal_xy": [
+        2.0,
+        2.0
+      ],
+      "scenario_contact_id": "B2_CONTACT_V1",
+      "scenario_contact_start_xy_yaw": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scenario_goal_settle_id": "B2_GOAL_SETTLE_V1",
+      "scenario_goal_settle_position_xy": [
+        0.0,
+        0.0
+      ],
+      "scenario_goal_settle_zero_command": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scenario_soak_goal_xy": [
+        2.0,
+        2.0
+      ],
+      "scenario_soak_id": "B2_SOAK_V1",
+      "scenario_soak_start_xy_yaw": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "schema_id": "mecanum.local_training/v1",
+      "sensor_profile_id": "B2_GENERIC_2D_V1",
+      "soak_episode_count": 30,
+      "soak_first_episode_count": 10,
+      "soak_first_episode_steps": 34,
+      "soak_remaining_episode_count": 20,
+      "soak_remaining_episode_steps": 33,
+      "soak_seed_base": 2026102900,
+      "spawn_pose_proposal_test_only": true,
+      "spawn_xyz_yaw": [
+        0.0,
+        0.0,
+        0.1,
+        0.0
+      ],
+      "standstill_angular_speed_radps": 0.02,
+      "standstill_duration_ros_s": 0.2,
+      "standstill_linear_speed_mps": 0.01,
+      "standstill_minimum_samples": 21,
+      "steady_pipeline_budget_s": 0.1,
+      "stopping_distance_limit_m": 0.92,
+      "stopping_distance_m": 0.9062243132582557,
+      "successful_reset_count": 30,
+      "wall_height_m": 1.0,
+      "wall_thickness_m": 0.2,
+      "world_id": "b2_training_arena",
+      "world_seed": 20261029,
+      "world_to_task_mapping": "IDENTITY_XY_YAW",
+      "yaw_bias_sigma_rad": 0.01,
+      "yaw_drift_sigma_rad_per_tick": 0.0001,
+      "yaw_rate_noise_sigma_radps": 0.005
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "arena": {
+    "interior_m": [
+      8.0,
+      8.0
+    ],
+    "obstacle_center_xy_m": [
+      2.5,
+      0.0
+    ],
+    "obstacle_size_xyz_m": [
+      0.2,
+      1.0,
+      1.0
+    ],
+    "wall_height_m": 1.0,
+    "wall_thickness_m": 0.2
+  },
+  "backend_contract": {
+    "contact_core_sha256": "0f63b250b9adeb3e5564a24a3fcc0b06d821ec2bda59ad17531d05c1c1075b47",
+    "plugin_source_sha256": "2580beb0b2af3d020ba043ae3511188911d865c34520372d85c0ad1d1e92ee70",
+    "receipt_core_sha256": "93271863631a74b1987a95448458534dc03dd6405e42aa27b6118face105dc09"
+  },
+  "backend_id": "NATIVE_B2_BACKEND_V1",
+  "collision_registry": {
+    "maximum": 64,
+    "probe_collision": "b2_training_arena::b2_contact_probe::link::collision",
+    "probe_model": "b2_contact_probe",
+    "tracked_collision_names": [
+      "b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision",
+      "b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision",
+      "b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision",
+      "b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision",
+      "b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision"
+    ],
+    "wheel_floor_ignore": {
+      "depth_m": [
+        0.0,
+        0.005
+      ],
+      "normal_vertical_angle_max_deg": 15.0
+    }
+  },
+  "ground_truth": {
+    "pose_frame": "world",
+    "rate_hz": 100.0,
+    "tf_broadcast": false,
+    "topic": "/b2/ground_truth/odom",
+    "twist_child_frame": "base_link"
+  },
+  "physics": {
+    "step_ros_s": 0.01,
+    "target_real_time_factor": 1.0
+  },
+  "resource_closure": {
+    "ROBOT_URDF_final_description/meshes/Wheel_LB_1.stl": "5142132090f36b25066ce6de080c9361ef3cb5bafa4b318ea1b5836bde2d9178",
+    "ROBOT_URDF_final_description/meshes/Wheel_LF_1.stl": "65f20fbf9d074c11b3357d04eba34883c131cd46f7a3427b9e494fc37bfc74e5",
+    "ROBOT_URDF_final_description/meshes/Wheel_RB_1.stl": "b5310908de9eccdcd0089b85c0666cf71adbe77489cf9e282a0175a8753599d8",
+    "ROBOT_URDF_final_description/meshes/Wheel_RF_1.stl": "161d136eba02d359cb24f093621fc51e7a072da8b69f638ed22e7cbbe8bac316",
+    "ROBOT_URDF_final_description/meshes/base_link.stl": "fe0f09a8c2dbfab53942091e1f31db0973605c3abe1b69ac26398713b06ca262",
+    "ROBOT_URDF_final_description/models/b2_contact_probe/model.config": "bf7f4dc0fb00367736c1148742715b3efd6e5c146ea63e2edb29f2c23595be4d",
+    "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8f22eee006ccff4eac7394c13eb5617291af15faa843ea543ab36195e8b90e7",
+    "ROBOT_URDF_final_description/models/mecanum_b2/model.config": "270cf64e6e0c7e8ab946035050038be13088b55ce44853fc93145e19f6451b29",
+    "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "21588e0aa8607ef6b350302d67759920866fe0479d6adbd3b0a750d5de20019b",
+    "ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
+    "ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
+    "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb"
+  },
+  "robot_entity": "mecanum_b2",
+  "scenario_artifacts": {
+    "B2_CONTACT_V1": {
+      "active_contact_probe": true,
+      "coordinate_reference_id": "GT_ODOM_2D",
+      "file": "B2_CONTACT_V1.json",
+      "scenario_content_sha256": "44ba8efb3b795fb23c6d62b7f398b6c941e40e30bf1d899b111b06088ebe94d3",
+      "world_to_task_mapping": "IDENTITY_XY_YAW"
+    },
+    "B2_GOAL_SETTLE_V1": {
+      "active_contact_probe": false,
+      "coordinate_reference_id": "GT_ODOM_2D",
+      "file": "B2_GOAL_SETTLE_V1.json",
+      "scenario_content_sha256": "0ba7f620a00fc7660bcfa47a8f345310c2e4ee5a8fa8a248a2b90ce17f526bb3",
+      "world_to_task_mapping": "IDENTITY_XY_YAW"
+    },
+    "B2_SOAK_V1": {
+      "active_contact_probe": false,
+      "coordinate_reference_id": "GT_ODOM_2D",
+      "file": "B2_SOAK_V1.json",
+      "scenario_content_sha256": "2e3d65f51db1a5543977449e11715a7d0ea833962e620ebea6e5a9ec61bdcd46",
+      "world_to_task_mapping": "IDENTITY_XY_YAW"
+    }
+  },
+  "schema_id": "roadmap_b_b2_asset_manifest/v1",
+  "sensor": {
+    "angle_rad": [
+      -3.141592653589793,
+      3.141592653589793
+    ],
+    "beams": 500,
+    "extrinsic_rpy_rad": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "extrinsic_xyz_m": [
+      -0.031765,
+      0.0,
+      0.14
+    ],
+    "frame_id": "lidar_frame",
+    "profile_id": "B2_GENERIC_2D_V1",
+    "range_m": [
+      0.1,
+      8.0
+    ],
+    "rate_hz": 10.0,
+    "topic": "/b2/scan"
+  },
+  "world_file": "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf",
+  "world_file_sha256": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb",
+  "world_id": "b2_training_arena"
+}

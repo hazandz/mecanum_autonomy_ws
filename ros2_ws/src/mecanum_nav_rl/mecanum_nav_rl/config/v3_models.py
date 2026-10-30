@@ -17,10 +17,10 @@ from pydantic.types import StringConstraints
 
 
 IdentifierV3 = Annotated[
-    str, StringConstraints(strict=True, min_length=1, pattern=r"^\S+$")
+    str, StringConstraints(strict=True, min_length=1, pattern=r'^\S+$')
 ]
 Sha256V3 = Annotated[
-    str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$")
+    str, StringConstraints(strict=True, pattern=r'^[0-9a-f]{64}$')
 ]
 StrictFiniteFloatV3 = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 StrictPositiveFiniteFloatV3 = Annotated[
@@ -33,25 +33,27 @@ AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2 = 1e-12
 class ConfigModelV3(BaseModel):
     """Strict immutable base for every architecture-target config model."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+    model_config = ConfigDict(
+        extra='forbid', frozen=True, validate_default=True,
+    )
 
 
 class RuntimeProfileV3(str, Enum):
     """Exact architecture runtime-profile literals."""
 
-    SIM_TRAIN = "sim_train"
-    SIM_EVAL = "sim_eval"
-    DEPLOY_SIM = "deploy_sim"
-    DEPLOY_REAL = "deploy_real"
+    SIM_TRAIN = 'sim_train'
+    SIM_EVAL = 'sim_eval'
+    DEPLOY_SIM = 'deploy_sim'
+    DEPLOY_REAL = 'deploy_real'
 
 
 class NavigationModeV3(str, Enum):
     """Exact architecture navigation-mode literals."""
 
-    LOCAL_TRAINING = "LOCAL_TRAINING"
-    MAPPING = "MAPPING"
-    NAV2_BASELINE = "NAV2_BASELINE"
-    HYBRID_AI_LOCAL = "HYBRID_AI_LOCAL"
+    LOCAL_TRAINING = 'LOCAL_TRAINING'
+    MAPPING = 'MAPPING'
+    NAV2_BASELINE = 'NAV2_BASELINE'
+    HYBRID_AI_LOCAL = 'HYBRID_AI_LOCAL'
 
 
 _VALID_NAVIGATION_MODES_BY_PROFILE_V3: Mapping[RuntimeProfileV3, frozenset[NavigationModeV3]] = MappingProxyType({
@@ -83,12 +85,12 @@ def validate_profile_mode_v3(
     """Reject a D03 pair not explicitly allowed by the frozen architecture."""
 
     if not isinstance(runtime_profile, RuntimeProfileV3):
-        raise TypeError("runtime_profile must be RuntimeProfileV3")
+        raise TypeError('runtime_profile must be RuntimeProfileV3')
     if not isinstance(navigation_mode, NavigationModeV3):
-        raise TypeError("navigation_mode must be NavigationModeV3")
+        raise TypeError('navigation_mode must be NavigationModeV3')
     if navigation_mode not in _VALID_NAVIGATION_MODES_BY_PROFILE_V3[runtime_profile]:
         raise ValueError(
-            "navigation mode is not permitted for runtime profile: "
+            'navigation mode is not permitted for runtime profile: '
             f"{runtime_profile.value}/{navigation_mode.value}"
         )
 
@@ -96,11 +98,11 @@ def validate_profile_mode_v3(
 class ConfigTokenV3(str, Enum):
     """Architecture token classes permitted only before resolution."""
 
-    FIXED_ARCH = "FIXED_ARCH"
-    SIM_BASELINE = "SIM_BASELINE"
-    TBD_MEASURED = "TBD_MEASURED"
-    TBD_PROJECT_ACCEPTANCE = "TBD_PROJECT_ACCEPTANCE"
-    REQUIRED_BUILD_INPUT = "REQUIRED_BUILD_INPUT"
+    FIXED_ARCH = 'FIXED_ARCH'
+    SIM_BASELINE = 'SIM_BASELINE'
+    TBD_MEASURED = 'TBD_MEASURED'
+    TBD_PROJECT_ACCEPTANCE = 'TBD_PROJECT_ACCEPTANCE'
+    REQUIRED_BUILD_INPUT = 'REQUIRED_BUILD_INPUT'
 
 
 class TokenizedConfigInputV3(ConfigModelV3):
@@ -123,7 +125,7 @@ class ConfigProvenanceV3(ConfigModelV3):
     """Hashes and IDs that identify a fully resolved configuration."""
 
     config_hash: Sha256V3
-    config_hash_algorithm: Literal["sha256"]
+    config_hash_algorithm: Literal['sha256']
     resolution_policy_id: IdentifierV3
     source_manifest_sha256: Sha256V3
 
@@ -135,13 +137,15 @@ class RuntimeSelectionV3(ConfigModelV3):
     navigation_mode: NavigationModeV3
     use_sim_time: StrictBool
 
-    @model_validator(mode="after")
-    def validate_profile_time_source(self) -> "RuntimeSelectionV3":
+    @model_validator(mode='after')
+    def validate_profile_time_source(self) -> 'RuntimeSelectionV3':
+        """Check the selected profile's simulation time source."""
         validate_profile_mode_v3(self.runtime_profile, self.navigation_mode)
         expected = self.runtime_profile is not RuntimeProfileV3.DEPLOY_REAL
         if self.use_sim_time != expected:
             raise ValueError(
-                "runtime profile requires its architecture-defined use_sim_time value"
+                'runtime profile requires its architecture-defined '
+                'use_sim_time value'
             )
         return self
 
@@ -155,7 +159,7 @@ class FrameTfContractV3(ConfigModelV3):
     lidar_frame: IdentifierV3
     map_to_odom_authority: IdentifierV3
     odom_to_base_link_authority: Literal['EKF']
-    base_link_to_lidar_authority: Literal["robot_state_publisher"]
+    base_link_to_lidar_authority: Literal['robot_state_publisher']
     ground_truth_isolation_policy_id: IdentifierV3
 
 
@@ -189,7 +193,7 @@ class StateEstimationContractV3(ConfigModelV3):
 
     wheel_odometry_source: IdentifierV3
     imu_source: IdentifierV3
-    ekf_owner: Literal["robot_localization_EKF"]
+    ekf_owner: Literal['robot_localization_EKF']
     two_d_mode: StrictBool
     covariance_contract_id: IdentifierV3
 
@@ -227,15 +231,21 @@ class NavigationContractV3(ConfigModelV3):
     controller_owner: IdentifierV3
     path_validity_contract_id: IdentifierV3
     local_reference_contract_id: IdentifierV3
-    goal_type: Literal["position_only"]
+    goal_type: Literal['position_only']
     goal_settle_contract_id: IdentifierV3
-    step07_acceptance: "Step07AcceptancePolicyV3 | None" = None
+    step07_acceptance: 'Step07AcceptancePolicyV3 | None' = None
     local_training: 'LocalTrainingNavigationV31 | None' = None
 
-    @model_validator(mode="after")
-    def reject_explicit_null_step07_policy(self) -> "NavigationContractV3":
-        if "step07_acceptance" in self.model_fields_set and self.step07_acceptance is None:
-            raise ValueError("navigation.step07_acceptance must be omitted, not null")
+    @model_validator(mode='after')
+    def reject_explicit_null_step07_policy(self) -> 'NavigationContractV3':
+        """Reject an explicit null Step07 policy declaration."""
+        if (
+            'step07_acceptance' in self.model_fields_set
+            and self.step07_acceptance is None
+        ):
+            raise ValueError(
+                'navigation.step07_acceptance must be omitted, not null'
+            )
         return self
 
     @model_validator(mode='after')
@@ -250,11 +260,11 @@ class NavigationContractV3(ConfigModelV3):
             )
         return self
 
-    @model_serializer(mode="wrap")
+    @model_serializer(mode='wrap')
     def omit_absent_step07_policy(self, handler):
         data = handler(self)
         if self.step07_acceptance is None:
-            data.pop("step07_acceptance", None)
+            data.pop('step07_acceptance', None)
         if self.local_training is None:
             data.pop('local_training', None)
         return data
@@ -274,9 +284,9 @@ class LocalTrainingNavigationV31(ConfigModelV3):
 class Step07AcceptancePolicyV3(ConfigModelV3):
     """SIM-only integrated runtime acceptance policy included in config_hash."""
 
-    schema_id: Literal["mecanum.step07.research_acceptance/v1"]
-    runtime_profile: Literal["sim_eval"]
-    navigation_mode: Literal["NAV2_BASELINE"]
+    schema_id: Literal['mecanum.step07.research_acceptance/v1']
+    runtime_profile: Literal['sim_eval']
+    navigation_mode: Literal['NAV2_BASELINE']
     use_sim_time: StrictBool
     freshness_ms: Mapping[str, StrictInt]
     synchronization_ms: StrictInt
@@ -306,57 +316,76 @@ class Step07AcceptancePolicyV3(ConfigModelV3):
     observation_twist_scales: tuple[StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3, StrictPositiveFiniteFloatV3]
     require_nonzero_nav2_command: StrictBool
 
-    @model_validator(mode="after")
-    def validate_policy_values(self) -> "Step07AcceptancePolicyV3":
+    @model_validator(mode='after')
+    def validate_policy_values(self) -> 'Step07AcceptancePolicyV3':
+        """Check fixed Step07 policy values against the approved profile."""
         if (self.amcl_yaw_covariance_roundoff_tolerance_rad2
                 != AMCL_YAW_COVARIANCE_ROUNDOFF_TOLERANCE_RAD2):
             raise ValueError(
                 'Step07 AMCL yaw covariance roundoff tolerance is not approved'
             )
         expected = {
-            "scan": 500, "wheel_ingress": 200, "imu_ingress": 200,
-            "filtered_odometry": 250, "lifecycle": 500, "receipt": 500,
+            'scan': 500, 'wheel_ingress': 200, 'imu_ingress': 200,
+            'filtered_odometry': 250, 'lifecycle': 500, 'receipt': 500,
         }
         if dict(self.freshness_ms) != expected:
-            raise ValueError("Step07 freshness policy must match approved SIM_BASELINE")
-        if (self.use_sim_time is not True or self.synchronization_ms != 50
-                or self.reference_age_ms != 250 or self.tf_wait_ms != 200
-                or self.buffer_capacity != 64 or self.observation_samples_minimum != 5
-                or self.sample_report_limit != 5
-                or self.local_reference_lookahead_m != 0.50
-                or self.local_reference_backtrack_m != 0.10
-                or self.local_reference_forward_window_m != 1.0
-                or self.local_reference_max_deviation_m != 0.50):
-            raise ValueError("Step07 synchronization/sample policy differs from SIM_BASELINE")
-        if (self.mission_deadline_s != 240 or self.campaign_deadline_s != 480
-                or self.shutdown_reserve_s != 20 or self.goal_settle_s != 1.0
-                or self.goal_xy_tolerance_m != 0.15
-                or self.goal_linear_speed_mps != 0.03
-                or self.goal_angular_speed_radps != 0.05
-                or self.localization_max_covariance != 0.25
-                or self.localization_pose_max_age_s != 2.0
-                or self.localization_translation_jump_base_m != 0.50
-                or self.localization_translation_jump_speed_mps != 0.35
-                or self.localization_yaw_jump_base_rad != 0.50
-                or self.localization_yaw_jump_speed_radps != 1.0
-                or self.observation_twist_scales != (0.25, 0.20, 0.80)
-                or self.require_nonzero_nav2_command is not True):
-            raise ValueError("Step07 mission acceptance differs from approved SIM_BASELINE")
+            raise ValueError(
+                'Step07 freshness policy must match approved SIM_BASELINE'
+            )
+        if (
+            self.use_sim_time is not True
+            or self.synchronization_ms != 50
+            or self.reference_age_ms != 250
+            or self.tf_wait_ms != 200
+            or self.buffer_capacity != 64
+            or self.observation_samples_minimum != 5
+            or self.sample_report_limit != 5
+            or self.local_reference_lookahead_m != 0.50
+            or self.local_reference_backtrack_m != 0.10
+            or self.local_reference_forward_window_m != 1.0
+            or self.local_reference_max_deviation_m != 0.50
+        ):
+            raise ValueError(
+                'Step07 synchronization/sample policy differs from '
+                'SIM_BASELINE'
+            )
+        if (
+            self.mission_deadline_s != 240
+            or self.campaign_deadline_s != 480
+            or self.shutdown_reserve_s != 20
+            or self.goal_settle_s != 1.0
+            or self.goal_xy_tolerance_m != 0.15
+            or self.goal_linear_speed_mps != 0.03
+            or self.goal_angular_speed_radps != 0.05
+            or self.localization_max_covariance != 0.25
+            or self.localization_pose_max_age_s != 2.0
+            or self.localization_translation_jump_base_m != 0.50
+            or self.localization_translation_jump_speed_mps != 0.35
+            or self.localization_yaw_jump_base_rad != 0.50
+            or self.localization_yaw_jump_speed_radps != 1.0
+            or self.observation_twist_scales != (0.25, 0.20, 0.80)
+            or self.require_nonzero_nav2_command is not True
+        ):
+            raise ValueError(
+                'Step07 mission acceptance differs from approved SIM_BASELINE'
+            )
         return self
 
 
 class ObservationInputProfileV3(ConfigModelV3):
     """The fixed D05 observation input profile."""
 
-    schema_id: Literal["obs-v3-l72-g3-t3-c3-f32"]
-    dtype: Literal["float32"]
+    schema_id: Literal['obs-v3-l72-g3-t3-c3-f32']
+    dtype: Literal['float32']
     lidar_sector_count: Literal[72]
     local_reference_components: tuple[
-        Literal["distance"], Literal["sin_bearing"], Literal["cos_bearing"]
+        Literal['distance'], Literal['sin_bearing'], Literal['cos_bearing']
     ]
-    measured_twist_components: tuple[Literal["vx"], Literal["vy"], Literal["wz"]]
+    measured_twist_components: tuple[
+        Literal['vx'], Literal['vy'], Literal['wz'],
+    ]
     previous_final_issued_command_components: tuple[
-        Literal["vx"], Literal["vy"], Literal["wz"]
+        Literal['vx'], Literal['vy'], Literal['wz']
     ]
     dimension: Literal[81]
 
@@ -366,7 +395,7 @@ class ObservationContractV3(ConfigModelV3):
 
     input_profile: ObservationInputProfileV3
 
-    @model_validator(mode="before")
+    @model_validator(mode='before')
     @classmethod
     def normalize_legacy_constructor_fields(cls, value: object) -> object:
         """Accept the pre-nesting Python constructor while serializing nested.
@@ -377,19 +406,19 @@ class ObservationContractV3(ConfigModelV3):
         if not isinstance(value, Mapping):
             return value
         flat_names = {
-            "schema_id",
-            "dtype",
-            "lidar_sector_count",
-            "local_reference_components",
-            "measured_twist_components",
-            "previous_final_issued_command_components",
-            "dimension",
+            'schema_id',
+            'dtype',
+            'lidar_sector_count',
+            'local_reference_components',
+            'measured_twist_components',
+            'previous_final_issued_command_components',
+            'dimension',
         }
-        if "input_profile" in value or not (flat_names & set(value)):
+        if 'input_profile' in value or not (flat_names & set(value)):
             return value
         if set(value) != flat_names:
             return value
-        return {"input_profile": dict(value)}
+        return {'input_profile': dict(value)}
 
     @property
     def schema_id(self) -> str:
@@ -423,7 +452,7 @@ class ObservationContractV3(ConfigModelV3):
 class ActionContractV3(ConfigModelV3):
     """The fixed normalized holonomic action schema."""
 
-    component_order: tuple[Literal["vx"], Literal["vy"], Literal["wz"]]
+    component_order: tuple[Literal['vx'], Literal['vy'], Literal['wz']]
     dimension: Literal[3]
     normalized_minimum: Literal[-1.0]
     normalized_maximum: Literal[1.0]
@@ -432,7 +461,7 @@ class ActionContractV3(ConfigModelV3):
 class MotionLimitTargetPolicyV3(ConfigModelV3):
     """Resolved limit values plus their approved source class."""
 
-    source_class: Literal["SIM_BASELINE", "MEASURED_REGISTRY"]
+    source_class: Literal['SIM_BASELINE', 'MEASURED_REGISTRY']
     source_id: IdentifierV3
     max_vx_mps: StrictPositiveFiniteFloatV3
     max_vy_mps: StrictPositiveFiniteFloatV3
@@ -522,9 +551,9 @@ class CommandSafetyContractV3(ConfigModelV3):
     """D06/D07 envelope and final-command ownership declarations."""
 
     command_envelope_contract_id: IdentifierV3
-    safety_supervisor_owner: Literal["SafetySupervisor"]
-    final_twist_publisher_owner: Literal["FinalTwistPublisher"]
-    final_command_topic: Literal["/cmd_vel"]
+    safety_supervisor_owner: Literal['SafetySupervisor']
+    final_twist_publisher_owner: Literal['FinalTwistPublisher']
+    final_command_topic: Literal['/cmd_vel']
     safety_policy_id: IdentifierV3
 
 
@@ -567,7 +596,7 @@ class LocalTrainingContractV31(ConfigModelV3):
     """Typed simulation-only B2 training/noise/reset/scenario contract."""
 
     schema_id: Literal['mecanum.local_training/v1']
-    backend_id: Literal['NATIVE_B2_BACKEND_PENDING']
+    backend_id: Literal['NATIVE_B2_BACKEND_PENDING', 'NATIVE_B2_BACKEND_V1']
     observation_schema_id: Literal['obs-v3-l72-g3-t3-c3-f32']
     command_components: tuple[Literal['vx'], Literal['vy'], Literal['wz']]
     max_vx_mps: StrictPositiveFiniteFloatV3
@@ -877,8 +906,9 @@ class ResolvedConfigV3(ConfigModelV3):
     evaluation: EvaluationContractV3
     acceptance: AcceptanceContractV3
 
-    @model_validator(mode="after")
-    def validate_deploy_real_measurement_source(self) -> "ResolvedConfigV3":
+    @model_validator(mode='after')
+    def validate_deploy_real_measurement_source(self) -> 'ResolvedConfigV3':
+        """Enforce measured source rules for real deployment configs."""
         local_training = (
             self.runtime.navigation_mode is NavigationModeV3.LOCAL_TRAINING
         )
@@ -973,7 +1003,9 @@ class ResolvedConfigV3(ConfigModelV3):
             )
         if (
             self.runtime.runtime_profile is RuntimeProfileV3.DEPLOY_REAL
-            and self.motion_limits.source_class != "MEASURED_REGISTRY"
+            and self.motion_limits.source_class != 'MEASURED_REGISTRY'
         ):
-            raise ValueError("deploy_real requires resolved measured motion limits")
+            raise ValueError(
+                'deploy_real requires resolved measured motion limits'
+            )
         return self

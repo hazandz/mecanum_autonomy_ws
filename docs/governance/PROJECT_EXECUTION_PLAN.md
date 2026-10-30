@@ -1072,3 +1072,26 @@ base above. Candidate source and offline verification do not change a PEP status
 or establish Gate 1, runtime, training, HIL, integration, or real readiness.
 B2.1 delivery is pending required checks and independent exact-commit audit;
 B2.2/B2.3 remain unimplemented. Do not start runtime work from this note.
+
+## Roadmap B B2.2 — Owner-authorized offline implementation
+
+The 2026-10-30 Owner instruction authorizes the L2 work package
+`ROADMAP_B_B22_SIMULATION_SUBSTRATE` from exact base
+`ef9e0281cfb9de04d89a2698d6d7899bcde92803` on branch
+`roadmap-b-b22-simulation-substrate`. Scope is limited to the 58-path allowlist:
+native receipt/contact backend; B2 world, model and probe; trusted simulation
+ports, reset adapters, scenarios, manifest and three asset-bound resolved
+configurations; and LOCAL_TRAINING launch, bridge, GUI configuration and process
+supervision. B2.2 does not implement the B2.3 safety runtime, POLICY adapter,
+pending-step coordinator, FinalTwistPublisher changes, observation0 transaction,
+collection, fault runs or soak.
+
+Offline permission covers only the exact Python/native tests and five-package
+build listed in the implementation prompt, with fresh build/install/log output
+outside the repository and already installed dependencies. No ROS graph,
+Gazebo, launch, GUI, training, evaluation, soak, HIL, hardware, runtime guard,
+or integration is authorized. Source and offline checks remain pending until
+performed; this plan entry does not assert success or close a milestone.
+Next action after delivery is independent exact-commit audit. Runtime observation
+requires separate approval and must start with `gui:=true` as specified by the
+Owner.

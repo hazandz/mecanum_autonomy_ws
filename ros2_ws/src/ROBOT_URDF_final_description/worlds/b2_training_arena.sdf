@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<sdf version="1.11">
+  <world name="b2_training_arena">
+    <gravity>0 0 -9.8</gravity>
+    <physics name="b2_fixed_step" type="ignored">
+      <max_step_size>0.01</max_step_size><real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>100</real_time_update_rate>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+
+    <model name="ground_plane">
+      <static>true</static><link name="link">
+        <collision name="collision"><pose>0 0 -0.1 0 0 0</pose><geometry><box><size>20 20 0.2</size></box></geometry></collision>
+        <visual name="visual"><pose>0 0 -0.1 0 0 0</pose><geometry><box><size>20 20 0.2</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient></material></visual>
+      </link>
+    </model>
+    <model name="arena_walls"><static>true</static>
+      <link name="wall_west"><pose>-4.1 0 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>0.2 8.4 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 8.4 1</size></box></geometry></visual></link>
+      <link name="wall_east"><pose>4.1 0 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>0.2 8.4 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 8.4 1</size></box></geometry></visual></link>
+      <link name="wall_south"><pose>0 -4.1 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>8 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>8 0.2 1</size></box></geometry></visual></link>
+      <link name="wall_north"><pose>0 4.1 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>8 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>8 0.2 1</size></box></geometry></visual></link>
+    </model>
+    <model name="obstacle_0"><static>true</static><pose>2.5 0 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.2 1 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 1 1</size></box></geometry></visual></link></model>
+    <include><uri>model://mecanum_b2</uri><name>mecanum_b2</name><pose>0 0 0.10 0 0 0</pose></include>
+  </world>
+</sdf>

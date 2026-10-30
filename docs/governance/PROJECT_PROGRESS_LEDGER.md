@@ -1913,3 +1913,16 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records authorization and scope, not test, build, delivery, audit, integration, Gate, or runtime results. B2.1 and B2 are not marked closed. |
 | Boundary | No runtime, training, evaluation, soak, backend, GUI implementation, production asset binding, integration, or B2.2/B2.3 work is authorized here. |
 | Next action | Complete only the specified offline checks and delivery if all exact identity and exit conditions pass; then stop for independent exact-follow-up audit. |
+
+
+### Roadmap B B2.2 simulation substrate — Owner-authorized offline implementation — 2026-10-30
+
+| Field | Record |
+|---|---|
+| Supersedes | None. This is a new authorization entry and does not revise prior Ledger bytes or status. |
+| Owner instruction | `PROMPT_CODEX_B2_2_OFFLINE_IMPLEMENTATION` authorizes `ROADMAP_B_B22_SIMULATION_SUBSTRATE` as an L2 offline implementation work package under the existing Roadmap B ACR. |
+| Identity | Origin `https://github.com/hazandz/mecanum_autonomy_ws.git`; exact base and expected remote integration `ef9e0281cfb9de04d89a2698d6d7899bcde92803`; required base sole parent `e7a9abf8e203592bd07b6ccd1c518813a5ed695d`; branch `roadmap-b-b22-simulation-substrate`. |
+| Scope | Owner allowlist of 58 paths: native simulation backend, B2-only world/model assets, trusted simulation ports/reset adapters, B1-compatible scenarios and asset-bound config outputs, plus launch/bridge/GUI process supervision. B2.3 is excluded. |
+| Evidence status | `AUTHORIZED_OFFLINE_IMPLEMENTATION_IN_PROGRESS`; this entry records authority and scope only. It is not a test, build, audit, delivery, integration, Gate, runtime, training, HIL, or hardware result. |
+| Boundary | No ROS graph, Gazebo, launch, GUI, motion, runtime guard, training/evaluation/soak, HIL, hardware, integration, or B2.3 implementation is authorized by this work package. |
+| Next action | Complete only the enumerated offline checks and candidate delivery if every precondition and exit criterion passes; then stop for independent exact-commit audit. |

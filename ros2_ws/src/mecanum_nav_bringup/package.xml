@@ -25,6 +25,11 @@
   <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>mecanum_nav_rl</exec_depend>
   <exec_depend>mecanum_nav_rl_interfaces</exec_depend>
+  <exec_depend>mecanum_sim_backend</exec_depend>
+  <exec_depend>ROBOT_URDF_final_description</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>nav2_behaviors</exec_depend>

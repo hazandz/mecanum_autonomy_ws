@@ -1,0 +1,1 @@
+<?xml version="1.0"?><sdf version="1.11"><model name="b2_contact_probe"><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.10 0.10 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.10 0.10 0.10</size></box></geometry></visual></link></model></sdf>
