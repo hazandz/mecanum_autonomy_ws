@@ -79,7 +79,8 @@ public:
   bool WatchdogExpired(std::int64_t now_steady_ns) const;
   bool SetExpectedPolicyStep(std::uint64_t step_index,
                              std::uint64_t source_sequence,
-                             std::string transition_id);
+                             std::string transition_id,
+                             std::int64_t action_barrier_ns = 0);
   bool BindResetContext(std::int64_t barrier_stamp_ns,
                         std::uint64_t episode_generation,
                         std::uint32_t reset_epoch,
@@ -99,6 +100,7 @@ private:
     std::uint64_t step_index{};
     std::uint64_t source_sequence{};
     std::string transition_id;
+    std::int64_t action_barrier_ns{};
   };
   struct QueuedReceipt { ReceiptFacts facts; std::int64_t receive_steady_ns{}; };
   GateResult Fault(std::string reason);
@@ -109,6 +111,7 @@ private:
   std::optional<ReceiptFacts> last_receipt_;
   std::optional<std::int64_t> last_source_stamp_ns_;
   std::optional<PolicyIdentity> pending_policy_;
+  std::int64_t current_action_barrier_ns_{};
   std::uint64_t watermark_{};
   std::int64_t last_accepted_steady_ns_{};
   bool anchored_{};

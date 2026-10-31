@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 from mecanum_nav_rl.config.v3_hashing import config_v3_sha256
 from mecanum_nav_rl.config.v3_models import ResolvedConfigV3
@@ -30,7 +32,14 @@ class LaunchPlan:
     asset_manifest_sha256: str
     coordinator_ingress_instance_id: int
     commands: tuple[tuple[str, ...], ...]
-    environment: dict[str, str]
+    environment: Mapping[str, str]
+    bridge_command: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """Freeze a defensive copy of the process environment."""
+        object.__setattr__(
+            self, 'environment', MappingProxyType(dict(self.environment)),
+        )
 
 
 def parse_gui_argument(value: str) -> bool:
@@ -176,7 +185,9 @@ def bind_world_for_scenario(
 def build_launch_plan(
     *, gui: str, resolved_config: Path, world_file: Path,
     gui_config: Path, session_id: str, partition: str,
+    bridge_config: Path,
     resource_paths: tuple[Path, ...], plugin_path: Path,
+    physics_engine_plugin_path: Path,
     asset_manifest_file: Path, scenario_directory: Path,
     runtime_world_directory: Path,
     coordinator_ingress_instance_id: int,
@@ -295,6 +306,9 @@ def build_launch_plan(
         'GZ_PARTITION': partition,
         'GZ_SIM_RESOURCE_PATH': resource_value,
         'GZ_SIM_SYSTEM_PLUGIN_PATH': str(plugin_path.resolve(strict=True)),
+        'GZ_SIM_PHYSICS_ENGINE_PATH': str(
+            physics_engine_plugin_path.resolve(strict=True)
+        ),
     }
     server = (
         'gz', 'sim', '--force-version', '8', '-s',
@@ -303,6 +317,11 @@ def build_launch_plan(
     gui_command = (
         'gz', 'sim', '--force-version', '8', '-g',
         '--gui-config', str(gui_config),
+    )
+    bridge_command = (
+        'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+        '--ros-args', '-p',
+        f'config_file:={bridge_config.resolve(strict=True)}',
     )
     commands = (server, gui_command) if gui_requested else (server,)
     return LaunchPlan(
@@ -316,6 +335,7 @@ def build_launch_plan(
         coordinator_ingress_instance_id=coordinator_ingress_instance_id,
         commands=commands,
         environment=environment,
+        bridge_command=bridge_command,
     )
 
 

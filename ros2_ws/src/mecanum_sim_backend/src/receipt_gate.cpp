@@ -22,7 +22,9 @@ bool ValidHash(const std::string &value)
 }
 }  // namespace
 
-ReceiptGate::ReceiptGate(GateBinding binding) : binding_(std::move(binding)) {}
+ReceiptGate::ReceiptGate(GateBinding binding)
+: binding_(std::move(binding)),
+  current_action_barrier_ns_(binding_.barrier_stamp_ns) {}
 
 bool ReceiptGate::Enqueue(ReceiptFacts receipt, std::int64_t receive_steady_ns)
 {
@@ -154,11 +156,17 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
         r.transition_id == pending_policy_->transition_id;
     if (!matches_current && !matches_pending)
       return Fault("policy_issuance_binding_mismatch");
+    const auto action_barrier_ns = matches_pending ?
+        pending_policy_->action_barrier_ns : current_action_barrier_ns_;
+    if (r.stamp_ns <= action_barrier_ns)
+      return {GateDisposition::Rejected, "not_strictly_post_action_barrier",
+              std::nullopt, false};
     if (matches_pending)
     {
       binding_.next_policy_sequence = pending_policy_->source_sequence;
       binding_.expected_step_index = pending_policy_->step_index;
       binding_.expected_transition_id = pending_policy_->transition_id;
+      current_action_barrier_ns_ = pending_policy_->action_barrier_ns;
       pending_policy_.reset();
     }
   }
@@ -189,14 +197,18 @@ bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
 }
 bool ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
                                        std::uint64_t source_sequence,
-                                       std::string transition_id)
+                                       std::string transition_id,
+                                       std::int64_t action_barrier_ns)
 {
+  if (action_barrier_ns == 0) action_barrier_ns = current_action_barrier_ns_;
   if (faulted_ || pending_policy_ || step_index == 0 ||
       source_sequence != step_index || transition_id.empty() ||
-      step_index <= binding_.expected_step_index)
+      step_index <= binding_.expected_step_index ||
+      action_barrier_ns < current_action_barrier_ns_ ||
+      action_barrier_ns < binding_.barrier_stamp_ns)
     return false;
   pending_policy_ = PolicyIdentity{
-      step_index, source_sequence, std::move(transition_id)};
+      step_index, source_sequence, std::move(transition_id), action_barrier_ns};
   return true;
 }
 bool ReceiptGate::BindResetContext(
@@ -215,6 +227,7 @@ bool ReceiptGate::BindResetContext(
       next_safe_stop_sequence != binding_.next_safe_stop_sequence)
     return false;
   binding_.barrier_stamp_ns = barrier_stamp_ns;
+  current_action_barrier_ns_ = barrier_stamp_ns;
   binding_.episode_generation = episode_generation;
   binding_.reset_epoch = reset_epoch;
   binding_.runtime_generation = runtime_generation;

@@ -113,7 +113,12 @@ def plan(gui):
         __import__('pathlib').Path('/tmp/gui.config'),
         __import__('pathlib').Path('/tmp/config.json'), 'run-1',
         'a' * 64, 'b' * 64, 17, commands,
-        {'GZ_PARTITION': 'partition'},
+        {
+            'GZ_PARTITION': 'partition',
+            'GZ_SIM_RESOURCE_PATH': '/tmp/resources',
+            'GZ_SIM_SYSTEM_PLUGIN_PATH': '/tmp/plugins',
+            'GZ_SIM_PHYSICS_ENGINE_PATH': '/tmp/physics-plugins',
+        },
     )
 
 
@@ -155,6 +160,72 @@ def test_gui_mode_uses_same_partition_and_requires_owner_confirmation():
         assert event['screenshot_ref'] == 'screenshot://scene'
         assert event['environment']['GZ_PARTITION'] == 'partition'
     asyncio.run(run())
+
+
+def test_bridge_server_gui_and_scene_query_share_run_environment():
+    """Every Gazebo participant receives the immutable plan environment."""
+    async def run():
+        base_plan = plan(True)
+        bridge = (
+            'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+            '--ros-args', '-p', 'config_file:=/tmp/bridge.yaml',
+        )
+        values = vars(base_plan).copy()
+        values['bridge_command'] = bridge
+        bound_plan = SimpleNamespace(**values)
+        launcher = FakeLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=bound_plan, launcher=launcher, readiness=FakeReadiness(),
+            evidence_sink=FakeSink(),
+        )
+        await supervisor.start()
+        assert [item[0] for item in launcher.started] == [
+            bridge, *base_plan.commands,
+        ]
+        assert all(
+            environment == base_plan.environment
+            for _, environment, _ in launcher.started
+        )
+        assert isinstance(base_plan.environment, type(plan(False).environment))
+    asyncio.run(run())
+
+
+def test_production_scene_query_factory_observes_bound_run_environment():
+    """The injected production adapter seam sees the same run binding."""
+    observed = []
+
+    def scene_query(service, timeout_ms):
+        observed.append((
+            service, timeout_ms,
+            os.environ.get('GZ_PARTITION'),
+            os.environ.get('GZ_SIM_RESOURCE_PATH'),
+            os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH'),
+        ))
+        return SimpleNamespace(
+            name='b2_training_arena',
+            model=[SimpleNamespace(name='mecanum_b2', model=[])],
+        )
+
+    expected = plan(False)
+    previous = {
+        key: os.environ.get(key) for key in expected.environment
+    }
+    readiness = RclpyReadiness(scene_query=scene_query)
+    try:
+        readiness.bind_environment(expected.environment)
+        assert asyncio.run(readiness._query_scene_matches(expected))
+        assert observed == [(
+            '/world/b2_training_arena/scene/info', 500,
+            expected.environment['GZ_PARTITION'],
+            expected.environment['GZ_SIM_RESOURCE_PATH'],
+            expected.environment['GZ_SIM_SYSTEM_PLUGIN_PATH'],
+        )]
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def test_gui_start_failure_cleans_server_without_headless_fallback():
@@ -297,12 +368,65 @@ def test_production_scene_status_requires_fault_free_bound_identity():
         ('backend_instance_id', 0),
         ('status_sequence', 0),
         ('fault_flags', 1),
-        ('paused', True),
         ('actuator_inhibited', False),
     ):
         altered = SimpleNamespace(**vars(message))
         setattr(altered, field, value)
         assert not matches(altered, expected_plan, expected_hash)
+
+
+def test_paused_inhibited_scene_is_ready_for_passive_observation():
+    """A healthy paused scene may open the GUI while policy stays inhibited."""
+    readiness = RclpyReadiness()
+    expected_plan = plan(False)
+    expected_hash = 'a' * 64
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id='b2_training_arena'),
+        session_id=expected_plan.session_id,
+        config_hash=expected_hash,
+        backend_instance_id=17,
+        status_sequence=4,
+        fault_flags=0,
+        paused=True,
+        actuator_inhibited=True,
+    )
+    assert readiness._matches_bound_scene_status(
+        message, expected_plan, expected_hash,
+    )
+
+
+def test_paused_scene_opens_gui_without_world_control():
+    """Paused inhibited readiness starts the requested GUI without control."""
+    class PausedReadiness(FakeReadiness):
+        async def server_scene(self, bound_plan, process, timeout_s):
+            del process, timeout_s
+            status = SimpleNamespace(
+                header=SimpleNamespace(frame_id='b2_training_arena'),
+                session_id=bound_plan.session_id,
+                config_hash='a' * 64,
+                backend_instance_id=17,
+                status_sequence=4,
+                fault_flags=0,
+                paused=True,
+                actuator_inhibited=True,
+            )
+            assert RclpyReadiness._matches_bound_scene_status(
+                status, bound_plan, 'a' * 64,
+            )
+            self.calls.append(('paused_scene', 30.0))
+
+    async def run():
+        launcher = FakeLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(True), launcher=launcher,
+            readiness=PausedReadiness(), evidence_sink=FakeSink(),
+        )
+        await supervisor.start()
+        assert [command for command, _, _ in launcher.started] == list(
+            plan(True).commands,
+        )
+        assert len(launcher.started) == 2
+    asyncio.run(run())
 
 
 def test_production_scene_adapter_queries_world_scene_and_checks_cardinality():

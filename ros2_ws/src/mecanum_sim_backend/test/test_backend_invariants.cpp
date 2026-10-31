@@ -1,17 +1,23 @@
 #include <gtest/gtest.h>
 #include <limits>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
 #include <gz/sim/components/Link.hh>
 #include <gz/sim/components/LinearVelocity.hh>
 #include <gz/sim/components/AngularVelocity.hh>
 #include <gz/sim/components/Sensor.hh>
 #include <gz/sim/components/World.hh>
 #include <sdf/Root.hh>
+#include <ament_index_cpp/get_package_prefix.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include "../src/backend_system.cpp"
 #include "mecanum_sim_backend/backend_system.hpp"
 #include "mecanum_sim_backend/contact_coverage.hpp"
 using namespace mecanum_sim_backend;
 using ControlRequest = mecanum_nav_rl_interfaces::srv::LocalTrainingBackendControl::Request;
 using ControlResponse = mecanum_nav_rl_interfaces::srv::LocalTrainingBackendControl::Response;
+using SafetyInput = mecanum_nav_rl_interfaces::msg::LocalTrainingSafetyInput;
 
 namespace mecanum_sim_backend
 {
@@ -43,14 +49,27 @@ struct NativeResetChainIo
 class BackendSystemTestPeer
 {
 public:
+  static std::filesystem::path DescriptionFile(const std::string &relative)
+  {
+    return std::filesystem::path(
+        ament_index_cpp::get_package_share_directory(
+            "ROBOT_URDF_final_description")) / relative;
+  }
+
   static void SeedRunDescriptor(BackendSystem &system)
   {
+    system.steady_clock_now_ = [] { return 2'000'000'000LL; };
     system.world_name_ = "b2_training_arena";
     system.session_id_ = "test-session";
     system.config_hash_ = std::string(64, 'a');
     system.asset_manifest_hash_ = std::string(64, 'b');
     system.coordinator_ingress_instance_id_ = 7;
     system.backend_instance_id_ = 8;
+  }
+
+  static void SetSteadyClockNow(BackendSystem &system, std::int64_t now_ns)
+  {
+    system.steady_clock_now_ = [now_ns] { return now_ns; };
   }
 
   static void SeedObservationHistory(
@@ -149,8 +168,7 @@ public:
   {
     sdf::Root root;
     const auto errors = root.Load(
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf");
+        DescriptionFile("models/mecanum_b2/model.sdf").string());
     if (!errors.empty() || !root.Model() || root.Model()->Plugins().empty())
       return false;
     gz::sim::Entity parent = gz::sim::kNullEntity;
@@ -179,8 +197,7 @@ public:
   {
     sdf::Root root;
     const auto errors = root.Load(
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf");
+        DescriptionFile("models/mecanum_b2/model.sdf").string());
     if (!errors.empty() || !root.Model() || root.Model()->Plugins().empty())
       return false;
 
@@ -248,17 +265,39 @@ public:
       BackendSystem &system, gz::sim::EntityComponentManager &ecm,
       const std::shared_ptr<NativeResetChainIo> &io)
   {
-    constexpr const char *model_path =
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf";
-    constexpr const char *probe_path =
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf";
-    constexpr const char *physics_path =
-        "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/"
-        "engine-plugins/libgz-physics7-bullet-plugin.so.7.6.0";
+    const auto description_share = std::filesystem::path(
+        ament_index_cpp::get_package_share_directory(
+            "ROBOT_URDF_final_description"));
+    const auto model_path = description_share / "models/mecanum_b2/model.sdf";
+    const auto probe_path = description_share / "models/b2_contact_probe/model.sdf";
+    const auto physics_prefix = std::filesystem::path(
+        ament_index_cpp::get_package_prefix("gz_physics_vendor"));
+    const auto physics_library_root =
+        physics_prefix / "opt/gz_physics_vendor/lib";
+    std::vector<std::filesystem::path> dart_plugin_dirs;
+    if (std::filesystem::is_directory(physics_library_root))
+    {
+      for (const auto &entry : std::filesystem::recursive_directory_iterator(
+               physics_library_root))
+      {
+        if (entry.is_regular_file() &&
+            entry.path().parent_path().filename() == "engine-plugins" &&
+            entry.path().filename().string().find("dartsim-plugin.so") !=
+                std::string::npos)
+          dart_plugin_dirs.push_back(entry.path().parent_path());
+      }
+    }
+    std::sort(dart_plugin_dirs.begin(), dart_plugin_dirs.end());
+    dart_plugin_dirs.erase(std::unique(dart_plugin_dirs.begin(),
+                                      dart_plugin_dirs.end()),
+                           dart_plugin_dirs.end());
+    if (dart_plugin_dirs.size() != 1 ||
+        setenv("GZ_SIM_PHYSICS_ENGINE_PATH",
+               dart_plugin_dirs.front().c_str(), 1) != 0)
+      return false;
+    const std::string physics_plugin = "gz-physics-dartsim-plugin";
     sdf::Root root;
-    if (!root.Load(model_path).empty() || !root.Model() ||
+    if (!root.Load(model_path.string()).empty() || !root.Model() ||
         root.Model()->Plugins().empty())
       return false;
     auto plugin = root.Model()->Plugins().front().Element();
@@ -282,7 +321,7 @@ public:
         gz::sim::components::Name("b2_training_arena"));
     ecm.CreateComponent(world, gz::sim::components::World());
     ecm.CreateComponent(world,
-        gz::sim::components::PhysicsEnginePlugin(physics_path));
+        gz::sim::components::PhysicsEnginePlugin(physics_plugin));
     const auto floor_model = ecm.CreateEntity();
     ecm.CreateComponent(floor_model,
         gz::sim::components::Name("ground_plane"));
@@ -361,7 +400,7 @@ public:
         const std::function<void()> &) {
       return std::function<void()>([] {});
     };
-    system.probe_model_sdf_path_ = probe_path;
+    system.probe_model_sdf_path_ = probe_path.string();
     system.backend_state_sink_ = [io](const BackendState &) {
       ++io->backend_state_calls;
     };
@@ -404,10 +443,9 @@ public:
       gz::sim::Entity world)
   {
     sdf::Root root;
-    const auto path =
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf";
-    if (!root.Load(path).empty() || !root.Model()) return false;
+    const auto path = DescriptionFile(
+        "models/b2_contact_probe/model.sdf");
+    if (!root.Load(path.string()).empty() || !root.Model()) return false;
     const auto *link_sdf = root.Model()->LinkByName("link");
     const auto *sensor_sdf = link_sdf ?
         link_sdf->SensorByName("contact_sensor") : nullptr;
@@ -438,6 +476,45 @@ public:
     ecm.CreateComponent(sensor,
         gz::sim::components::ContactSensor(sensor_sdf->Element()));
     return true;
+  }
+
+  static void SeedProbeWorld(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm)
+  {
+    const auto prefix = std::filesystem::path(
+        ament_index_cpp::get_package_prefix("gz_physics_vendor"));
+    const auto root = prefix / "opt/gz_physics_vendor/lib";
+    std::vector<std::filesystem::path> dirs;
+    if (std::filesystem::is_directory(root))
+      for (const auto &entry : std::filesystem::recursive_directory_iterator(root))
+        if (entry.is_regular_file() &&
+            entry.path().parent_path().filename() == "engine-plugins" &&
+            entry.path().filename().string().find("dartsim-plugin.so") !=
+                std::string::npos)
+          dirs.push_back(entry.path().parent_path());
+    std::sort(dirs.begin(), dirs.end());
+    dirs.erase(std::unique(dirs.begin(), dirs.end()), dirs.end());
+    if (dirs.size() != 1 || setenv(
+            "GZ_SIM_PHYSICS_ENGINE_PATH", dirs.front().c_str(), 1) != 0)
+      throw std::runtime_error("pinned_dart_engine_path_unavailable");
+    auto world = system.world_entity_;
+    if (world == gz::sim::kNullEntity)
+    {
+      world = ecm.CreateEntity();
+      ecm.CreateComponent(world,
+          gz::sim::components::Name("b2_training_arena"));
+      ecm.CreateComponent(world, gz::sim::components::World());
+      ecm.CreateComponent(world,
+          gz::sim::components::PhysicsEnginePlugin(
+              "gz-physics-dartsim-plugin"));
+      system.world_entity_ = world;
+    }
+    if (!ecm.Component<gz::sim::components::PhysicsEnginePlugin>(world))
+      ecm.CreateComponent(world,
+          gz::sim::components::PhysicsEnginePlugin(
+              "gz-physics-dartsim-plugin"));
+    system.world_name_ = "b2_training_arena";
+    system.CapturePhysicsEngineFingerprint(ecm);
   }
 
   static void RunProductionTick(
@@ -483,6 +560,13 @@ public:
         ecm.RequestRemoveEntity(grandchild);
       ecm.RequestRemoveEntity(child);
     }
+    ecm.RequestRemoveEntity(model);
+    ecm.ProcessRemoveEntityRequests();
+  }
+
+  static void RemoveProbeModelById(
+      gz::sim::EntityComponentManager &ecm, std::uint64_t model)
+  {
     ecm.RequestRemoveEntity(model);
     ecm.ProcessRemoveEntityRequests();
   }
@@ -550,6 +634,27 @@ public:
     return system.configured_;
   }
 
+  static std::pair<std::string, std::string> CapturePhysicsEngine(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm,
+      const std::string &engine_name)
+  {
+    const auto world = ecm.CreateEntity();
+    ecm.CreateComponent(world,
+        gz::sim::components::Name("b2_training_arena"));
+    ecm.CreateComponent(world, gz::sim::components::World());
+    ecm.CreateComponent(world,
+        gz::sim::components::PhysicsEnginePlugin(engine_name));
+    system.world_entity_ = world;
+    system.CapturePhysicsEngineFingerprint(ecm);
+    return {system.observed_engine_plugin_path_,
+            system.proof_physics_engine_fingerprint_sha256_};
+  }
+
+  static std::string FingerprintBytes(const std::string &bytes)
+  {
+    return BackendSystem::Sha256(bytes);
+  }
+
   static void Shutdown(BackendSystem &system)
   {
     system.Shutdown();
@@ -614,6 +719,12 @@ public:
     return response;
   }
 
+  static void ReceiveSafetyInput(
+      BackendSystem &system, const SafetyInput &input)
+  {
+    system.OnSafetyInput(input);
+  }
+
   static void ChangeRevision(BackendSystem &system, std::uint64_t revision)
   {
     system.control_binding_revision_ = revision;
@@ -622,10 +733,9 @@ public:
   static void PrepareProbe(BackendSystem &system)
   {
     system.probe_model_sdf_path_ =
-        "/home/hazan/roadmap-b-b22-simulation-substrate/ros2_ws/src/"
-        "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf";
-    system.observed_engine_plugin_path_ = "/observed/physics-engine.so";
-    system.proof_physics_engine_fingerprint_sha256_ = std::string(64, 'c');
+        (std::filesystem::path(ament_index_cpp::get_package_share_directory(
+             "ROBOT_URDF_final_description")) /
+         "models/b2_contact_probe/model.sdf").string();
   }
 
   static void InjectProbeTransport(
@@ -645,9 +755,59 @@ public:
     system.probe_transport_.remove = std::move(remove);
   }
 
-  static void RequestSpawn(BackendSystem &system)
+  static void RequestSpawn(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm)
   {
-    system.RequestProbeSpawn();
+    system.RequestProbeSpawn(ecm);
+  }
+
+  static std::shared_ptr<backend_detail::ProbeServiceMailbox> ProbeMailbox(
+      BackendSystem &system)
+  {
+    return system.probe_service_mailbox_;
+  }
+
+  static bool PrepareMachineAtLift(BackendSystem &system)
+  {
+    if (!system.probe_machine_.Start(77, 2'000'000'000) ||
+        !system.probe_machine_.SpawnCompleted(true) ||
+        !system.probe_machine_.BindFixture(101, 102, 103))
+      return false;
+    for (std::uint64_t iteration = 1; iteration <= 3; ++iteration)
+    {
+      const ProbeObservation sample{
+          iteration, static_cast<std::int64_t>(iteration) * 10'000'000,
+          true, true, false, true, false, true, false};
+      if (!system.probe_machine_.Observe(sample)) return false;
+    }
+    return system.probe_machine_.Phase() == ProbePhase::AwaitLift;
+  }
+
+  static bool AdvanceMachineToRemoval(BackendSystem &system)
+  {
+    if (!system.probe_machine_.LiftCompleted(true))
+      return false;
+    if (!system.probe_machine_.Observe(
+            {4, 40'000'000, true, true, false, false, false, true, true}))
+      return false;
+    for (std::uint64_t iteration = 5; iteration <= 7; ++iteration)
+    {
+      if (!system.probe_machine_.Observe({
+              iteration, static_cast<std::int64_t>(iteration) * 10'000'000,
+              true, true, false, false, false, true, false}))
+        return false;
+    }
+    return system.probe_machine_.Phase() == ProbePhase::AwaitRemove;
+  }
+
+  static void RequestLift(BackendSystem &system)
+  {
+    system.RequestProbeLift();
+  }
+
+  static void RequestRemoval(BackendSystem &system)
+  {
+    system.RequestProbeRemoval();
   }
 
   static void ProcessProbeResults(BackendSystem &system)
@@ -658,6 +818,11 @@ public:
   static ProbePhase CurrentProbePhase(const BackendSystem &system)
   {
     return system.probe_machine_.Phase();
+  }
+
+  static std::string ProbeReason(const BackendSystem &system)
+  {
+    return system.probe_reason_ + "|" + system.engine_fingerprint_reason_;
   }
 
   static bool ProbeRunning(const BackendSystem &system)
@@ -675,6 +840,11 @@ public:
     return system.policy_open_;
   }
 
+  static bool AdmissionCandidate(const BackendSystem &system)
+  {
+    return system.safety_admission_candidate_;
+  }
+
   static std::int64_t ProbeDeadline(const BackendSystem &system)
   {
     return system.probe_machine_.DeadlineNs();
@@ -682,7 +852,8 @@ public:
 
   static bool SeedProbeEntities(
       BackendSystem &system, gz::sim::EntityComponentManager &ecm,
-      bool put_contact_data_on_sensor = false)
+      bool put_contact_data_on_sensor = false,
+      bool include_model_world_pose = true)
   {
     sdf::Root root;
     if (!root.Load(system.probe_model_sdf_path_).empty() || !root.Model())
@@ -710,12 +881,15 @@ public:
     ecm.CreateComponent(model, gz::sim::components::Name("b2_capability_probe"));
     ecm.CreateComponent(model, gz::sim::components::ParentEntity(world));
     ecm.CreateComponent(model, gz::sim::components::Model());
-    ecm.CreateComponent(model, gz::sim::components::WorldPose(
-        gz::math::Pose3d(0, 0, 0.07, 0, 0, 0)));
+    if (include_model_world_pose)
+      ecm.CreateComponent(model, gz::sim::components::WorldPose(
+          gz::math::Pose3d(0, 0, 0.07, 0, 0, 0)));
     const auto link = ecm.CreateEntity();
     ecm.CreateComponent(link, gz::sim::components::Name("link"));
     ecm.CreateComponent(link, gz::sim::components::ParentEntity(model));
     ecm.CreateComponent(link, gz::sim::components::Link());
+    ecm.CreateComponent(link, gz::sim::components::WorldPose(
+        gz::math::Pose3d(0, 0, 0.07, 0, 0, 0)));
     const auto collision = ecm.CreateEntity();
     ecm.CreateComponent(collision, gz::sim::components::Name("collision"));
     ecm.CreateComponent(collision, gz::sim::components::ParentEntity(link));
@@ -839,6 +1013,31 @@ public:
     return system.probe_machine_.ModelEntity();
   }
 
+  static std::uint64_t ProbeLink(
+      const BackendSystem &system,
+      const gz::sim::EntityComponentManager &ecm)
+  {
+    auto model = system.probe_machine_.ModelEntity();
+    if (model == gz::sim::kNullEntity)
+    {
+      const auto models = ecm.EntitiesByComponents(
+          gz::sim::components::Name("b2_capability_probe"),
+          gz::sim::components::Model());
+      if (models.size() != 1) return gz::sim::kNullEntity;
+      model = models.front();
+    }
+    gz::sim::Entity found = gz::sim::kNullEntity;
+    ecm.Each<gz::sim::components::Link, gz::sim::components::ParentEntity>(
+        [&](const gz::sim::Entity &entity,
+            const gz::sim::components::Link *,
+            const gz::sim::components::ParentEntity *parent) {
+          if (parent->Data() == model)
+            found = entity;
+          return true;
+        });
+    return found;
+  }
+
   static std::string NamedProbeScope(
       const gz::sim::EntityComponentManager &ecm)
   {
@@ -872,16 +1071,24 @@ public:
     return system.IsInBoundWorld(model, ecm);
   }
 
-  static void SetCapabilityPrerequisites(BackendSystem &system)
+  static void SetCapabilityPrerequisites(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm)
   {
-    system.observed_engine_plugin_path_ = "/observed/physics-engine.so";
-    system.proof_physics_engine_fingerprint_sha256_ = std::string(64, 'c');
+    SeedProbeWorld(system, ecm);
   }
 };
 }  // namespace mecanum_sim_backend
 
 namespace
 {
+std::string ReadFileBytes(const std::filesystem::path &path)
+{
+  std::ifstream input(path, std::ios::binary);
+  return std::string(
+      std::istreambuf_iterator<char>(input),
+      std::istreambuf_iterator<char>());
+}
+
 void SetStamp(builtin_interfaces::msg::Time &stamp, std::int64_t ns)
 {
   stamp.sec = static_cast<std::int32_t>(ns / 1'000'000'000LL);
@@ -1033,6 +1240,75 @@ TEST(BackendInvariants, BodyFrameConversionPreservesVyAndMeasuredVerticalCompone
   EXPECT_NEAR(body->linear[0],0.2,1e-12); EXPECT_NEAR(body->linear[1],-0.1,1e-12);
   EXPECT_NEAR(body->linear[2],0.2,1e-12); EXPECT_NEAR(body->angular[0],0.2,1e-12);
   EXPECT_NEAR(body->angular[1],-0.1,1e-12); EXPECT_NEAR(body->angular[2],0.4,1e-12);
+}
+
+TEST(BackendInvariants, PhysicsEngineFingerprintResolvesSelectedBinary)
+{
+  const char *ament_prefixes = std::getenv("AMENT_PREFIX_PATH");
+  ASSERT_NE(ament_prefixes, nullptr);
+  std::vector<std::filesystem::path> engine_libraries;
+  std::stringstream prefixes(ament_prefixes);
+  std::string prefix;
+  while (std::getline(prefixes, prefix, ':'))
+  {
+    const auto vendor_lib = std::filesystem::path(prefix) /
+        "opt/gz_physics_vendor/lib";
+    if (!std::filesystem::is_directory(vendor_lib)) continue;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(
+             vendor_lib))
+    {
+      if (!entry.is_regular_file() ||
+          entry.path().parent_path().filename() != "engine-plugins")
+        continue;
+      const auto filename = entry.path().filename().string();
+      if (filename.find("dartsim-plugin.so") != std::string::npos)
+        engine_libraries.push_back(std::filesystem::canonical(entry.path()));
+    }
+  }
+  std::sort(engine_libraries.begin(), engine_libraries.end());
+  engine_libraries.erase(
+      std::unique(engine_libraries.begin(), engine_libraries.end()),
+      engine_libraries.end());
+  ASSERT_EQ(engine_libraries.size(), 1u)
+      << "the pinned Gazebo dependency must resolve exactly one default DART engine";
+
+  const char *old_path = std::getenv("GZ_SIM_PHYSICS_ENGINE_PATH");
+  const bool had_old_path = old_path != nullptr;
+  const std::string old_path_value = had_old_path ? old_path : "";
+  ASSERT_EQ(setenv("GZ_SIM_PHYSICS_ENGINE_PATH",
+                   engine_libraries.front().parent_path().c_str(), 1), 0);
+  struct RestoreEnginePath
+  {
+    bool had_value;
+    std::string value;
+    ~RestoreEnginePath()
+    {
+      if (had_value) setenv("GZ_SIM_PHYSICS_ENGINE_PATH", value.c_str(), 1);
+      else unsetenv("GZ_SIM_PHYSICS_ENGINE_PATH");
+    }
+  } restore{had_old_path, old_path_value};
+
+  gz::sim::EntityComponentManager logical_ecm;
+  BackendSystem logical_system;
+  const auto logical = BackendSystemTestPeer::CapturePhysicsEngine(
+      logical_system, logical_ecm, "gz-physics-dartsim-plugin");
+  EXPECT_EQ(logical.first, engine_libraries.front().string());
+  EXPECT_EQ(logical.second, BackendSystemTestPeer::FingerprintBytes(
+      ReadFileBytes(engine_libraries.front())));
+
+  gz::sim::EntityComponentManager absolute_ecm;
+  BackendSystem absolute_system;
+  const auto absolute = BackendSystemTestPeer::CapturePhysicsEngine(
+      absolute_system, absolute_ecm, engine_libraries.front().string());
+  EXPECT_EQ(absolute.first, engine_libraries.front().string());
+  EXPECT_EQ(absolute.second, logical.second);
+
+  gz::sim::EntityComponentManager unknown_ecm;
+  BackendSystem unknown_system;
+  const auto unknown = BackendSystemTestPeer::CapturePhysicsEngine(
+      unknown_system, unknown_ecm, "unknown-physics-engine-plugin");
+  EXPECT_TRUE(unknown.first.empty());
+  EXPECT_TRUE(unknown.second.empty());
 }
 
 TEST(BackendInvariants, ConvertsYawPlusMinusNinetyWithoutDoubleRotation)
@@ -1200,7 +1476,8 @@ static void RunNativeResetObservation0Chain(
     bool mismatch_confirmation_context, bool missing_measurement_on_apply,
     bool reset_between_application_and_confirmation = false,
     bool inhibit_before_confirmation_apply = false,
-    bool contact_gap_after_application = false)
+    bool contact_gap_after_application = false,
+    bool positive_policy_admission = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -1253,9 +1530,7 @@ static void RunNativeResetObservation0Chain(
   BackendSystemTestPeer::RunProductionTick(system, ecm, 6, 260'000'000);
   EXPECT_EQ(io->lift_calls, 1u);
   BackendSystemTestPeer::SetProbePose(
-      ecm, *ecm.EntitiesByComponents(
-          gz::sim::components::Name("b2_capability_probe"),
-          gz::sim::components::Model()).begin(), 0.20);
+      ecm, BackendSystemTestPeer::ProbeLink(system, ecm), 0.20);
   BackendSystemTestPeer::SetProbeContact(
       ecm, *probe_collision.begin(), *probe_collision.begin(),
       *floor_collision.begin(), false);
@@ -1445,11 +1720,84 @@ static void RunNativeResetObservation0Chain(
         !contact_gap_after_application)
       EXPECT_EQ(final_applications[1].publish_sequence, 2u);
   }
+
+  if (positive_policy_admission && !reject_confirmation)
+  {
+    auto pending = BaseControlRequest(6);
+    pending.operation = ControlRequest::OP_BIND_PENDING_STEP;
+    pending.expected_binding_revision = 3;
+    pending.pending_step_index = 1;
+    pending.pending_source_sequence = 1;
+    pending.pending_transition_id = "policy-uuid-first";
+    SetStamp(pending.action_barrier_stamp, 450'000'000);
+    BindTestRequestToConfiguredBackend(pending, system);
+    const auto pending_queued = BackendSystemTestPeer::Receive(system, pending);
+    ASSERT_EQ(pending_queued.result, ControlResponse::RESULT_QUEUED)
+        << "reason=" << pending_queued.reason_code
+        << " revision=" << pending_queued.binding_revision;
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 22, 440'000'000);
+    ASSERT_EQ(BackendSystemTestPeer::Cached(system, 6).result,
+              ControlResponse::RESULT_APPLIED);
+
+    SafetyInput safety;
+    safety.header.frame_id = "base_link";
+    SetStamp(safety.header.stamp, 460'000'000);
+    safety.schema_version = SafetyInput::SCHEMA_VERSION;
+    safety.session_id = "native-reset-chain";
+    safety.config_hash = std::string(64, 'a');
+    safety.ingress_instance_id = 7;
+    safety.sample_sequence = 1;
+    safety.episode_generation = 3;
+    safety.reset_epoch = 4;
+    safety.runtime_generation = 4;
+    safety.odometry_status = SafetyInput::ODOM_VALID;
+    safety.measured_twist = {0.0, 0.0, 0.0};
+    safety.admission_state = SafetyInput::ADMISSION_POLICY_OPEN;
+    SetStamp(safety.observation0_cutoff, 400'000'000);
+    safety.observation0_final_publisher_instance_id = 11;
+    safety.observation0_final_publish_sequence = 1;
+    BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+
+    Receipt policy;
+    policy.header.frame_id = "base_link";
+    SetStamp(policy.header.stamp, 460'000'000);
+    policy.episode_generation = 3;
+    policy.reset_epoch = 4;
+    policy.runtime_generation = 4;
+    policy.step_index = 1;
+    policy.transition_id = "policy-uuid-first";
+    policy.source = Receipt::SOURCE_POLICY;
+    policy.sequence = 1;
+    policy.source_instance_id = 22;
+    policy.final_publisher_instance_id = 11;
+    policy.final_publish_sequence = 3;
+    policy.final_command.linear.x = 0.12;
+    BackendSystemTestPeer::EarlyReceipt(system, policy);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 23, 470'000'000);
+    EXPECT_TRUE(BackendSystemTestPeer::AdmissionCandidate(system));
+    EXPECT_TRUE(BackendSystemTestPeer::CapabilityVerified(system));
+    EXPECT_TRUE(BackendSystemTestPeer::MeasurementHealthy(system));
+    EXPECT_TRUE(BackendSystemTestPeer::PolicyOpen(system));
+    const auto admitted_applications =
+        BackendSystemTestPeer::ApplicationHistory(system);
+    ASSERT_EQ(admitted_applications.size(), 3u);
+    EXPECT_EQ(admitted_applications.back().publish_sequence, 3u);
+    EXPECT_TRUE(admitted_applications.back().receipt_valid);
+    EXPECT_FALSE(admitted_applications.back().local_zero_override);
+    ASSERT_FALSE(io->applied_commands.empty());
+    EXPECT_NEAR(io->applied_commands.back().linear[0], 0.12, 1.0e-9);
+  }
 }
 
 TEST(BackendSystemControlReceiver, NativeResetObservation0ChainUsesProductionFacts)
 {
   RunNativeResetObservation0Chain(false, false);
+}
+
+TEST(BackendSystemControlReceiver,
+     PolicyReceiptTraversesReceiverObservationProofAndActuatorSeam)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true);
 }
 
 TEST(BackendSystemControlReceiver,
@@ -1535,6 +1883,128 @@ TEST(BackendSystemControlReceiver, ResetContextKeepsPublicationWatermark)
       GateDisposition::Faulted);
   EXPECT_EQ(BackendSystemTestPeer::GateWatermark(system), 1u);
   EXPECT_FALSE(BackendSystemTestPeer::ObservationAuthorized(system));
+}
+
+TEST(BackendSystemControlReceiver,
+     PendingPolicyReceiptMustBeStrictlyAfterItsActionBarrier)
+{
+  const auto run_receipt = [](std::int64_t receipt_stamp_ns) {
+    BackendSystem system;
+    gz::sim::EntityComponentManager ecm;
+    BackendSystemTestPeer::SeedRunDescriptor(system);
+    EXPECT_TRUE(BindThroughProductionReceiver(system, ecm));
+
+    ReceiptFacts anchor;
+    anchor.session_id = "test-session";
+    anchor.config_hash = std::string(64, 'a');
+    anchor.key = {11, 1};
+    anchor.episode_generation = 2;
+    anchor.reset_epoch = 3;
+    anchor.runtime_generation = 4;
+    anchor.source = Receipt::SOURCE_SAFE_STOP;
+    anchor.sequence = 1;
+    anchor.source_instance_id = 33;
+    anchor.stamp_ns = 91;
+    anchor.frame_id = "base_link";
+    const auto anchored = BackendSystemTestPeer::ConsumeGateReceipt(
+        system, anchor, 100, 100);
+    EXPECT_EQ(anchored.disposition, GateDisposition::Anchored);
+
+    auto pending = BaseControlRequest(2);
+    pending.operation = ControlRequest::OP_BIND_PENDING_STEP;
+    pending.expected_binding_revision = 1;
+    pending.pending_step_index = 1;
+    pending.pending_source_sequence = 1;
+    pending.pending_transition_id = "pending-policy";
+    SetStamp(pending.action_barrier_stamp, 110);
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, pending).result,
+              ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::Tick(system, ecm, 120, 21, 2'000'000'000);
+
+    ReceiptFacts policy = anchor;
+    policy.key.publish_sequence = 2;
+    policy.step_index = 1;
+    policy.transition_id = "pending-policy";
+    policy.source = Receipt::SOURCE_POLICY;
+    policy.sequence = 1;
+    policy.source_instance_id = 22;
+    policy.stamp_ns = receipt_stamp_ns;
+    policy.twist[0] = 0.1;
+    const auto result = BackendSystemTestPeer::ConsumeGateReceipt(
+        system, policy, receipt_stamp_ns + 1, 200);
+    return std::pair{result.disposition, BackendSystemTestPeer::GateWatermark(system)};
+  };
+
+  const auto before = run_receipt(109);
+  EXPECT_EQ(before.first, GateDisposition::Rejected);
+  EXPECT_EQ(before.second, 1u);
+  const auto equal = run_receipt(110);
+  EXPECT_EQ(equal.first, GateDisposition::Rejected);
+  EXPECT_EQ(equal.second, 1u);
+  const auto after = run_receipt(111);
+  EXPECT_EQ(after.first, GateDisposition::Applied);
+  EXPECT_EQ(after.second, 2u);
+}
+
+TEST(BackendSystemControlReceiver, MutationDeadlineStartsAtReceiverIngress)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  const auto request = BindSessionRequest();
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, request).result,
+            ControlResponse::RESULT_QUEUED);
+  const auto after_ingress_ns = 2'000'000'000LL;
+  BackendSystemTestPeer::Tick(
+      system, ecm, 200, 20, after_ingress_ns + 1'100'000'000);
+  const auto response = BackendSystemTestPeer::Cached(system, 1);
+  EXPECT_EQ(response.result, ControlResponse::RESULT_REJECTED);
+  EXPECT_EQ(response.reason_code, ControlResponse::REASON_CONTROL_EXPIRED);
+  EXPECT_FALSE(BackendSystemTestPeer::SessionBound(system));
+  EXPECT_EQ(BackendSystemTestPeer::Revision(system), 0u);
+
+  BackendSystem boundary_system;
+  gz::sim::EntityComponentManager boundary_ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(boundary_system);
+  ASSERT_EQ(BackendSystemTestPeer::Receive(
+      boundary_system, BindSessionRequest()).result,
+      ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(
+      boundary_system, boundary_ecm, 200, 20, 3'000'000'000);
+  EXPECT_EQ(BackendSystemTestPeer::Cached(boundary_system, 1).result,
+            ControlResponse::RESULT_APPLIED);
+}
+
+TEST(BackendSystemControlReceiver, ProbeDeadlineIncludesIngressAndQueueDelay)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
+  BackendSystemTestPeer::PrepareProbe(system);
+  BackendSystemTestPeer::InjectProbeTransport(
+      system,
+      [](const auto &, std::function<void(bool)> completion) {
+        completion(true);
+      },
+      [](const auto &, std::function<void(bool)> completion) {
+        completion(true);
+      },
+      [](const auto &, std::function<void(bool)> completion) {
+        completion(true);
+      });
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
+
+  const auto start = ProbeStartRequest();
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, start).result,
+            ControlResponse::RESULT_QUEUED);
+  const auto after_ingress_ns = 2'000'000'000LL;
+  BackendSystemTestPeer::Tick(
+      system, ecm, 200, 20, after_ingress_ns + 200'000'000);
+  ASSERT_EQ(BackendSystemTestPeer::Cached(system, 2).result,
+            ControlResponse::RESULT_APPLIED);
+  EXPECT_LE(BackendSystemTestPeer::ProbeDeadline(system),
+            after_ingress_ns + ContactProbeMachine::kDeadlineNs);
 }
 
 TEST(BackendInvariants, Observation0RequiresSelectedAppliedZeroAndAdjacentBoundary)
@@ -1882,6 +2352,46 @@ TEST(BackendSystemControlReceiver, Observation0AppliesOnlyOnUpdateAndCachesResul
   EXPECT_EQ(BackendSystemTestPeer::Revision(system), 2u);
 }
 
+TEST(BackendSystemControlReceiver, AdmissionEnumCannotOpenPolicyWithoutProof)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto io = std::make_shared<NativeResetChainIo>();
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(
+      system, ecm, io));
+  auto bind = BindSessionRequest();
+  BindTestRequestToConfiguredBackend(bind, system);
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, bind).result,
+            ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 200'000'000);
+
+  SafetyInput safety;
+  safety.header.frame_id = "base_link";
+  SetStamp(safety.header.stamp, 210'000'000);
+  safety.schema_version = SafetyInput::SCHEMA_VERSION;
+  safety.session_id = "native-reset-chain";
+  safety.config_hash = std::string(64, 'a');
+  safety.ingress_instance_id = 7;
+  safety.sample_sequence = 1;
+  safety.episode_generation = 2;
+  safety.reset_epoch = 3;
+  safety.runtime_generation = 4;
+  safety.odometry_status = SafetyInput::ODOM_VALID;
+  safety.measured_twist = {0.0, 0.0, 0.0};
+  safety.admission_state = SafetyInput::ADMISSION_POLICY_OPEN;
+  BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 2, 220'000'000);
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_TRUE(std::none_of(
+      io->applied_commands.begin(), io->applied_commands.end(),
+      [](const BodyCommand3D &command) {
+        return std::any_of(command.linear.begin(), command.linear.end(),
+                           [](double value) { return value != 0.0; }) ||
+            std::any_of(command.angular.begin(), command.angular.end(),
+                        [](double value) { return value != 0.0; });
+      }));
+}
+
 TEST(BackendSystemControlReceiver, Observation0RejectsInvalidApplicationAndBoundary)
 {
   const auto run_case = [](
@@ -2044,6 +2554,7 @@ TEST(BackendSystemControlReceiver, ProbeStartUsesReceiverUpdateAndInjectedTransp
   BackendSystemTestPeer::SeedRunDescriptor(system);
   ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
   BackendSystemTestPeer::PrepareProbe(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
 
   std::vector<ros_gz_interfaces::srv::SpawnEntity::Request> spawn_requests;
   std::vector<std::function<void(bool)>> spawn_completions;
@@ -2080,7 +2591,7 @@ TEST(BackendSystemControlReceiver, ProbeStartUsesReceiverUpdateAndInjectedTransp
   EXPECT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
             ProbePhase::AwaitSpawn);
 
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_EQ(spawn_requests.size(), 1u);
   EXPECT_EQ(spawn_requests.front().entity_factory.name,
             "b2_capability_probe");
@@ -2129,14 +2640,14 @@ TEST(BackendSystemControlReceiver, ProbeSpawnReplyRequiresOwnedEcmEntity)
         [](const auto &, std::function<void(bool)> completion) {
           completion(true);
         });
-    BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+    BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
 
     ASSERT_EQ(BackendSystemTestPeer::Receive(
         system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
     BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
     ASSERT_EQ(BackendSystemTestPeer::Cached(system, 2).result,
               ControlResponse::RESULT_APPLIED);
-    BackendSystemTestPeer::RequestSpawn(system);
+    BackendSystemTestPeer::RequestSpawn(system, ecm);
     ASSERT_EQ(spawn_calls, 1u);
     spawn_completion(service_success);
     BackendSystemTestPeer::ProcessProbeResults(system);
@@ -2182,11 +2693,11 @@ TEST(BackendSystemControlReceiver, ProbeLiftAndCleanupFailuresStayInhibited)
         ++remove_calls;
         remove_completion = std::move(completion);
       });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   BackendSystemTestPeer::ProcessProbeResults(system);
   ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm));
   ASSERT_TRUE(BackendSystemTestPeer::ResolveProbeFixture(system, ecm));
@@ -2232,6 +2743,7 @@ TEST(BackendSystemControlReceiver, ProbeRemoveAckDoesNotVerifyWhileFixtureRemain
   BackendSystemTestPeer::SeedRunDescriptor(system);
   ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
   BackendSystemTestPeer::PrepareProbe(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
   std::function<void(bool)> lift_completion;
   std::function<void(bool)> remove_completion;
   std::size_t remove_calls = 0;
@@ -2247,12 +2759,11 @@ TEST(BackendSystemControlReceiver, ProbeRemoveAckDoesNotVerifyWhileFixtureRemain
         ++remove_calls;
         remove_completion = std::move(completion);
       });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
 
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm));
   BackendSystemTestPeer::ProcessProbeResults(system);
   ASSERT_TRUE(BackendSystemTestPeer::ResolveProbeFixture(system, ecm));
@@ -2274,7 +2785,7 @@ TEST(BackendSystemControlReceiver, ProbeRemoveAckDoesNotVerifyWhileFixtureRemain
   lift_completion(true);
   BackendSystemTestPeer::ProcessProbeResults(system);
   BackendSystemTestPeer::SetProbePose(
-      ecm, BackendSystemTestPeer::ProbeModel(system), 0.20);
+      ecm, BackendSystemTestPeer::ProbeLink(system, ecm), 0.20);
   for (std::uint64_t iteration = 4; iteration <= 7; ++iteration)
   {
     BackendSystemTestPeer::SetProbeContact(
@@ -2320,11 +2831,11 @@ TEST(BackendSystemControlReceiver, ProbeRemoveFailureAfterValidCoverageStaysInhi
       [&](const auto &, std::function<void(bool)> completion) {
         remove_completion = std::move(completion);
       });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm));
   BackendSystemTestPeer::ProcessProbeResults(system);
   ASSERT_TRUE(BackendSystemTestPeer::ResolveProbeFixture(system, ecm));
@@ -2344,7 +2855,7 @@ TEST(BackendSystemControlReceiver, ProbeRemoveFailureAfterValidCoverageStaysInhi
   lift_completion(true);
   BackendSystemTestPeer::ProcessProbeResults(system);
   BackendSystemTestPeer::SetProbePose(
-      ecm, BackendSystemTestPeer::ProbeModel(system), 0.20);
+      ecm, BackendSystemTestPeer::ProbeLink(system, ecm), 0.20);
   for (std::uint64_t iteration = 4; iteration <= 7; ++iteration)
   {
     BackendSystemTestPeer::SetProbeContact(
@@ -2391,7 +2902,7 @@ TEST(BackendSystemControlReceiver, ProbeNameConflictNeverRemovesUnownedFixture)
       [&](const auto &, std::function<void(bool)>) { ++spawn_calls; },
       [](const auto &, std::function<void(bool)>) {},
       [&](const auto &, std::function<void(bool)>) { ++remove_calls; });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
 
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
@@ -2424,11 +2935,11 @@ TEST(BackendSystemControlReceiver, ProbeRejectsMalformedAndDiscontinuousSamples)
         [](const auto &, std::function<void(bool)> completion) {
           completion(true);
         });
-    BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+    BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
     ASSERT_EQ(BackendSystemTestPeer::Receive(
         system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
     BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
-    BackendSystemTestPeer::RequestSpawn(system);
+    BackendSystemTestPeer::RequestSpawn(system, ecm);
     ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm));
     BackendSystemTestPeer::ProcessProbeResults(system);
     ASSERT_TRUE(BackendSystemTestPeer::ResolveProbeFixture(system, ecm));
@@ -2464,6 +2975,7 @@ TEST(BackendSystemControlReceiver, ProbeReadsCollisionEcmAndWaitsForOwnedTeardow
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
   BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::SeedProbeWorld(system, ecm);
   ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
   BackendSystemTestPeer::PrepareProbe(system);
   std::function<void(bool)> spawn_completion;
@@ -2486,21 +2998,24 @@ TEST(BackendSystemControlReceiver, ProbeReadsCollisionEcmAndWaitsForOwnedTeardow
         ++remove_calls;
         remove_completion = std::move(completion);
       });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
 
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
   ASSERT_EQ(spawn_calls, 0u);
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_EQ(spawn_calls, 1u);
   spawn_completion(true);
   BackendSystemTestPeer::ProcessProbeResults(system);
   ASSERT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
             ProbePhase::AwaitFixture);
-  ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm));
+  ASSERT_TRUE(BackendSystemTestPeer::SeedProbeEntities(system, ecm, false, false));
   EXPECT_EQ(BackendSystemTestPeer::NamedProbeScope(ecm),
             "b2_training_arena::b2_capability_probe");
+  EXPECT_EQ(ecm.Component<gz::sim::components::WorldPose>(
+                BackendSystemTestPeer::ProbeModel(system)), nullptr);
+  ASSERT_NE(ecm.Component<gz::sim::components::WorldPose>(
+                BackendSystemTestPeer::ProbeLink(system, ecm)), nullptr);
   EXPECT_EQ(BackendSystemTestPeer::ProbeModelCount(ecm), 1u);
   EXPECT_TRUE(BackendSystemTestPeer::IsProbeInBoundWorld(system, ecm));
   const auto collision_entities = ecm.EntitiesByComponents(
@@ -2546,8 +3061,8 @@ TEST(BackendSystemControlReceiver, ProbeReadsCollisionEcmAndWaitsForOwnedTeardow
   ASSERT_EQ(lift_calls, 1u);
   lift_completion(true);
   BackendSystemTestPeer::ProcessProbeResults(system);
-  BackendSystemTestPeer::SetProbePose(ecm, BackendSystemTestPeer::ProbeModel(system),
-                                      0.20);
+  BackendSystemTestPeer::SetProbePose(
+      ecm, BackendSystemTestPeer::ProbeLink(system, ecm), 0.20);
   for (std::uint64_t iteration = 4; iteration <= 7; ++iteration)
   {
     BackendSystemTestPeer::SetProbeContact(ecm, collision, collision, floor, false);
@@ -2573,7 +3088,7 @@ TEST(BackendSystemControlReceiver, ProbeReadsCollisionEcmAndWaitsForOwnedTeardow
   BackendSystemTestPeer::AdvanceProbe(system, ecm, 9, 90'000'000,
                                       2'090'000'000);
   EXPECT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
-            ProbePhase::Verified);
+            ProbePhase::Verified) << BackendSystemTestPeer::ProbeReason(system);
   EXPECT_TRUE(BackendSystemTestPeer::CapabilityVerified(system));
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
 }
@@ -2597,11 +3112,11 @@ TEST(BackendSystemControlReceiver, SensorEntityDataCannotProveProbeContact)
       [](const auto &, std::function<void(bool)> completion) {
         completion(true);
       });
-  BackendSystemTestPeer::SetCapabilityPrerequisites(system);
+  BackendSystemTestPeer::SetCapabilityPrerequisites(system, ecm);
   ASSERT_EQ(BackendSystemTestPeer::Receive(
       system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
-  BackendSystemTestPeer::RequestSpawn(system);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_TRUE(static_cast<bool>(spawn_completion));
   spawn_completion(true);
   BackendSystemTestPeer::ProcessProbeResults(system);
@@ -2658,9 +3173,11 @@ TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCa
   gz::sim::EntityComponentManager ecm;
   BackendSystemTestPeer::SeedRunDescriptor(system);
   ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
+  BackendSystemTestPeer::SeedProbeWorld(system, ecm);
   BackendSystemTestPeer::PrepareProbe(system);
   std::function<void(bool)> spawn_completion;
   std::size_t spawn_count = 0;
+  std::size_t remove_count = 0;
   BackendSystemTestPeer::InjectProbeTransport(
       system,
       [&](const auto &, std::function<void(bool)> completion) {
@@ -2670,7 +3187,9 @@ TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCa
       [](const auto &, std::function<void(bool)> completion) {
         completion(true);
       },
-      [](const auto &, std::function<void(bool)> completion) {
+      [&](const auto &request, std::function<void(bool)> completion) {
+        ++remove_count;
+        BackendSystemTestPeer::RemoveProbeModelById(ecm, request.entity.id);
         completion(true);
       });
 
@@ -2680,7 +3199,13 @@ TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCa
   BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
   ASSERT_EQ(BackendSystemTestPeer::Cached(system, 2).result,
             ControlResponse::RESULT_APPLIED);
-  BackendSystemTestPeer::RequestSpawn(system);
+  ASSERT_TRUE(BackendSystemTestPeer::AddProbeFixture(
+      ecm, BackendSystemTestPeer::WorldEntity(system)));
+  const auto foreign_model = ecm.EntityByComponents(
+      gz::sim::components::Name("b2_capability_probe"),
+      gz::sim::components::Model());
+  ASSERT_NE(foreign_model, gz::sim::kNullEntity);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
   ASSERT_EQ(spawn_count, 1u);
   const auto original_deadline = BackendSystemTestPeer::ProbeDeadline(system);
 
@@ -2709,13 +3234,127 @@ TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCa
   EXPECT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
             ProbePhase::Cancelled);
 
+  auto replacement_start = ProbeStartRequest();
+  replacement_start.request_sequence = 5;
+  replacement_start.expected_binding_revision = 1;
+  ASSERT_EQ(BackendSystemTestPeer::Receive(
+      system, replacement_start).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm, 221, 22, 2'210'000'000);
+  EXPECT_EQ(BackendSystemTestPeer::Cached(system, 5).result,
+            ControlResponse::RESULT_REJECTED);
+
+  ASSERT_TRUE(BackendSystemTestPeer::AddProbeFixture(
+      ecm, BackendSystemTestPeer::WorldEntity(system)));
+  EXPECT_EQ(BackendSystemTestPeer::ProbeModelCount(ecm), 2u);
   ASSERT_TRUE(static_cast<bool>(spawn_completion));
   spawn_completion(true);
-  BackendSystemTestPeer::ProcessProbeResults(system);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 23, 230);
   EXPECT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
             ProbePhase::Cancelled);
   EXPECT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_EQ(remove_count, 1u);
+  EXPECT_EQ(BackendSystemTestPeer::ProbeModelCount(ecm), 1u);
+  EXPECT_NE(ecm.Component<gz::sim::components::Model>(foreign_model), nullptr);
   EXPECT_EQ(spawn_count, 1u);
   EXPECT_EQ(BackendSystemTestPeer::ProbeDeadline(system), original_deadline);
+}
+
+TEST(BackendSystemControlReceiver, TimedOutLateSpawnReportsResidueAndKeepsInhibit)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  ASSERT_TRUE(BindThroughProductionReceiver(system, ecm));
+  BackendSystemTestPeer::SeedProbeWorld(system, ecm);
+  BackendSystemTestPeer::PrepareProbe(system);
+  std::function<void(bool)> spawn_completion;
+  std::size_t remove_count = 0;
+  BackendSystemTestPeer::InjectProbeTransport(
+      system,
+      [&](const auto &, std::function<void(bool)> completion) {
+        spawn_completion = std::move(completion);
+      },
+      [](const auto &, std::function<void(bool)> completion) {
+        completion(true);
+      },
+      [&](const auto &, std::function<void(bool)> completion) {
+        ++remove_count;
+        completion(true);
+      });
+
+  ASSERT_EQ(BackendSystemTestPeer::Receive(
+      system, ProbeStartRequest()).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
+  ASSERT_EQ(BackendSystemTestPeer::Cached(system, 2).result,
+            ControlResponse::RESULT_APPLIED);
+  BackendSystemTestPeer::RequestSpawn(system, ecm);
+  ASSERT_TRUE(static_cast<bool>(spawn_completion));
+
+  const auto deadline = BackendSystemTestPeer::ProbeDeadline(system);
+  BackendSystemTestPeer::SetSteadyClockNow(
+      system, deadline - ContactProbeMachine::kCleanupReserveNs);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 21, 210);
+  EXPECT_EQ(BackendSystemTestPeer::CurrentProbePhase(system),
+            ProbePhase::Failed);
+
+  ASSERT_TRUE(BackendSystemTestPeer::AddProbeFixture(
+      ecm, BackendSystemTestPeer::WorldEntity(system)));
+  spawn_completion(true);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 22, 220);
+  EXPECT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_NE(BackendSystemTestPeer::FaultFlags(system), 0u);
+  EXPECT_NE(BackendSystemTestPeer::ProbeReason(system).find("residue_possible"),
+            std::string::npos);
+  EXPECT_EQ(remove_count, 0u);
+  EXPECT_EQ(BackendSystemTestPeer::ProbeModelCount(ecm), 1u);
+}
+
+TEST(BackendSystemLifecycle,
+     SpawnPoseAndRemoveCallbacksRemainSafeAfterBackendDestruction)
+{
+  std::function<void(bool)> spawn_completion;
+  std::function<void(bool)> pose_completion;
+  std::function<void(bool)> remove_completion;
+  std::shared_ptr<backend_detail::ProbeServiceMailbox> mailbox;
+  {
+    auto system = std::make_unique<BackendSystem>();
+    gz::sim::EntityComponentManager ecm;
+    BackendSystemTestPeer::SeedRunDescriptor(*system);
+    BackendSystemTestPeer::PrepareProbe(*system);
+    BackendSystemTestPeer::InjectProbeTransport(
+        *system,
+        [&](const auto &, std::function<void(bool)> completion) {
+          spawn_completion = std::move(completion);
+        },
+        [&](const auto &, std::function<void(bool)> completion) {
+          pose_completion = std::move(completion);
+        },
+        [&](const auto &, std::function<void(bool)> completion) {
+          remove_completion = std::move(completion);
+        });
+    ASSERT_TRUE(BackendSystemTestPeer::PrepareMachineAtLift(*system));
+    BackendSystemTestPeer::RequestSpawn(*system, ecm);
+    BackendSystemTestPeer::RequestLift(*system);
+    ASSERT_TRUE(BackendSystemTestPeer::AdvanceMachineToRemoval(*system));
+    BackendSystemTestPeer::RequestRemoval(*system);
+    mailbox = BackendSystemTestPeer::ProbeMailbox(*system);
+    ASSERT_TRUE(spawn_completion);
+    ASSERT_TRUE(pose_completion);
+    ASSERT_TRUE(remove_completion);
+    BackendSystemTestPeer::Shutdown(*system);
+    EXPECT_FALSE(BackendSystemTestPeer::CapabilityVerified(*system));
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(*system));
+    system.reset();
+  }
+
+  spawn_completion(true);
+  pose_completion(true);
+  remove_completion(true);
+  ASSERT_TRUE(mailbox);
+  std::lock_guard<std::mutex> lock(mailbox->mutex);
+  EXPECT_TRUE(mailbox->closed);
+  EXPECT_TRUE(mailbox->possible_fixture_residue);
+  EXPECT_TRUE(mailbox->results.empty());
 }

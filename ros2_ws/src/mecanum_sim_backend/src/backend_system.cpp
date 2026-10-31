@@ -27,6 +27,7 @@
 #include <openssl/evp.h>
 
 #include <gz/math/Quaternion.hh>
+#include <gz/common/SystemPaths.hh>
 #include <gz/msgs/odometry.pb.h>
 #include <gz/msgs/Utility.hh>
 #include <gz/plugin/Register.hh>
@@ -113,6 +114,45 @@ struct ProbeServiceResult
   ProbeServiceKind kind{};
   bool success{};
 };
+struct ProbeServiceMailbox
+{
+  std::mutex mutex;
+  std::deque<ProbeServiceResult> results;
+  bool closed{};
+  bool queue_overflow{};
+  bool possible_fixture_residue{};
+};
+
+void EnqueueProbeServiceResult(
+    const std::shared_ptr<ProbeServiceMailbox> &mailbox,
+    std::uint64_t start_sequence, ProbeServiceKind kind, bool success)
+{
+  if (!mailbox) return;
+  bool report_residue = false;
+  {
+    std::lock_guard<std::mutex> lock(mailbox->mutex);
+    if (mailbox->closed)
+    {
+      const bool may_leave_fixture =
+          (kind == ProbeServiceKind::Spawn && success) ||
+          (kind == ProbeServiceKind::Lift && success) ||
+          kind == ProbeServiceKind::Remove;
+      if (may_leave_fixture)
+      {
+        mailbox->possible_fixture_residue = true;
+        report_residue = true;
+      }
+    }
+    else if (mailbox->results.size() >= 8)
+      mailbox->queue_overflow = true;
+    else
+      mailbox->results.push_back({start_sequence, kind, success});
+  }
+  if (report_residue)
+    gzerr << "probe_service_completion_after_backend_shutdown_"
+          << "fixture_residue_possible kind=" << static_cast<int>(kind)
+          << " success=" << success << "\n";
+}
 struct ProbeServiceTransport
 {
   std::function<bool()> spawn_ready;
@@ -138,6 +178,7 @@ using ControlRequest = BackendControl::Request;
 using ControlResponse = BackendControl::Response;
 using SteadyClock = std::chrono::steady_clock;
 using backend_detail::DeleteEntity;
+using backend_detail::ProbeServiceMailbox;
 using backend_detail::ProbeServiceKind;
 using backend_detail::ProbeServiceResult;
 using backend_detail::ProbeServiceTransport;
@@ -560,7 +601,7 @@ public:
       Shutdown();
     }
     last_sim_ns_ = 0;
-    last_sim_advance_steady_ns_ = NowSteadyNs();
+    last_sim_advance_steady_ns_ = steady_clock_now_();
     // Structural/plugin readiness is separate from actuator admission. A
     // missing trusted B2.3 binding keeps PreUpdate inhibited but still allows
     // the backend to publish its faulted, identity-bound status heartbeat.
@@ -571,12 +612,12 @@ public:
                  gz::sim::EntityComponentManager &ecm) override
   {
     if (shutdown_started_) return;
-    const auto steady_now_ns = NowSteadyNs();
+    const auto steady_now_ns = steady_clock_now_();
     ProcessBackendControlRequests(
         ecm, TimeNs(info), info.iterations, steady_now_ns, info.paused);
     ProcessProbeServiceResults();
     AdvanceContactProbe(info, ecm, steady_now_ns);
-    ProcessCallbackInputs();
+    ProcessCallbackInputs(TimeNs(info), steady_now_ns);
     const auto pending_faults = callback_fault_flags_.exchange(0);
     if (pending_faults != 0) SetFault(pending_faults, "ros_callback_queue_or_context_fault");
     if (!configured_ || !gate_ || !contact_coverage_ ||
@@ -588,13 +629,15 @@ public:
       if (base_link_.Valid(ecm)) ApplyEmergencyZero(ecm);
       return;
     }
-    const auto now_steady = NowSteadyNs();
+    const auto now_steady = steady_clock_now_();
     const auto now_sim = TimeNs(info);
     if (contact_capability_verified_)
     {
       const auto *engine = ecm.Component<gz::sim::components::PhysicsEnginePlugin>(
           world_entity_);
-      if (!engine || engine->Data() != proof_physics_engine_plugin_)
+      if (!engine || engine->Data() != proof_physics_engine_plugin_ ||
+          ResolvePhysicsEngineLibrary(engine->Data()) !=
+              observed_engine_plugin_path_)
         SetFault(BackendState::FAULT_CONTEXT,
                  "observed_physics_engine_identity_changed");
     }
@@ -643,6 +686,25 @@ public:
           accepted_receipt_history_.erase(accepted_receipt_history_.begin());
       }
     }
+    if (decision.disposition == GateDisposition::Applied &&
+        decision.accepted &&
+        decision.accepted->source == Receipt::SOURCE_SAFE_STOP)
+    {
+      policy_open_ = false;
+      safety_admission_candidate_ = false;
+    }
+    else if (decision.disposition == GateDisposition::Applied &&
+        decision.accepted && decision.accepted->source == Receipt::SOURCE_POLICY &&
+        safety_admission_candidate_ && observation0_authorized_ &&
+        contact_capability_verified_ && !info.paused && fault_flags_ == 0 &&
+        !probe_running_ && !probe_machine_.Running() &&
+        !probe_machine_.NeedsCleanup() && measurement_healthy_)
+      policy_open_ = true;
+    else if (!safety_admission_candidate_ || !observation0_authorized_ ||
+             !contact_capability_verified_ || info.paused || fault_flags_ != 0 ||
+             probe_running_ || probe_machine_.Running() ||
+             probe_machine_.NeedsCleanup())
+      policy_open_ = false;
 
     bool gate_faulted = false;
     {
@@ -780,6 +842,7 @@ private:
   {
     bool expected = false;
     if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+    CloseProbeServiceMailbox();
     configured_ = false;
     runtime_resources_ready_ = false;
     policy_open_ = false;
@@ -822,6 +885,7 @@ private:
   {
     ControlRequest request;
     std::vector<std::uint8_t> request_bytes;
+    std::int64_t ingress_steady_ns{};
   };
   struct CachedControl
   {
@@ -829,31 +893,53 @@ private:
     ControlResponse response;
   };
 
-  void EnqueueProbeServiceResult(
-      std::uint64_t start_sequence, ProbeServiceKind kind, bool success)
+  void CloseProbeServiceMailbox()
   {
-    if (shutdown_started_.load()) return;
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (probe_service_results_.size() >= 8)
+    if (!probe_service_mailbox_) return;
+    bool report_residue = false;
     {
-      callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
-      return;
+      std::lock_guard<std::mutex> lock(probe_service_mailbox_->mutex);
+      probe_service_mailbox_->closed = true;
+      const bool owned_fixture_or_spawn = probe_spawn_inflight_ ||
+          late_spawn_cleanup_pending_ || probe_machine_.ModelEntity() != 0;
+      const bool pending_spawn_result = std::any_of(
+          probe_service_mailbox_->results.begin(),
+          probe_service_mailbox_->results.end(), [](const auto &result) {
+            return result.kind == ProbeServiceKind::Spawn && result.success;
+          });
+      report_residue = owned_fixture_or_spawn || pending_spawn_result ||
+          probe_service_mailbox_->possible_fixture_residue;
+      probe_service_mailbox_->possible_fixture_residue |= report_residue;
     }
-    probe_service_results_.push_back({start_sequence, kind, success});
+    if (report_residue)
+      gzwarn << "backend_shutdown_with_probe_fixture_ownership_unresolved_"
+             << "residue_possible\n";
   }
 
   void ProcessProbeServiceResults()
   {
     std::deque<ProbeServiceResult> results;
     {
-      std::lock_guard<std::mutex> lock(callback_mutex_);
-      results.swap(probe_service_results_);
+      std::lock_guard<std::mutex> lock(probe_service_mailbox_->mutex);
+      results.swap(probe_service_mailbox_->results);
+      if (probe_service_mailbox_->queue_overflow)
+      {
+        callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+        probe_service_mailbox_->queue_overflow = false;
+      }
     }
     for (const auto &result : results)
     {
       if (result.start_sequence != probe_machine_.StartSequence()) continue;
       if (result.kind == ProbeServiceKind::Spawn)
-        probe_machine_.SpawnCompleted(result.success);
+      {
+        probe_spawn_inflight_ = false;
+        const auto completed = probe_machine_.SpawnCompleted(result.success);
+        if (!completed && result.success &&
+            (probe_machine_.Phase() == ProbePhase::Cancelled ||
+             probe_machine_.Phase() == ProbePhase::Failed))
+          late_spawn_cleanup_pending_ = true;
+      }
       else if (result.kind == ProbeServiceKind::Lift)
         probe_machine_.LiftCompleted(result.success);
       else if (result.kind == ProbeServiceKind::Remove)
@@ -867,7 +953,7 @@ private:
     }
   }
 
-  void RequestProbeSpawn()
+  void RequestProbeSpawn(gz::sim::EntityComponentManager &ecm)
   {
     if (!probe_transport_.spawn_ready || !probe_transport_.spawn ||
         !probe_transport_.spawn_ready() ||
@@ -886,8 +972,12 @@ private:
     request->entity_factory.pose.position.z = 0.07;
     request->entity_factory.pose.orientation.w = 1.0;
     const auto start_sequence = probe_machine_.StartSequence();
-    probe_transport_.spawn(*request, [this, start_sequence](bool success) {
-      EnqueueProbeServiceResult(start_sequence, ProbeServiceKind::Spawn, success);
+    probe_spawn_baseline_entity_ids_ = FindProbeModels(ecm);
+    probe_spawn_inflight_ = true;
+    probe_transport_.spawn(*request,
+        [mailbox = probe_service_mailbox_, start_sequence](bool success) {
+      backend_detail::EnqueueProbeServiceResult(
+          mailbox, start_sequence, ProbeServiceKind::Spawn, success);
     });
     probe_spawn_sent_ = true;
   }
@@ -1017,8 +1107,10 @@ private:
     request->pose.position.z = 0.20;
     request->pose.orientation.w = 1.0;
     const auto start_sequence = probe_machine_.StartSequence();
-    probe_transport_.set_pose(*request, [this, start_sequence](bool success) {
-      EnqueueProbeServiceResult(start_sequence, ProbeServiceKind::Lift, success);
+    probe_transport_.set_pose(*request,
+        [mailbox = probe_service_mailbox_, start_sequence](bool success) {
+      backend_detail::EnqueueProbeServiceResult(
+          mailbox, start_sequence, ProbeServiceKind::Lift, success);
     });
     probe_lift_sent_ = true;
   }
@@ -1033,8 +1125,10 @@ private:
     request->entity.name = "b2_capability_probe";
     request->entity.type = ros_gz_interfaces::msg::Entity::MODEL;
     const auto start_sequence = probe_machine_.StartSequence();
-    probe_transport_.remove(*request, [this, start_sequence](bool success) {
-      EnqueueProbeServiceResult(start_sequence, ProbeServiceKind::Remove, success);
+    probe_transport_.remove(*request,
+        [mailbox = probe_service_mailbox_, start_sequence](bool success) {
+      backend_detail::EnqueueProbeServiceResult(
+          mailbox, start_sequence, ProbeServiceKind::Remove, success);
     });
     probe_remove_sent_ = true;
   }
@@ -1050,21 +1144,58 @@ private:
     return out.str();
   }
 
+  static std::filesystem::path ResolvePhysicsEngineLibrary(
+      const std::string &plugin)
+  {
+    if (plugin.empty()) return {};
+    std::filesystem::path library(plugin);
+    if (!library.is_absolute())
+    {
+      gz::common::SystemPaths paths;
+      paths.SetPluginPathEnv("GZ_SIM_PHYSICS_ENGINE_PATH");
+      const auto resolved = paths.FindSharedLibrary(plugin);
+      if (resolved.empty()) return {};
+      library = resolved;
+    }
+    std::error_code path_error;
+    library = std::filesystem::canonical(library, path_error);
+    if (path_error || !std::filesystem::is_regular_file(library)) return {};
+    return library;
+  }
+
   void CapturePhysicsEngineFingerprint(
       const gz::sim::EntityComponentManager &ecm)
   {
+    const auto fail = [this](const std::string &reason) {
+      engine_fingerprint_reason_ = reason;
+      SetFault(BackendState::FAULT_CONTEXT, reason);
+    };
     const auto *engine = ecm.Component<gz::sim::components::PhysicsEnginePlugin>(
         world_entity_);
-    if (!engine || engine->Data().empty()) return;
-    const std::filesystem::path library(engine->Data());
-    if (!library.is_absolute() || !std::filesystem::is_regular_file(library))
+    if (!engine || engine->Data().empty())
+    {
+      fail("physics_engine_plugin_identity_missing");
       return;
+    }
+    const auto library = ResolvePhysicsEngineLibrary(engine->Data());
+    if (library.empty())
+    {
+      fail("physics_engine_plugin_binary_unresolved:" + engine->Data());
+      return;
+    }
     std::ifstream input(library, std::ios::binary);
-    if (!input) return;
+    if (!input)
+    {
+      fail("physics_engine_plugin_binary_unreadable:" + library.string());
+      return;
+    }
     std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
         EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1)
+    {
+      fail("physics_engine_fingerprint_initialization_failed");
       return;
+    }
     std::array<char, 64 * 1024> block{};
     while (input)
     {
@@ -1072,21 +1203,32 @@ private:
       const auto count = input.gcount();
       if (count > 0 && EVP_DigestUpdate(
             context.get(), block.data(), static_cast<std::size_t>(count)) != 1)
+      {
+        fail("physics_engine_fingerprint_update_failed");
         return;
+      }
     }
-    if (!input.eof()) return;
+    if (!input.eof())
+    {
+      fail("physics_engine_plugin_binary_read_failed");
+      return;
+    }
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
     unsigned int digest_size = 0;
     if (EVP_DigestFinal_ex(
           context.get(), digest.data(), &digest_size) != 1 ||
         digest_size != SHA256_DIGEST_LENGTH)
+    {
+      fail("physics_engine_fingerprint_finalization_failed");
       return;
+    }
     std::ostringstream out;
     out << std::hex << std::setfill('0');
     for (unsigned int index = 0; index < digest_size; ++index)
       out << std::setw(2) << unsigned(digest[index]);
     observed_engine_plugin_path_ = library.string();
     proof_physics_engine_fingerprint_sha256_ = out.str();
+    engine_fingerprint_reason_.clear();
   }
 
   void RecordVerifiedProbeProof(
@@ -1103,12 +1245,15 @@ private:
       probe_reason_ = "observed_physics_engine_or_probe_identity_missing";
       return;
     }
-    if (engine->Data() != observed_engine_plugin_path_ ||
+    const auto resolved_engine_path =
+        ResolvePhysicsEngineLibrary(engine->Data()).string();
+    if (resolved_engine_path != observed_engine_plugin_path_ ||
         proof_physics_engine_fingerprint_sha256_.size() != 64)
     {
       probe_machine_.Invalidate();
       contact_capability_verified_ = false;
-      probe_reason_ = "observed_physics_engine_binary_fingerprint_unavailable";
+      probe_reason_ = "observed_physics_engine_binary_fingerprint_unavailable:" +
+          resolved_engine_path + ":" + observed_engine_plugin_path_;
       return;
     }
     std::vector<std::string> names;
@@ -1201,6 +1346,66 @@ private:
       gz::sim::EntityComponentManager &ecm,
       std::int64_t steady_now_ns)
   {
+    if (late_spawn_cleanup_pending_)
+    {
+      if (steady_now_ns >= probe_machine_.DeadlineNs())
+      {
+        late_spawn_cleanup_pending_ = false;
+        late_spawn_remove_sent_ = false;
+        probe_reason_ = "late_probe_fixture_residue_possible_cleanup_deadline_expired";
+        SetFault(BackendState::FAULT_CONTEXT, probe_reason_);
+        return;
+      }
+      const auto observed_models = FindProbeModels(ecm);
+      std::vector<gz::sim::Entity> late_models;
+      std::copy_if(
+          observed_models.begin(), observed_models.end(),
+          std::back_inserter(late_models), [this](gz::sim::Entity entity) {
+            return std::find(
+                probe_spawn_baseline_entity_ids_.begin(),
+                probe_spawn_baseline_entity_ids_.end(), entity) ==
+                probe_spawn_baseline_entity_ids_.end();
+          });
+      if (late_models.size() > 1)
+      {
+        probe_reason_ = "late_probe_fixture_ownership_ambiguous_residue_possible";
+        late_spawn_cleanup_pending_ = false;
+        SetFault(BackendState::FAULT_CONTEXT, probe_reason_);
+        return;
+      }
+      if (late_models.size() == 1 && !late_spawn_remove_sent_ &&
+          steady_now_ns >= probe_machine_.DeadlineNs() -
+              ContactProbeMachine::kCleanupReserveNs)
+      {
+        probe_reason_ =
+            "late_owned_probe_fixture_cleanup_reserve_unavailable_residue_possible";
+        late_spawn_cleanup_pending_ = false;
+        SetFault(BackendState::FAULT_CONTEXT, probe_reason_);
+        return;
+      }
+      if (late_models.size() == 1 && !late_spawn_remove_sent_ &&
+          probe_transport_.remove_ready && probe_transport_.remove &&
+          probe_transport_.remove_ready())
+      {
+        auto request = std::make_shared<DeleteEntity::Request>();
+        request->entity.id = late_models.front();
+        request->entity.name = "b2_capability_probe";
+        request->entity.type = ros_gz_interfaces::msg::Entity::MODEL;
+        const auto sequence = probe_machine_.StartSequence();
+        probe_transport_.remove(*request,
+            [mailbox = probe_service_mailbox_, sequence](bool success) {
+          backend_detail::EnqueueProbeServiceResult(
+              mailbox, sequence, ProbeServiceKind::Remove, success);
+        });
+        late_spawn_remove_sent_ = true;
+      }
+      if (late_spawn_remove_sent_ && late_models.empty())
+      {
+        late_spawn_cleanup_pending_ = false;
+        late_spawn_remove_sent_ = false;
+        probe_reason_ = "late_owned_probe_fixture_removed_after_abort";
+      }
+    }
     if (probe_machine_.Running() && probe_machine_.Expire(steady_now_ns))
     {
       probe_reason_ = "probe_deadline_cleanup_reserve_started";
@@ -1209,7 +1414,7 @@ private:
     switch (probe_machine_.Phase())
     {
       case ProbePhase::AwaitSpawn:
-        if (!probe_spawn_sent_) RequestProbeSpawn();
+        if (!probe_spawn_sent_) RequestProbeSpawn(ecm);
         break;
       case ProbePhase::AwaitFixture:
         if (!probe_machine_.NeedsCleanup()) ResolveProbeFixture(ecm);
@@ -1221,7 +1426,8 @@ private:
       case ProbePhase::Failed:
       case ProbePhase::Cancelled:
         if (probe_machine_.NeedsCleanup() && !probe_remove_sent_ &&
-            steady_now_ns < probe_machine_.DeadlineNs())
+            steady_now_ns < probe_machine_.DeadlineNs() &&
+            !late_spawn_cleanup_pending_)
           RequestProbeRemoval();
         break;
       case ProbePhase::AwaitRemoval:
@@ -1327,10 +1533,28 @@ private:
       if (!observation.exact_fixture_floor_pair)
         observation.normal_depth_valid = true;
     }
-    const auto *probe_pose = ecm.Component<gz::sim::components::WorldPose>(
-        probe_machine_.ModelEntity());
-    observation.fixture_measured_separated = probe_pose &&
-        Finite(probe_pose->Data()) && probe_pose->Data().Pos().Z() > 0.07;
+    const auto *collision_parent = ecm.Component<gz::sim::components::ParentEntity>(
+        probe_machine_.CollisionEntity());
+    std::vector<std::pair<gz::sim::Entity, gz::math::Pose3d>> link_poses;
+    ecm.Each<gz::sim::components::Link, gz::sim::components::ParentEntity,
+             gz::sim::components::WorldPose>(
+        [&](const gz::sim::Entity &entity,
+            const gz::sim::components::Link *,
+            const gz::sim::components::ParentEntity *parent,
+            const gz::sim::components::WorldPose *world_pose) {
+          if (parent->Data() == probe_machine_.ModelEntity())
+            link_poses.emplace_back(entity, world_pose->Data());
+          return true;
+        });
+    const bool one_measured_link = collision_parent &&
+        link_poses.size() == 1 &&
+        collision_parent->Data() == link_poses.front().first;
+    observation.fixture_measured_separated = one_measured_link &&
+        info.iterations > last_probe_pose_iteration_ &&
+        Finite(link_poses.front().second) &&
+        link_poses.front().second.Pos().Z() > 0.07;
+    if (observation.fixture_measured_separated)
+      last_probe_pose_iteration_ = info.iterations;
     if (!probe_machine_.Observe(observation))
     {
       probe_running_ = false;
@@ -1431,7 +1655,7 @@ private:
               std::lock_guard<std::mutex> lock(callback_mutex_);
               if (shutdown_started_.load()) return;
               captured_twist_ = *msg;
-              captured_twist_received_steady_ns_ = NowSteadyNs();
+              captured_twist_received_steady_ns_ = steady_clock_now_();
             });
         if (!twist_sub_) throw std::runtime_error("twist_subscription_missing");
         return;
@@ -1562,6 +1786,7 @@ private:
   void OnBackendControl(
       const ControlRequest &request, ControlResponse &response)
   {
+    const auto ingress_steady_ns = steady_clock_now_();
     response = NewControlResponse(request.request_sequence);
     if (shutdown_started_.load())
     {
@@ -1656,7 +1881,7 @@ private:
       CacheControlResponse(request.request_sequence, request_bytes, response);
       return;
     }
-    PendingControl control{request, request_bytes};
+    PendingControl control{request, request_bytes, ingress_steady_ns};
     if (request.operation == ControlRequest::OP_INHIBIT)
     {
       for (auto it = control_queue_.begin(); it != control_queue_.end();) {
@@ -1701,7 +1926,12 @@ private:
     auto &response = cached->second.response;
     std::uint16_t reason = ControlResponse::REASON_NONE;
     bool applied = false;
-    if (request.operation != ControlRequest::OP_INHIBIT &&
+    if (steady_now_ns < pending.ingress_steady_ns ||
+        steady_now_ns - pending.ingress_steady_ns > 1'000'000'000)
+    {
+      reason = ControlResponse::REASON_CONTROL_EXPIRED;
+    }
+    else if (request.operation != ControlRequest::OP_INHIBIT &&
         request.expected_binding_revision != control_binding_revision_)
     {
       reason = ControlResponse::REASON_REVISION_MISMATCH;
@@ -1790,7 +2020,8 @@ private:
       else if (!gate_->SetExpectedPolicyStep(
                    request.pending_step_index,
                    request.pending_source_sequence,
-                   request.pending_transition_id))
+                   request.pending_transition_id,
+                   action_barrier_ns))
       {
         reason = ControlResponse::REASON_PENDING_STEP_MISMATCH;
       }
@@ -1845,6 +2076,9 @@ private:
         else
         {
           observation0_authorized_ = true;
+          observation0_cutoff_ns_ = cutoff_ns;
+          observation0_publisher_id_ = request.selected_zero_final_publisher_instance_id;
+          observation0_publish_sequence_ = request.selected_zero_final_publish_sequence;
           policy_open_ = false;
           local_zero_override_ = true;
           applied = true;
@@ -1879,7 +2113,8 @@ private:
         const auto admission = EvaluateProbeAdmission(
             lifecycle_matches, !policy_open_, world_paused, fault_flags_ != 0,
             observation0_authorized_, gate_ && gate_->HasPendingPolicyStep(),
-            probe_machine_.Running() || probe_machine_.NeedsCleanup(),
+            probe_machine_.Running() || probe_machine_.NeedsCleanup() ||
+              probe_spawn_inflight_ || late_spawn_cleanup_pending_,
             contact_capability_verified_, !existing_fixture.empty(),
             services_ready && !probe_model_sdf_path_.empty() &&
               std::filesystem::is_regular_file(probe_model_sdf_path_) &&
@@ -1891,7 +2126,8 @@ private:
               ControlResponse::REASON_FIXTURE_CONFLICT :
               ControlResponse::REASON_CONTACT_PROBE_NOT_READY;
         }
-        else if (!probe_machine_.Start(request.request_sequence, steady_now_ns))
+        else if (!probe_machine_.Start(
+                     request.request_sequence, pending.ingress_steady_ns))
         {
           reason = ControlResponse::REASON_BUSY;
         }
@@ -1900,6 +2136,10 @@ private:
           probe_start_request_sequence_ = request.request_sequence;
           probe_running_ = true;
           probe_spawn_sent_ = probe_lift_sent_ = probe_remove_sent_ = false;
+          probe_spawn_inflight_ = false;
+          late_spawn_cleanup_pending_ = false;
+          late_spawn_remove_sent_ = false;
+          last_probe_pose_iteration_ = 0;
           contact_capability_verified_ = false;
           ++capability_revision_;
           probe_reason_.clear();
@@ -1985,6 +2225,10 @@ private:
       {
         policy_open_ = false;
         observation0_authorized_ = false;
+        observation0_cutoff_ns_ = 0;
+        observation0_publisher_id_ = 0;
+        observation0_publish_sequence_ = 0;
+        safety_admission_candidate_ = false;
         selected_receipt_.reset();
         pending_applied_receipt_.reset();
         lifecycle_sequence_ = request.lifecycle_sequence;
@@ -2052,7 +2296,7 @@ private:
                    msg.final_command.linear.z, msg.final_command.angular.x,
                    msg.final_command.angular.y, msg.final_command.angular.z};
     std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (!gate_ || !gate_->Enqueue(std::move(facts), NowSteadyNs()))
+    if (!gate_ || !gate_->Enqueue(std::move(facts), steady_clock_now_()))
       callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
   }
 
@@ -2062,10 +2306,11 @@ private:
     std::lock_guard<std::mutex> lock(callback_mutex_);
     if (safety_queue_.size() >= ReceiptGate::kQueueCapacity)
     { callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE); return; }
-    safety_queue_.push_back({msg, NowSteadyNs()});
+    safety_queue_.push_back({msg, steady_clock_now_()});
   }
 
-  void ProcessCallbackInputs()
+  void ProcessCallbackInputs(std::int64_t sim_now_ns,
+                             std::int64_t steady_now_ns)
   {
     std::deque<std::pair<SafetyInput, std::int64_t>> pending;
     {
@@ -2074,18 +2319,32 @@ private:
     }
     for (const auto &[msg, received_ns] : pending)
     {
-      // Public B2.1 input has no observation0 proof and cannot bind the B2.3
-      // pending step. Keep the backend inhibited until B2.3 supplies it.
-      // backend inhibited until that binding is supplied through its private
-      // trusted port in a later work package.
-      policy_open_ = false;
       if (msg.session_id != session_id_ || msg.config_hash != config_hash_ ||
           msg.schema_version != SafetyInput::SCHEMA_VERSION ||
-          msg.ingress_instance_id == 0 || msg.sample_sequence == 0 ||
+          msg.ingress_instance_id == 0 ||
+          msg.ingress_instance_id != coordinator_ingress_instance_id_ ||
+          msg.sample_sequence == 0 ||
+          msg.sample_sequence <= last_safety_sample_sequence_ ||
           msg.runtime_generation == 0 || msg.episode_generation == 0 ||
-          msg.header.frame_id != "base_link")
+          msg.episode_generation != episode_generation_ ||
+          msg.reset_epoch != reset_epoch_ ||
+          msg.runtime_generation != runtime_generation_ ||
+          msg.header.frame_id != "base_link" ||
+          msg.admission_state > SafetyInput::ADMISSION_POLICY_OPEN)
       {
         SetFault(BackendState::FAULT_CONTEXT, "safety_input_identity_invalid");
+        safety_admission_candidate_ = false;
+        policy_open_ = false;
+        continue;
+      }
+      const auto safety_stamp_ns = TimeNs(msg.header.stamp);
+      if (safety_stamp_ns < 0 || safety_stamp_ns > sim_now_ns ||
+          sim_now_ns - safety_stamp_ns > 250'000'000 ||
+          steady_now_ns < received_ns ||
+          steady_now_ns - received_ns > 250'000'000)
+      {
+        safety_admission_candidate_ = false;
+        policy_open_ = false;
         continue;
       }
       if (msg.odometry_status == SafetyInput::ODOM_VALID)
@@ -2105,6 +2364,18 @@ private:
       }
       safety_input_ = msg;
       safety_receive_steady_ns_ = received_ns;
+      last_safety_sample_sequence_ = msg.sample_sequence;
+      const auto cutoff_ns = TimeNs(msg.observation0_cutoff);
+      safety_admission_candidate_ =
+          msg.admission_state == SafetyInput::ADMISSION_POLICY_OPEN &&
+          observation0_authorized_ && cutoff_ns == observation0_cutoff_ns_ &&
+          msg.observation0_final_publisher_instance_id ==
+              observation0_publisher_id_ &&
+          msg.observation0_final_publish_sequence ==
+              observation0_publish_sequence_ &&
+          contact_capability_verified_ && msg.odometry_status == SafetyInput::ODOM_VALID &&
+          msg.measured_twist.size() == 3;
+      if (!safety_admission_candidate_) policy_open_ = false;
     }
   }
 
@@ -2333,7 +2604,8 @@ private:
   std::mutex callback_mutex_;
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
   std::deque<PendingControl> control_queue_;
-  std::deque<ProbeServiceResult> probe_service_results_;
+  std::shared_ptr<ProbeServiceMailbox> probe_service_mailbox_{
+      std::make_shared<ProbeServiceMailbox>()};
   std::map<std::uint64_t, CachedControl> control_cache_;
   std::atomic<std::uint32_t> callback_fault_flags_{};
   SafetyInput safety_input_;
@@ -2354,10 +2626,15 @@ private:
   std::uint32_t fault_flags_{};
   std::int64_t last_sim_ns_{}, last_sim_advance_steady_ns_{}, selected_steady_ns_{};
   bool configured_{}, runtime_resources_ready_{}, policy_open_{};
+  std::function<std::int64_t()> steady_clock_now_{[] { return NowSteadyNs(); }};
   bool local_zero_override_{true}, measurement_healthy_{};
   bool contact_capability_verified_{};
   bool probe_running_{};
   bool observation0_authorized_{};
+  bool safety_admission_candidate_{};
+  std::int64_t observation0_cutoff_ns_{};
+  std::uint64_t observation0_publisher_id_{}, observation0_publish_sequence_{};
+  std::uint64_t last_safety_sample_sequence_{};
   bool control_session_bound_{}, control_mutation_pending_{};
   std::optional<ReceiptFacts> selected_receipt_, pending_applied_receipt_;
   std::optional<ReceiptKey> last_accepted_key_;
@@ -2369,6 +2646,7 @@ private:
   std::string probe_model_sdf_path_, probe_reason_;
   std::string proof_collision_registry_sha256_, proof_world_name_;
   std::string proof_physics_engine_plugin_, proof_gz_sim_version_;
+  std::string engine_fingerprint_reason_;
   std::string observed_engine_plugin_path_;
   std::string proof_physics_engine_fingerprint_sha256_;
   std::string proof_probe_model_name_, proof_probe_collision_name_;
@@ -2381,7 +2659,11 @@ private:
   std::int64_t proof_contact_first_stamp_ns_{}, proof_contact_last_stamp_ns_{};
   std::int64_t proof_empty_first_stamp_ns_{}, proof_empty_last_stamp_ns_{};
   std::int64_t proof_stamp_ns_{};
+  std::uint64_t last_probe_pose_iteration_{};
   bool probe_spawn_sent_{}, probe_lift_sent_{}, probe_remove_sent_{};
+  bool late_spawn_cleanup_pending_{}, late_spawn_remove_sent_{};
+  bool probe_spawn_inflight_{};
+  std::vector<gz::sim::Entity> probe_spawn_baseline_entity_ids_;
 };
 }  // namespace mecanum_sim_backend
 

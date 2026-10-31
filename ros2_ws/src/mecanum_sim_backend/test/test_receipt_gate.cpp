@@ -91,6 +91,68 @@ TEST(ReceiptGate, RejectsReplayAndFaultsSequenceGap)
             "policy_issuance_binding_mismatch");
 }
 
+TEST(ReceiptGate, PendingBarrierKeepsCurrentAndSafeStopLiveUntilPromotion)
+{
+  ReceiptGate gate(Binding());
+  AcceptAnchor(gate);
+  auto first = Policy();
+  ASSERT_TRUE(gate.Enqueue(first, 2'100));
+  ASSERT_EQ(gate.ConsumeNext(2'100, 2'100).disposition,
+            GateDisposition::Applied);
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(2, 2, "policy-uuid-2", 1'100));
+
+  auto current_timer = first;
+  current_timer.key.publish_sequence = 102;
+  current_timer.stamp_ns = 1'050;
+  ASSERT_TRUE(gate.Enqueue(current_timer, 2'110));
+  EXPECT_EQ(gate.ConsumeNext(2'110, 2'110).disposition,
+            GateDisposition::Applied);
+
+  auto early_pending = Policy();
+  early_pending.key.publish_sequence = 103;
+  early_pending.stamp_ns = 1'099;
+  early_pending.step_index = 2;
+  early_pending.sequence = 2;
+  early_pending.transition_id = "policy-uuid-2";
+  ASSERT_TRUE(gate.Enqueue(early_pending, 2'120));
+  EXPECT_EQ(gate.ConsumeNext(2'120, 2'120).disposition,
+            GateDisposition::Rejected);
+  EXPECT_EQ(gate.Watermark(), 102u);
+
+  auto safe_stop = Anchor();
+  safe_stop.key.publish_sequence = 103;
+  safe_stop.stamp_ns = 1'060;
+  safe_stop.sequence = 2;
+  ASSERT_TRUE(gate.Enqueue(safe_stop, 2'130));
+  EXPECT_EQ(gate.ConsumeNext(2'130, 2'130).disposition,
+            GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 103u);
+
+  auto equal_pending = early_pending;
+  equal_pending.key.publish_sequence = 104;
+  equal_pending.stamp_ns = 1'100;
+  ASSERT_TRUE(gate.Enqueue(equal_pending, 2'140));
+  EXPECT_EQ(gate.ConsumeNext(2'140, 2'140).disposition,
+            GateDisposition::Rejected);
+  EXPECT_EQ(gate.Watermark(), 103u);
+
+  auto pending = early_pending;
+  pending.key.publish_sequence = 104;
+  pending.stamp_ns = 1'101;
+  ASSERT_TRUE(gate.Enqueue(pending, 2'150));
+  EXPECT_EQ(gate.ConsumeNext(2'150, 2'150).disposition,
+            GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 104u);
+
+  auto old_identity = first;
+  old_identity.key.publish_sequence = 105;
+  old_identity.stamp_ns = 1'102;
+  ASSERT_TRUE(gate.Enqueue(old_identity, 2'160));
+  EXPECT_EQ(gate.ConsumeNext(2'160, 2'160).disposition,
+            GateDisposition::Faulted);
+  EXPECT_EQ(gate.Watermark(), 104u);
+}
+
 TEST(ReceiptGate, FinalPublicationSequenceGapFaultsBeforePolicyApply)
 {
   ReceiptGate gate(Binding()); AcceptAnchor(gate);

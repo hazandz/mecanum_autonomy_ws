@@ -195,8 +195,17 @@ class RclpyReadiness:
         self._steady_clock = steady_clock or time.monotonic
 
     @staticmethod
+    def bind_environment(environment: dict[str, str]) -> None:
+        """Bind the run environment before creating a Gazebo transport node."""
+        if not environment.get('GZ_PARTITION'):
+            raise RuntimeError('run GZ_PARTITION is missing')
+        os.environ.update(environment)
+
+    @staticmethod
     def _query_gazebo_scene(service: str, timeout_ms: int):
         """Read the current Gazebo Sim scene through its documented service."""
+        if not os.environ.get('GZ_PARTITION'):
+            raise RuntimeError('GZ_PARTITION must be bound before scene query')
         from gz.msgs10.empty_pb2 import Empty
         from gz.msgs10.scene_pb2 import Scene
         from gz.transport13 import Node
@@ -247,7 +256,6 @@ class RclpyReadiness:
             and msg.backend_instance_id != 0
             and msg.status_sequence > 0
             and msg.fault_flags == 0
-            and not msg.paused
             and msg.actuator_inhibited
         )
 
@@ -395,6 +403,22 @@ class LocalTrainingProcessSupervisor:
 
     async def start(self) -> None:
         """Start the server and requested GUI, failing closed on readiness."""
+        bind_environment = getattr(self.readiness, 'bind_environment', None)
+        if bind_environment is not None:
+            bind_environment(self.plan.environment)
+        bridge_command = getattr(self.plan, 'bridge_command', None)
+        if bridge_command:
+            bridge = await self.launcher.start(
+                bridge_command, self.plan.environment,
+            )
+            bridge_record = ProcessRecord(
+                'parameter_bridge', bridge_command, bridge.pid, bridge,
+            )
+            self.owned.append(bridge_record)
+            self._capture_output(bridge_record)
+            self.evidence_sink.record(
+                'parameter_bridge_requested', self._facts(bridge_record),
+            )
         server_command = self.plan.commands[0]
         server = await self.launcher.start(
             server_command, self.plan.environment,
@@ -605,6 +629,22 @@ def _load_sink(specification: str) -> EvidenceSink:
     return factory()
 
 
+def _physics_engine_plugin_path() -> Path:
+    """Resolve the pinned DART engine directory from its installed package."""
+    prefix = Path(get_package_prefix('gz_physics_vendor')).resolve(strict=True)
+    library_root = prefix / 'opt/gz_physics_vendor/lib'
+    matches = sorted({
+        entry.parent.resolve(strict=True)
+        for entry in library_root.rglob('*dartsim-plugin.so*')
+        if entry.is_file() and entry.parent.name == 'engine-plugins'
+    }) if library_root.is_dir() else []
+    if len(matches) != 1:
+        raise RuntimeError(
+            'pinned Gazebo DART engine plugin path is missing or ambiguous'
+        )
+    return matches[0]
+
+
 async def _run_from_cli(args: argparse.Namespace) -> int:
     gui = 'true' if args.gui == 'true' else 'false'
     config_path = Path(args.resolved_config).resolve(strict=True)
@@ -629,10 +669,14 @@ async def _run_from_cli(args: argparse.Namespace) -> int:
             gui=gui, resolved_config=config_path, world_file=installed_world,
             gui_config=bringup_share / 'config/gui/local_training.config',
             session_id=session_id, partition=partition,
+            bridge_config=(
+                bringup_share / 'config/bridge/local_training.runtime.yaml'
+            ),
             resource_paths=(
                 description_share.parent, description_share / 'models',
             ),
             plugin_path=backend_prefix / 'lib',
+            physics_engine_plugin_path=_physics_engine_plugin_path(),
             asset_manifest_file=(
                 description_share / 'manifests/b2/asset_manifest.json'
             ),

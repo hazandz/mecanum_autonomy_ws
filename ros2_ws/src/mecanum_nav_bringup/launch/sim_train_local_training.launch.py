@@ -28,18 +28,9 @@ def _start(context):
     description_share = Path(
         get_package_share_directory('ROBOT_URDF_final_description'),
     ).resolve(strict=True)
-    bringup_share = Path(
-        get_package_share_directory('mecanum_nav_bringup'),
-    ).resolve(strict=True)
     robot_description = (
         description_share / 'urdf/mecanum_b2_static.urdf'
     ).read_text(encoding='utf-8')
-    bridge_config = bringup_share / 'config/bridge/local_training.runtime.yaml'
-    if not bridge_config.is_file():
-        raise FileNotFoundError(
-            'installed local-training bridge config missing'
-        )
-
     return [
         Node(
             package='robot_state_publisher',
@@ -50,13 +41,6 @@ def _start(context):
                 'robot_description': robot_description,
                 'use_sim_time': True,
             }],
-        ),
-        Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            name='local_training_bridge',
-            output='screen',
-            parameters=[{'config_file': str(bridge_config)}],
         ),
         ExecuteProcess(
             cmd=[
