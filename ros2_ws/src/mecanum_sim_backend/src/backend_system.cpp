@@ -613,6 +613,7 @@ public:
   {
     if (shutdown_started_) return;
     const auto steady_now_ns = steady_clock_now_();
+    physics_iteration_ = info.iterations;
     ProcessBackendControlRequests(
         ecm, TimeNs(info), info.iterations, steady_now_ns, info.paused);
     ProcessProbeServiceResults();
@@ -686,6 +687,20 @@ public:
           accepted_receipt_history_.erase(accepted_receipt_history_.begin());
       }
     }
+    if (safety_admission_candidate_ &&
+        !RetainedSafetyInputFresh(TimeNs(info), now_steady))
+    {
+      safety_admission_candidate_ = false;
+      policy_open_ = false;
+      fault_flags_ |= BackendState::FAULT_COMMAND_STALE;
+      {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        gate_->Invalidate("retained_safety_input_age_exceeded_or_clock_invalid");
+      }
+      local_zero_override_ = true;
+      ApplyEmergencyZero(ecm);
+      return;
+    }
     if (decision.disposition == GateDisposition::Applied &&
         decision.accepted &&
         decision.accepted->source == Receipt::SOURCE_SAFE_STOP)
@@ -715,18 +730,6 @@ public:
     {
       fault_flags_ |= BackendState::FAULT_COMMAND_STALE;
       policy_open_ = false;
-      local_zero_override_ = true;
-      ApplyEmergencyZero(ecm);
-      return;
-    }
-    if (policy_open_ && (safety_receive_steady_ns_ == 0 || now_steady < safety_receive_steady_ns_ ||
-        now_steady - safety_receive_steady_ns_ > 250'000'000))
-    {
-      fault_flags_ |= BackendState::FAULT_COMMAND_STALE;
-      {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        gate_->Invalidate("safety_input_steady_age_exceeded");
-      }
       local_zero_override_ = true;
       ApplyEmergencyZero(ecm);
       return;
@@ -941,7 +944,11 @@ private:
           late_spawn_cleanup_pending_ = true;
       }
       else if (result.kind == ProbeServiceKind::Lift)
+      {
         probe_machine_.LiftCompleted(result.success);
+        if (result.success)
+          probe_lift_ack_iteration_ = physics_iteration_;
+      }
       else if (result.kind == ProbeServiceKind::Remove)
         probe_machine_.RemoveCompleted(result.success);
       if (!result.success)
@@ -1083,6 +1090,20 @@ private:
       probe_machine_.Invalidate();
       return false;
     }
+    if (!ecm.Component<gz::sim::components::WorldPose>(link_entity))
+    {
+      // SDF entity creation does not guarantee WorldPose on a link. Request
+      // it through mutable ECM; its initial value is not an achieved pose.
+      ecm.CreateComponent(
+          link_entity,
+          gz::sim::components::WorldPose(gz::math::Pose3d{}));
+      probe_pose_component_request_iteration_ = physics_iteration_;
+    }
+    if (probe_link_entity_ != link_entity)
+    {
+      probe_link_entity_ = link_entity;
+      probe_pose_component_request_iteration_ = physics_iteration_;
+    }
     probe_sensor_entity_ = *sensors.begin();
     return probe_machine_.BindFixture(
         *models.begin(), *collisions.begin(), floor_collision_entity_);
@@ -1098,6 +1119,7 @@ private:
       return;
     }
     if (!probe_machine_.LiftRequested()) return;
+    probe_lift_request_iteration_ = physics_iteration_;
     auto request = std::make_shared<SetEntityPose::Request>();
     request->entity.id = probe_machine_.ModelEntity();
     request->entity.name = "b2_capability_probe";
@@ -1535,24 +1557,28 @@ private:
     }
     const auto *collision_parent = ecm.Component<gz::sim::components::ParentEntity>(
         probe_machine_.CollisionEntity());
-    std::vector<std::pair<gz::sim::Entity, gz::math::Pose3d>> link_poses;
-    ecm.Each<gz::sim::components::Link, gz::sim::components::ParentEntity,
-             gz::sim::components::WorldPose>(
-        [&](const gz::sim::Entity &entity,
-            const gz::sim::components::Link *,
-            const gz::sim::components::ParentEntity *parent,
-            const gz::sim::components::WorldPose *world_pose) {
-          if (parent->Data() == probe_machine_.ModelEntity())
-            link_poses.emplace_back(entity, world_pose->Data());
-          return true;
-        });
-    const bool one_measured_link = collision_parent &&
-        link_poses.size() == 1 &&
-        collision_parent->Data() == link_poses.front().first;
-    observation.fixture_measured_separated = one_measured_link &&
-        info.iterations > last_probe_pose_iteration_ &&
-        Finite(link_poses.front().second) &&
-        link_poses.front().second.Pos().Z() > 0.07;
+    const auto *probe_pose = ecm.Component<gz::sim::components::WorldPose>(
+        probe_link_entity_);
+    const auto pose_state = probe_link_entity_ != gz::sim::kNullEntity ?
+        ecm.ComponentState(
+            probe_link_entity_, gz::sim::components::WorldPose::typeId) :
+        gz::sim::ComponentState::NoChange;
+    const auto *probe_link_parent = ecm.Component<gz::sim::components::ParentEntity>(
+        probe_link_entity_);
+    const bool exact_probe_link = collision_parent && probe_pose &&
+        collision_parent->Data() == probe_link_entity_ &&
+        ecm.Component<gz::sim::components::Link>(probe_link_entity_) &&
+        probe_link_parent &&
+        probe_link_parent->Data() == probe_machine_.ModelEntity();
+    const bool post_physics_measurement = exact_probe_link &&
+        pose_state == gz::sim::ComponentState::PeriodicChange &&
+        info.iterations > probe_pose_component_request_iteration_ &&
+        probe_lift_ack_iteration_ != 0 &&
+        info.iterations >= probe_lift_ack_iteration_ &&
+        info.iterations > probe_lift_request_iteration_ &&
+        info.iterations > last_probe_pose_iteration_;
+    observation.fixture_measured_separated = post_physics_measurement &&
+        Finite(probe_pose->Data()) && probe_pose->Data().Pos().Z() > 0.07;
     if (observation.fixture_measured_separated)
       last_probe_pose_iteration_ = info.iterations;
     if (!probe_machine_.Observe(observation))
@@ -2140,6 +2166,10 @@ private:
           late_spawn_cleanup_pending_ = false;
           late_spawn_remove_sent_ = false;
           last_probe_pose_iteration_ = 0;
+          probe_pose_component_request_iteration_ = 0;
+          probe_lift_request_iteration_ = 0;
+          probe_lift_ack_iteration_ = 0;
+          probe_link_entity_ = gz::sim::kNullEntity;
           contact_capability_verified_ = false;
           ++capability_revision_;
           probe_reason_.clear();
@@ -2392,6 +2422,16 @@ private:
     }
     pending_applied_receipt_.reset();
     local_zero_override_ = true;
+  }
+
+  bool RetainedSafetyInputFresh(
+      std::int64_t sim_now_ns, std::int64_t steady_now_ns) const
+  {
+    const auto stamp_ns = TimeNs(safety_input_.header.stamp);
+    return safety_receive_steady_ns_ > 0 && stamp_ns >= 0 &&
+        stamp_ns <= sim_now_ns && sim_now_ns - stamp_ns <= 250'000'000 &&
+        steady_now_ns >= safety_receive_steady_ns_ &&
+        steady_now_ns - safety_receive_steady_ns_ <= 250'000'000;
   }
 
   ContactSample BuildContactSample(const gz::sim::UpdateInfo &info,
@@ -2660,6 +2700,10 @@ private:
   std::int64_t proof_empty_first_stamp_ns_{}, proof_empty_last_stamp_ns_{};
   std::int64_t proof_stamp_ns_{};
   std::uint64_t last_probe_pose_iteration_{};
+  std::uint64_t probe_pose_component_request_iteration_{};
+  std::uint64_t probe_lift_request_iteration_{};
+  std::uint64_t probe_lift_ack_iteration_{};
+  gz::sim::Entity probe_link_entity_{gz::sim::kNullEntity};
   bool probe_spawn_sent_{}, probe_lift_sent_{}, probe_remove_sent_{};
   bool late_spawn_cleanup_pending_{}, late_spawn_remove_sent_{};
   bool probe_spawn_inflight_{};

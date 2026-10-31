@@ -399,39 +399,43 @@ class LocalTrainingProcessSupervisor:
         self.monotonic = monotonic
         self.sleep = sleep
         self.owned: list[ProcessRecord] = []
+        self._observer_tasks: set[asyncio.Task] = set()
+        self._cleanup_lock = asyncio.Lock()
         self.gui_opened = False
 
     async def start(self) -> None:
         """Start the server and requested GUI, failing closed on readiness."""
-        bind_environment = getattr(self.readiness, 'bind_environment', None)
-        if bind_environment is not None:
-            bind_environment(self.plan.environment)
-        bridge_command = getattr(self.plan, 'bridge_command', None)
-        if bridge_command:
-            bridge = await self.launcher.start(
-                bridge_command, self.plan.environment,
-            )
-            bridge_record = ProcessRecord(
-                'parameter_bridge', bridge_command, bridge.pid, bridge,
-            )
-            self.owned.append(bridge_record)
-            self._capture_output(bridge_record)
-            self.evidence_sink.record(
-                'parameter_bridge_requested', self._facts(bridge_record),
-            )
-        server_command = self.plan.commands[0]
-        server = await self.launcher.start(
-            server_command, self.plan.environment,
-        )
-        server_record = ProcessRecord(
-            'server', server_command, server.pid, server,
-        )
-        self.owned.append(server_record)
-        self._capture_output(server_record)
-        self.evidence_sink.record(
-            'server_requested', self._facts(self.owned[-1]),
-        )
         try:
+            bind_environment = getattr(
+                self.readiness, 'bind_environment', None,
+            )
+            if bind_environment is not None:
+                bind_environment(self.plan.environment)
+            bridge_command = getattr(self.plan, 'bridge_command', None)
+            if bridge_command:
+                bridge = await self.launcher.start(
+                    bridge_command, self.plan.environment,
+                )
+                bridge_record = ProcessRecord(
+                    'parameter_bridge', bridge_command, bridge.pid, bridge,
+                )
+                self.owned.append(bridge_record)
+                self._capture_output(bridge_record)
+                self.evidence_sink.record(
+                    'parameter_bridge_requested', self._facts(bridge_record),
+                )
+            server_command = self.plan.commands[0]
+            server = await self.launcher.start(
+                server_command, self.plan.environment,
+            )
+            server_record = ProcessRecord(
+                'server', server_command, server.pid, server,
+            )
+            self.owned.append(server_record)
+            self._capture_output(server_record)
+            self.evidence_sink.record(
+                'server_requested', self._facts(server_record),
+            )
             await self.readiness.server_scene(
                 self.plan, server, self.SERVER_READY_TIMEOUT_S,
             )
@@ -532,17 +536,49 @@ class LocalTrainingProcessSupervisor:
 
     async def monitor(self) -> int:
         """Wait for server exit and clean up only owned process groups."""
-        if not self.owned:
+        records = {record.name: record for record in self.owned}
+        server_record = records.get('server')
+        if server_record is None:
             raise RuntimeError('no owned server process')
-        server = self.owned[0].process
-        if self.plan.gui_requested and len(self.owned) > 1:
-            gui_record = self.owned[1]
-            if gui_record.process.returncode is None:
-                asyncio.create_task(self._record_gui_exit(gui_record))
+        bridge_record = records.get('parameter_bridge')
+        gui_record = records.get('gui')
+        waiters: dict[asyncio.Task, ProcessRecord] = {
+            asyncio.create_task(record.process.wait()): record
+            for record in (server_record, bridge_record)
+            if record is not None
+        }
+        for task in waiters:
+            self._track_observer(task)
+        if gui_record is not None and gui_record.process.returncode is None:
+            self._track_observer(asyncio.create_task(
+                self._record_gui_exit(gui_record),
+            ))
         try:
-            return await server.wait()
+            done, _ = await asyncio.wait(
+                waiters, return_when=asyncio.FIRST_COMPLETED,
+            )
+            completed = [(waiters[task], task.result()) for task in done]
+            bridge_exit = next(
+                ((record, status) for record, status in completed
+                 if record.name == 'parameter_bridge'), None,
+            )
+            if bridge_exit is not None:
+                record, status = bridge_exit
+                raise RuntimeError(
+                    f'owned infrastructure {record.name} exited: {status}'
+                )
+            return next(status for record, status in completed
+                        if record.name == 'server')
         finally:
+            for task in waiters:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
             await self.cleanup()
+
+    def _track_observer(self, task: asyncio.Task) -> None:
+        self._observer_tasks.add(task)
+        task.add_done_callback(self._observer_tasks.discard)
 
     async def _record_gui_exit(self, gui: ProcessRecord) -> None:
         status = await gui.process.wait()
@@ -575,7 +611,21 @@ class LocalTrainingProcessSupervisor:
 
     async def cleanup(self) -> None:
         """Stop all owned groups, including children whose leader exited."""
-        for record in reversed(self.owned):
+        async with self._cleanup_lock:
+            await self._cleanup_owned()
+
+    async def _cleanup_owned(self) -> None:
+        current = asyncio.current_task()
+        observers = [
+            task for task in self._observer_tasks if task is not current
+        ]
+        for task in observers:
+            task.cancel()
+        if observers:
+            await asyncio.gather(*observers, return_exceptions=True)
+        self._observer_tasks.difference_update(observers)
+        records, self.owned = list(reversed(self.owned)), []
+        for record in records:
             process = record.process
             if self.launcher.group_alive(process):
                 await self.launcher.stop_group(process, signal.SIGINT)
@@ -616,7 +666,6 @@ class LocalTrainingProcessSupervisor:
                         'owned_process_output_drain_timeout',
                         self._facts(record),
                     )
-        self.owned.clear()
 
 
 def _load_sink(specification: str) -> EvidenceSink:

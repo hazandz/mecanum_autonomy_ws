@@ -660,3 +660,164 @@ def test_gui_exit_cancels_production_owner_ack_wait():
         assert launcher.started == []
 
     asyncio.run(run())
+
+
+def _plan_with_bridge(gui):
+    """Build the production-shaped participant set with a bridge record."""
+    base_plan = plan(gui)
+    values = vars(base_plan).copy()
+    values['bridge_command'] = (
+        'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+        '--ros-args', '-p', 'config_file:=/tmp/bridge.yaml',
+    )
+    return SimpleNamespace(**values)
+
+
+def test_monitor_reports_server_exit_by_role_when_bridge_is_first():
+    """A bridge-first owned list still monitors and reports server exit."""
+    async def run():
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=_plan_with_bridge(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=sink,
+        )
+        await supervisor.start()
+        assert [record.name for record in supervisor.owned] == [
+            'parameter_bridge', 'server',
+        ]
+        monitor = asyncio.create_task(supervisor.monitor())
+        await asyncio.sleep(0)
+        server = next(
+            record.process for record in supervisor.owned
+            if record.name == 'server'
+        )
+        server.returncode = 7
+        assert await asyncio.wait_for(monitor, timeout=0.5) == 7
+        cleanup = [facts for event, facts in sink.events
+                   if event == 'owned_process_cleanup']
+        assert {item['process'] for item in cleanup} == {
+            'parameter_bridge', 'server',
+        }
+    asyncio.run(run())
+
+
+def test_monitor_fails_when_bridge_exits_while_server_lives():
+    """A failed bridge is infrastructure loss, not a server exit."""
+    async def run():
+        launcher = FakeLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=_plan_with_bridge(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+        )
+        await supervisor.start()
+        bridge = next(r.process for r in supervisor.owned
+                      if r.name == 'parameter_bridge')
+        monitor = asyncio.create_task(supervisor.monitor())
+        await asyncio.sleep(0)
+        bridge.returncode = 9
+        try:
+            await asyncio.wait_for(monitor, timeout=0.5)
+        except RuntimeError as error:
+            assert 'parameter_bridge' in str(error)
+        else:
+            raise AssertionError('bridge exit was reported as server exit')
+    asyncio.run(run())
+
+
+def test_monitor_records_gui_exit_by_role_with_bridge_and_server_alive():
+    """Closing the GUI is recorded without restarting owned infrastructure."""
+    async def run():
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=_plan_with_bridge(True), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=sink,
+        )
+        await supervisor.start()
+        roles = {record.name: record.process for record in supervisor.owned}
+        monitor = asyncio.create_task(supervisor.monitor())
+        await asyncio.sleep(0)
+        roles['gui'].returncode = 4
+        for _ in range(50):
+            if any(
+                event == 'gui_closed_or_crashed' for event, _ in sink.events
+            ):
+                break
+            await asyncio.sleep(0.001)
+        gui_events = [facts for name, facts in sink.events
+                      if name == 'gui_closed_or_crashed']
+        assert len(gui_events) == 1, gui_events
+        event = gui_events[0]
+        assert event['process'] == 'gui'
+        assert event['server_restart'] is False
+        assert event['gui_restart'] is False
+        assert not monitor.done()
+        roles['server'].returncode = 0
+        assert await asyncio.wait_for(monitor, timeout=0.5) == 0
+        assert [pid for pid, _ in launcher.stopped] == [
+            roles['parameter_bridge'].pid,
+        ]
+        cleanup = [facts for name, facts in sink.events
+                   if name == 'owned_process_cleanup']
+        assert {facts['process'] for facts in cleanup} == {
+            'gui', 'server', 'parameter_bridge',
+        }
+    asyncio.run(run())
+
+
+def test_bridge_start_is_rolled_back_when_server_spawn_fails():
+    """A bridge child is cleaned if a later server spawn cannot start."""
+    async def run():
+        launcher = FakeLauncher(fail_on=1)
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=_plan_with_bridge(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=sink,
+        )
+        try:
+            await supervisor.start()
+        except OSError:
+            pass
+        else:
+            raise AssertionError('server spawn failure was accepted')
+        assert [pid for pid, _ in launcher.stopped] == [100]
+        assert supervisor.owned == []
+        cleanup = [facts for event, facts in sink.events
+                   if event == 'owned_process_cleanup']
+        assert [record['process'] for record in cleanup] == [
+            'parameter_bridge',
+        ]
+    asyncio.run(run())
+
+
+def test_startup_cancellation_rolls_back_registered_children():
+    """Cancellation during server readiness cleans bridge and server once."""
+    class BlockingReadiness(FakeReadiness):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+
+        async def server_scene(self, plan, process, timeout_s):
+            del plan, process, timeout_s
+            self.entered.set()
+            await asyncio.Future()
+
+    async def run():
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        readiness = BlockingReadiness()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=_plan_with_bridge(False), launcher=launcher,
+            readiness=readiness, evidence_sink=sink,
+        )
+        startup = asyncio.create_task(supervisor.start())
+        await readiness.entered.wait()
+        startup.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await startup
+        assert [pid for pid, _ in launcher.stopped] == [101, 100]
+        assert supervisor.owned == []
+        await supervisor.cleanup()
+        assert [pid for pid, _ in launcher.stopped] == [101, 100]
+    asyncio.run(run())
