@@ -28,6 +28,7 @@ class LaunchPlan:
     session_id: str
     config_hash: str
     asset_manifest_sha256: str
+    coordinator_ingress_instance_id: int
     commands: tuple[tuple[str, ...], ...]
     environment: dict[str, str]
 
@@ -110,10 +111,16 @@ def load_bound_config(path: Path) -> tuple[dict[str, object], str, str, str]:
 def bind_world_for_scenario(
     world_source: bytes, model_source: bytes, scenario_id: str,
     session_id: str, config_hash: str, manifest_hash: str,
+    coordinator_ingress_instance_id: int,
 ) -> bytes:
     """Bind the model identity and select the contact probe."""
     if not session_id or session_id != session_id.strip():
         raise ValueError('session_id must be a non-empty Run ID')
+    if (
+        type(coordinator_ingress_instance_id) is not int
+        or coordinator_ingress_instance_id <= 0
+    ):
+        raise ValueError('coordinator ingress identity must be nonzero')
     for value in (config_hash, manifest_hash):
         if len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
             raise ValueError('startup hashes must be lowercase SHA-256')
@@ -146,6 +153,8 @@ def bind_world_for_scenario(
         ('session_id', session_id),
         ('config_hash', config_hash),
         ('asset_manifest_sha256', manifest_hash),
+        ('coordinator_ingress_instance_id',
+         str(coordinator_ingress_instance_id)),
     ):
         node = plugin.find(tag)
         if node is None:
@@ -170,9 +179,15 @@ def build_launch_plan(
     resource_paths: tuple[Path, ...], plugin_path: Path,
     asset_manifest_file: Path, scenario_directory: Path,
     runtime_world_directory: Path,
+    coordinator_ingress_instance_id: int,
 ) -> LaunchPlan:
     """Validate installed assets and construct bound process commands."""
     gui_requested = parse_gui_argument(gui)
+    if (
+        type(coordinator_ingress_instance_id) is not int
+        or coordinator_ingress_instance_id <= 0
+    ):
+        raise ValueError('coordinator ingress identity must be nonzero')
     document, config_hash, manifest_hash, scenario_id = load_bound_config(
         resolved_config,
     )
@@ -291,8 +306,16 @@ def build_launch_plan(
     )
     commands = (server, gui_command) if gui_requested else (server,)
     return LaunchPlan(
-        gui_requested, world_file, gui_config, resolved_config.resolve(),
-        session_id, config_hash, manifest_hash, commands, environment,
+        gui_requested=gui_requested,
+        world_file=world_file,
+        gui_config=gui_config,
+        resolved_config=resolved_config.resolve(),
+        session_id=session_id,
+        config_hash=config_hash,
+        asset_manifest_sha256=manifest_hash,
+        coordinator_ingress_instance_id=coordinator_ingress_instance_id,
+        commands=commands,
+        environment=environment,
     )
 
 
@@ -306,6 +329,7 @@ def write_bound_world(
     bound = bind_world_for_scenario(
         source, model_source, scenario, plan.session_id,
         plan.config_hash, plan.asset_manifest_sha256,
+        plan.coordinator_ingress_instance_id,
     )
     plan.world_file.parent.mkdir(parents=True, exist_ok=True)
     plan.world_file.write_bytes(bound)

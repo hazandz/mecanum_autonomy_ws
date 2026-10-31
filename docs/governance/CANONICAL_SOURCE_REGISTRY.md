@@ -998,3 +998,18 @@ motion, HIL, hardware, integration, or real-readiness evidence is inferred.
 Three resolved configurations are permitted only when generated from the actual
 asset manifest and scenarios, and do not imply execution. B2.3 remains
 unimplemented; B2 remains open. This entry routes ownership and phase only.
+
+### B2.2 backend-control and controlled contact-probe corrective route
+
+The Owner-approved corrective extends the effective allowlist to 65 paths and
+adds `mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl` at package
+version 2.7.0. The service receiver belongs to `mecanum_sim_backend`; the
+client adapter belongs to `mecanum_nav_rl` trusted simulation ports; the
+coordinator remains B2.3. The existing eight messages remain unchanged and
+historical WP-06 assertions remain historical. The ACR defines operation,
+identity, reset-context, receipt, observation0, and probe semantics.
+
+This route does not claim implementation, build, test, audit, or runtime
+success. Any eventual offline evidence remains below independent exact-commit
+audit. Probe capability, contact engine operation, GUI scene, reset, motion,
+Gate, and integration remain unverified and outside this source routing entry.

@@ -1,1 +1,28 @@
-<?xml version="1.0"?><sdf version="1.11"><model name="b2_contact_probe"><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.10 0.10 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.10 0.10 0.10</size></box></geometry></visual></link></model></sdf>
+<?xml version="1.0"?>
+<sdf version="1.11">
+  <model name="b2_contact_probe">
+    <static>false</static>
+    <link name="link">
+      <inertial>
+        <mass>1</mass>
+        <inertia>
+          <ixx>0.001666666666666667</ixx>
+          <iyy>0.001666666666666667</iyy>
+          <izz>0.001666666666666667</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>0.10 0.10 0.10</size></box></geometry>
+      </collision>
+      <sensor name="contact_sensor" type="contact">
+        <always_on>true</always_on>
+        <update_rate>100</update_rate>
+        <contact><collision>collision</collision></contact>
+      </sensor>
+      <visual name="visual">
+        <geometry><box><size>0.10 0.10 0.10</size></box></geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

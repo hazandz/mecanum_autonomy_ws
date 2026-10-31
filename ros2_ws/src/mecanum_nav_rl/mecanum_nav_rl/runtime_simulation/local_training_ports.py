@@ -11,6 +11,50 @@ from mecanum_nav_rl.simulation.simulated_odometry import (
     SimulatedOdometrySnapshot,
 )
 
+from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl
+
+BACKEND_CONTROL_ENDPOINT = '/mecanum/local_training/backend_control'
+
+
+class LocalTrainingBackendControlPort:
+    """Adapt an injected ROS service client without owning a ROS context.
+
+    B2.2 exposes this client seam for the future B2.3 coordinator. The adapter
+    never creates session, lifecycle, step, receipt, or observation identities.
+    """
+
+    def __init__(self, client: object) -> None:
+        """Bind a caller-owned service client."""
+        self._client = client
+
+    @classmethod
+    def from_node(cls, node: object) -> 'LocalTrainingBackendControlPort':
+        """Bind the canonical service to a caller-owned node."""
+        client = node.create_client(
+            LocalTrainingBackendControl, BACKEND_CONTROL_ENDPOINT,
+        )
+        return cls(client)
+
+    def submit(
+        self, request: LocalTrainingBackendControl.Request,
+    ) -> object:
+        """Submit one caller-constructed request and return its future."""
+        if not isinstance(request, LocalTrainingBackendControl.Request):
+            raise TypeError(
+                'request must be LocalTrainingBackendControl.Request'
+            )
+        if (
+            request.schema_version
+            != LocalTrainingBackendControl.Request.SCHEMA_VERSION
+        ):
+            raise ValueError('backend_control_request_schema_invalid')
+        if (
+            request.coordinator_ingress_instance_id == 0
+            or request.request_sequence == 0
+        ):
+            raise ValueError('backend_control_request_identity_missing')
+        return self._client.call_async(request)
+
 
 @dataclass(frozen=True)
 class GroundTruthPortSample:

@@ -77,15 +77,29 @@ public:
   bool Enqueue(ReceiptFacts receipt, std::int64_t receive_steady_ns);
   GateResult ConsumeNext(std::int64_t now_ros_ns, std::int64_t now_steady_ns);
   bool WatchdogExpired(std::int64_t now_steady_ns) const;
-  void SetExpectedPolicyStep(std::uint64_t step_index,
+  bool SetExpectedPolicyStep(std::uint64_t step_index,
                              std::uint64_t source_sequence,
                              std::string transition_id);
+  bool BindResetContext(std::int64_t barrier_stamp_ns,
+                        std::uint64_t episode_generation,
+                        std::uint32_t reset_epoch,
+                        std::uint32_t runtime_generation,
+                        std::uint64_t next_safe_stop_sequence);
   void Invalidate(std::string reason);
   bool Faulted() const;
   std::uint64_t Watermark() const;
+  std::uint64_t ExpectedSafeStopSequence() const;
+  bool HasPendingPolicyStep() const;
   std::int64_t LastAcceptedSteadyNs() const;
+  std::string FaultReason() const;
 
 private:
+  struct PolicyIdentity
+  {
+    std::uint64_t step_index{};
+    std::uint64_t source_sequence{};
+    std::string transition_id;
+  };
   struct QueuedReceipt { ReceiptFacts facts; std::int64_t receive_steady_ns{}; };
   GateResult Fault(std::string reason);
   bool ValidPayload(const ReceiptFacts &, std::string &) const;
@@ -93,9 +107,12 @@ private:
   GateBinding binding_;
   std::deque<QueuedReceipt> queue_;
   std::optional<ReceiptFacts> last_receipt_;
+  std::optional<std::int64_t> last_source_stamp_ns_;
+  std::optional<PolicyIdentity> pending_policy_;
   std::uint64_t watermark_{};
   std::int64_t last_accepted_steady_ns_{};
   bool anchored_{};
+  bool require_contiguous_anchor_{};
   bool faulted_{};
   std::string fault_reason_;
 };

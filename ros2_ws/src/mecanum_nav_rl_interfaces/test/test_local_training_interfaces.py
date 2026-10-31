@@ -11,6 +11,7 @@ from builtin_interfaces.msg import Time
 
 from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
 from mecanum_nav_rl_interfaces.msg import SimulationContactState
+from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl
 
 from rclpy.serialization import deserialize_message, serialize_message
 
@@ -151,7 +152,7 @@ def test_generated_messages_round_trip_without_ros_context() -> None:
 def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
     """Pin package generation and preserve every prior message definition."""
     package = ET.parse(_PACKAGE_ROOT / 'package.xml').getroot()
-    assert package.findtext('version') == '2.6.0'
+    assert package.findtext('version') == '2.7.0'
     cmake = (_PACKAGE_ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
     generation = re.search(
         'rosidl_generate_interfaces\\(\\$\\{PROJECT_NAME\\}(.*?)\\n\\)',
@@ -166,6 +167,12 @@ def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
         'msg/SafetyLifecycleState.msg', 'msg/LocalTrainingSafetyInput.msg',
         'msg/SimulationContactState.msg',
     ]
+    generated_services = re.findall(
+        '"(srv/[^"\\n]+\\.srv)"', generation.group(1)
+    )
+    assert generated_services == ['srv/LocalTrainingBackendControl.srv']
+    assert LocalTrainingBackendControl.Request.SCHEMA_VERSION == 1
+    assert LocalTrainingBackendControl.Response.RESPONSE_SCHEMA_VERSION == 1
     repository_root = _PACKAGE_ROOT.parents[2]
     base = 'bbd5a3c68e6745b5d143688266e044fa25093390'
     for message_path in generated[:-2]:
@@ -179,3 +186,42 @@ def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
             cwd=repository_root,
         )
         assert current == original, message_path
+
+
+def test_control_service_generated_types_and_round_trip_without_ros_context():
+    """Generated request and response preserve fields through serialization."""
+    request = LocalTrainingBackendControl.Request()
+    request.schema_version = 1
+    request.operation = request.OP_INHIBIT
+    request.probe_action = request.PROBE_ACTION_NONE
+    request.coordinator_ingress_instance_id = 1
+    request.request_sequence = 1
+    request.expected_backend_instance_id = 2
+    request.session_id = 'session'
+    request.config_hash = 'a' * 64
+    request.asset_manifest_sha256 = 'b' * 64
+    response = LocalTrainingBackendControl.Response()
+    response.schema_version = response.RESPONSE_SCHEMA_VERSION
+    response.result = response.RESULT_APPLIED
+    response.reason_code = response.REASON_NONE
+    response.request_sequence = 1
+    response.backend_instance_id = 2
+    pair = (
+        LocalTrainingBackendControl.Request,
+        LocalTrainingBackendControl.Response,
+    )
+    assert (
+        pair[0].get_fields_and_field_types()['config_hash'] == 'string<64>'
+    )
+    assert (
+        pair[1].get_fields_and_field_types()['proof_world_name']
+        == 'string<128>'
+    )
+    restored_request = deserialize_message(
+        serialize_message(request), LocalTrainingBackendControl.Request
+    )
+    restored_response = deserialize_message(
+        serialize_message(response), LocalTrainingBackendControl.Response
+    )
+    assert restored_request.asset_manifest_sha256 == 'b' * 64
+    assert restored_response.reason_code == response.REASON_NONE

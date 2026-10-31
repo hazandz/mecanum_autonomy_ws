@@ -394,6 +394,34 @@ and command. GUI adds no V3 root or config hash field, and no
 bit-identical trajectory/performance claim is made. GUI launch, assets,
 packaging, and runtime tests are deferred to B2.2/B2.3.
 
+### 5.8 B2.2 backend-control service amendment (L2)
+
+The Owner-approved B2.2 corrective adds `mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl` at `/mecanum/local_training/backend_control` and advances the interface package from 2.6.0 to 2.7.0. The eight existing messages remain byte-stable; the live inventory is eight messages plus one service. The service uses RELIABLE/VOLATILE and carries control, binding, and proof facts only. It has no Twist, action, goal, or Ground Truth fields. Receipt-v2 remains the sole atomic actuator carrier.
+
+The schema is version 1 with operations `BIND_SESSION`, `BIND_PENDING_STEP`, `CONFIRM_OBSERVATION0`, `INHIBIT`, `VERIFY_CONTACT_CAPABILITY`, and `BIND_RESET_CONTEXT`; probe actions are `NONE`, `START`, `QUERY`, and `ABORT`. The service source and generated tests pin its complete field order, types, bounds, constants, and reason codes. Common metadata is schema/session/config/asset identity, coordinator and backend identities, request sequence, and expected binding revision. Hashes are 64 lowercase hexadecimal characters. Operation-specific fields are required only by their operation; every unused field must be zero/empty. In particular, `INHIBIT` does not require fabricated lifecycle or proof data, and QUERY/ABORT reference the exact START request.
+
+The bringup supervisor creates a nonzero coordinator-ingress identity in an immutable run descriptor and supplies that identity to the backend and future B2.3 coordinator. The backend does not trust the first request or receipt as an identity source. This is a consistency/provenance boundary in a trusted simulation environment, not caller authentication or a security boundary. Missing identity/binding keeps actuator admission inhibited without preventing passive scene inspection.
+
+The backend service callback validates and copies requests into an ordered queue of capacity 8; simulation updates alone apply binding changes. A mutation must apply or fail within 1 s steady time. There is at most one pending binding mutation; QUERY, ABORT, and INHIBIT remain serviceable, and INHIBIT/reset/fault cancels pending operations that could open admission. A 128-entry response cache returns exact duplicate state without reapplying or refreshing actuator watchdog. Same-sequence changed content faults; old uncached sequence replays reject; sequence gaps fault. A new ordered request consumes its sequence even when BUSY or revision mismatch is cached. Retrying BUSY requires a new request sequence. Foreign session/backend requests cannot replace the active binding.
+
+`BIND_SESSION` is startup-only while inhibited and cannot replace source instances. `BIND_RESET_CONTEXT` accepts only a strictly newer authoritative lifecycle/barrier while inhibited, with no probe or admission-opening mutation active. It clears current/pending step and observation0 eligibility, while preserving request replay protection, source ownership, and global final-publication watermark. It does not reset/rearm, advance a generation, or create observation0. A reset context needs a matching strictly post-barrier SAFE_STOP-zero anchor; late receipts cannot repair a faulted segment. Backend or final-publisher restart invalidates the session.
+
+`BIND_PENDING_STEP` uses B1 `policy_transition_identity()` semantics and requires source sequence equal to step index; it creates no issuance or UUID. The backend retains current and one pending POLICY identity. Timer publications for current remain valid until the first matching pending receipt switches slots; afterward the old identity rejects. SAFE_STOP has its own source/counter and does not consume the pending step. Identity is never reassigned by arrival time, and counters never rewind. Action barrier is checked strictly for the receipt to which it applies.
+
+`CONFIRM_OBSERVATION0` is a B2.3 confirmation after its actual B1 commit, not a backend-generated commit. The selected evidence is the session-bound, post-reset-barrier SAFE_STOP-zero publication at or before cutoff, with retained application history matching key/iteration/stamp and no local override. The adjacent key is selected+1 from the same publisher, strictly after cutoff, no later than ROS now, and fresh. It proves only the boundary: it needs neither zero payload nor actuator application and cannot replace the pre-cutoff command. Missing/evicted history rejects. Confirmation enables zero-only eligibility; it does not rearm or open POLICY. POLICY additionally needs the current step, healthy Safety/input/contact and verified capability, no pause/reset/fault/inhibit, and the actual Safety/FinalTwistPublisher receipt path.
+
+### 5.9 Controlled contact-capability probe amendment (L2)
+
+Contact capability remains unknown until a backend-controlled infrastructure probe completes; no caller boolean can assert it. The fixture is the installed `b2_contact_probe` model named uniquely `b2_capability_probe`, separate from the robot collision mask and without changing `B2_CONTACT_V1`. It is a 0.10 m cube of mass 1 kg with source-validated inertia and a contact sensor on its exact collision.
+
+The planned world services are `/world/b2_training_arena/create` (`SpawnEntity`, `gz.msgs.EntityFactory` to `gz.msgs.Boolean`), `/set_pose` (`SetEntityPose`, `gz.msgs.Pose` to `gz.msgs.Boolean`), and `/remove` (`DeleteEntity`, `gz.msgs.Entity` to `gz.msgs.Boolean`). Support must be verified from the installed bridge/API before build; the presence of ROS service declarations alone is insufficient. START requires a separately authorized call while bound/inhibited, before observation0 or pending POLICY; `gui=true` neither plays the world nor starts the probe.
+
+START spawns at world pose `(-2,0,0.07)`, yaw zero, and must prove ownership and exact registry geometry. Name conflict fails without deleting an existing entity. The backend requires at least three consecutive post-Physics samples of the exact fixture-floor pair spanning 20 ms ROS with finite valid normal/depth. It raises the fixture to z=0.20, checks achieved separation from measurement, then requires three covered-empty consecutive samples spanning 20 ms. It removes only the owned fixture and verifies absence from ECM before capability becomes VERIFIED. ACK alone is not achieved pose.
+
+The proposed total deadline is 5 s steady from START receipt, including queueing and cleanup; reserve the final 1 s for cleanup and do not start an operation that would exceed the budget. START reaches APPLIED or an error within 1 s; APPLIED means probe started, not verified. Exact duplicate START cannot spawn twice. QUERY uses a new sequence and references START. ABORT/timeout does not retry. Cleanup failure keeps inhibit and records possible fixture residue. The proof binds session/backend/asset/registry/world/engine identity and fingerprint, exact entities, physics iterations, and simulation stamps. It is invalidated by identity change, restart, clock rollback, or fault; it may survive normal episode reset only while those identities remain unchanged and no invalidating fault occurs. Robot coverage is still checked independently each physics step. Fixture contact is not an RL collision penalty; real robot contact is not cleared to pass the probe. Teardown precedes reset/buffer clearing, fresh sensors, and any later observation0 transaction.
+
+This probe establishes only a bounded contact-capability property. It does not demonstrate contact operation in Gazebo, moving robot collision behavior, actuator behavior, braking, GUI readiness, or functional safety.
+
 ## 6. Candidate evidence disposition
 
 The above D1–D8 amendments are Owner-approved design contracts. Candidate
@@ -460,3 +488,13 @@ B2.2 remains within the Owner-approved L2 scope. Independent exact-commit
 audit is required before any next step. B2.3 and runtime are separate scopes;
 B2 remains open. This ACR section records approved contract and scope, not test,
 build, audit, integration, Gate, or runtime results.
+
+
+### 5.10 ROSIDL service constant naming correction
+
+The request declares `SCHEMA_VERSION=1`; the response declares
+`RESPONSE_SCHEMA_VERSION=1`. Both request and response retain their
+`schema_version` field. The distinct generated constant name avoids a C
+enumerator collision in the installed ROSIDL output while preserving the
+service fields, values, and wire data. This does not establish service runtime
+behavior.

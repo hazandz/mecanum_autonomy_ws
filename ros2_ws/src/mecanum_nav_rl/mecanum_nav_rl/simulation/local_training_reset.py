@@ -45,6 +45,42 @@ class ResetMeasurement:
     contact_healthy: bool
     contact_active: bool
     footprint_clear: bool
+    session_id: str = ''
+    config_hash: str = ''
+    backend_instance_id: int = 0
+    reset_epoch: int = 0
+    receive_steady_ns: int = -1
+    episode_generation: int = 0
+    runtime_generation: int = 0
+
+
+@dataclass(frozen=True)
+class AppliedZeroReceiptFact:
+    """Bind the selected SAFE_STOP receipt to backend application facts."""
+
+    session_id: str
+    config_hash: str
+    backend_instance_id: int
+    episode_generation: int
+    reset_epoch: int
+    runtime_generation: int
+    final_publisher_instance_id: int
+    final_publish_sequence: int
+    source: int
+    source_instance_id: int
+    source_sequence: int
+    step_index: int
+    transition_id: str
+    twist: tuple[float, float, float, float, float, float]
+    barrier_stamp_ns: int
+    receipt_stamp_ns: int
+    applied_receipt_valid: bool
+    applied_final_publisher_instance_id: int
+    applied_final_publish_sequence: int
+    applied_physics_iteration: int
+    applied_sim_stamp_ns: int
+    local_zero_override: bool
+    receive_steady_ns: int
 
 
 @dataclass(frozen=True)
@@ -56,6 +92,7 @@ class ResetFacts:
     resume_confirmed: bool
     measured_target_valid: bool
     measurement: ResetMeasurement
+    applied_zero_receipt: AppliedZeroReceiptFact
 
 
 class GazeboResetServices(Protocol):
@@ -83,12 +120,14 @@ class RosGazeboResetServices:
 
     def __init__(
         self, node: object, spin_until_future_complete: Callable,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Bind the two services to an externally owned ROS node."""
         from ros_gz_interfaces.srv import ControlWorld, SetEntityPose
 
         self._node = node
         self._spin_until = spin_until_future_complete
+        self._monotonic = monotonic
         self._control_type = ControlWorld
         self._set_pose_type = SetEntityPose
         self._control = node.create_client(
@@ -134,13 +173,18 @@ class RosGazeboResetServices:
         return self._call(self._set_pose, request, timeout_s)
 
     def _call(self, client: object, request: object, timeout_s: float) -> bool:
-        if (
-            timeout_s <= 0
-            or not client.wait_for_service(timeout_sec=timeout_s)
+        if timeout_s <= 0:
+            return False
+        deadline = self._monotonic() + timeout_s
+        if not client.wait_for_service(
+            timeout_sec=max(0.0, deadline - self._monotonic()),
         ):
             return False
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            return False
         future = client.call_async(request)
-        self._spin_until(self._node, future, timeout_sec=timeout_s)
+        self._spin_until(self._node, future, timeout_sec=remaining)
         if not future.done():
             return False
         response = future.result()
@@ -155,11 +199,18 @@ class LocalTrainingResetAdapter:
     TOTAL_DEADLINE_S = 15.0
     SERVICE_TIMEOUT_S = 1.0
     PAUSE_RESUME_TIMEOUT_S = 2.0
+    MEASUREMENT_MAX_RECEIVE_AGE_S = 0.2
 
     def __init__(
         self, services: GazeboResetServices,
         confirmed_state: Callable[[bool, float], bool],
-        measurement: Callable[[], ResetMeasurement],
+        measurement: Callable[[], Sequence[ResetMeasurement]],
+        *, expected_session_id: str, expected_config_hash: str,
+        expected_backend_instance_id: int, expected_reset_epoch: int,
+        expected_episode_generation: int, expected_runtime_generation: int,
+        expected_final_publisher_instance_id: int,
+        expected_safe_stop_source_instance_id: int,
+        expected_barrier_stamp_ns: int,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -167,6 +218,39 @@ class LocalTrainingResetAdapter:
         self._services = services
         self._confirmed_state = confirmed_state
         self._measurement = measurement
+        self._expected_session_id = expected_session_id
+        self._expected_config_hash = expected_config_hash
+        self._expected_backend_instance_id = expected_backend_instance_id
+        self._expected_reset_epoch = expected_reset_epoch
+        self._expected_episode_generation = expected_episode_generation
+        self._expected_runtime_generation = expected_runtime_generation
+        self._expected_final_publisher_instance_id = (
+            expected_final_publisher_instance_id
+        )
+        self._expected_safe_stop_source_instance_id = (
+            expected_safe_stop_source_instance_id
+        )
+        self._expected_barrier_stamp_ns = expected_barrier_stamp_ns
+        if (
+            not expected_session_id
+            or len(expected_config_hash) != 64
+            or any(c not in '0123456789abcdef' for c in expected_config_hash)
+            or type(expected_backend_instance_id) is not int
+            or expected_backend_instance_id <= 0
+            or type(expected_reset_epoch) is not int
+            or expected_reset_epoch < 0
+            or type(expected_episode_generation) is not int
+            or expected_episode_generation < 0
+            or type(expected_runtime_generation) is not int
+            or expected_runtime_generation < 0
+            or type(expected_final_publisher_instance_id) is not int
+            or expected_final_publisher_instance_id <= 0
+            or type(expected_safe_stop_source_instance_id) is not int
+            or expected_safe_stop_source_instance_id <= 0
+            or type(expected_barrier_stamp_ns) is not int
+            or expected_barrier_stamp_ns < 0
+        ):
+            raise ValueError('reset identity binding must be complete')
         self._sleep = sleep
         self._monotonic = monotonic
 
@@ -179,6 +263,18 @@ class LocalTrainingResetAdapter:
             raise ValueError(
                 'standstill requires at least 21 measured 100 Hz samples'
             )
+        for sample in samples:
+            if (
+                type(sample.iteration) is not int or sample.iteration < 0
+                or type(sample.stamp_ns) is not int or sample.stamp_ns < 0
+                or not isinstance(sample.linear_xyz_mps, tuple)
+                or len(sample.linear_xyz_mps) != 3
+                or not isinstance(sample.angular_xyz_radps, tuple)
+                or len(sample.angular_xyz_radps) != 3
+            ):
+                raise ValueError(
+                    'reset twist vectors must each have three values'
+                )
         for previous, current in zip(samples, samples[1:]):
             if current.iteration != previous.iteration + 1:
                 raise ValueError(
@@ -249,7 +345,11 @@ class LocalTrainingResetAdapter:
             or abs(measurement.y_m - target.y_m) > 0.01
         ):
             raise ValueError('measured XY reset error exceeds 0.01 m')
-        if abs(measurement.yaw_rad - target.yaw_rad) > 0.02:
+        yaw_error = math.atan2(
+            math.sin(measurement.yaw_rad - target.yaw_rad),
+            math.cos(measurement.yaw_rad - target.yaw_rad),
+        )
+        if abs(yaw_error) > 0.02:
             raise ValueError('measured yaw reset error exceeds 0.02 rad')
         if (
             abs(measurement.roll_rad) > 0.05
@@ -265,47 +365,235 @@ class LocalTrainingResetAdapter:
                 'reset footprint clearance including 0.05 m is not proven'
             )
 
+    def _remaining(
+        self, deadline: float, phase_limit: float, phase: str,
+    ) -> float:
+        remaining = min(phase_limit, deadline - self._monotonic())
+        if remaining <= 0:
+            raise TimeoutError(
+                f'total reset deadline exhausted during {phase}'
+            )
+        return remaining
+
+    def _validate_identity_and_freshness(
+        self, samples: Sequence[ResetMeasurement], *, after_steady_s: float,
+        after_stamp_ns: int | None = None,
+    ) -> None:
+        if not samples:
+            raise ValueError('reset requires fresh measured samples')
+        for sample in samples:
+            if (
+                sample.session_id != self._expected_session_id
+                or sample.config_hash != self._expected_config_hash
+                or sample.backend_instance_id
+                != self._expected_backend_instance_id
+                or sample.reset_epoch != self._expected_reset_epoch
+                or sample.episode_generation
+                != self._expected_episode_generation
+                or sample.runtime_generation
+                != self._expected_runtime_generation
+            ):
+                raise ValueError('reset measurement identity mismatch')
+            if (
+                type(sample.receive_steady_ns) is not int
+                or sample.receive_steady_ns < 0
+            ):
+                raise ValueError(
+                    'reset measurement lacks receive steady timestamp'
+                )
+            receive_s = sample.receive_steady_ns / 1_000_000_000
+            if receive_s < after_steady_s or receive_s > self._monotonic():
+                raise ValueError(
+                    'reset measurement receive timestamp is stale or future'
+                )
+            if (
+                self._monotonic() - receive_s
+                > self.MEASUREMENT_MAX_RECEIVE_AGE_S
+            ):
+                raise ValueError(
+                    'reset measurement exceeds receive freshness'
+                )
+            if (
+                after_stamp_ns is not None
+                and sample.stamp_ns <= after_stamp_ns
+            ):
+                raise ValueError(
+                    'reset measurement is not newer than reset barrier'
+                )
+
+    def _validate_applied_zero_receipt(
+        self, fact: AppliedZeroReceiptFact,
+    ) -> None:
+        """Require an identity-bound zero receipt selected by the backend."""
+        if not isinstance(fact, AppliedZeroReceiptFact):
+            raise ValueError(
+                'reset requires a typed applied zero receipt fact'
+            )
+        if (
+            fact.session_id != self._expected_session_id
+            or fact.config_hash != self._expected_config_hash
+            or fact.backend_instance_id != self._expected_backend_instance_id
+            or fact.episode_generation != self._expected_episode_generation
+            or fact.reset_epoch != self._expected_reset_epoch
+            or fact.runtime_generation != self._expected_runtime_generation
+        ):
+            raise ValueError('applied zero receipt identity mismatch')
+        if (
+            type(fact.source) is not int or fact.source != 4
+            or fact.source_instance_id
+            != self._expected_safe_stop_source_instance_id
+            or type(fact.source_instance_id) is not int
+            or type(fact.source_sequence) is not int
+            or fact.source_sequence <= 0
+            or type(fact.step_index) is not int
+            or fact.step_index != 0
+            or fact.transition_id != ''
+            or fact.final_publisher_instance_id
+            != self._expected_final_publisher_instance_id
+            or type(fact.final_publish_sequence) is not int
+            or fact.final_publish_sequence <= 0
+        ):
+            raise ValueError(
+                'applied zero receipt is not a bound SAFE_STOP'
+            )
+        if (
+            not isinstance(fact.twist, tuple) or len(fact.twist) != 6
+            or any(
+                type(value) not in (int, float) or not math.isfinite(value)
+                for value in fact.twist
+            )
+            or any(value != 0.0 for value in fact.twist)
+        ):
+            raise ValueError(
+                'selected SAFE_STOP receipt payload must be finite zero'
+            )
+        if (
+            type(fact.applied_receipt_valid) is not bool
+            or not fact.applied_receipt_valid
+            or type(fact.local_zero_override) is not bool
+            or fact.local_zero_override
+            or fact.applied_final_publisher_instance_id
+            != fact.final_publisher_instance_id
+            or fact.applied_final_publish_sequence
+            != fact.final_publish_sequence
+        ):
+            raise ValueError(
+                'backend did not apply the selected zero receipt key'
+            )
+        if (
+            type(fact.barrier_stamp_ns) is not int
+            or type(fact.receipt_stamp_ns) is not int
+            or type(fact.applied_sim_stamp_ns) is not int
+            or type(fact.applied_physics_iteration) is not int
+            or fact.barrier_stamp_ns < 0
+            or fact.barrier_stamp_ns != self._expected_barrier_stamp_ns
+            or fact.receipt_stamp_ns <= fact.barrier_stamp_ns
+            or fact.applied_sim_stamp_ns < fact.receipt_stamp_ns
+            or fact.applied_physics_iteration <= 0
+        ):
+            raise ValueError(
+                'applied zero receipt timing/barrier proof is invalid'
+            )
+        now_ns = int(self._monotonic() * 1_000_000_000)
+        if (
+            type(fact.receive_steady_ns) is not int
+            or fact.receive_steady_ns < 0
+            or fact.receive_steady_ns > now_ns
+            or now_ns - fact.receive_steady_ns > 100_000_000
+        ):
+            raise ValueError(
+                'applied zero receipt proof is stale or future'
+            )
+
     def execute(
         self, *, target: ResetTarget,
         measured_standstill: Sequence[ResetMeasurement],
-        zero_receipt_applied: bool,
+        applied_zero_receipt: AppliedZeroReceiptFact,
         reset_emulator_and_buffers: Callable[[], None],
     ) -> ResetFacts:
-        """Perform a reset and return only validated measured facts."""
+        """Perform bounded reset actions and return fresh measured facts."""
         start = self._monotonic()
         deadline = start + self.TOTAL_DEADLINE_S
-        if not zero_receipt_applied:
-            raise ValueError('reset requires an actually applied zero receipt')
+        self._validate_applied_zero_receipt(applied_zero_receipt)
         self.validate_standstill_window(measured_standstill)
+        self._validate_identity_and_freshness(
+            measured_standstill, after_steady_s=start - 5.0,
+        )
         if self._monotonic() - start > 5.0:
             raise TimeoutError('standstill phase exceeded 5 s steady')
-        if not self._services.control_world(
+        pre_reset_stamp = measured_standstill[-1].stamp_ns
+        self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'pause service')
+        pause_ack = self._services.control_world(
             world_name=self.WORLD, pause=True,
-            timeout_s=self.SERVICE_TIMEOUT_S,
-        ):
-            raise TimeoutError('Gazebo pause service failed or exceeded 1 s')
-        if not self._confirmed_state(
-            True, min(2.0, deadline - self._monotonic()),
-        ):
+            timeout_s=self._remaining(
+                deadline, self.SERVICE_TIMEOUT_S, 'pause service',
+            ),
+        )
+        if type(pause_ack) is not bool or not pause_ack:
+            raise TimeoutError(
+                'Gazebo pause service failed or exceeded its shared 1 s '
+                'deadline'
+            )
+        pause_confirmed = self._confirmed_state(
+            True, self._remaining(
+                deadline, self.PAUSE_RESUME_TIMEOUT_S,
+                'pause confirmation',
+            ),
+        )
+        if type(pause_confirmed) is not bool or not pause_confirmed:
             raise TimeoutError('world pause was not confirmed within 2 s')
         pose_ack = self._services.set_entity_pose(
             world_name=self.WORLD, entity_name=self.ENTITY, target=target,
-            timeout_s=self.SERVICE_TIMEOUT_S,
+            timeout_s=self._remaining(
+                deadline, self.SERVICE_TIMEOUT_S, 'set pose service',
+            ),
         )
-        if not pose_ack:
-            raise TimeoutError('SetEntityPose did not acknowledge within 1 s')
+        if type(pose_ack) is not bool or not pose_ack:
+            raise TimeoutError(
+                'SetEntityPose did not acknowledge within its shared 1 s '
+                'deadline'
+            )
+        self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'emulator reset')
         reset_emulator_and_buffers()
-        if not self._services.control_world(
+        resume_ack = self._services.control_world(
             world_name=self.WORLD, pause=False,
-            timeout_s=self.SERVICE_TIMEOUT_S,
-        ):
-            raise TimeoutError('Gazebo resume service failed or exceeded 1 s')
-        if not self._confirmed_state(
-            False, min(2.0, deadline - self._monotonic()),
-        ):
+            timeout_s=self._remaining(
+                deadline, self.SERVICE_TIMEOUT_S, 'resume service',
+            ),
+        )
+        if type(resume_ack) is not bool or not resume_ack:
+            raise TimeoutError(
+                'Gazebo resume service failed or exceeded its shared 1 s '
+                'deadline'
+            )
+        resumed_at = self._monotonic()
+        resume_confirmed = self._confirmed_state(
+            False, self._remaining(
+                deadline, self.PAUSE_RESUME_TIMEOUT_S,
+                'resume confirmation',
+            ),
+        )
+        if type(resume_confirmed) is not bool or not resume_confirmed:
             raise TimeoutError('world resume was not confirmed within 2 s')
-        measured = self._measurement()
-        self.validate_target(measured, target)
-        if self._monotonic() > deadline:
-            raise TimeoutError('total reset deadline exceeded 15 s steady')
-        return ResetFacts(True, pose_ack, True, True, measured)
+        self._remaining(
+            deadline, self.PAUSE_RESUME_TIMEOUT_S, 'post-resume settling',
+        )
+        settled = self._measurement()
+        if (
+            not isinstance(settled, Sequence)
+            or isinstance(settled, (str, bytes))
+        ):
+            raise ValueError(
+                'post-resume measurement must be a sample sequence'
+            )
+        self.validate_standstill_window(settled)
+        self._validate_identity_and_freshness(
+            settled, after_steady_s=resumed_at, after_stamp_ns=pre_reset_stamp,
+        )
+        for sample in settled:
+            self.validate_target(sample, target)
+        self._remaining(deadline, self.TOTAL_DEADLINE_S, 'completion')
+        measured = settled[-1]
+        return ResetFacts(
+            True, pose_ack, True, True, measured, applied_zero_receipt,
+        )

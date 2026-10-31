@@ -14,24 +14,88 @@
       1.0
     ],
     "wall_height_m": 1.0,
+    "wall_sizes_xyz_m": [
+      [
+        0.2,
+        8.4,
+        1.0
+      ],
+      [
+        0.2,
+        8.4,
+        1.0
+      ],
+      [
+        8.0,
+        0.2,
+        1.0
+      ],
+      [
+        8.0,
+        0.2,
+        1.0
+      ]
+    ],
     "wall_thickness_m": 0.2
   },
   "backend_contract": {
-    "contact_core_sha256": "0f63b250b9adeb3e5564a24a3fcc0b06d821ec2bda59ad17531d05c1c1075b47",
-    "plugin_source_sha256": "2580beb0b2af3d020ba043ae3511188911d865c34520372d85c0ad1d1e92ee70",
-    "receipt_core_sha256": "93271863631a74b1987a95448458534dc03dd6405e42aa27b6118face105dc09"
+    "fingerprint_sha256": "cb0147fe1cf8347647ff6ff76dadeea0ea9b3e44c0aa7aed24dfc0ff3eab1a57",
+    "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "f25f024fac472c8979d3bd9b0e0d6c27ece350e79da42daf181fbf5d02ff69e8",
+    "mecanum_nav_rl_interfaces/CMakeLists.txt": "34dd61114b01846adf78328e9c6b7b72c3c4b1273f08337e2809f5c074c06859",
+    "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
+    "mecanum_nav_rl_interfaces/msg/LocalTrainingSafetyInput.msg": "e75ffbe1cda6f7bacc16aedd71e0cec81415c49b8c79cfeda44528ee2cd150d7",
+    "mecanum_nav_rl_interfaces/msg/SimulationContactState.msg": "5fc9972b844b038042590805d8557a69065a922eabafc670075e45b85c467a36",
+    "mecanum_nav_rl_interfaces/package.xml": "089500f4eccd611ac8b12e6b47be322479691dc186d26c805fcea41cfc04ff73",
+    "mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl.srv": "fb03a5b9a09bd8f5ebc540db00aea52ed1ddbce62cde7c0578d894d8abe5ac83",
+    "mecanum_sim_backend/CMakeLists.txt": "47eeacbaa57fb5ff5b627c5422ebe52ce208137084b6625ace7bfc363a2a2284",
+    "mecanum_sim_backend/env-hooks/mecanum_sim_backend.dsv.in": "777d044a3a3d3751f77abe96cc461d03fbbb59e8b80c6921338cda4f74dcfbf3",
+    "mecanum_sim_backend/include/mecanum_sim_backend/backend_system.hpp": "42390be366b9a169d554454ca85da337708ded8fdf19397893c599244ad961ba",
+    "mecanum_sim_backend/include/mecanum_sim_backend/contact_coverage.hpp": "a5b4bf4323cb2739fda9c47d2f9ec3e7abe9e2aa41bccc654670b3e67f72506d",
+    "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "7f3ce409e07d287db8723961c37ca045d6e7f47ab026107113933649c2129084",
+    "mecanum_sim_backend/package.xml": "97b144b11c483e38689439fc47bb1d62286aaac137f54cb5989199228b9ffaad",
+    "mecanum_sim_backend/src/backend_system.cpp": "19bf3c150c25ebc3e35df7b4edd996d4d90dd7f44658c9f1fccc4725ecea9fa1",
+    "mecanum_sim_backend/src/contact_coverage.cpp": "840a38cb229a0487ccb358abefc403ba58848c613b5faf054bb7a5db5988c07a",
+    "mecanum_sim_backend/src/receipt_gate.cpp": "0f1700be1a9a441dbb06f8b190054c0c192c8d7d23b13fac16ef95fb45321615"
   },
   "backend_id": "NATIVE_B2_BACKEND_V1",
   "collision_registry": {
+    "canonical_geometry_comparison": {
+      "surrogate_differences": [
+        "wheel joints are fixed links; wheel rotation is not simulated",
+        "canonical wheel inertial-origin offsets are omitted from B2 link inertials",
+        "canonical IntelRealsense_D435_Multibody_1 link and collision are omitted",
+        "B2 planar body-motion commands bypass wheel traction and motor dynamics"
+      ]
+    },
     "maximum": 64,
-    "probe_collision": "b2_training_arena::b2_contact_probe::link::collision",
+    "probe_collision": "b2_training_arena::b2_capability_probe::link::collision",
     "probe_model": "b2_contact_probe",
-    "tracked_collision_names": [
-      "b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision",
-      "b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision",
-      "b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision",
-      "b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision",
-      "b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision"
+    "tracked_collisions": [
+      {
+        "collision": "b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision",
+        "sensor": "b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision_contact_sensor",
+        "wheel_floor_ignore": false
+      },
+      {
+        "collision": "b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision",
+        "sensor": "b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision_contact_sensor",
+        "wheel_floor_ignore": true
+      },
+      {
+        "collision": "b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision",
+        "sensor": "b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision_contact_sensor",
+        "wheel_floor_ignore": true
+      },
+      {
+        "collision": "b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision",
+        "sensor": "b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision_contact_sensor",
+        "wheel_floor_ignore": true
+      },
+      {
+        "collision": "b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision",
+        "sensor": "b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision_contact_sensor",
+        "wheel_floor_ignore": true
+      }
     ],
     "wheel_floor_ignore": {
       "depth_m": [
@@ -40,6 +104,40 @@
       ],
       "normal_vertical_angle_max_deg": 15.0
     }
+  },
+  "contact_capability_probe": {
+    "cleanup_reserve_steady_s": 1.0,
+    "collision_name": "collision",
+    "collision_size_m": [
+      0.1,
+      0.1,
+      0.1
+    ],
+    "contact_sensor_collision": "collision",
+    "contact_sensor_name": "contact_sensor",
+    "contact_sensor_rate_hz": 100.0,
+    "inertia_kg_m2": [
+      0.001666666666666667,
+      0.001666666666666667,
+      0.001666666666666667,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "mass_kg": 1.0,
+    "minimum_sample_span_ros_s": 0.02,
+    "probe_timeout_steady_s": 5.0,
+    "required_contact_samples": 3,
+    "required_covered_empty_samples": 3,
+    "runtime_entity_name": "b2_capability_probe",
+    "separation_world_z_m": 0.2,
+    "source_model_name": "b2_contact_probe",
+    "spawn_world_pose_xyz_yaw": [
+      -2.0,
+      0.0,
+      0.07,
+      0.0
+    ]
   },
   "ground_truth": {
     "pose_frame": "world",
@@ -59,9 +157,9 @@
     "ROBOT_URDF_final_description/meshes/Wheel_RF_1.stl": "161d136eba02d359cb24f093621fc51e7a072da8b69f638ed22e7cbbe8bac316",
     "ROBOT_URDF_final_description/meshes/base_link.stl": "fe0f09a8c2dbfab53942091e1f31db0973605c3abe1b69ac26398713b06ca262",
     "ROBOT_URDF_final_description/models/b2_contact_probe/model.config": "bf7f4dc0fb00367736c1148742715b3efd6e5c146ea63e2edb29f2c23595be4d",
-    "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8f22eee006ccff4eac7394c13eb5617291af15faa843ea543ab36195e8b90e7",
+    "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8c54c9cea8d34e720cd9515583ba86a377b94e98d6c93b7f23e4c9c79ce6b84",
     "ROBOT_URDF_final_description/models/mecanum_b2/model.config": "270cf64e6e0c7e8ab946035050038be13088b55ce44853fc93145e19f6451b29",
-    "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "21588e0aa8607ef6b350302d67759920866fe0479d6adbd3b0a750d5de20019b",
+    "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "c99626191563ad7e5949cc5fb8b83fcb1a65681d90ffe8b365bd5791264e8e06",
     "ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
     "ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
     "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb"

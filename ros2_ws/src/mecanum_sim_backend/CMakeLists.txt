@@ -14,6 +14,9 @@ find_package(gz-transport13 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(ros_gz_interfaces REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(mecanum_nav_rl_interfaces REQUIRED)
 
 add_library(mecanum_sim_backend_core SHARED
@@ -27,10 +30,11 @@ target_compile_options(mecanum_sim_backend_core PRIVATE -Wall -Wextra -Wpedantic
 add_library(mecanum_sim_backend_system SHARED src/backend_system.cpp)
 target_include_directories(mecanum_sim_backend_system PRIVATE include)
 ament_target_dependencies(mecanum_sim_backend_system
-  rclcpp nav_msgs geometry_msgs mecanum_nav_rl_interfaces)
+  rclcpp nav_msgs geometry_msgs ros_gz_interfaces ament_index_cpp
+  mecanum_nav_rl_interfaces)
 target_link_libraries(mecanum_sim_backend_system
   mecanum_sim_backend_core gz-sim8::gz-sim8 gz-msgs10::gz-msgs10
-  gz-transport13::gz-transport13)
+  gz-transport13::gz-transport13 OpenSSL::Crypto)
 target_compile_options(mecanum_sim_backend_system PRIVATE -Wall -Wextra -Wpedantic)
 
 install(TARGETS mecanum_sim_backend_core mecanum_sim_backend_system
@@ -45,7 +49,12 @@ if(BUILD_TESTING)
   ament_add_gtest(test_contact_coverage test/test_contact_coverage.cpp)
   target_link_libraries(test_contact_coverage mecanum_sim_backend_core)
   ament_add_gtest(test_backend_invariants test/test_backend_invariants.cpp)
-  target_link_libraries(test_backend_invariants mecanum_sim_backend_core)
+  ament_target_dependencies(test_backend_invariants
+    rclcpp nav_msgs geometry_msgs ros_gz_interfaces ament_index_cpp
+    mecanum_nav_rl_interfaces)
+  target_link_libraries(test_backend_invariants
+    mecanum_sim_backend_core gz-sim8::gz-sim8 gz-msgs10::gz-msgs10
+    gz-transport13::gz-transport13 OpenSSL::Crypto)
 endif()
 
 ament_export_include_directories(include)

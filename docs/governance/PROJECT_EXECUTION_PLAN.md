@@ -1095,3 +1095,21 @@ performed; this plan entry does not assert success or close a milestone.
 Next action after delivery is independent exact-commit audit. Runtime observation
 requires separate approval and must start with `gui:=true` as specified by the
 Owner.
+
+### B2.2 backend-control and controlled contact-probe corrective route
+
+The Owner's follow-up authorizes an offline corrective under the same L2 ACR,
+with an effective 65-path allowlist: the original 57-path candidate delta,
+`test_local_training_config.py`, and seven ROSIDL service/package/test paths.
+The corrective scope adds the 2.7.0 `LocalTrainingBackendControl` service while
+preserving all eight messages, and covers production receiver/client seams,
+receipt binding, reset-context admission, observation0 proof checking, and
+backend-controlled contact-probe state. The controlled probe uses a fixture
+outside the robot collision mask and does not alter `B2_CONTACT_V1`.
+
+The approved operation and probe rules are in §5.8–§5.9 of the existing
+Roadmap B ACR. This phase remains offline only. No bridge service, Gazebo
+contact capability, GUI scene, reset, motion, training, Gate, runtime,
+integration, or B2.3 evidence is asserted here. The installed five-package
+build and exact offline test selections remain the only implementation checks
+permitted. Runtime probe execution requires later separate authorization.

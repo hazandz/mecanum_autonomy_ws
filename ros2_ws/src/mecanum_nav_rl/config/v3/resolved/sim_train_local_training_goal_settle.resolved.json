@@ -44,7 +44,7 @@
   "map_identity": {
     "map_id": "b2_training_arena",
     "training_binding": {
-      "asset_manifest_sha256": "8fa763f82d38075b6a794f5e3bbcd7ebacd022ec0bc74774b46d7e8d00ca3bfd",
+      "asset_manifest_sha256": "d3f3bc08ed89f96475df25d35d4fd37cd1b69a8f18753cfa5583bfb47c271154",
       "binding_status": "BOUND",
       "scenario_id": "B2_GOAL_SETTLE_V1",
       "world_id": "b2_training_arena"
@@ -102,10 +102,10 @@
     "robot_model_id": "ROBOT_URDF_final"
   },
   "provenance": {
-    "config_hash": "9874e9ae454524f6f424e77915b996b259d5f8896690bcaf32ed32b942332e09",
+    "config_hash": "c939099e9be5db971c7d3a9fb4af318c21e1e3718b379719694adf698ee448fd",
     "config_hash_algorithm": "sha256",
     "resolution_policy_id": "v3_mode_specific_strict_no_unresolved_tokens",
-    "source_manifest_sha256": "8fa763f82d38075b6a794f5e3bbcd7ebacd022ec0bc74774b46d7e8d00ca3bfd"
+    "source_manifest_sha256": "d3f3bc08ed89f96475df25d35d4fd37cd1b69a8f18753cfa5583bfb47c271154"
   },
   "reward": {
     "contract_id": "ROADMAP_B_B1_REWARD_V3_BASELINE",

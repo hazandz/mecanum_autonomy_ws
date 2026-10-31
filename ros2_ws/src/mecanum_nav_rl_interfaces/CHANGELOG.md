@@ -2,6 +2,23 @@
 
 All notable changes to `mecanum_nav_rl_interfaces` are documented in this file.
 
+## [2.7.0] - Unreleased
+
+### Added
+
+- Added the `LocalTrainingBackendControl.srv` control and proof-query contract.
+  The service carries binding/control facts only; receipt-v2 remains the sole
+  actuator carrier. The declaration does not implement or prove runtime
+  admission, reset, or contact capability.
+- ROSIDL generation now contains eight messages and one service.
+- Named the response schema constant `RESPONSE_SCHEMA_VERSION`; request keeps `SCHEMA_VERSION`. Both retain the `schema_version` field.
+
+### Boundary
+
+- Generated type and serialization checks are offline interface evidence only.
+  Runtime service availability, Gazebo contact capability, and B2.3 coordinator
+  behavior remain unverified and outside this interface package.
+
 ## [2.6.0] - Unreleased
 
 ### Added

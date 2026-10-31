@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <regex>
 #include <utility>
 
@@ -52,7 +53,7 @@ bool ReceiptGate::ValidPayload(const ReceiptFacts &r, std::string &reason) const
            r.reset_epoch != binding_.reset_epoch ||
            r.runtime_generation != binding_.runtime_generation)
     reason = "lifecycle_mismatch";
-  else if (r.stamp_ns < binding_.barrier_stamp_ns) reason = "pre_barrier";
+  else if (r.stamp_ns <= binding_.barrier_stamp_ns) reason = "not_strictly_post_barrier";
   else if (r.stamp_ns < 0) reason = "invalid_stamp";
   else if (!std::all_of(r.twist.begin(), r.twist.end(),
                         [](double value) { return std::isfinite(value); }))
@@ -99,9 +100,11 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   if (!ValidPayload(r, reason)) return Fault(reason);
   if (now_ros_ns < r.stamp_ns || now_steady_ns < item.receive_steady_ns)
     return Fault("future_timestamp");
+  if (last_source_stamp_ns_ && r.stamp_ns < *last_source_stamp_ns_)
+    return Fault("source_timestamp_rollback");
   if (now_ros_ns - r.stamp_ns > binding_.max_ros_age_ns ||
       now_steady_ns - item.receive_steady_ns > binding_.max_steady_age_ns)
-    return {GateDisposition::Rejected, "stale_receipt", std::nullopt, false};
+    return Fault("stale_receipt");
 
   if (last_receipt_ && r.key.publisher_instance_id == last_receipt_->key.publisher_instance_id &&
       r.key.publish_sequence == last_receipt_->key.publish_sequence)
@@ -116,11 +119,19 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   {
     if (r.source != 4 || r.source_instance_id != binding_.safe_stop_source_instance_id ||
         r.sequence != binding_.next_safe_stop_sequence ||
-        r.step_index != 0 || !r.transition_id.empty() || !IsZero(r))
+        r.step_index != 0 || !r.transition_id.empty() || !IsZero(r) ||
+        (require_contiguous_anchor_ &&
+         r.key.publish_sequence != watermark_ + 1) ||
+        r.key.publish_sequence <= watermark_)
       return Fault("startup_anchor_requires_post_barrier_safe_stop_zero");
+    if (binding_.next_safe_stop_sequence ==
+        std::numeric_limits<std::uint64_t>::max())
+      return Fault("safe_stop_source_sequence_exhausted");
     anchored_ = true;
     watermark_ = r.key.publish_sequence;
+    ++binding_.next_safe_stop_sequence;
     last_receipt_ = r;
+    last_source_stamp_ns_ = r.stamp_ns;
     last_accepted_steady_ns_ = item.receive_steady_ns;
     return {GateDisposition::Anchored, "safe_stop_anchor", r, true};
   }
@@ -128,12 +139,28 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     return Fault("final_publication_sequence_gap");
   if (r.source == 1)
   {
-    if (r.source_instance_id != binding_.policy_source_instance_id ||
-        r.sequence != binding_.next_policy_sequence ||
-        r.step_index != binding_.expected_step_index ||
-        r.transition_id != binding_.expected_transition_id || r.step_index == 0 ||
-        r.transition_id.empty())
+    const bool valid_policy_source =
+        r.source_instance_id == binding_.policy_source_instance_id &&
+        r.step_index != 0 && !r.transition_id.empty();
+    const bool matches_current =
+        valid_policy_source &&
+        r.sequence == binding_.next_policy_sequence &&
+        r.step_index == binding_.expected_step_index &&
+        r.transition_id == binding_.expected_transition_id;
+    const bool matches_pending =
+        valid_policy_source && pending_policy_ &&
+        r.sequence == pending_policy_->source_sequence &&
+        r.step_index == pending_policy_->step_index &&
+        r.transition_id == pending_policy_->transition_id;
+    if (!matches_current && !matches_pending)
       return Fault("policy_issuance_binding_mismatch");
+    if (matches_pending)
+    {
+      binding_.next_policy_sequence = pending_policy_->source_sequence;
+      binding_.expected_step_index = pending_policy_->step_index;
+      binding_.expected_transition_id = pending_policy_->transition_id;
+      pending_policy_.reset();
+    }
   }
   else if (r.source == 4)
   {
@@ -141,11 +168,16 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
         r.sequence != binding_.next_safe_stop_sequence ||
         r.step_index != 0 || !r.transition_id.empty() || !IsZero(r))
       return Fault("safe_stop_identity_mismatch");
+    if (binding_.next_safe_stop_sequence ==
+        std::numeric_limits<std::uint64_t>::max())
+      return Fault("safe_stop_source_sequence_exhausted");
+    ++binding_.next_safe_stop_sequence;
   }
   else return Fault("unsupported_receipt_source");
 
   watermark_ = r.key.publish_sequence;
   last_receipt_ = r;
+  last_source_stamp_ns_ = r.stamp_ns;
   last_accepted_steady_ns_ = item.receive_steady_ns;
   return {GateDisposition::Applied, "accepted_once", r, true};
 }
@@ -155,16 +187,60 @@ bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
   return faulted_ || (anchored_ && (now_steady_ns < last_accepted_steady_ns_ ||
          now_steady_ns - last_accepted_steady_ns_ > kWatchdogNs));
 }
-void ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
-                                        std::uint64_t source_sequence,
-                                        std::string transition_id)
+bool ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
+                                       std::uint64_t source_sequence,
+                                       std::string transition_id)
 {
-  binding_.expected_step_index = step_index;
-  binding_.next_policy_sequence = source_sequence;
-  binding_.expected_transition_id = std::move(transition_id);
+  if (faulted_ || pending_policy_ || step_index == 0 ||
+      source_sequence != step_index || transition_id.empty() ||
+      step_index <= binding_.expected_step_index)
+    return false;
+  pending_policy_ = PolicyIdentity{
+      step_index, source_sequence, std::move(transition_id)};
+  return true;
+}
+bool ReceiptGate::BindResetContext(
+    std::int64_t barrier_stamp_ns, std::uint64_t episode_generation,
+    std::uint32_t reset_epoch, std::uint32_t runtime_generation,
+    std::uint64_t next_safe_stop_sequence)
+{
+  const bool newer_generation =
+      episode_generation >= binding_.episode_generation &&
+      reset_epoch >= binding_.reset_epoch &&
+      runtime_generation >= binding_.runtime_generation &&
+      (episode_generation > binding_.episode_generation ||
+       reset_epoch > binding_.reset_epoch ||
+       runtime_generation > binding_.runtime_generation);
+  if (barrier_stamp_ns <= binding_.barrier_stamp_ns || !newer_generation ||
+      next_safe_stop_sequence != binding_.next_safe_stop_sequence)
+    return false;
+  binding_.barrier_stamp_ns = barrier_stamp_ns;
+  binding_.episode_generation = episode_generation;
+  binding_.reset_epoch = reset_epoch;
+  binding_.runtime_generation = runtime_generation;
+  binding_.next_policy_sequence = 0;
+  binding_.expected_step_index = 0;
+  binding_.next_policy_sequence = 0;
+  binding_.expected_transition_id.clear();
+  pending_policy_.reset();
+  queue_.clear();
+  anchored_ = false;
+  require_contiguous_anchor_ = true;
+  faulted_ = false;
+  fault_reason_.clear();
+  return true;
 }
 void ReceiptGate::Invalidate(std::string reason) { faulted_ = true; fault_reason_ = std::move(reason); queue_.clear(); }
 bool ReceiptGate::Faulted() const { return faulted_; }
 std::uint64_t ReceiptGate::Watermark() const { return watermark_; }
+std::uint64_t ReceiptGate::ExpectedSafeStopSequence() const
+{
+  return binding_.next_safe_stop_sequence;
+}
+bool ReceiptGate::HasPendingPolicyStep() const
+{
+  return pending_policy_.has_value();
+}
 std::int64_t ReceiptGate::LastAcceptedSteadyNs() const { return last_accepted_steady_ns_; }
+std::string ReceiptGate::FaultReason() const { return fault_reason_; }
 }  // namespace mecanum_sim_backend

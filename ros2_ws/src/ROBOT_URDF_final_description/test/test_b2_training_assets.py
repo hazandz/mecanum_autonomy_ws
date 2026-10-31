@@ -1,6 +1,7 @@
 """Static checks for Roadmap B source assets; never start Gazebo."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -65,12 +66,33 @@ def test_contact_probe_is_an_installed_asset_not_a_runtime_claim() -> None:
     collision = probe.find(".//collision[@name='collision']")
     assert collision is not None
     assert collision.findtext('geometry/box/size') == '0.10 0.10 0.10'
-    manifest_module = (
-        _ROOT.parents[2]
-        / 'ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/'
-        'simulation/training_asset_binding.py'
-    ).read_text()
-    assert "'active_contact_probe': name == 'B2_CONTACT_V1'" in manifest_module
+    sensor = probe.find(".//sensor[@name='contact_sensor'][@type='contact']")
+    assert sensor is not None
+    assert sensor.findtext('contact/collision') == 'collision'
+    assert sensor.findtext('update_rate') == '100'
+    assert sensor.findtext('always_on') == 'true'
+    from mecanum_nav_rl.simulation.training_asset_binding import (
+        build_training_asset_bundle,
+    )
+
+    repository_root = _ROOT.parents[2]
+    manifest = json.loads(
+        build_training_asset_bundle(repository_root).manifest_bytes,
+    )
+    probe_contract = manifest['contact_capability_probe']
+    assert probe_contract['source_model_name'] == 'b2_contact_probe'
+    assert probe_contract['runtime_entity_name'] == 'b2_capability_probe'
+    assert probe_contract['collision_size_m'] == [0.1, 0.1, 0.1]
+    assert probe_contract['mass_kg'] == 1.0
+    assert probe_contract['contact_sensor_name'] == 'contact_sensor'
+    assert probe_contract['required_contact_samples'] == 3
+    assert probe_contract['required_covered_empty_samples'] == 3
+    scenarios = manifest['scenario_artifacts']
+    assert scenarios['B2_CONTACT_V1']['active_contact_probe'] is True
+    assert all(
+        scenarios[name]['active_contact_probe'] is False
+        for name in ('B2_SOAK_V1', 'B2_GOAL_SETTLE_V1')
+    )
 
 
 def test_mesh_uris_resolve_through_canonical_installed_description_share(
@@ -138,3 +160,24 @@ def test_b2_installed_world_models_urdf_and_manifest_are_byte_equal() -> None:
         assert installed.resolve().is_relative_to(base)
         assert installed.is_file() and source.is_file()
         assert installed.read_bytes() == source.read_bytes()
+
+
+def test_production_binder_semantically_validates_b2_asset_sources():
+    """The binder derives registry facts from source assets."""
+    from mecanum_nav_rl.simulation.training_asset_binding import (
+        validate_b2_asset_sources,
+    )
+
+    facts = validate_b2_asset_sources(_ROOT)
+    assert facts['world_name'] == 'b2_training_arena'
+    assert len(facts['collision_registry']) == 5
+    assert {item['collision'] for item in facts['collision_registry']} == {
+        (
+            'b2_training_arena::mecanum_b2::base_link::'
+            's3_d3_base_contact_collision'
+        ),
+        'b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision',
+        'b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision',
+        'b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision',
+        'b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision',
+    }

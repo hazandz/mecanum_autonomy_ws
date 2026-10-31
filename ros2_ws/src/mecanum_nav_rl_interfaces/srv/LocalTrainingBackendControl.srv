@@ -1,0 +1,141 @@
+uint16 SCHEMA_VERSION=1
+
+uint8 OP_BIND_SESSION=1
+uint8 OP_BIND_PENDING_STEP=2
+uint8 OP_CONFIRM_OBSERVATION0=3
+uint8 OP_INHIBIT=4
+uint8 OP_VERIFY_CONTACT_CAPABILITY=5
+uint8 OP_BIND_RESET_CONTEXT=6
+
+uint8 PROBE_ACTION_NONE=0
+uint8 PROBE_ACTION_START=1
+uint8 PROBE_ACTION_QUERY=2
+uint8 PROBE_ACTION_ABORT=3
+
+uint8 PRIMARY_UNCONFIGURED=0
+uint8 PRIMARY_INACTIVE=1
+uint8 PRIMARY_ACTIVE=2
+uint8 BARRIER_INIT=0
+uint8 BARRIER_READY=1
+uint8 BARRIER_NON_READY=2
+uint8 BARRIER_FAULT=3
+
+uint16 schema_version
+uint8 operation
+uint8 probe_action
+
+uint64 coordinator_ingress_instance_id
+uint64 request_sequence
+uint64 expected_binding_revision
+uint64 expected_backend_instance_id
+
+string<=64 session_id
+string<=64 config_hash
+string<=64 asset_manifest_sha256
+
+uint64 episode_generation
+uint32 reset_epoch
+uint32 runtime_generation
+uint64 lifecycle_sequence
+uint8 primary_state
+uint8 barrier_state
+builtin_interfaces/Time lifecycle_header_stamp
+string<=64 lifecycle_frame_id
+builtin_interfaces/Time barrier_stamp
+bool motion_permitted
+
+uint64 final_publisher_instance_id
+uint64 policy_source_instance_id
+uint64 safe_stop_source_instance_id
+uint64 next_safe_stop_sequence
+
+uint64 pending_step_index
+uint64 pending_source_sequence
+string<=36 pending_transition_id
+builtin_interfaces/Time action_barrier_stamp
+
+builtin_interfaces/Time observation0_cutoff
+uint64 selected_zero_final_publisher_instance_id
+uint64 selected_zero_final_publish_sequence
+uint64 adjacent_boundary_final_publisher_instance_id
+uint64 adjacent_boundary_final_publish_sequence
+
+uint64 probe_start_request_sequence
+---
+uint16 RESPONSE_SCHEMA_VERSION=1
+
+uint8 RESULT_QUEUED=2
+uint8 RESULT_APPLIED=3
+uint8 RESULT_REJECTED=4
+uint8 RESULT_FAULTED=5
+
+uint16 REASON_NONE=0
+uint16 REASON_BAD_SCHEMA=1
+uint16 REASON_BAD_OPERATION=2
+uint16 REASON_IDENTITY_MISMATCH=3
+uint16 REASON_BACKEND_RESTARTED=4
+uint16 REASON_LIFECYCLE_MISMATCH=5
+uint16 REASON_BARRIER_INVALID=6
+uint16 REASON_REVISION_MISMATCH=7
+uint16 REASON_REQUEST_REPLAY=8
+uint16 REASON_REQUEST_GAP=9
+uint16 REASON_DUPLICATE_CONTENT_CONFLICT=10
+uint16 REASON_QUEUE_OVERFLOW=11
+uint16 REASON_BUSY=12
+uint16 REASON_PENDING_STEP_MISMATCH=13
+uint16 REASON_OBSERVATION0_PROOF_MISMATCH=14
+uint16 REASON_CONTACT_PROBE_NOT_READY=15
+uint16 REASON_CONTACT_PROBE_FAILED=16
+uint16 REASON_UNUSED_FIELD_NONZERO=17
+uint16 REASON_FAULT_LATCHED=18
+uint16 REASON_CONTROL_EXPIRED=19
+uint16 REASON_CONTEXT_NOT_NEW=20
+uint16 REASON_FIXTURE_CONFLICT=21
+uint16 REASON_CANCELLED=22
+
+uint8 CAPABILITY_UNKNOWN=0
+uint8 CAPABILITY_RUNNING=1
+uint8 CAPABILITY_VERIFIED=2
+uint8 CAPABILITY_FAILED=3
+uint8 CAPABILITY_INVALIDATED=4
+
+uint16 schema_version
+uint8 result
+uint16 reason_code
+uint64 request_sequence
+uint64 backend_instance_id
+uint64 binding_revision
+uint64 applied_binding_revision
+uint64 applied_physics_iteration
+builtin_interfaces/Time applied_sim_stamp
+
+uint8 contact_capability_state
+uint64 capability_revision
+uint64 proof_backend_instance_id
+string<=64 proof_session_id
+string<=64 proof_config_hash
+string<=64 proof_asset_manifest_sha256
+string<=64 proof_collision_registry_sha256
+string<=128 proof_world_name
+string<=128 proof_physics_engine_plugin
+string<=32 proof_gz_sim_version
+string<=64 proof_physics_engine_fingerprint_sha256
+
+string<=128 probe_model_scoped_name
+uint64 probe_model_entity_id
+string<=128 probe_collision_scoped_name
+uint64 probe_collision_entity_id
+string<=128 floor_collision_scoped_name
+uint64 floor_collision_entity_id
+
+uint16 contact_sample_count
+uint64 contact_first_iteration
+uint64 contact_last_iteration
+builtin_interfaces/Time contact_first_stamp
+builtin_interfaces/Time contact_last_stamp
+
+uint16 covered_empty_sample_count
+uint64 empty_first_iteration
+uint64 empty_last_iteration
+builtin_interfaces/Time empty_first_stamp
+builtin_interfaces/Time empty_last_stamp

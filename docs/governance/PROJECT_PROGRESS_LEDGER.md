@@ -1926,3 +1926,16 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Evidence status | `AUTHORIZED_OFFLINE_IMPLEMENTATION_IN_PROGRESS`; this entry records authority and scope only. It is not a test, build, audit, delivery, integration, Gate, runtime, training, HIL, or hardware result. |
 | Boundary | No ROS graph, Gazebo, launch, GUI, motion, runtime guard, training/evaluation/soak, HIL, hardware, integration, or B2.3 implementation is authorized by this work package. |
 | Next action | Complete only the enumerated offline checks and candidate delivery if every precondition and exit criterion passes; then stop for independent exact-commit audit. |
+
+
+### Roadmap B B2.2 backend-control and controlled contact-probe corrective authorization — 2026-10-30
+
+| Field | Value |
+|---|---|
+| Supersedes | `Roadmap B B2.2 simulation substrate — Owner-authorized offline implementation — 2026-10-30` only for effective allowlist and added interface/control/probe scope; the original authorization remains in history. |
+| Work package | `ROADMAP_B_B22_SIMULATION_SUBSTRATE`; same L2 Decision ID `ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`. |
+| Candidate identity | Branch `roadmap-b-b22-simulation-substrate`; starting candidate `e01f264734a8ca337cc22eaa65bff9306d634e17`; follow-up parent requirement is that exact SHA; original base and expected integration remain `ef9e0281cfb9de04d89a2698d6d7899bcde92803`. |
+| Added scope | Effective 65-path allowlist; interface package 2.7.0 with one `LocalTrainingBackendControl` service and eight unchanged messages; backend control receiver/client seam; current/pending POLICY and reset-context binding; bounded observation0 evidence check; controlled probe implementation and asset/bridge closure. |
+| Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records scope only. No tests, build, delivery, audit, runtime, Gate, or integration result is claimed. |
+| Boundary | No ROS graph, Gazebo, bridge/service call, GUI, contact probe, motion, reset, B2.3 coordinator/Safety/FinalTwistPublisher, training, evaluation, soak, HIL, hardware, integration, or Gate activity is authorized. |
+| Next action | Complete the stated offline implementation and checks; if exact installed dependencies or an allowlisted production connection are insufficient, report the concrete blocker and preserve the candidate. |

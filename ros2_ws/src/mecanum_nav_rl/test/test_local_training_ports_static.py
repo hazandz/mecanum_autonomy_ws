@@ -5,13 +5,17 @@ The test inspects port types without constructing a ROS graph.
 from dataclasses import fields
 
 from mecanum_nav_rl.runtime_simulation.local_training_ports import (
+    BACKEND_CONTROL_ENDPOINT,
     GroundTruthPortSample,
+    LocalTrainingBackendControlPort,
     PolicySafeOdometryPort,
     SimulatedOdometryPort,
 )
 from mecanum_nav_rl.simulation.simulated_odometry import (
     SimulatedOdometryNoiseConfig,
 )
+
+from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl
 
 
 def test_emulator_wrapper_keeps_ground_truth_out_of_policy_safe_type():
@@ -44,3 +48,39 @@ def test_negative_profiles_keep_no_vector_and_original_stamp():
     assert last.snapshot.status.value == 'delayed'
     assert last.snapshot.measurement is None
     assert last.snapshot.timestamp_ns == 30
+
+
+def test_backend_control_adapter_uses_canonical_endpoint_and_injected_client():
+    """The client adapter uses an injected client at the fixed endpoint."""
+    class Future:
+        pass
+
+    class Client:
+        def __init__(self):
+            self.request = None
+            self.future = Future()
+
+        def call_async(self, request):
+            self.request = request
+            return self.future
+
+    class Node:
+        def __init__(self):
+            self.created = None
+
+        def create_client(self, service_type, endpoint):
+            self.created = (service_type, endpoint)
+            return client
+
+    client = Client()
+    node = Node()
+    port = LocalTrainingBackendControlPort.from_node(node)
+    request = LocalTrainingBackendControl.Request()
+    request.schema_version = request.SCHEMA_VERSION
+    request.coordinator_ingress_instance_id = 17
+    request.request_sequence = 1
+    assert node.created == (
+        LocalTrainingBackendControl, BACKEND_CONTROL_ENDPOINT,
+    )
+    assert port.submit(request) is client.future
+    assert client.request is request

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from mecanum_nav_rl.config.v3_hashing import config_v3_sha256
 from mecanum_nav_rl.config.v3_loader import load_v3_mapping
 from mecanum_nav_rl.config.v3_models import (
-    ConfigTokenV3,
     ResolvedConfigV3,
     RuntimeProfileV3,
     TokenizedConfigInputV3,
@@ -57,7 +56,9 @@ class ApprovedExperimentOverrideV3:
     def __post_init__(self) -> None:
         load_v3_mapping(self.values)
         if not isinstance(self.approval, ApprovalProvenanceV3):
-            raise TypeError('experiment override requires ApprovalProvenanceV3')
+            raise TypeError(
+                'experiment override requires ApprovalProvenanceV3'
+            )
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SafetyLifecycleState.msg"
   "msg/LocalTrainingSafetyInput.msg"
   "msg/SimulationContactState.msg"
+  "srv/LocalTrainingBackendControl.srv"
   DEPENDENCIES
     std_msgs
     geometry_msgs
@@ -39,6 +40,9 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_local_training_interfaces
     test/test_local_training_interfaces.py
+  )
+  ament_add_pytest_test(test_local_training_backend_control_interface
+    test/test_local_training_backend_control_interface.py
   )
 endif()
 
