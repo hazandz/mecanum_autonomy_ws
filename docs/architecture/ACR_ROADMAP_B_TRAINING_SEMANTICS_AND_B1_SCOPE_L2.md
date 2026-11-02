@@ -515,3 +515,21 @@ Owner acknowledgment, human visual acceptance, contact capability, physics or
 braking validation, motion behavior, or functional safety. Owner authority
 would remain the separate pre-run approval of exact packet pins and post-run
 review of immutable evidence. No new runtime authorization is granted here.
+
+The RUN002 design now specifies a bounded request/result file mailbox under the
+new run's evidence root. The runner would publish a screenshot-bound review
+request; Codex would inspect that exact image and atomically publish a
+`reviewer_kind=CODEX` result; the runner would validate the request, packet,
+session and screenshot hashes while health monitoring continues. The exchange
+would not use Owner stdin/TTY or fabricate an Owner token. It remains a proposed
+consistency/provenance mechanism, not authentication, and the acceptance change
+remains `PENDING_OWNER_APPROVAL`.
+
+The same design preserves the existing B2 identity types: `session_id` is a UUID
+string; `coordinator_ingress_instance_id` is a nonzero `uint64`, generated once
+and propagated unchanged through acquisition/descriptor/world and backend
+producer/consumer binding. It does not propose an interface/schema change.
+The proposed render-review checkpoint is capped at 15 s from window enumeration
+through Codex image review and runner result validation. That tool round-trip
+latency has not been measured; this is a disclosed feasibility risk for Owner
+review, not permission to extend the current active/cleanup/total caps.
