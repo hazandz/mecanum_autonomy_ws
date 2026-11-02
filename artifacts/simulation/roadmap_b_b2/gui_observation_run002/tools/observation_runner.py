@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import json
 import os
 import re
@@ -130,6 +131,18 @@ def process_start_identity(pid: int, proc_root: Path = Path('/proc')) -> dict:
         'session_id': int(fields[3]),
         'start_ticks': int(fields[19]),
     }
+
+
+def _valid_owned_leader_identity(identity, pid):
+    """Require a complete, typed identity for a newly owned session leader."""
+    if not isinstance(identity, dict):
+        return False
+    for key in ('pid', 'process_group_id', 'session_id', 'start_ticks'):
+        if type(identity.get(key)) is not int or identity[key] <= 0:
+            return False
+    return (identity['pid'] == pid
+            and identity['process_group_id'] == pid
+            and identity['session_id'] == pid)
 
 
 def process_parent_pid(pid: int, proc_root: Path = Path('/proc')) -> int:
@@ -1210,11 +1223,16 @@ def validate_review_result(result, request_bytes, request, *, now_ns):
 class TrackedProcessLauncher:
     """Use the audited launcher while checking its owned session identity."""
 
-    def __init__(self, delegate, on_start=None, identity_reader=None):
+    def __init__(self, delegate, on_start=None, identity_reader=None,
+                 proc_root=Path('/proc'), signal_process=os.kill,
+                 process_inventory=None):
         """Wrap the audited launcher with process-start identity tracking."""
         self.delegate = delegate
         self.on_start = on_start
         self.identity_reader = identity_reader or process_start_identity
+        self.proc_root = Path(proc_root)
+        self.signal_process = signal_process
+        self.process_inventory = process_inventory
         self.identities = {}
         self.records = []
         self.waiters = {}
@@ -1231,11 +1249,7 @@ class TrackedProcessLauncher:
         self.waiters[id(process)] = asyncio.create_task(process.wait())
         try:
             identity = self.identity_reader(process.pid)
-            if (
-                identity.get('pid') != process.pid
-                or identity.get('process_group_id') != process.pid
-                or identity.get('session_id') != process.pid
-            ):
+            if not _valid_owned_leader_identity(identity, process.pid):
                 raise ObservationFailure(
                     'new launcher process is not its owned session leader'
                 )
@@ -1256,44 +1270,56 @@ class TrackedProcessLauncher:
                 'residue is unverified'
             )
         members = []
-        for entry in Path('/proc').iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                current = process_start_identity(int(entry.name))
-            except (
-                FileNotFoundError, ProcessLookupError,
-                PermissionError, ValueError,
-            ):
-                continue
-            if (
-                current['process_group_id'] == identity['process_group_id']
-                and current['session_id'] == identity['session_id']
-                and current['start_ticks'] >= identity['start_ticks']
-            ):
+        leader_access_uncertain = False
+        if self.process_inventory is not None:
+            inventory = self.process_inventory()
+        else:
+            inventory = []
+            for entry in self.proc_root.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    inventory.append(
+                        self.identity_reader(int(entry.name)),
+                    )
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except (PermissionError, ValueError):
+                    if int(entry.name) == process.pid:
+                        leader_access_uncertain = True
+                    continue
+        for current in inventory:
+            if current['pid'] == process.pid:
+                if current != identity:
+                    raise ObservationFailure(
+                        'owned process leader identity changed; '
+                        'PID reuse suspected'
+                    )
+            if (current['process_group_id'] == identity['process_group_id']
+                    and current['session_id'] == identity['session_id']
+                    and current['start_ticks'] >= identity['start_ticks']):
                 members.append(current)
+        if leader_access_uncertain:
+            raise ObservationFailure(
+                'owned process leader identity unavailable; residue unknown'
+            )
         return identity, members
 
     def group_alive(self, process):
         """Check members against the process group and session identity."""
         if id(process) not in self.identities:
-            if process.returncode is not None:
-                raise ObservationFailure(
-                    'leader exited before its process-group identity was read'
-                )
-            return self.delegate.group_alive(process)
+            raise ObservationFailure(
+                'owned process group identity is unknown; residue unverified'
+            )
         _identity, members = self._members(process)
         return bool(members)
 
     async def stop_group(self, process, sig):
         """Signal only members whose current proc identity remains owned."""
         if id(process) not in self.identities:
-            if process.returncode is not None:
-                raise ObservationFailure(
-                    'cannot signal an unverified group after leader exit'
-                )
-            await self.delegate.stop_group(process, sig)
-            return
+            raise ObservationFailure(
+                'cannot signal a process group without verified identity'
+            )
         identity, members = self._members(process)
         if not members:
             return
@@ -1304,17 +1330,22 @@ class TrackedProcessLauncher:
             leader is not None
             and leader['start_ticks'] == identity['start_ticks']
         ):
+            current = self.identity_reader(process.pid)
+            if current != identity:
+                raise ObservationFailure(
+                    'leader identity changed before signal; residue unknown'
+                )
             await self.delegate.stop_group(process, sig)
             return
         # The leader exited; signal only members whose live proc identity was
         # captured in the currently verified owned session.
         import signal
         for member in members:
-            current = process_start_identity(member['pid'])
+            current = self.identity_reader(member['pid'])
             if current != member:
                 continue
             try:
-                os.kill(
+                self.signal_process(
                     member['pid'],
                     sig if isinstance(sig, int) else signal.SIGINT,
                 )
@@ -1332,6 +1363,78 @@ class ResilientSupervisor:
         cleanup_options = kwargs.pop('cleanup_options', {})
 
         class BoundSupervisor(base_type):
+            async def start(self):
+                """Start the RUN002 composition without a human ACK stage."""
+                ProcessRecord = importlib.import_module(
+                    'mecanum_nav_bringup.local_training_process_supervisor',
+                ).ProcessRecord
+                try:
+                    bind_environment = getattr(
+                        self.readiness, 'bind_environment', None,
+                    )
+                    if bind_environment is not None:
+                        bind_environment(self.plan.environment)
+                    bridge_command = getattr(
+                        self.plan, 'bridge_command', None,
+                    )
+                    if bridge_command:
+                        bridge = await self.launcher.start(
+                            bridge_command, self.plan.environment,
+                        )
+                        record = ProcessRecord(
+                            'parameter_bridge', bridge_command,
+                            bridge.pid, bridge,
+                        )
+                        self.owned.append(record)
+                        self._capture_output(record)
+                        self.evidence_sink.record(
+                            'parameter_bridge_requested', self._facts(record),
+                        )
+                    server_command = self.plan.commands[0]
+                    server = await self.launcher.start(
+                        server_command, self.plan.environment,
+                    )
+                    record = ProcessRecord(
+                        'server', server_command, server.pid, server,
+                    )
+                    self.owned.append(record)
+                    self._capture_output(record)
+                    self.evidence_sink.record(
+                        'server_requested', self._facts(record),
+                    )
+                    await self.readiness.server_scene(
+                        self.plan, server, self.SERVER_READY_TIMEOUT_S,
+                    )
+                    self.evidence_sink.record(
+                        'server_scene_ready', {
+                            **self._facts(record),
+                            'session_id': self.plan.session_id,
+                        },
+                    )
+                    if not self.plan.gui_requested:
+                        return
+                    gui_command = self.plan.commands[1]
+                    gui = await self.launcher.start(
+                        gui_command, self.plan.environment,
+                    )
+                    gui_record = ProcessRecord(
+                        'gui', gui_command, gui.pid, gui,
+                    )
+                    self.owned.append(gui_record)
+                    self._capture_output(gui_record)
+                    self.evidence_sink.record(
+                        'gui_requested', self._facts(gui_record),
+                    )
+                    await self.readiness.gui_process_started(
+                        self.plan, gui, self.GUI_READY_TIMEOUT_S,
+                    )
+                    self.evidence_sink.record(
+                        'gui_process_started', self._facts(gui_record),
+                    )
+                except BaseException:
+                    await self.cleanup()
+                    raise
+
             async def cleanup(self):
                 captured = list(self.owned)
                 captured.extend(
@@ -2148,6 +2251,7 @@ async def _monitor_owned_processes(
 
 async def _wait_competing(
     awaitable, monitor_task, deadline, steady, observer_task=None,
+    wait_fn=asyncio.wait,
 ):
     """Wait for one operation while process monitoring remains active."""
     operation = asyncio.ensure_future(awaitable)
@@ -2158,7 +2262,7 @@ async def _wait_competing(
         competing = {operation, monitor_task}
         if observer_task is not None:
             competing.add(observer_task)
-        done, _pending = await asyncio.wait(
+        done, _pending = await wait_fn(
             competing, timeout=remaining,
             return_when=asyncio.FIRST_COMPLETED,
         )
@@ -2181,6 +2285,10 @@ async def _wait_competing(
                 'observation completed before Codex review acceptance'
             )
         if operation in done:
+            if steady() >= deadline:
+                raise ObservationFailure(
+                    'competing operation completed at or after its deadline'
+                )
             return operation.result()
         raise ObservationFailure('240 s consume-to-end deadline expired')
     finally:
@@ -2464,6 +2572,9 @@ async def _run(args, *, dependencies=None):
             deps.get('launcher', SubprocessProcessLauncher()),
             on_start=sink_factory,
             identity_reader=deps.get('process_identity_reader'),
+            proc_root=deps.get('proc_root', Path('/proc')),
+            signal_process=deps.get('signal_process', os.kill),
+            process_inventory=deps.get('process_inventory'),
         )
         readiness_base = (
             deps['readiness'] if 'readiness' in deps else RclpyReadiness()
@@ -2564,10 +2675,14 @@ async def _run(args, *, dependencies=None):
             max(0.0, review_deadline - review_started) * 1_000_000_000
         )
         partition = plan.environment['GZ_PARTITION']
-        window = await deps.get('bind_gui_window', bind_gui_window)(
-            launcher=launcher, environment=bound_environment,
-            partition=partition, deadline=review_deadline, steady=mono,
-            sink=sink,
+        window = await _wait_competing(
+            deps.get('bind_gui_window', bind_gui_window)(
+                launcher=launcher, environment=bound_environment,
+                partition=partition, deadline=review_deadline, steady=mono,
+                sink=sink,
+            ),
+            process_monitor_task, review_deadline, mono, observer_task,
+            wait_fn=deps.get('binding_wait_fn', asyncio.wait),
         )
         window['evidence_sequence'] = sink.record('gui_window_bound', {
             key: value for key, value in window.items()
@@ -2812,6 +2927,27 @@ async def _run(args, *, dependencies=None):
             cleanup_errors.append('consume_to_end_deadline_exceeded')
         if mono() > cleanup_deadline:
             cleanup_errors.append('cleanup_deadline_exceeded')
+        finalization_deadline = min(cleanup_deadline, total_deadline)
+
+        def check_finalization_deadline(stage, *, record_if_possible=False):
+            nonlocal final_status
+            if mono() <= finalization_deadline:
+                return
+            reason = f'finalization_deadline_exceeded:{stage}'
+            if reason not in cleanup_errors:
+                cleanup_errors.append(reason)
+            final_status = 'FAIL'
+            if record_if_possible:
+                try:
+                    sink.record('finalization_deadline_violation', {
+                        'stage': stage,
+                        'deadline_steady': finalization_deadline,
+                    })
+                except BaseException as error:
+                    cleanup_errors.append(
+                        'finalization_deadline_evidence_failure:'
+                        f'{type(error).__name__}'
+                    )
         if cleanup_errors:
             final_status = 'FAIL'
         if sink is not None:
@@ -2836,6 +2972,9 @@ async def _run(args, *, dependencies=None):
                     'cleanup_elapsed_s': mono() - cleanup_start,
                     'cleanup_errors': cleanup_errors,
                 })
+                check_finalization_deadline(
+                    'final_status_record', record_if_possible=True,
+                )
             except BaseException as error:
                 final_status = 'FAIL'
                 cleanup_errors.append(
@@ -2851,6 +2990,7 @@ async def _run(args, *, dependencies=None):
             try:
                 sink.close()
                 close_ok = True
+                check_finalization_deadline('sink_close')
             except BaseException as error:
                 final_status = 'FAIL'
                 cleanup_errors.append(
@@ -2866,20 +3006,38 @@ async def _run(args, *, dependencies=None):
                         'status': final_status,
                         'automated_observation_verdict': observation_verdict,
                         'owner_visual_review': 'NOT_PERFORMED',
-                        'stream_sha256': sha256_file(stream_path),
+                        'stream_sha256': deps.get(
+                            'stream_hasher', sha256_file,
+                        )(stream_path),
                         'cleanup_errors': cleanup_errors,
                         'completed_utc': wall_utc(),
                     }
-                    atomic_publish(
+                    check_finalization_deadline('stream_hash')
+                    completion['status'] = final_status
+                    completion['cleanup_errors'] = cleanup_errors
+                    deps.get('completion_publisher', atomic_publish)(
                         evidence_root / 'final_result.json',
                         (json.dumps(completion, sort_keys=True,
                                     separators=(',', ':')) + '\n').encode(),
                     )
+                    check_finalization_deadline('completion_publication')
                 except BaseException as error:
                     final_status = 'FAIL'
                     cleanup_errors.append(
                         f'evidence_completion:{type(error).__name__}:{error}'
                     )
+    if mono() > min(cleanup_window.begin(), total_deadline):
+        final_status = 'FAIL'
+        if ('finalization_deadline_exceeded:runner_return'
+                not in cleanup_errors):
+            cleanup_errors.append(
+                'finalization_deadline_exceeded:runner_return'
+            )
+        print(
+            'RUN002_FINALIZATION_DEADLINE_VIOLATION '
+            'stage=runner_return marker_may_be_non_authoritative',
+            file=sys.stderr, flush=True,
+        )
     return final_status
 
 

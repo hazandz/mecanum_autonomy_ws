@@ -18,6 +18,12 @@ BUNDLE = HERE.parent
 PACKET = BUNDLE / 'packet.json'
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+for import_root in (
+        Path('/tmp/b22_gui_observation_run001_install')
+        / 'lib/python3.12/site-packages',
+        Path('/opt/ros/jazzy/lib/python3.12/site-packages')):
+    if import_root.is_dir() and str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 guard = importlib.import_module('observation_guard')
 runner = importlib.import_module('observation_runner')
 sink = importlib.import_module('observation_sink')
@@ -791,7 +797,8 @@ def test_review_deadline_is_absolute_and_duplicate_read_does_not_refresh(
     assert len(seen) == 1
 
 
-def make_runner_inputs(tmp_path, *, startup_failure=False):
+def make_runner_inputs(
+        tmp_path, *, startup_failure=False, production_supervisor=False):
     """Build _run dependencies entirely from local fakes and temp files."""
     packet = bundle_packet()
     packet_path = tmp_path / 'packet.json'
@@ -816,6 +823,8 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
         'capture_started': asyncio.Event(),
         'capture_released': asyncio.Event(),
         'capture_cancelled': [],
+        'owner_ack_calls': [],
+        'readiness_failure': None,
     }
     png = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR'
            + (2).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'fixture')
@@ -863,6 +872,14 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
             events.append(('spawn', runner._process_label(command)))
             return proc
 
+        def group_alive(self, process):
+            """Test helper for RUN002 offline behavior."""
+            return process.returncode is None
+
+        async def stop_group(self, process, _sig):
+            """Test helper for RUN002 offline behavior."""
+            process.finish()
+
     class FakeReadiness:
 
         def bind_environment(self, environment):
@@ -872,10 +889,21 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
         async def server_scene(self, plan, process, timeout_s):
             """Test helper for RUN002 offline behavior."""
             events.append(('scene_ready', timeout_s))
+            if state['readiness_failure'] == 'server':
+                raise RuntimeError('injected server readiness failure')
+            if state['readiness_failure'] == 'server_cancel':
+                raise asyncio.CancelledError
 
         async def gui_process_started(self, plan, process, timeout_s):
             """Test helper for RUN002 offline behavior."""
             events.append(('gui_ready', timeout_s))
+            if state['readiness_failure'] == 'gui':
+                raise RuntimeError('injected GUI readiness failure')
+
+        async def owner_ack(self, _timeout_s):
+            """Fail if a RUN002 path accidentally requests human ACK."""
+            state['owner_ack_calls'].append(True)
+            raise AssertionError('RUN002 must not request Owner ACK')
 
     class FakeSupervisor:
 
@@ -1045,13 +1073,19 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
                     'acquire': guard.acquire_once,
                     'launcher': FakeLauncher(),
                     'process_identity_reader': identity_reader,
+                    'process_inventory': lambda: [
+                        identity_reader(process.pid)
+                        for _command, process in processes
+                        if process.returncode is None
+                    ],
                     'readiness': FakeReadiness(),
-                    'supervisor_factory': FakeSupervisor,
                     'observer_factory': lambda: observer,
                     'evaluate_observation': evaluate,
                     'bind_gui_window': bind_window,
                     'await_review': review_waiter,
                     'cleanup_escalation_grace': (0, 0, 0)}
+    if not production_supervisor:
+        dependencies['supervisor_factory'] = FakeSupervisor
     dependencies.update(_host_dependency_fakes(packet))
     return (SimpleNamespace(gui=True, approved_commit=commit), dependencies,
             events, processes, root, observer, state)
@@ -1135,6 +1169,408 @@ def test_partial_startup_rolls_back_all_created_fake_children(tmp_path):
     assert observer.closed == 1
     result = json.loads((root / 'final_result.json').read_text())
     assert result['status'] == 'FAIL'
+
+
+def test_default_production_supervisor_reaches_codex_review_without_owner_ack(
+        tmp_path, monkeypatch):
+    """Test RUN002's actual wrapper start path omits human confirmation."""
+    args, deps, events, _processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    from mecanum_nav_bringup.local_training_process_supervisor import (
+        LocalTrainingProcessSupervisor,
+    )
+
+    async def forbidden_owner_ack(*_args, **_kwargs):
+        raise AssertionError('installed Owner ACK path must not be called')
+
+    monkeypatch.setattr(
+        LocalTrainingProcessSupervisor, '_owner_ack_with_liveness',
+        forbidden_owner_ack,
+    )
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    assert verdict == 'PASS'
+    assert state['owner_ack_calls'] == []
+    assert any(event[0] == 'gui_ready' for event in events)
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    assert not any(
+        record['facts'].get('confirmation_source') == 'human_owner'
+        for record in records
+    )
+    assert not any(record['event'] == 'gui_scene_owner_confirmed'
+                   for record in records)
+
+
+@pytest.mark.parametrize('failure', ['server', 'gui', 'server_cancel'])
+def test_default_production_supervisor_rolls_back_readiness_failures(
+        tmp_path, failure):
+    """Test production wrapper owns and rolls back partial compositions."""
+    args, deps, _events, processes, root, observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    state['readiness_failure'] = failure
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    assert verdict == 'FAIL'
+    assert processes
+    assert all(process.returncode is not None
+               for _command, process in processes)
+    assert observer.closed == 1
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    assert not any(record['event'] == 'codex_review_request_published'
+                   for record in records)
+    assert state['owner_ack_calls'] == []
+
+
+@pytest.mark.parametrize('cause', ['health', 'gui_exit', 'deadline', 'cancel'])
+def test_window_binding_is_invalidated_before_capture(tmp_path, cause):
+    """Test health, process, deadline and cancellation cancel window bind."""
+    args, deps, _events, processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    bind_started = asyncio.Event()
+    clock = [100.0]
+    deps['monotonic'] = lambda: clock[0]
+
+    async def immediate_deadline(_futures, *, timeout, **_wait_kwargs):
+        await asyncio.sleep(0)
+        clock[0] += timeout
+        return set(), set(_futures)
+
+    if cause == 'deadline':
+        deps['binding_wait_fn'] = immediate_deadline
+
+    async def binding_wait(**kwargs):
+        state['binding_cancelled'] = False
+        bind_started.set()
+        try:
+            if cause == 'deadline':
+                await asyncio.Event().wait()
+            if cause == 'gui_exit':
+                gui = next(
+                    process for command, process in processes
+                    if runner._process_label(command) == 'gui'
+                )
+                gui.finish(1)
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            state['binding_cancelled'] = True
+            raise
+
+    async def health_failure(**_kwargs):
+        await bind_started.wait()
+        if cause == 'health':
+            raise runner.ObservationFailure('injected backend health loss')
+        await asyncio.Event().wait()
+
+    deps['bind_gui_window'] = binding_wait
+    deps['evaluate_observation'] = health_failure
+
+    async def execute():
+        run_task = asyncio.create_task(runner._run(args, dependencies=deps))
+        await bind_started.wait()
+        if cause == 'cancel':
+            run_task.cancel()
+        return await run_task
+    verdict = asyncio.run(execute())
+    assert verdict == 'FAIL'
+    assert state['binding_cancelled'] is True
+    assert not (root / 'screenshots').exists()
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    assert not any(record['event'] == 'codex_review_request_published'
+                   for record in records)
+    assert all(process.returncode is not None
+               for _command, process in processes)
+
+
+def test_unknown_owned_identity_is_never_signalled_while_verified_group_cleans(
+        tmp_path):
+    """Test cleanup preserves unknown ownership and reclaims verified group."""
+    class Process:
+
+        def __init__(self, pid):
+            self.pid = pid
+            self.returncode = None
+            self.event = asyncio.Event()
+
+        async def wait(self):
+            await self.event.wait()
+            return self.returncode
+
+        def finish(self):
+            self.returncode = 0
+            self.event.set()
+
+    first = Process(910001)
+    second = Process(910002)
+    signals = []
+
+    class Delegate:
+
+        def __init__(self):
+            self.started = [first, second]
+
+        async def start(self, _command, _environment):
+            return self.started.pop(0)
+
+        def group_alive(self, process):
+            return process.returncode is None
+
+        async def stop_group(self, process, sig):
+            signals.append((process.pid, sig))
+            if sig != signal.SIGINT:
+                process.finish()
+
+    def identity_reader(pid):
+        if pid == first.pid:
+            raise OSError('injected proc identity read failure')
+        return {'pid': pid, 'process_group_id': pid, 'session_id': pid,
+                'start_ticks': 12}
+
+    launcher = runner.TrackedProcessLauncher(
+        Delegate(), identity_reader=identity_reader,
+        process_inventory=lambda: [identity_reader(second.pid)]
+        if second.returncode is None else [],
+    )
+    with pytest.raises(OSError):
+        asyncio.run(launcher.start(['server'], {}))
+    asyncio.run(launcher.start(['gui'], {}))
+    errors = []
+    asyncio.run(runner._fallback_cleanup(
+        launcher, launcher.records, None, errors,
+        deadline=10, steady=lambda: 0,
+        sleep=lambda _delay: asyncio.sleep(0),
+        escalation_grace=(0, 0, 0),
+    ))
+    assert first.returncode is None
+    assert second.returncode == 0
+    assert [sig for pid, sig in signals if pid == second.pid] == [
+        signal.SIGINT, signal.SIGTERM,
+    ]
+    assert launcher.records[0].identity is None
+    assert launcher.records[0].identity_error
+    assert any('identity' in error or 'unverified' in error
+               for error in errors)
+
+
+def test_reused_owned_leader_is_not_signalled(tmp_path):
+    """Test PID reuse fails closed before any group signal."""
+    class Process:
+
+        def __init__(self):
+            self.pid = 910003
+            self.returncode = None
+            self.event = asyncio.Event()
+
+        async def wait(self):
+            await self.event.wait()
+            return self.returncode
+
+    process = Process()
+    signals = []
+    current = {'start_ticks': 20}
+
+    class Delegate:
+
+        async def start(self, _command, _environment):
+            return process
+
+        def group_alive(self, _process):
+            raise AssertionError('must not delegate group liveness')
+
+        async def stop_group(self, _process, _sig):
+            signals.append(True)
+
+    def identity_reader(pid):
+        return {'pid': pid, 'process_group_id': pid, 'session_id': pid,
+                'start_ticks': current['start_ticks']}
+
+    launcher = runner.TrackedProcessLauncher(
+        Delegate(), identity_reader=identity_reader,
+        process_inventory=lambda: [identity_reader(process.pid)],
+    )
+    asyncio.run(launcher.start(['gui'], {}))
+    current['start_ticks'] = 21
+    with pytest.raises(runner.ObservationFailure, match='PID reuse'):
+        launcher.group_alive(process)
+    with pytest.raises(runner.ObservationFailure, match='PID reuse'):
+        asyncio.run(launcher.stop_group(process, 2))
+    assert signals == []
+
+
+@pytest.mark.parametrize('identity', [
+    {'pid': 44, 'process_group_id': 44, 'session_id': 44},
+    {'pid': 44, 'process_group_id': 44, 'session_id': 44,
+     'start_ticks': True},
+])
+def test_missing_or_wrong_type_start_identity_stays_unknown(identity):
+    """Test incomplete process start identity cannot authorize cleanup."""
+    class Process:
+
+        pid = 44
+        returncode = None
+
+        async def wait(self):
+            await asyncio.Event().wait()
+
+    process = Process()
+    signals = []
+
+    class Delegate:
+
+        async def start(self, _command, _environment):
+            return process
+
+        async def stop_group(self, _process, _sig):
+            signals.append(True)
+
+        def group_alive(self, _process):
+            return True
+
+    launcher = runner.TrackedProcessLauncher(
+        Delegate(), identity_reader=lambda _pid: identity,
+    )
+    with pytest.raises(runner.ObservationFailure):
+        asyncio.run(launcher.start(['gui'], {}))
+    assert launcher.records[0].identity is None
+    assert launcher.records[0].identity_error
+    with pytest.raises(runner.ObservationFailure, match='unknown'):
+        launcher.group_alive(process)
+    with pytest.raises(runner.ObservationFailure, match='verified identity'):
+        asyncio.run(launcher.stop_group(process, signal.SIGINT))
+    assert process.returncode is None
+    assert signals == []
+
+
+def test_absent_leader_allows_only_verified_descendant_cleanup():
+    """Test confirmed leader exit retains safe descendant cleanup path."""
+    class Process:
+
+        pid = 910004
+        returncode = 0
+
+        async def wait(self):
+            return 0
+
+    process = Process()
+    leader = {'pid': process.pid, 'process_group_id': process.pid,
+              'session_id': process.pid, 'start_ticks': 30}
+    child = {'pid': 910005, 'process_group_id': process.pid,
+             'session_id': process.pid, 'start_ticks': 31}
+    live = {child['pid']: child}
+    signals = []
+
+    class Delegate:
+
+        async def start(self, _command, _environment):
+            return process
+
+        async def stop_group(self, _process, _sig):
+            raise AssertionError('absent leader must use verified child path')
+
+    def identity_reader(pid):
+        return live[pid]
+
+    def signal_member(pid, sig):
+        signals.append((pid, sig))
+        live.pop(pid)
+
+    launcher = runner.TrackedProcessLauncher(
+        Delegate(), identity_reader=lambda pid: leader if pid == process.pid
+        else identity_reader(pid),
+        signal_process=signal_member,
+        process_inventory=lambda: list(live.values()),
+    )
+    asyncio.run(launcher.start(['server'], {}))
+    identity, members = launcher._members(process)
+    assert identity == leader
+    assert members == [child]
+    asyncio.run(launcher.stop_group(process, signal.SIGTERM))
+    assert signals == [(child['pid'], signal.SIGTERM)]
+    assert live == {}
+
+
+def test_incomplete_identity_blocks_signal_and_marks_runner_residue(
+        tmp_path):
+    """Test identity failure after spawn remains owned, unknown and FAIL."""
+    args, deps, _events, processes, root, _observer, _state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    signals = []
+    deps['process_identity_reader'] = lambda _pid: {
+        'pid': 1, 'process_group_id': 1, 'session_id': 1,
+    }
+    deps['signal_process'] = lambda pid, sig: signals.append((pid, sig))
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    assert verdict == 'FAIL'
+    assert processes and processes[0][1].returncode is None
+    assert signals == []
+    completion = json.loads((root / 'final_result.json').read_text())
+    assert completion['status'] == 'FAIL'
+    assert any('identity_unknown' in item or 'unverified' in item
+               for item in completion['cleanup_errors'])
+
+
+@pytest.mark.parametrize('stage', [
+    'record', 'close', 'stream_hash', 'publication', 'boundary',
+])
+def test_finalization_deadline_controls_runner_verdict_and_marker(
+        tmp_path, stage, capsys):
+    """Test _run returns FAIL when any finalization step crosses deadline."""
+    args, deps, _events, _processes, root, _observer, _state = \
+        make_runner_inputs(tmp_path)
+    clock = [100.0]
+    deps['monotonic'] = lambda: clock[0]
+    sink_factory = runner.ObservationEvidenceSink
+
+    class TimedSink:
+
+        def __init__(self, *args, **kwargs):
+            self.inner = sink_factory(*args, **kwargs)
+
+        def record(self, event, facts):
+            result = self.inner.record(event, facts)
+            if stage == 'record' and event == 'final_status':
+                clock[0] = 161.0
+            if stage == 'boundary' and event == 'final_status':
+                clock[0] = 159.9
+            return result
+
+        def close(self):
+            self.inner.close()
+            if stage == 'close':
+                clock[0] = 161.0
+
+    deps['sink_factory'] = TimedSink
+    if stage == 'stream_hash':
+        def late_hash(path):
+            value = runner.sha256_file(path)
+            clock[0] = 161.0
+            return value
+        deps['stream_hasher'] = late_hash
+    if stage == 'publication':
+        def late_publish(path, data):
+            runner.atomic_publish(path, data)
+            clock[0] = 161.0
+        deps['completion_publisher'] = late_publish
+
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    completion_path = root / 'final_result.json'
+    assert completion_path.exists()
+    completion = json.loads(completion_path.read_text())
+    if stage == 'boundary':
+        assert verdict == 'PASS'
+        assert completion['status'] == 'PASS'
+    elif stage == 'publication':
+        assert verdict == 'FAIL'
+        assert completion['status'] == 'PASS'
+        assert (
+            'RUN002_FINALIZATION_DEADLINE_VIOLATION'
+            in capsys.readouterr().err
+        )
+    else:
+        assert verdict == 'FAIL'
+        assert completion['status'] == 'FAIL'
+        assert any('finalization_deadline_exceeded' in item
+                   for item in completion['cleanup_errors'])
 
 
 def test_codex_result_and_owner_review_labels_are_distinct_in_source():

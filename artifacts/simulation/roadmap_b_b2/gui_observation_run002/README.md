@@ -51,6 +51,12 @@ RUN001. RUN002 có Run ID, packet, approval và acquisition riêng.
   cleanup sạch và final completion marker được ghi sau khi sink đóng thành công.
   Mọi process/evidence/health failure là FAIL; không restart/retry. Không suy
   contact/scan/physics/motion/braking/training/functional safety từ quan sát.
+- Startup RUN002 dùng wrapper trên installed supervisor contract, nhưng bỏ hẳn
+  nhánh Owner ACK sau GUI process readiness; sau đó runner chuyển sang window
+  binding và Codex review. Binding cạnh tranh cùng process/health monitor và
+  deadline review. Final verdict kiểm lại absolute cleanup/total deadline sau
+  evidence write, sink close, stream hash và completion publication; marker
+  được publish muộn không làm runner trả PASS.
 
 ## Capacity, approval và đường dẫn cố định
 
