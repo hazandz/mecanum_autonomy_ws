@@ -54,7 +54,8 @@ source /tmp/b22_gui_observation_run001_install/local_setup.bash
 
 Không chạy lệnh trên trong bước chuẩn bị này. Runner kiểm tra domain riêng
 `ROS_DOMAIN_ID=83`, desktop socket, exact installed files và capacity-one guard
-ngoài repository. Acquisition xảy ra trước mọi process/participant runtime.
+ngoài repository. Acquisition và evidence root không nhận CLI override; kiểm tra
+symlink/collision xảy ra trước consume. Acquisition xảy ra trước mọi process/participant runtime.
 
 ## Trình tự runtime được đóng gói
 
@@ -84,9 +85,9 @@ ngoài repository. Acquisition xảy ra trước mọi process/participant runti
 
 Tổng hoạt động sau consume tối đa 240 s; cleanup tối đa 60 s riêng; tổng hard
 cap 300 s. GUI crash, backend mismatch, evidence lỗi, timeout hoặc mất inhibit
-thất bại và kích hoạt cleanup. Owner đóng GUI trước khi đủ thời gian được ghi
-`ABORTED_BY_OWNER` khi exit được quan sát trong pha 60 s. Không restart server
-hoặc GUI, không đổi motion permission.
+thất bại và kích hoạt cleanup. `ABORTED_BY_OWNER` chỉ được ghi khi Owner trực
+tiếp nhập `OWNER_ABORT_GUI` trên foreground TTY; GUI exit không rõ nguyên nhân
+hoặc crash là `FAIL`. Không restart server hoặc GUI, không đổi motion permission.
 
 ## Trạng thái evidence
 

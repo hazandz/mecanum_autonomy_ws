@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -20,9 +21,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from observation_guard import (
-    CONFIG_HASH, GUARD_PATH, GuardError, MANIFEST_SHA256,
-    PRODUCTION_SOURCE_PIN, RESOLVED_SHA256, RUN_ID, SCENARIO_SHA256,
-    acquire_once, sha256_file, validate_approval,
+    CONFIG_HASH, EVIDENCE_ROOT, GUARD_PATH, GuardError, MANIFEST_SHA256,
+    RESOLVED_SHA256, RUN_ID, SCENARIO_SHA256,
+    acquire_once, packet_bindings, sha256_file, validate_approval,
 )
 
 from observation_sink import ObservationEvidenceSink
@@ -45,6 +46,13 @@ RUNTIME_CAP_S = 240.0
 CLEANUP_CAP_S = 60.0
 TOTAL_CAP_S = 300.0
 HEARTBEAT_GAP_S = 1.0
+CLOCK_READY_TIMEOUT_S = SERVER_READY_S
+CLOCK_SAMPLE_GAP_S = 1.0
+POLL_SLICE_S = 0.05
+EXPECTED_ROS_NODES = {
+    'b22_gui_observation_observer', 'robot_state_publisher',
+    'ros_gz_bridge', 'b2_server_scene_readiness',
+}
 
 
 class ObservationFailure(RuntimeError):
@@ -111,6 +119,38 @@ def preflight_desktop(
         raise ObservationFailure('no usable existing desktop socket found')
 
 
+def validate_run_roots(
+    guard_path: Path, evidence_root: Path, *, expected_guard=GUARD_PATH,
+    expected_evidence=EVIDENCE_ROOT,
+) -> tuple[Path, Path]:
+    """Reject redirected paths and evidence collisions before acquisition."""
+    guard_path = Path(guard_path)
+    evidence_root = Path(evidence_root)
+    if guard_path != expected_guard or evidence_root != expected_evidence:
+        raise GuardError('RUN001 acquisition/evidence paths are fixed')
+    for path in (guard_path, evidence_root):
+        if not path.is_absolute() or path.resolve(strict=False) != path:
+            raise GuardError(f'RUN001 path is not canonical: {path}')
+        for component in reversed((path, *path.parents)):
+            try:
+                if component.is_symlink():
+                    raise GuardError(
+                        f'RUN001 path contains a symlink: {component}'
+                    )
+            except OSError as error:
+                raise GuardError(
+                    f'RUN001 path cannot be inspected: {component}'
+                ) from error
+    if guard_path.exists() or guard_path.is_symlink():
+        raise GuardError('RUN001 acquisition already exists; no retry')
+    if evidence_root.exists():
+        if not evidence_root.is_dir():
+            raise GuardError('RUN001 evidence root is not a directory')
+        if any(evidence_root.iterdir()):
+            raise GuardError('RUN001 evidence root already contains data')
+    return guard_path, evidence_root
+
+
 def process_start_identity(pid: int, proc_root: Path = Path('/proc')) -> dict:
     """Read Linux PID, process-group, session and start-tick identity."""
     raw = (proc_root / str(pid) / 'stat').read_text(encoding='ascii')
@@ -127,28 +167,8 @@ def process_start_identity(pid: int, proc_root: Path = Path('/proc')) -> dict:
 
 
 def assert_packet_inputs(packet: dict, file_hashes: dict[str, str]) -> None:
-    """Validate fixed RUN001 identities and exact current tool hashes."""
-    expected = {
-        'run_id': RUN_ID,
-        'capacity': 1,
-        'gui': True,
-        'scenario_id': 'B2_SOAK_V1',
-        'world': 'b2_training_arena',
-        'robot': 'mecanum_b2',
-        'backend': 'NATIVE_B2_BACKEND_V1',
-        'production_source_pin': PRODUCTION_SOURCE_PIN,
-        'input_sha256': {
-            'asset_manifest': MANIFEST_SHA256,
-            'resolved_soak': RESOLVED_SHA256,
-            'config_hash': CONFIG_HASH,
-            'scenario': SCENARIO_SHA256,
-        },
-    }
-    for key, value in expected.items():
-        if packet.get(key) != value:
-            raise GuardError(f'packet pin mismatch: {key}')
-    if packet.get('tool_sha256') != file_hashes:
-        raise GuardError('packet tool hashes are not final/current')
+    """Call the one canonical packet validator used by guard and runner."""
+    return packet_bindings(packet, file_hashes)
 
 
 def _utc_now() -> str:
@@ -168,9 +188,10 @@ def _host_identity() -> dict[str, str]:
 class ScreenshotReadiness:
     """Delegate readiness to audited code and hash Owner's real screenshot."""
 
-    def __init__(self, readiness):
+    def __init__(self, readiness, owner_ack_event=None):
         """Wrap audited readiness and retain the verified Owner screenshot."""
         self._readiness = readiness
+        self.owner_ack_event = owner_ack_event
         self.screenshot_path = None
         self.screenshot_sha256 = None
         self.owner_ack_cancelled = False
@@ -206,48 +227,73 @@ class ScreenshotReadiness:
             )
         self.screenshot_path = path
         self.screenshot_sha256 = sha256_file(path)
+        if self.owner_ack_event is not None:
+            self.owner_ack_event.set()
         return True, str(path)
+
+    async def wait_owner_abort(self):
+        """Require direct TTY input to classify GUI close as Owner abort."""
+        reader = getattr(self._readiness, '_read_stdin_line', None)
+        if reader is None:
+            await asyncio.Future()
+        while True:
+            value = await reader(
+                'type OWNER_ABORT_GUI before closing to record Owner abort: '
+            )
+            if value is None:
+                return False
+            if value == 'OWNER_ABORT_GUI':
+                return True
 
 
 class TrackedProcessLauncher:
     """Use the audited launcher while checking its owned session identity."""
 
-    def __init__(self, delegate, on_start=None):
+    def __init__(self, delegate, on_start=None, identity_reader=None):
         """Wrap the audited launcher with process-start identity tracking."""
         self.delegate = delegate
         self.on_start = on_start
+        self.identity_reader = identity_reader or process_start_identity
         self.identities = {}
         self.records = []
+        self.waiters = {}
 
     async def start(self, command, environment):
         """Start a process and record its PID/session identity immediately."""
         process = await self.delegate.start(command, environment)
-        try:
-            self.identities[id(process)] = process_start_identity(process.pid)
-        except BaseException:
-            import signal
-            try:
-                await self.delegate.stop_group(process, signal.SIGINT)
-            finally:
-                raise
         record = SimpleNamespace(
-            name=_process_label(command), command=command,
-            pid=process.pid, process=process,
+            name=_process_label(command), command=tuple(command),
+            pid=process.pid, process=process, identity=None,
+            identity_error=None,
         )
         self.records.append(record)
+        self.waiters[id(process)] = asyncio.create_task(process.wait())
+        try:
+            identity = self.identity_reader(process.pid)
+            if (
+                identity.get('pid') != process.pid
+                or identity.get('process_group_id') != process.pid
+                or identity.get('session_id') != process.pid
+            ):
+                raise ObservationFailure(
+                    'new launcher process is not its owned session leader'
+                )
+            record.identity = identity
+            self.identities[id(process)] = identity
+        except BaseException as error:
+            record.identity_error = f'{type(error).__name__}:{error}'
+            raise
         if self.on_start is not None:
-            try:
-                self.on_start(record, self.identities[id(process)])
-            except BaseException:
-                import signal
-                await self.stop_group(process, signal.SIGINT)
-                raise
+            self.on_start(record, record.identity)
         return process
 
     def _members(self, process):
         identity = self.identities.get(id(process))
         if identity is None:
-            raise ObservationFailure('owned process identity was not recorded')
+            raise ObservationFailure(
+                'owned process group identity is unknown; '
+                'residue is unverified'
+            )
         members = []
         for entry in Path('/proc').iterdir():
             if not entry.name.isdigit():
@@ -269,11 +315,24 @@ class TrackedProcessLauncher:
 
     def group_alive(self, process):
         """Check members against the process group and session identity."""
+        if id(process) not in self.identities:
+            if process.returncode is not None:
+                raise ObservationFailure(
+                    'leader exited before its process-group identity was read'
+                )
+            return self.delegate.group_alive(process)
         _identity, members = self._members(process)
         return bool(members)
 
     async def stop_group(self, process, sig):
         """Signal only members whose current proc identity remains owned."""
+        if id(process) not in self.identities:
+            if process.returncode is not None:
+                raise ObservationFailure(
+                    'cannot signal an unverified group after leader exit'
+                )
+            await self.delegate.stop_group(process, sig)
+            return
         identity, members = self._members(process)
         if not members:
             return
@@ -339,40 +398,73 @@ def _process_label(command):
 class PassiveBackendObserver:
     """Owned ROS context with backend-state and clock subscribers only."""
 
-    def __init__(self):
+    def __init__(self, ros_api_factory=None, *, steady_ns=time.monotonic_ns):
         """Prepare an independent observer context without initializing ROS."""
         self.context = None
         self.node = None
         self.events = deque()
         self._rclpy = None
+        self._ros_api_factory = ros_api_factory
+        self._steady_ns = steady_ns
+        self._closed = False
 
-    def start(self):
-        """Initialize a private context with status and clock subscribers."""
+    @staticmethod
+    def _production_ros_api():
         import rclpy
         from rclpy.context import Context
         from rclpy.node import Node
+        from rclpy.qos import (
+            DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
+        )
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
         from rosgraph_msgs.msg import Clock
+        return SimpleNamespace(
+            rclpy=rclpy, Context=Context, Node=Node,
+            SimulationContactState=SimulationContactState, Clock=Clock,
+            QoSProfile=QoSProfile, HistoryPolicy=HistoryPolicy,
+            ReliabilityPolicy=ReliabilityPolicy,
+            DurabilityPolicy=DurabilityPolicy,
+        )
 
-        self._rclpy = rclpy
-        self.context = Context()
-        rclpy.init(context=self.context, domain_id=83)
-        self.node = Node(
+    @staticmethod
+    def clock_qos_profile(api):
+        """Match the pinned ros_gz_bridge CLOCK profile's delivery policy."""
+        return api.QoSProfile(
+            history=api.HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=api.ReliabilityPolicy.BEST_EFFORT,
+            durability=api.DurabilityPolicy.VOLATILE,
+        )
+
+    def start(self):
+        """Initialize a private context with status and clock subscribers."""
+        api = (
+            self._ros_api_factory()
+            if self._ros_api_factory is not None
+            else self._production_ros_api()
+        )
+        self._rclpy = api.rclpy
+        self.context = api.Context()
+        self._rclpy.init(context=self.context, domain_id=83)
+        self.node = api.Node(
             'b22_gui_observation_observer', context=self.context,
         )
         self.node.create_subscription(
-            SimulationContactState,
+            api.SimulationContactState,
             '/mecanum/local_training/backend_state',
-            lambda message: self.events.append(
-                ('backend', message, time.monotonic()),
-            ), 50,
+            lambda message: self._record_event('backend', message), 50,
         )
         self.node.create_subscription(
-            Clock, '/clock',
-            lambda message: self.events.append(
-                ('clock', message.clock, time.monotonic()),
-            ), 10,
+            api.Clock, '/clock',
+            lambda message: self._record_event('clock', message.clock),
+            self.clock_qos_profile(api),
         )
+        self._closed = False
+
+    def _record_event(self, kind, message):
+        self.events.append((
+            kind, message, time.monotonic(), self._steady_ns(),
+        ))
 
     def spin_once(self, timeout_s: float = 0.1):
         """Process passive observer callbacks for one bounded interval."""
@@ -380,42 +472,94 @@ class PassiveBackendObserver:
 
     def close(self):
         """Destroy the owned node and shut down only its ROS context."""
-        if self.node is not None:
-            self.node.destroy_node()
-            self.node = None
-        if self.context is not None and self._rclpy.ok(context=self.context):
-            self._rclpy.shutdown(context=self.context)
-        self.context = None
+        if self._closed:
+            return
+        self._closed = True
+        errors = []
+        node, self.node = self.node, None
+        context, self.context = self.context, None
+        try:
+            if node is not None:
+                node.destroy_node()
+        except BaseException as error:
+            errors.append(error)
+        try:
+            if (
+                context is not None and self._rclpy is not None
+                and self._rclpy.ok(context=context)
+            ):
+                self._rclpy.shutdown(context=context)
+        except BaseException as error:
+            errors.append(error)
+        if errors:
+            raise ObservationFailure(
+                f'observer context cleanup failed: {type(errors[0]).__name__}'
+            ) from errors[0]
+
+    def node_inventory(self):
+        """Read the post-consume graph from this owned observer node."""
+        if self.node is None:
+            raise ObservationFailure('observer node is not active')
+        return self.node.get_node_names_and_namespaces()
 
 
-def evaluate_observation(
+async def evaluate_observation(
     *, plan, observer, duration_s: float = OBSERVATION_S,
-    steady=time.monotonic, sleep=time.sleep, gui_exit=None,
+    steady=time.monotonic, ack_event=None, owner_abort_event=None,
+    deadline=None, sink=None, expected_nodes=EXPECTED_ROS_NODES,
+    clock_ready_timeout_s=CLOCK_READY_TIMEOUT_S,
 ):
-    """Require an uninterrupted stable paused/inhibited 60-second window."""
-    stable_start = None
+    """Monitor status and clock through acknowledgment and observation."""
+    monitor_started = steady()
+    acknowledgement_time = None
     observation_start = None
     last_heartbeat = None
+    last_status_sequence = None
+    status_count = 0
     clock_value = None
     clock_stable_since = None
+    last_clock_received = None
+    clock_count = 0
     backend_identity = None
-    seen_backend = False
+    seen_nodes = None
     while True:
         now = steady()
-        if gui_exit is not None and gui_exit.done():
-            raise OwnerAbort('Owner closed GUI during observation')
-        observer.spin_once(min(0.1, max(0.001, duration_s)))
+        if owner_abort_event is not None and owner_abort_event.is_set():
+            raise OwnerAbort(
+                'Owner explicitly requested GUI observation abort'
+            )
+        if deadline is not None and now >= deadline:
+            raise ObservationFailure('240 s consume-to-end deadline expired')
+        if now - monitor_started > clock_ready_timeout_s and clock_count == 0:
+            raise ObservationFailure('clock readiness timed out')
+        observer.spin_once(min(POLL_SLICE_S, max(0.001, duration_s)))
         while observer.events:
-            kind, message, received = observer.events.popleft()
+            event = observer.events.popleft()
+            kind, message, received = event[:3]
+            received_ns = event[3] if len(event) > 3 else int(received * 1e9)
             if kind == 'clock':
                 stamp = (message.sec, message.nanosec)
                 if clock_value is None:
                     clock_value = stamp
-                    clock_stable_since = received
                 elif stamp != clock_value:
                     raise ObservationFailure('simulation clock advanced')
+                elif clock_stable_since is None:
+                    clock_stable_since = received
+                if (
+                    last_clock_received is not None
+                    and received - last_clock_received > CLOCK_SAMPLE_GAP_S
+                ):
+                    raise ObservationFailure('clock sample gap exceeded 1 s')
+                last_clock_received = received
+                clock_count += 1
+                if sink is not None:
+                    sink.record('clock_sample', {
+                        'clock_sec': stamp[0], 'clock_nanosec': stamp[1],
+                        'receive_steady_s': received,
+                        'receive_steady_ns': received_ns,
+                        'sample_index': clock_count,
+                    })
                 continue
-            seen_backend = True
             identity = (
                 message.session_id, message.config_hash,
                 message.backend_instance_id, message.header.frame_id,
@@ -438,35 +582,104 @@ def evaluate_observation(
             if message.status_sequence <= 0:
                 raise ObservationFailure('invalid backend heartbeat sequence')
             if (
+                last_status_sequence is not None
+                and message.status_sequence <= last_status_sequence
+            ):
+                raise ObservationFailure(
+                    'backend heartbeat sequence did not increase'
+                )
+            if (
                 last_heartbeat is not None
                 and received - last_heartbeat > HEARTBEAT_GAP_S
             ):
                 raise ObservationFailure('backend heartbeat gap exceeded 1 s')
             last_heartbeat = received
-            if stable_start is None:
-                stable_start = received
+            last_status_sequence = message.status_sequence
+            status_count += 1
+            if sink is not None:
+                sink.record('backend_status_sample', {
+                    'session_id': message.session_id,
+                    'config_hash': message.config_hash,
+                    'backend_instance_id': message.backend_instance_id,
+                    'world': message.header.frame_id,
+                    'status_sequence': message.status_sequence,
+                    'paused': message.paused,
+                    'actuator_inhibited': message.actuator_inhibited,
+                    'fault_flags': message.fault_flags,
+                    'applied_receipt_valid': message.applied_receipt_valid,
+                    'receive_steady_s': received,
+                    'receive_steady_ns': received_ns,
+                    'sample_index': status_count,
+                })
+        if hasattr(observer, 'node_inventory'):
+            inventory = observer.node_inventory()
+            names = [name for name, _namespace in inventory]
+            unique_names = set(names)
+            if len(names) != len(unique_names):
+                raise ObservationFailure(
+                    'duplicate ROS graph participant names were observed'
+                )
+            names = unique_names
+            unexpected = names - set(expected_nodes)
+            if unexpected:
+                raise ObservationFailure(
+                    f'unexpected ROS graph participants: {sorted(unexpected)}'
+                )
+            if ack_event is not None and ack_event.is_set():
+                if names != set(expected_nodes):
+                    raise ObservationFailure(
+                        'ROS graph participants differ from packet allowlist'
+                    )
+            if names != seen_nodes:
+                seen_nodes = names
+                if sink is not None:
+                    sink.record('ros_graph_inventory', {
+                        'nodes': sorted(names),
+                        'unexpected_nodes': sorted(unexpected),
+                    })
         now = steady()
         if (
             last_heartbeat is not None
             and now - last_heartbeat > HEARTBEAT_GAP_S
         ):
             raise ObservationFailure('backend heartbeat lost for over 1 s')
-        if clock_stable_since is not None and now - clock_stable_since >= 1.0:
-            if not seen_backend:
-                raise ObservationFailure('no backend status received')
-            if observation_start is None:
-                observation_start = now
+        if last_clock_received is not None and (
+            now - last_clock_received > CLOCK_SAMPLE_GAP_S
+        ):
+            raise ObservationFailure(
+                'clock samples stopped during observation'
+            )
+        if (last_heartbeat is None
+                and now - monitor_started > clock_ready_timeout_s):
+            raise ObservationFailure('backend status readiness timed out')
+        if (
+            ack_event is not None and ack_event.is_set()
+            and acknowledgement_time is None
+        ):
+            acknowledgement_time = now
+        clock_stable = (
+            clock_stable_since is not None
+            and now - clock_stable_since >= 1.0
+        )
+        if (
+            acknowledgement_time is not None and clock_stable
+            and observation_start is None
+        ):
+            observation_start = now
         if (
             observation_start is not None
             and now - observation_start >= duration_s
         ):
             return {
                 'backend_identity': list(backend_identity),
+                'last_status_sequence': last_status_sequence,
+                'backend_status_samples': status_count,
                 'heartbeat_last_steady': last_heartbeat,
+                'clock_samples': clock_count,
                 'clock_stamp': list(clock_value),
                 'observed_seconds': now - observation_start,
             }
-        sleep(0.01)
+        await asyncio.sleep(0)
 
 
 def _installed_paths():
@@ -708,6 +921,170 @@ def build_runtime_plan(gui: bool, temp_dir: Path):
     return plan, paths, descriptor, descriptor_path
 
 
+def _validate_plan_commands(plan, packet):
+    """Match audited launch composition to the packet command contract."""
+    templates = packet['commands_argv']['exact_templates']
+    if not plan.gui_requested or len(plan.commands) != 2:
+        raise ObservationFailure('launch plan is not the one-GUI RUN001 plan')
+    server, gui = (tuple(command) for command in plan.commands)
+    expected_server = tuple(templates['server'][:-1]) + (str(plan.world_file),)
+    if server != expected_server:
+        raise ObservationFailure('server argv differs from approved packet')
+    if gui != tuple(templates['gui']):
+        raise ObservationFailure('GUI argv differs from approved packet')
+    bridge = tuple(getattr(plan, 'bridge_command', ()) or ())
+    if bridge != tuple(templates['parameter_bridge']):
+        raise ObservationFailure('bridge argv differs from approved packet')
+
+
+def _check_output_tasks(supervisor, sink):
+    """Raise on background stdout/stderr task failure without swallowing it."""
+    for record in tuple(getattr(supervisor, 'owned', ())):
+        for task in getattr(record, 'output_tasks', ()):
+            if not task.done():
+                continue
+            if task.cancelled():
+                raise ObservationFailure(
+                    f'background output task was cancelled: {record.name}'
+                )
+            error = task.exception()
+            if error is not None:
+                sink.record('background_output_failure', {
+                    'process': record.name,
+                    'error_type': type(error).__name__,
+                    'error': str(error)[:1000],
+                })
+                raise ObservationFailure(
+                    f'background output evidence failed: {record.name}'
+                ) from error
+
+
+async def _monitor_owned_processes(
+    *, launcher, supervisor, readiness, sink, ack_event,
+    owner_abort_event, stop_event,
+):
+    """Monitor role exits and output evidence from the first owned spawn."""
+    owner_abort_task = None
+    try:
+        while not stop_event.is_set():
+            if ack_event.is_set() and owner_abort_task is None:
+                owner_abort_task = asyncio.create_task(
+                    readiness.wait_owner_abort(),
+                )
+            if owner_abort_task is not None and owner_abort_task.done():
+                if owner_abort_task.cancelled():
+                    raise ObservationFailure(
+                        'Owner abort watcher was cancelled'
+                    )
+                if owner_abort_task.exception() is not None:
+                    raise ObservationFailure(
+                        'Owner abort watcher failed'
+                    ) from owner_abort_task.exception()
+                if owner_abort_task.result():
+                    owner_abort_event.set()
+                    sink.record('owner_abort_requested', {
+                        'token': 'OWNER_ABORT_GUI',
+                        'source': 'direct_owner_tty',
+                    })
+                    owner_abort_task = None
+            for record in tuple(launcher.records):
+                waiter = launcher.waiters.get(id(record.process))
+                if waiter is None or not waiter.done():
+                    continue
+                if waiter.cancelled():
+                    raise ObservationFailure(
+                        f'owned process waiter cancelled: {record.name}'
+                    )
+                status = waiter.result()
+                sink.record('owned_process_exit', {
+                    'process': record.name, 'pid': record.pid,
+                    'exit_status': status,
+                })
+                if (
+                    record.name == 'gui' and status == 0
+                    and owner_abort_event.is_set()
+                ):
+                    raise OwnerAbort(
+                        'Owner requested abort and GUI exited normally'
+                    )
+                raise ObservationFailure(
+                    'owned process exited unexpectedly: '
+                    f'{record.name} ({status})'
+                )
+            _check_output_tasks(supervisor, sink)
+            await asyncio.sleep(0)
+    finally:
+        if owner_abort_task is not None and not owner_abort_task.done():
+            owner_abort_task.cancel()
+        if owner_abort_task is not None:
+            await asyncio.gather(owner_abort_task, return_exceptions=True)
+
+
+async def _wait_competing(
+    awaitable, monitor_task, deadline, steady, observer_task=None,
+):
+    """Wait for one operation while process monitoring remains active."""
+    operation = asyncio.ensure_future(awaitable)
+    remaining = deadline - steady()
+    try:
+        if remaining <= 0:
+            raise ObservationFailure('240 s consume-to-end deadline expired')
+        competing = {operation, monitor_task}
+        if observer_task is not None:
+            competing.add(observer_task)
+        done, _pending = await asyncio.wait(
+            competing, timeout=remaining,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if monitor_task in done:
+            if monitor_task.cancelled():
+                raise ObservationFailure('owned-process monitor was cancelled')
+            error = monitor_task.exception()
+            if error is not None:
+                raise error
+            raise ObservationFailure(
+                'owned-process monitor stopped unexpectedly'
+            )
+        if observer_task is not None and observer_task in done:
+            if observer_task.cancelled():
+                raise ObservationFailure('observation monitor was cancelled')
+            error = observer_task.exception()
+            if error is not None:
+                raise error
+            raise ObservationFailure(
+                'observation completed before startup/Owner acknowledgment'
+            )
+        if operation in done:
+            return operation.result()
+        raise ObservationFailure('240 s consume-to-end deadline expired')
+    finally:
+        if not operation.done():
+            operation.cancel()
+            remaining = min(1.0, max(0.0, deadline - steady()))
+            done, _pending = await asyncio.wait(
+                {operation}, timeout=remaining,
+            )
+            if done:
+                await asyncio.gather(operation, return_exceptions=True)
+            else:
+                raise ObservationFailure(
+                    'cancelled operation did not join before runtime deadline'
+                )
+
+
+async def _join_task(task, *, timeout_s):
+    """Cancel and join one owned asyncio task within a bounded interval."""
+    if task is None:
+        return True
+    if not task.done():
+        task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=max(0.0, timeout_s))
+    if not done:
+        return False
+    await asyncio.gather(task, return_exceptions=True)
+    return True
+
+
 async def _run(args, *, dependencies=None):
     """Run one approved observation with injectable test boundaries."""
     deps = dependencies or {}
@@ -726,12 +1103,22 @@ async def _run(args, *, dependencies=None):
         packet_path=packet_path, approval_path=approval_path,
         expected_commit=args.approved_commit, tool_paths=TOOL_PATHS,
     )
-    assert_packet_inputs(packet, hashes)
+    bindings = assert_packet_inputs(packet, hashes)
     verify_commit = deps.get('verify_commit', verify_packet_commit)
     verify_commit(args.approved_commit, packet_path)
+    injected_paths = dependencies is not None
+    guard_path = Path(deps.get('guard_path', GUARD_PATH))
+    evidence_root = Path(deps.get('evidence_root', EVIDENCE_ROOT))
+    guard_path, evidence_root = validate_run_roots(
+        guard_path, evidence_root,
+        expected_guard=guard_path if injected_paths else GUARD_PATH,
+        expected_evidence=evidence_root if injected_paths else EVIDENCE_ROOT,
+    )
+    if not guard_path.parent.is_dir():
+        raise GuardError('canonical acquisition directory must be provisioned')
+
     install_preflight = deps.get('install_preflight')
     install_fingerprints = install_preflight() if install_preflight else None
-
     temp_parent = Path(args.temp_root)
     temp_parent.mkdir(parents=True, exist_ok=True)
     runtime_dir_context = tempfile.TemporaryDirectory(
@@ -742,28 +1129,59 @@ async def _run(args, *, dependencies=None):
         plan, paths, descriptor, descriptor_path = deps.get(
             'build_plan', build_runtime_plan,
         )(args.gui, runtime_dir)
+        _validate_plan_commands(plan, packet)
     except BaseException:
         runtime_dir_context.cleanup()
         raise
     fingerprints = install_fingerprints or _fingerprint_install(paths)
-    if fingerprints != packet.get('installed_sha256'):
+    if fingerprints != bindings['file_sha256']:
         runtime_dir_context.cleanup()
         raise ObservationFailure(
             'installed file fingerprints differ from packet'
         )
-    approved_packet_commit = args.approved_commit
-    process_identity = process_start_identity(os.getpid())
+    ros2_template = tuple(
+        packet['commands_argv']['exact_templates'][
+            'robot_state_publisher'
+        ]
+    )
+    if injected_paths:
+        ros2_template = tuple(
+            value.replace(str(EVIDENCE_ROOT), str(evidence_root))
+            for value in ros2_template
+        )
+    ros2_executable = deps.get('ros2_executable') or shutil.which('ros2')
+    params_path = evidence_root / 'runtime_assets'
+    params_path /= 'robot_state_publisher.params.yaml'
+    planned_rsp_command = (
+        ros2_executable, 'run', 'robot_state_publisher',
+        'robot_state_publisher', '--ros-args', '--params-file',
+        str(params_path),
+    )
+    if (not ros2_executable or ros2_executable != ros2_template[0]
+            or planned_rsp_command != ros2_template):
+        runtime_dir_context.cleanup()
+        raise ObservationFailure(
+            'robot_state_publisher argv differs from approved packet'
+        )
+    if not Path(ros2_executable).is_file():
+        runtime_dir_context.cleanup()
+        raise ObservationFailure('installed ros2 executable is missing')
+
+    run_id = deps.get('run_id', RUN_ID)
+    process_identity = deps.get(
+        'runner_process_identity', process_start_identity,
+    )(os.getpid())
     acquisition = {
         'schema_id': 'b22_gui_observation_acquisition/v1',
-        'run_id': RUN_ID,
+        'run_id': run_id,
         'capacity': 1,
         'packet_sha256': packet_hash,
-        'packet_commit': approved_packet_commit,
-        'production_source_pin': PRODUCTION_SOURCE_PIN,
+        'packet_commit': args.approved_commit,
+        'production_source_pin': bindings['production_source_pin'],
         'tool_sha256': hashes,
-        'input_sha256': packet['input_sha256'],
+        'input_sha256': bindings['input_sha256'],
         'installed_sha256': fingerprints,
-        'dependency_fingerprints': packet['dependency_fingerprints'],
+        'dependency_fingerprints': bindings['dependency_fingerprints'],
         'resolved_install_paths': {
             key: str(value) for key, value in paths.items()
         },
@@ -778,50 +1196,55 @@ async def _run(args, *, dependencies=None):
             'robot_state_publisher_params_sha256'
         ],
         'run_descriptor_sha256': sha256_file(descriptor_path),
-        'host': _host_identity(),
+        'host': deps.get('host_identity', _host_identity)(),
         'runner_process': process_identity,
-        'steady_ns': time.monotonic_ns(),
+        'steady_ns': deps.get('monotonic_ns', time.monotonic_ns)(),
         'utc_time': wall_utc(),
     }
-    acquire = deps.get('acquire', acquire_once)
-    guard_path = Path(args.guard_path)
     try:
-        acquire(guard_path, acquisition)
+        deps.get('acquire', acquire_once)(guard_path, acquisition)
     except BaseException:
         runtime_dir_context.cleanup()
         raise
+
     consumed_at = mono()
+    runtime_deadline = consumed_at + RUNTIME_CAP_S
+    total_deadline = consumed_at + TOTAL_CAP_S
     sink = None
     supervisor = None
     launcher = None
     observer = None
+    observer_task = None
+    process_monitor_task = None
+    stop_monitor = asyncio.Event()
+    owner_ack_event = asyncio.Event()
+    owner_abort_event = asyncio.Event()
     final_status = 'FAIL'
+    failure = None
     cleanup_errors = []
-    records_before_cleanup = []
+    original_environment = {}
     bound_environment = {'ROS_DOMAIN_ID': '83', **dict(plan.environment)}
-    original_environment = {
-        key: os.environ.get(key) for key in bound_environment
-    }
     try:
-        sink_factory = deps.get('sink_factory', ObservationEvidenceSink)
-        sink = sink_factory(
-            Path(args.evidence_root), RUN_ID, plan.session_id,
+        if not evidence_root.exists():
+            evidence_root.mkdir(mode=0o700, parents=False, exist_ok=False)
+        sink = deps.get('sink_factory', ObservationEvidenceSink)(
+            evidence_root, run_id, plan.session_id,
         )
         sink.record('guard_consumed', {
             'packet_sha256': packet_hash,
-            'packet_commit': approved_packet_commit,
-            'production_source_pin': PRODUCTION_SOURCE_PIN,
+            'packet_commit': args.approved_commit,
+            'production_source_pin': bindings['production_source_pin'],
             'tool_sha256': hashes,
             'descriptor_path': str(descriptor_path),
             'descriptor_sha256': sha256_file(descriptor_path),
             'source_world_sha256': descriptor['world_source_sha256'],
-            'runtime_bound_world_sha256': (
-                descriptor['runtime_bound_world_sha256']
-            ),
+            'runtime_bound_world_sha256': descriptor[
+                'runtime_bound_world_sha256'
+            ],
             'install_fingerprints': fingerprints,
-            'dependency_fingerprints': packet['dependency_fingerprints'],
+            'dependency_fingerprints': bindings['dependency_fingerprints'],
         })
-        evidence_assets = Path(args.evidence_root) / 'runtime_assets'
+        evidence_assets = evidence_root / 'runtime_assets'
         evidence_assets.mkdir(mode=0o700, exist_ok=False)
         persisted_world = evidence_assets / Path(plan.world_file).name
         persisted_params = evidence_assets / (
@@ -846,25 +1269,28 @@ async def _run(args, *, dependencies=None):
                 persisted_params
             ),
         })
+        original_environment = {
+            key: os.environ.get(key) for key in bound_environment
+        }
         os.environ.update(bound_environment)
+
         from mecanum_nav_bringup.local_training_process_supervisor import (
             LocalTrainingProcessSupervisor, ProcessRecord,
             RclpyReadiness, SubprocessProcessLauncher,
         )
-        launcher = deps.get('launcher')
-        if launcher is None:
-            launcher = TrackedProcessLauncher(
-                SubprocessProcessLauncher(),
-                on_start=lambda record, identity: sink.record(
-                    'owned_process_identity', {
-                        'process': record.name,
-                        'command': list(record.command),
-                        'pid': record.pid, 'process_identity': identity,
-                    },
-                ),
-            )
+
+        def sink_factory(record, identity):
+            return sink.record('owned_process_identity', {
+                'process': record.name, 'command': list(record.command),
+                'pid': record.pid, 'process_identity': identity,
+            })
+        launcher = TrackedProcessLauncher(
+            deps.get('launcher', SubprocessProcessLauncher()),
+            on_start=sink_factory,
+            identity_reader=deps.get('process_identity_reader'),
+        )
         readiness = ScreenshotReadiness(
-            deps.get('readiness', RclpyReadiness())
+            deps.get('readiness', RclpyReadiness()), owner_ack_event,
         )
         if deps.get('supervisor_factory'):
             supervisor = deps['supervisor_factory'](
@@ -876,42 +1302,52 @@ async def _run(args, *, dependencies=None):
                 LocalTrainingProcessSupervisor, plan=plan, launcher=launcher,
                 readiness=readiness, evidence_sink=sink,
             )
-        # The installed robot_state_publisher shares this lifecycle.
-        ros2 = shutil.which('ros2')
-        if not ros2:
-            raise ObservationFailure('installed ros2 executable is missing')
-        rsp_command = (
-            ros2, 'run', 'robot_state_publisher', 'robot_state_publisher',
-            '--ros-args', '--params-file', str(persisted_params),
+        observer = deps.get('observer_factory', PassiveBackendObserver)()
+        observer.start()
+        sink.record('passive_observer_started', {
+            'node': 'b22_gui_observation_observer',
+            'ros_domain_id': 83,
+            'subscriptions': [
+                '/mecanum/local_training/backend_state', '/clock',
+            ],
+            'control_publishers': 0,
+            'control_service_clients': 0,
+        })
+        process_monitor_task = asyncio.create_task(_monitor_owned_processes(
+            launcher=launcher, supervisor=supervisor, readiness=readiness,
+            sink=sink, ack_event=owner_ack_event,
+            owner_abort_event=owner_abort_event, stop_event=stop_monitor,
+        ))
+        observer_task = asyncio.create_task(evaluate_observation(
+            plan=plan, observer=observer, duration_s=OBSERVATION_S,
+            steady=mono, ack_event=owner_ack_event,
+            owner_abort_event=owner_abort_event,
+            deadline=runtime_deadline, sink=sink,
+            expected_nodes=set(
+                packet['identity_binding']['expected_ros_node_names']
+            ),
+        ))
+        rsp_command = planned_rsp_command
+        rsp = await _wait_competing(
+            launcher.start(rsp_command, dict(plan.environment)),
+            process_monitor_task, runtime_deadline, mono, observer_task,
         )
-        rsp = await launcher.start(rsp_command, dict(plan.environment))
         rsp_record = ProcessRecord(
             'robot_state_publisher', rsp_command, rsp.pid, rsp,
         )
         supervisor.owned.append(rsp_record)
-        start_identity = getattr(launcher, 'identities', {}).get(
-            id(rsp), process_start_identity(rsp.pid),
-        )
+        capture_output = getattr(supervisor, '_capture_output', None)
+        if capture_output is not None:
+            capture_output(rsp_record)
         sink.record('owned_process_started', {
             'process': rsp_record.name, 'command': list(rsp_command),
-            'pid': rsp.pid, 'process_identity': start_identity,
+            'pid': rsp.pid,
+            'process_identity': launcher.identities.get(id(rsp)),
         })
-        await asyncio.wait_for(
-            supervisor.start(),
-            timeout=SERVER_READY_S + GUI_START_S + OWNER_ACK_S,
+        await _wait_competing(
+            supervisor.start(), process_monitor_task, runtime_deadline, mono,
+            observer_task,
         )
-        for record in supervisor.owned:
-            identity = getattr(
-                launcher, 'identities', {},
-            ).get(id(record.process))
-            sink.record('owned_process_identity', {
-                'process': record.name, 'pid': record.pid,
-                'process_identity': identity,
-            })
-        if mono() - consumed_at > RUNTIME_CAP_S:
-            raise ObservationFailure(
-                '240 s runtime cap exceeded before observation'
-            )
         screenshot = readiness.screenshot_path
         if screenshot is None or readiness.screenshot_sha256 is None:
             raise ObservationFailure('Owner screenshot was not verified')
@@ -920,54 +1356,55 @@ async def _run(args, *, dependencies=None):
             'screenshot_sha256': readiness.screenshot_sha256,
             'confirmation_source': 'direct_owner_tty',
         })
-        observer_factory = deps.get('observer_factory', PassiveBackendObserver)
-        observer = observer_factory()
-        observer.start()
-        gui_record = next(
-            record for record in supervisor.owned if record.name == 'gui'
+        verdict = await _wait_competing(
+            observer_task, process_monitor_task, runtime_deadline, mono,
         )
-        gui_exit = asyncio.create_task(gui_record.process.wait())
-        sink.record('observation_started', {'duration_s': OBSERVATION_S})
-        observe = deps.get('evaluate_observation', evaluate_observation)
-        verdict = await asyncio.wait_for(asyncio.to_thread(
-            observe, plan=plan, observer=observer,
-            duration_s=deps.get('observation_duration', OBSERVATION_S),
-            steady=mono, gui_exit=gui_exit,
-        ), timeout=deps.get('observation_duration', OBSERVATION_S) + 15.0)
-        if mono() - consumed_at > RUNTIME_CAP_S:
+        if mono() > runtime_deadline:
             raise ObservationFailure('240 s runtime cap exceeded')
-        final_status = 'PASS'
         sink.record('observation_result', verdict)
-    except asyncio.CancelledError:
+        final_status = 'PASS'
+    except OwnerAbort as error:
+        failure = error
         final_status = 'ABORTED_BY_OWNER'
-        raise
+        if sink is not None:
+            try:
+                sink.record('owner_abort', {
+                    'error': str(error), 'source': 'direct_owner_tty',
+                })
+            except BaseException as sink_error:
+                cleanup_errors.append(
+                    f'evidence_failure:{type(sink_error).__name__}'
+                )
     except BaseException as error:
-        if isinstance(error, OwnerAbort):
-            final_status = 'ABORTED_BY_OWNER'
-        elif (
-            'readiness' in locals()
-            and readiness.owner_ack_cancelled
-            and sink is not None
-            and 'gui_closed_or_crashed' in getattr(sink, 'events', [])
-        ):
-            final_status = 'ABORTED_BY_OWNER'
-        try:
-            if sink is not None:
+        failure = error
+        final_status = 'FAIL'
+        if sink is not None:
+            try:
                 sink.record('observation_failure', {
                     'error_type': type(error).__name__,
                     'error': str(error)[:1000],
                 })
-        except BaseException as sink_error:
-            cleanup_errors.append(
-                f'evidence_failure:{type(sink_error).__name__}'
-            )
-        if isinstance(error, ObservationFailure):
-            final_status = 'FAIL'
-        if final_status != 'ABORTED_BY_OWNER':
-            raise
+            except BaseException as sink_error:
+                cleanup_errors.append(
+                    f'evidence_failure:{type(sink_error).__name__}'
+                )
     finally:
         cleanup_start = mono()
-        cleanup_deadline = time.monotonic() + CLEANUP_CAP_S
+        cleanup_deadline = min(
+            cleanup_start + CLEANUP_CAP_S, total_deadline,
+        )
+        stop_monitor.set()
+        for task in (observer_task, process_monitor_task):
+            try:
+                joined = await _join_task(
+                    task, timeout_s=max(0.0, cleanup_deadline - mono()),
+                )
+                if not joined:
+                    cleanup_errors.append('async_task_residue_unknown')
+            except BaseException as error:
+                cleanup_errors.append(
+                    f'task_cleanup:{type(error).__name__}:{error}'
+                )
         if observer is not None:
             try:
                 observer.close()
@@ -975,46 +1412,106 @@ async def _run(args, *, dependencies=None):
                 cleanup_errors.append(
                     f'observer_close:{type(error).__name__}:{error}'
                 )
+        all_records = (
+            list(getattr(launcher, 'records', ())) if launcher else []
+        )
+        supervisor_records = (
+            list(getattr(supervisor, 'owned', ()))
+            if supervisor is not None else []
+        )
         if supervisor is not None:
-            records_before_cleanup = list(supervisor.owned)
             try:
-                await asyncio.wait_for(
-                    supervisor.cleanup(),
-                    timeout=max(0.001, cleanup_deadline - time.monotonic()),
+                remaining = max(0.0, cleanup_deadline - mono())
+                cleanup_task = asyncio.create_task(supervisor.cleanup())
+                done, _pending = await asyncio.wait(
+                    {cleanup_task}, timeout=remaining,
                 )
+                if cleanup_task in done:
+                    error = cleanup_task.exception()
+                    if error is not None:
+                        cleanup_errors.append(
+                            'supervisor_cleanup:'
+                            f'{type(error).__name__}:{error}'
+                        )
+                else:
+                    cleanup_task.cancel()
+                    cleanup_errors.append('supervisor_cleanup_timeout')
+                    joined, _pending = await asyncio.wait(
+                        {cleanup_task},
+                        timeout=max(0.0, cleanup_deadline - mono()),
+                    )
+                    if joined:
+                        await asyncio.gather(
+                            cleanup_task, return_exceptions=True,
+                        )
+                    else:
+                        cleanup_errors.append(
+                            'supervisor_cleanup_task_residue_unknown'
+                        )
             except BaseException as error:
                 cleanup_errors.append(
                     f'supervisor_cleanup:{type(error).__name__}:{error}'
                 )
+        for record in supervisor_records:
+            for task in getattr(record, 'output_tasks', ()):
+                if task.cancelled():
+                    continue
+                if task.done() and task.exception() is not None:
+                    cleanup_errors.append(
+                        f'background_output_failure:{record.name}:'
+                        f'{type(task.exception()).__name__}'
+                    )
+        if launcher is not None and all_records:
+            try:
                 await _fallback_cleanup(
-                    launcher, records_before_cleanup, sink, cleanup_errors,
-                    deadline=cleanup_deadline,
+                    launcher, all_records, sink, cleanup_errors,
+                    deadline=cleanup_deadline, steady=mono,
+                    sleep=deps.get('cleanup_sleep', asyncio.sleep),
+                    escalation_grace=deps.get(
+                        'cleanup_escalation_grace', (5.0, 3.0, 3.0),
+                    ),
                 )
-        tracked_records = getattr(launcher, 'records', []) if launcher else []
-        if tracked_records:
-            await _fallback_cleanup(
-                launcher, tracked_records, sink, cleanup_errors,
-                deadline=cleanup_deadline,
-            )
+            except BaseException as error:
+                cleanup_errors.append(
+                    f'fallback_cleanup:{type(error).__name__}:{error}'
+                )
+        if launcher is not None:
+            for record in all_records:
+                if record.identity_error:
+                    cleanup_errors.append(
+                        'identity_unknown:'
+                        f'{record.name}:{record.identity_error}'
+                    )
+            for task in launcher.waiters.values():
+                try:
+                    if not await _join_task(
+                        task, timeout_s=max(0.0, cleanup_deadline - mono()),
+                    ):
+                        cleanup_errors.append('process_waiter_residue_unknown')
+                except BaseException as error:
+                    cleanup_errors.append(
+                        'process_waiter_cleanup:'
+                        f'{type(error).__name__}:{error}'
+                    )
         for key, previous in original_environment.items():
             if previous is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = previous
-        cleanup_elapsed = mono() - cleanup_start
-        if cleanup_elapsed > CLEANUP_CAP_S:
+        if mono() - cleanup_start > CLEANUP_CAP_S:
             cleanup_errors.append('cleanup_deadline_exceeded')
-        if mono() - consumed_at > TOTAL_CAP_S:
+        if mono() > total_deadline:
             cleanup_errors.append('consume_to_end_deadline_exceeded')
+        if cleanup_errors:
+            final_status = 'FAIL'
         if sink is not None:
             try:
-                final_status = classify_final_status(
-                    final_status == 'PASS',
-                    final_status == 'ABORTED_BY_OWNER', cleanup_errors,
-                )
                 sink.record('final_status', {
                     'status': final_status,
-                    'cleanup_elapsed_s': cleanup_elapsed,
+                    'failure_type': (
+                        type(failure).__name__ if failure else None
+                    ),
+                    'cleanup_elapsed_s': mono() - cleanup_start,
                     'cleanup_errors': cleanup_errors,
                 })
             except BaseException:
@@ -1023,21 +1520,32 @@ async def _run(args, *, dependencies=None):
                 sink.close()
             except BaseException:
                 final_status = 'FAIL'
-        runtime_dir_context.cleanup()
+        try:
+            runtime_dir_context.cleanup()
+        except BaseException as error:
+            final_status = 'FAIL'
+            if sink is not None:
+                cleanup_errors.append(
+                    f'runtime_dir_cleanup:{type(error).__name__}:{error}'
+                )
     return final_status
 
 
-async def _fallback_cleanup(launcher, records, sink, errors, *, deadline=None):
-    """Try captured groups despite supervisor cleanup or logging failures."""
-    import signal
-    deadline = (
-        deadline
-        if deadline is not None
-        else time.monotonic() + CLEANUP_CAP_S
-    )
+async def _fallback_cleanup(
+    launcher, records, sink, errors, *, deadline=None,
+    steady=time.monotonic, sleep=asyncio.sleep,
+    escalation_grace=(5.0, 3.0, 3.0),
+):
+    """Escalate captured process groups and retain ownership records."""
     unique = {id(record.process): record for record in records}
     owned = list(reversed(list(unique.values())))
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGKILL)
+    if len(escalation_grace) != len(signals):
+        raise ValueError('cleanup escalation grace must have three stages')
+    cleanup_deadline = (
+        deadline if deadline is not None else steady() + CLEANUP_CAP_S
+    )
+    for sig, grace in zip(signals, escalation_grace):
         for record in owned:
             try:
                 if launcher.group_alive(record.process):
@@ -1046,8 +1554,8 @@ async def _fallback_cleanup(launcher, records, sink, errors, *, deadline=None):
                 errors.append(
                     f'cleanup:{record.name}:{type(error).__name__}:{error}'
                 )
-        stage_deadline = min(deadline, time.monotonic() + 0.75)
-        while time.monotonic() < stage_deadline:
+        stage_deadline = min(cleanup_deadline, steady() + grace)
+        while steady() < stage_deadline:
             live = []
             for record in owned:
                 try:
@@ -1055,13 +1563,17 @@ async def _fallback_cleanup(launcher, records, sink, errors, *, deadline=None):
                         live.append(record)
                 except BaseException as error:
                     errors.append(
-                        f'identity:{record.name}:'
-                        f'{type(error).__name__}:{error}'
+                        'identity:'
+                        f'{record.name}:{type(error).__name__}:{error}'
                     )
             if not live:
                 break
-            await asyncio.sleep(min(0.05, stage_deadline - time.monotonic()))
-        if time.monotonic() >= deadline:
+            await sleep(min(0.05, max(0.0, stage_deadline - steady())))
+        if not any(
+            _safe_group_alive(launcher, record, errors) for record in owned
+        ):
+            break
+        if steady() >= cleanup_deadline:
             break
     for record in owned:
         try:
@@ -1069,15 +1581,27 @@ async def _fallback_cleanup(launcher, records, sink, errors, *, deadline=None):
                 errors.append(f'residue:process_group:{record.pid}')
         except BaseException as error:
             errors.append(
-                f'residue_unknown:{record.name}:{type(error).__name__}'
+                f'residue_unknown:{record.name}:{type(error).__name__}:{error}'
             )
         try:
             if sink is not None:
                 sink.record('fallback_cleanup_attempt', {
                     'process': record.name, 'pid': record.pid,
+                    'ownership_record_retained': True,
                 })
         except BaseException as error:
             errors.append(f'cleanup_evidence:{type(error).__name__}')
+
+
+def _safe_group_alive(launcher, record, errors):
+    """Check ownership without skipping remaining groups on failure."""
+    try:
+        return launcher.group_alive(record.process)
+    except BaseException as error:
+        errors.append(
+            f'residue_unknown:{record.name}:{type(error).__name__}:{error}'
+        )
+        return True
 
 
 def verify_packet_commit(commit: str, packet_path: Path) -> None:
@@ -1105,14 +1629,6 @@ def parse_args(argv=None):
     parser.add_argument('--packet', default=str(PACKET_PATH))
     parser.add_argument('--approval-file', required=True)
     parser.add_argument('--approved-commit', required=True)
-    parser.add_argument('--guard-path', default=str(GUARD_PATH))
-    parser.add_argument(
-        '--evidence-root',
-        default=(
-            '/home/hazan/mecanum_runtime_evidence/'
-            'B22_GUI_OBSERVATION_RUN001'
-        ),
-    )
     parser.add_argument('--temp-root', default='/tmp')
     return parser.parse_args(argv)
 

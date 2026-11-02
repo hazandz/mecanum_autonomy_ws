@@ -6,8 +6,8 @@
       "SIGKILL"
     ],
     "contact_capability": "UNKNOWN_ALLOWED",
-    "failure": "GUI/backend/evidence failure, timeout, identity mismatch, lost inhibit, clock progress or owned cleanup residue => FAIL; Owner-observed GUI close before completion => ABORTED_BY_OWNER; no restart/retry",
-    "owner": "Owner directly confirms rendered world/robot and provides existing nonempty screenshot file; record its SHA-256",
+    "failure": "GUI/backend/evidence failure, timeout, identity mismatch, lost inhibit, clock progress or owned cleanup residue => FAIL; Owner direct OWNER_ABORT_GUI token => ABORTED_BY_OWNER; no restart/retry",
+    "owner": "Owner directly confirms rendered world/robot and provides existing nonempty screenshot file; record its SHA-256; OWNER_ABORT_GUI is required to classify Owner abort",
     "pass_requires": "all listed identity, Owner screenshot, stable paused/inhibited status, heartbeat, clock and cleanup conditions; no runner-created command/control operation",
     "scan_health": "NOT_EVALUATED_WHILE_PAUSED",
     "scene": "world b2_training_arena; exactly one mecanum_b2 model in readiness query; bound backend session/config identity; one owned server and one owned GUI",
@@ -25,7 +25,8 @@
     "passive server scene readiness using audited RclpyReadiness and scene query",
     "Owner screenshot path and direct OWNER_ACK_SCENE input on the foreground TTY",
     "read-only subscriptions to /mecanum/local_training/backend_state and /clock in an owned ROS context",
-    "bounded signal and wait for runner-owned process groups only"
+    "bounded signal and wait for runner-owned process groups only",
+    "read-only ROS graph inventory after acquisition; fail on unapproved participant names"
   ],
   "approval_boundary": "No Owner approval is included in this packet. Independent exact-commit audit and explicit approval remain required.",
   "backend": "NATIVE_B2_BACKEND_V1",
@@ -102,6 +103,12 @@
   "gui": true,
   "identity_binding": {
     "coordinator_ingress_instance_id": "single nonzero uint64 generated once",
+    "expected_ros_node_names": [
+      "b22_gui_observation_observer",
+      "robot_state_publisher",
+      "ros_gz_bridge",
+      "b2_server_scene_readiness"
+    ],
     "gz_partition": "mecanum_b2_<session_uuid_without_hyphens>",
     "host_binding": [
       "hostname",
@@ -149,6 +156,13 @@
           }
         },
         "version": "3.12.3"
+      },
+      "ros_clock_subscription_qos": {
+        "bridge_profile": "CLOCK",
+        "depth": 10,
+        "durability": "VOLATILE",
+        "history": "KEEP_LAST",
+        "reliability": "BEST_EFFORT"
       },
       "ros_distro": "jazzy",
       "ros_underlay": "/opt/ros/jazzy",
@@ -253,7 +267,7 @@
   "run_id": "B22_GUI_OBSERVATION_RUN001",
   "scenario_id": "B2_SOAK_V1",
   "schema_id": "b22_gui_observation_packet/v1",
-  "status": "RUNTIME_PACKET_IMPLEMENTED_OFFLINE_PENDING_EXACT_COMMIT_AUDIT",
+  "status": "RUNTIME_PACKET_DELIVERED_PENDING_INDEPENDENT_EXACT_COMMIT_AUDIT",
   "timing_steady_seconds": {
     "backend_heartbeat_max_gap": 1,
     "cleanup_cap_separate": 60,
@@ -266,10 +280,10 @@
     "server_readiness": 30
   },
   "tool_sha256": {
-    "observation_guard.py": "c0e1e09074b9b29f23b6a838963fc277dde161fae26305316b9896b71456812c",
-    "observation_runner.py": "f7ee862089e08cacdd65eb4354a8c28e3448faac8cdebb4c20f43b57714020d9",
+    "observation_guard.py": "f9feff48c3fd16527c89b071afca48864fd8472aee82272213867d3866c483a4",
+    "observation_runner.py": "8617b8f978246d8d1cbef7b348e941affb10df18b1269b208ec659bf380897ab",
     "observation_sink.py": "d0e7fec7cf8aeb5d42110971f65a3dd01fa58a6320ce481236e3ce36d072dd1c",
-    "test_observation_packet.py": "493743a8bd12e429a1fcfab88c1b19a5b224b9477998c2eb9e5aee199678ec22"
+    "test_observation_packet.py": "b8527ee3d9e6164806f85e04464787d15da644ae44273f335151eed49023e9de"
   },
   "world": "b2_training_arena"
 }
