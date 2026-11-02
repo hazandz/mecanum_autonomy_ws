@@ -10,7 +10,7 @@
     "owner": "Owner directly confirms rendered world/robot and provides existing nonempty screenshot file; record its SHA-256; OWNER_ABORT_GUI is required to classify Owner abort",
     "pass_requires": "all listed identity, Owner screenshot, stable paused/inhibited status, heartbeat, clock and cleanup conditions; no runner-created command/control operation",
     "scan_health": "NOT_EVALUATED_WHILE_PAUSED",
-    "scene": "world b2_training_arena; exactly one mecanum_b2 model in readiness query; bound backend session/config identity; one owned server and one owned GUI",
+    "scene": "world b2_training_arena; exactly one mecanum_b2 model in readiness query; bound backend session/config identity; persistent observer, robot_state_publisher, ros_gz_bridge and mecanum_sim_backend in namespace /; startup-only b2_server_scene_readiness may disappear after readiness; required graph convergence within 30 s; one owned server and one owned GUI",
     "status_all_observation_samples": {
       "actuator_inhibited": true,
       "applied_receipt_valid": false,
@@ -105,10 +105,16 @@
     "coordinator_ingress_instance_id": "single nonzero uint64 generated once",
     "expected_ros_node_names": [
       "b22_gui_observation_observer",
+      "mecanum_sim_backend",
       "robot_state_publisher",
-      "ros_gz_bridge",
+      "ros_gz_bridge"
+    ],
+    "expected_ros_node_namespace": "/",
+    "startup_temporary_ros_node_names": [
       "b2_server_scene_readiness"
     ],
+    "node_graph_convergence_after_readiness_s": 30,
+    "temporary_node_stale_after_readiness_s": 30,
     "gz_partition": "mecanum_b2_<session_uuid_without_hyphens>",
     "host_binding": [
       "hostname",
@@ -280,10 +286,10 @@
     "server_readiness": 30
   },
   "tool_sha256": {
-    "observation_guard.py": "f9feff48c3fd16527c89b071afca48864fd8472aee82272213867d3866c483a4",
-    "observation_runner.py": "8617b8f978246d8d1cbef7b348e941affb10df18b1269b208ec659bf380897ab",
+    "observation_guard.py": "7d57728e2c9086ea22e1e8e404471e26e9f755ea1fdf80035e74d11513b16166",
+    "observation_runner.py": "67d0112b52c74cbfc4bbcee193bec603cd92e05d5580fd8219c156b65f7f9c0f",
     "observation_sink.py": "d0e7fec7cf8aeb5d42110971f65a3dd01fa58a6320ce481236e3ce36d072dd1c",
-    "test_observation_packet.py": "b8527ee3d9e6164806f85e04464787d15da644ae44273f335151eed49023e9de"
+    "test_observation_packet.py": "174883e18e5a80181735699fd13dbc453a11e49d9b860181a1a802667ca570ac"
   },
   "world": "b2_training_arena"
 }

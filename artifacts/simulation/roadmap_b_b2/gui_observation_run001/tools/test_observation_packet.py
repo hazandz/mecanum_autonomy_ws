@@ -403,7 +403,8 @@ class _EvaluationObserver:
     def __init__(
         self, clock, *, emit_clock=True, emit_backend=True,
         inhibit_after=None, change_clock_at=None, duplicate_sequence=False,
-        backend_once=False, foreign_node=False,
+        backend_once=False, foreign_node=False, graph_schedule=None,
+        readiness_event=None, ack_event=None, duplicate_backend=False,
     ):
         self.clock = clock
         self.emit_clock = emit_clock
@@ -413,6 +414,11 @@ class _EvaluationObserver:
         self.duplicate_sequence = duplicate_sequence
         self.backend_once = backend_once
         self.foreign_node = foreign_node
+        self.graph_schedule = graph_schedule
+        self.readiness_event = readiness_event
+        self.ack_event = ack_event
+        self.duplicate_backend = duplicate_backend
+        self.graph_calls = 0
         self.events = __import__('collections').deque()
         self.calls = 0
         self.close_count = 0
@@ -454,11 +460,26 @@ class _EvaluationObserver:
             self.events.append(('backend', message, now, int(now * 1e9)))
 
     def node_inventory(self):
-        names = [
+        persistent = [
             ('b22_gui_observation_observer', '/'),
+            ('mecanum_sim_backend', '/'),
             ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
-            ('b2_server_scene_readiness', '/'),
         ]
+        if self.graph_schedule is not None:
+            names = self.graph_schedule[min(
+                self.graph_calls, len(self.graph_schedule) - 1,
+            )]
+            self.graph_calls += 1
+            if (self.readiness_event is not None
+                    and ('b2_server_scene_readiness', '/') not in names
+                    and self.graph_calls >= len(self.graph_schedule)):
+                self.readiness_event.set()
+                if self.ack_event is not None:
+                    self.ack_event.set()
+            return names
+        names = list(persistent)
+        if self.duplicate_backend:
+            names.append(('mecanum_sim_backend', '/'))
         if self.foreign_node:
             names.append(('foreign_robot', '/'))
         return names
@@ -612,6 +633,107 @@ def test_foreign_graph_participant_and_background_evidence_fail():
                 steady=lambda: clock[0], ack_event=ack,
                 deadline=10, sink=evidence,
             )
+
+    asyncio.run(check())
+
+
+def test_ros_graph_real_readiness_node_lifecycle_and_convergence():
+    """Test backend permanence and temporary readiness-node lifecycle."""
+    async def check():
+        clock = [0.0]
+        ack = asyncio.Event()
+        ready = asyncio.Event()
+        persistent = [
+            ('b22_gui_observation_observer', '/'),
+            ('mecanum_sim_backend', '/'),
+            ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
+        ]
+        schedule = [
+            [persistent[0], persistent[2], persistent[3]],
+            list(persistent),
+            [*persistent, ('b2_server_scene_readiness', '/')],
+            list(persistent),
+        ]
+        observer = _EvaluationObserver(
+            clock, graph_schedule=schedule, readiness_event=ready,
+            ack_event=ack,
+        )
+        evidence = _Sink()
+        result = await runner.evaluate_observation(
+            plan=SimpleNamespace(
+                session_id='session-test', config_hash=guard.CONFIG_HASH,
+            ), observer=observer, duration_s=0.2,
+            steady=lambda: clock[0], ack_event=ack,
+            readiness_complete_event=ready, deadline=10, sink=evidence,
+        )
+        assert result['observed_seconds'] >= 0.2
+        inventories = [
+            facts['participants'] for name, facts in evidence.records
+            if name == 'ros_graph_inventory'
+        ]
+        assert any(
+            ['mecanum_sim_backend', '/'] in item for item in inventories
+        )
+        assert any(
+            ['b2_server_scene_readiness', '/'] in item
+            for item in inventories
+        )
+        assert set(map(tuple, inventories[-1])) == set(persistent)
+
+        clock_delayed = [0.0]
+        ack_delayed = asyncio.Event()
+        ready_delayed = asyncio.Event()
+        ready_delayed.set()
+        startup_without_backend = [
+            persistent[0], persistent[2], persistent[3],
+        ]
+        delayed = _EvaluationObserver(
+            clock_delayed,
+            graph_schedule=[startup_without_backend] * 6 + [persistent],
+            readiness_event=ready_delayed, ack_event=ack_delayed,
+        )
+        result = await runner.evaluate_observation(
+            plan=SimpleNamespace(
+                session_id='session-test', config_hash=guard.CONFIG_HASH,
+            ), observer=delayed, duration_s=0.1,
+            steady=lambda: clock_delayed[0], ack_event=ack_delayed,
+            readiness_complete_event=ready_delayed,
+            graph_convergence_s=1.0, deadline=10,
+        )
+        assert result['observed_seconds'] >= 0.1
+
+        for options, message in (
+            ({'graph_schedule': [[
+                ('b22_gui_observation_observer', '/'),
+                ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
+            ]], 'readiness_event': asyncio.Event()}, 'did not converge'),
+            ({'duplicate_backend': True}, 'duplicate ROS graph'),
+            ({'graph_schedule': [[
+                ('b22_gui_observation_observer', '/'),
+                ('mecanum_sim_backend', '/'),
+                ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
+                ('b2_server_scene_readiness', '/'),
+            ]]}, 'temporary readiness ROS node remained'),
+        ):
+            clock2 = [0.0]
+            observer2 = _EvaluationObserver(clock2, **options)
+            ready2 = options.get('readiness_event')
+            if ready2 is not None:
+                ready2.set()
+            if 'temporary readiness' in message:
+                ready2 = asyncio.Event()
+                ready2.set()
+            with pytest.raises(ObservationFailure, match=message):
+                await runner.evaluate_observation(
+                    plan=SimpleNamespace(
+                        session_id='session-test',
+                        config_hash=guard.CONFIG_HASH,
+                    ), observer=observer2, duration_s=2,
+                    steady=lambda: clock2[0], ack_event=asyncio.Event(),
+                    readiness_complete_event=ready2,
+                    graph_convergence_s=0.1, temporary_stale_s=0.1,
+                    deadline=10,
+                )
 
     asyncio.run(check())
 
@@ -790,8 +912,8 @@ class _FakeObserver:
     def node_inventory(self):
         return [
             ('b22_gui_observation_observer', '/'),
+            ('mecanum_sim_backend', '/'),
             ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
-            ('b2_server_scene_readiness', '/'),
         ]
 
     def close(self):
@@ -800,12 +922,13 @@ class _FakeObserver:
 
 
 class _FakeSink:
-    def __init__(self, state, fail_event=None):
+    def __init__(self, state, fail_event=None, fail_close=False):
         self.state = state
         self.fail_event = fail_event
         self.records = []
         self.events = []
         self.closed = 0
+        self.fail_close = fail_close
 
     def record(self, event, facts):
         self.records.append((event, facts))
@@ -817,6 +940,8 @@ class _FakeSink:
     def close(self):
         self.closed += 1
         self.state['events'].append('sink-close')
+        if self.fail_close:
+            raise OSError('injected sink close failure')
 
 
 @dataclass(frozen=True)
@@ -881,12 +1006,17 @@ class _FakeSupervisor:
         self.state['events'].append('supervisor-cleanup')
         for process in self.state['roles'].values():
             process.finish(0)
+        self.state['clock'][0] += self.state.get(
+            'cleanup_clock_advance', 0.0,
+        )
 
 
 def _fake_runner_inputs(
     tmp_path, *, fail_start=False, sink_failure=None, packet_mutation=None,
     exit_role=None, exit_status=0, inhibit_after=None, output_failure=False,
     wait_for_owner=False, emit_clock=True, emit_backend=True,
+    temporary_cleanup_failure=False, sink_close_failure=False,
+    temporary_cleanup_clock_advance=0.0,
 ):
     """Build an actual-packet positive control with injected runtime edges."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -896,6 +1026,9 @@ def _fake_runner_inputs(
         'screenshot': tmp_path / 'owner.png',
         'clock': [0.0], 'observer': None, 'sink': None,
         'supervisors': [], 'acquisitions': [], 'readiness': None,
+        'temporary_cleanup_failure': temporary_cleanup_failure,
+        'temporary_cleanup_clock_advance': temporary_cleanup_clock_advance,
+        'cleanup_clock_advance': 0.0,
     }
     state['screenshot'].write_bytes(b'test-only screenshot placeholder')
     packet_bytes = BUNDLE_PACKET.read_bytes()
@@ -954,6 +1087,18 @@ def _fake_runner_inputs(
             'physics_engine_path': tmp_path / 'physics',
         }, descriptor, descriptor_path
 
+    class RuntimeTemporaryDirectory:
+        def __init__(self, **kwargs):
+            self._context = runner.tempfile.TemporaryDirectory(**kwargs)
+            self.name = self._context.name
+
+        def cleanup(self):
+            state['events'].append('temporary-directory-cleanup')
+            self._context.cleanup()
+            state['clock'][0] += state['temporary_cleanup_clock_advance']
+            if state['temporary_cleanup_failure']:
+                raise OSError('injected temporary directory cleanup failure')
+
     launcher = _FakeLauncher(
         state, exit_role=exit_role, exit_status=exit_status,
     )
@@ -971,7 +1116,9 @@ def _fake_runner_inputs(
         state['acquisitions'].append(payload)
 
     def sink_factory(_root, _run_id, _session):
-        state['sink'] = _FakeSink(state, sink_failure)
+        state['sink'] = _FakeSink(
+            state, sink_failure, sink_close_failure,
+        )
         return state['sink']
 
     def observer_factory():
@@ -1014,6 +1161,7 @@ def _fake_runner_inputs(
         },
         'monotonic_ns': lambda: int(state['clock'][0] * 1e9),
         'monotonic': lambda: state['clock'][0],
+        'temporary_directory_factory': RuntimeTemporaryDirectory,
     }
     return args, dependencies, state
 
@@ -1038,6 +1186,71 @@ def test_actual_packet_positive_control_reaches_fake_acquisition(tmp_path):
     assert final[-1]['status'] == 'PASS'
     assert state['observer'].close_count == 1
     assert state['sink'].closed == 1
+    assert state['events'].index('temporary-directory-cleanup') < next(
+        index for index, event in enumerate(state['events'])
+        if event == 'evidence:final_status'
+    )
+
+
+def test_final_evidence_follows_cleanup_and_records_cleanup_failure(tmp_path):
+    """Test final PASS follows cleanup and cleanup failure is final FAIL."""
+    args, dependencies, state = _fake_runner_inputs(tmp_path / 'pass')
+    result = asyncio.run(runner._run(args, dependencies=dependencies))
+    assert result == 'PASS'
+    assert state['events'].index('temporary-directory-cleanup') < next(
+        index for index, event in enumerate(state['events'])
+        if event == 'evidence:final_status'
+    )
+
+    args, dependencies, state = _fake_runner_inputs(
+        tmp_path / 'tmp-fail', temporary_cleanup_failure=True,
+    )
+    result = asyncio.run(runner._run(args, dependencies=dependencies))
+    final = [
+        facts for name, facts in state['sink'].records
+        if name == 'final_status'
+    ][-1]
+    assert result == final['status'] == 'FAIL'
+    assert final['observation_status'] == 'PASS'
+    assert any('runtime_dir_cleanup:OSError' in item
+               for item in final['cleanup_errors'])
+
+
+def test_cleanup_deadline_and_evidence_failures_cannot_return_pass(tmp_path):
+    """Test cleanup timeout and sink write/close errors invalidate PASS."""
+    args, dependencies, state = _fake_runner_inputs(tmp_path / 'deadline')
+    state['cleanup_clock_advance'] = 61
+    result = asyncio.run(runner._run(args, dependencies=dependencies))
+    assert result == 'FAIL'
+    final = [
+        facts for name, facts in state['sink'].records
+        if name == 'final_status'
+    ][-1]
+    assert 'cleanup_deadline_exceeded' in final['cleanup_errors']
+
+    args, dependencies, state = _fake_runner_inputs(
+        tmp_path / 'temp-deadline', temporary_cleanup_clock_advance=61,
+    )
+    assert asyncio.run(runner._run(args, dependencies=dependencies)) == 'FAIL'
+    final = [
+        facts for name, facts in state['sink'].records
+        if name == 'final_status'
+    ][-1]
+    assert 'cleanup_deadline_exceeded' in final['cleanup_errors']
+
+    args, dependencies, state = _fake_runner_inputs(
+        tmp_path / 'write-fail', sink_failure='final_status',
+    )
+    assert asyncio.run(runner._run(args, dependencies=dependencies)) == 'FAIL'
+    assert any(name == 'evidence_incomplete'
+               for name, _facts in state['sink'].records)
+
+    args, dependencies, state = _fake_runner_inputs(
+        tmp_path / 'close-fail', sink_close_failure=True,
+    )
+    assert asyncio.run(runner._run(args, dependencies=dependencies)) == 'FAIL'
+    assert any(name == 'evidence_incomplete'
+               for name, _facts in state['sink'].records)
 
 
 def test_malformed_packet_stops_before_fake_acquisition_or_spawn(tmp_path):
@@ -1311,6 +1524,116 @@ def test_fallback_cleanup_escalates_and_is_idempotent():
     asyncio.run(check())
 
 
+def test_shared_cleanup_window_is_fixed_and_wrapper_joins_cancelled_base():
+    """Test wrapped cleanup uses one deadline and joins cancellation paths."""
+    async def check():
+        now = [0.0]
+        window = runner.CleanupWindow(0.0, 300.0, lambda: now[0])
+        first = window.begin()
+        now[0] = 55.0
+        assert window.begin() == first == 60.0
+
+        process = _FakeProcess(8401, 'server')
+        record = SimpleNamespace(
+            name='server', pid=process.pid, process=process,
+        )
+
+        class Launcher:
+            def __init__(self):
+                self.signals = []
+
+            def group_alive(self, proc):
+                return proc.returncode is None
+
+            async def stop_group(self, proc, sig):
+                self.signals.append(sig)
+                proc.finish(-sig)
+
+        launcher = Launcher()
+
+        class Base:
+            def __init__(self, **_kwargs):
+                self.owned = [record]
+                self.launcher = launcher
+                self.evidence_sink = None
+                self.waiter = None
+
+            async def cleanup(self):
+                self.waiter = asyncio.current_task()
+                await asyncio.Future()
+
+        errors = []
+        wrapped = runner.ResilientSupervisor(
+            Base, cleanup_window=runner.CleanupWindow(
+                0.0, 300.0, lambda: now[0],
+            ), cleanup_errors=errors,
+            cleanup_options={
+                'sleep': asyncio.sleep,
+                'escalation_grace': (0, 0, 0),
+            },
+        )
+        task = asyncio.create_task(wrapped.cleanup())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert wrapped.waiter.done() and wrapped.waiter.cancelled()
+        assert launcher.signals == [signal.SIGINT]
+        assert not [
+            item for item in asyncio.all_tasks()
+            if item is not asyncio.current_task() and not item.done()
+        ]
+
+    asyncio.run(check())
+
+
+def test_cleanup_window_deadline_does_not_renew_after_exception():
+    """Test base cleanup failure near deadline cannot grant another budget."""
+    async def check():
+        now = [0.0]
+        window = runner.CleanupWindow(0.0, 300.0, lambda: now[0])
+        process = _FakeProcess(8402, 'server')
+        record = SimpleNamespace(name='server', pid=8402, process=process)
+
+        class Launcher:
+            def group_alive(self, _process):
+                return True
+
+            async def stop_group(self, _process, _sig):
+                now[0] = 60.0
+
+        class Base:
+            def __init__(self, **_kwargs):
+                self.owned = [record]
+                self.launcher = Launcher()
+                self.evidence_sink = None
+                self.calls = 0
+
+            async def cleanup(self):
+                self.calls += 1
+                if self.calls == 1:
+                    now[0] = 59.0
+                raise RuntimeError('near-deadline cleanup failure')
+
+        errors = []
+        wrapped = runner.ResilientSupervisor(
+            Base, cleanup_window=window, cleanup_errors=errors,
+            cleanup_options={'escalation_grace': (5, 3, 3)},
+        )
+        with pytest.raises(ObservationFailure, match='residue'):
+            await wrapped.cleanup()
+        assert window.begin() == 60.0
+        assert now[0] == 60.0
+        assert any('base_cleanup:RuntimeError' in item for item in errors)
+        assert any('residue' in item for item in errors)
+        with pytest.raises(ObservationFailure, match='residue'):
+            await wrapped.cleanup()
+        assert window.begin() == 60.0
+        assert now[0] == 60.0
+
+    asyncio.run(check())
+
+
 def test_launcher_retains_ownership_before_identity_or_evidence_failure():
     """Test ownership survives identity and evidence callback failures."""
     class Delegate(_FakeLauncher):
@@ -1330,6 +1653,7 @@ def test_launcher_retains_ownership_before_identity_or_evidence_failure():
         assert launcher.records[0].identity_error.startswith('OSError')
         await runner._fallback_cleanup(
             launcher, launcher.records, None, [],
+            deadline=10,
             escalation_grace=(0, 0, 0),
         )
         assert len(launcher.records) == 1
@@ -1350,6 +1674,7 @@ def test_launcher_retains_ownership_before_identity_or_evidence_failure():
         assert launcher.records[0].identity is not None
         await runner._fallback_cleanup(
             launcher, launcher.records, None, [],
+            deadline=10,
             escalation_grace=(0, 0, 0),
         )
         for waiter in launcher.waiters.values():
@@ -1379,6 +1704,7 @@ def test_cleanup_unknown_identity_is_fail_closed_and_does_not_drop_record():
     errors = []
     asyncio.run(runner._fallback_cleanup(
         Launcher(), [record], None, errors,
+        deadline=10,
         escalation_grace=(0, 0, 0),
     ))
     assert any(

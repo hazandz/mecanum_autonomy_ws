@@ -75,7 +75,12 @@ symlink/collision xảy ra trước consume. Acquisition xảy ra trước mọi
    `OWNER_ACK_SCENE`; runner xác minh screenshot là file không rỗng và ghi hash.
 7. Observer ROS context riêng chỉ subscribe `/mecanum/local_training/backend_state`
    và `/clock`; không tạo control publisher/service client. Chờ clock ổn định
-   một giây rồi quan sát đủ 60 s.
+   một giây rồi quan sát đủ 60 s. Inventory ROS phải có observer,
+   `robot_state_publisher`, `ros_gz_bridge` và `mecanum_sim_backend` trong
+   namespace `/`. `b2_server_scene_readiness` chỉ node tạm của startup; graph
+   có tối đa 30 s sau readiness để phản ánh sự biến mất của node này và hội tụ
+   các participant thường trực. Participant lạ, trùng hoặc participant thường
+   trực còn thiếu sau budget làm lượt chạy thất bại.
 8. PASS yêu cầu backend identity bất biến, `paused=true`,
    `actuator_inhibited=true`, `fault_flags=0`, không applied receipt, heartbeat
    không mất quá một giây và simulation clock không tiến. Scan/contact capability

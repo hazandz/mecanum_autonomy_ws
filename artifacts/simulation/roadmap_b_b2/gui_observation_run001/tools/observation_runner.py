@@ -50,9 +50,11 @@ CLOCK_READY_TIMEOUT_S = SERVER_READY_S
 CLOCK_SAMPLE_GAP_S = 1.0
 POLL_SLICE_S = 0.05
 EXPECTED_ROS_NODES = {
-    'b22_gui_observation_observer', 'robot_state_publisher',
-    'ros_gz_bridge', 'b2_server_scene_readiness',
+    ('b22_gui_observation_observer', '/'),
+    ('mecanum_sim_backend', '/'),
+    ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
 }
+STARTUP_TEMPORARY_ROS_NODES = {('b2_server_scene_readiness', '/')}
 
 
 class ObservationFailure(RuntimeError):
@@ -188,10 +190,12 @@ def _host_identity() -> dict[str, str]:
 class ScreenshotReadiness:
     """Delegate readiness to audited code and hash Owner's real screenshot."""
 
-    def __init__(self, readiness, owner_ack_event=None):
+    def __init__(self, readiness, owner_ack_event=None,
+                 readiness_complete_event=None):
         """Wrap audited readiness and retain the verified Owner screenshot."""
         self._readiness = readiness
         self.owner_ack_event = owner_ack_event
+        self.readiness_complete_event = readiness_complete_event
         self.screenshot_path = None
         self.screenshot_sha256 = None
         self.owner_ack_cancelled = False
@@ -203,6 +207,8 @@ class ScreenshotReadiness:
     async def server_scene(self, plan, process, timeout_s):
         """Delegate passive server and scene readiness checks."""
         await self._readiness.server_scene(plan, process, timeout_s)
+        if self.readiness_complete_event is not None:
+            self.readiness_complete_event.set()
 
     async def gui_process_started(self, plan, process, timeout_s):
         """Delegate the audited GUI process liveness check."""
@@ -366,17 +372,102 @@ class ResilientSupervisor:
 
     def __new__(cls, base_type, **kwargs):
         """Create the audited supervisor with best-effort owned cleanup."""
+        cleanup_window = kwargs.pop('cleanup_window')
+        cleanup_errors = kwargs.pop('cleanup_errors')
+        cleanup_options = kwargs.pop('cleanup_options', {})
+
         class BoundSupervisor(base_type):
             async def cleanup(self):
                 captured = list(self.owned)
+                base_task = None
+                cancelled = False
                 try:
-                    await super().cleanup()
-                except BaseException:
-                    await _fallback_cleanup(
-                        self.launcher, captured, self.evidence_sink, [],
+                    deadline = cleanup_window.begin()
+                    base_task = asyncio.create_task(super().cleanup())
+                    done, _ = await asyncio.wait(
+                        {base_task}, timeout=max(
+                            0.0, deadline - cleanup_window.steady(),
+                        ),
                     )
-                    raise
+                    if base_task not in done:
+                        base_task.cancel()
+                        cleanup_errors.append('base_cleanup_timeout')
+                        joined, _ = await asyncio.wait(
+                            {base_task}, timeout=max(
+                                0.0, deadline - cleanup_window.steady(),
+                            ),
+                        )
+                        if not joined:
+                            cleanup_errors.append(
+                                'base_cleanup_task_residue_unknown'
+                            )
+                        else:
+                            await asyncio.gather(
+                                base_task, return_exceptions=True,
+                            )
+                    else:
+                        error = base_task.exception()
+                        if error is not None:
+                            raise error
+                except asyncio.CancelledError:
+                    cancelled = True
+                    if base_task is not None and not base_task.done():
+                        base_task.cancel()
+                        joined, _ = await asyncio.wait(
+                            {base_task}, timeout=max(
+                                0.0, cleanup_window.begin()
+                                - cleanup_window.steady(),
+                            ),
+                        )
+                        if joined:
+                            await asyncio.gather(
+                                base_task, return_exceptions=True,
+                            )
+                        else:
+                            cleanup_errors.append(
+                                'base_cleanup_task_residue_unknown'
+                            )
+                except BaseException as error:
+                    cleanup_errors.append(
+                        f'base_cleanup:{type(error).__name__}:{error}'
+                    )
+                finally:
+                    await _fallback_cleanup(
+                        self.launcher, captured, self.evidence_sink,
+                        cleanup_errors, deadline=cleanup_window.begin(),
+                        steady=cleanup_window.steady,
+                        **cleanup_options,
+                    )
+                if cleanup_window.steady() >= cleanup_window.begin():
+                    if any('residue' in item or 'timeout' in item
+                           for item in cleanup_errors):
+                        raise ObservationFailure(
+                            'cleanup deadline/residue was not cleared'
+                        )
+                if cancelled:
+                    raise asyncio.CancelledError
         return BoundSupervisor(**kwargs)
+
+
+class CleanupWindow:
+    """One immutable cleanup deadline shared by every cleanup path."""
+
+    def __init__(self, consumed_at, total_deadline, steady=time.monotonic):
+        """Bind one cleanup window to the run's absolute total deadline."""
+        self.consumed_at = consumed_at
+        self.total_deadline = total_deadline
+        self.steady = steady
+        self.started_at = None
+        self.deadline = None
+
+    def begin(self):
+        """Return the same absolute deadline on every cleanup invocation."""
+        if self.started_at is None:
+            self.started_at = self.steady()
+            self.deadline = min(
+                self.started_at + CLEANUP_CAP_S, self.total_deadline,
+            )
+        return self.deadline
 
 
 def _process_label(command):
@@ -507,6 +598,9 @@ async def evaluate_observation(
     *, plan, observer, duration_s: float = OBSERVATION_S,
     steady=time.monotonic, ack_event=None, owner_abort_event=None,
     deadline=None, sink=None, expected_nodes=EXPECTED_ROS_NODES,
+    temporary_nodes=STARTUP_TEMPORARY_ROS_NODES,
+    readiness_complete_event=None, graph_convergence_s=30.0,
+    temporary_stale_s=30.0,
     clock_ready_timeout_s=CLOCK_READY_TIMEOUT_S,
 ):
     """Monitor status and clock through acknowledgment and observation."""
@@ -522,6 +616,7 @@ async def evaluate_observation(
     clock_count = 0
     backend_identity = None
     seen_nodes = None
+    readiness_completed_at = None
     while True:
         now = steady()
         if owner_abort_event is not None and owner_abort_event.is_set():
@@ -613,28 +708,48 @@ async def evaluate_observation(
                 })
         if hasattr(observer, 'node_inventory'):
             inventory = observer.node_inventory()
-            names = [name for name, _namespace in inventory]
-            unique_names = set(names)
-            if len(names) != len(unique_names):
+            participants = list(inventory)
+            unique_participants = set(participants)
+            names = {name for name, _namespace in participants}
+            if len(participants) != len(unique_participants):
                 raise ObservationFailure(
                     'duplicate ROS graph participant names were observed'
                 )
-            names = unique_names
-            unexpected = names - set(expected_nodes)
+            unexpected = unique_participants - (
+                set(expected_nodes) | set(temporary_nodes)
+            )
             if unexpected:
                 raise ObservationFailure(
                     f'unexpected ROS graph participants: {sorted(unexpected)}'
                 )
-            if ack_event is not None and ack_event.is_set():
-                if names != set(expected_nodes):
+            if readiness_complete_event is None:
+                readiness_completed_at = monitor_started
+            elif readiness_complete_event.is_set() and (
+                readiness_completed_at is None
+            ):
+                readiness_completed_at = now
+            permanent_missing = set(expected_nodes) - unique_participants
+            if readiness_completed_at is not None:
+                if (permanent_missing and now - readiness_completed_at
+                        >= graph_convergence_s):
                     raise ObservationFailure(
-                        'ROS graph participants differ from packet allowlist'
+                        'ROS graph did not converge after scene readiness: '
+                        f'{sorted(permanent_missing)}'
                     )
-            if names != seen_nodes:
-                seen_nodes = names
+                stale_temporary = unique_participants & set(temporary_nodes)
+                if (stale_temporary and now - readiness_completed_at
+                        >= temporary_stale_s):
+                    raise ObservationFailure(
+                        'temporary readiness ROS node remained in graph'
+                    )
+            if unique_participants != seen_nodes:
+                seen_nodes = unique_participants
                 if sink is not None:
                     sink.record('ros_graph_inventory', {
                         'nodes': sorted(names),
+                        'participants': [
+                            list(item) for item in sorted(unique_participants)
+                        ],
                         'unexpected_nodes': sorted(unexpected),
                     })
         now = steady()
@@ -961,7 +1076,7 @@ def _check_output_tasks(supervisor, sink):
 
 async def _monitor_owned_processes(
     *, launcher, supervisor, readiness, sink, ack_event,
-    owner_abort_event, stop_event,
+    owner_abort_event, stop_event, deadline, steady,
 ):
     """Monitor role exits and output evidence from the first owned spawn."""
     owner_abort_task = None
@@ -1017,7 +1132,18 @@ async def _monitor_owned_processes(
         if owner_abort_task is not None and not owner_abort_task.done():
             owner_abort_task.cancel()
         if owner_abort_task is not None:
-            await asyncio.gather(owner_abort_task, return_exceptions=True)
+            remaining = max(0.0, deadline - steady())
+            done, _ = await asyncio.wait(
+                {owner_abort_task}, timeout=remaining,
+            )
+            if done:
+                await asyncio.gather(
+                    owner_abort_task, return_exceptions=True,
+                )
+            else:
+                raise ObservationFailure(
+                    'Owner abort watcher residue after cancellation'
+                )
 
 
 async def _wait_competing(
@@ -1121,7 +1247,9 @@ async def _run(args, *, dependencies=None):
     install_fingerprints = install_preflight() if install_preflight else None
     temp_parent = Path(args.temp_root)
     temp_parent.mkdir(parents=True, exist_ok=True)
-    runtime_dir_context = tempfile.TemporaryDirectory(
+    runtime_dir_context = deps.get(
+        'temporary_directory_factory', tempfile.TemporaryDirectory,
+    )(
         prefix='b22_gui_observation_run001_', dir=temp_parent,
     )
     runtime_dir = Path(runtime_dir_context.name)
@@ -1210,6 +1338,7 @@ async def _run(args, *, dependencies=None):
     consumed_at = mono()
     runtime_deadline = consumed_at + RUNTIME_CAP_S
     total_deadline = consumed_at + TOTAL_CAP_S
+    cleanup_window = CleanupWindow(consumed_at, total_deadline, mono)
     sink = None
     supervisor = None
     launcher = None
@@ -1220,9 +1349,11 @@ async def _run(args, *, dependencies=None):
     owner_ack_event = asyncio.Event()
     owner_abort_event = asyncio.Event()
     final_status = 'FAIL'
+    observation_verdict = 'FAIL'
     failure = None
     cleanup_errors = []
     original_environment = {}
+    readiness_complete_event = asyncio.Event()
     bound_environment = {'ROS_DOMAIN_ID': '83', **dict(plan.environment)}
     try:
         if not evidence_root.exists():
@@ -1291,6 +1422,7 @@ async def _run(args, *, dependencies=None):
         )
         readiness = ScreenshotReadiness(
             deps.get('readiness', RclpyReadiness()), owner_ack_event,
+            readiness_complete_event,
         )
         if deps.get('supervisor_factory'):
             supervisor = deps['supervisor_factory'](
@@ -1301,6 +1433,14 @@ async def _run(args, *, dependencies=None):
             supervisor = ResilientSupervisor(
                 LocalTrainingProcessSupervisor, plan=plan, launcher=launcher,
                 readiness=readiness, evidence_sink=sink,
+                cleanup_window=cleanup_window,
+                cleanup_errors=cleanup_errors,
+                cleanup_options={
+                    'sleep': deps.get('cleanup_sleep', asyncio.sleep),
+                    'escalation_grace': deps.get(
+                        'cleanup_escalation_grace', (5.0, 3.0, 3.0),
+                    ),
+                },
             )
         observer = deps.get('observer_factory', PassiveBackendObserver)()
         observer.start()
@@ -1317,15 +1457,34 @@ async def _run(args, *, dependencies=None):
             launcher=launcher, supervisor=supervisor, readiness=readiness,
             sink=sink, ack_event=owner_ack_event,
             owner_abort_event=owner_abort_event, stop_event=stop_monitor,
+            deadline=runtime_deadline, steady=mono,
         ))
         observer_task = asyncio.create_task(evaluate_observation(
             plan=plan, observer=observer, duration_s=OBSERVATION_S,
             steady=mono, ack_event=owner_ack_event,
             owner_abort_event=owner_abort_event,
             deadline=runtime_deadline, sink=sink,
-            expected_nodes=set(
-                packet['identity_binding']['expected_ros_node_names']
-            ),
+            expected_nodes={
+                (name, packet['identity_binding'][
+                    'expected_ros_node_namespace'
+                ]) for name in packet['identity_binding'][
+                    'expected_ros_node_names'
+                ]
+            },
+            temporary_nodes={
+                (name, packet['identity_binding'][
+                    'expected_ros_node_namespace'
+                ]) for name in packet['identity_binding'][
+                    'startup_temporary_ros_node_names'
+                ]
+            },
+            readiness_complete_event=readiness_complete_event,
+            graph_convergence_s=packet['identity_binding'][
+                'node_graph_convergence_after_readiness_s'
+            ],
+            temporary_stale_s=packet['identity_binding'][
+                'temporary_node_stale_after_readiness_s'
+            ],
         ))
         rsp_command = planned_rsp_command
         rsp = await _wait_competing(
@@ -1363,9 +1522,11 @@ async def _run(args, *, dependencies=None):
             raise ObservationFailure('240 s runtime cap exceeded')
         sink.record('observation_result', verdict)
         final_status = 'PASS'
+        observation_verdict = 'PASS'
     except OwnerAbort as error:
         failure = error
         final_status = 'ABORTED_BY_OWNER'
+        observation_verdict = 'ABORTED_BY_OWNER'
         if sink is not None:
             try:
                 sink.record('owner_abort', {
@@ -1378,6 +1539,7 @@ async def _run(args, *, dependencies=None):
     except BaseException as error:
         failure = error
         final_status = 'FAIL'
+        observation_verdict = 'FAIL'
         if sink is not None:
             try:
                 sink.record('observation_failure', {
@@ -1389,10 +1551,8 @@ async def _run(args, *, dependencies=None):
                     f'evidence_failure:{type(sink_error).__name__}'
                 )
     finally:
-        cleanup_start = mono()
-        cleanup_deadline = min(
-            cleanup_start + CLEANUP_CAP_S, total_deadline,
-        )
+        cleanup_deadline = cleanup_window.begin()
+        cleanup_start = cleanup_window.started_at
         stop_monitor.set()
         for task in (observer_task, process_monitor_task):
             try:
@@ -1498,36 +1658,62 @@ async def _run(args, *, dependencies=None):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = previous
+        try:
+            runtime_dir_context.cleanup()
+        except BaseException as error:
+            cleanup_errors.append(
+                f'runtime_dir_cleanup:{type(error).__name__}:{error}'
+            )
         if mono() - cleanup_start > CLEANUP_CAP_S:
             cleanup_errors.append('cleanup_deadline_exceeded')
         if mono() > total_deadline:
             cleanup_errors.append('consume_to_end_deadline_exceeded')
+        if mono() > cleanup_deadline:
+            cleanup_errors.append('cleanup_deadline_exceeded')
         if cleanup_errors:
             final_status = 'FAIL'
         if sink is not None:
             try:
+                sink.record('observation_verdict', {
+                    'status': observation_verdict,
+                    'failure_type': (
+                        type(failure).__name__ if failure else None
+                    ),
+                })
                 sink.record('final_status', {
                     'status': final_status,
+                    'observation_status': observation_verdict,
+                    'evidence_close_required_for_validity': True,
                     'failure_type': (
                         type(failure).__name__ if failure else None
                     ),
                     'cleanup_elapsed_s': mono() - cleanup_start,
                     'cleanup_errors': cleanup_errors,
                 })
-            except BaseException:
+            except BaseException as error:
                 final_status = 'FAIL'
+                cleanup_errors.append(
+                    f'final_evidence_write:{type(error).__name__}:{error}'
+                )
+                try:
+                    sink.record('evidence_incomplete', {
+                        'reason': cleanup_errors[-1],
+                    })
+                except BaseException:
+                    pass
             try:
                 sink.close()
-            except BaseException:
+            except BaseException as error:
                 final_status = 'FAIL'
-        try:
-            runtime_dir_context.cleanup()
-        except BaseException as error:
-            final_status = 'FAIL'
-            if sink is not None:
                 cleanup_errors.append(
-                    f'runtime_dir_cleanup:{type(error).__name__}:{error}'
+                    f'evidence_close:{type(error).__name__}:{error}'
                 )
+                try:
+                    sink.record('evidence_incomplete', {
+                        'reason': cleanup_errors[-1],
+                    })
+                except BaseException:
+                    pass
     return final_status
 
 
@@ -1542,11 +1728,15 @@ async def _fallback_cleanup(
     signals = (signal.SIGINT, signal.SIGTERM, signal.SIGKILL)
     if len(escalation_grace) != len(signals):
         raise ValueError('cleanup escalation grace must have three stages')
-    cleanup_deadline = (
-        deadline if deadline is not None else steady() + CLEANUP_CAP_S
-    )
+    if deadline is None:
+        raise ValueError('cleanup requires the runner shared deadline')
+    cleanup_deadline = deadline
     for sig, grace in zip(signals, escalation_grace):
+        if steady() >= cleanup_deadline:
+            break
         for record in owned:
+            if steady() >= cleanup_deadline:
+                break
             try:
                 if launcher.group_alive(record.process):
                     await launcher.stop_group(record.process, sig)

@@ -286,18 +286,33 @@ def packet_bindings(
     identity_binding = mapping(
         packet['identity_binding'], 'identity_binding', {
             'coordinator_ingress_instance_id', 'expected_ros_node_names',
+            'expected_ros_node_namespace',
             'gz_partition', 'host_binding', 'resource_plugin_environment',
-            'ros_domain_id', 'session_id',
+            'node_graph_convergence_after_readiness_s', 'ros_domain_id',
+            'session_id', 'startup_temporary_ros_node_names',
+            'temporary_node_stale_after_readiness_s',
         },
     )
     if (type(identity_binding['ros_domain_id']) is not int
             or identity_binding['ros_domain_id'] != 83):
         raise GuardError('packet ROS domain identity mismatch')
     if identity_binding['expected_ros_node_names'] != [
-        'b22_gui_observation_observer', 'robot_state_publisher',
-        'ros_gz_bridge', 'b2_server_scene_readiness',
+        'b22_gui_observation_observer', 'mecanum_sim_backend',
+        'robot_state_publisher', 'ros_gz_bridge',
     ]:
         raise GuardError('packet ROS graph participant allowlist mismatch')
+    if (identity_binding['expected_ros_node_namespace'] != '/'
+            or identity_binding['startup_temporary_ros_node_names'] != [
+                'b2_server_scene_readiness',
+            ]):
+        raise GuardError('packet ROS graph lifecycle mismatch')
+    for field in (
+        'node_graph_convergence_after_readiness_s',
+        'temporary_node_stale_after_readiness_s',
+    ):
+        if (type(identity_binding[field]) not in (float, int)
+                or identity_binding[field] != 30):
+            raise GuardError(f'packet {field} mismatch')
     if identity_binding['host_binding'] != [
         'hostname', 'Linux boot_id', 'runner pid', 'process group',
         'session', 'proc start ticks',
@@ -354,7 +369,11 @@ def packet_bindings(
         'scene': (
             'world b2_training_arena; exactly one mecanum_b2 model in '
             'readiness query; bound backend session/config identity; '
-            'one owned server and one owned GUI'
+            'persistent observer, robot_state_publisher, ros_gz_bridge and '
+            'mecanum_sim_backend in namespace /; startup-only '
+            'b2_server_scene_readiness may disappear after readiness; '
+            'required graph convergence within 30 s; one owned server and '
+            'one owned GUI'
         ),
         'status_all_observation_samples': {
             'actuator_inhibited': True, 'applied_receipt_valid': False,
