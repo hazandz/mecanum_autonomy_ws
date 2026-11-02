@@ -30,7 +30,12 @@ RUN001. RUN002 có Run ID, packet, approval và acquisition riêng.
 - Capture X11/XCB-only: `xwininfo`, `xprop`, và
   `PyQt5.QtGui.QScreen.grabWindow(WId)` chỉ cho cửa sổ được bind tới PID/PGID/
   start ticks/executable/argv/partition của GUI do run sở hữu. PNG mới, không
-  chỉnh sửa, mode 0600, tối đa 32 MiB, decode và hash lại.
+  chỉnh sửa, mode 0600, tối đa 32 MiB, decode và hash lại. Capture chạy trong
+  helper process có ownership; parent kiểm tra PNG/hash trước atomic publication
+  trong khi health monitor tiếp tục chạy.
+- Trước capacity-one acquisition, runner xác minh Qt/XCB, X11 tools, Python
+  module origins/versions, và pinned system-package versions từ metadata cài
+  sẵn. Acquisition lưu các dependency facts đã đọc thực tế.
 - Runner phát request JSON bất biến; Codex đọc request, rehash ảnh, mở ảnh thật,
   rehash lần nữa rồi gọi entry point publisher một lần. Mailbox dùng exact
   request/result schema, mode 0700/0600, `O_NOFOLLOW`, directory descriptors,

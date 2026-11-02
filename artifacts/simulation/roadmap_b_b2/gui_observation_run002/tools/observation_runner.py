@@ -132,9 +132,20 @@ def process_start_identity(pid: int, proc_root: Path = Path('/proc')) -> dict:
     }
 
 
+def process_parent_pid(pid: int, proc_root: Path = Path('/proc')) -> int:
+    """Read one process's parent PID from its current proc stat entry."""
+    raw = (proc_root / str(pid) / 'stat').read_text(encoding='ascii')
+    closing = raw.rfind(')')
+    if closing < 0:
+        raise ObservationFailure('malformed proc stat for owned process')
+    fields = raw[closing + 2:].split()
+    return int(fields[1])
+
+
 def verify_host_dependencies(
     packet, *, module_importer=None, file_hasher=sha256_file,
-    status_path=None,
+    status_path=None, package_version_reader=None, python_executable=None,
+    python_version=None, path_resolver=Path.resolve,
 ):
     """Check pinned Qt, X11 tools and Python module origins before consume."""
     import importlib
@@ -143,13 +154,21 @@ def verify_host_dependencies(
     qt = fingerprint['qt']
     desktop = fingerprint['desktop_tools']
     python = fingerprint['python']
-    pyqt = importer('PyQt5')
-    qtcore = importer('PyQt5.QtCore')
-    qtgui = importer('PyQt5.QtGui')
+    try:
+        pyqt = importer('PyQt5')
+        qtcore = importer('PyQt5.QtCore')
+        qtgui = importer('PyQt5.QtGui')
+        python_modules = {
+            name: importer(name) for name in ('pydantic', 'numpy', 'pytest')
+        }
+    except BaseException as error:
+        raise ObservationFailure(
+            f'host dependency import failed: {type(error).__name__}'
+        ) from error
     actual_modules = {
-        'PyQt5_origin': Path(pyqt.__file__).resolve(),
-        'QtCore_origin': Path(qtcore.__file__).resolve(),
-        'QtGui_origin': Path(qtgui.__file__).resolve(),
+        'PyQt5_origin': path_resolver(Path(pyqt.__file__), strict=True),
+        'QtCore_origin': path_resolver(Path(qtcore.__file__), strict=True),
+        'QtGui_origin': path_resolver(Path(qtgui.__file__), strict=True),
     }
     expected_modules = {
         'PyQt5_origin': qt['PyQt5_origin'],
@@ -157,13 +176,16 @@ def verify_host_dependencies(
         'QtGui_origin': qt['QtGui_origin'],
     }
     for key, actual in actual_modules.items():
-        if str(actual) != expected_modules[key]:
+        expected = path_resolver(Path(expected_modules[key]), strict=True)
+        if actual != expected:
             raise ObservationFailure(f'host module origin mismatch: {key}')
     hashes = {
         'PyQt5_sha256': file_hasher(actual_modules['PyQt5_origin']),
         'QtCore_sha256': file_hasher(actual_modules['QtCore_origin']),
         'QtGui_sha256': file_hasher(actual_modules['QtGui_origin']),
-        'platform_plugin_sha256': file_hasher(qt['platform_plugin']),
+        'platform_plugin_sha256': file_hasher(
+            path_resolver(Path(qt['platform_plugin']), strict=True)
+        ),
     }
     for key, actual in hashes.items():
         if actual != qt[key]:
@@ -173,37 +195,75 @@ def verify_host_dependencies(
         raise ObservationFailure('Qt/PyQt version fingerprint mismatch')
     for tool in ('xwininfo', 'xprop'):
         item = desktop[tool]
-        path = Path(item['path']).resolve(strict=True)
-        if str(path) != item['path'] or file_hasher(path) != item['sha256']:
+        path = path_resolver(Path(item['path']), strict=True)
+        expected_path = path_resolver(Path(item['path']), strict=True)
+        if path != expected_path:
+            raise ObservationFailure(f'{tool} path fingerprint mismatch')
+        if file_hasher(path) != item['sha256']:
             raise ObservationFailure(f'{tool} path/hash fingerprint mismatch')
     status_file = Path(status_path or '/var/lib/dpkg/status')
-    package_versions = _read_dpkg_versions(status_file, {
+    expected_packages = dict(fingerprint['system_packages'])
+    expected_packages.update({
         'x11-utils': desktop['xwininfo']['package_version'],
         'python3-pyqt5': desktop['python3_pyqt5_package_version'],
         'libqt5gui5t64': desktop['libqt5gui5t64_package_version'],
     })
-    if package_versions != {
-        'x11-utils': desktop['xwininfo']['package_version'],
-        'python3-pyqt5': desktop['python3_pyqt5_package_version'],
-        'libqt5gui5t64': desktop['libqt5gui5t64_package_version'],
-    }:
+    reader = package_version_reader or (
+        lambda packages: _read_dpkg_versions(status_file, packages)
+    )
+    package_versions = reader(expected_packages)
+    if package_versions != expected_packages:
         raise ObservationFailure(
             'desktop package version fingerprint mismatch'
         )
-    if str(Path(sys.executable).resolve()) != python['executable']:
+    actual_executable = path_resolver(
+        Path(python_executable or sys.executable), strict=True,
+    )
+    expected_executable = path_resolver(
+        Path(python['executable']), strict=True,
+    )
+    if actual_executable != expected_executable:
         raise ObservationFailure('Python executable differs from packet')
-    if sys.version.split()[0] != python['version']:
+    actual_python_version = python_version or sys.version.split()[0]
+    if actual_python_version != python['version']:
         raise ObservationFailure('Python version differs from packet')
-    actual_python_modules = {
-        name: importer(name) for name in ('pydantic', 'numpy', 'pytest')
-    }
+    actual_python_modules = python_modules
     for name, module in actual_python_modules.items():
         expected_module = python['modules'][name]
-        if (str(Path(module.__file__).resolve()) != expected_module['origin']
+        actual_origin = path_resolver(
+            Path(module.__file__), strict=True,
+        )
+        expected_origin = path_resolver(
+            Path(expected_module['origin']), strict=True,
+        )
+        if (actual_origin != expected_origin
                 or module.__version__ != expected_module['version']):
             raise ObservationFailure(f'{name} module fingerprint mismatch')
-    return {'qt': hashes, 'module_origins': actual_modules,
-            'package_versions': package_versions}
+        actual_python_modules[name] = {
+            'origin': str(actual_origin), 'version': module.__version__,
+        }
+    return {
+        'qt': hashes,
+        'qt_module_origins': {
+            key: str(value) for key, value in actual_modules.items()
+        },
+        'python': {
+            'executable': str(actual_executable),
+            'version': actual_python_version,
+            'modules': actual_python_modules,
+        },
+        'desktop_tools': {
+            tool: {
+                'path': str(path_resolver(Path(desktop[tool]['path']),
+                                          strict=True)),
+                'sha256': file_hasher(
+                    path_resolver(Path(desktop[tool]['path']), strict=True)
+                ),
+            }
+            for tool in ('xwininfo', 'xprop')
+        },
+        'system_packages': package_versions,
+    }
 
 
 def _read_dpkg_versions(status_file, expected_packages):
@@ -284,9 +344,91 @@ async def _owned_helper(launcher, argv, environment, *, timeout_s, sink):
     return stdout.decode('utf-8', errors='replace')
 
 
+def _xwininfo_window_entries(tree):
+    """Return actual child-window rows, excluding xwininfo root metadata."""
+    entries = []
+    pattern = re.compile(
+        r'^(?P<indent>\s+)(?P<window>0x[0-9a-fA-F]+)\s+(?:"|\()'
+    )
+    for line in tree.splitlines():
+        match = pattern.match(line)
+        if match is None:
+            continue
+        entries.append({
+            'window_id': match.group('window'),
+            'depth': len(match.group('indent')),
+        })
+    seen = {}
+    for entry in entries:
+        window_id = entry['window_id']
+        if window_id in seen:
+            raise ObservationFailure(
+                'xwininfo returned a duplicate window entry'
+            )
+        seen[window_id] = entry['depth']
+    return entries
+
+
+def _valid_process_identity(identity, pid):
+    fields = ('pid', 'process_group_id', 'session_id', 'start_ticks')
+    return (
+        isinstance(identity, dict)
+        and all(type(identity.get(key)) is int and identity[key] > 0
+                for key in fields)
+        and identity['pid'] == pid
+    )
+
+
+def _owned_gui_lineage(
+    pid, gui_record, *, identity_reader, parent_reader, max_depth=64,
+):
+    """Require an exact GUI owner or a same-session descendant of it."""
+    owned = gui_record.identity
+    if (not _valid_process_identity(owned, gui_record.pid)
+            or _process_label(gui_record.command) != 'gui'):
+        raise ObservationFailure(
+            'owned GUI identity or launcher pin is invalid'
+        )
+    if identity_reader(gui_record.pid) != owned:
+        raise ObservationFailure('owned GUI process identity changed')
+    identity = identity_reader(pid)
+    if not _valid_process_identity(identity, pid):
+        raise ObservationFailure('window process identity is incomplete')
+    if (identity['process_group_id'] != owned['process_group_id']
+            or identity['session_id'] != owned['session_id']):
+        raise ObservationFailure(
+            'window process is outside the owned GUI group'
+        )
+    if pid == gui_record.pid:
+        if identity != owned:
+            raise ObservationFailure(
+                'owned GUI process start identity changed'
+            )
+        return identity
+    current = pid
+    visited = {pid}
+    for _depth in range(max_depth):
+        parent = parent_reader(current)
+        if type(parent) is not int or parent <= 0 or parent in visited:
+            raise ObservationFailure('window process ancestry is invalid')
+        if parent == gui_record.pid:
+            if identity_reader(parent) != owned:
+                raise ObservationFailure('owned GUI ancestor identity changed')
+            return identity
+        ancestor = identity_reader(parent)
+        if (not _valid_process_identity(ancestor, parent)
+                or ancestor['process_group_id'] != owned['process_group_id']
+                or ancestor['session_id'] != owned['session_id']):
+            raise ObservationFailure('window process ancestry is not owned')
+        visited.add(parent)
+        current = parent
+    raise ObservationFailure('window process ancestry exceeded its bound')
+
+
 async def bind_gui_window(*, launcher, environment, partition, deadline,
                           steady=time.monotonic, sink=None,
                           process_identity_reader=process_start_identity,
+                          parent_reader=process_parent_pid,
                           executable_reader=os.readlink,
                           argv_reader=None,
                           partition_reader=_partition_for_pid):
@@ -302,15 +444,10 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             'exactly one identified owned GUI is required'
         )
     gui_record = gui[0]
-    window_lines = [line for line in tree.splitlines()
-                    if re.search(r'\b0x[0-9a-fA-F]+\b', line)]
-    top_indent = min((len(line) - len(line.lstrip())
-                      for line in window_lines), default=None)
-    ids = [re.search(r'\b(0x[0-9a-fA-F]+)\b', line).group(1)
-           for line in window_lines
-           if len(line) - len(line.lstrip()) == top_indent]
+    entries = _xwininfo_window_entries(tree)
     matches = []
-    for window_id in dict.fromkeys(ids):
+    for entry in entries:
+        window_id = entry['window_id']
         remaining = deadline - steady()
         if remaining <= 0:
             raise ReviewInvalidated(
@@ -321,9 +458,6 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
                        '_NET_WM_PID', 'WM_CLASS', '_NET_WM_NAME', 'WM_NAME'),
             environment, timeout_s=min(2.0, remaining), sink=sink,
         )
-        match = re.search(r'_NET_WM_PID\(CARDINAL\)\s*=\s*(\d+)', props)
-        if not match:
-            continue
         class_match = re.search(r'WM_CLASS\([^)]*\)\s*=\s*(.*)', props)
         if (
             class_match is None
@@ -332,45 +466,57 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             )
         ):
             continue
+        match = re.search(r'_NET_WM_PID\(CARDINAL\)\s*=\s*(\d+)', props)
+        if not match:
+            raise ObservationFailure(
+                f'GUI client window {window_id} has no owned PID metadata'
+            )
         pid = int(match.group(1))
-        try:
-            identity = process_identity_reader(pid)
-            if pid != gui_record.pid:
-                continue
-            exe = executable_reader(f'/proc/{pid}/exe')
-            if argv_reader is None:
-                argv = [part.decode('utf-8', errors='replace') for part in
-                        Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-                        if part]
-            else:
-                argv = list(argv_reader(pid))
-            command = list(gui_record.command)
-            if (Path(exe).resolve() != Path(command[0]).resolve()
-                    or argv != command):
-                continue
-            if identity['session_id'] != gui_record.identity['session_id']:
-                continue
-            current = process_identity_reader(pid)
-            if current != identity or partition_reader(pid) != partition:
-                continue
-        except (OSError, ObservationFailure, UnicodeError):
-            continue
-        matches.append({
+        identity = _owned_gui_lineage(
+            pid, gui_record, identity_reader=process_identity_reader,
+            parent_reader=parent_reader,
+        )
+        exe = executable_reader(f'/proc/{pid}/exe')
+        if argv_reader is None:
+            argv = [part.decode('utf-8', errors='replace') for part in
+                    Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                    if part]
+        else:
+            argv = list(argv_reader(pid))
+        if not exe or not argv:
+            raise ObservationFailure(
+                'window process executable/argv metadata is missing'
+            )
+        if partition_reader(pid) != partition:
+            raise ObservationFailure(
+                'window process partition differs from the run'
+            )
+        if process_identity_reader(pid) != identity:
+            raise ObservationFailure(
+                'window process identity changed during metadata read'
+            )
+        matches.append((entry['depth'], {
             'window_id': window_id, 'pid': pid,
             'pgid': identity['process_group_id'],
             'process_start_ticks': identity['start_ticks'],
             'gz_partition': partition, 'properties': props[:2048],
             'gui_process_identity': gui_record.identity,
             'executable': exe, 'argv': argv,
-        })
+            'window_tree_depth': entry['depth'],
+        }))
     if len(matches) != 1:
+        if not matches:
+            raise ObservationFailure(
+                'expected exactly one owned GUI client window; found none'
+            )
         raise ObservationFailure(
-            'expected exactly one process-bound GUI window; '
+            'expected exactly one owned GUI client window; '
             f'found {len(matches)}'
         )
+    result = matches[0][1]
     if sink is not None:
-        sink.record('gui_window_bound', matches[0])
-    return matches[0]
+        sink.record('gui_window_bound', result)
+    return result
 
 
 def capture_x11_window(
@@ -415,7 +561,6 @@ def capture_x11_window(
     first = next(pixels, None)
     if first is None or all(pixel == first for pixel in pixels):
         raise ObservationFailure('captured window is uniformly blank')
-    path = Path(screenshot_path)
     path = Path(screenshot_path) if screenshot_path is not None else None
     if path is not None:
         atomic_publish(path, data)
@@ -425,6 +570,106 @@ def capture_x11_window(
         'width': decoded.width(), 'height': decoded.height(),
         'size_bytes': len(data), 'png_bytes': data,
     }
+
+
+def capture_worker_png(window_id, *, capture=capture_x11_window):
+    """Capture and validate one X11 window for the internal worker mode."""
+    result = capture(window_id, None)
+    return result['png_bytes']
+
+
+def _capture_payload_facts(data):
+    """Verify the worker's bounded PNG envelope in the parent process."""
+    if (not isinstance(data, bytes) or not data
+            or len(data) > 32 * 1024 * 1024):
+        raise ObservationFailure('capture worker returned invalid PNG size')
+    if (len(data) < 24 or data[:8] != b'\x89PNG\r\n\x1a\n'
+            or data[12:16] != b'IHDR'):
+        raise ObservationFailure('capture worker returned malformed PNG')
+    width = int.from_bytes(data[16:20], 'big')
+    height = int.from_bytes(data[20:24], 'big')
+    if width <= 0 or height <= 0:
+        raise ObservationFailure('capture worker returned zero-size PNG')
+    return {
+        'sha256': sha256_bytes(data), 'width': width, 'height': height,
+        'size_bytes': len(data), 'png_bytes': data, 'path': None,
+    }
+
+
+async def capture_x11_window_bounded(
+    window_id, *, launcher, environment, deadline, steady=time.monotonic,
+    sink=None,
+):
+    """Capture via an owned worker while the loop stays responsive."""
+    remaining = deadline - steady()
+    if remaining <= 0:
+        raise ReviewInvalidated('capture started after review deadline')
+    command = (
+        sys.executable, str(Path(__file__).resolve()),
+        '--capture-worker', window_id,
+    )
+    process = await launcher.start(command, dict(environment))
+    record = next(
+        (item for item in launcher.records if item.process is process), None,
+    )
+    if record is None or not _valid_process_identity(
+        record.identity, process.pid,
+    ):
+        raise ObservationFailure(
+            'capture worker ownership is unknown; '
+            f'residue unknown pid={process.pid}'
+        )
+    if sink is not None:
+        sink.record('capture_worker_started', {
+            'pid': record.pid, 'identity': record.identity,
+            'command': list(command),
+        })
+    communication = asyncio.create_task(process.communicate())
+    try:
+        done, _pending = await asyncio.wait(
+            {communication}, timeout=max(0.0, deadline - steady()),
+        )
+        if not done:
+            raise ReviewInvalidated('capture worker exceeded review deadline')
+        stdout, stderr = communication.result()
+        if process.returncode is None:
+            remaining = deadline - steady()
+            if remaining <= 0:
+                raise ReviewInvalidated(
+                    'capture worker exit exceeded review deadline'
+                )
+            status = await asyncio.wait_for(
+                process.wait(), timeout=remaining,
+            )
+        else:
+            status = process.returncode
+        if status != 0:
+            raise ObservationFailure(
+                'capture worker failed '
+                f'({status}): '
+                f'{stderr.decode(errors="replace")[:512]}'
+            )
+        facts = _capture_payload_facts(stdout)
+        if sink is not None:
+            sink.record('capture_worker_exit', {
+                'pid': record.pid, 'exit_status': status,
+                'png_sha256': facts['sha256'],
+                'size_bytes': facts['size_bytes'],
+            })
+        return facts
+    except BaseException as error:
+        if not communication.done():
+            communication.cancel()
+            join_budget = min(1.0, max(0.0, deadline - steady()))
+            done, _pending = await asyncio.wait(
+                {communication}, timeout=join_budget,
+            )
+            if not done:
+                raise ObservationFailure(
+                    'capture communication task residue unknown'
+                ) from error
+            await asyncio.gather(communication, return_exceptions=True)
+        raise
 
 
 def _utc_timestamp():
@@ -587,11 +832,79 @@ def publish_review_result_worker(
     return result_path
 
 
+def _finalize_publisher_process(
+    process, identity, *, deadline, steady, identity_reader, signal_group,
+):
+    """Boundedly settle one publisher handle without guessing ownership."""
+    try:
+        if process.poll() is not None:
+            return None
+    except BaseException as error:
+        return f'residue unknown: process poll failed: {type(error).__name__}'
+    if (identity is None or not _valid_process_identity(
+            identity, process.pid)
+            or identity['process_group_id'] != process.pid
+            or identity['session_id'] != process.pid):
+        remaining = deadline - steady()
+        if remaining > 0:
+            try:
+                process.wait(timeout=min(1.0, remaining))
+            except BaseException:
+                pass
+        try:
+            if process.poll() is not None:
+                return None
+        except BaseException:
+            pass
+        return (
+            'residue unknown: publisher identity unverified '
+            f'pid={process.pid}'
+        )
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        remaining = deadline - steady()
+        if remaining <= 0:
+            break
+        try:
+            current = identity_reader(process.pid)
+            if current != identity:
+                return (
+                    'residue unknown: publisher identity changed '
+                    f'pid={process.pid}'
+                )
+            signal_group(process.pid, sig)
+        except ProcessLookupError:
+            break
+        except BaseException as error:
+            return (
+                'residue unknown: publisher signal failed '
+                f'{type(error).__name__} pid={process.pid}'
+            )
+        remaining = deadline - steady()
+        if remaining <= 0:
+            break
+        try:
+            process.wait(timeout=min(1.0, remaining))
+        except subprocess.TimeoutExpired:
+            pass
+        except BaseException as error:
+            return (
+                'residue unknown: publisher wait failed '
+                f'{type(error).__name__} pid={process.pid}'
+            )
+        try:
+            if process.poll() is not None:
+                return None
+        except BaseException:
+            return f'residue unknown: publisher poll failed pid={process.pid}'
+    return f'residue unknown: publisher still alive pid={process.pid}'
+
+
 def publish_review_result_bounded(
     request_path, *, verdict, reason, viewer_interaction_ref=None,
     viewer_ref_state='TOOL_NO_STABLE_REFERENCE', request_deadline,
     steady=time.monotonic, popen=subprocess.Popen,
-    identity_reader=process_start_identity, sleep=time.sleep,
+    identity_reader=process_start_identity, signal_group=None,
+    on_started=None,
 ):
     """Run the file-only writer in an owned group with bounded cleanup."""
     remaining = request_deadline - steady()
@@ -609,42 +922,47 @@ def publish_review_result_bounded(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, start_new_session=True,
     )
-    identity = identity_reader(process.pid)
-    if (identity.get('pid') != process.pid
-            or identity.get('process_group_id') != process.pid
-            or identity.get('session_id') != process.pid):
-        raise ObservationFailure('publisher worker ownership is unverified')
+    # Retain the OS handle before any /proc read or evidence callback.
+    owned_process = process
+    identity = None
+    signal_group = signal_group or os.killpg
     try:
-        stdout, stderr = process.communicate(timeout=budget)
-    except subprocess.TimeoutExpired as error:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                current = identity_reader(process.pid)
-                if current != identity:
-                    raise ObservationFailure('publisher PID identity changed')
-                os.killpg(process.pid, sig)
-            except ProcessLookupError:
-                break
-            try:
-                process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                pass
-            if process.poll() is not None:
-                break
-        if process.poll() is None:
+        identity = identity_reader(process.pid)
+        if (not _valid_process_identity(identity, process.pid)
+                or identity['process_group_id'] != process.pid
+                or identity['session_id'] != process.pid):
             raise ObservationFailure(
-                'publisher worker residue is unknown after bounded escalation'
-            ) from error
-        raise ObservationFailure('publisher worker timed out') from error
-    if process.returncode != 0:
-        raise ObservationFailure(
-            f'publisher worker failed: {stderr.decode(errors="replace")[:512]}'
+                'publisher worker ownership is unverified'
+            )
+        if on_started is not None:
+            on_started(owned_process)
+        remaining = request_deadline - steady()
+        if remaining <= 0:
+            raise ReviewInvalidated('publisher deadline expired before wait')
+        stdout, stderr = process.communicate(
+            timeout=min(budget, remaining),
         )
-    return {
-        'exit_status': process.returncode,
-        'worker_pid': process.pid, 'worker_identity': identity,
-        'stdout': stdout.decode(errors='replace')[:512],
-    }
+        if process.returncode != 0:
+            raise ObservationFailure(
+                'publisher worker failed: '
+                f'{stderr.decode(errors="replace")[:512]}'
+            )
+        return {
+            'exit_status': process.returncode,
+            'worker_pid': process.pid, 'worker_identity': identity,
+            'stdout': stdout.decode(errors='replace')[:512],
+            'cleanup_status': 'not_required',
+        }
+    except BaseException as error:
+        residue = _finalize_publisher_process(
+            owned_process, identity, deadline=request_deadline,
+            steady=steady, identity_reader=identity_reader,
+            signal_group=signal_group,
+        )
+        message = f'publisher worker failed: {type(error).__name__}:{error}'
+        if residue:
+            message += f'; {residue}'
+        raise ObservationFailure(message) from error
 
 
 class ReadinessAdapter:
@@ -1016,6 +1334,14 @@ class ResilientSupervisor:
         class BoundSupervisor(base_type):
             async def cleanup(self):
                 captured = list(self.owned)
+                captured.extend(
+                    record for record in getattr(
+                        self.launcher, 'records', (),
+                    ) if all(
+                        record.process is not item.process
+                        for item in captured
+                    )
+                )
                 base_task = None
                 cancelled = False
                 try:
@@ -1109,6 +1435,8 @@ class CleanupWindow:
 
 def _process_label(command):
     values = tuple(str(value) for value in command)
+    if '--capture-worker' in values:
+        return 'capture_helper'
     if values and Path(values[0]).name in ('xwininfo', 'xprop'):
         return 'window_helper'
     if 'parameter_bridge' in values and 'ros_gz_bridge' in values:
@@ -1707,15 +2035,47 @@ def build_runtime_plan(gui: bool, temp_dir: Path):
     return plan, paths, descriptor, descriptor_path
 
 
-def _validate_plan_commands(plan, packet):
-    """Match audited launch composition to the packet command contract."""
+def _validate_plan_commands(
+    plan, packet, *, runtime_dir=None, evidence_root=EVIDENCE_ROOT,
+    effective=False,
+):
+    """Check staged or final argv against the pinned command template."""
     templates = packet['commands_argv']['exact_templates']
     if not plan.gui_requested or len(plan.commands) != 2:
         raise ObservationFailure('launch plan is not the one-GUI RUN002 plan')
     server, gui = (tuple(command) for command in plan.commands)
-    expected_server = tuple(templates['server'][:-1]) + (str(plan.world_file),)
-    if server != expected_server:
+    server_template = tuple(templates['server'])
+    if (len(server) != len(server_template)
+            or server[:-1] != server_template[:-1]):
         raise ObservationFailure('server argv differs from approved packet')
+    template_world = Path(
+        server_template[-1].replace('<session_uuid>', plan.session_id)
+    )
+    if 'B22_GUI_OBSERVATION_RUN001' in str(template_world):
+        raise ObservationFailure('server template points to RUN001')
+    if effective:
+        expected_template = Path(
+            str(template_world).replace(str(EVIDENCE_ROOT), str(evidence_root))
+        )
+        expected_world = (
+            Path(evidence_root) / 'runtime_assets' / template_world.name
+        )
+        if (Path(server[-1]) != expected_world
+                or Path(plan.world_file) != expected_world
+                or expected_template != expected_world):
+            raise ObservationFailure(
+                'effective server world argv is not canonical RUN002 asset'
+            )
+    else:
+        if runtime_dir is None:
+            raise ValueError('staged plan validation requires runtime_dir')
+        staged_world = Path(server[-1])
+        if (staged_world.parent != Path(runtime_dir)
+                or staged_world.name != template_world.name
+                or Path(plan.world_file) != staged_world):
+            raise ObservationFailure(
+                'staged server world differs from bound RUN002 world'
+            )
     if gui != tuple(templates['gui']):
         raise ObservationFailure('GUI argv differs from approved packet')
     bridge = tuple(getattr(plan, 'bridge_command', ()) or ())
@@ -1768,7 +2128,8 @@ async def _monitor_owned_processes(
                 'exit_status': status,
             })
             reported_exits.add(id(record.process))
-            if record.name == 'window_helper' and status == 0:
+            if (record.name in ('window_helper', 'capture_helper')
+                    and status == 0):
                 continue
             raise ObservationFailure(
                 f'owned process exited unexpectedly: {record.name} ({status})'
@@ -1875,6 +2236,22 @@ async def _run(args, *, dependencies=None):
     bindings = assert_packet_inputs(packet, hashes)
     verify_commit = deps.get('verify_commit', verify_packet_commit)
     verify_commit(args.approved_commit, packet_path)
+    try:
+        verified_host_dependencies = deps.get(
+            'verify_host_dependencies', verify_host_dependencies,
+        )(
+            packet,
+            module_importer=deps.get('module_importer'),
+            file_hasher=deps.get('dependency_file_hasher', sha256_file),
+            package_version_reader=deps.get('package_version_reader'),
+            python_executable=deps.get('python_executable'),
+            python_version=deps.get('python_version'),
+            path_resolver=deps.get('dependency_path_resolver', Path.resolve),
+        )
+    except BaseException as error:
+        raise ObservationFailure(
+            f'host dependency verification failed: {type(error).__name__}'
+        ) from error
     injected_paths = dependencies is not None
     guard_path = Path(deps.get('guard_path', GUARD_PATH))
     evidence_root = Path(deps.get('evidence_root', EVIDENCE_ROOT))
@@ -1908,7 +2285,10 @@ async def _run(args, *, dependencies=None):
                 'QT_QPA_PLATFORM': 'xcb',
             },
         )
-        _validate_plan_commands(plan, packet)
+        _validate_plan_commands(
+            plan, packet, runtime_dir=runtime_dir,
+            evidence_root=evidence_root,
+        )
     except BaseException:
         runtime_dir_context.cleanup()
         raise
@@ -1972,7 +2352,7 @@ async def _run(args, *, dependencies=None):
         'tool_sha256': hashes,
         'input_sha256': bindings['input_sha256'],
         'installed_sha256': fingerprints,
-        'dependency_fingerprints': bindings['dependency_fingerprints'],
+        'dependency_fingerprints': verified_host_dependencies,
         'resolved_install_paths': {
             key: str(value) for key, value in paths.items()
         },
@@ -2035,7 +2415,7 @@ async def _run(args, *, dependencies=None):
                 'runtime_bound_world_sha256'
             ],
             'install_fingerprints': fingerprints,
-            'dependency_fingerprints': bindings['dependency_fingerprints'],
+            'dependency_fingerprints': verified_host_dependencies,
         })
         evidence_assets = evidence_root / 'runtime_assets'
         evidence_assets.mkdir(mode=0o700, exist_ok=False)
@@ -2051,6 +2431,9 @@ async def _run(args, *, dependencies=None):
         commands[0] = tuple(commands[0][:-1]) + (str(persisted_world),)
         plan = replace(
             plan, world_file=persisted_world, commands=tuple(commands),
+        )
+        _validate_plan_commands(
+            plan, packet, evidence_root=evidence_root, effective=True,
         )
         sink.record('runtime_assets_persisted', {
             'runtime_bound_world_path': str(persisted_world),
@@ -2194,13 +2577,27 @@ async def _run(args, *, dependencies=None):
         screenshot_dir = evidence_root / 'screenshots'
         if not screenshot_dir.exists():
             screenshot_dir.mkdir(mode=0o700)
-        capture = deps.get('capture_window', capture_x11_window)(
-            window['window_id'], None,
+        capture = await _wait_competing(
+            deps.get(
+                'capture_window_bounded', capture_x11_window_bounded,
+            )(
+                window['window_id'], launcher=launcher,
+                environment=bound_environment, deadline=review_deadline,
+                steady=mono, sink=sink,
+            ),
+            process_monitor_task, review_deadline, mono, observer_task,
         )
+        capture_facts = _capture_payload_facts(capture.get('png_bytes'))
+        for key in ('sha256', 'width', 'height', 'size_bytes'):
+            if capture.get(key) != capture_facts[key]:
+                raise ObservationFailure(
+                    f'capture worker {key} differs from parent validation'
+                )
         screenshot_path = screenshot_dir / (
-            f'{request_id}-{capture["sha256"]}.png'
+            f'{request_id}-{capture_facts["sha256"]}.png'
         )
-        atomic_publish(screenshot_path, capture.pop('png_bytes'))
+        atomic_publish(screenshot_path, capture_facts.pop('png_bytes'))
+        capture = capture_facts
         capture['path'] = str(screenshot_path)
         sink.record('window_screenshot_captured', {
             'window_id': window['window_id'],
@@ -2587,6 +2984,7 @@ def parse_args(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--publish-review-result', metavar='REQUEST')
     mode.add_argument('--review-publish-worker', metavar='REQUEST')
+    mode.add_argument('--capture-worker', metavar='WINDOW_ID')
     parser.add_argument('--gui', type=strict_gui_value)
     parser.add_argument('--approved-commit')
     parser.add_argument('--verdict', choices=('PASS', 'FAIL'))
@@ -2614,6 +3012,16 @@ def main(argv=None):
                 f'RUN002 review publisher worker: {error}'
             ) from error
         print(str(path))
+        return
+    if args.capture_worker:
+        try:
+            data = capture_worker_png(args.capture_worker)
+        except BaseException as error:
+            raise SystemExit(
+                f'RUN002 capture worker: {type(error).__name__}:{error}'
+            ) from error
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
         return
     if args.publish_review_result:
         try:

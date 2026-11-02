@@ -812,12 +812,20 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
     events = []
     processes = []
     counter = [900000]
+    state = {
+        'capture_started': asyncio.Event(),
+        'capture_released': asyncio.Event(),
+        'capture_cancelled': [],
+    }
+    png = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR'
+           + (2).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'fixture')
 
     class FakeProcess:
 
-        def __init__(self, pid):
+        def __init__(self, pid, command):
             """Test helper for RUN002 offline behavior."""
             self.pid = pid
+            self.command = tuple(command)
             self.returncode = None
             self.event = asyncio.Event()
 
@@ -828,6 +836,16 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
 
         async def communicate(self):
             """Test helper for RUN002 offline behavior."""
+            if '--capture-worker' in self.command:
+                state['capture_started'].set()
+                if state.get('capture_hang'):
+                    try:
+                        await state['capture_released'].wait()
+                    except asyncio.CancelledError:
+                        state['capture_cancelled'].append(self.pid)
+                        raise
+                self.finish()
+                return (png, b'')
             return (b'', b'')
 
         def finish(self, status=0):
@@ -840,7 +858,7 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
         async def start(self, command, environment):
             """Test helper for RUN002 offline behavior."""
             counter[0] += 1
-            proc = FakeProcess(counter[0])
+            proc = FakeProcess(counter[0], command)
             processes.append((tuple(command), proc))
             events.append(('spawn', runner._process_label(command)))
             return proc
@@ -922,17 +940,18 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
     observer = FakeObserver()
     template = packet['commands_argv']['exact_templates']
     holder = {}
-    state = {}
 
     def build_plan(gui, temp_dir):
         """Test helper for RUN002 offline behavior."""
-        world = temp_dir / 'bound.sdf'
+        session = str(uuid.uuid4())
+        world = temp_dir / (
+            f'b2_training_arena.B2_SOAK_V1.{session}.runtime.sdf'
+        )
         world.write_text('<sdf/>')
         params = temp_dir / 'robot_state_publisher.params.yaml'
         params.write_text('params')
         descriptor_path = temp_dir / 'run_descriptor.json'
         descriptor_path.write_text('{}')
-        session = str(uuid.uuid4())
         partition = f"mecanum_b2_{session.replace('-', '')}"
         FakePlan = make_dataclass(
             'FakePlan',
@@ -989,13 +1008,6 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
                 'gz_partition': holder['plan'].environment['GZ_PARTITION'],
                 'executable': '/usr/bin/gz', 'argv': ['/usr/bin/gz', 'sim'],
                 'gui_process_identity': {'pid': 900010}}
-    png = b'fake test fixture only'
-
-    def capture(_window_id, _path):
-        """Test helper for RUN002 offline behavior."""
-        return {'path': None, 'sha256': hashlib.sha256(png).hexdigest(),
-                'width': 3, 'height': 2, 'size_bytes': len(png),
-                'png_bytes': png}
 
     async def review_waiter(*, request, request_bytes, **_kwargs):
         """Test helper for RUN002 offline behavior."""
@@ -1038,11 +1050,54 @@ def make_runner_inputs(tmp_path, *, startup_failure=False):
                     'observer_factory': lambda: observer,
                     'evaluate_observation': evaluate,
                     'bind_gui_window': bind_window,
-                    'capture_window': capture,
                     'await_review': review_waiter,
                     'cleanup_escalation_grace': (0, 0, 0)}
+    dependencies.update(_host_dependency_fakes(packet))
     return (SimpleNamespace(gui=True, approved_commit=commit), dependencies,
             events, processes, root, observer, state)
+
+
+def _host_dependency_fakes(packet):
+    """Inject pinned host metadata without importing Qt or middleware."""
+    fingerprints = packet['installation']['dependency_fingerprints']
+    qt = fingerprints['qt']
+    desktop = fingerprints['desktop_tools']
+    python = fingerprints['python']
+    modules = {
+        'PyQt5': SimpleNamespace(__file__=qt['PyQt5_origin']),
+        'PyQt5.QtCore': SimpleNamespace(
+            __file__=qt['QtCore_origin'],
+            PYQT_VERSION_STR=qt['PyQt5_version'],
+            qVersion=lambda: qt['Qt_version'],
+        ),
+        'PyQt5.QtGui': SimpleNamespace(__file__=qt['QtGui_origin']),
+    }
+    for name, item in python['modules'].items():
+        modules[name] = SimpleNamespace(
+            __file__=item['origin'], __version__=item['version'],
+        )
+    file_hashes = {
+        qt['PyQt5_origin']: qt['PyQt5_sha256'],
+        qt['QtCore_origin']: qt['QtCore_sha256'],
+        qt['QtGui_origin']: qt['QtGui_sha256'],
+        qt['platform_plugin']: qt['platform_plugin_sha256'],
+        desktop['xwininfo']['path']: desktop['xwininfo']['sha256'],
+        desktop['xprop']['path']: desktop['xprop']['sha256'],
+    }
+    package_versions = {
+        **fingerprints['system_packages'],
+        'x11-utils': desktop['xwininfo']['package_version'],
+        'python3-pyqt5': desktop['python3_pyqt5_package_version'],
+        'libqt5gui5t64': desktop['libqt5gui5t64_package_version'],
+    }
+    return {
+        'module_importer': modules.__getitem__,
+        'dependency_file_hasher': lambda path: file_hashes[str(path)],
+        'package_version_reader': lambda _packages: package_versions,
+        'python_executable': python['executable'],
+        'python_version': python['version'],
+        'dependency_path_resolver': lambda path, strict=True: Path(path),
+    }
 
 
 def test_complete_runtime_entry_path_passes_only_with_injected_components(
@@ -1055,6 +1110,7 @@ def test_complete_runtime_entry_path_passes_only_with_injected_components(
     assert [runner._process_label(command)
             for command, _proc in processes] == [
         'robot_state_publisher', 'parameter_bridge', 'server', 'gui',
+        'capture_helper',
     ]
     assert observer.closed == 1
     records = [json.loads(line) for line in
@@ -1118,7 +1174,7 @@ def test_window_binding_matches_unique_owned_process_and_partition():
                     'pid': 101, 'process_group_id': 101,
                     'session_id': 101, 'start_ticks': 7,
                 },
-                process=object(), command=('/usr/bin/gz', 'sim'),
+                process=object(), command=('/usr/bin/gz', 'sim', '-g'),
             )]
             self.waiters = {}
             self.tree = tree
@@ -1149,20 +1205,26 @@ def test_window_binding_matches_unique_owned_process_and_partition():
         partition='mecanum_b2_test', deadline=10, steady=lambda: 0,
         process_identity_reader=lambda _pid: identity,
         executable_reader=lambda _path: '/usr/bin/gz',
-        argv_reader=lambda _pid: ['/usr/bin/gz', 'sim'],
+        argv_reader=lambda _pid: ['/usr/bin/gz', 'sim', '-g'],
         partition_reader=lambda _pid: 'mecanum_b2_test'))
     assert result['window_id'] == '0x000010'
     assert result['pid'] == 101 and result['pgid'] == 101
     assert result['process_start_ticks'] == 7
 
 
-@pytest.mark.parametrize('partition,tree', [('foreign',
-                                             b'  0x000010 "Gazebo"\n'),
-                                            ('mecanum_b2_test',
-                                             b'  0x000010 "Gazebo"\n'
-                                             b'  0x000011 "Gazebo"\n')])
-def test_window_binding_rejects_partition_mismatch_or_ambiguity(partition,
-                                                                tree):
+@pytest.mark.parametrize(
+    'partition,tree,expected_error',
+    [('foreign', b'  0x000010 "Gazebo"\n', 'partition differs'),
+     ('mecanum_b2_test', b'  0x000010 "Gazebo"\n'
+      b'    0x000011 "Gazebo child"\n', 'exactly one')],
+    ids=[
+        'foreign-  0x000010 "Gazebo"\n',
+        'mecanum_b2_test-  0x000010 "Gazebo"\n  '
+        '0x000011 "Gazebo"\n',
+    ],
+)
+def test_window_binding_rejects_partition_mismatch_or_ambiguity(
+        partition, tree, expected_error):
     """Test helper for RUN002 offline behavior."""
 
     class FakeProcess:
@@ -1192,7 +1254,7 @@ def test_window_binding_rejects_partition_mismatch_or_ambiguity(partition,
                     'session_id': 101,
                     'start_ticks': 7},
                 process=object(),
-                command=('/usr/bin/gz', 'sim'))]
+                command=('/usr/bin/gz', 'sim', '-g'))]
             self.waiters = {}
 
         async def start(self, command, _env):
@@ -1208,7 +1270,7 @@ def test_window_binding_rejects_partition_mismatch_or_ambiguity(partition,
             return proc
     identity = {'pid': 101, 'process_group_id': 101, 'session_id': 101,
                 'start_ticks': 7}
-    with pytest.raises(runner.ObservationFailure, match='exactly one'):
+    with pytest.raises(runner.ObservationFailure, match=expected_error):
         asyncio.run(runner.bind_gui_window(launcher=FakeLauncher(),
                                            environment={},
                                            partition='mecanum_b2_test',
@@ -1219,7 +1281,7 @@ def test_window_binding_rejects_partition_mismatch_or_ambiguity(partition,
                                                lambda _path: '/usr/bin/gz'),
                                            argv_reader=(
                                                lambda _pid: ['/usr/bin/gz',
-                                                             'sim']),
+                                                             'sim', '-g']),
                                            partition_reader=(
                                                lambda _pid: partition)))
 
@@ -1505,3 +1567,489 @@ def test_observation_health_fails_closed_for_clock_status_and_graph(fault,
                                                     SimpleNamespace(
                                                         is_set=lambda: True)),
                                                 clock_ready_timeout_s=0.4))
+
+
+def _capture_qt_api(pixels, png_bytes=b'PNG-offline-fixture'):
+    class Bits:
+        def setsize(self, _size):
+            return None
+
+        def __bytes__(self):
+            return pixels
+
+    class Image:
+        Format_RGBA8888 = 7
+
+        def isNull(self):
+            return False
+
+        def width(self):
+            return len(pixels) // 4
+
+        def height(self):
+            return 1
+
+        def save(self, buffer, _fmt):
+            buffer.array.extend(png_bytes)
+            return True
+
+        def convertToFormat(self, _fmt):
+            return self
+
+        def bits(self):
+            return Bits()
+
+        def byteCount(self):
+            return len(pixels)
+
+        @classmethod
+        def fromData(cls, _data, _fmt):
+            return cls()
+
+    class Pixmap:
+        def isNull(self):
+            return False
+
+        def toImage(self):
+            return Image()
+
+    class Screen:
+        def grabWindow(self, _window_id):
+            return Pixmap()
+
+    class App:
+        @staticmethod
+        def instance():
+            return App()
+
+        def primaryScreen(self):
+            return Screen()
+
+    class Buffer:
+        def __init__(self, array):
+            self.array = array
+
+        def open_buffer(self, _mode):
+            return True
+
+        def close(self):
+            return None
+
+    setattr(Buffer, 'open', Buffer.open_buffer)
+
+    return lambda: (App, Image, Buffer, bytearray,
+                    SimpleNamespace(WriteOnly=1))
+
+
+def test_capture_without_destination_returns_validated_bytes():
+    """Capture production PNG validation without forcing a destination."""
+    png = b'PNG-offline-fixture'
+    result = runner.capture_x11_window(
+        '0x12', None,
+        qt_api_factory=_capture_qt_api(
+            b'\x01\x02\x03\xff\x04\x05\x06\xff', png),
+    )
+    assert result['path'] is None
+    assert result['png_bytes'] == png
+    assert result['sha256'] == hashlib.sha256(png).hexdigest()
+    assert result['width'] == 2 and result['height'] == 1
+
+
+def test_window_binding_skips_tree_metadata_and_binds_owned_child():
+    """Bind the unique nested client window through owned process lineage."""
+    tree = ('xwininfo: Window id: 0x01 (the root window)\n'
+            '  Root window id: 0x01 (the root window)\n'
+            '  Parent window id: 0x00 (none)\n'
+            '     2 children:\n'
+            '     0x10 "WM frame": ("wm", "Xfwm4") 900x700+0+0\n'
+            '        1 child:\n'
+            '        0x11 "Gazebo": ("gz sim", "Gazebo") 800x600+1+1\n')
+    properties = {
+        '0x10': ('_NET_WM_PID(CARDINAL) = 900\n'
+                 'WM_CLASS(STRING) = "wm", "Xfwm4"\n'),
+        '0x11': ('_NET_WM_PID(CARDINAL) = 102\n'
+                 'WM_CLASS(STRING) = "gz sim", "Gazebo"\n'),
+    }
+    gui_identity = {
+        'pid': 101, 'process_group_id': 101, 'session_id': 101,
+        'start_ticks': 7,
+    }
+    child_identity = {
+        'pid': 102, 'process_group_id': 101, 'session_id': 101,
+        'start_ticks': 9,
+    }
+
+    class Process:
+        def __init__(self, pid, output):
+            self.pid = pid
+            self.output = output.encode()
+
+        async def communicate(self):
+            return self.output, b''
+
+        async def wait(self):
+            return 0
+
+    class Launcher:
+        def __init__(self):
+            self.records = [SimpleNamespace(
+                name='gui', pid=101, process=object(),
+                identity=gui_identity,
+                command=('/usr/bin/gz', 'sim', '-g'))]
+            self.waiters = {}
+
+        async def start(self, command, _environment):
+            if command[0] == '/usr/bin/xwininfo':
+                output = tree
+            else:
+                output = properties[command[2]]
+            process = Process(200 + len(self.records), output)
+            self.records.append(SimpleNamespace(
+                name='window_helper', pid=process.pid, process=process,
+                identity={'pid': process.pid}, command=tuple(command)))
+            return process
+
+    identities = {101: gui_identity, 102: child_identity}
+    result = asyncio.run(runner.bind_gui_window(
+        launcher=Launcher(), environment={'GZ_PARTITION': 'part-run'},
+        partition='part-run', deadline=10, steady=lambda: 0,
+        process_identity_reader=lambda pid: identities[pid],
+        parent_reader=lambda pid: {102: 101, 101: 1}[pid],
+        executable_reader=lambda _path: '/opt/gz/bin/gz',
+        argv_reader=lambda _pid: ['/opt/gz/bin/gz', 'sim', '-g'],
+        partition_reader=lambda _pid: 'part-run',
+    ))
+    assert result['window_id'] == '0x11'
+    assert result['pid'] == 102 and result['pgid'] == 101
+    assert result['argv'] == ['/opt/gz/bin/gz', 'sim', '-g']
+
+
+def test_capture_helper_is_async_owned_and_health_can_run_while_pending():
+    """Keep capture off the monitor loop and retain its owned handle."""
+    png = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR'
+    png += (2).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'payload'
+    started = asyncio.Event()
+    release = asyncio.Event()
+    alive = {'value': True}
+
+    class Process:
+        pid = 700
+        returncode = None
+
+        async def communicate(self):
+            started.set()
+            await release.wait()
+            self.returncode = 0
+            alive['value'] = False
+            return png, b''
+
+        async def wait(self):
+            return self.returncode
+
+    process = Process()
+    identity = {
+        'pid': 700, 'process_group_id': 700, 'session_id': 700,
+        'start_ticks': 44,
+    }
+
+    class Launcher:
+        def __init__(self):
+            self.records = []
+            self.waiters = {}
+            self.identities = {}
+
+        async def start(self, command, _environment):
+            record = SimpleNamespace(
+                name='capture_helper', pid=700, process=process,
+                identity=identity, command=tuple(command),
+                identity_error=None)
+            self.records.append(record)
+            self.identities[id(process)] = identity
+            return process
+
+        def group_alive(self, _process):
+            return alive['value']
+
+        async def stop_group(self, _process, _sig):
+            alive['value'] = False
+            process.returncode = -1
+
+    launcher = Launcher()
+    clock = [0.0]
+    health = []
+
+    async def monitor_health():
+        await started.wait()
+        health.append('checked')
+        release.set()
+
+    async def scenario():
+        capture = asyncio.create_task(runner.capture_x11_window_bounded(
+            '0x12', launcher=launcher, environment={}, deadline=5,
+            steady=lambda: clock[0]))
+        monitor = asyncio.create_task(monitor_health())
+        result = await capture
+        await monitor
+        assert health == ['checked']
+        assert result['png_bytes'] == png
+        assert result['sha256'] == hashlib.sha256(png).hexdigest()
+
+    asyncio.run(scenario())
+    assert launcher.records[0].identity == identity
+
+
+def test_runner_cancels_capture_and_cleans_owned_helper_on_health_failure(
+        tmp_path):
+    """Health failure cancels capture and joins all injected runner tasks."""
+    args, dependencies, _events, processes, _root, observer, state = \
+        make_runner_inputs(tmp_path)
+    state['capture_hang'] = True
+
+    async def fail_after_capture_starts(**_kwargs):
+        await state['capture_started'].wait()
+        raise runner.ObservationFailure('injected inhibit health failure')
+
+    dependencies['evaluate_observation'] = fail_after_capture_starts
+
+    async def run_and_check_tasks():
+        verdict = await runner._run(args, dependencies=dependencies)
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks()
+                   if task is not current and not task.done()]
+        return verdict, pending
+
+    verdict, pending = asyncio.run(run_and_check_tasks())
+    assert verdict == 'FAIL'
+    assert state['capture_cancelled']
+    assert all(process.returncode is not None for _cmd, process in processes)
+    assert pending == []
+    assert observer.closed == 1
+
+
+def test_dependency_preflight_runs_before_acquisition_and_launcher(tmp_path):
+    """Stop before capacity/process effects on dependency mismatch."""
+    args, dependencies, _events, processes, root, _observer, _state = \
+        make_runner_inputs(tmp_path)
+    acquired = []
+    dependencies['acquire'] = lambda *_args: acquired.append(True)
+
+    def missing_module(_name):
+        raise ImportError('injected pinned-module failure')
+
+    dependencies['module_importer'] = missing_module
+    with pytest.raises(runner.ObservationFailure,
+                       match='host dependency verification failed'):
+        asyncio.run(runner._run(args, dependencies=dependencies))
+    assert acquired == []
+    assert processes == []
+    assert not root.exists()
+
+
+def test_publisher_identity_read_failure_retains_handle_and_reports_residue():
+    """Popen ownership exists before identity reading and is never guessed."""
+    owned = []
+
+    class Process:
+        pid = 801
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            owned.append(self.pid)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout):
+            return self.returncode
+
+    def read_identity(_pid):
+        assert owned == [801]
+        raise OSError('injected proc read failure')
+
+    with pytest.raises(runner.ObservationFailure,
+                       match='residue unknown'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='reviewed',
+            request_deadline=10, steady=lambda: 0,
+            popen=Process, identity_reader=read_identity,
+        )
+    assert owned == [801]
+
+
+def test_publisher_communication_error_finalizes_verified_worker():
+    """A writer error escalates only the process group it owns."""
+    signals = []
+
+    class Process:
+        pid = 802
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            self.started = True
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            raise OSError('injected communicate failure')
+
+        def wait(self, timeout):
+            if signals and signals[-1] == signal.SIGKILL:
+                self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    identity = {
+        'pid': 802, 'process_group_id': 802,
+        'session_id': 802, 'start_ticks': 54,
+    }
+    with pytest.raises(runner.ObservationFailure, match='communicate failure'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='reviewed',
+            request_deadline=10, steady=lambda: 0, popen=Process,
+            identity_reader=lambda _pid: identity,
+            signal_group=lambda pgid, sig: signals.append((pgid, sig)),
+        )
+    assert signals == [(802, signal.SIGTERM), (802, signal.SIGKILL)]
+
+
+def test_publisher_identity_change_never_signals_unverified_group():
+    """A changed start identity leaves residue unknown without signaling."""
+    signals = []
+
+    class Process:
+        pid = 803
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            raise OSError('injected writer error')
+
+        def wait(self, timeout):
+            return self.returncode
+
+    identities = iter((
+        {'pid': 803, 'process_group_id': 803,
+         'session_id': 803, 'start_ticks': 55},
+        {'pid': 803, 'process_group_id': 803,
+         'session_id': 803, 'start_ticks': 56},
+    ))
+    with pytest.raises(runner.ObservationFailure,
+                       match='residue unknown.*identity changed'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='reviewed',
+            request_deadline=10, steady=lambda: 0, popen=Process,
+            identity_reader=lambda _pid: next(identities),
+            signal_group=lambda pgid, sig: signals.append((pgid, sig)),
+        )
+    assert signals == []
+
+
+def test_publisher_started_callback_failure_finalizes_owned_handle():
+    """A failed evidence callback still cleans the verified writer group."""
+    signals = []
+
+    class Process:
+        pid = 804
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout):
+            if signals:
+                self.returncode = -signals[-1][1]
+            return self.returncode
+
+    identity = {
+        'pid': 804, 'process_group_id': 804,
+        'session_id': 804, 'start_ticks': 57,
+    }
+
+    def fail_evidence(_process):
+        raise RuntimeError('evidence callback failed')
+
+    with pytest.raises(runner.ObservationFailure, match='evidence callback'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='reviewed',
+            request_deadline=10, steady=lambda: 0, popen=Process,
+            identity_reader=lambda _pid: identity,
+            signal_group=lambda pgid, sig: signals.append((pgid, sig)),
+            on_started=fail_evidence,
+        )
+    assert signals == [(804, signal.SIGTERM)]
+
+
+def test_publisher_wait_failure_records_unknown_residue():
+    """A wait error remains a failure and does not claim cleanup success."""
+    signals = []
+
+    class Process:
+        pid = 805
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            raise OSError('injected communicate error')
+
+        def wait(self, timeout):
+            raise OSError('injected wait error')
+
+    identity = {
+        'pid': 805, 'process_group_id': 805,
+        'session_id': 805, 'start_ticks': 58,
+    }
+    with pytest.raises(runner.ObservationFailure,
+                       match='residue unknown.*publisher wait failed'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='reviewed',
+            request_deadline=10, steady=lambda: 0, popen=Process,
+            identity_reader=lambda _pid: identity,
+            signal_group=lambda pgid, sig: signals.append((pgid, sig)),
+        )
+    assert signals == [(805, signal.SIGTERM)]
+
+
+def test_server_template_is_bound_to_run002_and_effective_world():
+    """Pin the full effective server argv under the RUN002 evidence root."""
+    template = bundle_packet()['commands_argv']['exact_templates']['server']
+    expected = (
+        '/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN002/'
+        'runtime_assets/b2_training_arena.B2_SOAK_V1.<session_uuid>'
+        '.runtime.sdf'
+    )
+    assert template[-1] == expected
+    assert 'B22_GUI_OBSERVATION_RUN001' not in template[-1]
+    session = str(uuid.uuid4())
+    world = Path(expected.replace('<session_uuid>', session))
+    plan = SimpleNamespace(
+        gui_requested=True,
+        commands=(
+            tuple(template[:-1]) + (str(world),),
+            tuple(bundle_packet()['commands_argv']['exact_templates']['gui']),
+        ),
+        bridge_command=tuple(bundle_packet()['commands_argv'][
+            'exact_templates']['parameter_bridge']),
+        world_file=world,
+        session_id=session,
+    )
+    runner._validate_plan_commands(plan, bundle_packet(), effective=True)
+    run001_world = Path(str(world).replace('RUN002', 'RUN001'))
+    plan.world_file = run001_world
+    plan.commands = (tuple(template[:-1]) + (str(run001_world),),
+                     plan.commands[1])
+    with pytest.raises(runner.ObservationFailure,
+                       match='canonical RUN002 asset'):
+        runner._validate_plan_commands(plan, bundle_packet(), effective=True)
