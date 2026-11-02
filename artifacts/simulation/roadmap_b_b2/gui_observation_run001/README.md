@@ -100,3 +100,20 @@ Packet/tool bytes là candidate chuẩn bị runtime, chưa có independent audi
 Owner runtime approval. Evidence tối đa là `IMPLEMENTED_OFFLINE_ONLY`; chưa có
 GUI observation hay runtime evidence. Không tạo guard acquisition thật trong
 quá trình chuẩn bị.
+
+## Lịch sử RUN001 và corrective observer
+
+RUN001 đã được consume đúng một lần trên commit
+`09a3304e217628a11c44f0b1380ad1a7d5ae533a` và kết thúc `FAIL`. Evidence ngoài
+repository ghi `guard_consumed`, sau đó lỗi observer
+`TypeError: 'NoneType' object does not support the context manager protocol`;
+final status trong JSONL là `FAIL`. Log lịch sử không chứa traceback đầy đủ.
+Corrective follow-up chuyển observer sang executor riêng gắn với context riêng
+và thêm regression offline. Đây là source-level correction, không chứng minh
+runtime đã thành công.
+
+RUN001 không được chạy lại. Packet/tool hashes corrective mới không thể dùng lại
+approval cũ; bất kỳ lượt quan sát nào sau này cần packet/run identity riêng,
+independent exact-commit audit và Owner authorization mới. RUN002 Codex-owned
+GUI capture hiện chỉ là thiết kế đề xuất; thay đổi acceptance L2 đang chờ Owner
+phê duyệt.

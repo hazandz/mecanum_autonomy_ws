@@ -336,17 +336,30 @@ def test_evidence_write_failure_propagates(tmp_path):
 
 def _fake_ros_api():
     """Build a ROS API double that captures the production subscription QoS."""
-    state = {'subscriptions': [], 'init': [], 'shutdown': 0, 'destroy': 0}
+    state = {
+        'subscriptions': [], 'init': [], 'shutdown': 0, 'destroy': 0,
+        'contexts': [], 'executors': [], 'events': [], 'fail_stage': None,
+    }
 
     class Context:
-        pass
+        def __init__(self):
+            self.initialized = False
+            state['contexts'].append(self)
 
     class Node:
         def __init__(self, _name, *, context):
+            if state['fail_stage'] == 'node':
+                raise RuntimeError('node construction failure')
             self.context = context
 
         def create_subscription(self, *args):
+            stage = 'backend_subscription' if not state['subscriptions'] else (
+                'clock_subscription'
+            )
+            if state['fail_stage'] == stage:
+                raise RuntimeError(f'{stage} failure')
             state['subscriptions'].append(args)
+            state['events'].append('subscription')
             return object()
 
         def get_node_names_and_namespaces(self):
@@ -354,19 +367,62 @@ def _fake_ros_api():
 
         def destroy_node(self):
             state['destroy'] += 1
+            state['events'].append('node_destroy')
+
+    class Executor:
+        def __init__(self, *, context):
+            if state['fail_stage'] == 'executor':
+                raise RuntimeError('executor construction failure')
+            assert context.initialized
+            self.context = context
+            state['executors'].append(self)
+
+        def add_node(self, node):
+            if state['fail_stage'] == 'add_node':
+                raise RuntimeError('add node failure')
+            assert node.context is self.context
+            state['added_node'] = node
+            state['events'].append('add_node')
+            return True
+
+        def remove_node(self, node):
+            assert node.context is self.context
+            state['events'].append('remove_node')
+            return node is state.get('added_node')
+
+        def spin_once(self, *, timeout_sec):
+            assert timeout_sec >= 0
+            state['spin'] = state.get('spin', 0) + 1
+            state['events'].append('executor_spin')
+
+        def shutdown(self, *, timeout_sec):
+            state['shutdown_timeout'] = timeout_sec
+            state['events'].append('executor_shutdown')
+            if state['fail_stage'] == 'executor_shutdown':
+                raise RuntimeError('executor shutdown failure')
+            return True
 
     class Rclpy:
         @staticmethod
         def init(*, context, domain_id):
             state['init'].append((context, domain_id))
+            if state['fail_stage'] == 'init':
+                raise RuntimeError('context init failure')
+            context.initialized = True
 
         @staticmethod
         def ok(*, context):
-            return True
+            return context.initialized
 
         @staticmethod
         def shutdown(*, context):
             state['shutdown'] += 1
+            context.initialized = False
+            state['events'].append('context_shutdown')
+
+        @staticmethod
+        def spin_once(*_args, **_kwargs):
+            raise AssertionError('global rclpy.spin_once must not be used')
 
     class QoSProfile:
         def __init__(self, **kwargs):
@@ -374,6 +430,7 @@ def _fake_ros_api():
 
     return state, SimpleNamespace(
         rclpy=Rclpy, Context=Context, Node=Node,
+        SingleThreadedExecutor=Executor,
         SimulationContactState=object, Clock=object, QoSProfile=QoSProfile,
         HistoryPolicy=SimpleNamespace(KEEP_LAST='keep_last'),
         ReliabilityPolicy=SimpleNamespace(BEST_EFFORT='best_effort'),
@@ -393,10 +450,96 @@ def test_production_observer_passes_clock_qos_to_subscription_factory():
         'reliability': 'best_effort', 'durability': 'volatile',
     }
     assert state['init'][0][1] == 83
+    assert state['executors'][0].context is state['init'][0][0]
+    assert state['added_node'] is observer.node
+    observer.spin_once(0.01)
+    assert state['spin'] == 1
+    assert state['events'][-1] == 'executor_spin'
+    readiness_context = api.Context()
+    api.rclpy.init(context=readiness_context, domain_id=83)
+    api.rclpy.shutdown(context=readiness_context)
+    assert observer.context.initialized
+    assert not readiness_context.initialized
+    state['events'].clear()
     observer.close()
+    assert state['events'].index('remove_node') < state['events'].index(
+        'executor_shutdown',
+    ) < state['events'].index('node_destroy') < state['events'].index(
+        'context_shutdown',
+    )
+    observer.close()
+    assert state['destroy'] == 1
+    assert state['shutdown'] == 2
+
+
+@pytest.mark.parametrize(
+    'stage', [
+        'init', 'executor', 'node', 'add_node',
+        'backend_subscription', 'clock_subscription',
+    ],
+)
+def test_observer_partial_startup_failure_releases_created_resources(stage):
+    """Test every partial construction stage leaves only owned cleanup."""
+    state, api = _fake_ros_api()
+    state['fail_stage'] = stage
+    observer = PassiveBackendObserver(ros_api_factory=lambda: api)
+    with pytest.raises(RuntimeError):
+        observer.start()
+    observer.close()
+    observer.close()
+    assert state['destroy'] == int(stage in {
+        'add_node', 'backend_subscription', 'clock_subscription',
+    })
+    assert state['shutdown'] == int(stage != 'init')
+    if state['executors']:
+        assert state['events'].count('executor_shutdown') == 1
+    assert state['events'].count('node_destroy') == state['destroy']
+
+
+def test_executor_shutdown_failure_still_releases_node_and_owned_context():
+    """Test shutdown failure does not skip remaining owned cleanup."""
+    state, api = _fake_ros_api()
+    observer = PassiveBackendObserver(ros_api_factory=lambda: api)
+    observer.start()
+    state['fail_stage'] = 'executor_shutdown'
+    with pytest.raises(ObservationFailure, match='cleanup failed'):
+        observer.close()
+    assert state['events'].index('executor_shutdown') < state['events'].index(
+        'node_destroy',
+    ) < state['events'].index('context_shutdown')
+    assert state['destroy'] == 1
+    assert state['shutdown'] == 1
     observer.close()
     assert state['destroy'] == 1
     assert state['shutdown'] == 1
+
+
+def test_observer_cancellation_during_bounded_spin_leaves_no_worker():
+    """Test cancelling evaluation during spin exits without a worker leak."""
+    state, api = _fake_ros_api()
+    observer = PassiveBackendObserver(ros_api_factory=lambda: api)
+    observer.start()
+
+    async def check():
+        task = asyncio.create_task(
+            runner.evaluate_observation(
+                plan=None, observer=observer, duration_s=10,
+            ),
+        )
+        await asyncio.sleep(0.03)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        observer.close()
+        assert state['spin'] > 0
+        assert state['destroy'] == 1
+        assert state['shutdown'] == 1
+        assert [
+            item for item in asyncio.all_tasks()
+            if item is not asyncio.current_task() and not item.done()
+        ] == []
+
+    asyncio.run(check())
 
 
 class _EvaluationObserver:
@@ -916,7 +1059,7 @@ class _FakeObserver:
             ('robot_state_publisher', '/'), ('ros_gz_bridge', '/'),
         ]
 
-    def close(self):
+    def close(self, *, deadline=None, steady=None):
         self.close_count += 1
         self.state['events'].append('observer-close')
 
@@ -1412,6 +1555,41 @@ def test_startup_cancellation_joins_observer_and_process_tasks(tmp_path):
             if other is not asyncio.current_task() and not other.done()
         ]
         assert pending == []
+
+    asyncio.run(check())
+
+
+def test_unjoined_observer_is_not_closed_and_records_unknown_residue(
+    tmp_path, monkeypatch,
+):
+    """Test a context is not closed if its observer task cannot join."""
+    args, dependencies, state = _fake_runner_inputs(tmp_path)
+    original_join = runner._join_task
+
+    async def refuse_observer_join(task, *, timeout_s):
+        if task is not None and task.get_coro().__qualname__.endswith(
+            'evaluate_observation',
+        ):
+            task.cancel()
+            return False
+        return await original_join(task, timeout_s=timeout_s)
+
+    monkeypatch.setattr(runner, '_join_task', refuse_observer_join)
+
+    async def check():
+        result = await runner._run(args, dependencies=dependencies)
+        assert result == 'FAIL'
+        assert state['observer'].close_count == 0
+        final = [
+            facts for name, facts in state['sink'].records
+            if name == 'final_status'
+        ][-1]
+        assert 'observer_context_residue_unknown' in final['cleanup_errors']
+        assert 'async_task_residue_unknown' in final['cleanup_errors']
+        assert [
+            item for item in asyncio.all_tasks()
+            if item is not asyncio.current_task() and not item.done()
+        ] == []
 
     asyncio.run(check())
 

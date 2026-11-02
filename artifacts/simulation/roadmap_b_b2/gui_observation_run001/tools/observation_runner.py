@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from collections import deque
 from dataclasses import replace
@@ -492,7 +493,10 @@ class PassiveBackendObserver:
     def __init__(self, ros_api_factory=None, *, steady_ns=time.monotonic_ns):
         """Prepare an independent observer context without initializing ROS."""
         self.context = None
+        self.executor = None
         self.node = None
+        self.subscriptions = []
+        self._node_add_attempted = False
         self.events = deque()
         self._rclpy = None
         self._ros_api_factory = ros_api_factory
@@ -503,6 +507,7 @@ class PassiveBackendObserver:
     def _production_ros_api():
         import rclpy
         from rclpy.context import Context
+        from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
         from rclpy.qos import (
             DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
@@ -511,6 +516,7 @@ class PassiveBackendObserver:
         from rosgraph_msgs.msg import Clock
         return SimpleNamespace(
             rclpy=rclpy, Context=Context, Node=Node,
+            SingleThreadedExecutor=SingleThreadedExecutor,
             SimulationContactState=SimulationContactState, Clock=Clock,
             QoSProfile=QoSProfile, HistoryPolicy=HistoryPolicy,
             ReliabilityPolicy=ReliabilityPolicy,
@@ -529,6 +535,7 @@ class PassiveBackendObserver:
 
     def start(self):
         """Initialize a private context with status and clock subscribers."""
+        self._closed = False
         api = (
             self._ros_api_factory()
             if self._ros_api_factory is not None
@@ -537,20 +544,23 @@ class PassiveBackendObserver:
         self._rclpy = api.rclpy
         self.context = api.Context()
         self._rclpy.init(context=self.context, domain_id=83)
+        self.executor = api.SingleThreadedExecutor(context=self.context)
         self.node = api.Node(
             'b22_gui_observation_observer', context=self.context,
         )
-        self.node.create_subscription(
+        self._node_add_attempted = True
+        if self.executor.add_node(self.node) is False:
+            raise ObservationFailure('observer executor rejected its node')
+        self.subscriptions.append(self.node.create_subscription(
             api.SimulationContactState,
             '/mecanum/local_training/backend_state',
             lambda message: self._record_event('backend', message), 50,
-        )
-        self.node.create_subscription(
+        ))
+        self.subscriptions.append(self.node.create_subscription(
             api.Clock, '/clock',
             lambda message: self._record_event('clock', message.clock),
             self.clock_qos_profile(api),
-        )
-        self._closed = False
+        ))
 
     def _record_event(self, kind, message):
         self.events.append((
@@ -559,21 +569,43 @@ class PassiveBackendObserver:
 
     def spin_once(self, timeout_s: float = 0.1):
         """Process passive observer callbacks for one bounded interval."""
-        self._rclpy.spin_once(self.node, timeout_sec=timeout_s)
+        if self.executor is None or self.node is None:
+            raise ObservationFailure('observer executor is not active')
+        self.executor.spin_once(timeout_sec=timeout_s)
 
-    def close(self):
-        """Destroy the owned node and shut down only its ROS context."""
+    def close(self, *, deadline=None, steady=time.monotonic):
+        """Release each owned ROS resource once, continuing after errors."""
         if self._closed:
             return
         self._closed = True
         errors = []
+        executor, self.executor = self.executor, None
         node, self.node = self.node, None
         context, self.context = self.context, None
+        if (
+            executor is not None and node is not None
+            and self._node_add_attempted
+        ):
+            try:
+                executor.remove_node(node)
+            except BaseException as error:
+                errors.append(error)
+        if executor is not None:
+            try:
+                timeout = (
+                    max(0.0, deadline - steady())
+                    if deadline is not None else CLEANUP_CAP_S
+                )
+                if executor.shutdown(timeout_sec=timeout) is False:
+                    raise TimeoutError('observer executor shutdown timed out')
+            except BaseException as error:
+                errors.append(error)
         try:
             if node is not None:
                 node.destroy_node()
         except BaseException as error:
             errors.append(error)
+        self.subscriptions.clear()
         try:
             if (
                 context is not None and self._rclpy is not None
@@ -1545,6 +1577,9 @@ async def _run(args, *, dependencies=None):
                 sink.record('observation_failure', {
                     'error_type': type(error).__name__,
                     'error': str(error)[:1000],
+                    'traceback': ''.join(traceback.format_exception(
+                        type(error), error, error.__traceback__,
+                    ))[-12000:],
                 })
             except BaseException as sink_error:
                 cleanup_errors.append(
@@ -1554,24 +1589,34 @@ async def _run(args, *, dependencies=None):
         cleanup_deadline = cleanup_window.begin()
         cleanup_start = cleanup_window.started_at
         stop_monitor.set()
+        observer_task_joined = observer_task is None
         for task in (observer_task, process_monitor_task):
             try:
                 joined = await _join_task(
                     task, timeout_s=max(0.0, cleanup_deadline - mono()),
                 )
+                if task is observer_task:
+                    observer_task_joined = joined
                 if not joined:
                     cleanup_errors.append('async_task_residue_unknown')
             except BaseException as error:
+                if task is observer_task:
+                    observer_task_joined = False
                 cleanup_errors.append(
                     f'task_cleanup:{type(error).__name__}:{error}'
                 )
         if observer is not None:
-            try:
-                observer.close()
-            except BaseException as error:
-                cleanup_errors.append(
-                    f'observer_close:{type(error).__name__}:{error}'
-                )
+            if observer_task_joined:
+                try:
+                    observer.close(
+                        deadline=cleanup_deadline, steady=mono,
+                    )
+                except BaseException as error:
+                    cleanup_errors.append(
+                        f'observer_close:{type(error).__name__}:{error}'
+                    )
+            else:
+                cleanup_errors.append('observer_context_residue_unknown')
         all_records = (
             list(getattr(launcher, 'records', ())) if launcher else []
         )

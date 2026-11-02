@@ -498,3 +498,20 @@ The request declares `SCHEMA_VERSION=1`; the response declares
 enumerator collision in the installed ROSIDL output while preserving the
 service fields, values, and wire data. This does not establish service runtime
 behavior.
+
+## 9. B2.2 GUI observation acknowledgment change proposal — pending Owner approval
+
+RUN001 was consumed and ended with `FAIL` on commit
+`09a3304e217628a11c44f0b1380ad1a7d5ae533a`; its append-only runtime evidence is
+preserved. A future RUN002 design proposes replacing the production requirement
+for direct Owner scene acknowledgment and an Owner-supplied screenshot with a
+Codex-operated, process-bound GUI capture and visual inspection checkpoint.
+This is a proposed L2 acceptance change only. It is `PENDING_OWNER_APPROVAL`
+and does not alter or supersede the prior approved requirement in §8.
+
+If approved, the run would record `automated_observation_verdict` and
+`owner_visual_review: NOT_PERFORMED` as distinct facts. It would not claim an
+Owner acknowledgment, human visual acceptance, contact capability, physics or
+braking validation, motion behavior, or functional safety. Owner authority
+would remain the separate pre-run approval of exact packet pins and post-run
+review of immutable evidence. No new runtime authorization is granted here.
