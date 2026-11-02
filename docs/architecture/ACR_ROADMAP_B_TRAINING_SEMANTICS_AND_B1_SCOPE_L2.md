@@ -558,3 +558,24 @@ only. It grants no runtime authority. A separately audited exact packet/commit
 and new Owner runtime authorization are required. It does not amend other B1/B2
 contracts, add an interface or config root, alter RUN001, or authorize B2.3,
 training, HIL, integration, or real-robot activity.
+
+## 11. RUN003 inheritance of Codex GUI observation acceptance (L2, 2026-11-03)
+
+The Owner's RUN003 preparation prompt approves carrying forward
+the complete Codex-owned GUI observation acceptance in §10 to the separate
+`B22_GUI_OBSERVATION_RUN003` packet, without changing its semantics. The
+offline approval source is that Owner prompt, and RUN003 pins its production
+source to starting commit `35f700538548e11df364013f0e94a746c809c95e`. The
+review remains Codex inspection of a real, process-bound X11/XCB window image;
+`automated_observation_verdict` and `owner_visual_review: NOT_PERFORMED` remain
+distinct. Existing identity, mailbox, capture, health, timing, cleanup,
+capacity-one, paused/inhibited-only, and no-retry criteria carry forward as
+written in §10 and the audited RUN002 implementation.
+
+This is approval for RUN003 offline packet preparation and offline checks only.
+It grants no runtime authorization, Gate or milestone transition. A separately
+audited exact RUN003 packet/commit and explicit Owner runtime authorization are
+required. RUN001 and RUN002 remain consumed/FAIL with their evidence preserved;
+their approval, guard, acquisition, and evidence are not reusable. This item
+does not alter other B1/B2 contracts or authorize B2.3, training, HIL,
+integration, or real-robot activity.
