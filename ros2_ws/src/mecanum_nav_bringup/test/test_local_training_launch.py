@@ -69,7 +69,7 @@ def test_bound_world_rejects_missing_identity_or_backend():
 
 
 def test_bridge_contains_exact_fixture_service_mappings():
-    """The installed bridge contract declares the three fixture services."""
+    """The bridge contract pins clock, scan, ground truth, and services."""
     root = Path(__file__).resolve().parents[4]
     config = yaml.safe_load((
         root / 'ros2_ws/src/mecanum_nav_bringup/config/bridge/'
@@ -82,6 +82,21 @@ def test_bridge_contains_exact_fixture_service_mappings():
         )
         for item in config if 'service_name' in item
     }
+    topics = {
+        item['ros_topic_name']: item
+        for item in config if 'ros_topic_name' in item
+    }
+    assert len(topics) == 3
+    assert topics['/clock']['gz_topic_name'] == '/clock'
+    assert topics['/clock']['qos_profile'] == 'CLOCK'
+    assert topics['/scan']['gz_topic_name'] == '/b2/scan'
+    assert topics['/scan']['qos_profile'] == 'SENSOR_DATA'
+    ground_truth = topics['/mecanum/internal/ground_truth/odom']
+    assert ground_truth['gz_topic_name'] == '/b2/ground_truth/odom'
+    assert ground_truth['direction'] == 'GZ_TO_ROS'
+    assert 'qos_profile' not in ground_truth
+    assert ground_truth['publisher_queue'] == 10
+    assert ground_truth['subscriber_queue'] == 10
     assert services['/world/b2_training_arena/create'] == (
         'ros_gz_interfaces/srv/SpawnEntity',
         'gz.msgs.EntityFactory', 'gz.msgs.Boolean',

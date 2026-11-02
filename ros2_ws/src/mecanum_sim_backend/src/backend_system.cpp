@@ -371,6 +371,17 @@ class BackendSystem final : public gz::sim::System,
                             public gz::sim::ISystemPreUpdate,
                             public gz::sim::ISystemPostUpdate
 {
+private:
+  enum class InitializationState
+  {
+    UNCONFIGURED,
+    PENDING,
+    ATTEMPTED,
+    READY,
+    FAILED,
+    CANCELLED,
+  };
+
 public:
   BackendSystem()
   : gate_factory_([](GateBinding binding) {
@@ -397,6 +408,44 @@ public:
                  const std::shared_ptr<const sdf::Element> &sdf,
                  gz::sim::EntityComponentManager &ecm,
                  gz::sim::EventManager &) override
+  {
+    if (initialization_state_ != InitializationState::UNCONFIGURED)
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "configure_called_more_than_once");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
+    if (!sdf || entity == gz::sim::kNullEntity ||
+        gz::sim::entityTypeId(entity, ecm) != gz::sim::components::Model::typeId)
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "plugin_requires_model_entity_and_sdf");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
+    const auto *model_name = ecm.Component<gz::sim::components::Name>(entity);
+    if (!model_name)
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "plugin_model_name_missing");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
+    model_entity_ = entity;
+    configured_model_name_ = model_name->Data();
+    pending_sdf_ = sdf->Clone();
+    if (!pending_sdf_)
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "plugin_sdf_clone_failed");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
+    initialization_state_ = InitializationState::PENDING;
+  }
+
+private:
+  void InitializeAfterParent(
+      const gz::sim::Entity &entity,
+      const std::shared_ptr<const sdf::Element> &sdf,
+      gz::sim::EntityComponentManager &ecm)
   {
     if (!sdf || entity == gz::sim::kNullEntity ||
         gz::sim::entityTypeId(entity, ecm) != gz::sim::components::Model::typeId)
@@ -608,10 +657,38 @@ public:
     configured_ = runtime_resources_ready_ && base_link_.Valid(ecm);
   }
 
+public:
   void PreUpdate(const gz::sim::UpdateInfo &info,
                  gz::sim::EntityComponentManager &ecm) override
   {
     if (shutdown_started_) return;
+    if (initialization_state_ == InitializationState::PENDING)
+    {
+      initialization_state_ = InitializationState::ATTEMPTED;
+      auto pending_sdf = std::move(pending_sdf_);
+      const auto *model_name = ecm.Component<gz::sim::components::Name>(model_entity_);
+      if (!pending_sdf || model_entity_ == gz::sim::kNullEntity ||
+          gz::sim::entityTypeId(model_entity_, ecm) !=
+              gz::sim::components::Model::typeId ||
+          !model_name || model_name->Data() != configured_model_name_)
+      {
+        SetFault(BackendState::FAULT_CONTEXT,
+                 "model_identity_changed_before_first_update");
+        initialization_state_ = InitializationState::FAILED;
+      }
+      else
+      {
+        InitializeAfterParent(model_entity_, pending_sdf, ecm);
+        initialization_state_ = configured_ ?
+            InitializationState::READY : InitializationState::FAILED;
+      }
+    }
+    if (initialization_state_ != InitializationState::READY)
+    {
+      policy_open_ = false;
+      local_zero_override_ = true;
+      return;
+    }
     const auto steady_now_ns = steady_clock_now_();
     physics_iteration_ = info.iterations;
     ProcessBackendControlRequests(
@@ -845,6 +922,11 @@ private:
   {
     bool expected = false;
     if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+    if (initialization_state_ == InitializationState::PENDING)
+    {
+      initialization_state_ = InitializationState::CANCELLED;
+      pending_sdf_.reset();
+    }
     CloseProbeServiceMailbox();
     configured_ = false;
     runtime_resources_ready_ = false;
@@ -2603,6 +2685,9 @@ private:
   gz::sim::World world_{gz::sim::kNullEntity};
   gz::sim::Model model_{gz::sim::kNullEntity};
   gz::sim::Link base_link_{gz::sim::kNullEntity};
+  InitializationState initialization_state_{InitializationState::UNCONFIGURED};
+  std::shared_ptr<const sdf::Element> pending_sdf_;
+  std::string configured_model_name_;
   std::string world_name_, model_name_, base_link_name_, session_id_, config_hash_, asset_manifest_hash_;
   std::string probe_collision_name_, fault_reason_;
   std::shared_ptr<ReceiptGate> gate_;

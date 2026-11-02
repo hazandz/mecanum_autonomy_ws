@@ -8,6 +8,8 @@
 #include <gz/sim/components/AngularVelocity.hh>
 #include <gz/sim/components/Sensor.hh>
 #include <gz/sim/components/World.hh>
+#include <gz/sim/Events.hh>
+#include <gz/sim/SdfEntityCreator.hh>
 #include <sdf/Root.hh>
 #include <ament_index_cpp/get_package_prefix.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -46,6 +48,15 @@ struct NativeResetChainIo
   std::vector<BodyCommand3D> applied_commands;
 };
 
+struct DeferredInitializationIo
+{
+  std::uint32_t runtime_creates{};
+  std::uint32_t runtime_releases{};
+  std::uint32_t actuator_calls{};
+  std::vector<BodyCommand3D> applied_commands;
+  std::vector<BackendState> statuses;
+};
+
 class BackendSystemTestPeer
 {
 public:
@@ -58,6 +69,8 @@ public:
 
   static void SeedRunDescriptor(BackendSystem &system)
   {
+    // Isolated control-path tests start after the runtime resources boundary.
+    system.initialization_state_ = BackendSystem::InitializationState::READY;
     system.steady_clock_now_ = [] { return 2'000'000'000LL; };
     system.world_name_ = "b2_training_arena";
     system.session_id_ = "test-session";
@@ -164,7 +177,9 @@ public:
 
   static bool ConfigureInvalidModel(
       BackendSystem &system, gz::sim::EntityComponentManager &ecm,
-      bool create_world)
+      bool create_world, const std::string &world_name = "b2_training_arena",
+      const std::string &model_name = "mecanum_b2",
+      bool create_base_link = false, bool duplicate_model = false)
   {
     sdf::Root root;
     const auto errors = root.Load(
@@ -176,14 +191,30 @@ public:
     {
       parent = ecm.CreateEntity();
       ecm.CreateComponent(parent,
-          gz::sim::components::Name("b2_training_arena"));
+          gz::sim::components::Name(world_name));
       ecm.CreateComponent(parent, gz::sim::components::World());
     }
     const auto model = ecm.CreateEntity();
-    ecm.CreateComponent(model, gz::sim::components::Name("mecanum_b2"));
+    ecm.CreateComponent(model, gz::sim::components::Name(model_name));
     ecm.CreateComponent(model, gz::sim::components::Model());
     if (create_world)
       ecm.CreateComponent(model, gz::sim::components::ParentEntity(parent));
+    if (create_world && create_base_link)
+    {
+      const auto link = ecm.CreateEntity();
+      ecm.CreateComponent(link, gz::sim::components::Name("base_link"));
+      ecm.CreateComponent(link, gz::sim::components::Link());
+      ecm.CreateComponent(link, gz::sim::components::ParentEntity(model));
+    }
+    if (create_world && duplicate_model)
+    {
+      const auto duplicate = ecm.CreateEntity();
+      ecm.CreateComponent(duplicate,
+          gz::sim::components::Name("mecanum_b2"));
+      ecm.CreateComponent(duplicate, gz::sim::components::Model());
+      ecm.CreateComponent(duplicate,
+          gz::sim::components::ParentEntity(parent));
+    }
     gz::sim::EventManager events;
     system.Configure(model, root.Model()->Plugins().front().Element(),
                      ecm, events);
@@ -258,6 +289,7 @@ public:
     gz::sim::EventManager events;
     system.Configure(model, root.Model()->Plugins().front().Element(),
                      ecm, events);
+    CallPausedUpdateHooks(system, ecm);
     return true;
   }
 
@@ -435,6 +467,7 @@ public:
       };
     gz::sim::EventManager events;
     system.Configure(model, plugin, ecm, events);
+    CallFirstPausedPreUpdate(system, ecm);
     return system.configured_ && system.fault_flags_ == 0;
   }
 
@@ -645,6 +678,47 @@ public:
     system.PostUpdate(info, ecm);
   }
 
+  static void CallPausedUpdateHooks(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm)
+  {
+    gz::sim::UpdateInfo info;
+    info.iterations = 1;
+    info.simTime = std::chrono::nanoseconds(0);
+    info.paused = true;
+    system.PreUpdate(info, ecm);
+    system.PostUpdate(info, ecm);
+  }
+
+  static void CallFirstPausedPreUpdate(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm)
+  {
+    gz::sim::UpdateInfo info;
+    info.iterations = 1;
+    info.simTime = std::chrono::nanoseconds(0);
+    info.paused = true;
+    system.PreUpdate(info, ecm);
+  }
+
+  static void InjectDeferredInitializationIo(
+      BackendSystem &system,
+      const std::shared_ptr<DeferredInitializationIo> &io)
+  {
+    system.runtime_resource_factory_ = [io](
+        backend_detail::RuntimeResourceKind,
+        const std::function<void()> &) {
+      ++io->runtime_creates;
+      return [io] { ++io->runtime_releases; };
+    };
+    system.backend_state_sink_ = [io](const BackendState &state) {
+      io->statuses.push_back(state);
+    };
+    system.actuator_apply_ = [io](
+        gz::sim::EntityComponentManager &, const BodyCommand3D &command) {
+      ++io->actuator_calls;
+      io->applied_commands.push_back(command);
+    };
+  }
+
   static bool Configured(const BackendSystem &system)
   {
     return system.configured_;
@@ -851,6 +925,11 @@ public:
   static bool CapabilityVerified(const BackendSystem &system)
   {
     return system.contact_capability_verified_;
+  }
+
+  static std::string FaultReason(const BackendSystem &system)
+  {
+    return system.fault_reason_;
   }
 
   static bool PolicyOpen(const BackendSystem &system)
@@ -1436,6 +1515,7 @@ TEST(BackendSystemLifecycle, MissingWorldAndLinkStayInhibitedAcrossHooks)
     gz::sim::EntityComponentManager ecm;
     ASSERT_TRUE(BackendSystemTestPeer::ConfigureInvalidModel(
         system, ecm, create_world));
+    BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
     EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
     EXPECT_NE(BackendSystemTestPeer::FaultFlags(system), 0u);
     Receipt receipt;
@@ -1450,6 +1530,185 @@ TEST(BackendSystemLifecycle, MissingWorldAndLinkStayInhibitedAcrossHooks)
     BackendSystemTestPeer::CallUpdateHooks(system, ecm);
     EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
     EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+  }
+}
+
+TEST(BackendSystemLifecycle, SdfEntityCreatorDefersBackendInitializationUntilParentExists)
+{
+  sdf::Root root;
+  const auto world_path = BackendSystemTestPeer::DescriptionFile(
+      "worlds/b2_training_arena.sdf");
+  const auto models_path = BackendSystemTestPeer::DescriptionFile("models");
+  sdf::ParserConfig parser_config;
+  parser_config.SetFindCallback([models_path](const std::string &uri) {
+    constexpr char kModelPrefix[] = "model://";
+    if (uri.rfind(kModelPrefix, 0) != 0) return std::string{};
+    return (models_path / uri.substr(sizeof(kModelPrefix) - 1)).string();
+  });
+  ASSERT_TRUE(root.Load(world_path.string(), parser_config).empty());
+  auto *sdf_world = root.WorldByName("b2_training_arena");
+  ASSERT_NE(sdf_world, nullptr);
+  auto *robot = sdf_world->ModelByName("mecanum_b2");
+  ASSERT_NE(robot, nullptr);
+  bool bound_backend_plugin = false;
+  for (auto &plugin : robot->Plugins())
+  {
+    if (plugin.Name() != "mecanum_sim_backend::BackendSystem") continue;
+    const auto element = plugin.Element();
+    ASSERT_NE(element, nullptr);
+    ASSERT_TRUE(element->GetElement("session_id")->Set<std::string>(
+        "sdf-creator-deferred-session"));
+    ASSERT_TRUE(element->GetElement("config_hash")->Set<std::string>(
+        std::string(64, 'a')));
+    ASSERT_TRUE(element->GetElement("asset_manifest_sha256")->Set<std::string>(
+        std::string(64, 'b')));
+    ASSERT_TRUE(element->GetElement("coordinator_ingress_instance_id")
+        ->Set<std::uint64_t>(71));
+    bound_backend_plugin = true;
+  }
+  ASSERT_TRUE(bound_backend_plugin);
+
+  gz::sim::EntityComponentManager ecm;
+  gz::sim::EventManager events;
+  BackendSystem system;
+  const auto io = std::make_shared<DeferredInitializationIo>();
+  BackendSystemTestPeer::InjectDeferredInitializationIo(system, io);
+  bool configure_callback_seen = false;
+  bool parent_missing_during_callback = false;
+  gz::sim::Entity backend_model = gz::sim::kNullEntity;
+  auto connection = events.Connect<gz::sim::events::LoadSdfPlugins>(
+      [&](gz::sim::Entity entity, sdf::Plugins plugins) {
+        for (const auto &plugin : plugins)
+        {
+          if (plugin.Name() != "mecanum_sim_backend::BackendSystem") continue;
+          configure_callback_seen = true;
+          backend_model = entity;
+          parent_missing_during_callback =
+              gz::sim::worldEntity(entity, ecm) == gz::sim::kNullEntity;
+          system.Configure(entity, plugin.Element(), ecm, events);
+        }
+      });
+
+  gz::sim::SdfEntityCreator creator(ecm, events);
+  const auto world_entity = creator.CreateEntities(sdf_world);
+  ASSERT_NE(world_entity, gz::sim::kNullEntity);
+  ASSERT_TRUE(configure_callback_seen);
+  EXPECT_TRUE(parent_missing_during_callback);
+  EXPECT_EQ(io->runtime_creates, 0u);
+  ASSERT_NE(backend_model, gz::sim::kNullEntity);
+  EXPECT_EQ(gz::sim::worldEntity(backend_model, ecm), world_entity);
+
+  BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+  EXPECT_TRUE(BackendSystemTestPeer::Configured(system));
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_EQ(io->runtime_creates, 15u);
+  EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+  ASSERT_FALSE(io->applied_commands.empty());
+  const auto &paused_command = io->applied_commands.back();
+  EXPECT_DOUBLE_EQ(paused_command.linear[0], 0.0);
+  EXPECT_DOUBLE_EQ(paused_command.linear[1], 0.0);
+  EXPECT_DOUBLE_EQ(paused_command.linear[2], 0.0);
+  EXPECT_DOUBLE_EQ(paused_command.angular[0], 0.0);
+  EXPECT_DOUBLE_EQ(paused_command.angular[1], 0.0);
+  EXPECT_DOUBLE_EQ(paused_command.angular[2], 0.0);
+  ASSERT_FALSE(io->statuses.empty());
+  EXPECT_EQ(io->statuses.back().session_id, "sdf-creator-deferred-session");
+  EXPECT_EQ(io->statuses.back().config_hash, std::string(64, 'a'));
+  EXPECT_TRUE(io->statuses.back().paused);
+  EXPECT_TRUE(io->statuses.back().actuator_inhibited);
+  EXPECT_FALSE(io->statuses.back().applied_receipt_valid);
+  EXPECT_NE(BackendSystemTestPeer::FaultReason(system),
+            "parent_world_missing");
+  BackendSystemTestPeer::Shutdown(system);
+  EXPECT_EQ(io->runtime_releases, 15u);
+  BackendSystemTestPeer::Shutdown(system);
+  EXPECT_EQ(io->runtime_releases, 15u);
+}
+
+TEST(BackendSystemLifecycle, FirstPausedUpdateLatchesMissingParentWithoutRetry)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto io = std::make_shared<DeferredInitializationIo>();
+  BackendSystemTestPeer::InjectDeferredInitializationIo(system, io);
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureInvalidModel(
+      system, ecm, false));
+  BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+  EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
+  EXPECT_EQ(BackendSystemTestPeer::FaultReason(system), "parent_world_missing");
+  EXPECT_EQ(io->runtime_creates, 0u);
+
+  const auto model = ecm.EntityByComponents(
+      gz::sim::components::Name("mecanum_b2"),
+      gz::sim::components::Model());
+  const auto world = ecm.CreateEntity();
+  ecm.CreateComponent(world,
+      gz::sim::components::Name("b2_training_arena"));
+  ecm.CreateComponent(world, gz::sim::components::World());
+  ecm.CreateComponent(model, gz::sim::components::ParentEntity(world));
+  BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+  EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
+  EXPECT_EQ(BackendSystemTestPeer::FaultReason(system), "parent_world_missing");
+  EXPECT_EQ(io->runtime_creates, 0u);
+}
+
+TEST(BackendSystemLifecycle, ShutdownBeforeFirstUpdateCancelsPendingInitialization)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto io = std::make_shared<DeferredInitializationIo>();
+  BackendSystemTestPeer::InjectDeferredInitializationIo(system, io);
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureInvalidModel(
+      system, ecm, false));
+  BackendSystemTestPeer::Shutdown(system);
+  const auto model = ecm.EntityByComponents(
+      gz::sim::components::Name("mecanum_b2"),
+      gz::sim::components::Model());
+  const auto world = ecm.CreateEntity();
+  ecm.CreateComponent(world,
+      gz::sim::components::Name("b2_training_arena"));
+  ecm.CreateComponent(world, gz::sim::components::World());
+  ecm.CreateComponent(model, gz::sim::components::ParentEntity(world));
+  BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+  EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
+  EXPECT_EQ(io->runtime_creates, 0u);
+  EXPECT_TRUE(io->statuses.empty());
+}
+
+TEST(BackendSystemLifecycle, FirstUpdateRejectsWrongIdentityDuplicateAndMissingLink)
+{
+  struct Case
+  {
+    std::string world_name;
+    std::string model_name;
+    bool create_base_link;
+    bool duplicate_model;
+    std::string expected_reason;
+  };
+  const std::vector<Case> cases{
+    {"wrong_world", "mecanum_b2", true, false,
+      "world_or_robot_identity_mismatch"},
+    {"b2_training_arena", "wrong_robot", true, false,
+      "world_or_robot_identity_mismatch"},
+    {"b2_training_arena", "mecanum_b2", false, false,
+      "base_link_missing"},
+    {"b2_training_arena", "mecanum_b2", true, true,
+      "robot_model_cardinality_or_world_mismatch"},
+  };
+  for (const auto &test_case : cases)
+  {
+    BackendSystem system;
+    gz::sim::EntityComponentManager ecm;
+    ASSERT_TRUE(BackendSystemTestPeer::ConfigureInvalidModel(
+        system, ecm, true, test_case.world_name, test_case.model_name,
+        test_case.create_base_link, test_case.duplicate_model));
+    BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+    EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
+    EXPECT_EQ(BackendSystemTestPeer::FaultReason(system),
+              test_case.expected_reason);
+    BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
+    EXPECT_EQ(BackendSystemTestPeer::FaultReason(system),
+              test_case.expected_reason);
   }
 }
 

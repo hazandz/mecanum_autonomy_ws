@@ -15,7 +15,8 @@
   ros_type_name: nav_msgs/msg/Odometry
   gz_type_name: gz.msgs.Odometry
   direction: GZ_TO_ROS
-  qos_profile: DEFAULT
+  publisher_queue: 10
+  subscriber_queue: 10
 - service_name: /world/b2_training_arena/control
   ros_type_name: ros_gz_interfaces/srv/ControlWorld
   gz_req_type_name: gz.msgs.WorldControl
