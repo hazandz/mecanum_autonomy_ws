@@ -1013,3 +1013,20 @@ This route does not claim implementation, build, test, audit, or runtime
 success. Any eventual offline evidence remains below independent exact-commit
 audit. Probe capability, contact engine operation, GUI scene, reset, motion,
 Gate, and integration remain unverified and outside this source routing entry.
+
+## Roadmap B full-plan and status master — documentation candidate
+
+As of 2026-11-02, the work-branch candidate
+`docs/governance/ROADMAP_B_MASTER_PLAN_AND_STATUS.md` consolidates the Roadmap
+B1–B8 sequence and links its provenance to the active
+`ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2` ACR, the Project Execution Plan,
+and the Progress Ledger. Its source snapshot is
+`6f510b3048bd45030dd75418a820a684920c5a37`; this registry entry is a review
+reference, not canonical activation.
+
+The master is an index and status-context document. It does not override the
+Architecture DOCX, an Owner-approved ACR, or newer evidence; it changes no
+workstream routing and grants no implementation, runtime, training, Gate,
+integration, HIL, or hardware authority. Historical source provenance is
+reported as workspace-supplied, not as a source directly read or hashed by
+Codex.

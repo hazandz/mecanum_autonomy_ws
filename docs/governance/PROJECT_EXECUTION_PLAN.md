@@ -1113,3 +1113,19 @@ contact capability, GUI scene, reset, motion, training, Gate, runtime,
 integration, or B2.3 evidence is asserted here. The installed five-package
 build and exact offline test selections remain the only implementation checks
 permitted. Runtime probe execution requires later separate authorization.
+
+## Roadmap B full-plan context restoration — documentation candidate
+
+Date: 2026-11-02. This section records an L1 documentation/context
+reconciliation on branch `roadmap-b-b22-simulation-substrate`, based on exact
+source commit `6f510b3048bd45030dd75418a820a684920c5a37`. The consolidated
+[Roadmap B master plan and status](ROADMAP_B_MASTER_PLAN_AND_STATUS.md) restores
+the B1–B8 sequence and points to the controlling ACR and current governance
+evidence.
+
+This work-branch copy is a review candidate, not canonical activation. It does
+not rewrite earlier snapshots, change the global revision, activation rule or
+runtime status, transition a milestone, or grant runtime, training or
+integration authority. The historical Markdown source was read and supplied
+by the workspace; it was not directly accessed by Codex and is not treated as
+fully approved design. This section records documentation routing only.

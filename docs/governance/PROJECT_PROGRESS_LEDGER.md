@@ -1939,3 +1939,19 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Evidence status | `AUTHORIZED_OFFLINE_CORRECTION_IN_PROGRESS`; this entry records scope only. No tests, build, delivery, audit, runtime, Gate, or integration result is claimed. |
 | Boundary | No ROS graph, Gazebo, bridge/service call, GUI, contact probe, motion, reset, B2.3 coordinator/Safety/FinalTwistPublisher, training, evaluation, soak, HIL, hardware, integration, or Gate activity is authorized. |
 | Next action | Complete the stated offline implementation and checks; if exact installed dependencies or an allowlisted production connection are insufficient, report the concrete blocker and preserve the candidate. |
+
+
+### Roadmap B full-plan context restoration — documentation candidate
+
+| Field | Record |
+|---|---|
+| Date | 2026-11-02 |
+| Work package | `ROADMAP_B_GOVERNANCE_CONTEXT_RESTORATION` |
+| Source branch and exact base | `roadmap-b-b22-simulation-substrate`; `6f510b3048bd45030dd75418a820a684920c5a37` |
+| Supersedes | None — new consolidated reference; no historical authorization/status is superseded. |
+| Scope | `docs/governance/ROADMAP_B_MASTER_PLAN_AND_STATUS.md`; `docs/governance/PROJECT_EXECUTION_PLAN.md`; `docs/governance/CANONICAL_SOURCE_REGISTRY.md`; `docs/governance/PROJECT_PROGRESS_LEDGER.md`. |
+| Historical source and amendment routing | Historical `Markdown đã dán (1)(20261026-185834).md` was read and supplied by the workspace; Codex did not access or hash it. Current routing remains through `ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2`; RUN002 acceptance remains pending as recorded in ACR §9. |
+| Evidence | Documentation/context reconciliation only; no runtime, training, test, Gate, integration, HIL, or hardware evidence. |
+| Status transition | None. No milestone status changed. |
+| Authority boundary | This candidate grants no runtime/training/integration authority and does not supersede Architecture, ACR, canonical integration governance, or historical Ledger entries. |
+| Next action | Independent review of the exact documentation delta; RUN002 decisions remain pending. |
