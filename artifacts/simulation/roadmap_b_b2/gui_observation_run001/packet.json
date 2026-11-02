@@ -1,0 +1,275 @@
+{
+  "acceptance": {
+    "cleanup_escalation": [
+      "SIGINT",
+      "SIGTERM",
+      "SIGKILL"
+    ],
+    "contact_capability": "UNKNOWN_ALLOWED",
+    "failure": "GUI/backend/evidence failure, timeout, identity mismatch, lost inhibit, clock progress or owned cleanup residue => FAIL; Owner-observed GUI close before completion => ABORTED_BY_OWNER; no restart/retry",
+    "owner": "Owner directly confirms rendered world/robot and provides existing nonempty screenshot file; record its SHA-256",
+    "pass_requires": "all listed identity, Owner screenshot, stable paused/inhibited status, heartbeat, clock and cleanup conditions; no runner-created command/control operation",
+    "scan_health": "NOT_EVALUATED_WHILE_PAUSED",
+    "scene": "world b2_training_arena; exactly one mecanum_b2 model in readiness query; bound backend session/config identity; one owned server and one owned GUI",
+    "status_all_observation_samples": {
+      "actuator_inhibited": true,
+      "applied_receipt_valid": false,
+      "backend_heartbeat_gap_max_s": 1,
+      "backend_identity_unchanged": true,
+      "fault_flags": 0,
+      "paused": true,
+      "simulation_clock_advances": false
+    }
+  },
+  "allowed_operations": [
+    "passive server scene readiness using audited RclpyReadiness and scene query",
+    "Owner screenshot path and direct OWNER_ACK_SCENE input on the foreground TTY",
+    "read-only subscriptions to /mecanum/local_training/backend_state and /clock in an owned ROS context",
+    "bounded signal and wait for runner-owned process groups only"
+  ],
+  "approval_boundary": "No Owner approval is included in this packet. Independent exact-commit audit and explicit approval remain required.",
+  "backend": "NATIVE_B2_BACKEND_V1",
+  "capacity": 1,
+  "commands_argv": {
+    "composition": "one robot_state_publisher, one parameter_bridge, one Gazebo server, one GUI; no ros2 launch process and no second simulator",
+    "exact_templates": {
+      "gui": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-g",
+        "--gui-config",
+        "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup/config/gui/local_training.config"
+      ],
+      "parameter_bridge": [
+        "ros2",
+        "run",
+        "ros_gz_bridge",
+        "parameter_bridge",
+        "--ros-args",
+        "-p",
+        "config_file:=/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml"
+      ],
+      "robot_state_publisher": [
+        "/opt/ros/jazzy/bin/ros2",
+        "run",
+        "robot_state_publisher",
+        "robot_state_publisher",
+        "--ros-args",
+        "--params-file",
+        "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN001/runtime_assets/robot_state_publisher.params.yaml"
+      ],
+      "server": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-s",
+        "--headless-rendering",
+        "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN001/runtime_assets/b2_training_arena.B2_SOAK_V1.<session_uuid>.runtime.sdf"
+      ]
+    },
+    "substitutions": {
+      "<evidence_root>": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN001",
+      "<session_uuid>": "the one session_id recorded in descriptor and acquisition",
+      "bare gz and ros2": "resolved through preflight PATH and bound to installed executable SHA-256 in file_sha256"
+    }
+  },
+  "evidence": {
+    "format": "append-only JSONL, exclusive create, mode 0600, per-record fsync",
+    "retained_assets": [
+      "runtime_assets/run_descriptor.json",
+      "runtime_assets/<session-bound-world>.runtime.sdf",
+      "runtime_assets/robot_state_publisher.params.yaml",
+      "Owner screenshot reference and SHA-256"
+    ],
+    "root": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN001",
+    "stream": "observation.jsonl"
+  },
+  "guard": {
+    "acquisition": "exclusive atomic create, mode 0600; existing or partial file consumes capacity; no reset or retry",
+    "owner_approval_fields": [
+      "run_id",
+      "packet_sha256",
+      "packet_commit",
+      "production_source_pin",
+      "tool_sha256"
+    ],
+    "owner_approval_schema": "b22_gui_observation_owner_approval/v1",
+    "path": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN001/acquisition.json"
+  },
+  "gui": true,
+  "identity_binding": {
+    "coordinator_ingress_instance_id": "single nonzero uint64 generated once",
+    "gz_partition": "mecanum_b2_<session_uuid_without_hyphens>",
+    "host_binding": [
+      "hostname",
+      "Linux boot_id",
+      "runner pid",
+      "process group",
+      "session",
+      "proc start ticks"
+    ],
+    "resource_plugin_environment": "exact values returned by installed build_launch_plan and shared by bridge/server/gui",
+    "ros_domain_id": 83,
+    "session_id": "single UUID generated once before participant creation"
+  },
+  "input_sha256": {
+    "asset_manifest": "200035538282ce7035ae1b48f25fc25359d8bf7cf5c3476caa8a38286d1a5b0c",
+    "config_hash": "e0743e903cbc5edf417084d114ad632ff5c34be404a5a144aae96dcc49c44ac7",
+    "resolved_soak": "9e75df82e30d61f03eeba7d503b8f85277e03f0163abee0a8dcb79850f9d5ba3",
+    "scenario": "9140e53daa5408af8b0897b6cf007847eef9048ffb40bbefddc61115123d4ea4"
+  },
+  "installation": {
+    "dependency_fingerprints": {
+      "gazebo": {
+        "gui_mode": "GUI-only process using the same GZ_PARTITION",
+        "major_version": 8,
+        "renderer_plugin_path": "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/gz-rendering-8/engine-plugins/libgz-rendering8-ogre2.so.8.2.3",
+        "runtime_graphics_context": "not observed during preparation; Owner GUI acknowledgment required at runtime",
+        "scene_broadcaster": "installed Gazebo Sim 8 SceneBroadcaster plugin",
+        "sensor_rendering": "Sensors system retained; ogre2",
+        "server_mode": "server-only with --headless-rendering"
+      },
+      "python": {
+        "executable": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+        "modules": {
+          "numpy": {
+            "origin": "/usr/lib/python3/dist-packages/numpy/__init__.py",
+            "version": "1.26.4"
+          },
+          "pydantic": {
+            "origin": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/lib/python3.12/site-packages/pydantic/__init__.py",
+            "version": "2.10.6"
+          },
+          "pytest": {
+            "origin": "/usr/lib/python3/dist-packages/pytest/__init__.py",
+            "version": "7.4.4"
+          }
+        },
+        "version": "3.12.3"
+      },
+      "ros_distro": "jazzy",
+      "ros_underlay": "/opt/ros/jazzy",
+      "system_packages": {
+        "gz-transport13-cli": "13.6.0-1~noble",
+        "ros-jazzy-gz-rendering-vendor": "0.0.7-1noble.20260425.063708",
+        "ros-jazzy-gz-sensors-vendor": "0.0.6-1noble.20260604.105419",
+        "ros-jazzy-gz-sim-vendor": "0.0.10-1noble.20260604.111001",
+        "ros-jazzy-gz-transport-vendor": "0.0.7-1noble.20260423.081526",
+        "ros-jazzy-robot-state-publisher": "3.3.4-1noble.20260615.150609",
+        "ros-jazzy-ros-gz-bridge": "1.0.22-1noble.20260615.142443"
+      }
+    },
+    "file_count": 47,
+    "file_sha256": {
+      "/opt/ros/jazzy/bin/ros2": "3308327fcefeaefe5601f72e0b473a5f9f9638434f5773d2f40b124f7c9aa04d",
+      "/opt/ros/jazzy/lib/librobot_state_publisher_node.so": "e8d604ebe94051f1c198ee30a77f9b44b055f01d55811a1ffa087a3a27125256",
+      "/opt/ros/jazzy/lib/libros_gz_bridge.so": "a61ece7198e9216825755229c5ed59b6dd896d75f81de369d1622e6bfa06ee62",
+      "/opt/ros/jazzy/lib/robot_state_publisher/robot_state_publisher": "8bca2daa9dea4b634b746f342bb7124eb8092258e374fd631d8cdd4fb3d2dfb5",
+      "/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge": "0b33905dc1791d927ca6b6f685f299a88681c0b68fadb88057636d3a15bae4fe",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-bullet-featherstone-plugin.so.7.6.0": "e36ac862cd1204b1dbb23a38a686e2d2e2588804a2dff5b711837193f7c93509",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-bullet-plugin.so.7.6.0": "76436279a8f913c6370a0505fd890ceaa4e3cd7dc89e25097da10f47b926f637",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-dartsim-plugin.so.7.6.0": "9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-tpe-plugin.so.7.6.0": "939f6673ab3e0966d09dc1520c574c86ea35982f7db2d06281fcf835ef342fac",
+      "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/gz-rendering-8/engine-plugins/libgz-rendering8-ogre2.so.8.2.3": "3a54fcd4678dc6840041a8c8ad88d4119c7e415964e26733f506075b1796d400",
+      "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/libgz-rendering8-ogre2.so.8.2.3": "3a54fcd4678dc6840041a8c8ad88d4119c7e415964e26733f506075b1796d400",
+      "/opt/ros/jazzy/opt/gz_sim_vendor/lib/libgz-sim8-scene-broadcaster-system.so.8.11.0": "f500db9a0ba9eca65ff1546ded933193138be137ede398a1f78a424e28617849",
+      "/opt/ros/jazzy/opt/gz_sim_vendor/lib/libgz-sim8-sensors-system.so.8.11.0": "b4203ea8d53edc45f7b92b8218643726f2a569e0acf4c503dbe0325fec0e7ee9",
+      "/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz": "fa523c7c7d8d76c5b6412a376708b55064a2efde107172a630485a24d8bf7f5d",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_generator_c.so": "2c30446f3b35cde24a54bb7eefd32644dcd0455938f69b819f23bcf2ffff71b2",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_generator_py.so": "cea1b1774d36bed63d570105b690ecd2637fb71b08db3a1cf1e9309c88c6f1e2",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_c.so": "f37004f0d39c50e46ae356cf5d16e064a906d983b7a8798e334d579b1f890ad5",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_cpp.so": "a4449ddfd9f49cc30aa6953e04d68298073a253fb0a2a68c161f0d72ae93f5d3",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_fastrtps_c.so": "cfb42a12f297a36b1b73fec7e526866a84d822fc08874f8c1dfecb52a0923404",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_fastrtps_cpp.so": "3ecb28f2e0481ebe70efeda81a4cc95502396eb4773bffb327a1c45c1e94fd7b",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_introspection_c.so": "17943f5432394cd7dd1f96d196e743d2d2719e92669c2566a9d580543284d19a",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_introspection_cpp.so": "cfb333935256dbe31499835eccdb457e454b2a23f59681f1b589ac0aec3f0ff4",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_sim_backend_core.so": "b97770c712558ac24bd8a1eac1c4b56ec437d86269833c5499622909a3b0a47c",
+      "/tmp/b22_gui_observation_run001_install/lib/libmecanum_sim_backend_system.so": "3272fa69f07d44f8e610c039a9a286c272a6239c93aa23c4fca4411eb5b5d6dd",
+      "/tmp/b22_gui_observation_run001_install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_launch_contract.py": "04bf356785ff89acbeecc65155427e7f587083ec292fe12c8792dfba42008008",
+      "/tmp/b22_gui_observation_run001_install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_process_supervisor.py": "dda923630e143ac2b811db9752459f3a06e1277ebca385cc2d5d47a4758c3e22",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/manifests/b2/asset_manifest.json": "200035538282ce7035ae1b48f25fc25359d8bf7cf5c3476caa8a38286d1a5b0c",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/meshes/Wheel_LB_1.stl": "5142132090f36b25066ce6de080c9361ef3cb5bafa4b318ea1b5836bde2d9178",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/meshes/Wheel_LF_1.stl": "65f20fbf9d074c11b3357d04eba34883c131cd46f7a3427b9e494fc37bfc74e5",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/meshes/Wheel_RB_1.stl": "b5310908de9eccdcd0089b85c0666cf71adbe77489cf9e282a0175a8753599d8",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/meshes/Wheel_RF_1.stl": "161d136eba02d359cb24f093621fc51e7a072da8b69f638ed22e7cbbe8bac316",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/meshes/base_link.stl": "fe0f09a8c2dbfab53942091e1f31db0973605c3abe1b69ac26398713b06ca262",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/models/b2_contact_probe/model.config": "bf7f4dc0fb00367736c1148742715b3efd6e5c146ea63e2edb29f2c23595be4d",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8c54c9cea8d34e720cd9515583ba86a377b94e98d6c93b7f23e4c9c79ce6b84",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/models/mecanum_b2/model.config": "270cf64e6e0c7e8ab946035050038be13088b55ce44853fc93145e19f6451b29",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "c99626191563ad7e5949cc5fb8b83fcb1a65681d90ffe8b365bd5791264e8e06",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
+      "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "f25f024fac472c8979d3bd9b0e0d6c27ece350e79da42daf181fbf5d02ff69e8",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup/config/gui/local_training.config": "dd89f08e33950d1216dcea1424525cea209690e87b238b8a8b4703de903e653e",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup/launch/sim_train_local_training.launch.py": "cf35a7755775fe27478dbb74480f72655d19685f11116644960687e9a6ddda20",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_soak.resolved.json": "9e75df82e30d61f03eeba7d503b8f85277e03f0163abee0a8dcb79850f9d5ba3",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl/scenarios/local_training/B2_SOAK_V1.json": "9140e53daa5408af8b0897b6cf007847eef9048ffb40bbefddc61115123d4ea4",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl_interfaces/msg/SimulationContactState.msg": "5fc9972b844b038042590805d8557a69065a922eabafc670075e45b85c467a36",
+      "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl.srv": "fb03a5b9a09bd8f5ebc540db00aea52ed1ddbce62cde7c0578d894d8abe5ac83"
+    },
+    "install_prefix": "/tmp/b22_gui_observation_run001_install",
+    "method": "fresh_external_non_symlink_five_package_colcon_build",
+    "packages": [
+      "mecanum_nav_rl_interfaces",
+      "ROBOT_URDF_final_description",
+      "mecanum_nav_rl",
+      "mecanum_sim_backend",
+      "mecanum_nav_bringup"
+    ],
+    "resolved_paths": {
+      "ROBOT_URDF_final_description": "/tmp/b22_gui_observation_run001_install/share/ROBOT_URDF_final_description",
+      "gazebo_executable": "/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz",
+      "mecanum_nav_bringup": "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_bringup",
+      "mecanum_nav_rl": "/tmp/b22_gui_observation_run001_install/share/mecanum_nav_rl",
+      "mecanum_nav_rl_interfaces_prefix": "/tmp/b22_gui_observation_run001_install",
+      "mecanum_sim_backend_prefix": "/tmp/b22_gui_observation_run001_install",
+      "physics_engine_plugin_directory": "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins",
+      "renderer_ogre2_plugin": "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/gz-rendering-8/engine-plugins/libgz-rendering8-ogre2.so.8.2.3",
+      "ros2_executable": "/opt/ros/jazzy/bin/ros2"
+    }
+  },
+  "non_retry_rule": "Once acquisition.json exists, including a partial file, never retry this run or create a new run ID from this packet.",
+  "prohibited_operations": [
+    "play, unpause, physics stepping, reset, teleport, probe, rearm",
+    "command publisher, control publisher or service client",
+    "training, evaluation, 30 reset/1000 command soak, HIL, hardware",
+    "xhost+, sudo, virtual display, dependency installation, fallback renderer, simulator restart"
+  ],
+  "repository": {
+    "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "branch": "roadmap-b-b22-simulation-substrate",
+    "expected_remote_integration": "ef9e0281cfb9de04d89a2698d6d7899bcde92803",
+    "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "production_source_pin": "7d4f2ad1c38c8021f13a6a88ebf707053718eb02",
+    "starting_head": "7d4f2ad1c38c8021f13a6a88ebf707053718eb02",
+    "starting_sole_parent": "0aa37a8ab48d42e144df89d47b3f10dcc271c6d2"
+  },
+  "robot": "mecanum_b2",
+  "run_id": "B22_GUI_OBSERVATION_RUN001",
+  "scenario_id": "B2_SOAK_V1",
+  "schema_id": "b22_gui_observation_packet/v1",
+  "status": "RUNTIME_PACKET_IMPLEMENTED_OFFLINE_PENDING_EXACT_COMMIT_AUDIT",
+  "timing_steady_seconds": {
+    "backend_heartbeat_max_gap": 1,
+    "cleanup_cap_separate": 60,
+    "clock_stability_gate": 1,
+    "consume_to_end_hard_cap": 300,
+    "gui_process_startup": 30,
+    "observation_after_ack_and_clock_stable": 60,
+    "owner_acknowledgment": 60,
+    "runtime_cap_after_consume": 240,
+    "server_readiness": 30
+  },
+  "tool_sha256": {
+    "observation_guard.py": "c0e1e09074b9b29f23b6a838963fc277dde161fae26305316b9896b71456812c",
+    "observation_runner.py": "f7ee862089e08cacdd65eb4354a8c28e3448faac8cdebb4c20f43b57714020d9",
+    "observation_sink.py": "d0e7fec7cf8aeb5d42110971f65a3dd01fa58a6320ce481236e3ce36d072dd1c",
+    "test_observation_packet.py": "493743a8bd12e429a1fcfab88c1b19a5b224b9477998c2eb9e5aee199678ec22"
+  },
+  "world": "b2_training_arena"
+}
