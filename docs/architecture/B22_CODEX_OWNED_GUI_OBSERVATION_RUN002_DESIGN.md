@@ -1,7 +1,7 @@
-# Thiết kế đề xuất: Codex-owned GUI observation RUN002
+# Thiết kế Codex-owned GUI observation RUN002
 
-**Trạng thái:** `READY_FOR_OWNER_REVIEW` — thiết kế, chưa phải runtime packet,
-implementation hoặc runtime approval.
+**Trạng thái:** `OWNER_APPROVED_L2_IMPLEMENTATION`; implementation candidate
+pending independent audit; `RUNTIME_NOT_AUTHORIZED`.
 
 **Phạm vi:** B2.2 L2, một lượt GUI quan sát paused/inhibited sau khi Owner duyệt
 pins và cấp quyền runtime riêng. RUN001 đã consume và `FAIL` tại commit
@@ -9,11 +9,11 @@ pins và cấp quyền runtime riêng. RUN001 đã consume và `FAIL` tại comm
 sửa hay tái sử dụng. RUN002 phải có packet, hash, audit và capacity-one guard
 riêng.
 
-## Thay đổi acceptance đang chờ duyệt
+## Acceptance L2 được Owner duyệt cho RUN002
 
-ACR L2 §8 hiện hành yêu cầu Owner trực tiếp xác nhận scene và cung cấp screenshot
-sau một runtime được cấp quyền riêng. Đề xuất này thay thao tác đó bằng kiểm tra
-ảnh do Codex vận hành, với hai trường tách biệt:
+Owner đã duyệt qua prompt `PROMPT_CODEX_B22_RUN002_OFFLINE_IMPLEMENTATION` việc
+thay trực tiếp xác nhận scene bằng Codex kiểm tra ảnh thật của cửa sổ thuộc run.
+Evidence giữ hai trường tách biệt:
 
 ```json
 {
@@ -24,9 +24,9 @@ sau một runtime được cấp quyền riêng. Đề xuất này thay thao tá
 
 Trường thứ nhất ghi nhận kết quả kiểm tra máy/agent trên scene query và ảnh thật
 của cửa sổ thuộc lượt chạy. Trường thứ hai ngăn diễn giải kết quả thành xác nhận
-của con người. Thay đổi acceptance chưa được kích hoạt; ACR có mục đề xuất riêng
-ở trạng thái `PENDING_OWNER_APPROVAL`. Owner vẫn duyệt exact packet trước run và
-xem xét evidence sau run.
+của con người. Acceptance này chỉ áp dụng RUN002; runtime vẫn cần exact packet/
+commit audit và Owner runtime authorization riêng. Owner quyết định cấp quyền
+trước run và xem xét evidence sau run.
 
 ## Tiến trình, identity và ownership
 
@@ -254,8 +254,8 @@ accepted result.
 
 | Producer | Consumer | Giao diện/schema | Deadline | Failure |
 |---|---|---|---|---|
-| Runner | Codex | Atomic request JSON `b22_gui_codex_review_request/v1` tại `review_mailbox/requests/<id>.json` | Tạo và giao request trong cùng checkpoint ≤15 s | Publish/read/hash/schema lỗi: review FAIL |
-| Codex | Runner | Atomic result JSON `b22_gui_codex_review_result/v1` tại `review_mailbox/results/<id>.json` | Cùng absolute steady deadline ≤15 s | Viewer unavailable, ảnh không xem được, result sai/thiếu/late: FAIL |
+| Runner | Codex | Atomic request JSON `b22_gui_codex_review_request/v1` tại `review_mailbox/requests/<id>.json` | Tạo và giao request trong cùng checkpoint ≤60 s | Publish/read/hash/schema lỗi: review FAIL |
+| Codex | Runner | Atomic result JSON `b22_gui_codex_review_result/v1` tại `review_mailbox/results/<id>.json` | Cùng absolute steady deadline ≤60 s | Viewer unavailable, ảnh không xem được, result sai/thiếu/late: FAIL |
 | Runner health monitor | Runner review state machine | Backend/clock/graph/process/evidence facts đã bind trong run | Liên tục đến review accept hoặc invalidate | GUI crash, inhibit loss, fault, timeout, cancellation hoặc evidence failure lập tức invalidate và cleanup |
 
 State machine: `IDLE → WINDOW_BOUND → SCREENSHOT_PUBLISHED → REQUEST_PUBLISHED
@@ -279,15 +279,15 @@ operation để publish result atomic. Codex đợi writer exit và kiểm exit 
 writer không khởi tạo ROS/Gazebo và không tạo participant. Runner vẫn giám sát
 health/process trong toàn bộ khoảng chờ. Không dùng stdin cho mailbox.
 
-Deadline 15 s bắt đầu ngay trước window enumeration/binding; bao gồm window
+Checkpoint 60 s bắt đầu ngay trước window enumeration/binding; bao gồm window
 binding, capture/persist/hash, request publication, Codex đọc request/mở ảnh/
-kiểm ảnh, result publication và runner validation. Effective deadline là
-`min(review_started_steady_ns + 15 s, consume_steady_ns + 240 s)`. Duplicate,
-tool delay hoặc retry không gia hạn deadline. Active cap 240 s, cleanup cap
-riêng 60 s và total cap 300 s không đổi. Không bắt đầu checkpoint khi active
-budget không đủ. Tool round-trip latency chưa được đo; 15 s là feasibility risk,
-không có static evidence chứng minh đủ. Giữ 15 s và yêu cầu Owner quyết định
-nếu muốn phân bổ khác bên trong active cap; không tự nới.
+kiểm ảnh, result publisher, runner validation và kiểm tra publisher exit.
+Effective deadline là `min(review_started_steady_ns + 60 s, consume_steady_ns +
+240 s)`. Duplicate, tool delay hoặc retry không gia hạn deadline. Active cap
+240 s, cleanup cap riêng 60 s và total cap 300 s không đổi. Không bắt đầu
+checkpoint khi active budget còn dưới 121 s; dành tối đa 60 s review, 1 s clock
+gate và đủ 60 s observation. Round-trip chưa đo; 60 s là budget đã được duyệt,
+không phải cam kết thời gian hoàn thành.
 
 Nếu managed process/session handle, local file access, image viewer hoặc
 atomic writer không khả dụng, dừng trước consume nếu preflight nhận diện được;
@@ -318,7 +318,7 @@ của writer phải được báo unknown, checkpoint vẫn FAIL.
    một GUI. Giới hạn server readiness 30 s, GUI process startup 30 s. Quan sát
    backend status, exact scene, namespace graph và foreign participant theo
    packet; graph convergence tối đa 30 s. Không play/step/reset/probe/rearm.
-4. **Render review checkpoint:** bắt đầu deadline steady 15 s trước window
+4. **Render review checkpoint:** bắt đầu deadline steady 60 s trước window
    enumeration. Bind top-level window duy nhất với GUI PID/PGID, start identity
    và `GZ_PARTITION`; scene query phải trả world/model đúng. Capture riêng window,
    persist/hash và publish request JSON. Codex đọc request, mở đúng screenshot,
@@ -341,11 +341,12 @@ của writer phải được báo unknown, checkpoint vẫn FAIL.
 
 Giữ hard caps hiện hành: active ≤240 s từ consume, cleanup riêng ≤60 s, tổng
 ≤300 s. Server readiness 30 s; GUI startup 30 s; graph convergence 30 s; clock
-stability 1 s; checkpoint 15 s tính từ trước window enumeration đến khi runner
+stability 1 s; checkpoint 60 s tính từ trước window enumeration đến khi runner
 validate result; observation đủ 60 s sau clock gate và review PASS. Checkpoint
 bao gồm binding, capture, request/result I/O, Codex tool round-trip và validation.
-Tool round-trip latency chưa được đo nên 15 s là risk cần Owner chấp thuận, không
-được âm thầm gia hạn. Các giai đoạn overlap dùng absolute steady deadlines; nếu
+15 s là budget đề xuất lịch sử đã được thay bằng checkpoint 60 s theo quyết định
+Owner ngày 2026-11-02. Tool round-trip vẫn chưa được đo; budget không bảo đảm
+hoàn tất trong mọi môi trường. Các giai đoạn overlap dùng absolute steady deadlines; nếu
 active budget không đủ thì fail/cleanup trong giới hạn còn lại.
 
 ## PASS/FAIL và abort
@@ -382,9 +383,10 @@ paused/inhibited backend/clock/graph, heartbeat và cleanup. Kết quả không 
 minh Owner visual review, physical contact, motion, braking, functional safety,
 training/soak, HIL hoặc robot readiness.
 
-## Allowlist dự kiến cho implementation RUN002
+## Allowlist implementation RUN002 đã được duyệt
 
-Chỉ sau khi Owner duyệt acceptance change và prompt implementation riêng:
+Prompt Owner đã duyệt acceptance/design và cấp implementation ngoại tuyến trong
+đúng phạm vi này:
 
 1. `artifacts/simulation/roadmap_b_b2/gui_observation_run002/packet.json`
 2. `artifacts/simulation/roadmap_b_b2/gui_observation_run002/README.md`
@@ -393,29 +395,24 @@ Chỉ sau khi Owner duyệt acceptance change và prompt implementation riêng:
 5. `artifacts/simulation/roadmap_b_b2/gui_observation_run002/tools/observation_runner.py`
 6. `artifacts/simulation/roadmap_b_b2/gui_observation_run002/tools/test_observation_packet.py`
 7. `docs/architecture/ACR_ROADMAP_B_TRAINING_SEMANTICS_AND_B1_SCOPE_L2.md`
+8. `docs/architecture/B22_CODEX_OWNED_GUI_OBSERVATION_RUN002_DESIGN.md`
 
-RUN001 files/evidence remain immutable historical inputs. This design file is
-not a packet and does not authorize creation of RUN002 guard, approval, or
-runtime implementation.
+RUN001 files/evidence remain immutable historical inputs. This design document
+is approved for RUN002 offline implementation, but it is not a runtime packet,
+runtime approval, or authority to create/consume the real guard.
 
-## Điểm cần Owner quyết định / blocker
+## Giới hạn và blocker còn lại
 
-1. Chấp thuận hoặc bác bỏ thay đổi L2 từ direct Owner scene acknowledgment sang
-   `automated_observation_verdict` với `owner_visual_review: NOT_PERFORMED`.
-2. Chấp thuận X11/XCB-only capture profile; static inventory cho thấy API và
-   executable cần thiết có mặt, nhưng không xác minh active desktop session,
-   Qt window metadata, capture permission hoặc Codex image-viewer handoff ở
-   runtime.
-3. Implementation phải pin fingerprints mới và chứng minh tích hợp pause/review
-   checkpoint mà không giả Owner input; thiết kế này chưa tạo packet hoặc code.
-4. Round-trip của Codex tool chưa được đo; budget review 15 s giữ nguyên nhưng
-   là feasibility risk phải được Owner chấp thuận trước implementation. Thiết kế
-   không cộng ngân sách vào active 240 s/cleanup 60 s/total 300 s.
-5. Current sandbox reports canonical evidence storage read-only. RUN002 preflight
-   must verify an Owner-authorized Codex execution context with exclusive write
-   access to the exact root before consume; if unavailable, stop without using
-   another root or a user-operated fallback.
+1. X11/XCB-only capture phụ thuộc desktop, quyền display và khả năng gắn window
+   với đúng process/partition; các điều kiện runtime này chưa được thử.
+2. Codex image viewer, managed process handoff và writer capability mới được
+   ghi theo tool metadata; round-trip thực tế chưa được chứng minh.
+3. Installed fingerprints là static; không chứng minh renderer/engine đã load,
+   frame đã render, mailbox ghi được hoặc cleanup runtime thành công.
+4. Canonical evidence/approval paths phải được kiểm tra quyền/collision trong
+   exact runtime context sau authorization; không đổi root hoặc quyền hệ thống.
+5. Checkpoint 60 s đã được Owner duyệt cho implementation; latency chưa đo và
+   60 s không phải cam kết hoàn tất. Active/cleanup/total caps vẫn 240/60/300 s.
 
-**Kết luận:** `READY_FOR_OWNER_REVIEW` cho quyết định acceptance/design. Runtime
-khả năng cụ thể vẫn phụ thuộc desktop/X11 và image handoff thực tế; nếu các điều
-kiện đó thiếu ở lượt được cấp quyền, phải fail closed.
+**Kết luận:** `READY_FOR_OFFLINE_IMPLEMENTATION_AUDIT`; runtime capability và
+runtime authorization vẫn chưa có.

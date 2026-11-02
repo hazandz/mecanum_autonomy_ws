@@ -533,3 +533,28 @@ The proposed render-review checkpoint is capped at 15 s from window enumeration
 through Codex image review and runner result validation. That tool round-trip
 latency has not been measured; this is a disclosed feasibility risk for Owner
 review, not permission to extend the current active/cleanup/total caps.
+
+## 10. RUN002 Codex image-review acceptance decision (L2, 2026-11-02)
+
+The Owner approved the RUN002 acceptance/design implementation by issuing
+`PROMPT_CODEX_B22_RUN002_OFFLINE_IMPLEMENTATION`. Within RUN002 only, this
+supersedes the pending proposal in §9 to replace direct Owner scene
+acknowledgment with a Codex-operated image review. The reviewer is Codex; this
+is not an Owner acknowledgment. Evidence must keep
+`automated_observation_verdict: PASS|FAIL` separate from
+`owner_visual_review: NOT_PERFORMED`. RUN001 history and its consumed/FAIL
+outcome remain unchanged.
+
+The approved review checkpoint is at most 60 seconds, beginning before X11
+window enumeration and including process/window binding, capture, screenshot
+persistence and hash, request publication, Codex image inspection, result
+publisher completion, and runner validation. The active, cleanup, and total
+caps remain 240, 60, and 300 seconds. The checkpoint is not refreshed. The
+runner must reserve 121 seconds of active time before starting it, allowing at
+most 60 seconds review, a one-second clock gate, and 60 seconds observation.
+
+This decision authorizes offline RUN002 implementation and its specified checks
+only. It grants no runtime authority. A separately audited exact packet/commit
+and new Owner runtime authorization are required. It does not amend other B1/B2
+contracts, add an interface or config root, alter RUN001, or authorize B2.3,
+training, HIL, integration, or real-robot activity.
