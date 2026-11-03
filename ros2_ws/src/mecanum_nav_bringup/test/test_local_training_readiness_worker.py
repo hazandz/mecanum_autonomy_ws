@@ -19,9 +19,12 @@ from mecanum_nav_bringup.local_training_process_supervisor import (
     RclpyReadiness,
 )
 from mecanum_nav_bringup.local_training_readiness_worker import (
+    EVENT_SCHEMA,
     REQUEST_SCHEMA,
     canonical_request_bytes,
     run_worker,
+    scene_facts,
+    scene_readiness_matches,
     strict_json_loads,
     validate_request,
 )
@@ -155,9 +158,11 @@ def protocol_transcript(request, *, scene_outcome='MATCH', ready=True):
         'status_sequence': 1, 'fault_flags': 0, 'actuator_inhibited': True,
     }
     scene = {
-        'world_name': request['world_id'] if scene_outcome == 'MATCH'
-        else 'other_world',
+        'scene_name': '',
         'matching_model_count': 1 if scene_outcome == 'MATCH' else 0,
+        'query_service': '/world/b2_training_arena/scene/info',
+        'query_partition': request['gz_partition'],
+        'world_identity_source': 'WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND',
     }
     specifications = [
         ('worker_started', {'request_binding': binding}),
@@ -188,7 +193,7 @@ def protocol_transcript(request, *, scene_outcome='MATCH', ready=True):
     records = []
     for sequence, (event, facts) in enumerate(specifications, 1):
         records.append({
-            'schema_id': 'mecanum_b2_scene_readiness_event/v1',
+            'schema_id': EVENT_SCHEMA,
             'request_id': request['request_id'], 'request_sha256': digest,
             'sequence': sequence, 'event': event,
             'monotonic_ns': time.monotonic_ns(), 'facts': facts,
@@ -259,7 +264,7 @@ def run_emitted_full_window(monkeypatch, *, match_at):
         query_starts.append(clock.now_ns)
         if match_at is not None and len(query_starts) == match_at:
             return SimpleNamespace(
-                name=request['world_id'],
+                name='',
                 model=[SimpleNamespace(
                     name=request['model_id'], model=[],
                 )],
@@ -446,7 +451,7 @@ class Scene:
                 else os.environ.get('FAKE_SCENE', 'match')
             )
             os.environ['FAKE_SCENE_INDEX'] = str(index + 1)
-        self.name = 'other_world' if mode == 'world' else 'b2_training_arena'
+        self.name = os.environ.get('FAKE_SCENE_NAME', '')
         count = (
             0 if mode == 'missing'
             else 2 if mode == 'duplicate' else 1
@@ -455,7 +460,11 @@ class Scene:
 scene_module.Scene = Scene
 transport = module('gz.transport13'); transport.__path__ = []
 class TransportNode:
-    def __init__(self): self.calls = 0
+    def __init__(self):
+        self.calls = 0
+        self.options = types.SimpleNamespace(
+            partition=os.environ.get('GZ_PARTITION', ''),
+        )
     def request(
         self, service, request, request_type, response_type, timeout_ms,
     ):
@@ -535,6 +544,8 @@ def readiness_with_controlled_worker(monkeypatch, worker, sink=None):
 
 def test_request_is_canonical_strict_and_binds_domain_partition():
     """Validate canonical binding, field types and duplicate-key rejection."""
+    assert REQUEST_SCHEMA == 'mecanum_b2_scene_readiness_request/v1'
+    assert EVENT_SCHEMA == 'mecanum_b2_scene_readiness_event/v2'
     request = {
         'schema_id': REQUEST_SCHEMA,
         'request_id': str(uuid.uuid4()),
@@ -1014,9 +1025,9 @@ def test_status_mismatch_never_returns_ready(
     assert not results or results[0]['verdict'] != 'READY'
 
 
-@pytest.mark.parametrize('scene_mode', ['world', 'missing', 'duplicate'])
+@pytest.mark.parametrize('scene_mode', ['missing', 'duplicate'])
 def test_scene_mismatch_never_returns_ready(monkeypatch, tmp_path, scene_mode):
-    """Reject a wrong world and missing or duplicate robot model."""
+    """Reject missing or duplicate robot model cardinality."""
     readiness, sink = readiness_with_child_fakes(
         monkeypatch, tmp_path, FAKE_SCENE=scene_mode,
     )
@@ -1026,6 +1037,123 @@ def test_scene_mismatch_never_returns_ready(monkeypatch, tmp_path, scene_mode):
                if name == 'readiness_worker_event'
                and facts['record']['event'] == 'worker_result']
     assert all(result['verdict'] != 'READY' for result in results)
+
+
+def test_nonempty_scene_label_is_not_interpreted_as_world_identity(
+    monkeypatch, tmp_path,
+):
+    """A producer label does not replace the scoped service binding."""
+    readiness, _sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, FAKE_SCENE_NAME='untrusted-scene-label',
+    )
+    asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 2.0))
+    records = [facts['record'] for name, facts in _sink.events
+               if name == 'readiness_worker_event']
+    finished = next(record['facts'] for record in records
+                    if record['event'] == 'scene_query_finished')
+    assert finished['scene_name'] == 'untrusted-scene-label'
+    assert finished['outcome'] == 'MATCH'
+    assert records[-1]['facts']['verdict'] == 'READY'
+
+
+def test_installed_gz_scene_default_label_and_model_use_bound_predicate(
+    monkeypatch,
+):
+    """The installed protobuf producer shape accepts an unnamed scene."""
+    from gz.msgs10.scene_pb2 import Scene
+
+    monkeypatch.setenv('GZ_PARTITION', 'mecanum_b2_testpartition')
+    request = RclpyReadiness()._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 1_000_000_000,
+    )
+    status = {
+        'world_id': request['world_id'],
+        'session_id': request['session_id'],
+        'config_hash': request['config_hash'], 'backend_instance_id': 9,
+        'status_sequence': 1, 'fault_flags': 0, 'actuator_inhibited': True,
+    }
+    scene = Scene()
+    model = scene.model.add()
+    model.name = request['model_id']
+    facts = scene_facts(
+        scene, '/world/b2_training_arena/scene/info',
+        request['gz_partition'], request,
+    )
+    assert scene.name == ''
+    assert facts['scene_name'] == ''
+    assert facts['matching_model_count'] == 1
+    assert scene_readiness_matches(status, facts, request)
+
+
+def test_scene_facts_counts_matching_nested_models():
+    """Count the requested model recursively, not only top-level entries."""
+    request = {
+        'world_id': 'b2_training_arena', 'model_id': 'mecanum_b2',
+        'session_id': SESSION, 'config_hash': CONFIG_HASH,
+        'gz_partition': 'mecanum_b2_testpartition',
+    }
+    nested = SimpleNamespace(name='container', model=[SimpleNamespace(
+        name='mecanum_b2', model=[],
+    )])
+    facts = scene_facts(
+        SimpleNamespace(name='', model=[nested]),
+        '/world/b2_training_arena/scene/info', request['gz_partition'],
+        request,
+    )
+    assert facts['matching_model_count'] == 1
+    duplicate = SimpleNamespace(name='mecanum_b2', model=[])
+    facts = scene_facts(
+        SimpleNamespace(name='', model=[nested, duplicate]),
+        '/world/b2_training_arena/scene/info', request['gz_partition'],
+        request,
+    )
+    assert facts['matching_model_count'] == 2
+
+
+def test_worker_fails_if_transport_partition_changes_during_query(
+    monkeypatch,
+):
+    """A query cannot retain readiness after its bound partition changes."""
+    monkeypatch.setenv('GZ_PARTITION', 'mecanum_b2_testpartition')
+    monkeypatch.setenv('ROS_DOMAIN_ID', '83')
+    request = RclpyReadiness()._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 1_000_000_000,
+    )
+    status = SimpleNamespace(
+        header=SimpleNamespace(frame_id=request['world_id']),
+        session_id=request['session_id'], config_hash=request['config_hash'],
+        backend_instance_id=9, status_sequence=1, fault_flags=0,
+        actuator_inhibited=True,
+    )
+    source = SimpleNamespace(
+        start=lambda: None, next_status=lambda _timeout: status,
+        close=lambda: None,
+    )
+
+    class Emitter:
+        def __init__(self):
+            self.records = []
+
+        def emit(self, event, facts):
+            self.records.append((event, facts))
+
+    def change_partition(_service, _timeout):
+        monkeypatch.setenv('GZ_PARTITION', 'foreign-partition')
+        return SimpleNamespace(name='', model=[SimpleNamespace(
+            name='mecanum_b2', model=[],
+        )])
+    emitter = Emitter()
+    result = run_worker(
+        request, status_source_factory=lambda: source,
+        scene_query=change_partition, emitter=emitter,
+    )
+    finished = next(facts for event, facts in emitter.records
+                    if event == 'scene_query_finished')
+    assert result == 1
+    assert finished['query_partition'] == request['gz_partition']
+    assert finished['outcome'] == 'ERROR'
+    assert 'partition changed' in finished['error']
+    assert emitter.records[-1][1]['verdict'] == 'FAIL'
 
 
 @pytest.mark.parametrize('child_values', [
@@ -1085,7 +1213,7 @@ def test_worker_core_retries_timeout_without_new_attempt(monkeypatch):
         if len(calls) == 1:
             raise TimeoutError('injected first query timeout')
         return SimpleNamespace(
-            name=request['world_id'],
+            name='',
             model=[SimpleNamespace(name=request['model_id'], model=[])],
         )
 
@@ -1497,7 +1625,7 @@ def test_parent_protocol_caps_cumulative_transcript_with_max_error_field():
     for record in first_cycle:
         if record['event'] == 'scene_query_finished':
             record['facts']['error'] = 'x' * 256
-            record['facts']['world_name'] = None
+            record['facts']['scene_name'] = None
             record['facts']['matching_model_count'] = 0
     records = []
     for cycle_index in range(70):
@@ -1683,14 +1811,20 @@ def test_parent_entry_rejects_ready_without_protocol_history(monkeypatch):
                 'fault_flags': 0, 'actuator_inhibited': True,
             }
             result = {
-                'schema_id': 'mecanum_b2_scene_readiness_event/v1',
+                'schema_id': EVENT_SCHEMA,
                 'request_id': request['request_id'],
                 'request_sha256': digest, 'sequence': 1,
                 'event': 'worker_result', 'monotonic_ns': time.monotonic_ns(),
                 'facts': {'verdict': 'READY', 'reason': '', 'facts': {
                     'status': status, 'scene': {
-                        'world_name': request['world_id'],
-                        'matching_model_count': 1,
+                        'scene_name': '', 'matching_model_count': 1,
+                        'query_service': (
+                            '/world/b2_training_arena/scene/info'
+                        ),
+                        'query_partition': request['gz_partition'],
+                        'world_identity_source': (
+                            'WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND'
+                        ),
                     }, 'request_binding': binding,
                 }, 'cleanup_errors': [], 'cleanup_elapsed_ns': 1},
             }
@@ -1773,8 +1907,13 @@ def test_ready_result_rejects_boolean_scene_cardinality():
                     'fault_flags': 0, 'actuator_inhibited': True,
                 },
                 'scene': {
-                    'world_name': request['world_id'],
+                    'scene_name': '',
                     'matching_model_count': True,
+                    'query_service': '/world/b2_training_arena/scene/info',
+                    'query_partition': request['gz_partition'],
+                    'world_identity_source': (
+                        'WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND'
+                    ),
                 },
                 'request_binding': {
                     key: request[key] for key in (
@@ -2148,7 +2287,7 @@ def test_worker_cleanup_after_readiness_deadline_cannot_return_ready(
     result = run_worker(
         request, status_source_factory=StatusSource,
         scene_query=lambda *_args: SimpleNamespace(
-            name=request['world_id'],
+            name='',
             model=[SimpleNamespace(name=request['model_id'], model=[])],
         ),
         emitter=emitter,

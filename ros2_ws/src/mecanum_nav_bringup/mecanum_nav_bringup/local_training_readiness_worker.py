@@ -16,7 +16,8 @@ import uuid
 
 
 REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v1'
-EVENT_SCHEMA = 'mecanum_b2_scene_readiness_event/v1'
+EVENT_SCHEMA = 'mecanum_b2_scene_readiness_event/v2'
+WORLD_IDENTITY_SOURCE = 'WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND'
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RECORD_BYTES = 4 * 1024
 MAX_STDOUT_BYTES = 64 * 1024
@@ -120,30 +121,76 @@ def _status_facts(message):
 
 
 def _matches_status(message, request):
+    return status_readiness_matches({
+        'world_id': message.header.frame_id,
+        'session_id': message.session_id,
+        'config_hash': message.config_hash,
+        'backend_instance_id': message.backend_instance_id,
+        'status_sequence': message.status_sequence,
+        'fault_flags': message.fault_flags,
+        'actuator_inhibited': message.actuator_inhibited,
+    }, request)
+
+
+def status_readiness_matches(status, request):
+    """Validate one typed status binding and its current health predicate."""
     return (
-        message.header.frame_id == request['world_id']
-        and message.session_id == request['session_id']
-        and message.config_hash == request['config_hash']
-        and type(message.backend_instance_id) is int
-        and message.backend_instance_id > 0
-        and type(message.status_sequence) is int
-        and message.status_sequence > 0
-        and message.fault_flags == 0
-        and message.actuator_inhibited is True
+        isinstance(status, dict)
+        and set(status) == {
+            'world_id', 'session_id', 'config_hash',
+            'backend_instance_id', 'status_sequence', 'fault_flags',
+            'actuator_inhibited',
+        }
+        and status['world_id'] == request['world_id']
+        and status['session_id'] == request['session_id']
+        and status['config_hash'] == request['config_hash']
+        and type(status['backend_instance_id']) is int
+        and status['backend_instance_id'] > 0
+        and type(status['status_sequence']) is int
+        and status['status_sequence'] > 0
+        and type(status['fault_flags']) is int
+        and status['fault_flags'] == 0
+        and status['actuator_inhibited'] is True
     )
 
 
-def _scene_facts(scene, request):
-    if scene is None:
-        return {'world_name': None, 'matching_model_count': 0}
-    stack = list(scene.model)
+def scene_facts(scene, query_service, query_partition, request):
+    """Capture raw scene label and the actual query binding used."""
+    scene_name = None if scene is None else scene.name
+    stack = [] if scene is None else list(scene.model)
     matching = 0
     while stack:
         model = stack.pop()
         if model.name == request['model_id']:
             matching += 1
         stack.extend(model.model)
-    return {'world_name': scene.name, 'matching_model_count': matching}
+    return {
+        'scene_name': scene_name,
+        'matching_model_count': matching,
+        'query_service': query_service,
+        'query_partition': query_partition,
+        'world_identity_source': WORLD_IDENTITY_SOURCE,
+    }
+
+
+def scene_readiness_matches(status, scene, request):
+    """Apply the shared backend and world-scoped scene readiness predicate."""
+    expected_service = f"/world/{request['world_id']}/scene/info"
+    status_ok = status_readiness_matches(status, request)
+    scene_ok = (
+        isinstance(scene, dict)
+        and set(scene) == {
+            'scene_name', 'matching_model_count', 'query_service',
+            'query_partition', 'world_identity_source',
+        }
+        and isinstance(scene['scene_name'], str)
+        and type(scene['matching_model_count']) is int
+        and scene['matching_model_count'] == 1
+        and scene['query_service'] == expected_service
+        and scene['query_partition'] == request['gz_partition']
+        and scene['world_identity_source'] == WORLD_IDENTITY_SOURCE
+    )
+    return status_ok and scene_ok
 
 
 class _ProtocolEmitter:
@@ -252,11 +299,21 @@ def run_worker(
         else:
             source_status = status_source_factory()
             source_status.start()
+        query_service = f"/world/{request['world_id']}/scene/info"
+        query_partition = os.environ.get('GZ_PARTITION')
+        if query_partition != request['gz_partition']:
+            raise ValueError('Gazebo partition changed before scene query')
         if scene_query is None:
             from gz.msgs10.empty_pb2 import Empty
             from gz.msgs10.scene_pb2 import Scene
             from gz.transport13 import Node as TransportNode
             transport_node = TransportNode()
+            query_partition = transport_node.options.partition
+            if (query_partition != request['gz_partition']
+                    or query_partition != os.environ.get('GZ_PARTITION')):
+                raise ValueError(
+                    'Gazebo transport node partition differs from binding'
+                )
 
             def scene_query(service, timeout_ms):
                 success, scene = transport_node.request(
@@ -317,8 +374,7 @@ def run_worker(
             if timeout_ms < 1:
                 break
             emitter.emit('scene_query_started', {
-                'service': '/world/b2_training_arena/scene/info',
-                'timeout_ms': timeout_ms,
+                'service': query_service, 'timeout_ms': timeout_ms,
             })
             remaining_ns = (
                 request['deadline_monotonic_ns'] - clock_ns()
@@ -328,13 +384,15 @@ def run_worker(
                 raise TimeoutError(
                     'readiness deadline expired before scene query'
                 )
+            if os.environ.get('GZ_PARTITION') != query_partition:
+                raise ValueError(
+                    'Gazebo partition changed before scene query'
+                )
             query_start = time.monotonic_ns()
             previous_query_start_ns = clock_ns()
             unexpected_query_error = None
             try:
-                scene = scene_query(
-                    '/world/b2_training_arena/scene/info', timeout_ms,
-                )
+                scene = scene_query(query_service, timeout_ms)
                 query_error = None
             except (TimeoutError, OSError) as exc:
                 scene = None
@@ -344,11 +402,14 @@ def run_worker(
                 query_error = f'{type(exc).__name__}: {exc}'[:256]
                 unexpected_query_error = exc
             duration_ns = time.monotonic_ns() - query_start
-            facts = _scene_facts(scene, request)
+            if os.environ.get('GZ_PARTITION') != query_partition:
+                query_error = 'Gazebo partition changed during scene query'
+            facts = scene_facts(
+                scene, query_service, query_partition, request,
+            )
             outcome = 'ERROR' if query_error else 'MISMATCH'
-            if (not query_error
-                    and facts['world_name'] == request['world_id']
-                    and facts['matching_model_count'] == 1):
+            if (not query_error and scene_readiness_matches(
+                    status_facts, facts, request)):
                 outcome = 'MATCH'
             emitter.emit('scene_query_finished', {
                 **facts, 'duration_ns': duration_ns,

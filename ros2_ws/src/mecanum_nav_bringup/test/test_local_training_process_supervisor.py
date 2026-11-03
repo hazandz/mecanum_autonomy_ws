@@ -11,6 +11,11 @@ from mecanum_nav_bringup.local_training_process_supervisor import (
     LocalTrainingProcessSupervisor,
     RclpyReadiness,
 )
+from mecanum_nav_bringup.local_training_readiness_worker import (
+    WORLD_IDENTITY_SOURCE,
+    scene_facts,
+    scene_readiness_matches,
+)
 
 
 class FakeProcess:
@@ -404,31 +409,60 @@ def test_paused_scene_opens_gui_without_world_control():
     asyncio.run(run())
 
 
-def test_scene_match_predicate_checks_world_and_cardinality():
-    """Interpret typed scene facts separately from backend heartbeats."""
-    scene = SimpleNamespace(
-        name='b2_training_arena',
-        model=[SimpleNamespace(name='mecanum_b2', model=[])],
-    )
-    readiness = RclpyReadiness()
+def test_shared_scene_binding_predicate_uses_service_partition_and_backend():
+    """Use bound transport and backend facts instead of Scene.name."""
     expected_plan = plan(False)
-    assert readiness._matches_expected_scene(scene, expected_plan)
+    request = {
+        'world_id': 'b2_training_arena', 'model_id': 'mecanum_b2',
+        'session_id': expected_plan.session_id, 'config_hash': 'a' * 64,
+        'gz_partition': 'mecanum_b2_testpartition',
+    }
+    status = {
+        'world_id': request['world_id'],
+        'session_id': request['session_id'],
+        'config_hash': request['config_hash'], 'backend_instance_id': 17,
+        'status_sequence': 4, 'fault_flags': 0,
+        'actuator_inhibited': True,
+    }
+    service = '/world/b2_training_arena/scene/info'
+    model = SimpleNamespace(name='mecanum_b2', model=[])
+    unnamed = scene_facts(
+        SimpleNamespace(name='', model=[model]), service,
+        request['gz_partition'], request,
+    )
+    assert unnamed['scene_name'] == ''
+    assert unnamed['world_identity_source'] == WORLD_IDENTITY_SOURCE
+    assert scene_readiness_matches(status, unnamed, request)
 
-    scene = SimpleNamespace(
-        name='other_world',
-        model=[SimpleNamespace(name='mecanum_b2', model=[])],
+    labeled = {**unnamed, 'scene_name': 'not-a-world-identity'}
+    assert scene_readiness_matches(status, labeled, request)
+    assert not scene_readiness_matches(
+        {**status, 'world_id': 'other_world'}, unnamed, request,
     )
-    assert not readiness._matches_expected_scene(scene, expected_plan)
-    scene = SimpleNamespace(name='b2_training_arena', model=[])
-    assert not readiness._matches_expected_scene(scene, expected_plan)
-    scene = SimpleNamespace(
-        name='b2_training_arena',
-        model=[
-            SimpleNamespace(name='mecanum_b2', model=[]),
-            SimpleNamespace(name='mecanum_b2', model=[]),
-        ],
+    assert not scene_readiness_matches(
+        {**status, 'session_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},
+        unnamed, request,
     )
-    assert not readiness._matches_expected_scene(scene, expected_plan)
+    assert not scene_readiness_matches(
+        {**status, 'config_hash': 'c' * 64}, unnamed, request,
+    )
+    assert not scene_readiness_matches(
+        status, {**unnamed, 'query_service': '/world/other/scene/info'},
+        request,
+    )
+    assert not scene_readiness_matches(
+        status, {**unnamed, 'query_partition': 'foreign-partition'}, request,
+    )
+    assert not scene_readiness_matches(
+        status, scene_facts(None, service, request['gz_partition'], request),
+        request,
+    )
+    assert not scene_readiness_matches(
+        status, {**unnamed, 'matching_model_count': 0}, request,
+    )
+    assert not scene_readiness_matches(
+        status, {**unnamed, 'matching_model_count': 2}, request,
+    )
 
 
 def test_gui_exit_cancels_production_owner_ack_wait():

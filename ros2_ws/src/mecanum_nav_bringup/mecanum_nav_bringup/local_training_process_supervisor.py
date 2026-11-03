@@ -33,6 +33,12 @@ from mecanum_nav_bringup.local_training_launch_contract import (
     load_bound_config,
     write_bound_world,
 )
+from mecanum_nav_bringup.local_training_readiness_worker import (
+    EVENT_SCHEMA as READINESS_EVENT_SCHEMA,
+    WORLD_IDENTITY_SOURCE,
+    scene_readiness_matches,
+    status_readiness_matches,
+)
 
 
 class OwnedProcess(Protocol):
@@ -142,7 +148,7 @@ class RclpyReadiness:
     SERVER_READY_TIMEOUT_S = 30.0
     WORKER_MODULE = 'mecanum_nav_bringup.local_training_readiness_worker'
     REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v1'
-    EVENT_SCHEMA = 'mecanum_b2_scene_readiness_event/v1'
+    EVENT_SCHEMA = READINESS_EVENT_SCHEMA
     MAX_REQUEST_BYTES = 16 * 1024
     MAX_RECORD_BYTES = 4 * 1024
     MAX_STREAM_BYTES = 64 * 1024
@@ -180,6 +186,7 @@ class RclpyReadiness:
         self._protocol_last_status = None
         self._protocol_last_scene = None
         self._protocol_last_scene_outcome = None
+        self._protocol_last_query_service = None
         self._spawn_task = None
         self._phase_tasks = set()
         self._evidence_errors = []
@@ -472,14 +479,19 @@ class RclpyReadiness:
         elif event == 'scene_query_started':
             if state != 'EXPECT_QUERY_STARTED':
                 raise ValueError('scene_query_started transition mismatch')
+            self._protocol_last_query_service = facts['service']
             self._protocol_state = 'EXPECT_QUERY_FINISHED'
         elif event == 'scene_query_finished':
             if state != 'EXPECT_QUERY_FINISHED':
                 raise ValueError('scene_query_finished without query start')
             self._protocol_last_scene = {
-                'world_name': facts['world_name'],
-                'matching_model_count': facts['matching_model_count'],
+                key: facts[key] for key in (
+                    'scene_name', 'matching_model_count', 'query_service',
+                    'query_partition', 'world_identity_source',
+                )
             }
+            if facts['query_service'] != self._protocol_last_query_service:
+                raise ValueError('scene query service history mismatch')
             self._protocol_last_scene_outcome = facts['outcome']
             self._protocol_state = (
                 'MATCHED_SCENE' if facts['outcome'] == 'MATCH'
@@ -498,11 +510,10 @@ class RclpyReadiness:
                     or ready.get('scene') != self._protocol_last_scene
                     or self._protocol_last_scene_outcome != 'MATCH'):
                 raise ValueError('READY facts disagree with protocol history')
-            if self._protocol_last_scene != {
-                'world_name': self._active_request['world_id'],
-                'matching_model_count': 1,
-            }:
-                raise ValueError('READY terminal scene is not matched')
+            if not scene_readiness_matches(
+                    self._protocol_last_status,
+                    self._protocol_last_scene, self._active_request):
+                raise ValueError('READY terminal binding is not matched')
             self._protocol_state = 'TERMINAL'
         else:
             raise ValueError('unknown readiness protocol event')
@@ -568,43 +579,46 @@ class RclpyReadiness:
                 'actuator_inhibited',
             }:
                 raise ValueError('matched status fields invalid')
-            if (status['world_id'] != request['world_id']
-                    or status['session_id'] != request['session_id']
-                    or status['config_hash'] != request['config_hash']
-                    or type(status['backend_instance_id']) is not int
-                    or status['backend_instance_id'] <= 0
-                    or type(status['status_sequence']) is not int
-                    or status['status_sequence'] <= 0
-                    or type(status['fault_flags']) is not int
-                    or status['fault_flags'] != 0
-                    or status['actuator_inhibited'] is not True):
+            if not status_readiness_matches(status, request):
                 raise ValueError('matched status predicate failed')
         elif event == 'scene_query_started':
+            expected_service = f"/world/{request['world_id']}/scene/info"
             if (set(facts) != {'service', 'timeout_ms'}
-                    or facts['service'] != (
-                        '/world/b2_training_arena/scene/info'
-                    )):
+                    or facts['service'] != expected_service):
                 raise ValueError('scene query start binding mismatch')
             timeout_ms = facts['timeout_ms']
             if type(timeout_ms) is not int or not 1 <= timeout_ms <= 500:
                 raise ValueError('scene query timeout is invalid')
         elif event == 'scene_query_finished':
             if set(facts) != {
-                'world_name', 'matching_model_count', 'duration_ns',
+                'scene_name', 'matching_model_count', 'query_service',
+                'query_partition', 'world_identity_source', 'duration_ns',
                 'outcome', 'error',
             }:
                 raise ValueError('scene query result fields mismatch')
+            if (facts['scene_name'] is not None
+                    and not isinstance(facts['scene_name'], str)):
+                raise ValueError('scene label must be raw string or None')
             if (type(facts['matching_model_count']) is not int
                     or facts['matching_model_count'] < 0
+                    or facts['query_service'] != (
+                        f"/world/{request['world_id']}/scene/info"
+                    )
+                    or facts['query_partition'] != request['gz_partition']
+                    or facts['world_identity_source'] != WORLD_IDENTITY_SOURCE
                     or type(facts['duration_ns']) is not int
                     or facts['duration_ns'] < 0
                     or facts['outcome'] not in {'MATCH', 'MISMATCH', 'ERROR'}
                     or (facts['error'] is not None
                         and not isinstance(facts['error'], str))):
                 raise ValueError('scene query result is invalid')
-            matches = (
-                facts['world_name'] == request['world_id']
-                and facts['matching_model_count'] == 1
+            matches = scene_readiness_matches(
+                self._protocol_last_status, {
+                    key: facts[key] for key in (
+                        'scene_name', 'matching_model_count', 'query_service',
+                        'query_partition', 'world_identity_source',
+                    )
+                }, request,
             )
             if (facts['outcome'] == 'MATCH'
                     and (not matches or facts['error'] is not None)):
@@ -663,32 +677,9 @@ class RclpyReadiness:
         }
         if binding != expected_binding:
             raise RuntimeError('worker READY request binding mismatch')
-        if not isinstance(status, dict) or status != {
-            'world_id': request['world_id'],
-            'session_id': request['session_id'],
-            'config_hash': request['config_hash'],
-            'backend_instance_id': status.get('backend_instance_id'),
-            'status_sequence': status.get('status_sequence'),
-            'fault_flags': 0,
-            'actuator_inhibited': True,
-        }:
-            raise RuntimeError('worker status facts do not match request')
-        if (type(status['backend_instance_id']) is not int
-                or status['backend_instance_id'] <= 0
-                or type(status['status_sequence']) is not int
-                or status['status_sequence'] <= 0
-                or type(status['fault_flags']) is not int
-                or status['fault_flags'] != 0
-                or status['actuator_inhibited'] is not True):
+        if not status_readiness_matches(status, request):
             raise RuntimeError('worker status measurement is invalid')
-        if (not isinstance(ready['scene'], dict)
-                or set(ready['scene']) != {
-                    'world_name', 'matching_model_count',
-                }
-                or type(ready['scene']['matching_model_count']) is not int
-                or ready['scene'] != {
-            'world_name': request['world_id'], 'matching_model_count': 1,
-                }):
+        if not scene_readiness_matches(status, ready['scene'], request):
             raise RuntimeError('worker scene facts do not match binding')
         return {
             **self._request_binding_facts(request, digest),
@@ -1173,20 +1164,6 @@ class RclpyReadiness:
                 })
             except BaseException:
                 self._cleanup_record_error = True
-
-    @staticmethod
-    def _matches_expected_scene(scene, plan) -> bool:
-        """Pure scene cardinality predicate, retained for contract tests."""
-        if scene is None or scene.name != 'b2_training_arena':
-            return False
-        models = list(scene.model)
-        matches = []
-        while models:
-            model = models.pop()
-            if model.name == 'mecanum_b2':
-                matches.append(model)
-            models.extend(model.model)
-        return len(matches) == 1 and bool(plan.session_id)
 
     @staticmethod
     def _matches_bound_scene_status(msg, plan, config_hash: str) -> bool:

@@ -599,3 +599,41 @@ consumed/FAIL; their approval, guard, acquisition, mailbox, and evidence are
 not reusable. A separately audited exact RUN004 packet/commit and explicit
 Owner runtime authorization are required. This item does not alter other B1/B2
 contracts or authorize HIL or real-robot activity.
+
+## 13. RUN004 producer-contract clarification after consumed failure (L2, 2026-11-03)
+
+The Owner approved this L2 clarification for offline implementation only.
+Gazebo Sim 8.11.0's `sdf::Scene` to `gz::msgs::Scene` conversion does not
+guarantee that `Scene.name` identifies the world. The raw scene label is
+retained as evidence, but world identity is established jointly by querying
+`/world/b2_training_arena/scene/info`, using the bound effective
+`GZ_PARTITION`, matching the healthy inhibited backend status to the bound
+world/session/configuration, and finding exactly one `mecanum_b2` in the
+typed scene response, including nested models. An empty label is acceptable;
+a nonempty label is not interpreted as a world name, and no expected identity
+is synthesized from a request echo. This keeps the existing correct-world,
+model-cardinality, run-binding, and health requirements intact.
+
+The private readiness event protocol advances to
+`mecanum_b2_scene_readiness_event/v2`; the request remains
+`mecanum_b2_scene_readiness_request/v1`. This is an internal worker/parent
+protocol change and does not change a ROS message or service.
+
+For a future packet, orchestration must latch the first failure's reason,
+source, phase, and steady-clock detection time immediately when detected,
+before cleanup. Later errors remain separate secondary or cleanup failures
+and cannot replace that primary failure. An owned-process exit requested by a
+cleanup signal is a cleanup event; an unrequested exit during cleanup remains
+a secondary failure. Implementations must not blanket-ignore exits merely
+because cleanup is underway, and simultaneous operation/monitor completion
+must not be attributed by the order in which `_wait_competing` checks branches.
+Final evidence must preserve primary, secondary, and cleanup failures
+separately.
+
+Finding R004-02 is
+`CONTRACT_SPECIFIED_PENDING_NEXT_PACKET_IMPLEMENTATION`. It can close only
+after the next packet has a default-production-orchestration regression that
+recreates timeout, cleanup signal, then server exit status 0, while retaining
+the timeout as the primary failure. This clarification does not modify or
+reinterpret the consumed/FAIL RUN004 journal or completion result, grant
+runtime/RUN005/capacity authority, or change Gate or milestone status.
