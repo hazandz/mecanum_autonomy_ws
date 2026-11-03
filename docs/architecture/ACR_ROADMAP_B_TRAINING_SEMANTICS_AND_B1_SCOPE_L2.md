@@ -637,3 +637,31 @@ recreates timeout, cleanup signal, then server exit status 0, while retaining
 the timeout as the primary failure. This clarification does not modify or
 reinterpret the consumed/FAIL RUN004 journal or completion result, grant
 runtime/RUN005/capacity authority, or change Gate or milestone status.
+
+## 14. RUN005 first-failure attribution and offline packet preparation (L2, 2026-11-03)
+
+The Owner authorizes offline implementation of the first-failure attribution
+contract from §13 in a new RUN005 packet based on corrective source commit
+`d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`. The runner must latch the first
+failure's reason, source, phase, and monotonic detection timestamp in memory
+before evidence writes or cleanup. The latch is immutable; later failures are
+retained separately as secondary failures or cleanup errors. Readiness worker
+failure detection is forwarded to this latch before readiness finalization and
+supervisor rollback. Other failures are captured at their detection paths.
+
+Cleanup records the verified owned-process identity and cleanup intent before
+signaling. A matching exit after a requested cleanup signal is a cleanup
+event; an unrequested process exit during cleanup remains a secondary failure.
+Cleanup does not blanket-ignore process exits. When competing tasks complete
+together, their branch inspection order is not the failure ordering authority.
+Final evidence keeps `primary_failure`, `secondary_failures`, and
+`cleanup_errors` distinct. Evidence, health, ownership, or cleanup failures
+remain FAIL conditions.
+
+RUN005 carries forward the approved Codex-owned GUI observation acceptance
+without changing its semantics and consumes no runtime authority in this
+offline preparation. RUN004 remains consumed/FAIL and its journal and other
+evidence are not reinterpreted or reused. This amendment grants no runtime,
+capacity, RUN006, Gate, training, B2.3, integration, HIL, or hardware
+authority. Independent exact-commit audit and a separate explicit Owner runtime
+authorization remain required before any runtime invocation.
