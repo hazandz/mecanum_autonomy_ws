@@ -68,6 +68,11 @@ SOAK, semantic config và scenario được đối chiếu với bytes source/c�
   `review_mailbox/results/<request_id>.publisher-ownership.json` trước khi
   release target. Artifact dùng no-replace/mode 0600; publisher process không
   ghi trực tiếp journal runner sở hữu. Callback lỗi ngăn target execution.
+- Publisher cleanup có một deadline tuyệt đối tối đa 2 giây, luôn bị clip bởi
+  review deadline. SIGTERM và SIGKILL mỗi pha chỉ chờ tối đa 1 giây; pha
+  SIGTERM rút ngắn thời gian chờ để giữ cơ hội recheck identity, escalation và
+  join. Cleanup gọi lại không làm mới deadline; identity/residue chưa xác minh
+  vẫn là FAIL.
 - Review checkpoint 60 giây bắt đầu trước window enumeration, gồm bind/capture/
   persist/request/Codex review/publisher/runner validation. Không gia hạn.
   Trước checkpoint phải còn ít nhất 121 giây active budget. Sau review PASS,

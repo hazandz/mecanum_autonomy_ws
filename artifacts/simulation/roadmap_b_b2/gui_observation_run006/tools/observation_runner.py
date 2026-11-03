@@ -63,6 +63,8 @@ EXPECTED_ROS_NODES = {
 STARTUP_TEMPORARY_ROS_NODES = {('b2_server_scene_readiness', '/')}
 GATED_HELPER_SCHEMA = 'b22_owned_helper_gate/v1'
 GATED_HELPER_MAX_FRAME = 16 * 1024
+PUBLISHER_CLEANUP_BUDGET_S = 2.0
+PUBLISHER_CLEANUP_PHASE_S = 1.0
 
 
 class ObservationFailure(RuntimeError):
@@ -1330,7 +1332,7 @@ def _finalize_publisher_process(
             'residue unknown: publisher identity unverified '
             f'pid={process.pid}'
         )
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for phase, sig in enumerate((signal.SIGTERM, signal.SIGKILL)):
         remaining = deadline - steady()
         if remaining <= 0:
             break
@@ -1352,8 +1354,27 @@ def _finalize_publisher_process(
         remaining = deadline - steady()
         if remaining <= 0:
             break
+        if phase == 0:
+            # Reserve up to one second for identity recheck, SIGKILL, and join.
+            reserve_for_escalation = min(PUBLISHER_CLEANUP_PHASE_S, remaining)
+            wait_budget = min(
+                PUBLISHER_CLEANUP_PHASE_S,
+                max(0.0, remaining - reserve_for_escalation),
+            )
+        else:
+            wait_budget = min(PUBLISHER_CLEANUP_PHASE_S, remaining)
+        if wait_budget <= 0:
+            try:
+                if process.poll() is not None:
+                    return None
+            except BaseException:
+                return (
+                    'residue unknown: publisher poll failed '
+                    f'pid={process.pid}'
+                )
+            continue
         try:
-            process.wait(timeout=min(1.0, remaining))
+            process.wait(timeout=wait_budget)
         except subprocess.TimeoutExpired:
             pass
         except BaseException as error:
@@ -1367,6 +1388,19 @@ def _finalize_publisher_process(
         except BaseException:
             return f'residue unknown: publisher poll failed pid={process.pid}'
     return f'residue unknown: publisher still alive pid={process.pid}'
+
+
+def _publisher_cleanup_deadline(record, review_deadline, steady):
+    """Latch one cleanup deadline, clipped to the immutable review deadline."""
+    if record is None:
+        return min(review_deadline, steady() + PUBLISHER_CLEANUP_BUDGET_S)
+    deadline = record.get('cleanup_deadline_monotonic_s')
+    if deadline is None:
+        deadline = min(
+            review_deadline, steady() + PUBLISHER_CLEANUP_BUDGET_S,
+        )
+        record['cleanup_deadline_monotonic_s'] = deadline
+    return deadline
 
 
 def _verify_publisher_ownership_artifact(record, request_path):
@@ -1620,7 +1654,9 @@ def publish_review_result_bounded(
     except BaseException as error:
         residue = None
         if process is not None:
-            cleanup_deadline = min(request_deadline, steady() + 1.0)
+            cleanup_deadline = _publisher_cleanup_deadline(
+                record, request_deadline, steady,
+            )
             residue = _finalize_publisher_process(
                 process, identity, deadline=cleanup_deadline,
                 steady=steady, identity_reader=identity_reader,

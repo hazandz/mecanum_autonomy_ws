@@ -3417,6 +3417,8 @@ class _PublisherFakeProcess:
 
     def wait(self, timeout):
         self.wait_calls.append(timeout)
+        if self.now is not None and self.returncode is None:
+            self.now[0] += timeout
         if self.returncode is None:
             raise subprocess.TimeoutExpired('fake-publisher', timeout)
         return self.returncode
@@ -3616,6 +3618,7 @@ def test_publisher_operation_timeout_cleans_verified_identity_bounded(
     """Timeout uses bounded verified signaling and reports unknown residue."""
     now = [0.0]
     process = _PublisherFakeProcess(
+        now=now,
         communicate_error=subprocess.TimeoutExpired('publisher', 2.0),
     )
     sent = []
@@ -3658,7 +3661,150 @@ def test_publisher_operation_timeout_cleans_verified_identity_bounded(
     assert signals == [
         (process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL),
     ]
-    assert process.wait_calls
+    assert process.wait_calls == [1.0, 1.0]
+    assert now[0] == 2.0
+
+
+def test_publisher_cleanup_escalates_to_sigkill_for_sigterm_resistant_native(
+        tmp_path):
+    """A harmless TERM-resistant Python target is killed and joined."""
+    root = tmp_path / 'native-evidence'
+    root.mkdir()
+    request_path, request_bytes, request, _image = request_fixture(
+        root, steady_ns=time.monotonic_ns(),
+    )
+    callback = runner.publisher_pre_release_evidence_callback(
+        request_path, request_bytes, request, evidence_root=root,
+    )
+    started = []
+    signals = []
+    process = None
+
+    def on_started(record):
+        started.append(record)
+        callback(record)
+
+    def signal_group(pgid, sig):
+        signals.append((pgid, sig))
+        os.killpg(pgid, sig)
+
+    target = _python_target(
+        'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+        'print("term-ignored", flush=True); time.sleep(30)'
+    )
+    try:
+        with pytest.raises(runner.ObservationFailure,
+                           match='TimeoutExpired'):
+            runner.publish_review_result_bounded(
+                request_path, verdict='PASS', reason='offline timeout test',
+                request_deadline=time.monotonic() + 7.5,
+                on_started=on_started, signal_group=signal_group,
+                helper_command_factory=lambda _role, _planned: target,
+            )
+        assert len(started) == 1
+        process = started[0]['process']
+        assert signals == [
+            (process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL),
+        ]
+        assert process.returncode == -signal.SIGKILL
+        artifact = Path(started[0]['evidence_artifact_path'])
+        assert artifact.is_file()
+        evidence = json.loads(artifact.read_text())
+        assert evidence['process_identity'] == started[0]['identity']
+        assert evidence['gate_nonce'] == started[0]['nonce']
+        assert started[0]['evidence_before_release'] is True
+        process.communicate(timeout=1)
+    finally:
+        if process is None and started:
+            process = started[0]['process']
+        if process is not None and process.poll() is None:
+            original = started[0]['identity']
+            current = runner.process_start_identity(process.pid)
+            if current == original:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
+                process.communicate(timeout=1)
+
+
+def test_publisher_cleanup_rechecks_identity_before_sigkill():
+    """A reused identity is never signaled during escalation."""
+    now = [0.0]
+    process = _PublisherFakeProcess(now=now)
+    baseline = {
+        'pid': process.pid, 'process_group_id': process.pid,
+        'session_id': process.pid, 'start_ticks': 91,
+    }
+    calls = []
+    signals = []
+
+    def identity_reader(pid):
+        calls.append(pid)
+        if len(calls) == 1:
+            return baseline
+        return {**baseline, 'start_ticks': 92}
+
+    residue = runner._finalize_publisher_process(
+        process, baseline, deadline=2.0, steady=lambda: now[0],
+        identity_reader=identity_reader,
+        signal_group=lambda pgid, sig: signals.append((pgid, sig)),
+    )
+    assert signals == [(process.pid, signal.SIGTERM)]
+    assert now[0] == 1.0
+    assert residue == (
+        f'residue unknown: publisher identity changed pid={process.pid}'
+    )
+    assert process.returncode is None
+
+
+def test_publisher_cleanup_clips_and_latches_short_review_budget(monkeypatch):
+    """A short review remainder is not refreshed or reported as clean."""
+    now = [0.0]
+    process = _PublisherFakeProcess(now=now)
+    sent = []
+    received = _publisher_frames()
+    _listener, identity_reader, popen = _patch_publisher_operation_fakes(
+        monkeypatch, now=now, process=process, received=received, sent=sent,
+    )
+    records = []
+
+    def callback(record):
+        records.append(record)
+        now[0] = 7.2
+
+    def signal_group(pgid, sig):
+        sent.append({'signal_pid': pgid, 'signal': sig})
+
+    with pytest.raises(runner.ObservationFailure,
+                       match='deadline.*residue unknown'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='short budget',
+            request_deadline=7.5, steady=lambda: now[0],
+            on_started=callback, signal_group=signal_group,
+            identity_reader=identity_reader, popen=popen,
+        )
+    record = records[0]
+    deadline = record['cleanup_deadline_monotonic_s']
+    assert deadline == 7.5
+    assert sent == [
+        {'signal_pid': process.pid, 'signal': signal.SIGTERM},
+        {'signal_pid': process.pid, 'signal': signal.SIGKILL},
+    ]
+    assert process.wait_calls == [pytest.approx(0.3)]
+    assert now[0] == 7.5
+    assert runner._publisher_cleanup_deadline(
+        record, 20.0, lambda: now[0],
+    ) == deadline
+    residue = runner._finalize_publisher_process(
+        process, record['identity'], deadline=deadline, steady=lambda: now[0],
+        identity_reader=identity_reader,
+        signal_group=lambda pgid, sig: sent.append(
+            {'signal_pid': pgid, 'signal': sig}
+        ),
+    )
+    assert residue == (
+        f'residue unknown: publisher still alive pid={process.pid}'
+    )
+    assert len(sent) == 2
 
 
 def test_default_publish_cli_writes_ownership_evidence_before_target(
