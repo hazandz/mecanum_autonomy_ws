@@ -6,9 +6,6 @@ import signal
 import sys
 from types import SimpleNamespace
 
-from mecanum_nav_bringup import (
-    local_training_process_supervisor as supervisor_module,
-)
 from mecanum_nav_bringup.local_training_launch_contract import LaunchPlan
 from mecanum_nav_bringup.local_training_process_supervisor import (
     LocalTrainingProcessSupervisor,
@@ -115,6 +112,7 @@ def plan(gui):
         'a' * 64, 'b' * 64, 17, commands,
         {
             'GZ_PARTITION': 'partition',
+            'ROS_DOMAIN_ID': '83',
             'GZ_SIM_RESOURCE_PATH': '/tmp/resources',
             'GZ_SIM_SYSTEM_PLUGIN_PATH': '/tmp/plugins',
             'GZ_SIM_PHYSICS_ENGINE_PATH': '/tmp/physics-plugins',
@@ -190,42 +188,19 @@ def test_bridge_server_gui_and_scene_query_share_run_environment():
     asyncio.run(run())
 
 
-def test_production_scene_query_factory_observes_bound_run_environment():
-    """The injected production adapter seam sees the same run binding."""
-    observed = []
-
-    def scene_query(service, timeout_ms):
-        observed.append((
-            service, timeout_ms,
-            os.environ.get('GZ_PARTITION'),
-            os.environ.get('GZ_SIM_RESOURCE_PATH'),
-            os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH'),
-        ))
-        return SimpleNamespace(
-            name='b2_training_arena',
-            model=[SimpleNamespace(name='mecanum_b2', model=[])],
-        )
-
-    expected = plan(False)
-    previous = {
-        key: os.environ.get(key) for key in expected.environment
-    }
-    readiness = RclpyReadiness(scene_query=scene_query)
-    try:
-        readiness.bind_environment(expected.environment)
-        assert asyncio.run(readiness._query_scene_matches(expected))
-        assert observed == [(
-            '/world/b2_training_arena/scene/info', 500,
-            expected.environment['GZ_PARTITION'],
-            expected.environment['GZ_SIM_RESOURCE_PATH'],
-            expected.environment['GZ_SIM_SYSTEM_PLUGIN_PATH'],
-        )]
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+def test_readiness_request_uses_plan_binding_without_mutating_parent_env():
+    """Worker requests copy the launch binding without editing parent env."""
+    values = vars(plan(False)).copy()
+    values['session_id'] = 'bc3bffce-eb9e-4b78-b1ac-b8f1de32b692'
+    bound_plan = LaunchPlan(**values)
+    previous = dict(os.environ)
+    readiness = RclpyReadiness()
+    request = readiness._make_request(bound_plan, 'a' * 64, 123456789)
+    assert request['session_id'] == bound_plan.session_id
+    assert request['coordinator_ingress_instance_id'] == 17
+    assert request['gz_partition'] == bound_plan.environment['GZ_PARTITION']
+    assert request['ros_domain_id'] == bound_plan.environment['ROS_DOMAIN_ID']
+    assert dict(os.environ) == previous
 
 
 def test_gui_start_failure_cleans_server_without_headless_fallback():
@@ -429,191 +404,31 @@ def test_paused_scene_opens_gui_without_world_control():
     asyncio.run(run())
 
 
-def test_production_scene_adapter_queries_world_scene_and_checks_cardinality():
-    """Interpret Gazebo Scene replies separately from backend heartbeats."""
-    calls = []
-    current = [SimpleNamespace(
+def test_scene_match_predicate_checks_world_and_cardinality():
+    """Interpret typed scene facts separately from backend heartbeats."""
+    scene = SimpleNamespace(
         name='b2_training_arena',
         model=[SimpleNamespace(name='mecanum_b2', model=[])],
-    )]
-
-    def query(service, timeout_ms):
-        calls.append((service, timeout_ms))
-        return current[0]
-
-    readiness = RclpyReadiness(scene_query=query)
+    )
+    readiness = RclpyReadiness()
     expected_plan = plan(False)
-    assert asyncio.run(readiness._query_scene_matches(expected_plan))
-    assert calls == [('/world/b2_training_arena/scene/info', 500)]
+    assert readiness._matches_expected_scene(scene, expected_plan)
 
-    current[0] = SimpleNamespace(
+    scene = SimpleNamespace(
         name='other_world',
         model=[SimpleNamespace(name='mecanum_b2', model=[])],
     )
-    assert not asyncio.run(readiness._query_scene_matches(expected_plan))
-    current[0] = SimpleNamespace(name='b2_training_arena', model=[])
-    assert not asyncio.run(readiness._query_scene_matches(expected_plan))
-    current[0] = SimpleNamespace(
+    assert not readiness._matches_expected_scene(scene, expected_plan)
+    scene = SimpleNamespace(name='b2_training_arena', model=[])
+    assert not readiness._matches_expected_scene(scene, expected_plan)
+    scene = SimpleNamespace(
         name='b2_training_arena',
         model=[
             SimpleNamespace(name='mecanum_b2', model=[]),
             SimpleNamespace(name='mecanum_b2', model=[]),
         ],
     )
-    assert not asyncio.run(readiness._query_scene_matches(expected_plan))
-
-
-def test_integrated_backend_status_requires_bound_status_and_scene(
-    monkeypatch,
-):
-    """Join injected status and typed scene data through production entry."""
-    monkeypatch.setattr(
-        supervisor_module, 'load_bound_config',
-        lambda _path: (None, 'a' * 64, None, None),
-    )
-    expected_plan = plan(False)
-    status = SimpleNamespace(
-        header=SimpleNamespace(frame_id='b2_training_arena'),
-        session_id=expected_plan.session_id,
-        config_hash='a' * 64,
-        backend_instance_id=17,
-        status_sequence=2,
-        fault_flags=0,
-        paused=False,
-        actuator_inhibited=True,
-    )
-    scene = SimpleNamespace(
-        name='b2_training_arena',
-        model=[SimpleNamespace(name='mecanum_b2', model=[])],
-    )
-
-    class StatusSource:
-        def __init__(self, messages):
-            self.messages = list(messages)
-            self.started = 0
-            self.closed = 0
-
-        async def start(self):
-            self.started += 1
-
-        async def next_status(self, timeout_s):
-            assert 0 < timeout_s <= 0.1
-            return self.messages.pop(0) if self.messages else None
-
-        async def close(self):
-            self.closed += 1
-
-    source = StatusSource([status])
-    query_calls = []
-    readiness = RclpyReadiness(
-        scene_query=lambda endpoint, timeout: (
-            query_calls.append((endpoint, timeout)) or scene
-        ),
-        backend_status_source_factory=lambda: source,
-        steady_clock=lambda: 10.0,
-    )
-    process = FakeProcess(700)
-    asyncio.run(readiness._backend_status(expected_plan, process))
-    assert source.started == source.closed == 1
-    assert query_calls == [('/world/b2_training_arena/scene/info', 500)]
-
-
-def test_integrated_backend_status_rejects_status_or_scene_mismatch(
-    monkeypatch,
-):
-    """A healthy heartbeat cannot substitute for the expected scene."""
-    monkeypatch.setattr(
-        supervisor_module, 'load_bound_config',
-        lambda _path: (None, 'a' * 64, None, None),
-    )
-    expected_plan = plan(False)
-    good_status = SimpleNamespace(
-        header=SimpleNamespace(frame_id='b2_training_arena'),
-        session_id=expected_plan.session_id,
-        config_hash='a' * 64,
-        backend_instance_id=17,
-        status_sequence=2,
-        fault_flags=0,
-        paused=False,
-        actuator_inhibited=True,
-    )
-
-    class StatusSource:
-        def __init__(self, message):
-            self.message = message
-
-        async def start(self):
-            return None
-
-        async def next_status(self, timeout_s):
-            del timeout_s
-            return self.message
-
-        async def close(self):
-            return None
-
-    wrong_status = SimpleNamespace(**vars(good_status))
-    wrong_status.session_id = 'foreign-session'
-    for status, scene in (
-        (good_status, SimpleNamespace(name='wrong-world', model=[])),
-        (wrong_status, SimpleNamespace(
-            name='b2_training_arena',
-            model=[SimpleNamespace(name='mecanum_b2', model=[])],
-        )),
-    ):
-        ticks = iter((0.0, 31.0))
-        readiness = RclpyReadiness(
-            scene_query=lambda _endpoint, _timeout: scene,
-            backend_status_source_factory=lambda: StatusSource(status),
-            steady_clock=lambda: next(ticks),
-        )
-        try:
-            asyncio.run(readiness._backend_status(
-                expected_plan, FakeProcess(701),
-            ))
-        except TimeoutError:
-            pass
-        else:
-            raise AssertionError('mismatched status or scene was accepted')
-
-
-def test_integrated_backend_status_closes_partial_source_on_start_failure(
-    monkeypatch,
-):
-    """A failed status-source startup is closed without runtime fallback."""
-    monkeypatch.setattr(
-        supervisor_module, 'load_bound_config',
-        lambda _path: (None, 'a' * 64, None, None),
-    )
-
-    class PartialSource:
-        def __init__(self):
-            self.closed = 0
-
-        async def start(self):
-            raise RuntimeError('injected status subscription failure')
-
-        async def next_status(self, timeout_s):
-            del timeout_s
-            raise AssertionError('failed source must not be polled')
-
-        async def close(self):
-            self.closed += 1
-
-    source = PartialSource()
-    readiness = RclpyReadiness(
-        scene_query=lambda *_args: (_ for _ in ()).throw(
-            AssertionError('scene query must not start after status failure')
-        ),
-        backend_status_source_factory=lambda: source,
-    )
-    try:
-        asyncio.run(readiness._backend_status(plan(False), FakeProcess(702)))
-    except RuntimeError as error:
-        assert str(error) == 'injected status subscription failure'
-    else:
-        raise AssertionError('partial status-source failure was accepted')
-    assert source.closed == 1
+    assert not readiness._matches_expected_scene(scene, expected_plan)
 
 
 def test_gui_exit_cancels_production_owner_ack_wait():

@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import importlib
-import inspect
 import json
 import os
+import re
 import secrets
 import signal
 import sys
@@ -135,90 +136,718 @@ class SubprocessProcessLauncher:
         return True
 
 
-class _RclpyBackendStatusSource:
-    """Own the production ROS subscription used by scene readiness."""
-
-    def __init__(self) -> None:
-        self._rclpy = None
-        self._node = None
-        self._subscription = None
-        self._messages = []
-
-    async def start(self) -> None:
-        import rclpy
-        from rclpy.node import Node
-        from mecanum_nav_rl_interfaces.msg import SimulationContactState
-
-        self._rclpy = rclpy
-        rclpy.init(args=None)
-        self._node = Node('b2_server_scene_readiness')
-        self._subscription = self._node.create_subscription(
-            SimulationContactState,
-            '/mecanum/local_training/backend_state',
-            self._messages.append,
-            50,
-        )
-
-    async def next_status(self, timeout_s: float):
-        if self._rclpy is None or self._node is None:
-            raise RuntimeError('backend status source is not started')
-        self._rclpy.spin_once(self._node, timeout_sec=timeout_s)
-        return self._messages.pop(0) if self._messages else None
-
-    async def close(self) -> None:
-        if self._node is not None and self._subscription is not None:
-            self._node.destroy_subscription(self._subscription)
-            self._subscription = None
-        if self._node is not None:
-            self._node.destroy_node()
-            self._node = None
-        if self._rclpy is not None and self._rclpy.ok():
-            self._rclpy.shutdown()
-        self._rclpy = None
-
-
 class RclpyReadiness:
-    """Check backend identity and require explicit GUI owner confirmation."""
+    """Own an isolated worker for ROS/Gazebo server-scene readiness."""
 
     SERVER_READY_TIMEOUT_S = 30.0
+    WORKER_MODULE = 'mecanum_nav_bringup.local_training_readiness_worker'
+    REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v1'
+    EVENT_SCHEMA = 'mecanum_b2_scene_readiness_event/v1'
+    MAX_REQUEST_BYTES = 16 * 1024
+    MAX_RECORD_BYTES = 4 * 1024
+    MAX_STREAM_BYTES = 64 * 1024
+    CLEANUP_CAP_S = 3.0
 
     def __init__(
-        self, scene_query=None, *, backend_status_source_factory=None,
-        steady_clock=None,
+        self, *, worker_factory=None, identity_reader=None, signal_group=None,
+        monotonic=time.monotonic, monotonic_ns=time.monotonic_ns,
+        sleep=asyncio.sleep,
     ) -> None:
-        """Keep partial stdin lines across bounded, cancellable reads."""
+        """Prepare process seams without creating middleware or a worker."""
         self._stdin_buffers: dict[int, bytearray] = {}
-        self._scene_query = scene_query or self._query_gazebo_scene
-        self._backend_status_source_factory = (
-            backend_status_source_factory or _RclpyBackendStatusSource
-        )
-        self._steady_clock = steady_clock or time.monotonic
+        self._worker_factory = worker_factory or self._spawn_worker
+        self._identity_reader = identity_reader or self._read_process_identity
+        self._signal_group = signal_group or self._signal_verified_group
+        self._monotonic = monotonic
+        self._monotonic_ns = monotonic_ns
+        self._sleep = sleep
+        self._evidence_sink = None
+        self._worker = None
+        self._worker_identity = None
+        self._worker_cleanup_deadline = None
+        self._stdout_task = None
+        self._stderr_task = None
+        self._worker_wait_task = None
+        self._cleanup_phase = 0
+        self._cleanup_record_error = False
+        self._protocol_records = []
+        self._protocol_error = None
+        self._stdout_total = 0
+        self._stderr_total = 0
+        self._stderr_hash = hashlib.sha256()
+        self._ready_attempted = False
+        self._residue = 'NONE'
+        self._active_request = None
+
+    def bind_evidence_sink(self, evidence_sink):
+        """Bind the one owner responsible for readiness evidence."""
+        if (self._evidence_sink is not None
+                and self._evidence_sink is not evidence_sink):
+            raise RuntimeError('readiness evidence sink already bound')
+        self._evidence_sink = evidence_sink
 
     @staticmethod
-    def bind_environment(environment: dict[str, str]) -> None:
-        """Bind the run environment before creating a Gazebo transport node."""
-        if not environment.get('GZ_PARTITION'):
-            raise RuntimeError('run GZ_PARTITION is missing')
-        os.environ.update(environment)
+    def _read_process_identity(pid):
+        raw = Path(f'/proc/{pid}/stat').read_text(encoding='ascii')
+        closing = raw.rfind(')')
+        if closing < 0:
+            raise RuntimeError('malformed worker proc stat')
+        fields = raw[closing + 2:].split()
+        return {
+            'pid': pid,
+            'process_group_id': int(fields[2]),
+            'session_id': int(fields[3]),
+            'start_ticks': int(fields[19]),
+        }
 
     @staticmethod
-    def _query_gazebo_scene(service: str, timeout_ms: int):
-        """Read the current Gazebo Sim scene through its documented service."""
-        if not os.environ.get('GZ_PARTITION'):
-            raise RuntimeError('GZ_PARTITION must be bound before scene query')
-        from gz.msgs10.empty_pb2 import Empty
-        from gz.msgs10.scene_pb2 import Scene
-        from gz.transport13 import Node
+    def _valid_process_identity(identity, pid):
+        if not isinstance(identity, dict):
+            return False
+        keys = ('pid', 'process_group_id', 'session_id', 'start_ticks')
+        if set(identity) != set(keys):
+            return False
+        if any(type(identity[key]) is not int or identity[key] <= 0
+               for key in keys):
+            return False
+        return (identity['pid'] == pid
+                and identity['process_group_id'] == pid
+                and identity['session_id'] == pid)
 
-        node = Node()
-        success, scene = node.request(
-            service, Empty(), Empty, Scene, timeout_ms,
+    async def _spawn_worker(self, environment):
+        env = os.environ.copy()
+        env.update(environment)
+        return await asyncio.create_subprocess_exec(
+            sys.executable, '-m', self.WORKER_MODULE,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env, start_new_session=True, limit=self.MAX_RECORD_BYTES,
         )
-        return scene if success else None
+
+    def _record(self, event, facts):
+        if self._evidence_sink is None:
+            raise RuntimeError('readiness evidence sink is not bound')
+        self._evidence_sink.record(event, facts)
+
+    @staticmethod
+    def _canonical_request(request):
+        return json.dumps(
+            request, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+            allow_nan=False,
+        ).encode('utf-8')
+
+    def _make_request(self, plan, config_hash, deadline_ns):
+        coordinator = plan.coordinator_ingress_instance_id
+        if type(coordinator) is not int or not 0 < coordinator < 2**64:
+            raise RuntimeError('coordinator identity is not nonzero uint64')
+        domain = plan.environment.get('ROS_DOMAIN_ID')
+        partition = plan.environment.get('GZ_PARTITION')
+        if (not isinstance(domain, str) or not re.fullmatch(r'[0-9]+', domain)
+                or not isinstance(partition, str) or not partition):
+            raise RuntimeError('readiness domain/partition binding is invalid')
+        if config_hash != plan.config_hash:
+            raise RuntimeError('resolved config hash differs from launch plan')
+        try:
+            if str(uuid.UUID(plan.session_id)) != plan.session_id:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError) as error:
+            raise RuntimeError('session ID must be canonical UUID') from error
+        return {
+            'schema_id': self.REQUEST_SCHEMA,
+            'request_id': str(uuid.uuid4()),
+            'session_id': plan.session_id,
+            'config_hash': config_hash,
+            'asset_manifest_sha256': plan.asset_manifest_sha256,
+            'coordinator_ingress_instance_id': coordinator,
+            'world_id': 'b2_training_arena',
+            'model_id': 'mecanum_b2',
+            'gz_partition': partition,
+            'ros_domain_id': domain,
+            'deadline_monotonic_ns': deadline_ns,
+        }
+
+    @staticmethod
+    def _strict_worker_json(line):
+        def pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('duplicate JSON key')
+                result[key] = value
+            return result
+
+        def constant(value):
+            raise ValueError(f'invalid JSON constant: {value}')
+
+        return json.loads(
+            line.decode('utf-8', errors='strict'),
+            object_pairs_hook=pairs, parse_constant=constant,
+        )
+
+    async def _drain_stdout(self, request_id, request_sha256):
+        stream = self._worker.stdout
+        buffered = bytearray()
+        seen_result = False
+        sequence = 0
+        allowed = {
+            'worker_started', 'status_wait_started', 'status_matched',
+            'scene_query_started', 'scene_query_finished', 'worker_result',
+        }
+        order = [
+            'worker_started', 'status_wait_started', 'status_matched',
+            'scene_query_started', 'scene_query_finished', 'worker_result',
+        ]
+        last_order = -1
+        while True:
+            chunk = await stream.read(2048)
+            if not chunk:
+                break
+            self._stdout_total += len(chunk)
+            if self._stdout_total > self.MAX_STREAM_BYTES:
+                self._protocol_error = 'worker stdout exceeded 64 KiB'
+                continue
+            if seen_result:
+                self._protocol_error = 'protocol output followed worker_result'
+                continue
+            buffered.extend(chunk)
+            while b'\n' in buffered:
+                line, _, tail = buffered.partition(b'\n')
+                buffered = bytearray(tail)
+                if len(line) + 1 > self.MAX_RECORD_BYTES:
+                    self._protocol_error = 'worker record exceeded 4 KiB'
+                    continue
+                try:
+                    record = self._strict_worker_json(line)
+                    if not isinstance(record, dict) or set(record) != {
+                        'schema_id', 'request_id', 'request_sha256',
+                        'sequence', 'event', 'monotonic_ns', 'facts',
+                    }:
+                        raise ValueError('worker event fields mismatch')
+                    if record['schema_id'] != self.EVENT_SCHEMA:
+                        raise ValueError('worker event schema mismatch')
+                    if record['request_id'] != request_id:
+                        raise ValueError('worker request ID mismatch')
+                    if record['request_sha256'] != request_sha256:
+                        raise ValueError('worker request hash mismatch')
+                    if type(record['sequence']) is not int or record[
+                        'sequence'
+                    ] != sequence + 1:
+                        raise ValueError('worker event sequence mismatch')
+                    if type(record['monotonic_ns']) is not int or record[
+                        'monotonic_ns'
+                    ] <= 0:
+                        raise ValueError('worker monotonic timestamp invalid')
+                    if record['event'] not in allowed or not isinstance(
+                        record['facts'], dict,
+                    ):
+                        raise ValueError('worker event type/facts invalid')
+                    self._validate_event_facts(record, self._active_request)
+                    event_order = order.index(record['event'])
+                    if record['event'] == 'worker_result':
+                        if event_order != 5:
+                            raise ValueError('worker result is not terminal')
+                        last_order = 5
+                    elif event_order != last_order + 1 or event_order >= 5:
+                        raise ValueError('worker event transition mismatch')
+                    if seen_result:
+                        raise ValueError('duplicate worker_result')
+                    if event_order < 5:
+                        last_order = event_order
+                    sequence += 1
+                    if record['event'] == 'worker_result':
+                        seen_result = True
+                    self._protocol_records.append(record)
+                    self._record('readiness_worker_event', {
+                        'worker_monotonic_ns': record['monotonic_ns'],
+                        'parent_received_monotonic_ns': self._monotonic_ns(),
+                        'record': record,
+                    })
+                except BaseException as exc:
+                    self._protocol_error = f'worker protocol invalid: {exc}'
+        if buffered:
+            self._protocol_error = self._protocol_error or (
+                'worker stdout ended with partial JSON record'
+            )
+        results = [r for r in self._protocol_records
+                   if r['event'] == 'worker_result']
+        if len(results) != 1:
+            self._protocol_error = self._protocol_error or (
+                'worker result missing or duplicated'
+            )
+        elif results[0]['facts'].get('verdict') == 'READY' and last_order != 5:
+            self._protocol_error = self._protocol_error or (
+                'READY protocol omitted required readiness events'
+            )
+
+    async def _drain_stderr(self):
+        while True:
+            chunk = await self._worker.stderr.read(4096)
+            if not chunk:
+                return
+            self._stderr_total += len(chunk)
+            self._stderr_hash.update(chunk)
+            if self._stderr_total > self.MAX_STREAM_BYTES:
+                self._protocol_error = 'worker stderr exceeded 64 KiB'
+
+    def _request_binding_facts(self, request, digest):
+        return {
+            'request_id': request['request_id'],
+            'request_sha256': digest,
+            'session_id': request['session_id'],
+            'config_hash': request['config_hash'],
+            'asset_manifest_sha256': request['asset_manifest_sha256'],
+            'coordinator_ingress_instance_id': request[
+                'coordinator_ingress_instance_id'
+            ],
+            'world_id': request['world_id'],
+            'model_id': request['model_id'],
+            'gz_partition': request['gz_partition'],
+            'ros_domain_id': request['ros_domain_id'],
+            'deadline_monotonic_ns': request['deadline_monotonic_ns'],
+        }
+
+    def _validate_event_facts(self, record, request):
+        """Reject event payloads that do not match the worker protocol."""
+        if not isinstance(request, dict):
+            raise ValueError('readiness request is unavailable')
+        event = record['event']
+        facts = record['facts']
+        binding = {
+            key: request[key] for key in (
+                'session_id', 'config_hash', 'asset_manifest_sha256',
+                'coordinator_ingress_instance_id',
+            )
+        }
+        if event == 'worker_started':
+            if (set(facts) != {'request_binding'}
+                    or facts['request_binding'] != binding):
+                raise ValueError('worker_started binding mismatch')
+        elif event == 'status_wait_started':
+            if facts != {
+                'topic': '/mecanum/local_training/backend_state',
+                'qos_depth': 50,
+            }:
+                raise ValueError('status wait contract mismatch')
+        elif event == 'status_matched':
+            if set(facts) != {'status', 'request_binding'}:
+                raise ValueError('matched status fields mismatch')
+            if facts['request_binding'] != binding:
+                raise ValueError('matched status binding mismatch')
+            status = facts['status']
+            if not isinstance(status, dict) or set(status) != {
+                'world_id', 'session_id', 'config_hash',
+                'backend_instance_id', 'status_sequence', 'fault_flags',
+                'actuator_inhibited',
+            }:
+                raise ValueError('matched status fields invalid')
+            if (status['world_id'] != request['world_id']
+                    or status['session_id'] != request['session_id']
+                    or status['config_hash'] != request['config_hash']
+                    or type(status['backend_instance_id']) is not int
+                    or status['backend_instance_id'] <= 0
+                    or type(status['status_sequence']) is not int
+                    or status['status_sequence'] <= 0
+                    or type(status['fault_flags']) is not int
+                    or status['fault_flags'] != 0
+                    or status['actuator_inhibited'] is not True):
+                raise ValueError('matched status predicate failed')
+        elif event == 'scene_query_started':
+            if (set(facts) != {'service', 'timeout_ms'}
+                    or facts['service'] != (
+                        '/world/b2_training_arena/scene/info'
+                    )):
+                raise ValueError('scene query start binding mismatch')
+            timeout_ms = facts['timeout_ms']
+            if type(timeout_ms) is not int or not 1 <= timeout_ms <= 500:
+                raise ValueError('scene query timeout is invalid')
+        elif event == 'scene_query_finished':
+            if set(facts) != {
+                'world_name', 'matching_model_count', 'duration_ns',
+                'outcome', 'error',
+            }:
+                raise ValueError('scene query result fields mismatch')
+            if (type(facts['matching_model_count']) is not int
+                    or facts['matching_model_count'] < 0
+                    or type(facts['duration_ns']) is not int
+                    or facts['duration_ns'] < 0
+                    or facts['outcome'] not in {'MATCH', 'MISMATCH', 'ERROR'}
+                    or (facts['error'] is not None
+                        and not isinstance(facts['error'], str))):
+                raise ValueError('scene query result is invalid')
+        elif event == 'worker_result':
+            if set(facts) != {
+                'verdict', 'reason', 'facts', 'cleanup_errors',
+                'cleanup_elapsed_ns',
+            }:
+                raise ValueError('worker result fields mismatch')
+            if (facts['verdict'] not in {'READY', 'FAIL'}
+                    or not isinstance(facts['reason'], str)
+                    or not isinstance(facts['facts'], dict)
+                    or not isinstance(facts['cleanup_errors'], list)
+                    or any(not isinstance(item, str)
+                           for item in facts['cleanup_errors'])
+                    or type(facts['cleanup_elapsed_ns']) is not int
+                    or facts['cleanup_elapsed_ns'] < 0
+                    or facts['cleanup_elapsed_ns'] > 3_000_000_000):
+                raise ValueError('worker result values invalid')
+            if facts['verdict'] == 'READY' and facts['reason']:
+                raise ValueError('READY result contains a failure reason')
+            if facts['verdict'] == 'FAIL' and not facts['reason']:
+                raise ValueError('FAIL result has no reason')
+
+    def _validate_ready_result(self, record, request, digest):
+        facts = record['facts']
+        if facts.get('verdict') != 'READY':
+            raise RuntimeError(
+                str(facts.get('reason') or 'worker readiness failed')
+            )
+        if facts.get('cleanup_errors') != []:
+            raise RuntimeError('worker cleanup was not clean')
+        ready = facts.get('facts')
+        if not isinstance(ready, dict) or set(ready) != {
+            'status', 'scene', 'request_binding',
+        }:
+            raise RuntimeError('worker READY facts are incomplete')
+        status = ready['status']
+        binding = ready['request_binding']
+        expected_binding = {
+            key: request[key] for key in (
+                'session_id', 'config_hash', 'asset_manifest_sha256',
+                'coordinator_ingress_instance_id',
+            )
+        }
+        if binding != expected_binding:
+            raise RuntimeError('worker READY request binding mismatch')
+        if not isinstance(status, dict) or status != {
+            'world_id': request['world_id'],
+            'session_id': request['session_id'],
+            'config_hash': request['config_hash'],
+            'backend_instance_id': status.get('backend_instance_id'),
+            'status_sequence': status.get('status_sequence'),
+            'fault_flags': 0,
+            'actuator_inhibited': True,
+        }:
+            raise RuntimeError('worker status facts do not match request')
+        if (type(status['backend_instance_id']) is not int
+                or status['backend_instance_id'] <= 0
+                or type(status['status_sequence']) is not int
+                or status['status_sequence'] <= 0
+                or type(status['fault_flags']) is not int
+                or status['fault_flags'] != 0
+                or status['actuator_inhibited'] is not True):
+            raise RuntimeError('worker status measurement is invalid')
+        if (not isinstance(ready['scene'], dict)
+                or set(ready['scene']) != {
+                    'world_name', 'matching_model_count',
+                }
+                or type(ready['scene']['matching_model_count']) is not int
+                or ready['scene'] != {
+            'world_name': request['world_id'], 'matching_model_count': 1,
+                }):
+            raise RuntimeError('worker scene facts do not match binding')
+        return {
+            **self._request_binding_facts(request, digest),
+            'status': status, 'scene': ready['scene'],
+        }
+
+    async def server_scene(
+        self, plan: LaunchPlan, process: OwnedProcess, timeout_s: float,
+    ) -> None:
+        """Wait for server readiness in one owned middleware worker process."""
+        if self._ready_attempted:
+            raise RuntimeError('readiness worker attempt already consumed')
+        if self._evidence_sink is None:
+            raise RuntimeError(
+                'readiness evidence sink must be bound before spawn'
+            )
+        self._ready_attempted = True
+        started = self._monotonic()
+        deadline = started + min(timeout_s, self.SERVER_READY_TIMEOUT_S)
+        deadline_ns = self._monotonic_ns() + int(
+            max(0.0, deadline - started) * 1e9
+        )
+        request = None
+        digest = None
+        try:
+            _, config_hash, manifest_hash, _ = load_bound_config(
+                plan.resolved_config,
+            )
+            if manifest_hash != plan.asset_manifest_sha256:
+                raise RuntimeError(
+                    'resolved manifest differs from launch plan'
+                )
+            request = self._make_request(plan, config_hash, deadline_ns)
+            self._active_request = request
+            request_bytes = self._canonical_request(request)
+            if len(request_bytes) > self.MAX_REQUEST_BYTES:
+                raise RuntimeError('readiness request exceeds 16 KiB')
+            digest = hashlib.sha256(request_bytes).hexdigest()
+            self._record('readiness_worker_spawn_requested', {
+                **self._request_binding_facts(request, digest),
+                'module': self.WORKER_MODULE,
+                'interpreter': sys.executable,
+            })
+            # Keep the handle before identity or evidence operations.
+            self._worker = await self._worker_factory(dict(plan.environment))
+            self._stdout_task = asyncio.create_task(
+                self._drain_stdout(request['request_id'], digest),
+            )
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
+            self._worker_wait_task = asyncio.create_task(self._worker.wait())
+            try:
+                identity = self._identity_reader(self._worker.pid)
+                if not self._valid_process_identity(
+                    identity, self._worker.pid,
+                ):
+                    raise RuntimeError('readiness worker identity invalid')
+                self._worker_identity = identity
+                self._residue = 'OWNED'
+                self._record('readiness_worker_spawned', {
+                    **self._request_binding_facts(request, digest),
+                    'worker_identity': identity,
+                })
+            except BaseException:
+                self._residue = 'UNKNOWN'
+                raise
+            self._worker.stdin.write(request_bytes + b'\n')
+            await self._worker.stdin.drain()
+            self._worker.stdin.close()
+            await self._worker.stdin.wait_closed()
+            self._record('readiness_request_sent', {
+                **self._request_binding_facts(request, digest),
+            })
+            while True:
+                if self._monotonic() >= deadline:
+                    raise TimeoutError('readiness parent deadline expired')
+                if process.returncode is not None:
+                    self._record('readiness_server_exit_detected', {
+                        'detection_monotonic_ns': self._monotonic_ns(),
+                        'server_pid': process.pid,
+                        'exit_status': process.returncode,
+                    })
+                    raise RuntimeError('Gazebo server exited during readiness')
+                if self._protocol_error:
+                    raise RuntimeError(self._protocol_error)
+                tasks = {self._worker_wait_task, self._stdout_task,
+                         self._stderr_task}
+                pending_tasks = {task for task in tasks if not task.done()}
+                if not pending_tasks:
+                    break
+                remaining = deadline - self._monotonic()
+                await asyncio.wait(
+                    pending_tasks, timeout=min(0.05, max(0.0, remaining)),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in tasks:
+                    if task.done() and not task.cancelled():
+                        error = task.exception()
+                        if error is not None:
+                            raise RuntimeError(
+                                f'readiness worker pipe/task failed: {error}'
+                            ) from error
+            if self._monotonic() >= deadline:
+                raise TimeoutError('readiness worker completed after deadline')
+            if self._protocol_error:
+                raise RuntimeError(self._protocol_error)
+            if self._worker.returncode != 0:
+                raise RuntimeError(
+                    f'readiness worker exited {self._worker.returncode}'
+                )
+            records = self._protocol_records
+            result = records[-1] if records else None
+            if result is None or result['event'] != 'worker_result':
+                raise RuntimeError('readiness worker result missing')
+            ready_facts = self._validate_ready_result(result, request, digest)
+            if self._monotonic() >= deadline:
+                raise TimeoutError(
+                    'readiness validation completed after deadline'
+                )
+            self._record('readiness_worker_parent_validated', {
+                'parent_received_monotonic_ns': self._monotonic_ns(),
+                'worker_exit_status': self._worker.returncode,
+                'readiness': ready_facts,
+                'stderr_bytes': self._stderr_total,
+                'stderr_sha256': self._stderr_hash.hexdigest(),
+            })
+            self._residue = 'NONE'
+        except BaseException as error:
+            detection = self._monotonic_ns()
+            try:
+                self._record('readiness_failure_detected', {
+                    'detection_monotonic_ns': detection,
+                    'error_type': type(error).__name__,
+                    'error': str(error)[:512],
+                    'request_id': request['request_id'] if request else None,
+                    'worker_identity': self._worker_identity,
+                    'residue': self._residue,
+                })
+            except BaseException:
+                pass
+            raise
+        finally:
+            await self._finalize_worker()
+            if self._residue != 'NONE' or self._cleanup_record_error:
+                raise RuntimeError(
+                    f'readiness worker cleanup not verified: {self._residue}'
+                )
+
+    async def _wait_worker(self, timeout):
+        if self._worker_wait_task is None:
+            return self._worker is None or self._worker.returncode is not None
+        if self._worker_wait_task.done():
+            return True
+        done, _ = await asyncio.wait(
+            {self._worker_wait_task}, timeout=max(0.0, timeout),
+        )
+        return bool(done)
+
+    def _verified_signal(self, sig):
+        if self._worker is None or self._worker_identity is None:
+            return False, 'identity_unavailable'
+        try:
+            current = self._identity_reader(self._worker.pid)
+        except BaseException as error:
+            return False, f'identity_read_failed:{type(error).__name__}'
+        if current != self._worker_identity:
+            return False, 'identity_mismatch_or_pid_reuse'
+        if not self._valid_process_identity(current, self._worker.pid):
+            return False, 'identity_invalid'
+        try:
+            self._signal_group(self._worker, current, sig)
+        except ProcessLookupError:
+            return False, 'process_group_missing'
+        except OSError as error:
+            return False, f'signal_failed:{error.errno}'
+        return True, 'signal_sent'
+
+    @staticmethod
+    def _signal_verified_group(process, identity, sig):
+        del process
+        os.killpg(identity['process_group_id'], sig)
+
+    async def _finalize_worker(self):
+        if self._worker is None:
+            return
+        if self._worker_cleanup_deadline is None:
+            self._worker_cleanup_deadline = (
+                self._monotonic() + self.CLEANUP_CAP_S
+            )
+            try:
+                self._record('readiness_worker_cleanup_started', {
+                    'detection_monotonic_ns': self._monotonic_ns(),
+                    'worker_identity': self._worker_identity,
+                    'residue': self._residue,
+                })
+            except BaseException:
+                self._residue = 'UNKNOWN'
+        deadline = self._worker_cleanup_deadline
+        stdin = getattr(self._worker, 'stdin', None)
+        if stdin is not None:
+            try:
+                if not stdin.is_closing():
+                    stdin.close()
+                remaining = max(0.0, deadline - self._monotonic())
+                await asyncio.wait_for(
+                    stdin.wait_closed(), timeout=min(0.1, remaining),
+                )
+                self._record('readiness_worker_stdin_closed', {
+                    'worker_identity': self._worker_identity,
+                    'remaining_budget_s': max(
+                        0.0, deadline - self._monotonic(),
+                    ),
+                })
+            except BaseException:
+                self._residue = 'UNKNOWN'
+                self._cleanup_record_error = True
+                try:
+                    self._record('readiness_worker_stdin_close_failed', {
+                        'worker_identity': self._worker_identity,
+                    })
+                except BaseException:
+                    self._cleanup_record_error = True
+        phases = ((signal.SIGINT, 0.5), (signal.SIGTERM, 0.5),
+                  (signal.SIGKILL, float('inf')))
+        if self._worker.returncode is None:
+            while self._cleanup_phase < len(phases):
+                sig, phase_s = phases[self._cleanup_phase]
+                self._cleanup_phase += 1
+                remaining = max(0.0, deadline - self._monotonic())
+                if remaining <= 0:
+                    break
+                budget = min(phase_s, remaining)
+                sent, reason = self._verified_signal(sig)
+                try:
+                    self._record('readiness_worker_cleanup_signal', {
+                        'signal': sig, 'sent': sent, 'reason': reason,
+                        'worker_identity': self._worker_identity,
+                        'remaining_budget_s': remaining,
+                    })
+                except BaseException:
+                    self._residue = 'UNKNOWN'
+                    self._cleanup_record_error = True
+                if await self._wait_worker(
+                    min(budget, deadline - self._monotonic()),
+                ):
+                    break
+                if not sent:
+                    break
+        remaining = max(0.0, deadline - self._monotonic())
+        drain_tasks = [task for task in (self._stdout_task, self._stderr_task)
+                       if task is not None and not task.done()]
+        if drain_tasks and remaining > 0:
+            done, pending = await asyncio.wait(
+                drain_tasks, timeout=remaining,
+            )
+            for task in done:
+                if not task.cancelled() and task.exception() is not None:
+                    self._residue = 'UNKNOWN'
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        wait_task = self._worker_wait_task
+        if wait_task is not None and not wait_task.done():
+            wait_task.cancel()
+            remaining = max(0.0, deadline - self._monotonic())
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(wait_task, return_exceptions=True),
+                    timeout=min(0.05, remaining),
+                )
+            except BaseException:
+                self._residue = 'UNKNOWN'
+        joined = self._worker.returncode is not None
+        if joined and self._worker_identity is not None:
+            try:
+                os.killpg(self._worker_identity['process_group_id'], 0)
+            except ProcessLookupError:
+                self._residue = 'NONE'
+            except PermissionError:
+                self._residue = 'UNKNOWN'
+            else:
+                self._residue = 'UNKNOWN'
+        elif self._worker_identity is None:
+            self._residue = 'UNKNOWN'
+        else:
+            self._residue = 'UNKNOWN'
+        try:
+            self._record('readiness_worker_cleanup_finished', {
+                'worker_identity': self._worker_identity,
+                'exit_status': self._worker.returncode,
+                'joined': joined,
+                'residue': self._residue,
+                'cleanup_elapsed_s': self.CLEANUP_CAP_S - max(
+                    0.0, deadline - self._monotonic(),
+                ),
+            })
+        except BaseException:
+            self._residue = 'UNKNOWN'
+            self._cleanup_record_error = True
 
     @staticmethod
     def _matches_expected_scene(scene, plan) -> bool:
-        """Require the exact world and one mecanum model in the scene data."""
+        """Pure scene cardinality predicate, retained for contract tests."""
         if scene is None or scene.name != 'b2_training_arena':
             return False
         models = list(scene.model)
@@ -230,25 +859,9 @@ class RclpyReadiness:
             models.extend(model.model)
         return len(matches) == 1 and bool(plan.session_id)
 
-    async def _query_scene_matches(self, plan) -> bool:
-        """Query the installed Gazebo scene service and validate its reply."""
-        service = '/world/b2_training_arena/scene/info'
-        try:
-            scene = self._scene_query(service, 500)
-            if inspect.isawaitable(scene):
-                scene = await scene
-        except (TimeoutError, OSError):
-            return False
-        return self._matches_expected_scene(scene, plan)
-
     @staticmethod
     def _matches_bound_scene_status(msg, plan, config_hash: str) -> bool:
-        """Accept only healthy inhibited status from the bound world/run.
-
-        Backend Configure validates exact world/model/link identity and model
-        cardinality before it can publish a fault-free status. Requiring the
-        fault-free state keeps a matching heartbeat from masking that failure.
-        """
+        """Pure predicate for the existing fault-free inhibited status."""
         return (
             msg.header.frame_id == 'b2_training_arena'
             and msg.session_id == plan.session_id
@@ -258,53 +871,6 @@ class RclpyReadiness:
             and msg.fault_flags == 0
             and msg.actuator_inhibited
         )
-
-    async def server_scene(
-        self, plan: LaunchPlan, process: OwnedProcess, timeout_s: float,
-    ) -> None:
-        """Wait for backend status matching the bound scene identity."""
-        await asyncio.wait_for(
-            self._backend_status(plan, process), timeout=timeout_s,
-        )
-
-    async def _backend_status(
-        self, plan: LaunchPlan, process: OwnedProcess,
-    ) -> None:
-        _, config_hash, _, _ = load_bound_config(plan.resolved_config)
-        source = self._backend_status_source_factory()
-        deadline = self._steady_clock() + self.SERVER_READY_TIMEOUT_S
-        try:
-            await asyncio.wait_for(
-                source.start(), timeout=self.SERVER_READY_TIMEOUT_S,
-            )
-            while True:
-                if process.returncode is not None:
-                    raise RuntimeError(
-                        'Gazebo server exited before scene identity readiness'
-                    )
-                remaining = deadline - self._steady_clock()
-                if remaining <= 0:
-                    raise TimeoutError(
-                        'server scene readiness deadline expired'
-                    )
-                message = await asyncio.wait_for(
-                    source.next_status(min(remaining, 0.1)), timeout=remaining,
-                )
-                if message is None:
-                    await asyncio.sleep(0)
-                    continue
-                if not self._matches_bound_scene_status(
-                    message, plan, config_hash,
-                ):
-                    continue
-                scene_ready = await asyncio.wait_for(
-                    self._query_scene_matches(plan),
-                    timeout=max(0.001, deadline - self._steady_clock()),
-                )
-                if scene_ready:
-                    return
-        finally:
-            await asyncio.wait_for(source.close(), timeout=3.0)
 
     async def gui_process_started(
         self, plan: LaunchPlan, process: OwnedProcess, timeout_s: float,
@@ -402,6 +968,9 @@ class LocalTrainingProcessSupervisor:
         self._observer_tasks: set[asyncio.Task] = set()
         self._cleanup_lock = asyncio.Lock()
         self.gui_opened = False
+        bind_evidence_sink = getattr(readiness, 'bind_evidence_sink', None)
+        if bind_evidence_sink is not None:
+            bind_evidence_sink(evidence_sink)
 
     async def start(self) -> None:
         """Start the server and requested GUI, failing closed on readiness."""
