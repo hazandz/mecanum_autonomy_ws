@@ -18,8 +18,10 @@ parent `d76212b48a10b2244b36b3263e4c55ade3811d9d`. Production source pin
 vẫn là `d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`; corrective này chỉ thay
 packet-scoped helper launcher và không sửa package production. Architecture SHA-256
 `432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204`.
-Production source pin và preparation base cùng trỏ tới commit chính xác này;
-backend aggregate source fingerprint được pin riêng. Hash manifest, resolved
+Preparation base là commit packet `09d638f2a8e8407b2c353191345073f44b7cf561`;
+production source pin vẫn là commit nguồn
+`d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`. Backend aggregate source
+fingerprint được pin riêng. Hash manifest, resolved
 SOAK, semantic config và scenario được đối chiếu với bytes source/cài đặt thật.
 
 ## Hợp đồng đã đóng gói
@@ -57,6 +59,15 @@ SOAK, semantic config và scenario được đối chiếu với bytes source/c�
   request/result schema, mode 0700/0600, `O_NOFOLLOW`, directory descriptors,
   `fsync` và hard-link no-replace. Mailbox là consistency/provenance boundary,
   không phải xác thực bảo mật.
+- Publisher dùng một absolute operation deadline tối đa 5 giây, tính từ lúc bắt
+  đầu và bị chặn bởi review deadline; spawn, identity, pre-release evidence,
+  handshake, `EXEC_COMMIT` và communicate cùng dùng phần thời gian còn lại. Tối
+  thiểu 7 giây review budget vẫn phải còn trước khi bắt đầu. CLI mặc định
+  atomic-publish artifact ownership gắn request/session/packet, screenshot,
+  nonce, command bindings và process identity vào
+  `review_mailbox/results/<request_id>.publisher-ownership.json` trước khi
+  release target. Artifact dùng no-replace/mode 0600; publisher process không
+  ghi trực tiếp journal runner sở hữu. Callback lỗi ngăn target execution.
 - Review checkpoint 60 giây bắt đầu trước window enumeration, gồm bind/capture/
   persist/request/Codex review/publisher/runner validation. Không gia hạn.
   Trước checkpoint phải còn ít nhất 121 giây active budget. Sau review PASS,

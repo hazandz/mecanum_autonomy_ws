@@ -298,7 +298,8 @@ def test_partial_acquisition_is_never_repaired_or_reused(tmp_path):
     assert path.read_bytes() == b'{partial'
 
 
-def request_fixture(root, *, packet_hash='a' * 64, session_id=None):
+def request_fixture(root, *, packet_hash='a' * 64, session_id=None,
+                    steady_ns=1000000000):
     """Test helper for RUN006 offline behavior."""
     session_id = session_id or str(uuid.uuid4())
     request_id = str(uuid.uuid4())
@@ -311,7 +312,7 @@ def request_fixture(root, *, packet_hash='a' * 64, session_id=None):
     image_hash = hashlib.sha256(image).hexdigest()
     image_path = screenshot_dir / f'{request_id}-{image_hash}.png'
     runner.atomic_publish(image_path, image)
-    now_ns = 1000000000
+    now_ns = steady_ns
     request = {
         'schema_id': 'b22_gui_codex_review_request/v1',
         'schema_version': 1,
@@ -510,7 +511,7 @@ def test_bounded_publisher_requires_budget_and_runs_gated_target():
     )
     assert result['exit_status'] == 0
     assert result['stdout'] == 'ok'
-    assert result['ownership_facts'][0]['evidence_before_release'] is True
+    assert result['ownership_facts'][0]['evidence_before_release'] is False
 
 
 def test_publisher_timeout_escalates_only_injected_owned_group(monkeypatch):
@@ -3371,6 +3372,393 @@ def _native_helper_launcher(on_start=None, delegate_transform=None):
 
 def _python_target(code):
     return (sys.executable, '-c', code)
+
+
+class _PublisherFakeControl:
+    def settimeout(self, timeout):
+        self.last_timeout = timeout
+
+    def close(self):
+        pass
+
+
+class _PublisherFakeListener(_PublisherFakeControl):
+    def bind(self, _path):
+        pass
+
+    def listen(self, _backlog):
+        pass
+
+    def accept(self):
+        return _PublisherFakeControl(), None
+
+
+class _PublisherFakeProcess:
+    pid = 440017
+
+    def __init__(self, *, now=None, communicate_error=None):
+        self.returncode = None
+        self.now = now
+        self.communicate_error = communicate_error
+        self.communicate_timeout = None
+        self.wait_calls = []
+
+    def poll(self):
+        return self.returncode
+
+    def communicate(self, timeout):
+        self.communicate_timeout = timeout
+        if self.communicate_error is not None:
+            raise self.communicate_error
+        if self.now is not None:
+            self.now[0] = 5.01
+        self.returncode = 0
+        return b'ok', b''
+
+    def wait(self, timeout):
+        self.wait_calls.append(timeout)
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired('fake-publisher', timeout)
+        return self.returncode
+
+
+def _patch_publisher_operation_fakes(
+        monkeypatch, *, now, process, received=None, sent=None):
+    listener = _PublisherFakeListener()
+    monkeypatch.setattr(
+        runner.socket, 'socket', lambda *_args, **_kwargs: listener,
+    )
+    monkeypatch.setattr(
+        runner, '_socket_recv_frame',
+        lambda *_args, **_kwargs: next(received),
+    )
+    monkeypatch.setattr(
+        runner, '_socket_send_frame',
+        lambda _sock, payload, **_kwargs: sent.append(payload),
+    )
+
+    def identity_reader(pid):
+        return {
+            'pid': pid, 'process_group_id': pid, 'session_id': pid,
+            'start_ticks': 91,
+        }
+
+    def popen(*_args, **_kwargs):
+        return process
+    monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    return listener, identity_reader, popen
+
+
+def _publisher_frames():
+    return iter((
+        {'schema_id': runner.GATED_HELPER_SCHEMA,
+         'event': 'READY_FOR_RELEASE', 'pid': _PublisherFakeProcess.pid,
+         'nonce': 'filled-by-test', 'binding_sha256': 'filled-by-test',
+         'deadline_monotonic_ns': 5_000_000_000},
+        {'schema_id': runner.GATED_HELPER_SCHEMA,
+         'event': 'RELEASE_ACCEPTED', 'nonce': 'filled-by-test',
+         'binding_sha256': 'filled-by-test'},
+        EOFError('target exec closed control channel'),
+    ))
+
+
+def test_publisher_operation_uses_one_budget_after_handshake(monkeypatch):
+    """Handshake time is deducted from communicate's remaining budget."""
+    now = [0.0]
+    process = _PublisherFakeProcess()
+    sent = []
+    received = _publisher_frames()
+    _listener, identity_reader, popen = _patch_publisher_operation_fakes(
+        monkeypatch, now=now, process=process, received=received, sent=sent,
+    )
+    holder = {}
+
+    def callback(record):
+        holder['record'] = record
+        now[0] = 2.0
+
+    def receive(_sock, **_kwargs):
+        frame = next(received)
+        if isinstance(frame, BaseException):
+            raise frame
+        if frame['event'] == 'READY_FOR_RELEASE':
+            frame['pid'] = process.pid
+            frame['nonce'] = holder['record']['nonce']
+            frame['binding_sha256'] = holder['record']['binding_sha256']
+            frame['deadline_monotonic_ns'] = (
+                holder['record']['operation_deadline_monotonic_ns']
+            )
+            assert frame == {
+                'schema_id': runner.GATED_HELPER_SCHEMA,
+                'event': 'READY_FOR_RELEASE', 'pid': process.pid,
+                'nonce': holder['record']['nonce'],
+                'binding_sha256': holder['record']['binding_sha256'],
+                'deadline_monotonic_ns': (
+                    holder['record']['operation_deadline_monotonic_ns']
+                ),
+            }
+        if frame['event'] == 'RELEASE_ACCEPTED':
+            frame['nonce'] = sent[0]['nonce']
+            frame['binding_sha256'] = sent[0]['binding_sha256']
+        return frame
+
+    monkeypatch.setattr(runner, '_socket_recv_frame', receive)
+    result = runner.publish_review_result_bounded(
+        '/tmp/request.json', verdict='PASS', reason='seen',
+        request_deadline=20.0, steady=lambda: now[0],
+        on_started=callback, identity_reader=identity_reader, popen=popen,
+    )
+    assert result['exit_status'] == 0
+    assert process.communicate_timeout == pytest.approx(3.0)
+    assert [item['event'] for item in sent] == ['RELEASE', 'EXEC_COMMIT']
+
+
+def test_publisher_operation_expiry_after_handshake_blocks_exec_commit(
+        monkeypatch):
+    """An expired operation deadline cannot release target execution."""
+    now = [0.0]
+    process = _PublisherFakeProcess()
+    sent = []
+    received = _publisher_frames()
+    signals = []
+    _listener, identity_reader, popen = _patch_publisher_operation_fakes(
+        monkeypatch, now=now, process=process, received=received, sent=sent,
+    )
+
+    def callback(record):
+        now[0] = 5.0
+
+    def signal_group(pgid, sig):
+        signals.append((pgid, sig))
+        process.returncode = -sig
+
+    with pytest.raises(runner.ObservationFailure, match='deadline'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='seen',
+            request_deadline=20.0, steady=lambda: now[0],
+            on_started=callback, signal_group=signal_group,
+            identity_reader=identity_reader, popen=popen,
+        )
+    assert not sent
+    assert signals == [(process.pid, signal.SIGTERM)]
+
+
+def test_publisher_communicate_completion_after_deadline_fails(monkeypatch):
+    """A late exit cannot become a successful publisher result."""
+    now = [0.0]
+    process = _PublisherFakeProcess(now=now)
+    sent = []
+    received = _publisher_frames()
+    _listener, identity_reader, popen = _patch_publisher_operation_fakes(
+        monkeypatch, now=now, process=process, received=received, sent=sent,
+    )
+    holder = {}
+
+    def receive(_sock, **_kwargs):
+        frame = next(received)
+        if isinstance(frame, BaseException):
+            raise frame
+        if frame['event'] == 'READY_FOR_RELEASE':
+            frame['pid'] = process.pid
+            frame['nonce'] = holder['record']['nonce']
+            frame['binding_sha256'] = holder['record']['binding_sha256']
+            frame['deadline_monotonic_ns'] = (
+                holder['record']['operation_deadline_monotonic_ns']
+            )
+        if frame['event'] == 'RELEASE_ACCEPTED':
+            frame['nonce'] = sent[0]['nonce']
+            frame['binding_sha256'] = sent[0]['binding_sha256']
+        return frame
+
+    monkeypatch.setattr(runner, '_socket_recv_frame', receive)
+    with pytest.raises(runner.ObservationFailure, match='deadline'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='seen',
+            request_deadline=20.0, steady=lambda: now[0],
+            on_started=lambda record: holder.update(record=record),
+            identity_reader=identity_reader, popen=popen,
+        )
+    assert process.returncode == 0
+    assert [item['event'] for item in sent] == ['RELEASE', 'EXEC_COMMIT']
+
+
+def test_framed_partial_read_recomputes_remaining_deadline():
+    """A partial frame cannot restart the socket timeout per recv."""
+    now = [0.0]
+    wire = (4).to_bytes(4, 'big') + b'{"x":1}'
+
+    class PartialSocket:
+        def __init__(self):
+            self.timeouts = []
+            self.calls = 0
+
+        def settimeout(self, value):
+            self.timeouts.append(value)
+
+        def recv(self, _size):
+            self.calls += 1
+            if self.calls == 1:
+                now[0] = 4.95
+                return wire[:1]
+            now[0] = 5.0
+            return wire[1:2]
+
+    sock = PartialSocket()
+    with pytest.raises(TimeoutError):
+        runner._socket_recv_frame(sock, deadline=5.0, steady=lambda: now[0])
+    assert sock.calls == 2
+    assert sock.timeouts[0] == pytest.approx(5.0)
+    assert sock.timeouts[1] == pytest.approx(0.05)
+
+
+def test_publisher_operation_timeout_cleans_verified_identity_bounded(
+        monkeypatch):
+    """Timeout uses bounded verified signaling and reports unknown residue."""
+    now = [0.0]
+    process = _PublisherFakeProcess(
+        communicate_error=subprocess.TimeoutExpired('publisher', 2.0),
+    )
+    sent = []
+    received = _publisher_frames()
+    signals = []
+    _listener, identity_reader, popen = _patch_publisher_operation_fakes(
+        monkeypatch, now=now, process=process, received=received, sent=sent,
+    )
+    holder = {}
+
+    def receive(_sock, **_kwargs):
+        frame = next(received)
+        if isinstance(frame, BaseException):
+            raise frame
+        if frame['event'] == 'READY_FOR_RELEASE':
+            frame['pid'] = process.pid
+            frame['nonce'] = holder['record']['nonce']
+            frame['binding_sha256'] = holder['record']['binding_sha256']
+            frame['deadline_monotonic_ns'] = (
+                holder['record']['operation_deadline_monotonic_ns']
+            )
+        if frame['event'] == 'RELEASE_ACCEPTED':
+            frame['nonce'] = sent[0]['nonce']
+            frame['binding_sha256'] = sent[0]['binding_sha256']
+        return frame
+
+    monkeypatch.setattr(runner, '_socket_recv_frame', receive)
+
+    def signal_group(pgid, sig):
+        signals.append((pgid, sig))
+
+    with pytest.raises(runner.ObservationFailure, match='residue unknown'):
+        runner.publish_review_result_bounded(
+            '/tmp/request.json', verdict='PASS', reason='seen',
+            request_deadline=20.0, steady=lambda: now[0],
+            on_started=lambda record: holder.update(record=record),
+            signal_group=signal_group,
+            identity_reader=identity_reader, popen=popen,
+        )
+    assert signals == [
+        (process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL),
+    ]
+    assert process.wait_calls
+
+
+def test_default_publish_cli_writes_ownership_evidence_before_target(
+        tmp_path, monkeypatch, capsys):
+    """The CLI's default callback publishes binding before target release."""
+    root = tmp_path / 'evidence'
+    root.mkdir()
+    request_path, _request_bytes, request, _image = request_fixture(
+        root, steady_ns=time.monotonic_ns(),
+    )
+    monkeypatch.setattr(runner, 'EVIDENCE_ROOT', root)
+    artifact = (
+        root / 'review_mailbox' / 'results'
+        / f"{request['review_request_id']}.publisher-ownership.json"
+    )
+    marker = tmp_path / 'publisher-target-ran'
+    target = (
+        'import json; from pathlib import Path; '
+        f'artifact=Path({str(artifact)!r}); '
+        'record=json.loads(artifact.read_text()); '
+        'assert record["run_id"] == "B22_GUI_OBSERVATION_RUN006"; '
+        f'Path({str(marker)!r}).write_text(record["gate_nonce"])'
+    )
+    bounded = runner.publish_review_result_bounded
+
+    def default_cli_bounded(*args, **kwargs):
+        assert callable(kwargs.get('on_started'))
+        kwargs['helper_command_factory'] = (
+            lambda _role, _planned: _python_target(target)
+        )
+        return bounded(*args, **kwargs)
+
+    monkeypatch.setattr(runner, 'publish_review_result_bounded',
+                        default_cli_bounded)
+    runner.main([
+        '--publish-review-result', str(request_path), '--verdict', 'PASS',
+        '--reason', 'fake-only CLI binding check',
+        '--viewer-ref-state', 'TOOL_NO_STABLE_REFERENCE',
+    ])
+    result = json.loads(capsys.readouterr().out)
+    ownership = json.loads(artifact.read_text())
+    assert marker.read_text() == ownership['gate_nonce']
+    assert result['evidence_before_release'] is True
+    assert result['evidence_artifact_path'] == str(artifact)
+    assert result['evidence_artifact_sha256'] == hashlib.sha256(
+        artifact.read_bytes()
+    ).hexdigest()
+    assert ownership['session_id'] == request['session_id']
+    assert ownership['packet_sha256'] == request['packet_sha256']
+    assert ownership['process_identity']['pid'] == result['worker_pid']
+
+
+def test_default_publish_cli_evidence_failure_blocks_target_and_cleans(
+        tmp_path, monkeypatch, capsys):
+    """Default CLI evidence failure prevents release and cleans its helper."""
+    root = tmp_path / 'evidence'
+    root.mkdir()
+    request_path, _request_bytes, request, _image = request_fixture(
+        root, steady_ns=time.monotonic_ns(),
+    )
+    monkeypatch.setattr(runner, 'EVIDENCE_ROOT', root)
+    artifact = (
+        root / 'review_mailbox' / 'results'
+        / f"{request['review_request_id']}.publisher-ownership.json"
+    )
+    marker = tmp_path / 'publisher-target-must-not-run'
+    target = f'from pathlib import Path; Path({str(marker)!r}).touch()'
+    real_atomic_publish = runner.atomic_publish
+
+    def fail_ownership_write(path, data):
+        if str(path).endswith('.publisher-ownership.json'):
+            raise OSError('injected ownership evidence write failure')
+        return real_atomic_publish(path, data)
+
+    monkeypatch.setattr(runner, 'atomic_publish', fail_ownership_write)
+    bounded = runner.publish_review_result_bounded
+    captured = []
+
+    def default_cli_bounded(*args, **kwargs):
+        callback = kwargs['on_started']
+        kwargs['on_started'] = lambda record: (
+            captured.append(record), callback(record)
+        )[-1]
+        kwargs['helper_command_factory'] = (
+            lambda _role, _planned: _python_target(target)
+        )
+        return bounded(*args, **kwargs)
+
+    monkeypatch.setattr(runner, 'publish_review_result_bounded',
+                        default_cli_bounded)
+    with pytest.raises(SystemExit, match='injected ownership evidence write'):
+        runner.main([
+            '--publish-review-result', str(request_path), '--verdict', 'PASS',
+            '--reason', 'fake-only evidence failure check',
+            '--viewer-ref-state', 'TOOL_NO_STABLE_REFERENCE',
+        ])
+    assert captured and captured[0]['process'].returncode is not None
+    assert not marker.exists()
+    assert not artifact.exists()
+    assert 'evidence' in capsys.readouterr().err.lower() or captured
 
 
 def test_gated_helper_records_identity_before_immediate_target_exec(tmp_path):

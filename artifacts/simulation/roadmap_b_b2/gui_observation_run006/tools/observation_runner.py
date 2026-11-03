@@ -594,9 +594,14 @@ def _gated_wrapper_argv(role, command, socket_path, nonce, deadline_ns):
     ), binding, binding_hash
 
 
-def _socket_recv_exact(sock, size):
+def _socket_recv_exact(sock, size, *, deadline=None, steady=time.monotonic):
     chunks = bytearray()
     while len(chunks) < size:
+        if deadline is not None:
+            remaining = deadline - steady()
+            if remaining <= 0:
+                raise socket.timeout('gated helper frame deadline expired')
+            sock.settimeout(remaining)
         chunk = sock.recv(size - len(chunks))
         if not chunk:
             raise EOFError('gated helper control channel closed')
@@ -604,18 +609,28 @@ def _socket_recv_exact(sock, size):
     return bytes(chunks)
 
 
-def _socket_send_frame(sock, payload):
+def _socket_send_frame(sock, payload, *, deadline=None,
+                       steady=time.monotonic):
     data = _canonical_json_bytes(payload)
     if not data or len(data) > GATED_HELPER_MAX_FRAME:
         raise ObservationFailure('gated helper control frame size invalid')
+    if deadline is not None:
+        remaining = deadline - steady()
+        if remaining <= 0:
+            raise socket.timeout('gated helper frame deadline expired')
+        sock.settimeout(remaining)
     sock.sendall(struct.pack('!I', len(data)) + data)
 
 
-def _socket_recv_frame(sock):
-    size = struct.unpack('!I', _socket_recv_exact(sock, 4))[0]
+def _socket_recv_frame(sock, *, deadline=None, steady=time.monotonic):
+    size = struct.unpack('!I', _socket_recv_exact(
+        sock, 4, deadline=deadline, steady=steady,
+    ))[0]
     if size <= 0 or size > GATED_HELPER_MAX_FRAME:
         raise ObservationFailure('gated helper control frame size invalid')
-    raw = _socket_recv_exact(sock, size)
+    raw = _socket_recv_exact(
+        sock, size, deadline=deadline, steady=steady,
+    )
     value = strict_json_loads(raw)
     if not isinstance(value, dict):
         raise ObservationFailure('gated helper control frame is not an object')
@@ -649,9 +664,13 @@ def _gated_helper_worker(socket_path, nonce, deadline_ns, target_b64,
                 'gated helper deadline expired before ready'
             )
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(max(
-            0.001, (int(deadline_ns) - time.monotonic_ns()) / 1e9,
-        ))
+        operation_deadline = int(deadline_ns) / 1_000_000_000
+        remaining = (int(deadline_ns) - time.monotonic_ns()) / 1e9
+        if remaining <= 0:
+            raise ReviewInvalidated(
+                'gated helper deadline expired before connect'
+            )
+        connection.settimeout(remaining)
         connection.connect(socket_path)
         ready = {
             'schema_id': GATED_HELPER_SCHEMA,
@@ -661,8 +680,12 @@ def _gated_helper_worker(socket_path, nonce, deadline_ns, target_b64,
             'binding_sha256': expected_hash,
             'deadline_monotonic_ns': int(deadline_ns),
         }
-        _socket_send_frame(connection, ready)
-        release = _socket_recv_frame(connection)
+        _socket_send_frame(
+            connection, ready, deadline=operation_deadline,
+        )
+        release = _socket_recv_frame(
+            connection, deadline=operation_deadline,
+        )
         if (set(release) != {'schema_id', 'event', 'nonce',
                              'binding_sha256', 'deadline_monotonic_ns'}
                 or release['schema_id'] != GATED_HELPER_SCHEMA
@@ -680,8 +703,10 @@ def _gated_helper_worker(socket_path, nonce, deadline_ns, target_b64,
             'schema_id': GATED_HELPER_SCHEMA,
             'event': 'RELEASE_ACCEPTED', 'nonce': nonce,
             'binding_sha256': expected_hash,
-        })
-        commit = _socket_recv_frame(connection)
+        }, deadline=operation_deadline)
+        commit = _socket_recv_frame(
+            connection, deadline=operation_deadline,
+        )
         if (set(commit) != {'schema_id', 'event', 'nonce',
                             'binding_sha256', 'deadline_monotonic_ns'}
                 or commit['schema_id'] != GATED_HELPER_SCHEMA
@@ -705,7 +730,7 @@ def _gated_helper_worker(socket_path, nonce, deadline_ns, target_b64,
                 'binding_sha256': expected_hash,
                 'error_type': type(error).__name__,
                 'reason': str(error)[:512],
-            })
+            }, deadline=operation_deadline)
             return 126
     except BaseException as error:
         if connection is not None:
@@ -715,7 +740,7 @@ def _gated_helper_worker(socket_path, nonce, deadline_ns, target_b64,
                     'event': 'GATE_ERROR', 'nonce': nonce,
                     'error_type': type(error).__name__,
                     'reason': str(error)[:512],
-                })
+                }, deadline=(int(deadline_ns) / 1_000_000_000))
             except BaseException:
                 pass
         return 125
@@ -1344,6 +1369,73 @@ def _finalize_publisher_process(
     return f'residue unknown: publisher still alive pid={process.pid}'
 
 
+def _verify_publisher_ownership_artifact(record, request_path):
+    """Re-read the no-replace pre-release artifact and verify all bindings."""
+    artifact_path = record.get('evidence_artifact_path')
+    artifact_hash = record.get('evidence_artifact_sha256')
+    request_path = Path(request_path)
+    expected_path = request_path.parent.parent / 'results' / (
+        request_path.stem + '.publisher-ownership.json'
+    )
+    if (not record.get('evidence_before_release')
+            or Path(artifact_path or '') != expected_path
+            or not isinstance(artifact_hash, str)):
+        return None
+    data = read_published(expected_path)
+    if sha256_bytes(data) != artifact_hash:
+        raise ObservationFailure(
+            'publisher ownership evidence hash mismatch before release'
+        )
+    payload = strict_json_loads(data)
+    required = {
+        'schema_id', 'event', 'run_id', 'session_id', 'packet_sha256',
+        'review_request_id', 'request_sha256', 'screenshot_sha256',
+        'process_identity', 'gate_nonce', 'gate_binding_sha256',
+        'planned_command_sha256', 'wrapper_command_sha256',
+        'operation_deadline_monotonic_ns', 'recorded_monotonic_ns',
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ObservationFailure(
+            'publisher ownership evidence schema mismatch before release'
+        )
+    request_bytes = read_published(request_path)
+    request = strict_json_loads(request_bytes)
+    evidence_root = request_path.parent.parent.parent
+    validate_review_request(
+        request, evidence_root=evidence_root,
+        packet_hash=request.get('packet_sha256'),
+        session_id=request.get('session_id'),
+    )
+    expected_bindings = {
+        'schema_id': 'b22_gui_codex_publisher_ownership/v1',
+        'event': 'publisher_identity_verified_before_release',
+        'run_id': request['run_id'],
+        'session_id': request['session_id'],
+        'packet_sha256': request['packet_sha256'],
+        'review_request_id': request['review_request_id'],
+        'request_sha256': sha256_bytes(request_bytes),
+        'screenshot_sha256': request['screenshot_sha256'],
+        'process_identity': record['identity'],
+        'gate_nonce': record['nonce'],
+        'gate_binding_sha256': record['binding_sha256'],
+        'planned_command_sha256': sha256_bytes(
+            _canonical_json_bytes(list(record['planned_command']))
+        ),
+        'wrapper_command_sha256': sha256_bytes(
+            _canonical_json_bytes(list(record['wrapper_command']))
+        ),
+        'operation_deadline_monotonic_ns': record[
+            'operation_deadline_monotonic_ns'
+        ],
+    }
+    for key, expected in expected_bindings.items():
+        if payload.get(key) != expected:
+            raise ObservationFailure(
+                f'publisher ownership evidence binding mismatch: {key}'
+            )
+    return str(expected_path), artifact_hash
+
+
 def publish_review_result_bounded(
     request_path, *, verdict, reason, viewer_interaction_ref=None,
     viewer_ref_state='TOOL_NO_STABLE_REFERENCE', request_deadline,
@@ -1352,10 +1444,19 @@ def publish_review_result_bounded(
     on_started=None, helper_command_factory=None,
 ):
     """Run the file-only writer in an owned group with bounded cleanup."""
-    remaining = request_deadline - steady()
-    if remaining < 7.0:
+    operation_started = steady()
+    if request_deadline - operation_started < 7.0:
         raise ReviewInvalidated('less than 7 seconds remain for publisher')
-    budget = min(5.0, remaining)
+    operation_deadline = min(operation_started + 5.0, request_deadline)
+
+    def remaining_operation(phase):
+        remaining = operation_deadline - steady()
+        if remaining <= 0:
+            raise ReviewInvalidated(
+                f'publisher operation deadline expired during {phase}'
+            )
+        return remaining
+
     argv = [
         sys.executable, str(Path(__file__).resolve()),
         '--review-publish-worker', str(request_path), '--verdict', verdict,
@@ -1374,15 +1475,17 @@ def publish_review_result_bounded(
     record = None
     ownership_facts = []
     try:
+        remaining_operation('setup')
         os.chmod(gate_dir, 0o700)
         listener.bind(socket_path)
         listener.listen(1)
-        listener.settimeout(max(0.001, request_deadline - steady()))
+        listener.settimeout(remaining_operation('listen'))
         nonce = uuid.uuid4().hex
-        deadline_ns = int(request_deadline * 1_000_000_000)
+        deadline_ns = int(operation_deadline * 1_000_000_000)
         wrapper, binding, binding_hash = _gated_wrapper_argv(
             'publisher', argv, socket_path, nonce, deadline_ns,
         )
+        remaining_operation('spawn')
         process = popen(
             wrapper, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, start_new_session=True,
@@ -1393,7 +1496,10 @@ def publish_review_result_bounded(
             'planned_command': tuple(argv),
             'wrapper_command': tuple(wrapper), 'nonce': nonce,
             'binding_sha256': binding_hash,
+            'operation_deadline_monotonic_ns': deadline_ns,
+            'evidence_before_release': False,
         }
+        remaining_operation('spawn_completion')
         identity = identity_reader(process.pid)
         if (not _valid_process_identity(identity, process.pid)
                 or identity['process_group_id'] != process.pid
@@ -1402,23 +1508,33 @@ def publish_review_result_bounded(
                 'publisher worker ownership is unverified'
             )
         record['identity'] = identity
-        ownership_facts.append({
+        remaining_operation('identity_validation')
+        if on_started is not None:
+            on_started(record)
+        remaining_operation('pre_release_evidence')
+        verified_evidence = _verify_publisher_ownership_artifact(
+            record, request_path,
+        )
+        evidence_written = verified_evidence is not None
+        ownership_fact = {
             'event': 'publisher_identity_before_release',
             'pid': process.pid, 'process_identity': identity,
             'planned_command': list(argv),
             'wrapper_command': list(wrapper), 'nonce': nonce,
             'binding_sha256': binding_hash,
-            'evidence_before_release': True,
-        })
-        if on_started is not None:
-            on_started(record)
-        if request_deadline - steady() <= 0:
-            raise ReviewInvalidated(
-                'publisher deadline expired before gate handshake'
-            )
+            'operation_deadline_monotonic_ns': deadline_ns,
+            'evidence_before_release': evidence_written,
+        }
+        if evidence_written:
+            ownership_fact['evidence_artifact_path'] = verified_evidence[0]
+            ownership_fact['evidence_artifact_sha256'] = verified_evidence[1]
+        ownership_facts.append(ownership_fact)
+        listener.settimeout(remaining_operation('before_accept'))
         control, _address = listener.accept()
-        control.settimeout(max(0.001, request_deadline - steady()))
-        hello = _socket_recv_frame(control)
+        remaining_operation('accept')
+        hello = _socket_recv_frame(
+            control, deadline=operation_deadline, steady=steady,
+        )
         expected = {
             'schema_id': GATED_HELPER_SCHEMA,
             'event': 'READY_FOR_RELEASE', 'pid': process.pid,
@@ -1429,17 +1545,16 @@ def publish_review_result_bounded(
             raise ObservationFailure(
                 'publisher gate READY binding/identity mismatch'
             )
-        if request_deadline - steady() <= 0:
-            raise ReviewInvalidated(
-                'publisher deadline expired before release'
-            )
+        remaining_operation('before_release')
         _socket_send_frame(control, {
             'schema_id': GATED_HELPER_SCHEMA, 'event': 'RELEASE',
             'nonce': nonce, 'binding_sha256': binding_hash,
             'deadline_monotonic_ns': deadline_ns,
-        })
-        control.settimeout(max(0.001, request_deadline - steady()))
-        accepted = _socket_recv_frame(control)
+        }, deadline=operation_deadline, steady=steady)
+        accepted = _socket_recv_frame(
+            control, deadline=operation_deadline, steady=steady,
+        )
+        remaining_operation('release_acknowledgement')
         if accepted != {
                 'schema_id': GATED_HELPER_SCHEMA,
                 'event': 'RELEASE_ACCEPTED', 'nonce': nonce,
@@ -1452,20 +1567,19 @@ def publish_review_result_bounded(
             raise ObservationFailure(
                 'publisher gate release acknowledgement mismatch'
             )
-        if request_deadline - steady() <= 0:
-            raise ReviewInvalidated(
-                'publisher deadline expired before exec commit'
-            )
+        remaining_operation('before_exec_commit')
         _socket_send_frame(control, {
             'schema_id': GATED_HELPER_SCHEMA, 'event': 'EXEC_COMMIT',
             'nonce': nonce, 'binding_sha256': binding_hash,
             'deadline_monotonic_ns': deadline_ns,
-        })
-        control.settimeout(max(0.001, request_deadline - steady()))
+        }, deadline=operation_deadline, steady=steady)
         try:
-            trailing = _socket_recv_frame(control)
+            trailing = _socket_recv_frame(
+                control, deadline=operation_deadline, steady=steady,
+            )
         except EOFError:
             trailing = None
+        remaining_operation('exec_acknowledgement')
         if trailing is not None:
             if trailing.get('event') == 'EXEC_ERROR':
                 raise ObservationFailure(
@@ -1475,12 +1589,11 @@ def publish_review_result_bounded(
             raise ObservationFailure(
                 'publisher gate sent unexpected post-release data'
             )
-        remaining = request_deadline - steady()
-        if remaining <= 0:
-            raise ReviewInvalidated('publisher deadline expired before wait')
+        remaining = remaining_operation('communicate')
         stdout, stderr = process.communicate(
-            timeout=min(budget, remaining),
+            timeout=remaining,
         )
+        remaining_operation('communicate_completion')
         if process.returncode != 0:
             raise ObservationFailure(
                 'publisher worker failed: '
@@ -1492,15 +1605,24 @@ def publish_review_result_bounded(
             'planned_command': list(argv),
             'wrapper_command': list(wrapper),
             'gate_nonce': nonce, 'gate_binding_sha256': binding_hash,
+            'operation_deadline_monotonic_ns': deadline_ns,
             'ownership_facts': ownership_facts,
+            'evidence_before_release': evidence_written,
+            'evidence_artifact_path': (
+                verified_evidence[0] if verified_evidence else None
+            ),
+            'evidence_artifact_sha256': (
+                verified_evidence[1] if verified_evidence else None
+            ),
             'stdout': stdout.decode(errors='replace')[:512],
             'cleanup_status': 'not_required',
         }
     except BaseException as error:
         residue = None
         if process is not None:
+            cleanup_deadline = min(request_deadline, steady() + 1.0)
             residue = _finalize_publisher_process(
-                process, identity, deadline=request_deadline,
+                process, identity, deadline=cleanup_deadline,
                 steady=steady, identity_reader=identity_reader,
                 signal_group=signal_group,
             )
@@ -1520,6 +1642,77 @@ def publish_review_result_bounded(
             os.rmdir(gate_dir)
         except OSError:
             pass
+
+
+def publisher_pre_release_evidence_callback(
+    request_path, request_bytes, request, *, evidence_root=None,
+    publish=None, monotonic_ns=time.monotonic_ns,
+):
+    """Create a request-bound mailbox artifact before publisher release."""
+    root = Path(EVIDENCE_ROOT if evidence_root is None else evidence_root)
+    request_path = Path(request_path)
+    expected_request_dir = root / 'review_mailbox' / 'requests'
+    expected_result_dir = root / 'review_mailbox' / 'results'
+    publish = publish or atomic_publish
+    if request_path.parent != expected_request_dir:
+        raise ObservationFailure(
+            'publisher evidence request path is not canonical'
+        )
+    if sha256_bytes(request_bytes) != sha256_bytes(
+            read_published(request_path)):
+        raise ObservationFailure('publisher evidence request changed')
+    validate_review_request(
+        request, evidence_root=root, packet_hash=request['packet_sha256'],
+        session_id=request['session_id'],
+    )
+
+    def record_evidence(record):
+        process_identity = record.get('identity')
+        if (not _valid_process_identity(
+                process_identity, record['process'].pid)
+                or process_identity['process_group_id']
+                != record['process'].pid
+                or process_identity['session_id']
+                != record['process'].pid):
+            raise ObservationFailure(
+                'publisher evidence requires verified process identity'
+            )
+        payload = {
+            'schema_id': 'b22_gui_codex_publisher_ownership/v1',
+            'event': 'publisher_identity_verified_before_release',
+            'run_id': request['run_id'],
+            'session_id': request['session_id'],
+            'packet_sha256': request['packet_sha256'],
+            'review_request_id': request['review_request_id'],
+            'request_sha256': sha256_bytes(request_bytes),
+            'screenshot_sha256': request['screenshot_sha256'],
+            'process_identity': process_identity,
+            'gate_nonce': record['nonce'],
+            'gate_binding_sha256': record['binding_sha256'],
+            'planned_command_sha256': sha256_bytes(
+                _canonical_json_bytes(list(record['planned_command']))
+            ),
+            'wrapper_command_sha256': sha256_bytes(
+                _canonical_json_bytes(list(record['wrapper_command']))
+            ),
+            'operation_deadline_monotonic_ns': record[
+                'operation_deadline_monotonic_ns'
+            ],
+            'recorded_monotonic_ns': monotonic_ns(),
+        }
+        artifact_path = expected_result_dir / (
+            request['review_request_id'] + '.publisher-ownership.json'
+        )
+        data = (json.dumps(
+            payload, sort_keys=True, separators=(',', ':'),
+        ) + '\n').encode('utf-8')
+        publish(artifact_path, data)
+        record['evidence_artifact_path'] = str(artifact_path)
+        record['evidence_artifact_sha256'] = sha256_bytes(data)
+        record['evidence_before_release'] = True
+        return artifact_path
+
+    return record_evidence
 
 
 class ReadinessAdapter:
@@ -4572,6 +4765,9 @@ def main(argv=None):
                 viewer_interaction_ref=args.viewer_ref,
                 viewer_ref_state=args.viewer_ref_state,
                 request_deadline=time.monotonic() + remaining,
+                on_started=publisher_pre_release_evidence_callback(
+                    request_path, request_bytes, request,
+                ),
             )
         except BaseException as error:
             raise SystemExit(f'RUN006 review publisher: {error}') from error
