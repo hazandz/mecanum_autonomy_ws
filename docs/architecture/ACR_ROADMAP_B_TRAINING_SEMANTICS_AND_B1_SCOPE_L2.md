@@ -579,3 +579,23 @@ required. RUN001 and RUN002 remain consumed/FAIL with their evidence preserved;
 their approval, guard, acquisition, and evidence are not reusable. This item
 does not alter other B1/B2 contracts or authorize B2.3, training, HIL,
 integration, or real-robot activity.
+
+## 12. RUN004 inheritance and offline packet preparation (L2, 2026-11-03)
+
+The Owner's RUN004 preparation prompt carries forward the Codex-owned GUI image
+review acceptance in §§10–11 without changing its semantics. RUN004 binds its
+production source pin to `10d112548f30f94d8beba50fb4fd925a7d645570`. Its
+readiness path uses the audited canonical `RclpyReadiness` worker, with the
+RUN004 adapter forwarding the evidence sink and checking the supervisor's
+environment against the launch plan. RUN004 also records each received backend
+status and clock sample before validation so a triggering sample is retained
+with its processing and detection timestamps; receive time is not represented
+as backend publication time.
+
+This decision authorizes offline packet preparation and its specified offline
+checks only. It grants no runtime authorization, capacity, Gate, milestone,
+training, B2.3, or integration transition. RUN001, RUN002, and RUN003 remain
+consumed/FAIL; their approval, guard, acquisition, mailbox, and evidence are
+not reusable. A separately audited exact RUN004 packet/commit and explicit
+Owner runtime authorization are required. This item does not alter other B1/B2
+contracts or authorize HIL or real-robot activity.
