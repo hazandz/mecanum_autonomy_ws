@@ -5,8 +5,10 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,12 +111,10 @@ class ControlledInput:
             self.release.set()
 
     async def wait_closed(self):
-        """Optionally hold stdin-close completion for the test."""
+        """Wait on the actual child/pipe close state on every call."""
         self.wait_closed_calls += 1
-        if self.mode == 'wait_closed' and self.wait_closed_calls == 1:
+        if self.mode == 'wait_closed':
             await self.release.wait()
-        elif self.mode == 'wait_closed':
-            self.release.set()
 
 
 class ControlledWorker:
@@ -194,6 +194,129 @@ def protocol_transcript(request, *, scene_outcome='MATCH', ready=True):
             'monotonic_ns': time.monotonic_ns(), 'facts': facts,
         })
     return digest, records
+
+
+def run_emitted_full_window(monkeypatch, *, match_at):
+    """Exercise production emitter and FSM using a fake clock."""
+    import mecanum_nav_bringup.local_training_readiness_worker as worker_module
+
+    class Clock:
+        def __init__(self):
+            self.now_ns = time.monotonic_ns()
+            self.starts = []
+
+        def __call__(self):
+            return self.now_ns
+
+        def sleep(self, seconds):
+            self.now_ns += int(seconds * 1_000_000_000)
+
+    class TimeProxy:
+        monotonic = staticmethod(time.monotonic)
+        monotonic_ns = staticmethod(time.monotonic_ns)
+
+        @staticmethod
+        def sleep(seconds):
+            clock.sleep(seconds)
+
+    clock = Clock()
+    monkeypatch.setattr(worker_module, 'time', TimeProxy)
+    monkeypatch.setenv('GZ_PARTITION', 'mecanum_b2_testpartition')
+    monkeypatch.setenv('ROS_DOMAIN_ID', '83')
+    plan = replace(
+        make_plan(), coordinator_ingress_instance_id=(1 << 64) - 1,
+    )
+    request = RclpyReadiness()._make_request(
+        plan, CONFIG_HASH, clock.now_ns + 30_000_000_000,
+    )
+
+    class Status:
+        header = SimpleNamespace(frame_id=request['world_id'])
+        session_id = request['session_id']
+        config_hash = request['config_hash']
+        backend_instance_id = 9
+        status_sequence = 1
+        fault_flags = 0
+        actuator_inhibited = True
+
+    class StatusSource:
+        def start(self):
+            """Start the deterministic fake status source."""
+
+        def next_status(self, _timeout_s):
+            """Return the same healthy, exactly bound status."""
+            return Status()
+
+        def close(self):
+            """Close the fake source without external resources."""
+
+    query_starts = []
+
+    class E(TimeoutError):
+        """Short timeout type maximizes bounded escaped error evidence."""
+
+    def scene_query(_service, _timeout_ms):
+        query_starts.append(clock.now_ns)
+        if match_at is not None and len(query_starts) == match_at:
+            return SimpleNamespace(
+                name=request['world_id'],
+                model=[SimpleNamespace(
+                    name=request['model_id'], model=[],
+                )],
+            )
+        if match_at is None or len(query_starts) % 2 == 0:
+            raise E('é\\"\n' + '\x00' * 249)
+        return None
+
+    request_digest = hashlib.sha256(
+        canonical_request_bytes(request),
+    ).hexdigest()
+
+    class RecordingEmitter:
+        def __init__(self, delegate):
+            self.delegate = delegate
+            self.failure = None
+
+        def emit(self, event, facts):
+            try:
+                return self.delegate.emit(event, facts)
+            except RuntimeError as error:
+                self.failure = str(error)
+                raise
+
+        def close(self):
+            self.delegate.close()
+
+    with tempfile.TemporaryFile() as output:
+        emitter = RecordingEmitter(worker_module._ProtocolEmitter(
+            os.dup(output.fileno()), request['request_id'], request_digest,
+        ))
+        result = worker_module.run_worker(
+            request, status_source_factory=StatusSource,
+            scene_query=scene_query, emitter=emitter, clock_ns=clock,
+        )
+        emitter.close()
+        output.seek(0)
+        payload = output.read()
+
+    lines = payload.splitlines(keepends=True)
+    parent = RclpyReadiness()
+    parent._active_request = request
+    parent.bind_evidence_sink(Sink())
+    parent._worker = SimpleNamespace(stdout=ChunkStream([payload]))
+    asyncio.run(parent._drain_stdout(request['request_id'], request_digest))
+    records = [json.loads(line) for line in lines]
+    return {
+        'request': request,
+        'query_starts': query_starts,
+        'result': result,
+        'emitter_failure': emitter.failure,
+        'payload_bytes': len(payload),
+        'record_bytes': [len(line) for line in lines],
+        'records': records,
+        'protocol_error': parent._protocol_error,
+        'protocol_state': parent._protocol_state,
+    }
 
 
 def make_plan():
@@ -353,7 +476,8 @@ transport.Node = TransportNode
 
 
 def readiness_with_child_fakes(
-    monkeypatch, tmp_path, sink_fail_event=None, **child_values,
+    monkeypatch, tmp_path, sink_fail_event=None, monotonic=None, sink=None,
+    **child_values,
 ):
     """Bind an isolated middleware-fake environment to the default client."""
     fake_root = tmp_path / 'child-fakes'
@@ -369,8 +493,9 @@ def readiness_with_child_fakes(
         supervisor, 'load_bound_config',
         lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
     )
-    readiness = RclpyReadiness()
-    sink = Sink(fail_event=sink_fail_event)
+    readiness_kwargs = {} if monotonic is None else {'monotonic': monotonic}
+    readiness = RclpyReadiness(**readiness_kwargs)
+    sink = sink or Sink(fail_event=sink_fail_event)
     LocalTrainingProcessSupervisor(
         plan=make_plan(), launcher=object(), readiness=readiness,
         evidence_sink=sink,
@@ -592,6 +717,37 @@ def test_pending_request_pipe_phase_is_deadline_bounded(
     assert readiness._residue == 'NONE'
 
 
+def test_persistent_stdin_close_does_not_block_verified_worker_signal(
+    monkeypatch,
+):
+    """Signal the verified worker while the same close waiter stays pending."""
+    worker = ControlledWorker('wait_closed')
+    readiness, sink = readiness_with_controlled_worker(monkeypatch, worker)
+    signal_events = []
+
+    def stop_on_verified_signal(process, identity, sig):
+        assert process is worker
+        assert identity['pid'] == worker.pid
+        signal_events.append(sig)
+        worker.stop()
+
+    readiness._signal_group = stop_on_verified_signal
+    with pytest.raises(
+        TimeoutError, match='deadline expired during stdin close',
+    ):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.05))
+    assert signal_events == [signal.SIGINT]
+    assert worker.returncode == 0
+    assert worker.stdin.wait_closed_calls == 1
+    events = [event for event, _facts in sink.events]
+    assert events.index('readiness_worker_cleanup_signal') < events.index(
+        'readiness_worker_stdin_closed'
+    )
+    assert readiness._process_residue == 'NONE'
+    assert readiness._task_residue == 'NONE'
+    assert readiness._residue == 'NONE'
+
+
 def test_server_exit_during_request_drain_cleans_worker(monkeypatch):
     """The parent notices server exit while request transfer is pending."""
     worker = ControlledWorker('drain')
@@ -759,6 +915,81 @@ def test_evidence_validation_overrun_cannot_return_ready(
     assert readiness._residue == 'NONE'
 
 
+@pytest.mark.parametrize(
+    'advance_at', [
+        None, 'readiness_worker_cleanup_started',
+        'readiness_worker_cleanup_finished',
+    ],
+)
+def test_parent_success_requires_deadline_after_finalization(
+    monkeypatch, tmp_path, advance_at,
+):
+    """The parent entry includes cleanup evidence in its READY deadline."""
+    class Clock:
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Clock()
+
+    class SinkWithClock(Sink):
+        def record(self, event, facts):
+            super().record(event, facts)
+            if event == advance_at:
+                clock.now = 1.1
+
+    sink = SinkWithClock()
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, monotonic=clock, sink=sink,
+    )
+    if advance_at is None:
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 1.0))
+        assert readiness._residue == 'NONE'
+    else:
+        with pytest.raises(TimeoutError, match='finalization'):
+            asyncio.run(
+                readiness.server_scene(make_plan(), ServerProcess(), 1.0)
+            )
+        assert readiness._readiness_deadline_violation
+        assert readiness._residue == 'NONE'
+        assert 'readiness_deadline_violation_after_finalization' in [
+            event for event, _facts in sink.events
+        ]
+
+
+def test_cleanup_finished_deadline_overrun_is_sticky_and_not_ready(
+    monkeypatch, tmp_path,
+):
+    """Late cleanup evidence cannot turn a worker READY result into success."""
+    class Clock:
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Clock()
+
+    class SlowCleanupFinishedSink(Sink):
+        def record(self, event, facts):
+            super().record(event, facts)
+            if event == 'readiness_worker_cleanup_finished':
+                clock.now = 3.1
+
+    sink = SlowCleanupFinishedSink()
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, monotonic=clock, sink=sink,
+    )
+    with pytest.raises(TimeoutError, match='cleanup deadline'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 10.0))
+    assert readiness._cleanup_deadline_violation
+    assert readiness._process_residue == 'NONE'
+    assert readiness._task_residue == 'NONE'
+    assert 'readiness_worker_cleanup_deadline_violation' in [
+        event for event, _facts in sink.events
+    ]
+
+
 @pytest.mark.parametrize('key,value', [
     ('FAKE_WORLD', 'other_world'),
     ('FAKE_SESSION', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
@@ -818,7 +1049,7 @@ def test_worker_requeries_until_matching_scene_in_same_attempt(
     result = records[-1]['facts']
     assert result['verdict'] == 'READY'
     assert len(starts) == 2
-    assert starts[1] - starts[0] >= 1_000_000_000
+    assert starts[1] - starts[0] >= 2_000_000_000
     assert finished[0]['outcome'] in {'ERROR', 'MISMATCH'}
     assert finished[1]['outcome'] == 'MATCH'
     assert len([event for event, _ in sink.events
@@ -869,11 +1100,88 @@ def test_worker_core_retries_timeout_without_new_attempt(monkeypatch):
     )
     assert result == 0
     assert len(calls) == 2
-    assert query_starts[1] - query_starts[0] >= 1_000_000_000
+    assert query_starts[1] - query_starts[0] >= 2_000_000_000
     assert [event for event, _ in emitter.records].count(
         'scene_query_finished',
     ) == 2
     assert emitter.records[-1][1]['verdict'] == 'READY'
+
+
+def test_full_window_emitter_and_parent_fsm_fit_with_late_match(
+    monkeypatch, tmp_path,
+):
+    """Prove a 30 s producer window fits and can match at query fifteen."""
+    result = run_emitted_full_window(monkeypatch, match_at=15)
+    intervals = [b - a for a, b in zip(
+        result['query_starts'], result['query_starts'][1:],
+    )]
+    metrics = {
+        'query_count': len(result['query_starts']),
+        'query_intervals_ns': intervals,
+        'payload_bytes': result['payload_bytes'],
+        'max_record_bytes': max(result['record_bytes']),
+        'result': result['records'][-1]['facts']['verdict'],
+        'coordinator_ingress_instance_id': result['request'][
+            'coordinator_ingress_instance_id'
+        ],
+        'parent_protocol_state': result['protocol_state'],
+        'emitter_failure': result['emitter_failure'],
+    }
+    (tmp_path / 'metrics.json').write_text(
+        json.dumps(metrics, sort_keys=True), encoding='utf-8',
+    )
+    assert metrics['coordinator_ingress_instance_id'] == (1 << 64) - 1
+    assert metrics['query_count'] == 15
+    assert all(interval >= 2_000_000_000 for interval in intervals)
+    assert metrics['max_record_bytes'] <= 4 * 1024
+    assert metrics['payload_bytes'] <= 64 * 1024
+    assert result['result'] == 0
+    assert metrics['result'] == 'READY'
+    assert result['protocol_error'] is None
+    assert result['protocol_state'] == 'TERMINAL'
+    assert result['emitter_failure'] is None
+
+
+def test_full_window_no_match_emitter_stays_bounded_and_returns_fail(
+    monkeypatch, tmp_path,
+):
+    """Bound all 15 query cycles with escaped transient errors to deadline."""
+    result = run_emitted_full_window(monkeypatch, match_at=None)
+    terminal = next((record for record in result['records']
+                     if record['event'] == 'worker_result'), None)
+    intervals = [b - a for a, b in zip(
+        result['query_starts'], result['query_starts'][1:],
+    )]
+    metrics = {
+        'query_count': len(result['query_starts']),
+        'query_intervals_ns': intervals,
+        'payload_bytes': result['payload_bytes'],
+        'max_record_bytes': max(result['record_bytes']),
+        'result': (terminal['facts'].get('verdict')
+                   if terminal is not None else None),
+        'parent_protocol_state': result['protocol_state'],
+        'emitter_failure': result['emitter_failure'],
+        'error_sample': next(
+            record['facts']['error']
+            for record in result['records']
+            if record['event'] == 'scene_query_finished'
+            and record['facts']['error'] is not None
+        ),
+    }
+    (tmp_path / 'metrics.json').write_text(
+        json.dumps(metrics, ensure_ascii=True, sort_keys=True),
+        encoding='utf-8',
+    )
+    assert metrics['query_count'] == 15
+    assert all(interval >= 2_000_000_000 for interval in intervals)
+    assert metrics['max_record_bytes'] <= 4 * 1024
+    assert metrics['payload_bytes'] <= 64 * 1024
+    assert '\\u0000' in json.dumps(metrics['error_sample'])
+    assert result['result'] == 1
+    assert metrics['result'] == 'FAIL'
+    assert result['protocol_error'] is None
+    assert result['protocol_state'] == 'TERMINAL'
+    assert result['emitter_failure'] is None
 
 
 def test_always_mismatched_scene_times_out_without_ready(
@@ -1075,6 +1383,52 @@ def test_exited_process_with_pending_drain_is_not_clean_and_deadline_is_stable(
         assert readiness._worker_cleanup_deadline == fixed_deadline
         assert readiness._process_residue == 'NONE'
         assert readiness._task_residue == 'UNKNOWN'
+
+    asyncio.run(exercise())
+
+
+def test_persistent_stdin_pending_escalates_and_remains_unknown(monkeypatch):
+    """Escalate verified signals despite a pending pipe and retain residue."""
+    worker = ControlledWorker('wait_closed')
+    signals = []
+    clock = [0.0]
+    readiness = RclpyReadiness(
+        monotonic=lambda: clock[0],
+        identity_reader=lambda _pid: {
+            'pid': worker.pid, 'process_group_id': worker.pid,
+            'session_id': worker.pid, 'start_ticks': 987,
+        },
+        signal_group=lambda _proc, _identity, sig: signals.append(sig),
+    )
+    sink = Sink()
+    readiness.bind_evidence_sink(sink)
+    readiness._worker = worker
+    readiness._worker_identity = {
+        'pid': worker.pid, 'process_group_id': worker.pid,
+        'session_id': worker.pid, 'start_ticks': 987,
+    }
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: None)
+
+    async def consume_phase_budget(timeout):
+        clock[0] += timeout
+        return False
+
+    readiness._wait_worker = consume_phase_budget
+
+    async def exercise():
+        readiness._worker_wait_task = asyncio.create_task(worker.wait())
+        await readiness._finalize_worker()
+        fixed = readiness._worker_cleanup_deadline
+        assert signals == [signal.SIGINT, signal.SIGTERM, signal.SIGKILL]
+        assert readiness._process_residue == 'UNKNOWN'
+        assert readiness._task_residue == 'UNKNOWN'
+        assert readiness._residue == 'UNKNOWN'
+        assert readiness._cleanup_deadline_violation
+        await readiness._finalize_worker()
+        assert readiness._worker_cleanup_deadline == fixed
+        assert signals == [signal.SIGINT, signal.SIGTERM, signal.SIGKILL]
+        assert readiness._cleanup_deadline_violation
+        assert readiness._residue == 'UNKNOWN'
 
     asyncio.run(exercise())
 

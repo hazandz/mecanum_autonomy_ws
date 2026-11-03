@@ -168,8 +168,12 @@ class RclpyReadiness:
         self._stdout_task = None
         self._stderr_task = None
         self._worker_wait_task = None
+        self._stdin_close_task = None
+        self._stdin_closed_recorded = False
         self._cleanup_phase = 0
         self._cleanup_record_error = False
+        self._cleanup_deadline_violation = False
+        self._readiness_deadline_violation = False
         self._protocol_records = []
         self._protocol_error = None
         self._protocol_state = 'EXPECT_WORKER_STARTED'
@@ -255,6 +259,8 @@ class RclpyReadiness:
         else:
             task = asyncio.create_task(operation)
             self._phase_tasks.add(task)
+            if label == 'stdin close':
+                self._stdin_close_task = task
         while True:
             if server.returncode is not None:
                 self._record('readiness_server_exit_detected', {
@@ -861,6 +867,32 @@ class RclpyReadiness:
         finally:
             active_exception = sys.exc_info()[0] is not None
             await self._finalize_worker()
+            deadline = self._readiness_deadline
+            if deadline is not None and self._monotonic() >= deadline:
+                self._readiness_deadline_violation = True
+                try:
+                    self._record(
+                        'readiness_deadline_violation_after_finalization', {
+                            'detection_monotonic_ns': self._monotonic_ns(),
+                            'readiness_deadline_s': deadline,
+                            'cleanup_deadline_s': (
+                                self._worker_cleanup_deadline
+                            ),
+                            'worker_identity': self._worker_identity,
+                            'process_residue': self._process_residue,
+                            'task_residue': self._task_residue,
+                        },
+                    )
+                except BaseException:
+                    pass
+            if self._cleanup_deadline_violation and not active_exception:
+                raise TimeoutError(
+                    'readiness worker cleanup deadline exceeded'
+                )
+            if self._readiness_deadline_violation and not active_exception:
+                raise TimeoutError(
+                    'readiness deadline expired during finalization'
+                )
             if (self._residue != 'NONE' or self._cleanup_record_error
                     or self._evidence_errors) and not active_exception:
                 raise RuntimeError(
@@ -917,6 +949,8 @@ class RclpyReadiness:
             except BaseException:
                 pass
         deadline = self._worker_cleanup_deadline
+        if self._monotonic() >= deadline:
+            self._cleanup_deadline_violation = True
         if self._spawn_task is not None and self._worker is None:
             if not self._spawn_task.done():
                 remaining = max(0.0, deadline - self._monotonic())
@@ -968,24 +1002,24 @@ class RclpyReadiness:
             try:
                 if not stdin.is_closing():
                     stdin.close()
-                remaining = max(0.0, deadline - self._monotonic())
-                if remaining <= 0:
-                    self._task_cleanup_unknown = True
-                else:
+                close_task = self._stdin_close_task
+                if close_task is None:
                     close_task = asyncio.create_task(stdin.wait_closed())
+                    self._stdin_close_task = close_task
                     self._phase_tasks.add(close_task)
-                    await asyncio.wait({close_task}, timeout=remaining)
-                    if close_task.done() and not close_task.cancelled():
-                        close_task.result()
-                        self._record('readiness_worker_stdin_closed', {
-                            'worker_identity': self._worker_identity,
-                            'remaining_budget_s': max(
-                                0.0, deadline - self._monotonic(),
-                            ),
-                        })
-                    else:
-                        self._task_cleanup_unknown = True
-                        close_task.cancel()
+                remaining = max(0.0, deadline - self._monotonic())
+                close_budget = min(0.1, remaining)
+                if close_budget > 0 and not close_task.done():
+                    await asyncio.wait({close_task}, timeout=close_budget)
+                if close_task.done() and not close_task.cancelled():
+                    close_task.result()
+                    self._record('readiness_worker_stdin_closed', {
+                        'worker_identity': self._worker_identity,
+                        'remaining_budget_s': max(
+                            0.0, deadline - self._monotonic(),
+                        ),
+                    })
+                    self._stdin_closed_recorded = True
             except BaseException:
                 self._task_residue = 'FAILED'
                 self._cleanup_record_error = True
@@ -1015,14 +1049,33 @@ class RclpyReadiness:
                 if not sent:
                     self._process_residue = 'UNKNOWN'
                     break
+        close_task = self._stdin_close_task
+        if (close_task is not None and close_task.done()
+                and not close_task.cancelled()):
+            try:
+                close_task.result()
+                if not self._stdin_closed_recorded:
+                    self._record('readiness_worker_stdin_closed', {
+                        'worker_identity': self._worker_identity,
+                        'after_worker_stop': True,
+                        'remaining_budget_s': max(
+                            0.0, deadline - self._monotonic(),
+                        ),
+                    })
+                    self._stdin_closed_recorded = True
+            except BaseException:
+                self._task_residue = 'FAILED'
+                self._cleanup_record_error = True
         task_map = {
             'stdout_drain': self._stdout_task,
             'stderr_drain': self._stderr_task,
             'worker_wait': self._worker_wait_task,
             'spawn': self._spawn_task,
+            'stdin_close': self._stdin_close_task,
         }
         task_map.update({f'io_{i}': task
-                         for i, task in enumerate(self._phase_tasks)})
+                         for i, task in enumerate(self._phase_tasks)
+                         if task is not self._stdin_close_task})
         live_tasks = {task for task in task_map.values()
                       if task is not None and not task.done()}
         remaining = max(0.0, deadline - self._monotonic())
@@ -1037,6 +1090,7 @@ class RclpyReadiness:
         task_states = {}
         task_pending = False
         task_failed = False
+        task_unknown = False
         for label, task in task_map.items():
             if task is None:
                 task_states[label] = 'not_started'
@@ -1045,6 +1099,8 @@ class RclpyReadiness:
                 task_pending = True
             elif task.cancelled():
                 task_states[label] = 'cancelled'
+                if label == 'stdin_close':
+                    task_unknown = True
             else:
                 try:
                     error = task.exception()
@@ -1055,10 +1111,9 @@ class RclpyReadiness:
                 else:
                     task_states[label] = f'failed:{type(error).__name__}'
                     task_failed = True
-        if self._task_cleanup_unknown:
-            task_states['stdin_close'] = 'unknown_deadline_expired'
         self._task_residue = (
-            'UNKNOWN' if task_pending or self._task_cleanup_unknown
+            'UNKNOWN' if task_pending or task_unknown
+            or self._task_cleanup_unknown
             else 'FAILED' if task_failed else 'NONE'
         )
         joined = (
@@ -1106,6 +1161,18 @@ class RclpyReadiness:
             })
         except BaseException:
             self._cleanup_record_error = True
+        if self._monotonic() >= deadline:
+            self._cleanup_deadline_violation = True
+            try:
+                self._record('readiness_worker_cleanup_deadline_violation', {
+                    'detection_monotonic_ns': self._monotonic_ns(),
+                    'cleanup_deadline_s': deadline,
+                    'worker_identity': self._worker_identity,
+                    'process_residue': self._process_residue,
+                    'task_residue': self._task_residue,
+                })
+            except BaseException:
+                self._cleanup_record_error = True
 
     @staticmethod
     def _matches_expected_scene(scene, plan) -> bool:

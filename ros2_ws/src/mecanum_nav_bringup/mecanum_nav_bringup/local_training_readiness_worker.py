@@ -299,7 +299,7 @@ def run_worker(
                 },
             })
             if previous_query_start_ns is not None:
-                next_query_ns = previous_query_start_ns + 1_000_000_000
+                next_query_ns = previous_query_start_ns + 2_000_000_000
                 while clock_ns() < next_query_ns:
                     if interrupted:
                         raise RuntimeError('readiness worker cancelled')
