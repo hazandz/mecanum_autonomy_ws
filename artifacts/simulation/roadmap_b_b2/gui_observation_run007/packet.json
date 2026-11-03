@@ -320,9 +320,9 @@
   },
   "tool_sha256": {
     "observation_guard.py": "65ef3c95de5fb4cf4f2e5e77afded895fc8a29e5bcd46b7d18b90b2c82a96b7a",
-    "observation_runner.py": "36fc33e2e4ac261726fe49a40f3e1ccf0e374f038aeaca8ea87d545bae3068a2",
+    "observation_runner.py": "4e0b4373da1442e6e9240cffea1dac3e4f4d769a94c5556056e7b928f7154375",
     "observation_sink.py": "eac616ba35d4c9557156e9668424209d6d156bea0c2b40c61443a58ed7e20ebb",
-    "test_observation_packet.py": "5ad4d9bb461be7c4dd7446c9c00f57a01e7c66d801cabf3a00020604486e63a9"
+    "test_observation_packet.py": "a9b0b7efb6ef047d2aa96d4609565c67d4593b81a5d5a96bc1c707406547dc99"
   },
   "host_capabilities": {
     "display": "static environment/socket inventory only; runtime not tested",

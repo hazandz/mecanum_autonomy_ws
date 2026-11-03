@@ -176,7 +176,14 @@ class FirstFailureEvidenceSink:
         """Latch readiness failures before forwarding the record."""
         if event == 'readiness_failure_detected':
             self.failure_latch.bind_readiness_event(facts)
-        return self.delegate.record(event, facts)
+        try:
+            return self.delegate.record(event, facts)
+        except BaseException as error:
+            self.failure_latch.cleanup_errors.append({
+                'event': event, 'error_type': type(error).__name__,
+                'error': str(error)[:512],
+            })
+            raise
 
     def close(self):
         """Close the underlying evidence sink."""
@@ -486,7 +493,8 @@ def _partition_for_pid(pid):
 
 async def _owned_helper(launcher, argv, environment, *, deadline, sink,
                         steady=time.monotonic, role='window_helper',
-                        window_id=None, return_metadata=False):
+                        window_id=None, return_metadata=False,
+                        failure_phase='window_discovery'):
     """Run a short helper only after its wrapper identity is evidenced."""
     process = await launcher.start_gated(
         tuple(argv), dict(environment), role=role, deadline=deadline,
@@ -517,10 +525,15 @@ async def _owned_helper(launcher, argv, environment, *, deadline, sink,
     stdout_text = stdout.decode('utf-8', errors='replace')
     stderr_text = stderr.decode('utf-8', errors='replace')
     disappeared = bool(
-        window_id is not None and status != 0 and re.search(
-            r'(?:BadWindow|no such window|window id .* does not exist)',
-            f'{stdout_text}\n{stderr_text}', re.I,
+        role == 'window_helper' and status != 0
+        and isinstance(window_id, str)
+        and re.fullmatch(r'0x[0-9a-fA-F]+', window_id)
+        and tuple(argv) == (
+            '/usr/bin/xprop', '-id', window_id, '_NET_WM_PID',
+            'WM_CLASS', '_NET_WM_NAME', 'WM_NAME',
         )
+        and re.search(r'X Error of failed request:\s*BadWindow\b',
+                      stderr_text, re.I)
     )
     metadata = {
         'exit_status': status,
@@ -534,10 +547,7 @@ async def _owned_helper(launcher, argv, environment, *, deadline, sink,
         ),
         'window_id': window_id,
     }
-    if sink is not None:
-        sink.record('owned_helper_exit', {
-            'role': role, 'pid': process.pid, **metadata,
-        })
+    terminal_error = None
     if status != 0 and not disappeared:
         escaped = ''.join(
             char if char.isprintable() else repr(char)[1:-1]
@@ -546,9 +556,24 @@ async def _owned_helper(launcher, argv, environment, *, deadline, sink,
         diagnostic = escaped[:512]
         if len(stderr_text) > 512 or len(escaped) > 512:
             diagnostic += ' [truncated]'
-        raise ObservationFailure(
+        terminal_error = ObservationFailure(
             f'{role} helper failed with exit status {status}: {diagnostic}'
         )
+        latch = getattr(sink, 'failure_latch', None)
+        if latch is not None:
+            latch.detect(str(terminal_error), 'window_helper', failure_phase,
+                         error=terminal_error)
+    if sink is not None:
+        try:
+            sink.record('owned_helper_exit', {
+                'role': role, 'pid': process.pid, **metadata,
+            })
+        except BaseException as error:
+            if terminal_error is not None:
+                raise terminal_error from error
+            raise
+    if terminal_error is not None:
+        raise terminal_error
     if return_metadata:
         return stdout_text, metadata
     return stdout_text
@@ -933,6 +958,10 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
     def write_pass_failure(outcome, error, *, parsed=0, diagnostics=(),
                            helper_results=()):
         now = steady()
+        latch = getattr(sink, 'failure_latch', None)
+        if latch is not None and latch.primary_failure is None:
+            latch.detect(str(error), 'window_discovery', discovery_phase,
+                         error=error)
         payload = {
             'phase': discovery_phase, 'pass_index': pass_index,
             'started_steady_ns': int(pass_started * 1_000_000_000),
@@ -952,7 +981,10 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             'diagnostics_truncated': len(diagnostics) > 32,
             'unreported_candidate_count': max(0, len(diagnostics) - 32),
         }
-        write_pass(payload)
+        try:
+            write_pass(payload)
+        except BaseException as sink_error:
+            raise error from sink_error
 
     while True:
         pass_index += 1
@@ -971,23 +1003,33 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
                     f'(last parsed={last_parsed_entry_count}, '
                     f'owned_matches={last_owned_match_count})'
                 )
-            write_pass({
-                'phase': discovery_phase, 'pass_index': pass_index,
-                'started_steady_ns': int(pass_started * 1_000_000_000),
-                'completed_steady_ns': int(pass_started * 1_000_000_000),
-                'remaining_deadline_s': 0.0, 'parsed_entry_count': 0,
-                'candidate_count': last_parsed_entry_count,
-                'owned_match_count': last_owned_match_count,
-                'outcome': 'DEADLINE_EXPIRED', 'reason': reason,
-                'candidate_diagnostics': [], 'diagnostics_truncated': False,
-            })
-            raise ReviewInvalidated(reason)
+            error = ReviewInvalidated(reason)
+            latch = getattr(sink, 'failure_latch', None)
+            if latch is not None:
+                latch.detect(reason, 'window_discovery', discovery_phase,
+                             error=error)
+            try:
+                write_pass({
+                    'phase': discovery_phase, 'pass_index': pass_index,
+                    'started_steady_ns': int(pass_started * 1_000_000_000),
+                    'completed_steady_ns': int(pass_started * 1_000_000_000),
+                    'remaining_deadline_s': 0.0, 'parsed_entry_count': 0,
+                    'candidate_count': last_parsed_entry_count,
+                    'owned_match_count': last_owned_match_count,
+                    'outcome': 'DEADLINE_EXPIRED', 'reason': reason,
+                    'candidate_diagnostics': [],
+                    'diagnostics_truncated': False,
+                })
+            except BaseException as sink_error:
+                raise error from sink_error
+            raise error
 
         try:
             current_owned_gui()
             tree, tree_result = await _owned_helper(
                 launcher, tree_command, environment, deadline=deadline,
                 steady=steady, sink=sink, return_metadata=True,
+                failure_phase=discovery_phase,
             )
         except Exception as error:
             write_pass_failure('GUI_IDENTITY_OR_TREE_HELPER_FAILURE', error)
@@ -1032,6 +1074,7 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
                     launcher, props_command, environment,
                     deadline=helper_deadline, steady=steady, sink=sink,
                     window_id=window_id, return_metadata=True,
+                    failure_phase=discovery_phase,
                 )
             except Exception as error:
                 write_pass_failure(
@@ -1160,6 +1203,7 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             candidate = {
                 'window_id': window_id, 'pid': pid,
                 'pgid': identity['process_group_id'],
+                'sid': identity['session_id'],
                 'process_start_ticks': identity['start_ticks'],
                 'gz_partition': partition,
                 'gui_process_identity': owned_gui_identity,
@@ -1222,15 +1266,44 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             payload['helper_results_truncated'] = True
             payload['diagnostics_truncated'] = True
             payload['unreported_helper_result_count'] += 1
-        write_pass(payload)
-        last_owned_match_count = len(matches)
-        last_parsed_entry_count = len(entries)
-
+        terminal_error = None
         if outcome == 'DEADLINE_DURING_ENUMERATION':
-            raise ReviewInvalidated(
+            terminal_error = ReviewInvalidated(
                 'window discovery review deadline expired during candidate '
                 'enumeration'
             )
+        elif remaining_after <= 0 and len(matches) != 1:
+            if len(matches) > 1:
+                reason = ('window discovery deadline expired with ambiguous '
+                          f'owned client windows ({len(matches)} matches)')
+            else:
+                reason = ('window discovery deadline expired without a unique '
+                          f'owned client window (last parsed={len(entries)}, '
+                          f'owned_matches={len(matches)})')
+            terminal_error = ReviewInvalidated(reason)
+        if len(matches) == 1 and expected_window is not None:
+            fields = ('window_id', 'pid', 'pgid', 'sid', 'process_start_ticks',
+                      'gz_partition', 'executable', 'argv')
+            if any(matches[0].get(key) != expected_window.get(key)
+                   for key in fields):
+                terminal_error = ObservationFailure(
+                    'owned GUI window binding changed before capture'
+                )
+        latch = getattr(sink, 'failure_latch', None)
+        if terminal_error is not None and latch is not None:
+            latch.detect(str(terminal_error), 'window_discovery',
+                         discovery_phase, error=terminal_error)
+        try:
+            write_pass(payload)
+        except BaseException as sink_error:
+            if terminal_error is not None:
+                raise terminal_error from sink_error
+            raise
+        last_owned_match_count = len(matches)
+        last_parsed_entry_count = len(entries)
+
+        if terminal_error is not None:
+            raise terminal_error
         if len(matches) == 1:
             result = matches[0]
             if expected_window is not None:
@@ -1244,13 +1317,18 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
                         'owned GUI window binding changed before capture'
                     )
                 if sink is not None:
-                    sink.record('gui_window_capture_binding_verified', {
-                        'window_id': result['window_id'],
-                        'pid': result['pid'], 'pgid': result['pgid'],
-                        'process_start_ticks': result['process_start_ticks'],
-                        'gz_partition': result['gz_partition'],
-                        'gui_process_identity': owned_gui_identity,
-                    })
+                    result['evidence_sequence'] = sink.record(
+                        'gui_window_capture_binding_verified', {
+                            'window_id': result['window_id'],
+                            'pid': result['pid'], 'pgid': result['pgid'],
+                            'sid': result['sid'],
+                            'process_start_ticks': result[
+                                'process_start_ticks'],
+                            'gz_partition': result['gz_partition'],
+                            'gui_process_identity': owned_gui_identity,
+                            'executable': result['executable'],
+                            'argv': result['argv'],
+                        })
             else:
                 if sink is not None:
                     sink.record('gui_window_bound', result)

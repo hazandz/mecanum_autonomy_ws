@@ -2873,6 +2873,152 @@ def test_window_discovery_helper_failure_is_not_reported_as_no_window():
     assert passes[-1]['outcome'] == 'WINDOW_PROPERTY_HELPER_FAILURE'
 
 
+@pytest.mark.parametrize('fail_persist', [False, True])
+def test_r007_a01_run_uses_persisted_revalidation_sequence(
+        tmp_path, fail_persist):
+    """The actual binder feeds the persisted revalidation event to request."""
+    args, deps, _, _, root, _, state = make_runner_inputs(
+        tmp_path, production_supervisor=True,
+    )
+    fake = _window_discovery_fakes(
+        [_window_line('0x22')], [{'0x22': _gazebo_properties()}],
+    )
+
+    async def production_binder(**kwargs):
+        kwargs['launcher'] = fake['launcher']
+        for name in ('process_identity_reader', 'parent_reader',
+                     'executable_reader', 'argv_reader'):
+            kwargs[name] = fake[name]
+        kwargs['partition_reader'] = lambda _pid: kwargs['partition']
+        return await runner.bind_gui_window(**kwargs)
+
+    deps['bind_gui_window'] = production_binder
+    deps['revalidate_gui_window'] = production_binder
+    if fail_persist:
+        class FailingSink(runner.ObservationEvidenceSink):
+            def record(self, event, facts):
+                if event == 'gui_window_capture_binding_verified':
+                    raise OSError('injected revalidation persistence failure')
+                return super().record(event, facts)
+
+        deps['sink_factory'] = FailingSink
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    if fail_persist:
+        assert verdict == 'FAIL'
+        assert 'request' not in state
+        assert not list(root.glob('review_mailbox/requests/*.json'))
+        return
+    assert verdict == 'PASS'
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    event = next(r for r in records
+                 if r['event'] == 'gui_window_capture_binding_verified')
+    assert (state['request']['window_process_identity']['evidence_sequence']
+            == event['sequence'])
+
+
+@pytest.mark.parametrize('role', ['window_helper', 'capture_helper',
+                                  'publisher'])
+def test_r007_a02_non_xprop_badwindow_is_failure(role):
+    """The X11 exception is limited to the xprop discovery operation."""
+    fake = _window_discovery_fakes(
+        [''], [{'0x51': (b'', 1, b'X Error of failed request: BadWindow')}],
+    )
+    fake['launcher'].pass_index = 0
+    command = (('/usr/bin/other', '-id', '0x51') if role == 'window_helper'
+               else ('/usr/bin/xprop', '-id', '0x51', '_NET_WM_PID',
+                     'WM_CLASS', '_NET_WM_NAME', 'WM_NAME'))
+    with pytest.raises(runner.ObservationFailure, match='BadWindow'):
+        asyncio.run(runner._owned_helper(
+            fake['launcher'], command, {}, role=role,
+            deadline=1.0, steady=fake['steady'], sink=None,
+            window_id='0x51',
+        ))
+
+
+def test_r007_a02_repeated_badwindow_expires_same_deadline():
+    """Stale XIDs are reconsidered without refreshing the deadline."""
+    fake = _window_discovery_fakes(
+        [_window_line('0x51')],
+        [{'0x51': (b'', 1, b'X Error of failed request: BadWindow')}],
+    )
+    kwargs = dict(fake)
+    launcher, sink = kwargs.pop('launcher'), kwargs.pop('sink')
+    kwargs.pop('clock')
+    kwargs.pop('steady')
+    kwargs.pop('sleep')
+    with pytest.raises(runner.ReviewInvalidated, match='deadline expired'):
+        asyncio.run(runner.bind_gui_window(
+            launcher=launcher, environment={}, partition='mecanum_b2_test',
+            deadline=0.25, steady=fake['steady'], sleep=fake['sleep'],
+            sink=sink, **kwargs,
+        ))
+    assert fake['clock'][0] == pytest.approx(0.25)
+
+
+def test_r007_a02_stdout_badwindow_does_not_hide_xprop_failure():
+    """Only stderr X11 diagnostics can identify a disappeared XID."""
+    fake = _window_discovery_fakes(
+        [_window_line('0x51')],
+        [{'0x51': (b'BadWindow in title', 1, b'cannot open display')}],
+    )
+    kwargs = dict(fake)
+    launcher, sink = kwargs.pop('launcher'), kwargs.pop('sink')
+    kwargs.pop('clock')
+    kwargs.pop('steady')
+    kwargs.pop('sleep')
+    with pytest.raises(runner.ObservationFailure, match='cannot open display'):
+        asyncio.run(runner.bind_gui_window(
+            launcher=launcher, environment={}, partition='mecanum_b2_test',
+            deadline=1.0, steady=fake['steady'], sleep=fake['sleep'],
+            sink=sink, **kwargs,
+        ))
+
+
+@pytest.mark.parametrize('failed_event', [
+    'owned_helper_exit', 'gui_window_discovery_pass',
+])
+def test_r007_a03_latches_helper_failure_before_sink_error(failed_event):
+    """A failed diagnostic write cannot replace a detected helper failure."""
+    fake = _window_discovery_fakes(
+        [_window_line('0x51')],
+        [{'0x51': (b'', 1, b'cannot open display')}],
+    )
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 123456)
+    writes = []
+    failed = [False]
+
+    class FailingSink:
+        def record(self, event, facts):
+            if not failed[0] and event == failed_event and (
+                    event != 'owned_helper_exit'
+                    or facts.get('result') == 'HELPER_FAILED'):
+                failed[0] = True
+                raise OSError('injected sink failure')
+            writes.append(event)
+
+    sink = runner.FirstFailureEvidenceSink(FailingSink(), latch)
+    kwargs = dict(fake)
+    launcher = kwargs.pop('launcher')
+    kwargs.pop('sink')
+    kwargs.pop('clock')
+    kwargs.pop('steady')
+    kwargs.pop('sleep')
+    with pytest.raises((runner.ObservationFailure, OSError)):
+        asyncio.run(runner.bind_gui_window(
+            launcher=launcher, environment={}, partition='mecanum_b2_test',
+            deadline=1.0, steady=fake['steady'], sleep=fake['sleep'],
+            sink=sink, **kwargs,
+        ))
+    assert 'cannot open display' in latch.primary_failure['reason']
+    assert latch.primary_failure['source'] == 'window_helper'
+    assert latch.primary_failure['phase'] == 'window_discovery'
+    assert latch.primary_failure['detection_monotonic_ns'] == 123456
+    assert any(item['event'] == failed_event for item in latch.cleanup_errors)
+    sink.record('sink_recovered', {})
+    assert 'sink_recovered' in writes
+
+
 def test_window_discovery_sink_failure_fails_closed():
     """A diagnostics sink failure cannot turn a missing window into success."""
     fake = _window_discovery_fakes([''], [{}])
