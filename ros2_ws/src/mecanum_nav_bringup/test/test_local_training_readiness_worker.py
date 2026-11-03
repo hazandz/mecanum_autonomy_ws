@@ -66,6 +66,136 @@ class ChunkStream:
         return self._chunks.pop(0) if self._chunks else b''
 
 
+class GatedStream:
+    """Pipe double that remains open until the owned worker exits."""
+
+    def __init__(self):
+        """Create an unopened stream that waits for worker exit."""
+        self.closed = asyncio.Event()
+
+    async def read(self, _size):
+        """Wait until the owning fake worker closes the stream."""
+        await self.closed.wait()
+        return b''
+
+
+class ControlledInput:
+    """Input pipe double with a selectable pending drain/close phase."""
+
+    def __init__(self, mode, release):
+        """Create an input pipe with the selected gated operation."""
+        self.mode = mode
+        self.release = release
+        self.closed = False
+        self.wait_closed_calls = 0
+
+    def write(self, _data):
+        """Accept request bytes without a real pipe."""
+        return None
+
+    async def drain(self):
+        """Optionally hold request drain until released by the test."""
+        if self.mode == 'drain':
+            await self.release.wait()
+
+    def is_closing(self):
+        """Return whether close has been requested."""
+        return self.closed
+
+    def close(self):
+        """Close the fake input and release drain-mode tests."""
+        self.closed = True
+        if self.mode == 'drain':
+            self.release.set()
+
+    async def wait_closed(self):
+        """Optionally hold stdin-close completion for the test."""
+        self.wait_closed_calls += 1
+        if self.mode == 'wait_closed' and self.wait_closed_calls == 1:
+            await self.release.wait()
+        elif self.mode == 'wait_closed':
+            self.release.set()
+
+
+class ControlledWorker:
+    """Owned worker fake with independently gated pipes and wait status."""
+
+    def __init__(self, mode):
+        """Create a fake process with independently gated I/O streams."""
+        self.pid = 77123
+        self.returncode = None
+        self.exited = asyncio.Event()
+        self.stdout = GatedStream()
+        self.stderr = GatedStream()
+        self.stdin = ControlledInput(mode, self.exited)
+
+    async def wait(self):
+        """Wait for the test to mark this worker exited."""
+        await self.exited.wait()
+        return self.returncode
+
+    def stop(self):
+        """Mark the worker exited and close both fake output streams."""
+        self.returncode = 0
+        self.exited.set()
+        self.stdout.closed.set()
+        self.stderr.closed.set()
+
+
+def protocol_transcript(request, *, scene_outcome='MATCH', ready=True):
+    """Build a canonical worker transcript for drainer regressions."""
+    digest = hashlib.sha256(canonical_request_bytes(request)).hexdigest()
+    binding = {key: request[key] for key in (
+        'session_id', 'config_hash', 'asset_manifest_sha256',
+        'coordinator_ingress_instance_id',
+    )}
+    status = {
+        'world_id': request['world_id'], 'session_id': request['session_id'],
+        'config_hash': request['config_hash'], 'backend_instance_id': 9,
+        'status_sequence': 1, 'fault_flags': 0, 'actuator_inhibited': True,
+    }
+    scene = {
+        'world_name': request['world_id'] if scene_outcome == 'MATCH'
+        else 'other_world',
+        'matching_model_count': 1 if scene_outcome == 'MATCH' else 0,
+    }
+    specifications = [
+        ('worker_started', {'request_binding': binding}),
+        ('status_wait_started', {
+            'topic': '/mecanum/local_training/backend_state', 'qos_depth': 50,
+        }),
+        ('status_matched', {'status': status, 'request_binding': binding}),
+        ('scene_query_started', {
+            'service': '/world/b2_training_arena/scene/info',
+            'timeout_ms': 500,
+        }),
+        ('scene_query_finished', {
+            **scene, 'duration_ns': 100, 'outcome': scene_outcome,
+            'error': 'injected query error' if scene_outcome == 'ERROR'
+            else None,
+        }),
+    ]
+    verdict = 'READY' if ready else 'FAIL'
+    result_facts = {
+        'verdict': verdict,
+        'reason': '' if ready else 'early injected failure',
+        'facts': {
+            'status': status, 'scene': scene, 'request_binding': binding,
+        } if ready else {},
+        'cleanup_errors': [], 'cleanup_elapsed_ns': 100,
+    }
+    specifications.append(('worker_result', result_facts))
+    records = []
+    for sequence, (event, facts) in enumerate(specifications, 1):
+        records.append({
+            'schema_id': 'mecanum_b2_scene_readiness_event/v1',
+            'request_id': request['request_id'], 'request_sha256': digest,
+            'sequence': sequence, 'event': event,
+            'monotonic_ns': time.monotonic_ns(), 'facts': facts,
+        })
+    return digest, records
+
+
 def make_plan():
     """Build a valid immutable launch-plan binding for the worker tests."""
     return LaunchPlan(
@@ -155,12 +285,15 @@ class Executor:
     def spin_once(self, *, timeout_sec):
         if self.node.callback is not None:
             self.node.callback(Status())
-            self.node.callback = None
         else:
             time.sleep(min(timeout_sec, 0.005))
     def remove_node(self, node):
         record('executor.remove_node')
-        return node is self.node
+        if os.environ.get('FAKE_REMOVE_NODE_FAIL') == '1':
+            raise RuntimeError('injected remove_node failure')
+        if node is self.node:
+            self.node = None
+        return None
     def shutdown(self, timeout_sec=None):
         self.closed = True
         record('executor.shutdown')
@@ -181,8 +314,15 @@ empty_module.Empty = Empty
 class Model:
     def __init__(self, name): self.name = name; self.model = []
 class Scene:
-    def __init__(self):
-        mode = os.environ.get('FAKE_SCENE', 'match')
+    def __init__(self, mode=None):
+        if mode is None:
+            modes = os.environ.get('FAKE_SCENE_SEQUENCE', '').split(',')
+            index = int(os.environ.get('FAKE_SCENE_INDEX', '0'))
+            mode = (
+                modes[min(index, len(modes) - 1)] if modes[0]
+                else os.environ.get('FAKE_SCENE', 'match')
+            )
+            os.environ['FAKE_SCENE_INDEX'] = str(index + 1)
         self.name = 'other_world' if mode == 'world' else 'b2_training_arena'
         count = (
             0 if mode == 'missing'
@@ -192,10 +332,17 @@ class Scene:
 scene_module.Scene = Scene
 transport = module('gz.transport13'); transport.__path__ = []
 class TransportNode:
+    def __init__(self): self.calls = 0
     def request(
         self, service, request, request_type, response_type, timeout_ms,
     ):
         assert service == '/world/b2_training_arena/scene/info'
+        self.calls += 1
+        if (self.calls == 1
+                and os.environ.get('FAKE_QUERY_TIMEOUT_FIRST') == '1'):
+            raise TimeoutError('injected first-query timeout')
+        if os.environ.get('FAKE_QUERY_UNEXPECTED') == '1':
+            raise RuntimeError('injected unexpected query error')
         delay = float(os.environ.get('FAKE_SCENE_DELAY', '0'))
         if delay:
             time.sleep(delay)
@@ -215,6 +362,7 @@ def readiness_with_child_fakes(
         'PYTHONPATH',
         str(fake_root) + os.pathsep + os.environ.get('PYTHONPATH', ''),
     )
+    monkeypatch.setenv('FAKE_TRACE', str(fake_root / 'trace'))
     for key, value in child_values.items():
         monkeypatch.setenv(key, str(value))
     monkeypatch.setattr(
@@ -223,6 +371,36 @@ def readiness_with_child_fakes(
     )
     readiness = RclpyReadiness()
     sink = Sink(fail_event=sink_fail_event)
+    LocalTrainingProcessSupervisor(
+        plan=make_plan(), launcher=object(), readiness=readiness,
+        evidence_sink=sink,
+    )
+    return readiness, sink
+
+
+def readiness_with_controlled_worker(monkeypatch, worker, sink=None):
+    """Bind an owned fake process to the real parent readiness entry."""
+    identity = {
+        'pid': worker.pid, 'process_group_id': worker.pid,
+        'session_id': worker.pid, 'start_ticks': 987,
+    }
+
+    async def factory(_environment):
+        return worker
+
+    readiness = RclpyReadiness(
+        worker_factory=factory,
+        identity_reader=lambda _pid: identity,
+        signal_group=lambda _process, _identity, _sig: worker.stop(),
+    )
+    sink = sink or Sink()
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: (
+        _ for _ in ()
+    ).throw(ProcessLookupError()))
+    monkeypatch.setattr(
+        supervisor, 'load_bound_config',
+        lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
+    )
     LocalTrainingProcessSupervisor(
         plan=make_plan(), launcher=object(), readiness=readiness,
         evidence_sink=sink,
@@ -291,6 +469,41 @@ def test_default_parent_client_uses_isolated_production_worker(
     assert result['facts']['scene']['matching_model_count'] == 1
 
 
+def test_jazzy_remove_node_none_does_not_block_ready(monkeypatch, tmp_path):
+    """Treat the Jazzy remove_node None return as successful cleanup."""
+    readiness, sink = readiness_with_child_fakes(monkeypatch, tmp_path)
+    asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 2.0))
+    result = next(facts['record']['facts'] for name, facts in sink.events
+                  if name == 'readiness_worker_event'
+                  and facts['record']['event'] == 'worker_result')
+    trace = Path(os.environ['PYTHONPATH'].split(os.pathsep)[0]) / 'trace'
+    assert result['verdict'] == 'READY'
+    assert trace.read_text(encoding='utf-8').splitlines()[-4:] == [
+        'executor.remove_node', 'executor.shutdown', 'node.destroy',
+        'context.shutdown',
+    ]
+
+
+def test_remove_node_exception_still_attempts_remaining_cleanup(
+    monkeypatch, tmp_path,
+):
+    """Continue executor/node/context cleanup after remove_node raises."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, FAKE_REMOVE_NODE_FAIL='1',
+    )
+    with pytest.raises(RuntimeError, match='readiness worker exited 1'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 2.0))
+    result = next(facts['record']['facts'] for name, facts in sink.events
+                  if name == 'readiness_worker_event'
+                  and facts['record']['event'] == 'worker_result')
+    trace = Path(os.environ['PYTHONPATH'].split(os.pathsep)[0]) / 'trace'
+    events = trace.read_text(encoding='utf-8').splitlines()
+    assert result['verdict'] == 'FAIL'
+    assert 'executor.shutdown' in events
+    assert 'node.destroy' in events
+    assert 'context.shutdown' in events
+
+
 def test_slow_child_query_does_not_block_parent_ticker(monkeypatch, tmp_path):
     """Keep event-loop health polling live during slow child scene queries."""
     readiness, _sink = readiness_with_child_fakes(
@@ -339,6 +552,213 @@ def test_parent_deadline_is_detected_before_slow_scene_query_returns(
     assert readiness._residue == 'NONE'
 
 
+def test_nonpositive_budget_does_not_spawn_worker(monkeypatch):
+    """Reject an exhausted readiness budget before the process factory."""
+    calls = []
+
+    async def factory(_environment):
+        calls.append(True)
+        raise AssertionError('worker factory must not be called')
+
+    readiness = RclpyReadiness(worker_factory=factory, monotonic=lambda: 7.0)
+    sink = Sink()
+    monkeypatch.setattr(
+        supervisor, 'load_bound_config',
+        lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
+    )
+    LocalTrainingProcessSupervisor(
+        plan=make_plan(), launcher=object(), readiness=readiness,
+        evidence_sink=sink,
+    )
+    with pytest.raises(TimeoutError, match='before worker spawn'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.0))
+    assert calls == []
+
+
+@pytest.mark.parametrize('mode', ['drain', 'wait_closed'])
+def test_pending_request_pipe_phase_is_deadline_bounded(
+    monkeypatch, mode,
+):
+    """Request drain and stdin close wait share the parent deadline."""
+    worker = ControlledWorker(mode)
+    readiness, sink = readiness_with_controlled_worker(
+        monkeypatch, worker,
+    )
+    with pytest.raises(TimeoutError, match='deadline expired during'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.05))
+    assert worker.returncode == 0
+    assert readiness._process_residue == 'NONE'
+    assert readiness._task_residue == 'NONE', sink.events[-1][1]['task_states']
+    assert readiness._residue == 'NONE'
+
+
+def test_server_exit_during_request_drain_cleans_worker(monkeypatch):
+    """The parent notices server exit while request transfer is pending."""
+    worker = ControlledWorker('drain')
+    readiness, sink = readiness_with_controlled_worker(monkeypatch, worker)
+    server = ServerProcess()
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.03, setattr, server, 'returncode', 9)
+        with pytest.raises(
+            RuntimeError, match='server exited during readiness',
+        ):
+            await readiness.server_scene(make_plan(), server, 1.0)
+
+    asyncio.run(exercise())
+    assert worker.returncode == 0
+    event = next(facts for name, facts in sink.events
+                 if name == 'readiness_server_exit_detected')
+    assert event['readiness_phase'] == 'request drain'
+    assert readiness._residue == 'NONE'
+
+
+def test_failed_drain_task_is_classified_separately_from_process(monkeypatch):
+    """A finished process does not hide a failed pipe-drain task."""
+    worker = ControlledWorker('normal')
+    worker.stop()
+    readiness = RclpyReadiness(monotonic=lambda: 5.0)
+    readiness.bind_evidence_sink(Sink())
+    readiness._worker = worker
+    readiness._worker_identity = {
+        'pid': worker.pid, 'process_group_id': worker.pid,
+        'session_id': worker.pid, 'start_ticks': 987,
+    }
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: (
+        _ for _ in ()
+    ).throw(ProcessLookupError()))
+
+    async def exercise():
+        async def fail_drain():
+            raise OSError('injected pipe read failure')
+        readiness._stdout_task = asyncio.create_task(fail_drain())
+        await asyncio.sleep(0)
+        await readiness._finalize_worker()
+        assert readiness._process_residue == 'NONE'
+        assert readiness._task_residue == 'FAILED'
+        assert readiness._residue == 'UNKNOWN'
+
+    asyncio.run(exercise())
+
+
+def test_spawn_handle_returned_during_cleanup_is_adopted_and_stopped(
+    monkeypatch,
+):
+    """Retain and clean a worker handle that arrives after spawn timeout."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    worker = ControlledWorker('normal')
+    calls = []
+
+    async def factory(_environment):
+        calls.append(True)
+        started.set()
+        await release.wait()
+        return worker
+
+    identity = {'pid': worker.pid, 'process_group_id': worker.pid,
+                'session_id': worker.pid, 'start_ticks': 987}
+    readiness = RclpyReadiness(
+        worker_factory=factory, identity_reader=lambda _pid: identity,
+        signal_group=lambda _process, _identity, _sig: worker.stop(),
+    )
+    sink = Sink()
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: (
+        _ for _ in ()
+    ).throw(ProcessLookupError()))
+    monkeypatch.setattr(
+        supervisor, 'load_bound_config',
+        lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
+    )
+    LocalTrainingProcessSupervisor(
+        plan=make_plan(), launcher=object(), readiness=readiness,
+        evidence_sink=sink,
+    )
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        task = asyncio.create_task(
+            readiness.server_scene(make_plan(), ServerProcess(), 0.04),
+        )
+        await started.wait()
+        loop.call_later(0.06, release.set)
+        with pytest.raises(TimeoutError, match='worker spawn'):
+            await task
+
+    asyncio.run(exercise())
+    assert calls == [True]
+    assert readiness._worker is worker
+    assert worker.returncode == 0
+    assert readiness._process_residue == 'NONE'
+    assert readiness._residue == 'NONE'
+
+
+def test_cancellation_near_spawn_completion_keeps_handle_owned(monkeypatch):
+    """Cancellation while spawn is pending still adopts its eventual handle."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    worker = ControlledWorker('normal')
+
+    async def factory(_environment):
+        started.set()
+        await release.wait()
+        return worker
+
+    identity = {'pid': worker.pid, 'process_group_id': worker.pid,
+                'session_id': worker.pid, 'start_ticks': 987}
+    readiness = RclpyReadiness(
+        worker_factory=factory, identity_reader=lambda _pid: identity,
+        signal_group=lambda _process, _identity, _sig: worker.stop(),
+    )
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: (
+        _ for _ in ()
+    ).throw(ProcessLookupError()))
+    monkeypatch.setattr(
+        supervisor, 'load_bound_config',
+        lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
+    )
+    LocalTrainingProcessSupervisor(
+        plan=make_plan(), launcher=object(), readiness=readiness,
+        evidence_sink=Sink(),
+    )
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        task = asyncio.create_task(
+            readiness.server_scene(make_plan(), ServerProcess(), 2.0),
+        )
+        await started.wait()
+        loop.call_later(0.05, release.set)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert readiness._worker is worker
+    assert worker.returncode == 0
+    assert readiness._process_residue == 'NONE'
+
+
+def test_evidence_validation_overrun_cannot_return_ready(
+    monkeypatch, tmp_path,
+):
+    """A slow final validation evidence write invalidates timely READY."""
+    readiness, _sink = readiness_with_child_fakes(monkeypatch, tmp_path)
+
+    class SlowValidationSink(Sink):
+        def record(self, event, facts):
+            super().record(event, facts)
+            if event == 'readiness_worker_parent_validated':
+                time.sleep(0.2)
+
+    sink = SlowValidationSink()
+    readiness._evidence_sink = sink
+    with pytest.raises(TimeoutError, match='validation evidence'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.15))
+    assert readiness._residue == 'NONE'
+
+
 @pytest.mark.parametrize('key,value', [
     ('FAKE_WORLD', 'other_world'),
     ('FAKE_SESSION', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
@@ -369,12 +789,157 @@ def test_scene_mismatch_never_returns_ready(monkeypatch, tmp_path, scene_mode):
     readiness, sink = readiness_with_child_fakes(
         monkeypatch, tmp_path, FAKE_SCENE=scene_mode,
     )
-    with pytest.raises(RuntimeError, match='readiness worker'):
+    with pytest.raises((RuntimeError, TimeoutError)):
         asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 1.0))
-    result = next(facts['record']['facts'] for name, facts in sink.events
-                  if name == 'readiness_worker_event'
-                  and facts['record']['event'] == 'worker_result')
-    assert result['verdict'] == 'FAIL'
+    results = [facts['record']['facts'] for name, facts in sink.events
+               if name == 'readiness_worker_event'
+               and facts['record']['event'] == 'worker_result']
+    assert all(result['verdict'] != 'READY' for result in results)
+
+
+@pytest.mark.parametrize('child_values', [
+    {'FAKE_QUERY_TIMEOUT_FIRST': '1'},
+    {'FAKE_SCENE_SEQUENCE': 'missing,match'},
+])
+def test_worker_requeries_until_matching_scene_in_same_attempt(
+    monkeypatch, tmp_path, child_values,
+):
+    """A transient query timeout or missing model can converge in-place."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, **child_values,
+    )
+    asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 3.0))
+    records = [facts['record'] for name, facts in sink.events
+               if name == 'readiness_worker_event']
+    starts = [record['monotonic_ns'] for record in records
+              if record['event'] == 'scene_query_started']
+    finished = [record['facts'] for record in records
+                if record['event'] == 'scene_query_finished']
+    result = records[-1]['facts']
+    assert result['verdict'] == 'READY'
+    assert len(starts) == 2
+    assert starts[1] - starts[0] >= 1_000_000_000
+    assert finished[0]['outcome'] in {'ERROR', 'MISMATCH'}
+    assert finished[1]['outcome'] == 'MATCH'
+    assert len([event for event, _ in sink.events
+                if event == 'readiness_worker_spawned']) == 1
+    assert len({record['request_id'] for record in records}) == 1
+
+
+def test_worker_core_retries_timeout_without_new_attempt(monkeypatch):
+    """Exercise retry convergence in the production worker core with fakes."""
+    import mecanum_nav_bringup.local_training_readiness_worker as worker_module
+
+    monkeypatch.setenv('GZ_PARTITION', 'mecanum_b2_testpartition')
+    monkeypatch.setenv('ROS_DOMAIN_ID', '83')
+    request = RclpyReadiness()._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 2_500_000_000,
+    )
+    status = SimpleNamespace(
+        header=SimpleNamespace(frame_id=request['world_id']),
+        session_id=request['session_id'], config_hash=request['config_hash'],
+        backend_instance_id=9, status_sequence=1, fault_flags=0,
+        actuator_inhibited=True,
+    )
+    source = SimpleNamespace(
+        start=lambda: None, next_status=lambda _timeout: status,
+        close=lambda: None,
+    )
+    calls = []
+    query_starts = []
+
+    def query(_service, _timeout_ms):
+        calls.append(True)
+        query_starts.append(time.monotonic_ns())
+        if len(calls) == 1:
+            raise TimeoutError('injected first query timeout')
+        return SimpleNamespace(
+            name=request['world_id'],
+            model=[SimpleNamespace(name=request['model_id'], model=[])],
+        )
+
+    class Emitter:
+        def __init__(self): self.records = []
+        def emit(self, event, facts): self.records.append((event, facts))
+
+    emitter = Emitter()
+    result = worker_module.run_worker(
+        request, status_source_factory=lambda: source,
+        scene_query=query, emitter=emitter,
+    )
+    assert result == 0
+    assert len(calls) == 2
+    assert query_starts[1] - query_starts[0] >= 1_000_000_000
+    assert [event for event, _ in emitter.records].count(
+        'scene_query_finished',
+    ) == 2
+    assert emitter.records[-1][1]['verdict'] == 'READY'
+
+
+def test_always_mismatched_scene_times_out_without_ready(
+    monkeypatch, tmp_path,
+):
+    """A persistent scene mismatch remains bounded and never becomes ready."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, FAKE_SCENE='missing',
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.35))
+    results = [facts['record']['facts'] for name, facts in sink.events
+               if name == 'readiness_worker_event'
+               and facts['record']['event'] == 'worker_result']
+    assert all(result['verdict'] != 'READY' for result in results)
+    assert len([1 for name, facts in sink.events
+                if name == 'readiness_worker_event'
+                and facts['record']['event'] == 'scene_query_started']) == 1
+
+
+def test_cancellation_between_scene_queries_does_not_start_another(
+    monkeypatch, tmp_path,
+):
+    """Cancellation during the one-second cadence prevents another query."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, FAKE_SCENE='missing',
+    )
+
+    async def exercise():
+        task = asyncio.create_task(
+            readiness.server_scene(make_plan(), ServerProcess(), 3.0),
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if any(name == 'readiness_worker_event'
+                   and facts['record']['event'] == 'scene_query_finished'
+                   for name, facts in sink.events):
+                break
+            await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    starts = [facts['record'] for name, facts in sink.events
+              if name == 'readiness_worker_event'
+              and facts['record']['event'] == 'scene_query_started']
+    assert len(starts) == 1
+
+
+def test_unexpected_scene_query_exception_is_not_retried(
+    monkeypatch, tmp_path,
+):
+    """Only timeouts and OSError converge; unexpected exceptions fail."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, FAKE_QUERY_UNEXPECTED='1',
+    )
+    with pytest.raises(RuntimeError, match='worker exited 1'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 2.0))
+    records = [facts['record'] for name, facts in sink.events
+               if name == 'readiness_worker_event']
+    finished = [record for record in records
+                if record['event'] == 'scene_query_finished']
+    assert len(finished) == 1
+    assert finished[0]['facts']['outcome'] == 'ERROR'
+    assert records[-1]['facts']['verdict'] == 'FAIL'
 
 
 def test_supervisor_binds_evidence_sink_without_changing_ack_contract():
@@ -423,6 +988,95 @@ def test_failure_sink_does_not_erase_worker_ownership():
     readiness.bind_evidence_sink(sink)
     assert readiness._worker is None
     assert readiness._residue == 'NONE'
+
+
+@pytest.mark.parametrize('fail_event', [
+    'readiness_worker_cleanup_started',
+    'readiness_worker_stdin_closed',
+    'readiness_worker_cleanup_finished',
+])
+def test_cleanup_evidence_failure_is_sticky_after_process_exit(
+    monkeypatch, tmp_path, fail_event,
+):
+    """Clean process state cannot erase missing cleanup evidence."""
+    readiness, sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path, sink_fail_event=fail_event,
+    )
+    with pytest.raises(RuntimeError, match='evidence_errors'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 2.0))
+    assert readiness._process_residue == 'NONE'
+    assert readiness._task_residue == 'NONE'
+    assert readiness._residue == 'NONE'
+    assert any(item.startswith(f'{fail_event}:')
+               for item in readiness._evidence_errors)
+    assert fail_event not in [event for event, _ in sink.events]
+
+
+def test_cleanup_signal_evidence_failure_does_not_erase_timeout(
+    monkeypatch, tmp_path,
+):
+    """Signal-event write failure remains sticky while cleanup is attempted."""
+    readiness, _sink = readiness_with_child_fakes(
+        monkeypatch, tmp_path,
+        sink_fail_event='readiness_worker_cleanup_signal',
+        FAKE_SCENE_DELAY='0.5',
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.1))
+    assert any(item.startswith('readiness_worker_cleanup_signal:')
+               for item in readiness._evidence_errors)
+    assert readiness._process_residue == 'NONE'
+    assert readiness._residue == 'NONE'
+
+
+def test_exited_process_with_pending_drain_is_not_clean_and_deadline_is_stable(
+    monkeypatch,
+):
+    """Separate process cleanup from task residue across finalization."""
+    worker = ControlledWorker('normal')
+    worker.stop()
+    readiness = RclpyReadiness(monotonic=lambda: 10.0)
+    sink = Sink()
+    readiness.bind_evidence_sink(sink)
+    readiness._worker = worker
+    readiness._worker_identity = {
+        'pid': worker.pid, 'process_group_id': worker.pid,
+        'session_id': worker.pid, 'start_ticks': 987,
+    }
+    readiness._worker_cleanup_deadline = 10.0
+    monkeypatch.setattr(supervisor.os, 'killpg', lambda *_args: (
+        _ for _ in ()
+    ).throw(ProcessLookupError()))
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def cancellation_resistant_drain():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    async def exercise():
+        task = asyncio.create_task(cancellation_resistant_drain())
+        readiness._stdout_task = task
+        await entered.wait()
+        await readiness._finalize_worker()
+        fixed_deadline = readiness._worker_cleanup_deadline
+        assert readiness._process_residue == 'NONE'
+        assert readiness._task_residue == 'UNKNOWN'
+        assert readiness._residue == 'UNKNOWN'
+        assert not task.done()
+        release.set()
+        await asyncio.wait_for(task, timeout=0.2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await readiness._finalize_worker()
+        assert readiness._worker_cleanup_deadline == fixed_deadline
+        assert readiness._process_residue == 'NONE'
+        assert readiness._task_residue == 'UNKNOWN'
+
+    asyncio.run(exercise())
 
 
 def test_parent_protocol_rejects_bad_event_binding_and_missing_result():
@@ -474,6 +1128,44 @@ def test_parent_protocol_rejects_oversized_record():
     assert 'worker record exceeded 4 KiB' in readiness._protocol_error
 
 
+def test_parent_protocol_caps_cumulative_transcript_with_max_error_field():
+    """Enforce the 64 KiB cap across a full stream, not one record."""
+    readiness = RclpyReadiness()
+    request = readiness._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 5_000_000_000,
+    )
+    readiness._active_request = request
+    readiness.bind_evidence_sink(Sink())
+    digest, cycle = protocol_transcript(
+        request, scene_outcome='ERROR', ready=False,
+    )
+    first_cycle = cycle[:-1]
+    for record in first_cycle:
+        if record['event'] == 'scene_query_finished':
+            record['facts']['error'] = 'x' * 256
+            record['facts']['world_name'] = None
+            record['facts']['matching_model_count'] = 0
+    records = []
+    for cycle_index in range(70):
+        selected = first_cycle if cycle_index == 0 else first_cycle[1:]
+        records.extend(dict(record) for record in selected)
+    terminal = dict(cycle[-1])
+    records.append(terminal)
+    for sequence, record in enumerate(records, 1):
+        record['sequence'] = sequence
+        record['request_sha256'] = digest
+    lines = [json.dumps(record).encode() + b'\n' for record in records]
+    assert max(map(len, lines)) <= readiness.MAX_RECORD_BYTES
+    payload = b''.join(lines)
+    assert len(payload) > readiness.MAX_STREAM_BYTES
+    chunks = [payload[offset:offset + 2048]
+              for offset in range(0, len(payload), 2048)]
+    readiness._worker = SimpleNamespace(stdout=ChunkStream(chunks))
+    asyncio.run(readiness._drain_stdout(request['request_id'], digest))
+    assert readiness._stdout_total == len(payload)
+    assert 'worker stdout exceeded 64 KiB' in readiness._protocol_error
+
+
 def test_parent_protocol_rejects_duplicate_terminal_result():
     """Require one terminal result and reject a replayed second one."""
     request = RclpyReadiness()._make_request(
@@ -513,6 +1205,200 @@ def test_parent_protocol_rejects_duplicate_terminal_result():
     readiness._worker = SimpleNamespace(stdout=ChunkStream([raw]))
     asyncio.run(readiness._drain_stdout(request['request_id'], digest))
     assert 'duplicate worker_result' in readiness._protocol_error
+
+
+@pytest.mark.parametrize('case', [
+    'ready_sequence_one', 'missing_status_wait', 'missing_status_stage',
+    'query_finish_without_start', 'missing_query_finish',
+    'ready_after_mismatch', 'ready_after_query_error',
+    'terminal_facts_disagree', 'duplicate_result', 'output_after_terminal',
+])
+def test_protocol_drainer_rejects_invalid_ready_history(case):
+    """Validate the entire event history rather than terminal READY alone."""
+    readiness = RclpyReadiness()
+    request = readiness._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 5_000_000_000,
+    )
+    readiness._active_request = request
+    sink = Sink()
+    readiness.bind_evidence_sink(sink)
+    digest, records = protocol_transcript(request)
+    if case == 'ready_sequence_one':
+        records = [records[-1]]
+    elif case == 'missing_status_wait':
+        records = [record for record in records
+                   if record['event'] != 'status_wait_started']
+    elif case == 'missing_status_stage':
+        records = [record for record in records
+                   if record['event'] != 'status_matched']
+    elif case == 'query_finish_without_start':
+        records = [record for record in records
+                   if record['event'] != 'scene_query_started']
+    elif case == 'missing_query_finish':
+        records = [record for record in records
+                   if record['event'] != 'scene_query_finished']
+    elif case == 'ready_after_mismatch':
+        digest, records = protocol_transcript(
+            request, scene_outcome='MISMATCH',
+        )
+    elif case == 'ready_after_query_error':
+        digest, records = protocol_transcript(
+            request, scene_outcome='ERROR',
+        )
+    elif case == 'terminal_facts_disagree':
+        records[-1]['facts']['facts']['status'] = {
+            **records[-1]['facts']['facts']['status'],
+            'status_sequence': 2,
+        }
+    elif case in {'duplicate_result', 'output_after_terminal'}:
+        extra = dict(records[-1])
+        extra['sequence'] = len(records) + 1
+        if case == 'output_after_terminal':
+            extra['event'] = 'worker_started'
+        records.append(extra)
+    for sequence, record in enumerate(records, 1):
+        record['sequence'] = sequence
+        record['request_sha256'] = digest
+    raw = b''.join(json.dumps(record).encode() + b'\n'
+                   for record in records)
+    readiness._worker = SimpleNamespace(stdout=ChunkStream([raw]))
+    asyncio.run(readiness._drain_stdout(request['request_id'], digest))
+    assert readiness._protocol_error is not None
+
+
+@pytest.mark.parametrize('early_fail', [False, True])
+def test_protocol_drainer_accepts_full_ready_and_early_fail(early_fail):
+    """Accept only a complete matching READY history or active early FAIL."""
+    readiness = RclpyReadiness()
+    request = readiness._make_request(
+        make_plan(), CONFIG_HASH, time.monotonic_ns() + 5_000_000_000,
+    )
+    readiness._active_request = request
+    readiness.bind_evidence_sink(Sink())
+    digest, records = protocol_transcript(request, ready=not early_fail)
+    if early_fail:
+        records = [records[0], records[-1]]
+        records[1]['sequence'] = 2
+    raw = b''.join(json.dumps(record).encode() + b'\n'
+                   for record in records)
+    readiness._worker = SimpleNamespace(stdout=ChunkStream([raw]))
+    asyncio.run(readiness._drain_stdout(request['request_id'], digest))
+    assert readiness._protocol_error is None
+    assert readiness._protocol_state == 'TERMINAL'
+
+
+def test_parent_entry_rejects_ready_without_protocol_history(monkeypatch):
+    """The production parent entry rejects a forged terminal-only READY."""
+    class Input:
+        def __init__(self, stream):
+            """Bind the fake stdin to its paired stdout protocol stream."""
+            self.stream = stream
+            self.data = bytearray()
+            self.closed = False
+
+        def write(self, data):
+            """Retain the exact request bytes sent by the parent."""
+            self.data.extend(data)
+
+        async def drain(self):
+            """Complete request draining immediately."""
+            return None
+
+        def is_closing(self):
+            """Report whether the parent closed stdin."""
+            return self.closed
+
+        def close(self):
+            """Mark stdin closed for the paired worker fake."""
+            self.closed = True
+
+        async def wait_closed(self):
+            """Publish a deliberately terminal-only READY result."""
+            request = strict_json_loads(bytes(self.data).rstrip(b'\n'))
+            digest = hashlib.sha256(
+                canonical_request_bytes(request)
+            ).hexdigest()
+            binding = {key: request[key] for key in (
+                'session_id', 'config_hash', 'asset_manifest_sha256',
+                'coordinator_ingress_instance_id',
+            )}
+            status = {
+                'world_id': request['world_id'], 'session_id': request[
+                    'session_id'], 'config_hash': request['config_hash'],
+                'backend_instance_id': 9, 'status_sequence': 1,
+                'fault_flags': 0, 'actuator_inhibited': True,
+            }
+            result = {
+                'schema_id': 'mecanum_b2_scene_readiness_event/v1',
+                'request_id': request['request_id'],
+                'request_sha256': digest, 'sequence': 1,
+                'event': 'worker_result', 'monotonic_ns': time.monotonic_ns(),
+                'facts': {'verdict': 'READY', 'reason': '', 'facts': {
+                    'status': status, 'scene': {
+                        'world_name': request['world_id'],
+                        'matching_model_count': 1,
+                    }, 'request_binding': binding,
+                }, 'cleanup_errors': [], 'cleanup_elapsed_ns': 1},
+            }
+            self.stream.publish(json.dumps(result).encode() + b'\n')
+
+    class Output:
+        def __init__(self):
+            """Initialize an event-driven in-memory output stream."""
+            self.event = asyncio.Event()
+            self.chunks = []
+
+        def publish(self, data):
+            """Queue one protocol record and wake the reader."""
+            self.chunks.append(data)
+            self.event.set()
+
+        async def read(self, _size):
+            """Return a queued record after it becomes available."""
+            if not self.chunks:
+                await self.event.wait()
+            return self.chunks.pop(0) if self.chunks else b''
+
+    class Worker:
+        """Expose process and pipe interfaces required by the parent client."""
+
+        pid = 556677
+        returncode = 0
+
+        def __init__(self):
+            """Create the terminal-only fake worker."""
+            self.stdout = Output()
+            self.stderr = ChunkStream([])
+            self.stdin = Input(self.stdout)
+
+        async def wait(self):
+            """Report successful process exit after publishing the response."""
+            return 0
+
+    worker = Worker()
+
+    async def factory(_environment):
+        return worker
+    identity = {'pid': worker.pid, 'process_group_id': worker.pid,
+                'session_id': worker.pid, 'start_ticks': 456}
+    monkeypatch.setattr(
+        supervisor.os, 'killpg',
+        lambda *_args: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    readiness = RclpyReadiness(worker_factory=factory,
+                               identity_reader=lambda _pid: identity)
+    sink = Sink()
+    monkeypatch.setattr(
+        supervisor, 'load_bound_config',
+        lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
+    )
+    LocalTrainingProcessSupervisor(
+        plan=make_plan(), launcher=object(), readiness=readiness,
+        evidence_sink=sink,
+    )
+    with pytest.raises(RuntimeError, match='worker protocol invalid'):
+        asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 1.0))
+    assert readiness._residue == 'NONE'
 
 
 def test_ready_result_rejects_boolean_scene_cardinality():
@@ -557,7 +1443,7 @@ def test_worker_attempt_is_not_restarted_after_failure(monkeypatch, tmp_path):
     readiness, _sink = readiness_with_child_fakes(
         monkeypatch, tmp_path, FAKE_SCENE='missing',
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises((RuntimeError, TimeoutError)):
         asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 1.0))
     with pytest.raises(RuntimeError, match='attempt already consumed'):
         asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 1.0))
@@ -697,9 +1583,11 @@ def test_unjoinable_worker_is_not_reported_clean_or_ready(monkeypatch):
         supervisor, 'load_bound_config',
         lambda _path: (None, CONFIG_HASH, MANIFEST_HASH, 'B2_SOAK_V1'),
     )
-    with pytest.raises(RuntimeError, match='cleanup not verified: UNKNOWN'):
+    with pytest.raises(OSError, match='identity unavailable'):
         asyncio.run(readiness.server_scene(make_plan(), ServerProcess(), 0.05))
     assert sent == []
+    assert readiness._process_residue == 'UNKNOWN'
+    assert readiness._residue == 'UNKNOWN'
     assert readiness._worker_wait_task.cancelled()
     assert readiness._residue == 'UNKNOWN'
     cleanup = next(facts for event, facts in sink.events

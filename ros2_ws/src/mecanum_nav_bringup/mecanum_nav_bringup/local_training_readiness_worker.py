@@ -264,23 +264,27 @@ def run_worker(
                 )
                 return scene if success else None
 
-        emitter.emit('status_wait_started', {
-            'topic': '/mecanum/local_training/backend_state',
-            'qos_depth': 50,
-        })
-        status_facts = None
+        previous_query_start_ns = None
         while clock_ns() < request['deadline_monotonic_ns']:
             if interrupted:
                 raise RuntimeError('readiness worker cancelled')
-            remaining = (request['deadline_monotonic_ns'] - clock_ns()) / 1e9
-            if remaining <= 0:
+            emitter.emit('status_wait_started', {
+                'topic': '/mecanum/local_training/backend_state',
+                'qos_depth': 50,
+            })
+            status_facts = None
+            while clock_ns() < request['deadline_monotonic_ns']:
+                if interrupted:
+                    raise RuntimeError('readiness worker cancelled')
+                remaining = (
+                    request['deadline_monotonic_ns'] - clock_ns()
+                ) / 1e9
+                status = source_status.next_status(min(remaining, 0.1))
+                if status is not None and _matches_status(status, request):
+                    status_facts = _status_facts(status)
+                    break
+            if status_facts is None:
                 break
-            status = source_status.next_status(min(remaining, 0.1))
-            if status is None:
-                continue
-            if not _matches_status(status, request):
-                continue
-            status_facts = _status_facts(status)
             emitter.emit('status_matched', {
                 'status': status_facts,
                 'request_binding': {
@@ -294,59 +298,87 @@ def run_worker(
                     ],
                 },
             })
-            break
-        if status_facts is None:
-            raise TimeoutError('backend status readiness deadline expired')
-        remaining_ns = request['deadline_monotonic_ns'] - clock_ns()
-        if remaining_ns <= 0:
-            raise TimeoutError('readiness deadline expired before scene query')
-        timeout_ms = min(500, max(1, int(remaining_ns / 1_000_000)))
-        emitter.emit('scene_query_started', {
-            'service': '/world/b2_training_arena/scene/info',
-            'timeout_ms': timeout_ms,
-        })
-        query_start = time.monotonic_ns()
-        try:
-            scene = scene_query(
-                '/world/b2_training_arena/scene/info', timeout_ms,
+            if previous_query_start_ns is not None:
+                next_query_ns = previous_query_start_ns + 1_000_000_000
+                while clock_ns() < next_query_ns:
+                    if interrupted:
+                        raise RuntimeError('readiness worker cancelled')
+                    remaining_ns = min(
+                        next_query_ns - clock_ns(),
+                        request['deadline_monotonic_ns'] - clock_ns(),
+                    )
+                    if remaining_ns <= 0:
+                        break
+                    time.sleep(min(remaining_ns / 1e9, 0.05))
+            remaining_ns = request['deadline_monotonic_ns'] - clock_ns()
+            # Floor the remaining milliseconds; never round a sub-ms
+            # remainder up to a request that exceeds the absolute deadline.
+            timeout_ms = min(500, int(remaining_ns / 1_000_000))
+            if timeout_ms < 1:
+                break
+            emitter.emit('scene_query_started', {
+                'service': '/world/b2_training_arena/scene/info',
+                'timeout_ms': timeout_ms,
+            })
+            remaining_ns = (
+                request['deadline_monotonic_ns'] - clock_ns()
             )
-            query_error = None
-        except BaseException as exc:
-            scene = None
-            query_error = f'{type(exc).__name__}: {exc}'[:256]
-        duration_ns = time.monotonic_ns() - query_start
-        facts = _scene_facts(scene, request)
-        outcome = 'ERROR' if query_error else 'MISMATCH'
-        if (not query_error
-                and facts['world_name'] == request['world_id']
-                and facts['matching_model_count'] == 1):
-            outcome = 'MATCH'
-        emitter.emit('scene_query_finished', {
-            **facts, 'duration_ns': duration_ns,
-            'outcome': outcome, 'error': query_error,
-        })
-        if query_error:
-            raise RuntimeError(f'scene query failed: {query_error}')
-        if facts['world_name'] != request['world_id']:
-            raise RuntimeError('scene world identity mismatch')
-        if facts['matching_model_count'] != 1:
-            raise RuntimeError('scene model cardinality mismatch')
-        if interrupted:
-            raise RuntimeError('readiness worker cancelled')
-        if clock_ns() >= request['deadline_monotonic_ns']:
-            raise TimeoutError('scene readiness completed after deadline')
-        ready_facts = {
-            'status': status_facts,
-            'scene': facts,
-            'request_binding': {
-                'session_id': request['session_id'],
-                'config_hash': request['config_hash'],
-                'asset_manifest_sha256': request['asset_manifest_sha256'],
-                'coordinator_ingress_instance_id': request[
-                    'coordinator_ingress_instance_id'
-                ],
-            },
-        }
+            timeout_ms = min(timeout_ms, int(remaining_ns / 1_000_000))
+            if timeout_ms < 1:
+                raise TimeoutError(
+                    'readiness deadline expired before scene query'
+                )
+            query_start = time.monotonic_ns()
+            previous_query_start_ns = clock_ns()
+            unexpected_query_error = None
+            try:
+                scene = scene_query(
+                    '/world/b2_training_arena/scene/info', timeout_ms,
+                )
+                query_error = None
+            except (TimeoutError, OSError) as exc:
+                scene = None
+                query_error = f'{type(exc).__name__}: {exc}'[:256]
+            except BaseException as exc:
+                scene = None
+                query_error = f'{type(exc).__name__}: {exc}'[:256]
+                unexpected_query_error = exc
+            duration_ns = time.monotonic_ns() - query_start
+            facts = _scene_facts(scene, request)
+            outcome = 'ERROR' if query_error else 'MISMATCH'
+            if (not query_error
+                    and facts['world_name'] == request['world_id']
+                    and facts['matching_model_count'] == 1):
+                outcome = 'MATCH'
+            emitter.emit('scene_query_finished', {
+                **facts, 'duration_ns': duration_ns,
+                'outcome': outcome, 'error': query_error,
+            })
+            if unexpected_query_error is not None:
+                raise RuntimeError(
+                    f'unexpected scene query failure: {query_error}'
+                ) from unexpected_query_error
+            if interrupted:
+                raise RuntimeError('readiness worker cancelled')
+            if clock_ns() >= request['deadline_monotonic_ns']:
+                raise TimeoutError('scene readiness completed after deadline')
+            if outcome != 'MATCH':
+                continue
+            ready_facts = {
+                'status': status_facts,
+                'scene': facts,
+                'request_binding': {
+                    'session_id': request['session_id'],
+                    'config_hash': request['config_hash'],
+                    'asset_manifest_sha256': request['asset_manifest_sha256'],
+                    'coordinator_ingress_instance_id': request[
+                        'coordinator_ingress_instance_id'
+                    ],
+                },
+            }
+            break
+        if ready_facts is None and failure is None:
+            raise TimeoutError('backend/scene readiness deadline expired')
     except BaseException as exc:
         failure = f'{type(exc).__name__}: {exc}'[:512]
     finally:
@@ -371,8 +403,9 @@ def run_worker(
                 )
         if node is not None and executor is not None:
             try:
-                if not executor.remove_node(node):
-                    cleanup_errors.append('executor_remove_node_failed')
+                # rclpy Jazzy remove_node() returns None; no exception is the
+                # success indication for this operation.
+                executor.remove_node(node)
             except BaseException as exc:
                 cleanup_errors.append(f'remove_node:{type(exc).__name__}')
             try:

@@ -172,12 +172,23 @@ class RclpyReadiness:
         self._cleanup_record_error = False
         self._protocol_records = []
         self._protocol_error = None
+        self._protocol_state = 'EXPECT_WORKER_STARTED'
+        self._protocol_last_status = None
+        self._protocol_last_scene = None
+        self._protocol_last_scene_outcome = None
+        self._spawn_task = None
+        self._phase_tasks = set()
+        self._evidence_errors = []
+        self._process_residue = 'NONE'
+        self._task_residue = 'NONE'
+        self._task_cleanup_unknown = False
         self._stdout_total = 0
         self._stderr_total = 0
         self._stderr_hash = hashlib.sha256()
         self._ready_attempted = False
         self._residue = 'NONE'
         self._active_request = None
+        self._active_request_sha256 = None
 
     def bind_evidence_sink(self, evidence_sink):
         """Bind the one owner responsible for readiness evidence."""
@@ -225,10 +236,72 @@ class RclpyReadiness:
             env=env, start_new_session=True, limit=self.MAX_RECORD_BYTES,
         )
 
+    def _capture_spawn_result(self, task):
+        """Retain a late spawn handle after timeout or cancellation."""
+        if task.cancelled():
+            self._process_residue = 'UNKNOWN'
+            return
+        try:
+            process = task.result()
+        except BaseException:
+            return
+        if self._worker is None:
+            self._worker = process
+
+    async def _await_operation(self, operation, deadline, server, label):
+        """Await one phase while polling the parent server and deadline."""
+        if isinstance(operation, asyncio.Future):
+            task = operation
+        else:
+            task = asyncio.create_task(operation)
+            self._phase_tasks.add(task)
+        while True:
+            if server.returncode is not None:
+                self._record('readiness_server_exit_detected', {
+                    'detection_monotonic_ns': self._monotonic_ns(),
+                    'server_pid': server.pid,
+                    'exit_status': server.returncode,
+                    'readiness_phase': label,
+                })
+                raise RuntimeError('Gazebo server exited during readiness')
+            if self._protocol_error:
+                raise RuntimeError(self._protocol_error)
+            for drain_task in (self._stdout_task, self._stderr_task):
+                if (drain_task is not None and drain_task.done()
+                        and not drain_task.cancelled()):
+                    drain_error = drain_task.exception()
+                    if drain_error is not None:
+                        raise RuntimeError(
+                            f'readiness worker drain failed during {label}'
+                        ) from drain_error
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f'readiness deadline expired during {label}'
+                )
+            if task.done():
+                result = task.result()
+                if self._monotonic() >= deadline:
+                    raise TimeoutError(
+                        f'{label} completed after readiness deadline'
+                    )
+                return result
+            await asyncio.wait(
+                {task}, timeout=min(0.025, remaining),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        return task.result()
+
     def _record(self, event, facts):
         if self._evidence_sink is None:
             raise RuntimeError('readiness evidence sink is not bound')
-        self._evidence_sink.record(event, facts)
+        try:
+            self._evidence_sink.record(event, facts)
+        except BaseException as error:
+            self._evidence_errors.append(
+                f'{event}:{type(error).__name__}:{error}'[:512]
+            )
+            raise
 
     @staticmethod
     def _canonical_request(request):
@@ -294,11 +367,6 @@ class RclpyReadiness:
             'worker_started', 'status_wait_started', 'status_matched',
             'scene_query_started', 'scene_query_finished', 'worker_result',
         }
-        order = [
-            'worker_started', 'status_wait_started', 'status_matched',
-            'scene_query_started', 'scene_query_finished', 'worker_result',
-        ]
-        last_order = -1
         while True:
             chunk = await stream.read(2048)
             if not chunk:
@@ -343,17 +411,9 @@ class RclpyReadiness:
                     ):
                         raise ValueError('worker event type/facts invalid')
                     self._validate_event_facts(record, self._active_request)
-                    event_order = order.index(record['event'])
-                    if record['event'] == 'worker_result':
-                        if event_order != 5:
-                            raise ValueError('worker result is not terminal')
-                        last_order = 5
-                    elif event_order != last_order + 1 or event_order >= 5:
-                        raise ValueError('worker event transition mismatch')
                     if seen_result:
                         raise ValueError('duplicate worker_result')
-                    if event_order < 5:
-                        last_order = event_order
+                    self._advance_protocol_state(record)
                     sequence += 1
                     if record['event'] == 'worker_result':
                         seen_result = True
@@ -363,6 +423,15 @@ class RclpyReadiness:
                         'parent_received_monotonic_ns': self._monotonic_ns(),
                         'record': record,
                     })
+                    if self._active_request is not None and (
+                        self._monotonic_ns() >= self._active_request[
+                            'deadline_monotonic_ns'
+                        ]
+                    ):
+                        self._protocol_error = (
+                            'worker evidence processing crossed '
+                            'readiness deadline'
+                        )
                 except BaseException as exc:
                     self._protocol_error = f'worker protocol invalid: {exc}'
         if buffered:
@@ -375,10 +444,62 @@ class RclpyReadiness:
             self._protocol_error = self._protocol_error or (
                 'worker result missing or duplicated'
             )
-        elif results[0]['facts'].get('verdict') == 'READY' and last_order != 5:
-            self._protocol_error = self._protocol_error or (
-                'READY protocol omitted required readiness events'
+
+    def _advance_protocol_state(self, record):
+        """Validate protocol history, including repeated query cycles."""
+        event = record['event']
+        facts = record['facts']
+        state = self._protocol_state
+        if event == 'worker_started':
+            if state != 'EXPECT_WORKER_STARTED':
+                raise ValueError('worker_started is not the first event')
+            self._protocol_state = 'EXPECT_STATUS_WAIT'
+        elif event == 'status_wait_started':
+            if state != 'EXPECT_STATUS_WAIT':
+                raise ValueError('status_wait_started transition mismatch')
+            self._protocol_state = 'EXPECT_STATUS_MATCHED'
+        elif event == 'status_matched':
+            if state != 'EXPECT_STATUS_MATCHED':
+                raise ValueError('status_matched transition mismatch')
+            self._protocol_last_status = facts['status']
+            self._protocol_state = 'EXPECT_QUERY_STARTED'
+        elif event == 'scene_query_started':
+            if state != 'EXPECT_QUERY_STARTED':
+                raise ValueError('scene_query_started transition mismatch')
+            self._protocol_state = 'EXPECT_QUERY_FINISHED'
+        elif event == 'scene_query_finished':
+            if state != 'EXPECT_QUERY_FINISHED':
+                raise ValueError('scene_query_finished without query start')
+            self._protocol_last_scene = {
+                'world_name': facts['world_name'],
+                'matching_model_count': facts['matching_model_count'],
+            }
+            self._protocol_last_scene_outcome = facts['outcome']
+            self._protocol_state = (
+                'MATCHED_SCENE' if facts['outcome'] == 'MATCH'
+                else 'EXPECT_STATUS_WAIT'
             )
+        elif event == 'worker_result':
+            if state == 'EXPECT_WORKER_STARTED':
+                raise ValueError('worker_result before worker_started')
+            if facts['verdict'] == 'FAIL':
+                self._protocol_state = 'TERMINAL'
+                return
+            if state != 'MATCHED_SCENE':
+                raise ValueError('READY lacks a matched query history')
+            ready = facts['facts']
+            if (ready.get('status') != self._protocol_last_status
+                    or ready.get('scene') != self._protocol_last_scene
+                    or self._protocol_last_scene_outcome != 'MATCH'):
+                raise ValueError('READY facts disagree with protocol history')
+            if self._protocol_last_scene != {
+                'world_name': self._active_request['world_id'],
+                'matching_model_count': 1,
+            }:
+                raise ValueError('READY terminal scene is not matched')
+            self._protocol_state = 'TERMINAL'
+        else:
+            raise ValueError('unknown readiness protocol event')
 
     async def _drain_stderr(self):
         while True:
@@ -475,6 +596,23 @@ class RclpyReadiness:
                     or (facts['error'] is not None
                         and not isinstance(facts['error'], str))):
                 raise ValueError('scene query result is invalid')
+            matches = (
+                facts['world_name'] == request['world_id']
+                and facts['matching_model_count'] == 1
+            )
+            if (facts['outcome'] == 'MATCH'
+                    and (not matches or facts['error'] is not None)):
+                raise ValueError('MATCH scene result facts are inconsistent')
+            if (facts['outcome'] == 'MISMATCH'
+                    and (matches or facts['error'] is not None)):
+                raise ValueError(
+                    'MISMATCH scene result facts are inconsistent'
+                )
+            if (facts['outcome'] == 'ERROR'
+                    and (not facts['error'] or not isinstance(
+                        facts['error'], str,
+                    ))):
+                raise ValueError('ERROR scene result lacks an error fact')
         elif event == 'worker_result':
             if set(facts) != {
                 'verdict', 'reason', 'facts', 'cleanup_errors',
@@ -564,6 +702,9 @@ class RclpyReadiness:
         self._ready_attempted = True
         started = self._monotonic()
         deadline = started + min(timeout_s, self.SERVER_READY_TIMEOUT_S)
+        if deadline <= started:
+            raise TimeoutError('readiness budget expired before worker spawn')
+        self._readiness_deadline = deadline
         deadline_ns = self._monotonic_ns() + int(
             max(0.0, deadline - started) * 1e9
         )
@@ -583,13 +724,25 @@ class RclpyReadiness:
             if len(request_bytes) > self.MAX_REQUEST_BYTES:
                 raise RuntimeError('readiness request exceeds 16 KiB')
             digest = hashlib.sha256(request_bytes).hexdigest()
+            self._active_request_sha256 = digest
             self._record('readiness_worker_spawn_requested', {
                 **self._request_binding_facts(request, digest),
                 'module': self.WORKER_MODULE,
                 'interpreter': sys.executable,
             })
-            # Keep the handle before identity or evidence operations.
-            self._worker = await self._worker_factory(dict(plan.environment))
+            if self._monotonic() >= deadline:
+                raise TimeoutError(
+                    'readiness budget expired before worker spawn'
+                )
+            self._spawn_task = asyncio.create_task(
+                self._worker_factory(dict(plan.environment)),
+            )
+            self._spawn_task.add_done_callback(self._capture_spawn_result)
+            # Shield the owned task from caller cancellation. If the bounded
+            # wait ends first, finalization still owns and accounts for it.
+            self._worker = await self._await_operation(
+                self._spawn_task, deadline, process, 'worker spawn',
+            )
             self._stdout_task = asyncio.create_task(
                 self._drain_stdout(request['request_id'], digest),
             )
@@ -602,21 +755,37 @@ class RclpyReadiness:
                 ):
                     raise RuntimeError('readiness worker identity invalid')
                 self._worker_identity = identity
+                self._process_residue = 'OWNED'
                 self._residue = 'OWNED'
                 self._record('readiness_worker_spawned', {
                     **self._request_binding_facts(request, digest),
                     'worker_identity': identity,
                 })
+                if self._monotonic() >= deadline:
+                    raise TimeoutError(
+                        'readiness deadline expired after spawn evidence'
+                    )
             except BaseException:
+                self._process_residue = 'UNKNOWN'
                 self._residue = 'UNKNOWN'
                 raise
             self._worker.stdin.write(request_bytes + b'\n')
-            await self._worker.stdin.drain()
+            await self._await_operation(
+                self._worker.stdin.drain(), deadline, process,
+                'request drain',
+            )
             self._worker.stdin.close()
-            await self._worker.stdin.wait_closed()
+            await self._await_operation(
+                self._worker.stdin.wait_closed(), deadline, process,
+                'stdin close',
+            )
             self._record('readiness_request_sent', {
                 **self._request_binding_facts(request, digest),
             })
+            if self._monotonic() >= deadline:
+                raise TimeoutError(
+                    'readiness deadline expired after request evidence'
+                )
             while True:
                 if self._monotonic() >= deadline:
                     raise TimeoutError('readiness parent deadline expired')
@@ -670,6 +839,10 @@ class RclpyReadiness:
                 'stderr_bytes': self._stderr_total,
                 'stderr_sha256': self._stderr_hash.hexdigest(),
             })
+            if self._monotonic() >= deadline:
+                raise TimeoutError(
+                    'readiness validation evidence completed after deadline'
+                )
             self._residue = 'NONE'
         except BaseException as error:
             detection = self._monotonic_ns()
@@ -686,10 +859,14 @@ class RclpyReadiness:
                 pass
             raise
         finally:
+            active_exception = sys.exc_info()[0] is not None
             await self._finalize_worker()
-            if self._residue != 'NONE' or self._cleanup_record_error:
+            if (self._residue != 'NONE' or self._cleanup_record_error
+                    or self._evidence_errors) and not active_exception:
                 raise RuntimeError(
-                    f'readiness worker cleanup not verified: {self._residue}'
+                    'readiness worker incomplete: '
+                    f'residue={self._residue}, '
+                    f'evidence_errors={self._evidence_errors!r}'
                 )
 
     async def _wait_worker(self, timeout):
@@ -727,8 +904,6 @@ class RclpyReadiness:
         os.killpg(identity['process_group_id'], sig)
 
     async def _finalize_worker(self):
-        if self._worker is None:
-            return
         if self._worker_cleanup_deadline is None:
             self._worker_cleanup_deadline = (
                 self._monotonic() + self.CLEANUP_CAP_S
@@ -740,35 +915,83 @@ class RclpyReadiness:
                     'residue': self._residue,
                 })
             except BaseException:
-                self._residue = 'UNKNOWN'
+                pass
         deadline = self._worker_cleanup_deadline
+        if self._spawn_task is not None and self._worker is None:
+            if not self._spawn_task.done():
+                remaining = max(0.0, deadline - self._monotonic())
+                if remaining > 0:
+                    await asyncio.wait({self._spawn_task}, timeout=remaining)
+            if self._spawn_task.done() and not self._spawn_task.cancelled():
+                try:
+                    self._worker = self._spawn_task.result()
+                except BaseException:
+                    self._process_residue = 'NONE'
+            else:
+                self._process_residue = 'UNKNOWN'
+                self._spawn_task.cancel()
+
         stdin = getattr(self._worker, 'stdin', None)
+        if self._worker is not None:
+            if self._worker_wait_task is None:
+                self._worker_wait_task = asyncio.create_task(
+                    self._worker.wait(),
+                )
+            if self._active_request is not None:
+                if self._stdout_task is None:
+                    self._stdout_task = asyncio.create_task(
+                        self._drain_stdout(
+                            self._active_request['request_id'],
+                            self._active_request_sha256,
+                        ),
+                    )
+                if self._stderr_task is None:
+                    self._stderr_task = asyncio.create_task(
+                        self._drain_stderr(),
+                    )
+            if self._worker_identity is None:
+                try:
+                    identity = self._identity_reader(self._worker.pid)
+                    if not self._valid_process_identity(
+                        identity, self._worker.pid,
+                    ):
+                        raise RuntimeError('late worker identity invalid')
+                    self._worker_identity = identity
+                    self._process_residue = 'OWNED'
+                    self._record('readiness_worker_spawned', {
+                        'worker_identity': identity,
+                        'late_handle_received_during_cleanup': True,
+                    })
+                except BaseException:
+                    self._process_residue = 'UNKNOWN'
         if stdin is not None:
             try:
                 if not stdin.is_closing():
                     stdin.close()
                 remaining = max(0.0, deadline - self._monotonic())
-                await asyncio.wait_for(
-                    stdin.wait_closed(), timeout=min(0.1, remaining),
-                )
-                self._record('readiness_worker_stdin_closed', {
-                    'worker_identity': self._worker_identity,
-                    'remaining_budget_s': max(
-                        0.0, deadline - self._monotonic(),
-                    ),
-                })
+                if remaining <= 0:
+                    self._task_cleanup_unknown = True
+                else:
+                    close_task = asyncio.create_task(stdin.wait_closed())
+                    self._phase_tasks.add(close_task)
+                    await asyncio.wait({close_task}, timeout=remaining)
+                    if close_task.done() and not close_task.cancelled():
+                        close_task.result()
+                        self._record('readiness_worker_stdin_closed', {
+                            'worker_identity': self._worker_identity,
+                            'remaining_budget_s': max(
+                                0.0, deadline - self._monotonic(),
+                            ),
+                        })
+                    else:
+                        self._task_cleanup_unknown = True
+                        close_task.cancel()
             except BaseException:
-                self._residue = 'UNKNOWN'
+                self._task_residue = 'FAILED'
                 self._cleanup_record_error = True
-                try:
-                    self._record('readiness_worker_stdin_close_failed', {
-                        'worker_identity': self._worker_identity,
-                    })
-                except BaseException:
-                    self._cleanup_record_error = True
         phases = ((signal.SIGINT, 0.5), (signal.SIGTERM, 0.5),
                   (signal.SIGKILL, float('inf')))
-        if self._worker.returncode is None:
+        if self._worker is not None and self._worker.returncode is None:
             while self._cleanup_phase < len(phases):
                 sig, phase_s = phases[self._cleanup_phase]
                 self._cleanup_phase += 1
@@ -784,65 +1007,104 @@ class RclpyReadiness:
                         'remaining_budget_s': remaining,
                     })
                 except BaseException:
-                    self._residue = 'UNKNOWN'
                     self._cleanup_record_error = True
                 if await self._wait_worker(
                     min(budget, deadline - self._monotonic()),
                 ):
                     break
                 if not sent:
+                    self._process_residue = 'UNKNOWN'
                     break
+        task_map = {
+            'stdout_drain': self._stdout_task,
+            'stderr_drain': self._stderr_task,
+            'worker_wait': self._worker_wait_task,
+            'spawn': self._spawn_task,
+        }
+        task_map.update({f'io_{i}': task
+                         for i, task in enumerate(self._phase_tasks)})
+        live_tasks = {task for task in task_map.values()
+                      if task is not None and not task.done()}
         remaining = max(0.0, deadline - self._monotonic())
-        drain_tasks = [task for task in (self._stdout_task, self._stderr_task)
-                       if task is not None and not task.done()]
-        if drain_tasks and remaining > 0:
-            done, pending = await asyncio.wait(
-                drain_tasks, timeout=remaining,
-            )
-            for task in done:
-                if not task.cancelled() and task.exception() is not None:
-                    self._residue = 'UNKNOWN'
-            for task in pending:
+        if live_tasks and remaining > 0:
+            await asyncio.wait(live_tasks, timeout=remaining)
+        for task in live_tasks:
+            if not task.done():
                 task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-        wait_task = self._worker_wait_task
-        if wait_task is not None and not wait_task.done():
-            wait_task.cancel()
-            remaining = max(0.0, deadline - self._monotonic())
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(wait_task, return_exceptions=True),
-                    timeout=min(0.05, remaining),
-                )
-            except BaseException:
-                self._residue = 'UNKNOWN'
-        joined = self._worker.returncode is not None
-        if joined and self._worker_identity is not None:
+        remaining = max(0.0, deadline - self._monotonic())
+        if live_tasks and remaining > 0:
+            await asyncio.wait(live_tasks, timeout=remaining)
+        task_states = {}
+        task_pending = False
+        task_failed = False
+        for label, task in task_map.items():
+            if task is None:
+                task_states[label] = 'not_started'
+            elif not task.done():
+                task_states[label] = 'pending'
+                task_pending = True
+            elif task.cancelled():
+                task_states[label] = 'cancelled'
+            else:
+                try:
+                    error = task.exception()
+                except BaseException as exc:
+                    error = exc
+                if error is None:
+                    task_states[label] = 'done'
+                else:
+                    task_states[label] = f'failed:{type(error).__name__}'
+                    task_failed = True
+        if self._task_cleanup_unknown:
+            task_states['stdin_close'] = 'unknown_deadline_expired'
+        self._task_residue = (
+            'UNKNOWN' if task_pending or self._task_cleanup_unknown
+            else 'FAILED' if task_failed else 'NONE'
+        )
+        joined = (
+            self._worker is not None and self._worker.returncode is not None
+        )
+        if self._worker is None:
+            if self._spawn_task is None or (
+                self._spawn_task.done() and not self._spawn_task.cancelled()
+            ):
+                self._process_residue = 'NONE'
+            else:
+                self._process_residue = 'UNKNOWN'
+        elif joined and self._worker_identity is not None:
             try:
                 os.killpg(self._worker_identity['process_group_id'], 0)
             except ProcessLookupError:
-                self._residue = 'NONE'
+                self._process_residue = 'NONE'
             except PermissionError:
-                self._residue = 'UNKNOWN'
+                self._process_residue = 'UNKNOWN'
             else:
-                self._residue = 'UNKNOWN'
+                self._process_residue = 'UNKNOWN'
         elif self._worker_identity is None:
-            self._residue = 'UNKNOWN'
+            self._process_residue = 'UNKNOWN'
         else:
-            self._residue = 'UNKNOWN'
+            self._process_residue = 'UNKNOWN'
+        self._residue = (
+            'NONE' if self._process_residue == 'NONE'
+            and self._task_residue == 'NONE' else 'UNKNOWN'
+        )
         try:
             self._record('readiness_worker_cleanup_finished', {
                 'worker_identity': self._worker_identity,
-                'exit_status': self._worker.returncode,
+                'exit_status': (
+                    self._worker.returncode if self._worker is not None
+                    else None
+                ),
                 'joined': joined,
                 'residue': self._residue,
+                'process_residue': self._process_residue,
+                'task_residue': self._task_residue,
+                'task_states': task_states,
                 'cleanup_elapsed_s': self.CLEANUP_CAP_S - max(
                     0.0, deadline - self._monotonic(),
                 ),
             })
         except BaseException:
-            self._residue = 'UNKNOWN'
             self._cleanup_record_error = True
 
     @staticmethod
