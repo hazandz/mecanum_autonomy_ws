@@ -665,3 +665,39 @@ evidence are not reinterpreted or reused. This amendment grants no runtime,
 capacity, RUN006, Gate, training, B2.3, integration, HIL, or hardware
 authority. Independent exact-commit audit and a separate explicit Owner runtime
 authorization remain required before any runtime invocation.
+
+## 15. RUN006 short-lived helper ownership and offline packet preparation (L0/L1, 2026-11-03)
+
+The Owner authorizes an offline corrective for short-lived helper ownership and
+preparation of a distinct RUN006 packet. RUN005 remains consumed/FAIL; its
+approval, acquisition, journal and other evidence are immutable and are not
+reused or reinterpreted. This section does not authorize runtime, capacity,
+RUN006 execution, Gate progression, B2.3, training, integration, HIL or
+hardware.
+
+For the packet-scoped `window_helper`, `capture_helper` and file-only
+`publisher`, a managed wrapper is spawned in a dedicated process session but
+does not execute the target initially. The parent retains the process handle,
+validates live PID/PGID/SID/start-ticks identity and performs the required
+evidence callback before release. A private nonce/binding/deadline-bound
+AF_UNIX framed-JSON control channel is separate from the target's stdout and
+stderr. The protocol is two-stage: after identity/evidence acceptance the
+parent sends `RELEASE`, the wrapper returns `RELEASE_ACCEPTED`, and only a
+final nonce/binding/deadline-bound `EXEC_COMMIT` permits `execvpe`. Losing the
+parent connection between those stages cannot execute the target. The wrapper
+fails closed on control EOF, malformed or mismatched binding, timeout,+cancellation or pre-release evidence failure. `execvpe` preserves the
+process/session identity; the planned argv and actual wrapper argv are
+separate evidence facts. No shell command interpolation is used. Process
+identity uncertainty remains FAIL/residue UNKNOWN, and bounded cleanup,
+primary-failure attribution, dispatch outcome and secondary cleanup failures
+retain the RUN005 audited contract.
+
+RUN006 inherits the current Codex-owned GUI observation acceptance without
+changing ROS, Safety, RL task/lifecycle or observation semantics. Its packet
+uses a distinct run identity and canonical paths, retains the production source
+pin `d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`, and may reference the already
+pinned RUN005 install only after its current static fingerprints and origins
+are verified. That shared install is not a reuse of RUN005 runtime evidence or
+capacity. `runtime_authorization` remains `NOT_GRANTED`. Preparation and offline
+tests are not runtime evidence, Gate PASS, or B2 closure. RUN001–RUN005 remain
+consumed/FAIL; R003-02 remains UNKNOWN and RT002-03 remains OPEN.
