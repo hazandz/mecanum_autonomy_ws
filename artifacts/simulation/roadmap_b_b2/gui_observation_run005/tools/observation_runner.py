@@ -65,6 +65,16 @@ class ObservationFailure(RuntimeError):
     """A fail-closed runtime observation result."""
 
 
+def _owned_identity_key(identity):
+    """Return a stable key for one verified process-start identity."""
+    if not isinstance(identity, dict):
+        return None
+    fields = ('pid', 'process_group_id', 'session_id', 'start_ticks')
+    if any(type(identity.get(name)) is not int for name in fields):
+        return None
+    return tuple(identity[name] for name in fields)
+
+
 class ReviewInvalidated(ObservationFailure):
     """A Codex review checkpoint was invalidated and cannot be resumed."""
 
@@ -130,6 +140,11 @@ class FirstFailureLatch:
                         ),
                     )[-12000:]
             return False
+        for existing in self.secondary_failures:
+            if (existing['source'] == source
+                    and existing['phase'] == phase
+                    and existing['reason'] == failure['reason']):
+                return False
         self.secondary_failures.append(failure)
         self._persist_detection('secondary_failure_detected', failure)
         return False
@@ -1409,18 +1424,24 @@ class TrackedProcessLauncher:
 
     def __init__(self, delegate, on_start=None, identity_reader=None,
                  proc_root=Path('/proc'), signal_process=os.kill,
-                 process_inventory=None):
+                 signal_group=os.killpg, process_inventory=None):
         """Wrap the audited launcher with process-start identity tracking."""
         self.delegate = delegate
         self.on_start = on_start
         self.identity_reader = identity_reader or process_start_identity
         self.proc_root = Path(proc_root)
         self.signal_process = signal_process
+        self.signal_group = signal_group
         self.process_inventory = process_inventory
         self.identities = {}
         self.records = []
         self.waiters = {}
-        self.cleanup_requested = set()
+        # Cleanup intent is not proof that a signal was dispatched.  Keep
+        # intent, dispatch outcome, and observed leader exit separately and
+        # bind each record to the verified process-start identity.
+        self.cleanup_intents = {}
+        self.cleanup_dispatches = {}
+        self.observed_exits = {}
         self.reported_exit_ids = set()
 
     async def start(self, command, environment):
@@ -1508,7 +1529,7 @@ class TrackedProcessLauncher:
             )
         identity, members = self._members(process)
         if not members:
-            return
+            return {'targets': [], 'leader_dispatched': False}
         leader = next(
             (item for item in members if item['pid'] == process.pid), None,
         )
@@ -1521,11 +1542,17 @@ class TrackedProcessLauncher:
                 raise ObservationFailure(
                     'leader identity changed before signal; residue unknown'
                 )
-            await self.delegate.stop_group(process, sig)
-            return
+            # Call the group-signal primitive directly so ProcessLookupError
+            # cannot be swallowed by a launcher and mistaken for dispatch.
+            self.signal_group(process.pid, sig)
+            return {
+                'targets': [dict(item) for item in members],
+                'leader_dispatched': True,
+            }
         # The leader exited; signal only members whose live proc identity was
         # captured in the currently verified owned session.
         import signal
+        dispatched = []
         for member in members:
             current = self.identity_reader(member['pid'])
             if current != member:
@@ -1535,8 +1562,15 @@ class TrackedProcessLauncher:
                     member['pid'],
                     sig if isinstance(sig, int) else signal.SIGINT,
                 )
+                dispatched.append(dict(member))
             except ProcessLookupError:
                 pass
+        return {
+            'targets': dispatched,
+            'leader_dispatched': any(
+                item == identity for item in dispatched
+            ),
+        }
 
 
 class ResilientSupervisor:
@@ -1891,6 +1925,7 @@ async def evaluate_observation(
     readiness_complete_event=None, graph_convergence_s=30.0,
     temporary_stale_s=30.0,
     clock_ready_timeout_s=CLOCK_READY_TIMEOUT_S,
+    failure_latch=None,
 ):
     """Monitor status and clock through acknowledgment and observation."""
     monitor_started = steady()
@@ -1907,6 +1942,35 @@ async def evaluate_observation(
     backend_identity = None
     seen_nodes = None
     readiness_completed_at = None
+
+    def latch_health_failure(error, phase, event=None, facts=None):
+        """Latch producer-detected health failure before diagnostic I/O."""
+        detected_ns = int(steady() * 1e9)
+        if failure_latch is not None:
+            failure_latch.detect(
+                str(error), 'observer_health', phase, error=error,
+                detection_monotonic_ns=detected_ns,
+            )
+        if sink is not None and event is not None:
+            record_facts = dict(facts or {})
+            record_facts['detection_steady_ns'] = detected_ns
+            record_facts['reason'] = str(error)[:512]
+            try:
+                sink.record(event, record_facts)
+            except BaseException as sink_error:
+                if failure_latch is not None:
+                    failure_latch.detect(
+                        str(sink_error), 'evidence_sink',
+                        f'{phase}_failure_event', error=sink_error,
+                        detection_monotonic_ns=int(steady() * 1e9),
+                    )
+                raise error from sink_error
+
+    def health_error(reason, phase):
+        error = ObservationFailure(reason)
+        latch_health_failure(error, phase)
+        return error
+
     while True:
         now = steady()
         if ack_event is not None and ack_event.is_set() and (
@@ -1915,10 +1979,16 @@ async def evaluate_observation(
             review_accepted_at = now
             clock_stable_since = None
         if deadline is not None and now >= deadline:
-            raise ObservationFailure('240 s consume-to-end deadline expired')
+            raise health_error(
+                '240 s consume-to-end deadline expired', 'total_deadline',
+            )
         if now - monitor_started > clock_ready_timeout_s and clock_count == 0:
-            raise ObservationFailure('clock readiness timed out')
-        observer.spin_once(min(POLL_SLICE_S, max(0.001, duration_s)))
+            raise health_error('clock readiness timed out', 'clock_readiness')
+        try:
+            observer.spin_once(min(POLL_SLICE_S, max(0.001, duration_s)))
+        except BaseException as error:
+            latch_health_failure(error, 'observer_spin')
+            raise
         while observer.events:
             event = observer.events.popleft()
             kind, message, received = event[:3]
@@ -1956,17 +2026,17 @@ async def evaluate_observation(
                             'clock sample gap exceeded 1 s'
                         )
                 except BaseException as error:
-                    if sink is not None:
-                        sink.record('clock_validation_failed', {
+                    latch_health_failure(
+                        error, 'clock_validation', 'clock_validation_failed',
+                        {
                             'sample_index': clock_count,
-                            'reason': str(error)[:512],
-                            'detection_steady_ns': int(steady() * 1e9),
                             'receive_steady_ns': received_ns,
                             'previous_receive_steady_ns': (
                                 None if last_clock_received is None
                                 else int(last_clock_received * 1e9)
                             ),
-                        })
+                        },
+                    )
                     raise
                 last_clock_received = received
                 continue
@@ -2043,18 +2113,18 @@ async def evaluate_observation(
                         'backend heartbeat gap exceeded 1 s'
                     )
             except BaseException as error:
-                if sink is not None:
-                    sink.record('backend_status_validation_failed', {
+                latch_health_failure(
+                    error, 'backend_status_validation',
+                    'backend_status_validation_failed', {
                         'sample_index': status_count,
-                        'reason': str(error)[:512],
-                        'detection_steady_ns': int(steady() * 1e9),
                         'receive_steady_ns': received_ns,
                         'previous_receive_steady_ns': prior_heartbeat_ns,
                         'previous_status_sequence': prior_status_sequence,
                         'trigger_status_sequence': getattr(
                             message, 'status_sequence', None,
                         ),
-                    })
+                    },
+                )
                 raise
             last_heartbeat = received
             last_status_sequence = message.status_sequence
@@ -2065,20 +2135,26 @@ async def evaluate_observation(
                     'processing_steady_ns': int(steady() * 1e9),
                 })
         if hasattr(observer, 'node_inventory'):
-            inventory = observer.node_inventory()
+            try:
+                inventory = observer.node_inventory()
+            except BaseException as error:
+                latch_health_failure(error, 'graph_inventory')
+                raise
             participants = list(inventory)
             unique_participants = set(participants)
             names = {name for name, _namespace in participants}
             if len(participants) != len(unique_participants):
-                raise ObservationFailure(
-                    'duplicate ROS graph participant names were observed'
+                raise health_error(
+                    'duplicate ROS graph participant names were observed',
+                    'graph_validation',
                 )
             unexpected = unique_participants - (
                 set(expected_nodes) | set(temporary_nodes)
             )
             if unexpected:
-                raise ObservationFailure(
-                    f'unexpected ROS graph participants: {sorted(unexpected)}'
+                raise health_error(
+                    f'unexpected ROS graph participants: {sorted(unexpected)}',
+                    'graph_validation',
                 )
             if readiness_complete_event is None:
                 readiness_completed_at = monitor_started
@@ -2090,15 +2166,16 @@ async def evaluate_observation(
             if readiness_completed_at is not None:
                 if (permanent_missing and now - readiness_completed_at
                         >= graph_convergence_s):
-                    raise ObservationFailure(
+                    raise health_error(
                         'ROS graph did not converge after scene readiness: '
-                        f'{sorted(permanent_missing)}'
+                        f'{sorted(permanent_missing)}', 'graph_convergence',
                     )
                 stale_temporary = unique_participants & set(temporary_nodes)
                 if (stale_temporary and now - readiness_completed_at
                         >= temporary_stale_s):
-                    raise ObservationFailure(
-                        'temporary readiness ROS node remained in graph'
+                    raise health_error(
+                        'temporary readiness ROS node remained in graph',
+                        'graph_temporary_node',
                     )
             if unique_participants != seen_nodes:
                 seen_nodes = unique_participants
@@ -2115,16 +2192,20 @@ async def evaluate_observation(
             last_heartbeat is not None
             and now - last_heartbeat > HEARTBEAT_GAP_S
         ):
-            raise ObservationFailure('backend heartbeat lost for over 1 s')
+            raise health_error(
+                'backend heartbeat lost for over 1 s', 'heartbeat_gap',
+            )
         if last_clock_received is not None and (
             now - last_clock_received > CLOCK_SAMPLE_GAP_S
         ):
-            raise ObservationFailure(
-                'clock samples stopped during observation'
+            raise health_error(
+                'clock samples stopped during observation', 'clock_gap',
             )
         if (last_heartbeat is None
                 and now - monitor_started > clock_ready_timeout_s):
-            raise ObservationFailure('backend status readiness timed out')
+            raise health_error(
+                'backend status readiness timed out', 'backend_readiness',
+            )
         if (
             review_accepted_at is not None
             and acknowledgement_time is None
@@ -2512,17 +2593,29 @@ async def _monitor_owned_processes(
                     )
                 raise error
             status = waiter.result()
-            cleanup_requested = id(record.process) in getattr(
-                launcher, 'cleanup_requested', set(),
+            identity_key = _owned_identity_key(record.identity)
+            dispatch = getattr(launcher, 'cleanup_dispatches', {}).get(
+                identity_key,
+            )
+            leader_dispatched = bool(
+                dispatch and dispatch.get('leader_dispatched') is True
             )
             detected_ns = time.monotonic_ns()
-            if cleanup_requested:
+            if identity_key is not None:
+                launcher.observed_exits[identity_key] = {
+                    'exit_status': status,
+                    'detection_monotonic_ns': detected_ns,
+                    'dispatch_observed_before_exit': leader_dispatched,
+                }
+            if leader_dispatched:
                 try:
                     sink.record('owned_process_cleanup_exit', {
                         'process': record.name, 'pid': record.pid,
                         'exit_status': status,
                         'detection_monotonic_ns': detected_ns,
-                        'cleanup_requested': True,
+                        'cleanup_identity': record.identity,
+                        'dispatch_observed_before_exit': True,
+                        'causation_claimed': False,
                     })
                 except BaseException as error:
                     if failure_latch is not None:
@@ -2996,9 +3089,9 @@ async def _run(args, *, dependencies=None):
             identity_reader=deps.get('process_identity_reader'),
             proc_root=deps.get('proc_root', Path('/proc')),
             signal_process=deps.get('signal_process', os.kill),
+            signal_group=deps.get('signal_group', os.killpg),
             process_inventory=deps.get('process_inventory'),
         )
-        launcher.cleanup_requested = set()
         launcher.failure_latch = failure_latch
         original_stop_group = launcher.stop_group
 
@@ -3006,19 +3099,28 @@ async def _run(args, *, dependencies=None):
             record = next((item for item in launcher.records
                            if item.process is process), None)
             identity = launcher.identities.get(id(process))
+            identity_key = _owned_identity_key(identity)
             verified = identity is not None
+            members = []
             if verified:
                 try:
-                    launcher._members(process)
+                    _verified_identity, members = launcher._members(process)
                 except BaseException:
                     verified = False
+            leader_present = bool(
+                verified and any(
+                    item.get('pid') == process.pid
+                    and item == identity for item in members
+                )
+            )
             facts = {
                 'process': record.name if record else None,
                 'pid': process.pid, 'identity': identity,
                 'signal': int(sig), 'ownership_verified': verified,
+                'leader_present_at_intent': leader_present,
             }
-            if verified:
-                launcher.cleanup_requested.add(id(process))
+            if identity_key is not None:
+                launcher.cleanup_intents[identity_key] = dict(facts)
             try:
                 sink.record('cleanup_signal_intent', facts)
             except BaseException as error:
@@ -3028,13 +3130,50 @@ async def _run(args, *, dependencies=None):
             try:
                 result = await original_stop_group(process, sig)
             except BaseException as error:
+                if identity_key is not None:
+                    state = launcher.cleanup_dispatches.setdefault(
+                        identity_key, {'attempts': [], 'targets': [],
+                                       'leader_dispatched': False},
+                    )
+                    state['attempts'].append({
+                        'outcome': 'FAILED',
+                        'error_type': type(error).__name__,
+                    })
                 failure_latch.cleanup_errors.append({
                     **facts, 'error_type': type(error).__name__,
                     'error': str(error)[:512],
                 })
                 raise
+            dispatch = result if isinstance(result, dict) else {}
+            targets = dispatch.get('targets', [])
+            leader_dispatched = bool(
+                leader_present
+                and dispatch.get('leader_dispatched') is True
+                and any(item == identity for item in targets)
+            )
+            if identity_key is not None:
+                state = launcher.cleanup_dispatches.setdefault(
+                    identity_key, {'attempts': [], 'targets': [],
+                                   'leader_dispatched': False},
+                )
+                state['attempts'].append({
+                    'outcome': 'DISPATCHED' if targets else 'NO_MEMBER',
+                    'signal': int(sig), 'targets': targets,
+                })
+                state['targets'].extend(targets)
+                state['leader_dispatched'] = bool(
+                    state['leader_dispatched'] or leader_dispatched
+                )
             try:
-                sink.record('cleanup_signal_dispatched', facts)
+                if targets:
+                    sink.record('cleanup_signal_dispatched', {
+                        **facts, 'targets': targets,
+                        'leader_dispatched': leader_dispatched,
+                    })
+                else:
+                    sink.record('cleanup_signal_not_dispatched', {
+                        **facts, 'reason': 'no verified live member',
+                    })
             except BaseException as error:
                 cleanup_errors.append(
                     f'cleanup_signal_evidence:{type(error).__name__}'
@@ -3113,6 +3252,7 @@ async def _run(args, *, dependencies=None):
             temporary_stale_s=packet['composition'][
                 'temporary_node_stale_after_readiness_s'
             ],
+            failure_latch=failure_latch,
         ))
         rsp_command = planned_rsp_command
         rsp = await _wait_competing(
@@ -3426,15 +3566,30 @@ async def _run(args, *, dependencies=None):
                     status = waiter.result()
                 if status is None:
                     continue
-                requested = process_id in launcher.cleanup_requested
+                identity_key = _owned_identity_key(record.identity)
+                dispatch = launcher.cleanup_dispatches.get(identity_key)
+                requested = bool(
+                    dispatch
+                    and dispatch.get('leader_dispatched') is True
+                )
                 event = ('owned_process_cleanup_exit' if requested else
                          'owned_process_exit_during_cleanup')
                 facts = {
                     'process': record.name, 'pid': record.pid,
-                    'exit_status': status, 'cleanup_signal_requested':
-                    requested, 'detection_monotonic_ns': time.monotonic_ns(),
+                    'exit_status': status,
+                    'dispatch_observed_before_exit': requested,
+                    'causation_claimed': False,
+                    'detection_monotonic_ns': time.monotonic_ns(),
                     'process_identity': record.identity,
                 }
+                if identity_key is not None:
+                    launcher.observed_exits[identity_key] = {
+                        'exit_status': status,
+                        'detection_monotonic_ns': facts[
+                            'detection_monotonic_ns'
+                        ],
+                        'dispatch_observed_before_exit': requested,
+                    }
                 if not requested and not (
                         record.name in ('window_helper', 'capture_helper')
                         and status == 0):
@@ -3556,6 +3711,17 @@ async def _run(args, *, dependencies=None):
             if close_ok:
                 try:
                     stream_path = evidence_root / 'observation.jsonl'
+                    stream_digest = None
+                    try:
+                        stream_digest = deps.get(
+                            'stream_hasher', sha256_file,
+                        )(stream_path)
+                    except BaseException as error:
+                        final_status = 'FAIL'
+                        cleanup_errors.append(
+                            'stream_hash:'
+                            f'{type(error).__name__}:{error}'
+                        )
                     completion = {
                         'schema_id': 'b22_gui_observation_completion/v1',
                         'run_id': run_id,
@@ -3563,9 +3729,7 @@ async def _run(args, *, dependencies=None):
                         'status': final_status,
                         'automated_observation_verdict': observation_verdict,
                         'owner_visual_review': 'NOT_PERFORMED',
-                        'stream_sha256': deps.get(
-                            'stream_hasher', sha256_file,
-                        )(stream_path),
+                        'stream_sha256': stream_digest,
                         'cleanup_errors': [
                             *cleanup_errors, *failure_latch.cleanup_errors,
                         ],
@@ -3577,7 +3741,9 @@ async def _run(args, *, dependencies=None):
                     }
                     check_finalization_deadline('stream_hash')
                     completion['status'] = final_status
-                    completion['cleanup_errors'] = cleanup_errors
+                    completion['cleanup_errors'] = [
+                        *cleanup_errors, *failure_latch.cleanup_errors,
+                    ]
                     deps.get('completion_publisher', atomic_publish)(
                         evidence_root / 'final_result.json',
                         (json.dumps(completion, sort_keys=True,

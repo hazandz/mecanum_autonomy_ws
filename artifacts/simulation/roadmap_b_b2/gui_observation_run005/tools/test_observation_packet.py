@@ -10,6 +10,7 @@ import signal
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import make_dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -1115,6 +1116,14 @@ def make_runner_inputs(
             if state['readiness_failure'] == 'server_exit_during_cleanup':
                 process.finish(0)
                 raise TimeoutError('injected readiness timeout')
+            if state['readiness_failure'] == 'server_exit_with_descendant':
+                state['descendant_leader_pid'] = process.pid
+                state['descendant_alive'] = True
+                process.finish(0)
+                raise TimeoutError('injected readiness timeout')
+            if state['readiness_failure'] == 'server_identity_changed':
+                state['identity_changed_pid'] = process.pid
+                raise TimeoutError('injected readiness timeout')
             if state['readiness_failure'] == 'server_cancel':
                 raise asyncio.CancelledError
 
@@ -1280,12 +1289,15 @@ def make_runner_inputs(
                 'viewer_ref_state': 'TOOL_NO_STABLE_REFERENCE'}
 
     def identity_reader(pid):
-        return {
+        identity = {
             'pid': pid,
             'process_group_id': pid,
             'session_id': pid,
             'start_ticks': 1,
         }
+        if state.get('identity_changed_pid') == pid:
+            identity['start_ticks'] = 2
+        return identity
     dependencies = {'preflight': lambda *_args: events.append(('preflight',)),
                     'stdin_isatty': False, 'environ': {},
                     'exists': lambda _path: True, 'packet_path': packet_path,
@@ -1310,6 +1322,10 @@ def make_runner_inputs(
                         for _command, process in processes
                         if process.returncode is None
                     ],
+                    'signal_group': lambda pid, _sig: next(
+                        process.finish() for _command, process in processes
+                        if process.pid == pid
+                    ),
                     'readiness': FakeReadiness(),
                     'observer_factory': lambda: observer,
                     'evaluate_observation': evaluate,
@@ -1468,7 +1484,8 @@ def test_first_failure_survives_cleanup_signal_and_server_exit_zero(tmp_path):
     )
     assert cleanup_exit['process'] == 'server'
     assert cleanup_exit['exit_status'] == 0
-    assert cleanup_exit['cleanup_signal_requested'] is True
+    assert cleanup_exit['dispatch_observed_before_exit'] is True
+    assert cleanup_exit['causation_claimed'] is False
     final = [record['facts'] for record in records
              if record['event'] == 'final_status'][-1]
     assert final['status'] == 'FAIL'
@@ -1546,42 +1563,358 @@ def test_unrequested_exit_during_readiness_cleanup_is_secondary(tmp_path):
              if record['event'] == 'owned_process_exit_during_cleanup']
     assert any(item['facts']['process'] == 'server'
                and item['facts']['exit_status'] == 0
-               and item['facts']['cleanup_signal_requested'] is False
+               and item['facts']['dispatch_observed_before_exit'] is False
                for item in exits)
+    assert not any(
+        item['facts'].get('process') == 'server'
+        for item in records
+        if item['event'] == 'cleanup_signal_dispatched'
+    )
+
+
+def test_leader_exit_is_unrequested_when_only_descendant_is_dispatched(
+        tmp_path):
+    """Descendant cleanup cannot reclassify a departed group leader exit."""
+    args, deps, _events, processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    state['readiness_failure'] = 'server_exit_with_descendant'
+    original_inventory = deps['process_inventory']
+    original_reader = deps['process_identity_reader']
+    signals = []
+
+    def inventory():
+        values = list(original_inventory())
+        if state.get('descendant_alive'):
+            leader_pid = state['descendant_leader_pid']
+            values.append({
+                'pid': leader_pid + 10000,
+                'process_group_id': leader_pid,
+                'session_id': leader_pid,
+                'start_ticks': 2,
+            })
+        return values
+
+    def signal_process(pid, sig):
+        signals.append((pid, sig))
+        if pid == state['descendant_leader_pid'] + 10000:
+            state['descendant_alive'] = False
+
+    deps['process_inventory'] = inventory
+    deps['signal_process'] = signal_process
+    deps['process_identity_reader'] = lambda pid: (
+        next((item for item in inventory() if item['pid'] == pid), None)
+        or original_reader(pid)
+    )
+    assert asyncio.run(runner._run(args, dependencies=deps)) == 'FAIL'
+    assert signals
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    server_exit = next(
+        item for item in records
+        if item['event'] == 'owned_process_exit_during_cleanup'
+        and item['facts']['process'] == 'server'
+    )
+    assert server_exit['facts']['dispatch_observed_before_exit'] is False
+    assert server_exit['facts']['causation_claimed'] is False
+    assert any(
+        item['event'] == 'cleanup_signal_dispatched'
+        and item['facts']['process'] == 'server'
+        and item['facts']['leader_dispatched'] is False
+        for item in records
+    )
+    final = [item['facts'] for item in records
+             if item['event'] == 'final_status'][-1]
+    assert final['primary_failure']['source'] == 'readiness'
+
+
+def test_identity_change_during_cleanup_never_creates_requested_exit(
+        tmp_path):
+    """Changed identity fails closed without dispatch evidence."""
+    args, deps, _events, _processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    state['readiness_failure'] = 'server_identity_changed'
+    assert asyncio.run(runner._run(args, dependencies=deps)) == 'FAIL'
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    assert not any(
+        item['event'] == 'cleanup_signal_dispatched'
+        and item['facts'].get('process') == 'server'
+        for item in records
+    )
+    assert any(
+        item['event'] == 'fallback_cleanup_attempt'
+        and item['facts'].get('process') == 'server'
+        for item in records
+    )
+    assert any(
+        'PID reuse suspected' in str(error)
+        for item in records if item['event'] == 'final_status'
+        for error in item['facts'].get('cleanup_errors', [])
+    )
+    final = [item['facts'] for item in records
+             if item['event'] == 'final_status'][-1]
+    assert final['primary_failure']['source'] == 'readiness'
+
+
+def test_dispatch_error_does_not_create_requested_exit_classification(
+        tmp_path):
+    """A failed verified group signal remains an unrequested process exit."""
+    args, deps, _events, _processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    state['readiness_failure'] = 'server'
+
+    def fail_group(pid, _sig):
+        raise PermissionError(f'injected signal dispatch rejection for {pid}')
+
+    deps['signal_group'] = fail_group
+    assert asyncio.run(runner._run(args, dependencies=deps)) == 'FAIL'
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    assert not any(
+        item['event'] == 'cleanup_signal_dispatched'
+        and item['facts'].get('process') == 'server'
+        for item in records
+    )
+    final = [item['facts'] for item in records
+             if item['event'] == 'final_status'][-1]
+    assert final['primary_failure']['source'] == 'readiness'
+    assert any('PermissionError' in str(item)
+               for item in final['cleanup_errors'])
 
 
 def test_simultaneous_competing_failures_do_not_replace_prior_latch():
-    """Done-set inspection order cannot replace a producer-latched failure."""
-    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 200)
-    latch.detect('monitor detected server exit', 'process_monitor',
-                 'owned_process_monitor', detection_monotonic_ns=100)
+    """Each producer latches at detection; done-set order is irrelevant."""
+    async def run_pair(first_source):
+        latch = runner.FirstFailureLatch(monotonic_ns=lambda: 200)
+        first_detected = asyncio.Event()
+        second_detected = asyncio.Event()
+        both_started = asyncio.Event()
+        starts = 0
+        detections = []
 
-    async def fail_operation():
-        raise RuntimeError('operation also completed with failure')
+        # Force both tasks into one done-set after ordered detection.
+        async def ordered_producer(source, release_gate):
+            nonlocal starts
+            starts += 1
+            if starts == 2:
+                both_started.set()
+            await both_started.wait()
+            await release_gate.wait()
+            error = RuntimeError(f'{source} detected failure')
+            detections.append(source)
+            latch.detect(
+                str(error), source, 'simultaneous', error=error,
+                detection_monotonic_ns=100 if source == first_source else 101,
+            )
+            if len(detections) == 1:
+                first_detected.set()
+            else:
+                second_detected.set()
+            raise error
 
-    async def fail_monitor():
-        raise RuntimeError('monitor also completed with failure')
-
-    async def run_pair(_operation_first):
-        monitor = asyncio.create_task(fail_monitor())
+        operation_gate = asyncio.Event()
+        monitor_gate = asyncio.Event()
+        if first_source == 'operation':
+            operation_gate.set()
+        else:
+            monitor_gate.set()
 
         class DoneWait:
             async def __call__(self, futures, **_kwargs):
                 await asyncio.gather(*futures, return_exceptions=True)
                 return set(futures), set()
-        with pytest.raises(RuntimeError):
-            await runner._wait_competing(
-                fail_operation(), monitor, 500, lambda: 100,
-                wait_fn=DoneWait(),
-                failure_latch=latch, phase='simultaneous',
-            )
 
-    asyncio.run(run_pair(True))
-    primary = dict(latch.primary_failure)
-    asyncio.run(run_pair(False))
-    assert latch.primary_failure == primary
-    assert primary['source'] == 'process_monitor'
-    assert primary['reason'] == 'monitor detected server exit'
+        monitor = asyncio.create_task(
+            ordered_producer('process_monitor', monitor_gate),
+        )
+        # Let the first producer record, then release the second.
+        competing = asyncio.create_task(runner._wait_competing(
+            ordered_producer('operation', operation_gate),
+            monitor, 500, lambda: 100,
+            wait_fn=DoneWait(), failure_latch=latch,
+            phase='simultaneous',
+        ))
+        await first_detected.wait()
+        (monitor_gate if first_source == 'operation' else operation_gate).set()
+        with pytest.raises(RuntimeError):
+            await competing
+        assert detections == [first_source,
+                              'process_monitor' if first_source == 'operation'
+                              else 'operation']
+        assert latch.primary_failure['source'] == first_source
+        assert len(latch.secondary_failures) == 1
+        return latch.primary_failure['source'], {
+            item['source'] for item in latch.secondary_failures
+        }
+
+    assert asyncio.run(run_pair('operation')) == (
+        'operation', {'process_monitor'},
+    )
+    assert asyncio.run(run_pair('process_monitor')) == (
+        'process_monitor', {'operation'},
+    )
+
+
+def test_completion_retains_latch_only_evidence_error_after_sink_recovers(
+        tmp_path):
+    """A recovered sink publishes sticky latch errors and keeps the cause."""
+    args, deps, _events, _processes, root, _observer, state = \
+        make_runner_inputs(tmp_path, production_supervisor=True)
+    state['readiness_failure'] = 'server'
+    original_factory = deps['sink_factory'] if 'sink_factory' in deps else None
+
+    class FailFirstFailureRecord:
+        def __init__(self, delegate):
+            self.delegate = delegate
+            self.failed = False
+
+        def record(self, event, facts):
+            if event == 'first_failure_latched' and not self.failed:
+                self.failed = True
+                raise OSError('latch journal write failed once')
+            return self.delegate.record(event, facts)
+
+        def close(self):
+            return self.delegate.close()
+
+    deps['sink_factory'] = lambda *items: FailFirstFailureRecord(
+        (original_factory or runner.ObservationEvidenceSink)(*items),
+    )
+    assert asyncio.run(runner._run(args, dependencies=deps)) == 'FAIL'
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    final = [item['facts'] for item in records
+             if item['event'] == 'final_status'][-1]
+    completion = json.loads((root / 'final_result.json').read_text())
+    assert final['status'] == completion['status'] == 'FAIL'
+    assert final['primary_failure'] == completion['primary_failure']
+    assert final['primary_failure']['source'] == 'readiness'
+    assert any('latch journal write failed once' in str(item)
+               for item in final['cleanup_errors'])
+    assert any('latch journal write failed once' in str(item)
+               for item in completion['cleanup_errors'])
+
+
+def _observer_with_events(events, *, inventory=None):
+    """Construct a passive-only evaluator fake with one fixed event batch."""
+    class Observer:
+        def __init__(self):
+            self.events = deque(events)
+
+        def spin_once(self, _timeout):
+            return None
+
+        def node_inventory(self):
+            return inventory if inventory is not None else []
+
+    return Observer()
+
+
+def _health_test_plan():
+    return SimpleNamespace(session_id='session', config_hash='config')
+
+
+def test_backend_health_failure_latches_before_validation_event_sink_error():
+    """Invalid backend status remains primary if failure journaling fails."""
+    message = SimpleNamespace(
+        session_id='wrong-session', config_hash='config',
+        backend_instance_id=7,
+        header=SimpleNamespace(frame_id='b2_training_arena'), paused=True,
+        actuator_inhibited=True, fault_flags=0,
+        applied_receipt_valid=False, status_sequence=4,
+    )
+    events = [('status', message, 1.0, 1_000_000_000)]
+
+    class Sink:
+        def record(self, event, _facts):
+            if event == 'backend_status_validation_failed':
+                raise OSError('backend failure journal unavailable')
+
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 55)
+    with pytest.raises(runner.ObservationFailure, match='backend identity'):
+        asyncio.run(runner.evaluate_observation(
+            plan=_health_test_plan(), observer=_observer_with_events(events),
+            sink=Sink(), failure_latch=latch, steady=lambda: 1.0,
+        ))
+    assert latch.primary_failure['reason'] == 'backend identity mismatch'
+    assert latch.primary_failure['source'] == 'observer_health'
+    assert latch.primary_failure['phase'] == 'backend_status_validation'
+    assert latch.primary_failure['detection_monotonic_ns'] == 1_000_000_000
+    assert any(item['source'] == 'evidence_sink'
+               for item in latch.secondary_failures)
+
+
+def test_clock_health_failure_latches_before_validation_event_sink_error():
+    """Clock failure stays primary when its event cannot persist."""
+    events = [
+        ('clock', SimpleNamespace(sec=0, nanosec=0), 1.0, 1_000_000_000),
+        ('clock', SimpleNamespace(sec=0, nanosec=1), 1.1, 1_100_000_000),
+    ]
+
+    class Sink:
+        def record(self, event, _facts):
+            if event == 'clock_validation_failed':
+                raise OSError('clock failure journal unavailable')
+
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 77)
+    with pytest.raises(runner.ObservationFailure, match='clock advanced'):
+        asyncio.run(runner.evaluate_observation(
+            plan=_health_test_plan(), observer=_observer_with_events(events),
+            sink=Sink(), failure_latch=latch, steady=lambda: 1.0,
+        ))
+    assert latch.primary_failure['reason'] == 'simulation clock advanced'
+    assert latch.primary_failure['phase'] == 'clock_validation'
+    assert latch.primary_failure['detection_monotonic_ns'] == 1_000_000_000
+    assert any(item['source'] == 'evidence_sink'
+               for item in latch.secondary_failures)
+
+
+def test_graph_failure_is_latched_before_later_cleanup_error():
+    """Graph failure remains primary over a later cleanup fault."""
+    observer = _observer_with_events([], inventory=[
+        ('foreign_node', '/'), ('foreign_node', '/'),
+    ])
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 99)
+    with pytest.raises(runner.ObservationFailure, match='duplicate ROS graph'):
+        asyncio.run(runner.evaluate_observation(
+            plan=_health_test_plan(), observer=observer,
+            failure_latch=latch, steady=lambda: 1.0,
+        ))
+    latch.detect('cleanup failed', 'cleanup', 'rollback')
+    assert 'duplicate ROS graph' in latch.primary_failure['reason']
+    assert latch.primary_failure['phase'] == 'graph_validation'
+    assert latch.primary_failure['detection_monotonic_ns'] == 1_000_000_000
+    assert latch.secondary_failures[0]['source'] == 'cleanup'
+
+
+def test_heartbeat_gap_is_latched_before_cleanup_failure():
+    """Heartbeat gap retains its producer timestamp as primary evidence."""
+    def status(sequence):
+        return SimpleNamespace(
+            session_id='session', config_hash='config',
+            backend_instance_id=7,
+            header=SimpleNamespace(frame_id='b2_training_arena'),
+            paused=True, actuator_inhibited=True, fault_flags=0,
+            applied_receipt_valid=False, status_sequence=sequence,
+        )
+
+    observer = _observer_with_events([
+        ('status', status(1), 1.0, 1_000_000_000),
+        ('status', status(2), 2.1, 2_100_000_000),
+    ])
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 200)
+    with pytest.raises(runner.ObservationFailure, match='heartbeat gap'):
+        asyncio.run(runner.evaluate_observation(
+            plan=_health_test_plan(), observer=observer,
+            failure_latch=latch, steady=lambda: 3.0,
+        ))
+    assert latch.primary_failure['phase'] == 'backend_status_validation'
+    assert latch.primary_failure['detection_monotonic_ns'] == 3_000_000_000
+    latch.detect('cleanup failed', 'cleanup', 'rollback')
+    assert latch.primary_failure['reason'] == (
+        'backend heartbeat gap exceeded 1 s'
+    )
+    assert latch.secondary_failures[0]['source'] == 'cleanup'
 
 
 def test_run005_default_supervisor_uses_canonical_readiness_parent(
@@ -1870,6 +2203,10 @@ def test_unknown_owned_identity_is_never_signalled_while_verified_group_cleans(
 
     launcher = runner.TrackedProcessLauncher(
         Delegate(), identity_reader=identity_reader,
+        signal_group=lambda pgid, sig: (
+            signals.append((pgid, sig)),
+            second.finish() if sig != signal.SIGINT else None,
+        ),
         process_inventory=lambda: [identity_reader(second.pid)]
         if second.returncode is None else [],
     )

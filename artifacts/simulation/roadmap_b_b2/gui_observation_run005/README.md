@@ -129,3 +129,17 @@ runner đúng một lần, theo dõi startup và health, capture cửa sổ đã
 đã hash, publish mailbox result, thu evidence và cleanup. Owner không cần chạy
 terminal, nhập ACK/token, gửi ảnh hoặc tạo file phản hồi giữa lượt. Lượt chuẩn
 bị hiện tại chưa tạo approval/acquisition và chưa được phép chạy.
+
+## Corrective R005-01–R005-03
+
+Cleanup intent, dispatch outcome và process exit được ghi riêng, gắn với
+identity đầy đủ của process đã xác minh. Event exit sau dispatch chỉ ghi thứ
+tự quan sát, không khẳng định signal là nguyên nhân; exit của leader không
+được gọi là requested nếu chỉ descendants được signal hoặc dispatch không
+được xác nhận.
+
+Các lỗi backend, clock, graph và heartbeat được latch tại điểm phát hiện trước
+khi ghi event failure và trước cleanup. Completion giữ cả lỗi sticky trong
+latch lẫn lỗi cleanup/finalization; verdict vẫn FAIL nếu evidence I/O hoặc
+cleanup có lỗi. Các kiểm tra này là offline regressions dùng fakes, không xác
+nhận runtime behavior của RUN004 hoặc RUN005.
