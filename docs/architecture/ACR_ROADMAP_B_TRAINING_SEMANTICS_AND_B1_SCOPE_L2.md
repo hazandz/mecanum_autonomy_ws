@@ -701,3 +701,51 @@ are verified. That shared install is not a reuse of RUN005 runtime evidence or
 capacity. `runtime_authorization` remains `NOT_GRANTED`. Preparation and offline
 tests are not runtime evidence, Gate PASS, or B2 closure. RUN001–RUN005 remain
 consumed/FAIL; R003-02 remains UNKNOWN and RT002-03 remains OPEN.
+
+## 16. RUN007 bounded window discovery and offline packet preparation (L1, 2026-11-03)
+
+The Owner authorizes an offline corrective to RUN006 window discovery and
+preparation of a distinct RUN007 packet. RUN006 remains consumed/FAIL; its
+acquisition, observation journal and final result remain immutable. RUN007
+does not reuse prior approval, acquisition, mailbox, evidence or capacity.
+This section does not authorize runtime, capacity, Gate progression, B2.3,
+B3, training, HIL, hardware or integration.
+
+For RUN007, a live GUI process is not itself proof that its client window is
+ready. The packet repeats bounded window-tree enumeration and property reads
+inside one absolute review deadline while the existing health/process monitor
+continues. It does not restart the GUI, simulator or a failed helper. Only one
+client window whose PID, process group, session, start ticks, executable, argv
+and partition are verified against the owned GUI may be bound. Foreign windows
+are excluded; missing or late metadata can be evaluated on a later pass; zero
+or multiple owned matches at deadline fail closed. The selected binding is
+rechecked immediately before capture. Helper, parser, transport, sink,
+identity, health or cancellation failures are not converted into an empty
+window result. Bounded diagnostics state counts, candidate rejection reasons,
+helper outcomes and truncation, without persisting desktop titles or foreign
+application command lines; all enumerated candidates remain part of the
+decision regardless of diagnostic truncation. Repeated discovery within the
+same unconsumed attempt and checkpoint is not a retry after capacity consume.
+
+The Owner additionally reported seeing a Gazebo window with a black
+background, a white robot and no warehouse. This is a supplementary Owner
+observation, not a Codex image review or RUN006 journal evidence. RUN006 and
+RUN007 pin `b2_training_arena`, not a warehouse world. Static source/install
+inspection confirms the arena world content, robot mesh references and GUI
+configuration, but does not establish the pixels actually rendered in RUN006.
+The RUN006 journal records helper exit status but not the X11 property output
+needed to determine why candidates were rejected. The relationship between
+window recognition and the Owner's display report, and the cause of the
+reported appearance, therefore remain UNKNOWN. No claim is made that the
+renderer failed, a mesh was missing, or the wrong world was loaded. RUN007
+does not change world, camera, renderer, lighting, materials or assets; any
+future authorized review must inspect the actual bound image against the
+pinned B2 arena and robot.
+
+RUN007 is an offline packet preparation based on preparation commit
+`7338330f0db9d1e5f7ce707c872bd990551f6b40`, retaining production source pin
+`d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`. `runtime_authorization` remains
+`NOT_GRANTED`; no RUN007 approval, acquisition, mailbox or runtime evidence is
+created by this change. RUN001–RUN006 remain consumed/FAIL. R003-02 remains
+UNKNOWN and RT002-03 remains OPEN/out of scope. Offline tests and packet
+delivery do not establish runtime, Gate PASS or B2 closure.

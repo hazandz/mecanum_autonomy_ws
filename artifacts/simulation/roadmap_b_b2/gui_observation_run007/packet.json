@@ -1,0 +1,512 @@
+{
+  "schema_id": "b22_codex_owned_gui_observation_packet/v1",
+  "schema_version": 1,
+  "run_id": "B22_GUI_OBSERVATION_RUN007",
+  "capacity": 1,
+  "gui": true,
+  "repository": {
+    "origin": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "branch": "roadmap-b-b22-simulation-substrate",
+    "starting_head": "7338330f0db9d1e5f7ce707c872bd990551f6b40",
+    "starting_sole_parent": "dcc20fbfae079da05de985d0f9cc517e8c8a3ce9",
+    "expected_remote_integration": "ef9e0281cfb9de04d89a2698d6d7899bcde92803",
+    "architecture_sha256": "432eeac363a595cfcf7e81c4b66054fb674dba140a2ef3cffecd617ab8136204",
+    "production_source_pin": "d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336",
+    "remote_status_at_executor": "VERIFIED_DIRECT_READBACK",
+    "remote_candidate_sha": "7338330f0db9d1e5f7ce707c872bd990551f6b40",
+    "remote_integration_sha": "ef9e0281cfb9de04d89a2698d6d7899bcde92803"
+  },
+  "identity": {
+    "session_id": "canonical UUID generated once before participant creation",
+    "coordinator_ingress_instance_id": "single nonzero uint64 generated once before participant creation",
+    "ros_domain_id": 83,
+    "gz_partition": "mecanum_b2_<session_uuid_without_hyphens>",
+    "world": "b2_training_arena",
+    "robot": "mecanum_b2",
+    "backend": "NATIVE_B2_BACKEND_V1",
+    "scenario_id": "B2_SOAK_V1"
+  },
+  "scenario": {
+    "scenario_id": "B2_SOAK_V1",
+    "world": "b2_training_arena",
+    "robot": "mecanum_b2",
+    "backend": "NATIVE_B2_BACKEND_V1"
+  },
+  "composition": {
+    "process_roles": [
+      "robot_state_publisher",
+      "parameter_bridge",
+      "server",
+      "gui"
+    ],
+    "persistent_ros_nodes": [
+      "b22_gui_observation_observer",
+      "robot_state_publisher",
+      "ros_gz_bridge",
+      "mecanum_sim_backend"
+    ],
+    "startup_temporary_ros_nodes": [
+      "b2_server_scene_readiness"
+    ],
+    "namespace": "/",
+    "graph_convergence_after_readiness_s": 30,
+    "temporary_node_stale_after_readiness_s": 30,
+    "scene_query": "world b2_training_arena with exactly one model mecanum_b2",
+    "server": "one Gazebo Sim 8 server-only process with Sensors/OGRE2/headless rendering and SceneBroadcaster",
+    "gui": "one GUI-only process sharing the bound GZ_PARTITION and installed MinimalScene/GzSceneManager/InteractiveViewControl config",
+    "bridge": "one parameter_bridge",
+    "robot_state_publisher": "one installed robot_state_publisher process",
+    "startup_helper_roles": [
+      "readiness_worker"
+    ],
+    "startup_helper_commands": {
+      "readiness_worker": {
+        "owner": "canonical RclpyReadiness",
+        "interpreter": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+        "argv": [
+          "-m",
+          "mecanum_nav_bringup.local_training_readiness_worker"
+        ],
+        "temporary_ros_node": "b2_server_scene_readiness",
+        "participant_class": "startup helper, not a persistent daemon"
+      }
+    },
+    "readiness_protocol": {
+      "request_schema": "mecanum_b2_scene_readiness_request/v1",
+      "event_schema": "mecanum_b2_scene_readiness_event/v2",
+      "scene_name_semantics": "raw_scene_label_only",
+      "world_identity_source": "WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND",
+      "query_service_template": "/world/<bound_world>/scene/info",
+      "query_partition_source": "effective_GZ_PARTITION_used_by_transport_node"
+    },
+    "short_lived_helper_protocol": {
+      "schema_id": "b22_owned_helper_gate/v1",
+      "roles": [
+        "window_helper",
+        "capture_helper",
+        "publisher"
+      ],
+      "control_channel": "private_AF_UNIX_framed_JSON_separate_from_target_stdio",
+      "binding": [
+        "run_id",
+        "role",
+        "nonce",
+        "absolute_deadline",
+        "target_argv_sha256"
+      ],
+      "ownership_before_release": [
+        "pid",
+        "pgid",
+        "sid",
+        "start_ticks",
+        "evidence_callback"
+      ],
+      "target_execution": "execvpe_same_process_same_session_after_exact_release_and_exec_commit",
+      "control_stages": [
+        "READY_FOR_RELEASE",
+        "RELEASE",
+        "RELEASE_ACCEPTED",
+        "EXEC_COMMIT"
+      ],
+      "fail_closed": [
+        "control_EOF",
+        "malformed_frame",
+        "nonce_or_binding_mismatch",
+        "deadline",
+        "cancellation",
+        "identity_unknown",
+        "evidence_failure"
+      ],
+      "command_facts": [
+        "planned_command",
+        "wrapper_command"
+      ],
+      "shell_interpolation": false
+    }
+  },
+  "installation": {
+    "dependency_fingerprints": {
+      "backend_source": {
+        "fingerprint_sha256": "8c689000e73c1038c9dd505b5d3c48b76d8d114137df43f888d88eeea6beec5c"
+      },
+      "gazebo": {
+        "gui_mode": "GUI-only process using the same GZ_PARTITION",
+        "major_version": 8,
+        "renderer_plugin_path": "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/gz-rendering-8/engine-plugins/libgz-rendering8-ogre2.so.8.2.3",
+        "runtime_graphics_context": "NOT_TESTED; installed fingerprint is static only",
+        "scene_broadcaster": "installed Gazebo Sim 8 SceneBroadcaster plugin",
+        "sensor_rendering": "Sensors system retained; ogre2",
+        "server_mode": "server-only with --headless-rendering"
+      },
+      "python": {
+        "executable": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+        "modules": {
+          "numpy": {
+            "origin": "/usr/lib/python3/dist-packages/numpy/__init__.py",
+            "version": "1.26.4"
+          },
+          "pydantic": {
+            "origin": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/lib/python3.12/site-packages/pydantic/__init__.py",
+            "version": "2.10.6"
+          },
+          "pytest": {
+            "origin": "/usr/lib/python3/dist-packages/pytest/__init__.py",
+            "version": "7.4.4"
+          }
+        },
+        "version": "3.12.3"
+      },
+      "ros_clock_subscription_qos": {
+        "bridge_profile": "CLOCK",
+        "depth": 10,
+        "durability": "VOLATILE",
+        "history": "KEEP_LAST",
+        "reliability": "BEST_EFFORT"
+      },
+      "ros_distro": "jazzy",
+      "ros_underlay": "/opt/ros/jazzy",
+      "system_packages": {
+        "gz-transport13-cli": "13.6.0-1~noble",
+        "ros-jazzy-gz-rendering-vendor": "0.0.7-1noble.20260425.063708",
+        "ros-jazzy-gz-sensors-vendor": "0.0.6-1noble.20260604.105419",
+        "ros-jazzy-gz-sim-vendor": "0.0.10-1noble.20260604.111001",
+        "ros-jazzy-gz-transport-vendor": "0.0.7-1noble.20260423.081526",
+        "ros-jazzy-robot-state-publisher": "3.3.4-1noble.20260615.150609",
+        "ros-jazzy-ros-gz-bridge": "1.0.22-1noble.20260615.142443",
+        "ros-jazzy-rclpy": "7.1.11-1noble.20260615.133206",
+        "python3-gz-transport13": "13.6.0-1~noble"
+      },
+      "qt": {
+        "PyQt5_version": "5.15.10",
+        "PyQt5_origin": "/usr/lib/python3/dist-packages/PyQt5/__init__.py",
+        "PyQt5_sha256": "328ea9629f667bd019ea96fcd33da68a010dee14734d76f347c01b1446d71846",
+        "Qt_version": "5.15.13",
+        "QtCore_origin": "/usr/lib/python3/dist-packages/PyQt5/QtCore.abi3.so",
+        "QtCore_sha256": "7b035b02b76c036f2fbcfc2039d48131d9d0f3604f65a2a1e0143ae090f00006",
+        "QtGui_origin": "/usr/lib/python3/dist-packages/PyQt5/QtGui.abi3.so",
+        "QtGui_sha256": "69fbb387b0c16a569e7a41a3a96f869696669899a27e32b25f931cd4f3b11791",
+        "platform_plugin": "/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so",
+        "platform_plugin_sha256": "8545cd0fee43b36561cc8bf14d6a87096b20c93da24ee103d0266c0afcf38364",
+        "platform": "xcb"
+      },
+      "desktop_tools": {
+        "xwininfo": {
+          "path": "/usr/bin/xwininfo",
+          "sha256": "4b3a8b4c4f95942d579f667f52d192372303312265346fbde604b51b673404d2",
+          "package": "x11-utils",
+          "package_version": "7.7+6build2"
+        },
+        "xprop": {
+          "path": "/usr/bin/xprop",
+          "sha256": "f48d1acc43444538a8a43ec3b76babf3371ac3220cc4a373a702faf2ceeee260",
+          "package": "x11-utils",
+          "package_version": "7.7+6build2"
+        },
+        "python3_pyqt5_package_version": "5.15.10+dfsg-1build6",
+        "libqt5gui5t64_package_version": "5.15.13+dfsg-1ubuntu1"
+      },
+      "codex_tools": {
+        "exec_command": "managed process/session handle is available by API metadata",
+        "write_stdin": "empty poll is available by API metadata; cancellation/join not guaranteed",
+        "view_image": "local image-viewer API is available by metadata; operational display not tested",
+        "filesystem_namespace": "shared local filesystem path expected; runtime round-trip not tested",
+        "one_shot_writer": "exec_command can invoke a writer; process lifecycle not operationally tested",
+        "stable_interaction_reference": "not provided by the available API metadata",
+        "operational_proof": "NOT_TESTED"
+      },
+      "filesystem": {
+        "required_api": "O_NOFOLLOW, directory descriptors, same-filesystem hard-link no-replace, fsync(file and parent)",
+        "canonical_root_access": "NOT_TESTED_IN_THIS_IMPLEMENTATION",
+        "publication_capability": "NOT_TESTED"
+      },
+      "readiness_worker_provenance": {
+        "supervisor_path": "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_process_supervisor.py",
+        "supervisor_sha256": "044a9583aaa414a29cd606cb2fe5aa633f4f609a953fe9ade47a038eebbb465f",
+        "worker_path": "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_readiness_worker.py",
+        "worker_sha256": "94ac394d282cae0b419b766220bf836309ba377d25617a6f6ab6015a6be1d948",
+        "worker_module": "mecanum_nav_bringup.local_training_readiness_worker",
+        "worker_interpreter": "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+        "rclpy_version": "7.1.11-1noble.20260615.133206",
+        "rclpy_origin": "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py",
+        "rclpy_sha256": "15b5665a97a688645545e704a6111a5be5f5b2d147cfcf099e2f92aabcbdf00f",
+        "executor_context_source": "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py and /opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py",
+        "gz_transport_version": "13.6.0-1~noble",
+        "gz_transport_wrapper_origin": "/usr/lib/python3/dist-packages/gz/transport13/__init__.py",
+        "gz_transport_wrapper_sha256": "b94e07824177b434681615eecc67e048d6605e7f2117e7d32b739f85f60c8617",
+        "gz_transport_native_origin": "/usr/lib/python3/dist-packages/gz/transport13/_transport.cpython-312-x86_64-linux-gnu.so",
+        "gz_transport_native_sha256": "2fe72815e2b58b20fc749d53a96a7422a3989acd2fbafa5a1daa996858eca2b1",
+        "rclpy_executor_path": "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py",
+        "rclpy_executor_sha256": "f0d655bdd32d4cc735a37fc46f0147b339b28aaacaa0de0d1ca8b3512de97002",
+        "rclpy_context_path": "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py",
+        "rclpy_context_sha256": "a33eb8a3a7bf4f43b45e7acc3d5efd85a5fbf8da7626c069494215a342df6c77"
+      }
+    },
+    "file_count": 48,
+    "file_sha256": {
+      "/opt/ros/jazzy/bin/ros2": "3308327fcefeaefe5601f72e0b473a5f9f9638434f5773d2f40b124f7c9aa04d",
+      "/opt/ros/jazzy/lib/librobot_state_publisher_node.so": "e8d604ebe94051f1c198ee30a77f9b44b055f01d55811a1ffa087a3a27125256",
+      "/opt/ros/jazzy/lib/libros_gz_bridge.so": "a61ece7198e9216825755229c5ed59b6dd896d75f81de369d1622e6bfa06ee62",
+      "/opt/ros/jazzy/lib/robot_state_publisher/robot_state_publisher": "8bca2daa9dea4b634b746f342bb7124eb8092258e374fd631d8cdd4fb3d2dfb5",
+      "/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge": "0b33905dc1791d927ca6b6f685f299a88681c0b68fadb88057636d3a15bae4fe",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-bullet-featherstone-plugin.so.7.6.0": "e36ac862cd1204b1dbb23a38a686e2d2e2588804a2dff5b711837193f7c93509",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-bullet-plugin.so.7.6.0": "76436279a8f913c6370a0505fd890ceaa4e3cd7dc89e25097da10f47b926f637",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-dartsim-plugin.so.7.6.0": "9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9",
+      "/opt/ros/jazzy/opt/gz_physics_vendor/lib/gz-physics-7/engine-plugins/libgz-physics7-tpe-plugin.so.7.6.0": "939f6673ab3e0966d09dc1520c574c86ea35982f7db2d06281fcf835ef342fac",
+      "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/gz-rendering-8/engine-plugins/libgz-rendering8-ogre2.so.8.2.3": "3a54fcd4678dc6840041a8c8ad88d4119c7e415964e26733f506075b1796d400",
+      "/opt/ros/jazzy/opt/gz_rendering_vendor/lib/libgz-rendering8-ogre2.so.8.2.3": "3a54fcd4678dc6840041a8c8ad88d4119c7e415964e26733f506075b1796d400",
+      "/opt/ros/jazzy/opt/gz_sim_vendor/lib/libgz-sim8-scene-broadcaster-system.so.8.11.0": "f500db9a0ba9eca65ff1546ded933193138be137ede398a1f78a424e28617849",
+      "/opt/ros/jazzy/opt/gz_sim_vendor/lib/libgz-sim8-sensors-system.so.8.11.0": "b4203ea8d53edc45f7b92b8218643726f2a569e0acf4c503dbe0325fec0e7ee9",
+      "/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz": "fa523c7c7d8d76c5b6412a376708b55064a2efde107172a630485a24d8bf7f5d",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_generator_c.so": "1028d971f1f0004b8238a38cbbda81dee54a2a2cfa7a2a76da431df4439e1da9",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_generator_py.so": "6ee3329040b6448597754d6f7229eaba48133c4855bcc42134f888698e9839bf",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_c.so": "72f6eb7fe9c3b06ee3e737342fdf1a245a7cadb4f1f9a18dcee45d3e5e830977",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_cpp.so": "9aee894029a22cfc9cb9c2fe29aef901a3cf45afbefc4d5b3811f53bfed48335",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_fastrtps_c.so": "ae0b7772fd178c483d2cafa18b14a6e7f7c1c55eb9b79f335c0db0150fff3b39",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_fastrtps_cpp.so": "8691ec7c3be0a7847bdc15e613052ee09ff37c2a7eb0dfccac577fcc2cc3c190",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_introspection_c.so": "ab090618c223de184c8ae674c140c86d7d10c64d57b97daa60717ec1f1c2eace",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_nav_rl_interfaces__rosidl_typesupport_introspection_cpp.so": "1a9ab2aa4527028e0d1e3fafa023a36a25e1b406a5b05df3b2a943d77fbffbca",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_sim_backend_core.so": "2df8c5f709845b0f4bc414de08891d5e7184b90fbadd577b7f68b654e8bcd1dc",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/libmecanum_sim_backend_system.so": "a3e05d7f7d19eba0088749f83e8cedf19246ae93f97955045c2248dd88cd42ca",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_launch_contract.py": "04bf356785ff89acbeecc65155427e7f587083ec292fe12c8792dfba42008008",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_process_supervisor.py": "044a9583aaa414a29cd606cb2fe5aa633f4f609a953fe9ade47a038eebbb465f",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/manifests/b2/asset_manifest.json": "13bccaedc1760860f2745961f02ecdac81ac2cc90320d91b594cd0d014968108",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/meshes/Wheel_LB_1.stl": "5142132090f36b25066ce6de080c9361ef3cb5bafa4b318ea1b5836bde2d9178",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/meshes/Wheel_LF_1.stl": "65f20fbf9d074c11b3357d04eba34883c131cd46f7a3427b9e494fc37bfc74e5",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/meshes/Wheel_RB_1.stl": "b5310908de9eccdcd0089b85c0666cf71adbe77489cf9e282a0175a8753599d8",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/meshes/Wheel_RF_1.stl": "161d136eba02d359cb24f093621fc51e7a072da8b69f638ed22e7cbbe8bac316",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/meshes/base_link.stl": "fe0f09a8c2dbfab53942091e1f31db0973605c3abe1b69ac26398713b06ca262",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/models/b2_contact_probe/model.config": "bf7f4dc0fb00367736c1148742715b3efd6e5c146ea63e2edb29f2c23595be4d",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8c54c9cea8d34e720cd9515583ba86a377b94e98d6c93b7f23e4c9c79ce6b84",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/models/mecanum_b2/model.config": "270cf64e6e0c7e8ab946035050038be13088b55ce44853fc93145e19f6451b29",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "c99626191563ad7e5949cc5fb8b83fcb1a65681d90ffe8b365bd5791264e8e06",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "cc1a379939e06c7982d38fbb5e94c5f4975634ff1bce3a331faade7203375261",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup/config/gui/local_training.config": "dd89f08e33950d1216dcea1424525cea209690e87b238b8a8b4703de903e653e",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup/launch/sim_train_local_training.launch.py": "cf35a7755775fe27478dbb74480f72655d19685f11116644960687e9a6ddda20",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_soak.resolved.json": "c4ea84eae508fcdd691618f71c5261979fa886988e469adf76696a99af264f43",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl/scenarios/local_training/B2_SOAK_V1.json": "9140e53daa5408af8b0897b6cf007847eef9048ffb40bbefddc61115123d4ea4",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl_interfaces/msg/SimulationContactState.msg": "5fc9972b844b038042590805d8557a69065a922eabafc670075e45b85c467a36",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl.srv": "fb03a5b9a09bd8f5ebc540db00aea52ed1ddbce62cde7c0578d894d8abe5ac83",
+      "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_readiness_worker.py": "94ac394d282cae0b419b766220bf836309ba377d25617a6f6ab6015a6be1d948"
+    },
+    "install_prefix": "/tmp/b22-run005-fresh-d6dc1c9/install",
+    "method": "fresh_external_non_symlink_merged_debug_five_package_colcon_build",
+    "packages": [
+      "mecanum_nav_rl_interfaces",
+      "ROBOT_URDF_final_description",
+      "mecanum_nav_rl",
+      "mecanum_sim_backend",
+      "mecanum_nav_bringup"
+    ],
+    "resolved_paths": {
+      "backend_prefix": "/tmp/b22-run005-fresh-d6dc1c9/install",
+      "bringup_share": "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup",
+      "description_share": "/tmp/b22-run005-fresh-d6dc1c9/install/share/ROBOT_URDF_final_description",
+      "rl_share": "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_rl",
+      "ros2_executable": "/opt/ros/jazzy/bin/ros2",
+      "readiness_worker": "/tmp/b22-run005-fresh-d6dc1c9/install/lib/python3.12/site-packages/mecanum_nav_bringup/local_training_readiness_worker.py"
+    },
+    "overlay": "/tmp/b22-run005-fresh-d6dc1c9/install",
+    "build_type": "Debug"
+  },
+  "inputs": {
+    "manifest_sha256": "13bccaedc1760860f2745961f02ecdac81ac2cc90320d91b594cd0d014968108",
+    "resolved_config_sha256": "c4ea84eae508fcdd691618f71c5261979fa886988e469adf76696a99af264f43",
+    "config_hash": "1d2543874c113373fe7f616a56baa2aaa13ab8a6789899222e999272c51f7c1c",
+    "scenario_sha256": "9140e53daa5408af8b0897b6cf007847eef9048ffb40bbefddc61115123d4ea4"
+  },
+  "tool_sha256": {
+    "observation_guard.py": "65ef3c95de5fb4cf4f2e5e77afded895fc8a29e5bcd46b7d18b90b2c82a96b7a",
+    "observation_runner.py": "36fc33e2e4ac261726fe49a40f3e1ccf0e374f038aeaca8ea87d545bae3068a2",
+    "observation_sink.py": "eac616ba35d4c9557156e9668424209d6d156bea0c2b40c61443a58ed7e20ebb",
+    "test_observation_packet.py": "5ad4d9bb461be7c4dd7446c9c00f57a01e7c66d801cabf3a00020604486e63a9"
+  },
+  "host_capabilities": {
+    "display": "static environment/socket inventory only; runtime not tested",
+    "image_viewer": "Codex view_image API metadata only; render/interaction not tested",
+    "managed_process": "session/poll APIs present by metadata; cleanup not guaranteed",
+    "canonical_roots": "runtime write capability not tested; no directory created",
+    "runtime_capability_checks": "NOT_PERFORMED"
+  },
+  "capture": {
+    "profile": "X11_XCB_ONLY",
+    "enumerator": "/usr/bin/xwininfo",
+    "metadata_reader": "/usr/bin/xprop",
+    "capture_api": "PyQt5.QtGui.QScreen.grabWindow(WId)",
+    "whole_screen": false,
+    "max_png_bytes": 33554432,
+    "image_rule": "decode PNG, positive dimensions, reject completely uniform pixels; semantic Codex inspection required",
+    "screenshot_pattern": "screenshots/<review_request_id>-<sha256>.png"
+  },
+  "mailbox": {
+    "root": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007/review_mailbox",
+    "request_schema": "b22_gui_codex_review_request/v1",
+    "result_schema": "b22_gui_codex_review_result/v1",
+    "max_json_bytes": 16384,
+    "directory_mode": "0700",
+    "file_mode": "0600",
+    "publication": "fsync+hard-link-no-replace"
+  },
+  "timing": {
+    "server_readiness_s": 30,
+    "gui_startup_s": 30,
+    "graph_convergence_s": 30,
+    "review_checkpoint_s": 60,
+    "clock_stability_s": 1,
+    "observation_s": 60,
+    "active_cap_s": 240,
+    "cleanup_cap_s": 60,
+    "total_cap_s": 300,
+    "publisher_budget_s": 5,
+    "publisher_min_remaining_s": 7,
+    "publisher_terminate_join_phase_s": 1,
+    "review_checkpoint_starts_before": "window enumeration",
+    "minimum_active_remaining_to_start_review_s": 121
+  },
+  "operations": {
+    "allowed": [
+      "passive scene readiness",
+      "read-only backend_state and /clock subscriptions",
+      "read-only ROS graph inventory after acquisition",
+      "X11 window metadata query",
+      "capture one owned window",
+      "Codex image review via immutable mailbox",
+      "bounded cleanup of owned groups"
+    ],
+    "prohibited": [
+      "play",
+      "unpause",
+      "physics step",
+      "reset",
+      "teleport",
+      "set-pose",
+      "probe",
+      "rearm",
+      "command publisher",
+      "control service client",
+      "training",
+      "evaluation",
+      "soak",
+      "HIL",
+      "hardware",
+      "second simulator",
+      "headless-only fallback"
+    ]
+  },
+  "approval_boundary": {
+    "approval_path": "/home/hazan/mecanum_runtime_approvals/B22_GUI_OBSERVATION_RUN007.owner.json",
+    "runtime_authorization": "NOT_GRANTED",
+    "required_fields": [
+      "run_id",
+      "packet_sha256",
+      "packet_commit",
+      "production_source_pin",
+      "tool_sha256"
+    ],
+    "codex_review_is_owner_ack": "false"
+  },
+  "runtime_authorization": "NOT_GRANTED",
+  "acceptance": {
+    "paused": true,
+    "actuator_inhibited": true,
+    "fault_flags": 0,
+    "applied_receipt_valid": false,
+    "heartbeat_gap_max_s": 1,
+    "clock_sample_required": true,
+    "clock_must_not_advance": true,
+    "scene_identity_required": true,
+    "graph_exact_after_convergence": true,
+    "automated_review_reviewer": "CODEX",
+    "owner_visual_review": "NOT_PERFORMED",
+    "motion": "PROHIBITED",
+    "contact_capability": "UNKNOWN_ALLOWED",
+    "scan_health": "NOT_EVALUATED_WHILE_PAUSED",
+    "cleanup_residue": "FAIL",
+    "retry_after_consume": false
+  },
+  "evidence": {
+    "root": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007",
+    "stream": "observation.jsonl",
+    "format": "append-only JSONL; exclusive create; mode 0600; per-record fsync",
+    "completion_marker": "final_result.json created only after cleanup and successful sink close",
+    "failure_attribution": {
+      "primary_failure": "first reason/source/phase/detection_monotonic_ns latched in memory before evidence I/O or cleanup",
+      "secondary_failures": "later independent failures retained without replacing primary",
+      "cleanup_errors": "cleanup failures and residue retained separately",
+      "requested_process_exit": "cleanup event only when verified cleanup intent preceded signal",
+      "unrequested_process_exit_during_cleanup": "secondary failure, never blanket-ignored",
+      "simultaneous_task_completion": "producer latch order, not _wait_competing branch order, determines primary"
+    },
+    "assets": [
+      "runtime_assets/run_descriptor.json",
+      "runtime_assets/<bound-world>.sdf",
+      "runtime_assets/robot_state_publisher.params.yaml",
+      "screenshots/<review_request_id>-<sha256>.png",
+      "review_mailbox request/result",
+      "review_mailbox/results/<review_request_id>.publisher-ownership.json"
+    ]
+  },
+  "guard": {
+    "acquisition_path": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007/acquisition.json",
+    "capacity": 1,
+    "exclusive_create": true,
+    "existing_partial_consumes": true,
+    "retry_after_consume": false
+  },
+  "commands_argv": {
+    "composition": "one RSP, one parameter_bridge, one server, one GUI; canonical readiness owns one temporary worker; no external ros2 launch",
+    "exact_templates": {
+      "gui": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-g",
+        "--gui-config",
+        "/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup/config/gui/local_training.config"
+      ],
+      "parameter_bridge": [
+        "ros2",
+        "run",
+        "ros_gz_bridge",
+        "parameter_bridge",
+        "--ros-args",
+        "-p",
+        "config_file:=/tmp/b22-run005-fresh-d6dc1c9/install/share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml"
+      ],
+      "robot_state_publisher": [
+        "/opt/ros/jazzy/bin/ros2",
+        "run",
+        "robot_state_publisher",
+        "robot_state_publisher",
+        "--ros-args",
+        "--params-file",
+        "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007/runtime_assets/robot_state_publisher.params.yaml"
+      ],
+      "server": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-s",
+        "--headless-rendering",
+        "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007/runtime_assets/b2_training_arena.B2_SOAK_V1.<session_uuid>.runtime.sdf"
+      ],
+      "readiness_worker": [
+        "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+        "-m",
+        "mecanum_nav_bringup.local_training_readiness_worker"
+      ]
+    },
+    "substitutions": {
+      "<evidence_root>": "/home/hazan/mecanum_runtime_evidence/B22_GUI_OBSERVATION_RUN007",
+      "<session_uuid>": "the single UUID in acquisition/descriptor/LaunchPlan/bound world/consumer",
+      "<runtime_bound_world>": "world written by audited write_bound_world; hash separately from source world",
+      "environment": "ROS_DOMAIN_ID=83, run GZ_PARTITION and installed resource/plugin paths"
+    },
+    "startup_helper_owner": "canonical RclpyReadiness; no second runner-spawned worker"
+  }
+}
