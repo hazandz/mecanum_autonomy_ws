@@ -2503,13 +2503,25 @@ def _window_discovery_fakes(snapshots, property_snapshots=None,
                     output, status, stderr = failure
             process = Process(200 + len(self.records), output, status,
                               stderr)
-            self.records.append(SimpleNamespace(
+            identity = {'pid': process.pid, 'process_group_id': process.pid,
+                        'session_id': process.pid, 'start_ticks': 1}
+            record = SimpleNamespace(
                 name=role, pid=process.pid, process=process,
-                identity={'pid': process.pid}, command=command,
+                identity=identity, command=command,
                 wrapper_command=('fake-gate-wrapper',),
-                gate={'nonce': 'fake-nonce', 'binding_sha256': 'f' * 64},
+                gate={'nonce': 'fake-nonce', 'binding_sha256': 'f' * 64,
+                      'role': role,
+                      'verified_identity': dict(identity),
+                      'planned_command': list(command)},
                 gate_released=True,
-            ))
+            )
+            if (len(command) >= 3 and runner._xprop_discovery_command(
+                    role, command, command[2])):
+                record.helper_classification = {
+                    'state': 'pending', 'owner': asyncio.current_task(),
+                    'deadline': deadline, 'window_id': command[2],
+                }
+            self.records.append(record)
             return process
 
     def read_identity(pid):
@@ -3017,6 +3029,316 @@ def test_r007_a03_latches_helper_failure_before_sink_error(failed_event):
     assert any(item['event'] == failed_event for item in latch.cleanup_errors)
     sink.record('sink_recovered', {})
     assert 'sink_recovered' in writes
+
+
+@pytest.mark.parametrize('delayed', [False, True])
+def test_r007_b01_classified_badwindow_is_accepted_by_real_monitor(
+        monkeypatch, delayed):
+    """A gated xprop stale-window result is not an unexpected exit."""
+    fake = _window_discovery_fakes(
+        [''], [{'0x51': (b'', 1, b'X Error of failed request: BadWindow')}],
+    )
+    launcher = fake['launcher']
+    launcher.pass_index = 0
+    launcher.waiters = {}
+    launcher.cleanup_dispatches = {}
+    launcher.observed_exits = {}
+    launcher.reported_exit_ids = set()
+    original = launcher.start_gated
+    release = asyncio.Event()
+    pending_seen = asyncio.Event()
+    classify = runner._helper_exit_classification
+
+    def observe_classification(*args):
+        outcome = classify(*args)
+        if outcome == 'pending':
+            pending_seen.set()
+        return outcome
+
+    monkeypatch.setattr(runner, '_helper_exit_classification',
+                        observe_classification)
+
+    async def start(*args, **kwargs):
+        process = await original(*args, **kwargs)
+        record = launcher.records[-1]
+        record.identity = {'pid': process.pid, 'process_group_id': process.pid,
+                           'session_id': process.pid, 'start_ticks': 1}
+        record.gate.update({'role': 'window_helper',
+                            'planned_command': list(args[0]),
+                            'verified_identity': dict(record.identity)})
+        if delayed:
+            communicate = process.communicate
+
+            async def blocked_communicate():
+                await release.wait()
+                return await communicate()
+
+            process.communicate = blocked_communicate
+        launcher.waiters[id(process)] = asyncio.create_task(process.wait())
+        return process
+
+    launcher.start_gated = start
+    stop = asyncio.Event()
+
+    class Sink:
+        def record(self, event, facts):
+            if event == 'owned_process_exit':
+                stop.set()
+
+    async def run():
+        command = ('/usr/bin/xprop', '-id', '0x51', '_NET_WM_PID',
+                   'WM_CLASS', '_NET_WM_NAME', 'WM_NAME')
+        helper = asyncio.create_task(runner._owned_helper(
+            launcher, command, {}, deadline=time.monotonic() + 2,
+            sink=Sink(), window_id='0x51', return_metadata=True,
+        ))
+        monitor = asyncio.create_task(runner._monitor_owned_processes(
+            launcher=launcher, supervisor=SimpleNamespace(owned=[]),
+            sink=Sink(), stop_event=stop, deadline=time.monotonic() + 2,
+            steady=time.monotonic,
+        ))
+        if delayed:
+            await asyncio.wait_for(pending_seen.wait(), 1)
+            assert not monitor.done()
+            release.set()
+        await helper
+        await monitor
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('case', [
+    'missing', 'expired', 'owner_cancelled', 'identity_unknown', 'other_role',
+])
+def test_r007_b01_monitor_rejects_unverified_exit(case):
+    """Pending ownership and unrelated nonzero exits remain fail closed."""
+    async def run():
+        pid = 201
+        identity = {'pid': pid, 'process_group_id': pid,
+                    'session_id': pid, 'start_ticks': 1}
+        command = ('/usr/bin/xprop', '-id', '0x51', '_NET_WM_PID',
+                   'WM_CLASS', '_NET_WM_NAME', 'WM_NAME')
+        process = SimpleNamespace(pid=pid, returncode=1)
+        gate = {'role': 'window_helper', 'planned_command': list(command),
+                'verified_identity': dict(identity), 'nonce': 'nonce',
+                'binding_sha256': 'f' * 64}
+        owner = asyncio.get_running_loop().create_future()
+        if case == 'owner_cancelled':
+            owner.cancel()
+        record = SimpleNamespace(
+            name='capture_helper' if case == 'other_role' else 'window_helper',
+            pid=pid, process=process, command=command, gate=gate,
+            gate_released=True,
+            identity=None if case == 'identity_unknown' else identity,
+        )
+        if case != 'missing':
+            record.helper_classification = {
+                'state': 'pending', 'owner': owner, 'window_id': '0x51',
+                'deadline': 0 if case == 'expired' else time.monotonic() + 2,
+            }
+        waiter = asyncio.get_running_loop().create_future()
+        waiter.set_result(1)
+        launcher = SimpleNamespace(
+            records=[record], waiters={id(process): waiter},
+            cleanup_dispatches={}, observed_exits={}, reported_exit_ids=set(),
+        )
+        with pytest.raises(runner.ObservationFailure, match='unexpectedly'):
+            await runner._monitor_owned_processes(
+                launcher=launcher, supervisor=SimpleNamespace(owned=[]),
+                sink=SimpleNamespace(record=lambda *_args: None),
+                stop_event=asyncio.Event(), deadline=time.monotonic() + 2,
+                steady=time.monotonic,
+            )
+
+    asyncio.run(run())
+
+
+def test_r007_b01_discovery_and_monitor_accept_stale_then_valid():
+    """Production discovery and monitor agree on a stale xprop exit."""
+    fake = _window_discovery_fakes(
+        [_window_line('0x51'), _window_line('0x52')],
+        [{'0x51': (b'', 1, b'X Error of failed request: BadWindow')},
+         {'0x52': _gazebo_properties()}],
+    )
+    launcher = fake['launcher']
+    launcher.waiters = {}
+    launcher.cleanup_dispatches = {}
+    launcher.observed_exits = {}
+    launcher.reported_exit_ids = set()
+    original = launcher.start_gated
+    observed = asyncio.Event()
+    stop = asyncio.Event()
+    events = []
+
+    async def start(*args, **kwargs):
+        process = await original(*args, **kwargs)
+        launcher.waiters[id(process)] = asyncio.create_task(process.wait())
+        return process
+
+    launcher.start_gated = start
+
+    class Sink:
+        def record(self, event, facts):
+            events.append((event, facts))
+            if (event == 'owned_process_exit'
+                    and facts.get('exit_status') == 1):
+                observed.set()
+
+    async def run():
+        monitor = asyncio.create_task(runner._monitor_owned_processes(
+            launcher=launcher, supervisor=SimpleNamespace(owned=[]),
+            sink=Sink(), stop_event=stop, deadline=2.0, steady=fake['steady'],
+        ))
+        try:
+            result = await runner.bind_gui_window(
+                launcher=launcher, environment={}, partition='mecanum_b2_test',
+                deadline=1.0, steady=fake['steady'], sleep=fake['sleep'],
+                sink=Sink(),
+                process_identity_reader=fake['process_identity_reader'],
+                parent_reader=fake['parent_reader'],
+                executable_reader=fake['executable_reader'],
+                argv_reader=fake['argv_reader'],
+                partition_reader=fake['partition_reader'],
+            )
+            await asyncio.wait_for(observed.wait(), 1)
+            assert result['window_id'] == '0x52'
+        finally:
+            stop.set()
+            await monitor
+        exit_fact = next(f for e, f in events if e == 'owned_process_exit'
+                         and f.get('exit_status') == 1)
+        assert exit_fact['helper_outcome'] == 'accepted'
+        assert exit_fact['requested_cleanup_exit'] is False
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('classification', [
+    'accepted', 'missing', 'identity_mismatch', 'other_command', 'pending',
+])
+def test_r007_b01_final_sweep_classifies_unreported_helper_exit(
+        tmp_path, classification):
+    """The production final sweep accepts only a fully classified exit."""
+    args, deps, _, _, root, _, state = make_runner_inputs(
+        tmp_path, production_supervisor=True,
+    )
+    capture = deps['capture_window_bounded']
+
+    async def capture_with_launcher(*args, **kwargs):
+        state['launcher_for_sweep'] = kwargs['launcher']
+        return await capture(*args, **kwargs)
+
+    deps['capture_window_bounded'] = capture_with_launcher
+
+    class InjectExitSink(runner.ObservationEvidenceSink):
+        def record(self, event, facts):
+            sequence = super().record(event, facts)
+            if event == 'observation_result':
+                launcher = state['launcher_for_sweep']
+                pid = 920001
+                identity = {'pid': pid, 'process_group_id': pid,
+                            'session_id': pid, 'start_ticks': 1}
+                command = ('/usr/bin/xprop', '-id', '0x51', '_NET_WM_PID',
+                           'WM_CLASS', '_NET_WM_NAME', 'WM_NAME')
+                process = SimpleNamespace(pid=pid, returncode=1)
+                gate = {'role': 'window_helper', 'planned_command':
+                        list(command), 'verified_identity': dict(identity),
+                        'nonce': 'test-nonce', 'binding_sha256': 'f' * 64}
+                record = SimpleNamespace(
+                    name='window_helper', pid=pid, process=process,
+                    identity=identity, identity_error=None, command=command,
+                    gate=gate, gate_released=True,
+                )
+                if classification != 'missing':
+                    classification_state = {
+                        'state': 'accepted_badwindow', 'identity': identity,
+                        'exit_status': 1, 'binding_sha256': 'f' * 64,
+                        'nonce': 'test-nonce', 'window_id': '0x51',
+                    }
+                    if classification == 'identity_mismatch':
+                        classification_state['identity'] = {
+                            **identity, 'start_ticks': 2,
+                        }
+                    elif classification == 'other_command':
+                        gate['planned_command'] = ['/usr/bin/other', '0x51']
+                    elif classification == 'pending':
+                        classification_state.update({
+                            'state': 'pending',
+                            'owner': (
+                                asyncio.get_running_loop().create_future()
+                            ),
+                            'deadline': time.monotonic() + 2,
+                        })
+                    record.helper_classification = classification_state
+                waiter = asyncio.get_running_loop().create_future()
+                waiter.set_result(1)
+                launcher.records.append(record)
+                launcher.identities[id(process)] = identity
+                launcher.waiters[id(process)] = waiter
+            return sequence
+
+    deps['sink_factory'] = InjectExitSink
+    verdict = asyncio.run(runner._run(args, dependencies=deps))
+    assert verdict == ('PASS' if classification == 'accepted' else 'FAIL')
+    records = [json.loads(line) for line in
+               (root / 'observation.jsonl').read_text().splitlines()]
+    event = next(r['facts'] for r in records
+                 if r['event'] == 'owned_process_exit_during_cleanup'
+                 and r['facts']['process'] == 'window_helper')
+    assert event['exit_status'] == 1
+    expected_outcome = {
+        'accepted': 'accepted', 'pending': 'pending',
+    }.get(classification, 'unexpected')
+    assert event['helper_outcome'] == expected_outcome
+    assert event['dispatch_observed_before_exit'] is False
+
+
+def test_r007_b02_deadline_precedes_mismatch_even_if_sink_fails():
+    """Keep both detected errors when a partial pass ends at deadline."""
+    fake = _window_discovery_fakes(
+        [_window_line('0x71') + _window_line('0x72')],
+        [{'0x71': _gazebo_properties(), '0x72': _gazebo_properties()}],
+    )
+    launcher = fake['launcher']
+    original = launcher.start_gated
+
+    async def finish_during_first_property(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if args[0][0].endswith('xprop'):
+            communicate = result.communicate
+
+            async def complete_at_deadline():
+                output = await communicate()
+                fake['clock'][0] = 1.0
+                return output
+
+            result.communicate = complete_at_deadline
+        return result
+
+    launcher.start_gated = finish_during_first_property
+    latch = runner.FirstFailureLatch(monotonic_ns=lambda: 123456)
+
+    class Sink:
+        def record(self, event, facts):
+            if event == 'gui_window_discovery_pass':
+                raise OSError('diagnostic sink failed')
+
+    sink = runner.FirstFailureEvidenceSink(Sink(), latch)
+    kwargs = {key: fake[key] for key in (
+        'process_identity_reader', 'parent_reader', 'executable_reader',
+        'argv_reader', 'partition_reader',
+    )}
+    expected = {'window_id': '0x99'}
+    with pytest.raises((runner.ObservationFailure, OSError)):
+        asyncio.run(runner.bind_gui_window(
+            launcher=launcher, environment={}, partition='mecanum_b2_test',
+            deadline=1.0, steady=fake['steady'], sleep=fake['sleep'],
+            sink=sink, expected_window=expected, **kwargs,
+        ))
+    assert 'deadline expired' in latch.primary_failure['reason']
+    assert any('binding changed' in item['reason']
+               for item in latch.secondary_failures)
+    assert latch.cleanup_errors
 
 
 def test_window_discovery_sink_failure_fails_closed():

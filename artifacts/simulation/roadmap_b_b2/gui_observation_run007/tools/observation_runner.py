@@ -491,6 +491,51 @@ def _partition_for_pid(pid):
     return values[0].decode('utf-8', errors='strict')
 
 
+def _xprop_discovery_command(role, argv, window_id):
+    """Recognize only the bound property query for one XID."""
+    return bool(
+        role == 'window_helper' and isinstance(window_id, str)
+        and re.fullmatch(r'0x[0-9a-fA-F]+', window_id)
+        and tuple(argv) == (
+            '/usr/bin/xprop', '-id', window_id, '_NET_WM_PID',
+            'WM_CLASS', '_NET_WM_NAME', 'WM_NAME',
+        )
+    )
+
+
+def _helper_exit_classification(record, status, now):
+    """Return pending, accepted, or unexpected for a recorded exit."""
+    state = getattr(record, 'helper_classification', None)
+    if not isinstance(state, dict):
+        return 'unexpected'
+    identity = record.identity
+    gate = getattr(record, 'gate', None)
+    if (not _valid_owned_leader_identity(identity, record.pid)
+            or not isinstance(gate, dict)
+            or gate.get('verified_identity') != identity
+            or not _xprop_discovery_command(
+                record.name, record.command, state.get('window_id'))):
+        return 'unexpected'
+    if state.get('state') == 'pending':
+        owner = state.get('owner')
+        if (owner is not None and not owner.done()
+                and now < state.get('deadline', 0)):
+            return 'pending'
+        return 'unexpected'
+    if (state.get('state') == 'accepted_badwindow'
+            and state.get('identity') == identity
+            and state.get('exit_status') == status and status != 0
+            and record.gate_released
+            and gate.get('role') == 'window_helper'
+            and gate.get('planned_command') == list(record.command)
+            and isinstance(gate.get('nonce'), str) and gate['nonce']
+            and state.get('nonce') == gate['nonce']
+            and isinstance(gate.get('binding_sha256'), str)
+            and state.get('binding_sha256') == gate['binding_sha256']):
+        return 'accepted'
+    return 'unexpected'
+
+
 async def _owned_helper(launcher, argv, environment, *, deadline, sink,
                         steady=time.monotonic, role='window_helper',
                         window_id=None, return_metadata=False,
@@ -525,13 +570,7 @@ async def _owned_helper(launcher, argv, environment, *, deadline, sink,
     stdout_text = stdout.decode('utf-8', errors='replace')
     stderr_text = stderr.decode('utf-8', errors='replace')
     disappeared = bool(
-        role == 'window_helper' and status != 0
-        and isinstance(window_id, str)
-        and re.fullmatch(r'0x[0-9a-fA-F]+', window_id)
-        and tuple(argv) == (
-            '/usr/bin/xprop', '-id', window_id, '_NET_WM_PID',
-            'WM_CLASS', '_NET_WM_NAME', 'WM_NAME',
-        )
+        status != 0 and _xprop_discovery_command(role, argv, window_id)
         and re.search(r'X Error of failed request:\s*BadWindow\b',
                       stderr_text, re.I)
     )
@@ -574,6 +613,28 @@ async def _owned_helper(launcher, argv, environment, *, deadline, sink,
             raise
     if terminal_error is not None:
         raise terminal_error
+    if disappeared:
+        state = getattr(record, 'helper_classification', None)
+        gate = getattr(record, 'gate', None)
+        if (sink is None or not isinstance(state, dict)
+                or not isinstance(gate, dict)
+                or not _valid_owned_leader_identity(
+                    record.identity, record.pid)
+                or gate.get('verified_identity') != record.identity
+                or gate.get('role') != 'window_helper'
+                or gate.get('planned_command') != list(argv)
+                or not gate.get('nonce') or not gate.get('binding_sha256')
+                or not record.gate_released
+                or state.get('owner') is not asyncio.current_task()
+                or steady() >= state.get('deadline', 0)):
+            raise ObservationFailure(
+                'BadWindow ownership classification failed'
+            )
+        state.update({
+            'state': 'accepted_badwindow', 'identity': dict(record.identity),
+            'exit_status': status, 'binding_sha256': gate['binding_sha256'],
+            'nonce': gate['nonce'],
+        })
     if return_metadata:
         return stdout_text, metadata
     return stdout_text
@@ -1266,12 +1327,20 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
             payload['helper_results_truncated'] = True
             payload['diagnostics_truncated'] = True
             payload['unreported_helper_result_count'] += 1
-        terminal_error = None
+        terminal_errors = []
+        latch = getattr(sink, 'failure_latch', None)
+
+        def detect_terminal(error):
+            terminal_errors.append(error)
+            if latch is not None:
+                latch.detect(str(error), 'window_discovery',
+                             discovery_phase, error=error)
+
         if outcome == 'DEADLINE_DURING_ENUMERATION':
-            terminal_error = ReviewInvalidated(
+            detect_terminal(ReviewInvalidated(
                 'window discovery review deadline expired during candidate '
                 'enumeration'
-            )
+            ))
         elif remaining_after <= 0 and len(matches) != 1:
             if len(matches) > 1:
                 reason = ('window discovery deadline expired with ambiguous '
@@ -1280,30 +1349,26 @@ async def bind_gui_window(*, launcher, environment, partition, deadline,
                 reason = ('window discovery deadline expired without a unique '
                           f'owned client window (last parsed={len(entries)}, '
                           f'owned_matches={len(matches)})')
-            terminal_error = ReviewInvalidated(reason)
+            detect_terminal(ReviewInvalidated(reason))
         if len(matches) == 1 and expected_window is not None:
             fields = ('window_id', 'pid', 'pgid', 'sid', 'process_start_ticks',
                       'gz_partition', 'executable', 'argv')
             if any(matches[0].get(key) != expected_window.get(key)
                    for key in fields):
-                terminal_error = ObservationFailure(
+                detect_terminal(ObservationFailure(
                     'owned GUI window binding changed before capture'
-                )
-        latch = getattr(sink, 'failure_latch', None)
-        if terminal_error is not None and latch is not None:
-            latch.detect(str(terminal_error), 'window_discovery',
-                         discovery_phase, error=terminal_error)
+                ))
         try:
             write_pass(payload)
         except BaseException as sink_error:
-            if terminal_error is not None:
-                raise terminal_error from sink_error
+            if terminal_errors:
+                raise terminal_errors[0] from sink_error
             raise
         last_owned_match_count = len(matches)
         last_parsed_entry_count = len(entries)
 
-        if terminal_error is not None:
-            raise terminal_error
+        if terminal_errors:
+            raise terminal_errors[0]
         if len(matches) == 1:
             result = matches[0]
             if expected_window is not None:
@@ -2451,6 +2516,13 @@ class TrackedProcessLauncher:
             gate=gate, gate_released=False, pid=process.pid,
             process=process, identity=None, identity_error=None,
         )
+        if (gate is not None and len(command) >= 3
+                and _xprop_discovery_command(name, command, command[2])):
+            record.helper_classification = {
+                'state': 'pending', 'owner': asyncio.current_task(),
+                'deadline': gate['deadline_monotonic_ns'] / 1_000_000_000,
+                'window_id': command[2],
+            }
         self.records.append(record)
         self.waiters[id(process)] = asyncio.create_task(process.wait())
         return record
@@ -3802,6 +3874,11 @@ async def _monitor_owned_processes(
                     )
                 raise error
             status = waiter.result()
+            helper_outcome = _helper_exit_classification(
+                record, status, steady(),
+            ) if status != 0 else 'unexpected'
+            if helper_outcome == 'pending':
+                continue
             identity_key = _owned_identity_key(record.identity)
             dispatch = getattr(launcher, 'cleanup_dispatches', {}).get(
                 identity_key,
@@ -3839,7 +3916,7 @@ async def _monitor_owned_processes(
             unexpected = not (
                 record.name in ('window_helper', 'capture_helper')
                 and status == 0
-            )
+            ) and helper_outcome != 'accepted'
             error = None
             if unexpected:
                 error = ObservationFailure(
@@ -3857,6 +3934,9 @@ async def _monitor_owned_processes(
                     'process': record.name, 'pid': record.pid,
                     'exit_status': status,
                     'detection_monotonic_ns': detected_ns,
+                    'process_identity': record.identity,
+                    'helper_outcome': helper_outcome,
+                    'requested_cleanup_exit': False,
                 })
             except BaseException as sink_error:
                 if failure_latch is not None:
@@ -4840,6 +4920,9 @@ async def _run(args, *, dependencies=None):
                     status = waiter.result()
                 if status is None:
                     continue
+                helper_outcome = _helper_exit_classification(
+                    record, status, mono(),
+                ) if status != 0 else 'unexpected'
                 identity_key = _owned_identity_key(record.identity)
                 dispatch = launcher.cleanup_dispatches.get(identity_key)
                 requested = bool(
@@ -4855,6 +4938,7 @@ async def _run(args, *, dependencies=None):
                     'causation_claimed': False,
                     'detection_monotonic_ns': time.monotonic_ns(),
                     'process_identity': record.identity,
+                    'helper_outcome': helper_outcome,
                 }
                 if identity_key is not None:
                     launcher.observed_exits[identity_key] = {
@@ -4866,7 +4950,7 @@ async def _run(args, *, dependencies=None):
                     }
                 if not requested and not (
                         record.name in ('window_helper', 'capture_helper')
-                        and status == 0):
+                        and status == 0) and helper_outcome != 'accepted':
                     error = ObservationFailure(
                         f'unrequested process exit during cleanup: '
                         f'{record.name} ({status})'
