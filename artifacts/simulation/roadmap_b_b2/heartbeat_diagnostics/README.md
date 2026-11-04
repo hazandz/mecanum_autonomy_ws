@@ -34,6 +34,7 @@ minh lời gọi publish đã trả về, không chứng minh subscriber đã nh
 ```python
 from heartbeat_diagnostics import (
     Binding, BoundedEventBuffer, DiagnosticEvent, EventKind, analyze,
+    PublishCoverage,
 )
 
 binding = Binding(session_id, backend_instance_id, config_hash, world)
@@ -54,12 +55,36 @@ result = analyze(events, expected=binding)
 ```
 
 Các loại event được hỗ trợ: `publish_begin`, `publish_return`,
-`receive_or_ready`, `take`, `callback_entry`, `heartbeat_check`. Kết quả có thể
-phân loại `backend_stopped`, `receive_path_delayed` hoặc
-`callback_service_delayed` chỉ khi đủ bằng chứng, mốc cùng miền đồng hồ và
-identity không mơ hồ. Thiếu event, metadata không được xác nhận, sai clock,
-identity trùng/sai hoặc buffer overflow đều trả `UNKNOWN`/incomplete. Một kết
-quả phân loại không chứng minh acceptance runtime.
+`receive_or_ready`, `take`, `callback_entry`, `status_validation` và
+`heartbeat_check`. `status_validation` ghi rõ mẫu callback đã được chấp nhận
+hay bị từ chối; callback entry tự nó không chứng minh heartbeat được cập nhật.
+Kết quả có thể phân loại `no_publish_attempt_observed`,
+`receive_path_delayed` hoặc `callback_service_delayed` chỉ khi đủ bằng chứng,
+mốc cùng miền đồng hồ và identity không mơ hồ. Thiếu event, metadata không
+được xác nhận, sai clock, identity trùng/sai hoặc buffer overflow đều trả
+`UNKNOWN`/incomplete. Một kết quả phân loại không chứng minh acceptance runtime.
+
+`no_publish_attempt_observed` chỉ được trả khi `PublishCoverage` xác nhận nguồn
+đã thu liên tục, không mất event, cùng binding/clock domain, bắt đầu không muộn
+hơn mẫu heartbeat hợp lệ sớm nhất và kết thúc không sớm hơn lần kiểm lỗi muộn
+nhất. Nguồn phải xác nhận không có publish đang in-flight tại đầu cửa sổ.
+Kết luận chỉ nói rằng không quan sát thấy lời gọi `publish_begin` trong cửa sổ
+được bao phủ; nó không chứng minh backend đã chết. Cửa sổ thiếu, có event rơi,
+còn publish in-flight hoặc có bằng chứng mẫu mâu thuẫn thì kết quả là `UNKNOWN`.
+
+Mốc thời gian được xét theo khoảng `timestamp_ns ± uncertainty_ns`. Hạn
+heartbeat có một cận sớm nhất và một cận muộn nhất từ khoảng thời gian mẫu cuối
+cộng ngưỡng một giây. Chỉ coi event đúng hạn khi toàn bộ khoảng của nó không
+muộn hơn hạn sớm nhất; chỉ coi event trễ khi toàn bộ khoảng của nó muộn hơn hạn
+muộn nhất. Nếu khoảng sai số chạm hoặc bắc qua vùng không phân định được thì
+nguyên nhân là `UNKNOWN`, dù riêng phép so sánh heartbeat tại thời điểm kiểm
+đã xác định gap vượt một giây.
+
+Các callback sau baseline được xét theo `status_sequence`, nhưng không được bỏ
+qua callback đã chạy trước lần kiểm lỗi nếu chưa có kết quả validation duy nhất
+và đã hoàn tất trước lần kiểm đó. Một mẫu được chấp nhận trước lần kiểm sẽ mâu
+thuẫn với giả định baseline cũ; thiếu hoặc sai thứ tự validation trả `UNKNOWN`.
+Mẫu phát sau lần kiểm không giải thích ngược lần kiểm trước.
 
 `measure_once()` bọc một callable giả hoặc callable do caller sở hữu. Nó gọi
 callable đúng một lần, đo monotonic trước/sau kể cả khi callable ném exception,
@@ -89,7 +114,8 @@ middleware.
 - Observer: callback entry, heartbeat-check và thời lượng toàn bộ một lần gọi
   `sink.record()` trong cùng miền monotonic. Không thêm `fsync` vào callback.
 - Báo overflow hoặc mất event; không coi sự vắng mặt của event là bằng chứng
-  publisher không phát nếu khoảng thu không được chứng minh đầy đủ.
+  không có lần gọi publish nếu khoảng thu không bao phủ đầy đủ mẫu cuối đến lần
+  kiểm lỗi, hoặc chưa loại trừ publish đang trên đường.
 
 Instrument production/backend, RMW tracing, hoặc nối công cụ này vào runner cần
 allowlist và quyết định riêng. Candidate hiện tại không sửa RUN008, không tạo

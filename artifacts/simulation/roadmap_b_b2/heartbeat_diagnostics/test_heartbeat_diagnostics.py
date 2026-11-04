@@ -46,6 +46,7 @@ def event(
     uncertainty=0,
     metadata_supported=None,
     middleware_sequence=None,
+    status_accepted=None,
 ):
     return DiagnosticEvent(
         kind=kind,
@@ -61,12 +62,15 @@ def event(
         uncertainty_ns=uncertainty,
         metadata_supported=metadata_supported,
         middleware_sequence=middleware_sequence,
+        status_accepted=status_accepted,
     )
 
 
 def baseline_events(check_ns=CHECK_NS):
     return [
         event(EventKind.CALLBACK_ENTRY, 3, BASE_NS),
+        event(EventKind.STATUS_VALIDATION, 3, BASE_NS + 1,
+              status_accepted=True),
         event(EventKind.HEARTBEAT_CHECK, 3, check_ns),
     ]
 
@@ -79,6 +83,101 @@ def buffer_with(*events, capacity=256):
 
 
 class HeartbeatDiagnosisTests(unittest.TestCase):
+    def test_publish_absence_with_late_coverage_start_is_unknown(self):
+        coverage = PublishCoverage(
+            binding=EXPECTED,
+            start_ns=BASE_NS + 999_000_000,
+            end_ns=CHECK_NS,
+            clock_domain=DOMAIN,
+            provenance='late-starting-backend-ring-v1',
+            source_verified=True,
+            complete=True,
+            in_flight_clear_at_start=True,
+        )
+        diagnosis = analyze(
+            buffer_with(*baseline_events()), expected=EXPECTED,
+            publisher_coverage=coverage,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_publish_evidence_inside_full_coverage_prevents_absence_cause(self):
+        coverage = PublishCoverage(
+            binding=EXPECTED,
+            start_ns=BASE_NS,
+            end_ns=CHECK_NS,
+            clock_domain=DOMAIN,
+            provenance='complete-backend-ring-v1',
+            source_verified=True,
+            complete=True,
+            in_flight_clear_at_start=True,
+        )
+        diagnosis = analyze(
+            buffer_with(
+                *baseline_events(),
+                event(EventKind.PUBLISH_BEGIN, 3, BASE_NS + 500_000_000),
+            ),
+            expected=EXPECTED,
+            publisher_coverage=coverage,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('conflicts with absence', diagnosis.reason)
+
+    def test_ready_inside_uncertain_deadline_is_unknown(self):
+        check_ns = BASE_NS + 1_020_000_000
+        items = [
+            event(EventKind.CALLBACK_ENTRY, 3, BASE_NS,
+                  uncertainty=10_000_000),
+            event(EventKind.STATUS_VALIDATION, 3, BASE_NS + 1,
+                  status_accepted=True),
+            event(EventKind.HEARTBEAT_CHECK, 3, check_ns),
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 900_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 910_000_000),
+            event(
+                EventKind.RECEIVE_OR_READY, 4, BASE_NS + 995_000_000,
+                metadata_supported=True,
+            ),
+            event(EventKind.CALLBACK_ENTRY, 4, check_ns + 1),
+            event(EventKind.STATUS_VALIDATION, 4, check_ns + 2,
+                  status_accepted=True),
+        ]
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertTrue(diagnosis.heartbeat_expired)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_later_sequence_does_not_skip_unclassified_earlier_callback(self):
+        items = baseline_events() + [
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 900_000_000),
+            event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 810_000_000),
+            event(
+                EventKind.RECEIVE_OR_READY, 5, CHECK_NS + 100,
+                metadata_supported=True,
+            ),
+            event(EventKind.CALLBACK_ENTRY, 5, CHECK_NS + 110),
+            event(EventKind.STATUS_VALIDATION, 5, CHECK_NS + 120,
+                  status_accepted=True),
+        ]
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_explicitly_rejected_earlier_sample_allows_supported_later_sample(self):
+        items = baseline_events() + [
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 900_000_000),
+            event(EventKind.STATUS_VALIDATION, 4, BASE_NS + 901_000_000,
+                  status_accepted=False),
+            event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 810_000_000),
+            event(
+                EventKind.RECEIVE_OR_READY, 5, CHECK_NS + 100,
+                metadata_supported=True,
+            ),
+            event(EventKind.CALLBACK_ENTRY, 5, CHECK_NS + 110),
+            event(EventKind.STATUS_VALIDATION, 5, CHECK_NS + 120,
+                  status_accepted=True),
+        ]
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.RECEIVE_PATH_DELAYED)
+
     def test_backend_stop_requires_complete_publisher_coverage(self):
         baseline = baseline_events()
         coverage = PublishCoverage(
@@ -89,12 +188,13 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             provenance='complete-backend-ring-v1',
             source_verified=True,
             complete=True,
+            in_flight_clear_at_start=True,
         )
         diagnosis = analyze(
             buffer_with(*baseline), expected=EXPECTED,
             publisher_coverage=coverage,
         )
-        self.assertEqual(diagnosis.cause, Cause.BACKEND_STOPPED)
+        self.assertEqual(diagnosis.cause, Cause.NO_PUBLISH_ATTEMPT)
         self.assertTrue(diagnosis.evidence_complete)
         self.assertTrue(diagnosis.heartbeat_expired)
 
@@ -110,10 +210,27 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             provenance='partial-backend-ring-v1',
             source_verified=True,
             complete=False,
+            in_flight_clear_at_start=True,
         )
         self.assertEqual(
             analyze(buffer_with(*baseline), expected=EXPECTED,
                     publisher_coverage=incomplete).cause,
+            Cause.UNKNOWN,
+        )
+
+        uncleared_boundary = PublishCoverage(
+            binding=EXPECTED,
+            start_ns=BASE_NS,
+            end_ns=CHECK_NS,
+            clock_domain=DOMAIN,
+            provenance='boundary-in-flight-state-unknown-v1',
+            source_verified=True,
+            complete=True,
+            in_flight_clear_at_start=False,
+        )
+        self.assertEqual(
+            analyze(buffer_with(*baseline), expected=EXPECTED,
+                    publisher_coverage=uncleared_boundary).cause,
             Cause.UNKNOWN,
         )
 
@@ -127,6 +244,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
                 metadata_supported=True,
             ),
             event(EventKind.CALLBACK_ENTRY, 4, late_ns + 10),
+            event(EventKind.STATUS_VALIDATION, 4, late_ns + 20,
+                  status_accepted=True),
         ]
         diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
         self.assertEqual(diagnosis.cause, Cause.RECEIVE_PATH_DELAYED)
@@ -138,6 +257,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
                 EventKind.PUBLISH_RETURN,
                 EventKind.RECEIVE_OR_READY,
                 EventKind.CALLBACK_ENTRY,
+                EventKind.STATUS_VALIDATION,
                 EventKind.HEARTBEAT_CHECK,
             ],
         )
@@ -151,6 +271,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
                 metadata_supported=True,
             ),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
+            event(EventKind.STATUS_VALIDATION, 4, CHECK_NS + 200,
+                  status_accepted=True),
         ]
         diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
         self.assertEqual(diagnosis.cause, Cause.CALLBACK_SERVICE_DELAYED)
@@ -219,6 +341,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.RECEIVE_OR_READY, 4, CHECK_NS + 10,
                   metadata_supported=False),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 20),
+            event(EventKind.STATUS_VALIDATION, 4, CHECK_NS + 30,
+                  status_accepted=True),
         ]
         diagnosis = analyze(buffer_with(*unsupported), expected=EXPECTED)
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
@@ -227,6 +351,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
     def test_uncertainty_straddling_deadline_is_unknown(self):
         items = [
             event(EventKind.CALLBACK_ENTRY, 3, BASE_NS, uncertainty=2),
+            event(EventKind.STATUS_VALIDATION, 3, BASE_NS + 10,
+                  status_accepted=True),
             event(EventKind.HEARTBEAT_CHECK, 3, CHECK_NS, uncertainty=2),
         ]
         diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
@@ -237,7 +363,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         buffer = buffer_with(*baseline_events(), capacity=1)
         diagnosis = analyze(buffer, expected=EXPECTED)
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
-        self.assertIn('dropped_count=1', diagnosis.reason)
+        self.assertIn('dropped_count=2', diagnosis.reason)
 
     def test_sink_measurement_success_and_slow_operation(self):
         ticks = iter((100, 125))

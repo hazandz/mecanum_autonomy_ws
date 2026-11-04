@@ -23,11 +23,12 @@ class EventKind(str, Enum):
     RECEIVE_OR_READY = 'receive_or_ready'
     TAKE = 'take'
     CALLBACK_ENTRY = 'callback_entry'
+    STATUS_VALIDATION = 'status_validation'
     HEARTBEAT_CHECK = 'heartbeat_check'
 
 
 class Cause(str, Enum):
-    BACKEND_STOPPED = 'backend_stopped'
+    NO_PUBLISH_ATTEMPT = 'no_publish_attempt_observed'
     RECEIVE_PATH_DELAYED = 'receive_path_delayed'
     CALLBACK_SERVICE_DELAYED = 'callback_service_delayed'
     UNKNOWN = 'unknown'
@@ -58,11 +59,12 @@ class DiagnosticEvent:
     uncertainty_ns: int = 0
     metadata_supported: Optional[bool] = None
     middleware_sequence: Optional[int] = None
+    status_accepted: Optional[bool] = None
 
 
 @dataclass(frozen=True)
 class PublishCoverage:
-    """Claim that publisher instrumentation covered one interval completely."""
+    """Verified, loss-free publisher coverage and clear in-flight boundary."""
 
     binding: Binding
     start_ns: int
@@ -71,6 +73,7 @@ class PublishCoverage:
     provenance: str
     source_verified: bool
     complete: bool
+    in_flight_clear_at_start: bool
 
 
 @dataclass(frozen=True)
@@ -245,11 +248,18 @@ def analyze(
             or event.status_sequence == 0
             or not _valid_nonnegative_int(event.timestamp_ns)
             or not _valid_nonnegative_int(event.uncertainty_ns)
+            or not isinstance(event.clock_domain, str)
             or not event.clock_domain
+            or not isinstance(event.provenance, str)
             or not event.provenance
             or not isinstance(event.source_verified, bool)
         ):
             return _unknown('event timestamp, identity, or provenance is incomplete')
+        if event.kind is EventKind.STATUS_VALIDATION:
+            if not isinstance(event.status_accepted, bool):
+                return _unknown('status-validation outcome is missing')
+        elif event.status_accepted is not None:
+            return _unknown('status outcome is attached to the wrong event kind')
 
     checks = [event for event in events if event.kind is EventKind.HEARTBEAT_CHECK]
     if len(checks) != 1:
@@ -260,25 +270,40 @@ def analyze(
         return _unknown('heartbeat-check source is not verified')
 
     baseline_seq = check.status_sequence
-    baseline = [
+    baseline_callbacks = [
         event for event in events
         if event.kind is EventKind.CALLBACK_ENTRY
         and event.status_sequence == baseline_seq
     ]
-    if len(baseline) != 1:
-        return _unknown('baseline callback is missing or ambiguous')
-    last = baseline[0]
-    if not last.source_verified or last.clock_domain != domain:
-        return _unknown('baseline callback clock/provenance is unverified')
+    baseline_validations = [
+        event for event in events
+        if event.kind is EventKind.STATUS_VALIDATION
+        and event.status_sequence == baseline_seq
+    ]
+    if len(baseline_callbacks) != 1 or len(baseline_validations) != 1:
+        return _unknown('baseline callback or validation is missing/ambiguous')
+    last = baseline_callbacks[0]
+    baseline_validation = baseline_validations[0]
+    if (
+        not last.source_verified
+        or not baseline_validation.source_verified
+        or last.clock_domain != domain
+        or baseline_validation.clock_domain != domain
+        or baseline_validation.status_accepted is not True
+    ):
+        return _unknown('baseline status was not verifiably accepted')
 
-    minimum_gap = (
-        check.timestamp_ns - check.uncertainty_ns
-        - (last.timestamp_ns + last.uncertainty_ns)
-    )
-    maximum_gap = (
-        check.timestamp_ns + check.uncertainty_ns
-        - (last.timestamp_ns - last.uncertainty_ns)
-    )
+    check_earliest = check.timestamp_ns - check.uncertainty_ns
+    check_latest = check.timestamp_ns + check.uncertainty_ns
+    last_earliest = last.timestamp_ns - last.uncertainty_ns
+    last_latest = last.timestamp_ns + last.uncertainty_ns
+    if baseline_validation.timestamp_ns + baseline_validation.uncertainty_ns > check_earliest:
+        return _unknown('baseline acceptance is not established before heartbeat check')
+    if baseline_validation.timestamp_ns + baseline_validation.uncertainty_ns < last_earliest:
+        return _unknown('baseline validation predates its callback sample')
+
+    minimum_gap = check_earliest - last_latest
+    maximum_gap = check_latest - last_earliest
     if minimum_gap > threshold_ns:
         expired: Optional[bool] = True
     elif maximum_gap <= threshold_ns:
@@ -288,8 +313,10 @@ def analyze(
     if not expired:
         return Diagnosis(Cause.UNKNOWN, True, 'heartbeat threshold is not exceeded', False)
 
-    deadline_ns = last.timestamp_ns + threshold_ns
-    next_sequences = sorted({
+    earliest_deadline_ns = last_earliest + threshold_ns
+    latest_deadline_ns = last_latest + threshold_ns
+
+    sequences = sorted({
         event.status_sequence for event in events
         if event.status_sequence > baseline_seq
     })
@@ -300,7 +327,37 @@ def analyze(
     if any(len(items) > 1 for items in indexed.values()):
         return _unknown('duplicate event identity makes sample correlation ambiguous', True)
 
-    for sequence in next_sequences:
+    # A callback already serviced by the time of this check cannot be skipped
+    # in favor of a later sequence unless its validation outcome is known.
+    for sequence in sequences:
+        callbacks = indexed.get((EventKind.CALLBACK_ENTRY, sequence), [])
+        validations = indexed.get((EventKind.STATUS_VALIDATION, sequence), [])
+        if validations and not callbacks:
+            return _unknown('status validation has no matching callback', True)
+        for callback_event in callbacks:
+            if callback_event.clock_domain != domain or not callback_event.source_verified:
+                return _unknown('callback clock/provenance is unverified', True)
+            callback_earliest = callback_event.timestamp_ns - callback_event.uncertainty_ns
+            callback_latest = callback_event.timestamp_ns + callback_event.uncertainty_ns
+            if callback_earliest > check_latest:
+                continue
+            if callback_latest > check_earliest:
+                return _unknown('callback/check order overlaps timestamp uncertainty', True)
+            if len(validations) != 1:
+                return _unknown('pre-check callback has no unique validation outcome', True)
+            validation = validations[0]
+            if (
+                validation.clock_domain != domain
+                or not validation.source_verified
+                or validation.timestamp_ns + validation.uncertainty_ns > check_earliest
+            ):
+                return _unknown('pre-check callback validation is not resolved before check', True)
+            if validation.timestamp_ns + validation.uncertainty_ns < callback_earliest:
+                return _unknown('validation timestamp precedes callback sample', True)
+            if validation.status_accepted:
+                return _unknown('check baseline conflicts with an earlier accepted status', True)
+
+    for sequence in sequences:
         sample = {
             kind: indexed.get((kind, sequence), [])
             for kind in EventKind
@@ -311,60 +368,84 @@ def analyze(
         if any(not event.source_verified for event in relevant):
             return _unknown('correlated sample provenance is unverified', True)
 
-        receive = sample[EventKind.RECEIVE_OR_READY]
-        callback = sample[EventKind.CALLBACK_ENTRY]
-        if receive:
-            event = receive[0]
-            if event.metadata_supported is not True:
-                return _unknown('receive/ready metadata is not verified as supported', True)
-            if callback:
-                callback_event = callback[0]
-                if (
-                    _definitely_before_or_at(event, deadline_ns)
-                    and _definitely_after(callback_event, deadline_ns)
-                ):
-                    return Diagnosis(
-                        Cause.CALLBACK_SERVICE_DELAYED, True,
-                        'verified receive/ready precedes deadline; callback entry follows it',
-                        True, (last, event, callback_event, check),
-                    )
-                if (
-                    _definitely_after(event, deadline_ns)
-                    and _definitely_after(callback_event, deadline_ns)
-                ):
-                    begin = sample[EventKind.PUBLISH_BEGIN]
-                    returned = sample[EventKind.PUBLISH_RETURN]
-                    if len(begin) == 1 and len(returned) == 1:
-                        if (
-                            begin[0].timestamp_ns + begin[0].uncertainty_ns
-                            > returned[0].timestamp_ns - returned[0].uncertainty_ns
-                        ):
-                            return _unknown(
-                                'publish begin/return order is not verified', True,
-                            )
-                        if (
-                            callback_event.timestamp_ns
-                            + callback_event.uncertainty_ns
-                            < event.timestamp_ns - event.uncertainty_ns
-                        ):
-                            return _unknown(
-                                'callback timestamp precedes receive/ready timestamp',
-                                True,
-                            )
-                        if (
-                            _definitely_before_or_at(begin[0], deadline_ns)
-                            and _definitely_before_or_at(returned[0], deadline_ns)
-                        ):
-                            return Diagnosis(
-                                Cause.RECEIVE_PATH_DELAYED, True,
-                                'verified publish completed before deadline; receive/ready follows it',
-                                True, (last, begin[0], returned[0], event, callback_event, check),
-                            )
-                    return _unknown(
-                        'late receive has no timely, complete publish-call evidence', True,
-                    )
-                return _unknown('sample timing overlaps the heartbeat deadline', True)
-            return _unknown('receive/ready exists without callback entry', True)
+        callback_items = sample[EventKind.CALLBACK_ENTRY]
+        validation_items = sample[EventKind.STATUS_VALIDATION]
+        receive_items = sample[EventKind.RECEIVE_OR_READY]
+        if not callback_items:
+            if receive_items:
+                return _unknown('receive/ready exists without callback entry', True)
+            continue
+        callback_event = callback_items[0]
+        callback_earliest = callback_event.timestamp_ns - callback_event.uncertainty_ns
+        if callback_earliest <= check_latest:
+            # Already resolved or rejected in the pre-check pass above.
+            if validation_items and validation_items[0].status_accepted is False:
+                continue
+            return _unknown('callback sequence was not resolved at heartbeat check', True)
+        if len(validation_items) != 1:
+            return _unknown('post-check callback has no unique validation outcome', True)
+        validation = validation_items[0]
+        if validation.status_accepted is False:
+            continue
+        if validation.timestamp_ns - validation.uncertainty_ns < callback_event.timestamp_ns - callback_event.uncertainty_ns:
+            return _unknown('validation timestamp precedes callback sample', True)
+        if not receive_items:
+            return _unknown('accepted callback has no receive/ready timestamp', True)
+        receive_event = receive_items[0]
+        if receive_event.metadata_supported is not True:
+            return _unknown('receive/ready metadata is not verified as supported', True)
+
+        receive_on_time = _definitely_before_or_at(
+            receive_event, earliest_deadline_ns,
+        )
+        receive_late = _definitely_after(receive_event, latest_deadline_ns)
+        callback_late = _definitely_after(callback_event, latest_deadline_ns)
+        if receive_on_time and callback_late:
+            if callback_event.timestamp_ns + callback_event.uncertainty_ns < (
+                receive_event.timestamp_ns - receive_event.uncertainty_ns
+            ):
+                return _unknown('callback timestamp precedes receive/ready timestamp', True)
+            return Diagnosis(
+                Cause.CALLBACK_SERVICE_DELAYED, True,
+                'verified ready is before the earliest deadline; callback starts after the latest deadline',
+                True, (last, receive_event, callback_event, validation, check),
+            )
+        if receive_late and callback_late:
+            begin = sample[EventKind.PUBLISH_BEGIN]
+            returned = sample[EventKind.PUBLISH_RETURN]
+            if len(begin) != 1 or len(returned) != 1:
+                return _unknown(
+                    'late receive lacks a complete publish-call pair', True,
+                )
+            begin_before = _definitely_before_or_at(
+                begin[0], earliest_deadline_ns,
+            )
+            return_before = _definitely_before_or_at(
+                returned[0], earliest_deadline_ns,
+            )
+            if not begin_before or not return_before:
+                return _unknown(
+                    'publish call is not proven complete before earliest deadline',
+                    True,
+                )
+            if (
+                begin[0].timestamp_ns + begin[0].uncertainty_ns
+                > returned[0].timestamp_ns - returned[0].uncertainty_ns
+            ):
+                return _unknown('publish begin/return order is not verified', True)
+            if callback_event.timestamp_ns + callback_event.uncertainty_ns < (
+                receive_event.timestamp_ns - receive_event.uncertainty_ns
+            ):
+                return _unknown('callback timestamp precedes receive/ready timestamp', True)
+            return Diagnosis(
+                Cause.RECEIVE_PATH_DELAYED, True,
+                'verified publish call completed before earliest deadline; receive/ready follows latest deadline',
+                True, (
+                    last, begin[0], returned[0], receive_event,
+                    callback_event, validation, check,
+                ),
+            )
+        return _unknown('sample timing is not definitely on either side of deadline', True)
 
     if publisher_coverage is not None:
         coverage = publisher_coverage
@@ -374,6 +455,8 @@ def analyze(
             or not coverage.source_verified
             or not isinstance(coverage.complete, bool)
             or not coverage.complete
+            or not isinstance(coverage.in_flight_clear_at_start, bool)
+            or not coverage.in_flight_clear_at_start
             or not isinstance(coverage.provenance, str)
             or not coverage.provenance
             or not isinstance(coverage.clock_domain, str)
@@ -382,30 +465,35 @@ def analyze(
             or not _valid_nonnegative_int(coverage.start_ns)
             or not _valid_nonnegative_int(coverage.end_ns)
         ):
-            return _unknown('publisher coverage is incomplete or mismatched', True)
-        latest_deadline_ns = (
-            last.timestamp_ns + last.uncertainty_ns + threshold_ns
-        )
-        latest_check_ns = check.timestamp_ns + check.uncertainty_ns
+            return _unknown('publisher coverage or in-flight boundary is incomplete', True)
         if (
-            coverage.start_ns > latest_deadline_ns
-            or coverage.end_ns < latest_check_ns
+            coverage.start_ns > last_earliest
+            or coverage.end_ns < check_latest
         ):
-            return _unknown('publisher coverage does not span the heartbeat window', True)
-        publish_attempts = [
-            event for event in events
-            if event.kind is EventKind.PUBLISH_BEGIN
-            and event.status_sequence > baseline_seq
-            and event.clock_domain == domain
-            and event.source_verified
-        ]
-        if not publish_attempts:
-            return Diagnosis(
-                Cause.BACKEND_STOPPED, True,
-                'complete verified publisher coverage shows no later publish attempt',
-                True, (last, check),
+            return _unknown(
+                'publisher coverage does not span earliest baseline sample to latest check',
+                True,
             )
-        if any(_definitely_after(event, deadline_ns) for event in publish_attempts):
-            return _unknown('publisher attempted the next status after the deadline', True)
+        window_sample_events = [
+            event for event in events
+            if event.status_sequence != baseline_seq
+            and event.timestamp_ns + event.uncertainty_ns >= coverage.start_ns
+            and event.timestamp_ns - event.uncertainty_ns <= coverage.end_ns
+        ]
+        publish_events_in_window = [
+            event for event in events
+            if event.kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
+            and event.timestamp_ns + event.uncertainty_ns >= coverage.start_ns
+            and event.timestamp_ns - event.uncertainty_ns <= coverage.end_ns
+        ]
+        if window_sample_events or publish_events_in_window:
+            return _unknown(
+                'sample or publish evidence conflicts with absence conclusion', True,
+            )
+        return Diagnosis(
+            Cause.NO_PUBLISH_ATTEMPT, True,
+            'complete publisher instrumentation observed no publish_begin in the full window; this does not establish backend death',
+            True, (last, baseline_validation, check),
+        )
 
     return _unknown('available events cannot distinguish publish, receive, and callback delay', True)
