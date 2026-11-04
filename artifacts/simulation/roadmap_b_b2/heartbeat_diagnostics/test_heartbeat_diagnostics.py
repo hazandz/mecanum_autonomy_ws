@@ -147,7 +147,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             publisher_coverage=coverage,
         )
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
-        self.assertIn('conflicts with absence', diagnosis.reason)
+        self.assertIn('seq=3', diagnosis.reason)
+        self.assertIn('publish begin/callback order', diagnosis.reason)
 
     def test_ready_inside_uncertain_deadline_is_unknown(self):
         check_ns = BASE_NS + 1_020_000_000
@@ -477,6 +478,95 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         )
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
         self.assertIn('lacks typed receive/ready', diagnosis.reason)
+
+    def _hd12_diagnose(self, *, baseline_take, coverage_enabled, baseline_publish):
+        check_ns = BASE_NS + 1_110_000_000
+        items = [
+            event(EventKind.CALLBACK_ENTRY, 3, BASE_NS + 100_000_000),
+            validation_event(3, BASE_NS + 101_000_000, True),
+            event(EventKind.HEARTBEAT_CHECK, 3, check_ns),
+        ]
+        if baseline_publish:
+            items.extend((
+                event(EventKind.PUBLISH_BEGIN, 3, BASE_NS + 80_000_000),
+                event(EventKind.PUBLISH_RETURN, 3, BASE_NS + 81_000_000),
+            ))
+        if baseline_take is not None:
+            items.append(event(
+                EventKind.TAKE, 3, BASE_NS + baseline_take,
+                take_succeeded=True,
+            ))
+        items.extend((
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 801_000_000),
+            ready_event(4, BASE_NS + 900_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_120_000_000),
+            validation_event(4, BASE_NS + 1_121_000_000, True),
+        ))
+        coverage = None
+        if coverage_enabled:
+            coverage = PublishCoverage(
+                binding=EXPECTED,
+                start_ns=BASE_NS + 100_000_000,
+                end_ns=check_ns,
+                clock_domain=DOMAIN,
+                provenance='complete-backend-ring-v1',
+                source_verified=True,
+                complete=True,
+                in_flight_clear_at_start=True,
+            )
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+            publisher_coverage=coverage,
+        )
+        return diagnosis
+
+    def test_baseline_take_mismatch_blocks_cause_with_coverage_and_same_sequence_publish(self):
+        # In milliseconds: baseline publish 80/81, callback 100, accepted 101,
+        # successful take 110; check 1110. Sequence 4 is ready 900, callback
+        # 1120, accepted 1121. Coverage spans 100..1110.
+        diagnosis = self._hd12_diagnose(
+            baseline_take=110_000_000,
+            coverage_enabled=True,
+            baseline_publish=True,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('seq=3', diagnosis.reason)
+        self.assertIn('take/callback order', diagnosis.reason)
+
+    def test_baseline_validity_coverage_and_same_sequence_publish_matrix(self):
+        for baseline_take in (None, 90_000_000):
+            for coverage_enabled in (False, True):
+                for baseline_publish in (False, True):
+                    with self.subTest(
+                        baseline_take=baseline_take,
+                        coverage=coverage_enabled,
+                        baseline_publish=baseline_publish,
+                    ):
+                        diagnosis = self._hd12_diagnose(
+                            baseline_take=baseline_take,
+                            coverage_enabled=coverage_enabled,
+                            baseline_publish=baseline_publish,
+                        )
+                        self.assertEqual(
+                            diagnosis.cause, Cause.CALLBACK_SERVICE_DELAYED,
+                        )
+
+    def test_baseline_causal_error_is_never_bypassed_by_coverage_or_publish(self):
+        for coverage_enabled in (False, True):
+            for baseline_publish in (False, True):
+                with self.subTest(
+                    coverage=coverage_enabled,
+                    baseline_publish=baseline_publish,
+                ):
+                    diagnosis = self._hd12_diagnose(
+                        baseline_take=110_000_000,
+                        coverage_enabled=coverage_enabled,
+                        baseline_publish=baseline_publish,
+                    )
+                    self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+                    self.assertIn('seq=3', diagnosis.reason)
 
     def test_receive_timestamp_without_verified_ready_is_not_callback_delay(self):
         items = baseline_events() + [

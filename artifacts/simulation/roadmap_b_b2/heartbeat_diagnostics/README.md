@@ -120,7 +120,9 @@ vẫn chưa được giải quyết tại check và nguyên nhân là `UNKNOWN`.
 identity và provenance đã xác minh mới có thể tham gia thứ tự nhân quả; khi có
 các mốc tương ứng, receive và ready phải được chứng minh trước take, rồi take
 phải được chứng minh trước callback. Quy tắc thứ tự này được áp dụng trước khi
-bỏ qua mẫu rejected và cả với baseline dùng cho heartbeat check. Take không
+bỏ qua mẫu rejected và cả với baseline dùng cho heartbeat check. Baseline có
+mâu thuẫn nhân quả sẽ dừng phân tích ngay; publisher coverage hoặc publish event
+cùng sequence không thể ghi đè mâu thuẫn đó. Take không
 thay thế `status_received` hoặc `status_ready`, và không chứng minh thời điểm
 gói đến. Take thất bại không phải bằng chứng mẫu đã được lấy. Mốc publish
 return không bắt buộc đi trước receive/ready. Các khoảng sai số chồng lấn không

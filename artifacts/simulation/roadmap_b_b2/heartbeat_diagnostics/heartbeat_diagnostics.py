@@ -378,12 +378,7 @@ def analyze(
     baseline_order_error = _sample_order_error(
         baseline_sample, sequence=baseline_seq, clock_domain=domain,
     )
-    baseline_publish_same_sequence = any(
-        event.status_sequence == baseline_seq
-        and event.kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
-        for event in events
-    )
-    if baseline_order_error and not (publisher_coverage and baseline_publish_same_sequence):
+    if baseline_order_error:
         return _unknown(baseline_order_error)
 
     check_earliest = check.timestamp_ns - check.uncertainty_ns
