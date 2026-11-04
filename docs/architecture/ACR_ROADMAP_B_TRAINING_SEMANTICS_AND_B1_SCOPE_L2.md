@@ -749,3 +749,45 @@ RUN007 is an offline packet preparation based on preparation commit
 created by this change. RUN001–RUN006 remain consumed/FAIL. R003-02 remains
 UNKNOWN and RT002-03 remains OPEN/out of scope. Offline tests and packet
 delivery do not establish runtime, Gate PASS or B2 closure.
+
+## 17. RUN008 capture diagnostics and failure/exit correlation (L0/L1, 2026-11-04)
+
+The Owner authorizes bounded capture diagnostics, correlation of repeated
+observations of the same terminal helper exit, and offline preparation of a
+distinct RUN008 packet. RUN007 remains consumed/FAIL and its acquisition,
+journal, final result and screenshot history are immutable. RUN008 does not
+reuse an earlier approval, acquisition, mailbox, evidence or capacity. This
+section does not authorize runtime, capacity, Gate progression, B2.3, B3,
+training, HIL, hardware or integration.
+
+The existing X11/XCB single-owned-window capture API and the rule rejecting
+completely uniform images remain unchanged. The capture worker may report
+bounded processing-stage state, null/encode/decode outcomes, dimensions, pixel
+format, the uniform result and exact RGBA when verified, and PNG size/hash
+when bytes exist. Unknown measurements remain null. Diagnostics travel on a
+bounded stderr frame separate from PNG stdout. Parent evidence records bounded
+stream counts/hashes and a sanitized, truncated excerpt; it does not put PNG
+bytes or base64 in the journal. These numeric facts describe the bytes observed
+by the capture path only. They do not prove that the intended rendered pixels
+were captured or establish renderer, scene, visibility, or asset behavior.
+
+A terminal capture helper failure is correlated to its capture operation,
+run/session, verified process-start identity, gate and command binding, and
+raw exit status. The process monitor, capture parent and final sweep retain the
+first detected failure and its timestamp. A later observation of the same
+failure is recorded explicitly as a duplicate only when the bindings and
+status agree. Identity, operation, command or status mismatch, evidence or
+signal/join failure, and unknown residue remain failures; an exit is not
+reclassified as cleanup-requested without evidence of dispatch. No exit status
+is rewritten. This preserves the failure's cause and ordering without claiming
+that a diagnostic color statistic proves a renderer fault or recovery.
+
+RUN008 preparation uses preparation base
+`e72f16757e623751487c0e0e946d1e088fe4d62c` and retains production source pin
+`d6dc1c9cfe9d8820a37fa6aed290a13b7efe1336`. Its remote snapshot is
+`REMOTE_UNVERIFIED` until a direct readback is available. The packet keeps
+`runtime_authorization: NOT_GRANTED`; no approval, acquisition, mailbox, or
+runtime evidence is created here. RUN001–RUN007 remain consumed/FAIL. Offline
+tests or packet delivery do not establish runtime, Gate PASS or B2 closure.
+The cause of RUN007's uniform image remains UNKNOWN. No L2 change to capture
+API/backend, desktop interaction or acceptance is included.
