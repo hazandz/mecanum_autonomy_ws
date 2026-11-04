@@ -162,3 +162,42 @@ middleware.
 Instrument production/backend, RMW tracing, hoặc nối công cụ này vào runner cần
 allowlist và quyết định riêng. Candidate hiện tại không sửa RUN008, không tạo
 RUN009, không đổi QoS/lịch publish/ngưỡng một giây và không cấp runtime.
+
+## Prototype file-backed độc lập v1
+
+Prototype này chỉ chứng minh writer C++ và reader Python trên file tạm sau khi
+tiến trình test sở hữu writer đã được `wait`/join. Không có observer probe, ROS,
+Gazebo hoặc nối production. Caller phải tạo file mới độc quyền, chuẩn bị đúng
+kích thước rồi truyền descriptor; writer từ chối file không phải regular file,
+sai kích thước hoặc có bytes cũ. Một writer/file, tối đa 4.096 slot; hết slot
+đặt cờ overflow, không ghi đè. Ví dụ test dùng 4 slot và timestamp/identity giả.
+
+Định dạng v1 dùng little-endian, không ghi C++ struct thô. Header 320 byte:
+
+| Offset | Bytes | Nội dung |
+|---:|---:|---|
+| 0 | 8 | magic ASCII `HBTRACE1` |
+| 8, 12, 16, 20 | 4 mỗi trường | version=1, header size=320, record size=96, capacity |
+| 24, 60 | 36 mỗi trường | collection ID, session ID; ASCII, zero-padded |
+| 96 | 8 | backend instance uint64 khác zero |
+| 104, 168, 200 | 64, 32, 32 | config, world, clock; ASCII, zero-padded |
+| 232, 240 | 8, 64 | writer role, provenance; ASCII, zero-padded |
+| 304, 308, 312 | 4 mỗi trường | overflow sticky, CRC32 header bytes 0..303, header completion marker |
+| 316 | 4 | reserved zero |
+
+Mỗi record 96 byte: offset 0 uint64 record sequence; 8 uint32 event kind;
+12 uint32 payload length (tối đa 56); 16 uint64 timestamp; 24 uint64 status
+sequence; 32..87 payload zero-padded; 88 uint32 CRC32 của bytes 0..87; 92
+uint32 completion marker. Kind 1/2/3 lần lượt là begin/data/end của fixture;
+identity của mọi record được bind vào header. CRC32 theo IEEE/zlib. Reader kiểm
+file size chính xác, marker, checksum, sequence, identity/clock và boundaries;
+record hợp lệ được trả riêng khỏi `coverage_complete` và danh sách lỗi.
+
+Trên host little-endian được test, mapping là `MAP_SHARED`; marker 32-bit được
+ghi aligned bằng atomic release sau payload/checksum, với yêu cầu compile-time
+lock-free. Reader chỉ mở sau khi process writer đã join, không đọc đồng thời.
+Mapping được chuẩn bị trước ghi record; đường append không log, fsync hay chờ
+reader. Đây là thứ tự công bố trên platform test và khả năng thu hồi qua page
+cache sau process exit, không phải cam kết dữ liệu bền khi mất điện. File cắt,
+slot dở, checksum sai, tràn, gap, thiếu boundary hoặc sai identity/clock không
+được coi là coverage đầy đủ. Không tự tạo end hoặc suy không có publish.
