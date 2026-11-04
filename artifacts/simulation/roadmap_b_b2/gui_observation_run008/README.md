@@ -252,6 +252,22 @@ backend/API, desktop interaction, world, camera, renderer, lighting, materials,
 or assets. Any separately authorized runtime review must inspect the actual
 bound image against `b2_training_arena` and `mecanum_b2`.
 
+## RUN008 corrective R008-A01/A02
+
+Capture failure evidence writes are isolated from communication-task cleanup.
+The original capture failure is latched before evidence I/O; an evidence write
+failure is retained separately. The communication task is cancelled and joined
+within the shared cleanup window. If it cannot be joined locally, ownership is
+retained for run cleanup; unresolved task/pipe residue remains a failure.
+
+The worker still writes PNG bytes only to stdout and exactly one bounded
+diagnostic JSON frame to stderr. The parent accepts that complete frame even
+when bounded library warning text precedes or follows it, while retaining the
+raw stderr byte count/hash and a sanitized, truncated warning excerpt. Missing,
+duplicate, malformed, oversized, or PNG-mismatched diagnostics still fail.
+These offline changes do not change capture API/backend, acceptance, or runtime
+authorization.
+
 RUN008 is packet preparation and offline implementation only. Its
 `runtime_authorization` remains `NOT_GRANTED`; no approval, acquisition,
 mailbox, or runtime evidence is created. Offline PASS is not runtime evidence

@@ -4335,6 +4335,333 @@ def test_capture_exit_is_correlated_when_monitor_and_parent_race(
             ))
 
 
+def _capture_failure_harness(communicate, *, sink_failure_event=None,
+                             cleanup_seconds=0.5, returncode=None):
+    """Build the real capture parent boundary around a fake process."""
+    pid = 18008
+    identity = {
+        'pid': pid, 'process_group_id': pid, 'session_id': pid,
+        'start_ticks': 808,
+    }
+    process = SimpleNamespace(pid=pid, returncode=returncode)
+    process.communicate = communicate
+    events = []
+
+    class CleanupWindow:
+        def __init__(self):
+            self.pending_operations = []
+            self.started_at = None
+            self.deadline = None
+
+        def begin(self):
+            if self.deadline is None:
+                self.started_at = time.monotonic()
+                self.deadline = self.started_at + cleanup_seconds
+            return self.deadline
+
+    class Launcher:
+        def __init__(self):
+            self.records = []
+            self.capture_exit_correlations = {}
+            self.cleanup_window = CleanupWindow()
+
+        async def start_gated(self, command, _environment, *, role,
+                              deadline, steady):
+            record = SimpleNamespace(
+                name=role, pid=pid, process=process,
+                identity=dict(identity), command=tuple(command),
+                wrapper_command=('fake-gate-wrapper',),
+                gate={'nonce': 'capture-failure-nonce',
+                      'binding_sha256': '8' * 64},
+                gate_released=True,
+            )
+            self.records.append(record)
+            return process
+
+    class Sink:
+        def __init__(self):
+            self.failed = False
+
+        def record(self, event, facts):
+            events.append((event, facts))
+            if (event == sink_failure_event and not self.failed):
+                self.failed = True
+                raise OSError('injected capture evidence failure')
+            return len(events)
+
+    return Launcher(), Sink(), events, process
+
+
+@pytest.mark.parametrize('failure_kind', ['timeout', 'health_cancel'])
+def test_capture_sink_failure_does_not_skip_communication_join(failure_kind):
+    """Failure evidence I/O cannot bypass cancellation and bounded join."""
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    communication_task = {}
+
+    async def communicate():
+        communication_task['task'] = asyncio.current_task()
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            return b'', b''
+
+    launcher, sink_instance, _events, _process = _capture_failure_harness(
+        communicate, sink_failure_event='capture_worker_failure_classified',
+    )
+    latch = runner.FirstFailureLatch()
+
+    async def scenario():
+        deadline = time.monotonic() + (0.04 if failure_kind == 'timeout'
+                                       else 5.0)
+        capture = asyncio.create_task(
+            runner.capture_x11_window_bounded(
+                '0x12', launcher=launcher, environment={}, deadline=deadline,
+                sink=sink_instance, failure_latch=latch,
+            ),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if failure_kind == 'health_cancel':
+            latch.detect('inhibit health lost', 'observer', 'health')
+            capture.cancel()
+        try:
+            try:
+                await capture
+            except (runner.ObservationFailure, asyncio.CancelledError):
+                pass
+            else:
+                raise AssertionError(
+                    'capture failure unexpectedly returned'
+                )
+            task = communication_task['task']
+            assert cancelled.is_set()
+            assert task.done()
+            if failure_kind == 'timeout':
+                assert latch.primary_failure['source'] == 'capture_worker'
+                assert 'deadline' in latch.primary_failure['reason']
+            else:
+                assert latch.primary_failure['reason'] == (
+                    'inhibit health lost'
+                )
+            assert any(
+                item['source'] == 'evidence_sink'
+                and item['phase'] == 'capture_failure_record'
+                for item in latch.secondary_failures
+            )
+        finally:
+            task = communication_task.get('task')
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.wait_for(task, timeout=0.5)
+
+    asyncio.run(scenario())
+
+
+def test_capture_communication_residue_is_bounded_and_transferred():
+    """A stubborn pipe task stays owned for whole-run cleanup as UNKNOWN."""
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+    communication_task = {}
+
+    async def communicate():
+        communication_task['task'] = asyncio.current_task()
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+            return b'', b''
+
+    launcher, sink_instance, _events, _process = _capture_failure_harness(
+        communicate, sink_failure_event='capture_worker_failure_classified',
+        cleanup_seconds=0.05,
+    )
+    latch = runner.FirstFailureLatch()
+
+    async def scenario():
+        capture = asyncio.create_task(
+            runner.capture_x11_window_bounded(
+                '0x12', launcher=launcher, environment={},
+                deadline=time.monotonic() + 0.03, sink=sink_instance,
+                failure_latch=latch,
+            ),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        begin = time.monotonic()
+        task = communication_task['task']
+        try:
+            with pytest.raises(runner.ObservationFailure,
+                               match='communication task residue unknown'):
+                await capture
+            elapsed = time.monotonic() - begin
+            assert cancellation_seen.is_set()
+            assert elapsed < 0.5
+            assert not task.done()
+            assert task in launcher.capture_communication_tasks
+            assert latch.primary_failure['source'] == 'capture_worker'
+            assert 'deadline' in latch.primary_failure['reason']
+            assert any(
+                item['source'] == 'capture_cleanup'
+                and 'residue unknown' in item['reason']
+                for item in latch.secondary_failures
+            )
+            assert any(
+                item['source'] == 'evidence_sink'
+                and item['phase'] == 'capture_failure_record'
+                for item in latch.secondary_failures
+            )
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=0.5)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stubborn', [False, True])
+def test_shared_cleanup_owns_and_bounds_retained_capture_tasks(stubborn):
+    """Run finalization joins retained pipe tasks or reports UNKNOWN."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    tasks = set()
+    launcher = SimpleNamespace(capture_communication_tasks=tasks)
+
+    async def communication():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if stubborn:
+                await asyncio.shield(release.wait())
+            return b'', b''
+
+    async def scenario():
+        task = asyncio.create_task(communication())
+        tasks.add(task)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        deadline = time.monotonic() + (0.04 if stubborn else 0.5)
+        errors = await runner._finalize_capture_communication_tasks(
+            launcher, deadline=deadline,
+        )
+        if stubborn:
+            assert errors == [
+                'capture_communication_task_residue_unknown'
+            ]
+            assert task in tasks and not task.done()
+            release.set()
+            await asyncio.wait_for(task, timeout=0.5)
+            tasks.discard(task)
+        else:
+            assert errors == []
+            assert task.done() and task not in tasks
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('capture_status', [0, 7])
+def test_capture_parser_keeps_warnings_around_one_diagnostic_frame(
+        capture_status):
+    """Warnings before/after the frame do not corrupt PNG or diagnostics."""
+    png = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0dIHDR'
+           + (2).to_bytes(4, 'big') + (1).to_bytes(4, 'big'))
+    diagnostic = json.loads(
+        _capture_diag_frame(png)[
+            len(runner.CAPTURE_DIAGNOSTIC_PREFIX):-1
+        ],
+    )
+    if capture_status:
+        diagnostic['failure_type'] = 'ObservationFailure'
+    frame = runner._capture_diagnostic_record(diagnostic)
+    raw_stderr = b'libwarning-before\n' + frame + b'libwarning-after\n'
+    launcher, sink_instance, events, _process = _capture_failure_harness(
+        lambda: asyncio.sleep(0, result=(
+            png if capture_status == 0 else b'', raw_stderr,
+        )),
+        returncode=capture_status,
+    )
+    latch = runner.FirstFailureLatch()
+
+    async def scenario():
+        if capture_status == 0:
+            result = await runner.capture_x11_window_bounded(
+                '0x12', launcher=launcher, environment={},
+                deadline=time.monotonic() + 2, sink=sink_instance,
+                failure_latch=latch,
+            )
+            assert result['png_bytes'] == png
+            assert result['capture_diagnostics']['png_sha256'] == (
+                hashlib.sha256(png).hexdigest()
+            )
+        else:
+            with pytest.raises(runner.ObservationFailure,
+                               match=r'capture worker failed \(7\)'):
+                await runner.capture_x11_window_bounded(
+                    '0x12', launcher=launcher, environment={},
+                    deadline=time.monotonic() + 2, sink=sink_instance,
+                    failure_latch=latch,
+                )
+
+    asyncio.run(scenario())
+    observed = next(
+        facts for event, facts in events
+        if event == 'capture_worker_result_observed'
+    )
+    diagnostics = observed['diagnostics']
+    assert diagnostics['png_sha256'] == hashlib.sha256(png).hexdigest()
+    assert observed['stderr_excerpt'] == (
+        'libwarning-before\\x0a' + 'libwarning-after\\x0a'
+    )
+    assert observed['output']['stdout_bytes'] == len(
+        png if capture_status == 0 else b''
+    )
+    assert observed['output']['stderr_bytes'] == len(raw_stderr)
+    assert observed['output']['stderr_sha256'] == hashlib.sha256(
+        raw_stderr,
+    ).hexdigest()
+    if capture_status == 0:
+        assert diagnostics['uniform_check'] is False
+    else:
+        assert latch.primary_failure['source'] == 'capture_worker'
+
+
+def test_capture_parser_rejects_duplicate_diagnostic_frames():
+    """Two otherwise valid frames are ambiguous and fail closed."""
+    frame = _capture_diag_frame(b'png')
+    with pytest.raises(runner.ObservationFailure, match='duplicate'):
+        runner._parse_capture_worker_stderr(frame + frame)
+
+
+def test_capture_parser_sanitizes_warning_text_before_and_after_frame():
+    """Raw stderr stays hashable while excerpts escape controls and UTF8."""
+    frame = _capture_diag_frame(b'png')
+    raw = b'pre\xff\x1b\n' + frame + b'post\x00\n'
+    _diagnostics, excerpt, truncated = runner._parse_capture_worker_stderr(
+        raw,
+    )
+    assert excerpt == r'pre\xff\x1b\x0a' + r'post\x00\x0a'
+    assert not truncated
+    facts = runner._capture_stream_facts(raw, excerpt, raw, truncated)
+    assert facts['stderr_sha256'] == hashlib.sha256(raw).hexdigest()
+
+
+def test_capture_parser_reports_truncated_warning_excerpt_around_frame():
+    """Keep full stderr hashes while bounding warnings around the frame."""
+    frame = _capture_diag_frame(b'png')
+    raw = b'before-' + b'a' * 700 + b'\n' + frame + b'after-warning\n'
+    _diagnostics, excerpt, truncated = runner._parse_capture_worker_stderr(
+        raw,
+    )
+    assert len(excerpt) <= runner.CAPTURE_OUTPUT_EXCERPT_MAX_BYTES
+    assert truncated
+    facts = runner._capture_stream_facts(raw, excerpt, raw, truncated)
+    assert facts['stderr_bytes'] == len(raw)
+    assert facts['stderr_sha256'] == hashlib.sha256(raw).hexdigest()
+    assert facts['stderr_excerpt_truncated'] is True
+
+
 def test_runner_cancels_capture_and_cleans_owned_helper_on_health_failure(
         tmp_path):
     """Health failure cancels capture and joins all injected runner tasks."""

@@ -320,9 +320,9 @@
   },
   "tool_sha256": {
     "observation_guard.py": "0adb137d5ac379b31132b855f77bd28cbf29825b582b9cc7af40993ce1b6dc67",
-    "observation_runner.py": "75cd1cb1d3f0f0758ba8fe7dcd1fb92f46e9bfdb968e143fe523d1f4fce33663",
+    "observation_runner.py": "f57e22d700ae507d7e37d790b0754aac2191bcfc2cd9931de6c7402531c26ca4",
     "observation_sink.py": "eac616ba35d4c9557156e9668424209d6d156bea0c2b40c61443a58ed7e20ebb",
-    "test_observation_packet.py": "431ce9747451f3b0494b2add9eeb7b4f0c996d215e6630bb244855fbefbb5f48"
+    "test_observation_packet.py": "9a5e70e34217738803dc6199744ed4539b0c391964ae5770d9f1a9cc5d98f0cf"
   },
   "host_capabilities": {
     "display": "static environment/socket inventory only; runtime not tested",
@@ -340,7 +340,9 @@
     "max_png_bytes": 33554432,
     "image_rule": "decode PNG, positive dimensions, reject completely uniform pixels; semantic Codex inspection required",
     "diagnostics": {
-      "worker_stderr_protocol": "one bounded RUN008_CAPTURE_DIAGNOSTICS JSON frame, separate from PNG stdout",
+      "worker_stderr_protocol": "exactly one complete bounded RUN008_CAPTURE_DIAGNOSTICS JSON frame on stderr, separate from PNG stdout; bounded warning text may precede or follow it and remains in raw stderr metadata",
+      "frame_required": true,
+      "duplicate_or_malformed_frame": "FAIL",
       "max_record_bytes": 4096,
       "max_stderr_bytes": 8192,
       "fields": [
@@ -359,7 +361,8 @@
       ],
       "unknown_values": null,
       "pixel_statistics_are_runtime_render_proof": false,
-      "desktop_interaction": "none"
+      "desktop_interaction": "none",
+      "communication_task_cleanup": "failure evidence I/O cannot skip cancellation/join; pending task remains owned for shared cleanup; unresolved residue is FAIL"
     },
     "output_evidence": {
       "stdout": "byte_count_and_sha256_only; PNG bytes never enter JSONL",

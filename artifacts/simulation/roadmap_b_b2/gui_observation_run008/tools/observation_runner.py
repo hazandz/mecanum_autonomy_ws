@@ -1734,6 +1734,9 @@ async def capture_x11_window_bounded(
             **correlation,
         })
     communication = asyncio.create_task(process.communicate())
+    if not hasattr(launcher, 'capture_communication_tasks'):
+        launcher.capture_communication_tasks = set()
+    launcher.capture_communication_tasks.add(communication)
     stdout = None
     stderr = None
     try:
@@ -1743,6 +1746,7 @@ async def capture_x11_window_bounded(
         if not done:
             raise ReviewInvalidated('capture worker exceeded review deadline')
         stdout, stderr = communication.result()
+        launcher.capture_communication_tasks.discard(communication)
         correlation['raw_exit_status'] = process.returncode
         diagnostics, stderr_excerpt, stderr_truncated = (
             _parse_capture_worker_stderr(stderr)
@@ -1889,6 +1893,19 @@ async def capture_x11_window_bounded(
                 str(error), 'capture_worker', 'capture', error=error,
             )
         correlation = getattr(error, 'capture_correlation', None)
+        cleanup_window = getattr(launcher, 'cleanup_window', None)
+        cleanup_deadline = deadline
+        if cleanup_window is not None:
+            try:
+                cleanup_deadline = cleanup_window.begin()
+            except BaseException as cleanup_start_error:
+                if failure_latch is not None:
+                    failure_latch.detect(
+                        str(cleanup_start_error), 'capture_cleanup',
+                        'cleanup_window_start', error=cleanup_start_error,
+                    )
+        evidence_error = None
+        cleanup_error = None
         failure_output = None
         if isinstance(stdout, bytes) and isinstance(stderr, bytes):
             raw_stderr_excerpt, raw_stderr_truncated = _safe_excerpt(stderr)
@@ -1909,23 +1926,71 @@ async def capture_x11_window_bounded(
                     'output': failure_output,
                 })
             except BaseException as sink_error:
+                evidence_error = sink_error
+                try:
+                    error.capture_evidence_error = sink_error
+                except BaseException:
+                    pass
                 if failure_latch is not None:
                     failure_latch.detect(
                         str(sink_error), 'evidence_sink',
                         'capture_failure_record', error=sink_error,
                     )
-                raise
+        if communication.done():
+            launcher.capture_communication_tasks.discard(communication)
         if not communication.done():
             communication.cancel()
-            join_budget = min(1.0, max(0.0, deadline - steady()))
-            done, _pending = await asyncio.wait(
-                {communication}, timeout=join_budget,
+            join_budget = min(
+                1.0, max(0.0, cleanup_deadline - steady()),
             )
-            if not done:
-                raise ObservationFailure(
-                    'capture communication task residue unknown'
-                ) from error
-            await asyncio.gather(communication, return_exceptions=True)
+            try:
+                done, _pending = await asyncio.wait(
+                    {communication}, timeout=join_budget,
+                )
+                if communication in done:
+                    await asyncio.gather(
+                        communication, return_exceptions=True,
+                    )
+                    launcher.capture_communication_tasks.discard(
+                        communication,
+                    )
+                else:
+                    cleanup_error = ObservationFailure(
+                        'capture communication task residue unknown'
+                    )
+                    if failure_latch is not None:
+                        failure_latch.detect(
+                            str(cleanup_error), 'capture_cleanup',
+                            'communication_join', error=cleanup_error,
+                        )
+                    try:
+                        error.capture_cleanup_error = cleanup_error
+                    except BaseException:
+                        pass
+                    raise cleanup_error from error
+            except BaseException as join_error:
+                if join_error is cleanup_error:
+                    raise
+                cleanup_error = join_error
+                if failure_latch is not None:
+                    failure_latch.detect(
+                        str(join_error), 'capture_cleanup',
+                        'communication_join', error=join_error,
+                    )
+                try:
+                    error.capture_cleanup_error = join_error
+                except BaseException:
+                    pass
+        if evidence_error is not None:
+            try:
+                error.capture_evidence_error = evidence_error
+            except BaseException:
+                pass
+        if cleanup_error is not None:
+            try:
+                error.capture_cleanup_error = cleanup_error
+            except BaseException:
+                pass
         raise
 
 
@@ -1959,16 +2024,29 @@ def _capture_stream_facts(stdout, stderr_excerpt, stderr, truncated):
 
 
 def _parse_capture_worker_stderr(stderr):
-    """Parse one bounded diagnostic frame and retain bounded text errors."""
+    """Parse one bounded diagnostic frame among bounded stderr warnings."""
     if not isinstance(stderr, bytes) or len(stderr) > 8192:
         raise ObservationFailure('capture worker stderr exceeds bound')
-    line, separator, remainder = stderr.partition(b'\n')
-    if not separator or not line.startswith(CAPTURE_DIAGNOSTIC_PREFIX):
+    lines = stderr.splitlines(keepends=True)
+    frame_indices = [
+        index for index, line in enumerate(lines)
+        if line.startswith(CAPTURE_DIAGNOSTIC_PREFIX)
+    ]
+    if len(frame_indices) > 1:
+        raise ObservationFailure('duplicate capture diagnostics frames')
+    if not frame_indices:
         excerpt, truncated = _safe_excerpt(stderr)
         return None, excerpt, truncated
-    frame = line[len(CAPTURE_DIAGNOSTIC_PREFIX):]
-    if len(line) + 1 > CAPTURE_DIAGNOSTIC_MAX_BYTES:
+    frame_index = frame_indices[0]
+    line = lines[frame_index]
+    if not line.endswith(b'\n'):
+        raise ObservationFailure('capture diagnostics frame is incomplete')
+    frame_line = line[:-1]
+    if frame_line.endswith(b'\r'):
+        frame_line = frame_line[:-1]
+    if len(line) > CAPTURE_DIAGNOSTIC_MAX_BYTES:
         raise ObservationFailure('capture diagnostics frame exceeds bound')
+    frame = frame_line[len(CAPTURE_DIAGNOSTIC_PREFIX):]
     try:
         diagnostics = strict_json_loads(frame)
     except BaseException as error:
@@ -1977,8 +2055,50 @@ def _parse_capture_worker_stderr(stderr):
         ) from error
     if not isinstance(diagnostics, dict):
         raise ObservationFailure('capture diagnostics must be an object')
-    excerpt, truncated = _safe_excerpt(remainder)
+    warning_bytes = b''.join(
+        item for index, item in enumerate(lines) if index != frame_index
+    )
+    excerpt, truncated = _safe_excerpt(warning_bytes)
     return diagnostics, excerpt, truncated
+
+
+async def _finalize_capture_communication_tasks(
+        launcher, *, deadline, steady=time.monotonic):
+    """Join retained capture pipe tasks within the shared cleanup deadline."""
+    tasks = set(getattr(launcher, 'capture_communication_tasks', ()))
+    if not tasks:
+        return []
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    remaining = max(0.0, deadline - steady())
+    try:
+        done, pending = await asyncio.wait(tasks, timeout=remaining)
+    except BaseException as error:
+        return [
+            'capture_communication_join:'
+            f'{type(error).__name__}:{str(error)[:256]}'
+        ]
+    errors = []
+    for task in done:
+        try:
+            result = await asyncio.gather(task, return_exceptions=True)
+            for outcome in result:
+                if isinstance(outcome, BaseException) and not isinstance(
+                        outcome, asyncio.CancelledError):
+                    errors.append(
+                        'capture_communication_failed:'
+                        f'{type(outcome).__name__}:{str(outcome)[:256]}'
+                    )
+        except BaseException as error:
+            errors.append(
+                'capture_communication_join:'
+                f'{type(error).__name__}:{str(error)[:256]}'
+            )
+        launcher.capture_communication_tasks.discard(task)
+    if pending:
+        errors.append('capture_communication_task_residue_unknown')
+    return errors
 
 
 def _utc_timestamp():
@@ -5345,6 +5465,12 @@ async def _run(args, *, dependencies=None):
                 cleanup_errors.append(
                     f'fallback_cleanup:{type(error).__name__}:{error}'
                 )
+        if launcher is not None:
+            cleanup_errors.extend(
+                await _finalize_capture_communication_tasks(
+                    launcher, deadline=cleanup_deadline, steady=mono,
+                ),
+            )
         if launcher is not None:
             for record in all_records:
                 if record.identity_error:
