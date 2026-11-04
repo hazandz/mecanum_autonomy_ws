@@ -117,11 +117,14 @@ validation. Một mốc ngoài miền đồng hồ của check hoặc thiếu pr
 vẫn chưa được giải quyết tại check và nguyên nhân là `UNKNOWN`.
 
 `take` có trường `take_succeeded` tường minh. Chỉ take thành công với clock,
-identity và provenance đã xác minh mới có thể tham gia thứ tự nhân quả; nó phải
-được chứng minh xảy ra sau ready (nếu có) và trước callback. Take không thay
-thế `status_received` hoặc `status_ready`, và không chứng minh thời điểm gói
-đến. Take xảy ra sau callback, hoặc khoảng sai số không xác lập được thứ tự,
-không hỗ trợ phân loại dương.
+identity và provenance đã xác minh mới có thể tham gia thứ tự nhân quả; khi có
+các mốc tương ứng, receive và ready phải được chứng minh trước take, rồi take
+phải được chứng minh trước callback. Quy tắc thứ tự này được áp dụng trước khi
+bỏ qua mẫu rejected và cả với baseline dùng cho heartbeat check. Take không
+thay thế `status_received` hoặc `status_ready`, và không chứng minh thời điểm
+gói đến. Take thất bại không phải bằng chứng mẫu đã được lấy. Mốc publish
+return không bắt buộc đi trước receive/ready. Các khoảng sai số chồng lấn không
+xác lập thứ tự và do đó không hỗ trợ phân loại dương.
 
 `measure_once()` bọc một callable giả hoặc callable do caller sở hữu. Nó gọi
 callable đúng một lần, đo monotonic trước/sau kể cả khi callable ném exception,

@@ -199,12 +199,72 @@ def _definitely_after(event: DiagnosticEvent, deadline_ns: int) -> bool:
 
 
 def _definitely_precedes(first: DiagnosticEvent, second: DiagnosticEvent) -> bool:
-    """Return true only when the timestamp intervals establish causal order."""
+    """Return true only when non-overlapping intervals establish causal order."""
 
     return (
         first.timestamp_ns + first.uncertainty_ns
-        <= second.timestamp_ns - second.uncertainty_ns
+        < second.timestamp_ns - second.uncertainty_ns
     )
+
+
+def _sample_order_error(
+    sample_events: list[DiagnosticEvent],
+    *,
+    sequence: int,
+    clock_domain: str,
+) -> Optional[str]:
+    """Check causal order once before a sample can be skipped or classified."""
+
+    if any(item.clock_domain != clock_domain for item in sample_events):
+        return f'seq={sequence} sample clock domain is unverified'
+    if any(not item.source_verified for item in sample_events):
+        return f'seq={sequence} sample provenance is unverified'
+    grouped: dict[EventKind, list[DiagnosticEvent]] = {}
+    for item in sample_events:
+        grouped.setdefault(item.kind, []).append(item)
+    if any(len(items) != 1 for items in grouped.values()):
+        return f'seq={sequence} duplicate event identity makes sample order ambiguous'
+
+    def ordered(first_kind: EventKind, second_kind: EventKind, label: str) -> Optional[str]:
+        first = grouped.get(first_kind, [])
+        second = grouped.get(second_kind, [])
+        if first and second and not _definitely_precedes(first[0], second[0]):
+            return f'seq={sequence} {label} order is not established'
+        return None
+
+    constraints = [
+        (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN, 'publish begin/return'),
+        (EventKind.PUBLISH_BEGIN, EventKind.STATUS_RECEIVED, 'publish begin/receive'),
+        (EventKind.PUBLISH_BEGIN, EventKind.STATUS_READY, 'publish begin/ready'),
+        (EventKind.PUBLISH_BEGIN, EventKind.CALLBACK_ENTRY, 'publish begin/callback'),
+        (EventKind.STATUS_RECEIVED, EventKind.STATUS_READY, 'receive/ready'),
+        (EventKind.STATUS_RECEIVED, EventKind.CALLBACK_ENTRY, 'receive/callback'),
+        (EventKind.STATUS_READY, EventKind.CALLBACK_ENTRY, 'ready/callback'),
+        (EventKind.CALLBACK_ENTRY, EventKind.STATUS_VALIDATION, 'callback/validation'),
+    ]
+    for first, second, label in constraints:
+        error = ordered(first, second, label)
+        if error:
+            return error
+
+    successful_takes = [
+        item for item in grouped.get(EventKind.TAKE, [])
+        if item.take_succeeded is True
+    ]
+    if successful_takes:
+        take = successful_takes[0]
+        for prior_kind, label in (
+            (EventKind.STATUS_RECEIVED, 'receive/take'),
+            (EventKind.STATUS_READY, 'ready/take'),
+            (EventKind.PUBLISH_BEGIN, 'publish begin/take'),
+        ):
+            prior = grouped.get(prior_kind, [])
+            if prior and not _definitely_precedes(prior[0], take):
+                return f'seq={sequence} {label} order is not established'
+        callbacks = grouped.get(EventKind.CALLBACK_ENTRY, [])
+        if callbacks and not _definitely_precedes(take, callbacks[0]):
+            return f'seq={sequence} take/callback order is not established'
+    return None
 
 
 def analyze(
@@ -310,6 +370,21 @@ def analyze(
         or baseline_validation.status_accepted is not True
     ):
         return _unknown('baseline status was not verifiably accepted')
+    baseline_sample = [
+        event for event in events
+        if event.status_sequence == baseline_seq
+        and event.kind is not EventKind.HEARTBEAT_CHECK
+    ]
+    baseline_order_error = _sample_order_error(
+        baseline_sample, sequence=baseline_seq, clock_domain=domain,
+    )
+    baseline_publish_same_sequence = any(
+        event.status_sequence == baseline_seq
+        and event.kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
+        for event in events
+    )
+    if baseline_order_error and not (publisher_coverage and baseline_publish_same_sequence):
+        return _unknown(baseline_order_error)
 
     check_earliest = check.timestamp_ns - check.uncertainty_ns
     check_latest = check.timestamp_ns + check.uncertainty_ns
@@ -353,10 +428,11 @@ def analyze(
     # validation -> check are established by non-overlapping time intervals.
     for sequence in sequences:
         sample_events = [event for event in events if event.status_sequence == sequence]
-        if any(event.clock_domain != domain for event in sample_events):
-            return _unknown(f'seq={sequence} sample clock domain is unverified', True)
-        if any(not event.source_verified for event in sample_events):
-            return _unknown(f'seq={sequence} sample provenance is unverified', True)
+        order_error = _sample_order_error(
+            sample_events, sequence=sequence, clock_domain=domain,
+        )
+        if order_error:
+            return _unknown(order_error, True)
         callbacks = indexed.get((EventKind.CALLBACK_ENTRY, sequence), [])
         validations = indexed.get((EventKind.STATUS_VALIDATION, sequence), [])
         receives = indexed.get((EventKind.STATUS_RECEIVED, sequence), [])
@@ -516,41 +592,6 @@ def analyze(
                     f'seq={sequence} publish begin does not precede typed timing event',
                     True,
                 )
-        if begin_items and return_items and not _definitely_precedes(
-            begin_items[0], return_items[0],
-        ):
-            return _unknown(
-                f'seq={sequence} publish begin/return order is not established', True,
-            )
-        if receive_items and ready_items and not _definitely_precedes(
-            receive_items[0], ready_items[0],
-        ):
-            return _unknown(
-                f'seq={sequence} middleware receive/ready order is not established',
-                True,
-            )
-        if ready_items and not _definitely_precedes(ready_items[0], callback_event):
-            return _unknown(
-                f'seq={sequence} ready does not definitely precede callback', True,
-            )
-        if receive_items and not _definitely_precedes(receive_items[0], callback_event):
-            return _unknown(
-                f'seq={sequence} receive does not definitely precede callback', True,
-            )
-        successful_takes = [item for item in take_items if item.take_succeeded is True]
-        if successful_takes:
-            if len(successful_takes) != 1 or not _definitely_precedes(
-                successful_takes[0], callback_event,
-            ):
-                return _unknown(
-                    f'seq={sequence} successful take does not definitely precede callback',
-                    True,
-                )
-            if ready_items and not _definitely_precedes(ready_items[0], successful_takes[0]):
-                return _unknown(
-                    f'seq={sequence} ready/take order is not established', True,
-                )
-
         ready_on_time = bool(ready_items) and _definitely_before_or_at(
             ready_items[0], earliest_deadline_ns,
         )
