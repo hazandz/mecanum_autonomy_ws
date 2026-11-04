@@ -63,6 +63,7 @@ class DiagnosticEvent:
     metadata_supported: Optional[bool] = None
     middleware_sequence: Optional[int] = None
     status_accepted: Optional[bool] = None
+    take_succeeded: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -272,6 +273,11 @@ def analyze(
                 return _unknown('status-validation outcome is missing')
         elif event.status_accepted is not None:
             return _unknown('status outcome is attached to the wrong event kind')
+        if event.kind is EventKind.TAKE:
+            if not isinstance(event.take_succeeded, bool):
+                return _unknown('take outcome is missing')
+        elif event.take_succeeded is not None:
+            return _unknown('take outcome is attached to the wrong event kind')
 
     checks = [event for event in events if event.kind is EventKind.HEARTBEAT_CHECK]
     if len(checks) != 1:
@@ -346,16 +352,17 @@ def analyze(
     # later sequence. A rejection is usable only if callback -> validation and
     # validation -> check are established by non-overlapping time intervals.
     for sequence in sequences:
+        sample_events = [event for event in events if event.status_sequence == sequence]
+        if any(event.clock_domain != domain for event in sample_events):
+            return _unknown(f'seq={sequence} sample clock domain is unverified', True)
+        if any(not event.source_verified for event in sample_events):
+            return _unknown(f'seq={sequence} sample provenance is unverified', True)
         callbacks = indexed.get((EventKind.CALLBACK_ENTRY, sequence), [])
         validations = indexed.get((EventKind.STATUS_VALIDATION, sequence), [])
         receives = indexed.get((EventKind.STATUS_RECEIVED, sequence), [])
         readies = indexed.get((EventKind.STATUS_READY, sequence), [])
         takes = indexed.get((EventKind.TAKE, sequence), [])
         ambiguous_times = indexed.get((EventKind.RECEIVE_OR_READY, sequence), [])
-        publish_events = [
-            event for kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
-            for event in indexed.get((kind, sequence), [])
-        ]
         if ambiguous_times:
             return _unknown(
                 f'seq={sequence} uses ambiguous receive_or_ready timestamp semantics',
@@ -401,13 +408,17 @@ def analyze(
                     )
                 resolved_rejections.add(sequence)
 
-        precheck_times = receives + readies + takes
-        has_precheck_time = any(
+        # A sample is unresolved at the check if any verified event could have
+        # occurred by then. Do not discard it merely because its callback or
+        # validation was recorded later. In particular, a later rejected
+        # validation cannot retroactively prove that a pre-check publish was
+        # irrelevant to this heartbeat check.
+        sample_may_affect_check = any(
             item.timestamp_ns - item.uncertainty_ns <= check_latest
-            for item in precheck_times
+            for item in sample_events
         )
         if (
-            has_precheck_time
+            sample_may_affect_check
             and validations
             and validations[0].status_accepted is False
             and sequence not in resolved_rejections
@@ -417,16 +428,7 @@ def analyze(
                 True,
             )
 
-        publish_may_precede_check = any(
-            event.timestamp_ns - event.uncertainty_ns <= check_latest
-            for event in publish_events
-        )
-        if (
-            publish_may_precede_check
-            and not callbacks
-            and not precheck_times
-            and not validations
-        ):
+        if sample_may_affect_check and not callbacks and not validations:
             return _unknown(
                 f'seq={sequence} publish sample is unresolved at heartbeat check',
                 True,
@@ -535,6 +537,19 @@ def analyze(
             return _unknown(
                 f'seq={sequence} receive does not definitely precede callback', True,
             )
+        successful_takes = [item for item in take_items if item.take_succeeded is True]
+        if successful_takes:
+            if len(successful_takes) != 1 or not _definitely_precedes(
+                successful_takes[0], callback_event,
+            ):
+                return _unknown(
+                    f'seq={sequence} successful take does not definitely precede callback',
+                    True,
+                )
+            if ready_items and not _definitely_precedes(ready_items[0], successful_takes[0]):
+                return _unknown(
+                    f'seq={sequence} ready/take order is not established', True,
+                )
 
         ready_on_time = bool(ready_items) and _definitely_before_or_at(
             ready_items[0], earliest_deadline_ns,

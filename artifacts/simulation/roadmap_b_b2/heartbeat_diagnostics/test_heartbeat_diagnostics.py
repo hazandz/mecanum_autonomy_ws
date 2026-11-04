@@ -47,6 +47,7 @@ def event(
     metadata_supported=None,
     middleware_sequence=None,
     status_accepted=None,
+    take_succeeded=None,
 ):
     fields = dict(
         kind=kind,
@@ -65,6 +66,8 @@ def event(
     )
     if 'status_accepted' in DiagnosticEvent.__dataclass_fields__:
         fields['status_accepted'] = status_accepted
+    if 'take_succeeded' in DiagnosticEvent.__dataclass_fields__:
+        fields['take_succeeded'] = take_succeeded
     return DiagnosticEvent(**fields)
 
 
@@ -269,6 +272,89 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         )
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
         self.assertIn('seq=4', diagnosis.reason)
+
+    def test_precheck_publish_cannot_be_skipped_after_late_rejection(self):
+        check_ns = BASE_NS + 1_010_000_000
+        items = baseline_events(check_ns) + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 801_000_000),
+            received_event(4, BASE_NS + 1_020_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_021_000_000),
+            event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 850_000_000),
+            event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 851_000_000),
+            ready_event(5, BASE_NS + 950_000_000),
+            event(EventKind.CALLBACK_ENTRY, 5, BASE_NS + 1_030_000_000),
+        ]
+        items.extend((
+            validation_event(4, BASE_NS + 1_022_000_000, False),
+            validation_event(5, BASE_NS + 1_031_000_000, True),
+        ))
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('seq=4', diagnosis.reason)
+
+    def test_take_after_callback_prevents_timeline_classification(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 701_000_000),
+            ready_event(4, BASE_NS + 900_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_030_000_000),
+            event(EventKind.TAKE, 4, BASE_NS + 1_040_000_000,
+                  take_succeeded=True),
+        ]
+        validation = validation_event(4, BASE_NS + 1_050_000_000, True)
+        if validation is not None:
+            items.append(validation)
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_take_before_callback_preserves_verified_ready_classification(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 701_000_000),
+            ready_event(4, BASE_NS + 900_000_000),
+            event(EventKind.TAKE, 4, BASE_NS + 1_020_000_000,
+                  take_succeeded=True),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_030_000_000),
+        ]
+        validation = validation_event(4, BASE_NS + 1_050_000_000, True)
+        if validation is not None:
+            items.append(validation)
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.CALLBACK_SERVICE_DELAYED)
+
+    def test_take_outcome_is_required_and_take_clock_must_match(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 701_000_000),
+            ready_event(4, BASE_NS + 900_000_000),
+            event(EventKind.TAKE, 4, BASE_NS + 1_020_000_000,
+                  take_succeeded=True, domain='other-monotonic'),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_030_000_000),
+            validation_event(4, BASE_NS + 1_050_000_000, True),
+        ]
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('clock domain', diagnosis.reason)
+
+    def test_take_without_outcome_is_unknown(self):
+        items = baseline_events() + [
+            event(EventKind.TAKE, 4, BASE_NS + 900_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_030_000_000),
+            validation_event(4, BASE_NS + 1_050_000_000, True),
+        ]
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('take outcome', diagnosis.reason)
 
     def test_receive_timestamp_without_verified_ready_is_not_callback_delay(self):
         items = baseline_events() + [
