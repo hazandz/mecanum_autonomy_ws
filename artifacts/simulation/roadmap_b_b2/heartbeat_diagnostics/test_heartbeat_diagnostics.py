@@ -78,6 +78,16 @@ def validation_event(sequence, timestamp, accepted):
     )
 
 
+def ready_event(sequence, timestamp, **kwargs):
+    kind = getattr(EventKind, 'STATUS_READY', EventKind.RECEIVE_OR_READY)
+    return event(kind, sequence, timestamp, metadata_supported=True, **kwargs)
+
+
+def received_event(sequence, timestamp, **kwargs):
+    kind = getattr(EventKind, 'STATUS_RECEIVED', EventKind.RECEIVE_OR_READY)
+    return event(kind, sequence, timestamp, metadata_supported=True, **kwargs)
+
+
 def baseline_events(check_ns=CHECK_NS):
     items = [
         event(EventKind.CALLBACK_ENTRY, 3, BASE_NS),
@@ -146,10 +156,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.HEARTBEAT_CHECK, 3, check_ns),
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 910_000_000),
-            event(
-                EventKind.RECEIVE_OR_READY, 4, BASE_NS + 995_000_000,
-                metadata_supported=True,
-            ),
+            ready_event(4, BASE_NS + 995_000_000),
             event(EventKind.CALLBACK_ENTRY, 4, check_ns + 1),
             event(EventKind.STATUS_VALIDATION, 4, check_ns + 2,
                   status_accepted=True),
@@ -163,10 +170,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 800_000_000),
             event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 810_000_000),
-            event(
-                EventKind.RECEIVE_OR_READY, 5, CHECK_NS + 100,
-                metadata_supported=True,
-            ),
+            received_event(5, CHECK_NS + 100),
             event(EventKind.CALLBACK_ENTRY, 5, CHECK_NS + 110),
             event(EventKind.STATUS_VALIDATION, 5, CHECK_NS + 120,
                   status_accepted=True),
@@ -176,8 +180,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
 
     def test_ready_before_publish_begin_is_not_callback_delay(self):
         items = baseline_events(BASE_NS + 1_010_000_000) + [
-            event(EventKind.RECEIVE_OR_READY, 4, BASE_NS + 900_000_000,
-                  metadata_supported=True),
+            ready_event(4, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 1_020_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 1_021_000_000),
             event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_030_000_000),
@@ -192,8 +195,8 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         items = baseline_events() + [
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000,
                   uncertainty=5_000_000),
-            event(EventKind.RECEIVE_OR_READY, 4, BASE_NS + 803_000_000,
-                  uncertainty=5_000_000, metadata_supported=True),
+            ready_event(4, BASE_NS + 803_000_000,
+                        uncertainty=5_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 810_000_000),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
         ]
@@ -210,8 +213,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 810_000_000),
             event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 910_000_000),
-            event(EventKind.RECEIVE_OR_READY, 5, BASE_NS + 950_000_000,
-                  metadata_supported=True),
+            ready_event(5, BASE_NS + 950_000_000),
             event(EventKind.CALLBACK_ENTRY, 5, BASE_NS + 1_020_000_000),
         ]
         validation = validation_event(5, BASE_NS + 1_030_000_000, True)
@@ -221,6 +223,93 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
         self.assertIn('seq=4', diagnosis.reason)
 
+    def test_rejection_after_check_cannot_resolve_prior_ready_sample(self):
+        check_ns = BASE_NS + 1_010_000_000
+        items = baseline_events(check_ns) + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 810_000_000),
+            ready_event(4, BASE_NS + 900_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 1_020_000_000),
+            event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 850_000_000),
+            event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 860_000_000),
+            ready_event(5, BASE_NS + 950_000_000),
+            event(EventKind.CALLBACK_ENTRY, 5, BASE_NS + 1_030_000_000),
+        ]
+        items.extend((
+            validation_event(4, BASE_NS + 1_021_000_000, False),
+            validation_event(5, BASE_NS + 1_031_000_000, True),
+        ))
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('seq=4', diagnosis.reason)
+
+    def test_rejection_overlapping_callback_uncertainty_does_not_resolve_sample(self):
+        check_ns = BASE_NS + 1_010_000_000
+        items = baseline_events(check_ns) + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 710_000_000),
+            ready_event(4, BASE_NS + 800_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 800_000_000,
+                  uncertainty=100_000_000),
+            event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 850_000_000),
+            event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 860_000_000),
+            ready_event(5, BASE_NS + 950_000_000),
+            event(EventKind.CALLBACK_ENTRY, 5, BASE_NS + 1_030_000_000),
+        ]
+        items.extend((
+            validation_event(4, BASE_NS + 850_000_000, False),
+            validation_event(5, BASE_NS + 1_031_000_000, True),
+        ))
+        diagnosis = analyze(
+            buffer_with(*(item for item in items if item is not None)),
+            expected=EXPECTED,
+        )
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+        self.assertIn('seq=4', diagnosis.reason)
+
+    def test_receive_timestamp_without_verified_ready_is_not_callback_delay(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 710_000_000),
+            received_event(4, BASE_NS + 900_000_000),
+            event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
+        ]
+        validation = validation_event(4, CHECK_NS + 200, True)
+        if validation is not None:
+            items.append(validation)
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_ambiguous_legacy_receive_or_ready_is_not_treated_as_ready(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 710_000_000),
+            event(EventKind.RECEIVE_OR_READY, 4, BASE_NS + 900_000_000,
+                  metadata_supported=True),
+            event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
+        ]
+        validation = validation_event(4, CHECK_NS + 200, True)
+        if validation is not None:
+            items.append(validation)
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
+    def test_ready_timestamp_does_not_prove_receive_path_delay(self):
+        items = baseline_events() + [
+            event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000),
+            event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 810_000_000),
+            ready_event(4, CHECK_NS + 100),
+            event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 110),
+        ]
+        validation = validation_event(4, CHECK_NS + 120, True)
+        if validation is not None:
+            items.append(validation)
+        diagnosis = analyze(buffer_with(*items), expected=EXPECTED)
+        self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
+
     def test_explicitly_rejected_earlier_sample_allows_supported_later_sample(self):
         items = baseline_events() + [
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 850_000_000),
@@ -228,10 +317,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.CALLBACK_ENTRY, 4, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_BEGIN, 5, BASE_NS + 800_000_000),
             event(EventKind.PUBLISH_RETURN, 5, BASE_NS + 810_000_000),
-            event(
-                EventKind.RECEIVE_OR_READY, 5, CHECK_NS + 100,
-                metadata_supported=True,
-            ),
+            received_event(5, CHECK_NS + 100),
             event(EventKind.CALLBACK_ENTRY, 5, CHECK_NS + 110),
         ]
         items.extend((
@@ -303,10 +389,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         items = baseline_events() + [
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 800_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 810_000_000),
-            event(
-                EventKind.RECEIVE_OR_READY, 4, late_ns,
-                metadata_supported=True,
-            ),
+            received_event(4, late_ns),
             event(EventKind.CALLBACK_ENTRY, 4, late_ns + 10),
             event(EventKind.STATUS_VALIDATION, 4, late_ns + 20,
                   status_accepted=True),
@@ -319,7 +402,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
                 EventKind.CALLBACK_ENTRY,
                 EventKind.PUBLISH_BEGIN,
                 EventKind.PUBLISH_RETURN,
-                EventKind.RECEIVE_OR_READY,
+                EventKind.STATUS_RECEIVED,
                 EventKind.CALLBACK_ENTRY,
                 EventKind.STATUS_VALIDATION,
                 EventKind.HEARTBEAT_CHECK,
@@ -330,10 +413,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         items = baseline_events() + [
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 710_000_000),
-            event(
-                EventKind.RECEIVE_OR_READY, 4, BASE_NS + 900_000_000,
-                metadata_supported=True,
-            ),
+            ready_event(4, BASE_NS + 900_000_000),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
             event(EventKind.STATUS_VALIDATION, 4, CHECK_NS + 200,
                   status_accepted=True),
@@ -345,8 +425,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
     def test_publish_return_may_follow_ready_without_invalidating_callback_delay(self):
         items = baseline_events() + [
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
-            event(EventKind.RECEIVE_OR_READY, 4, BASE_NS + 900_000_000,
-                  metadata_supported=True),
+            ready_event(4, BASE_NS + 900_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 950_000_000),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 100),
         ]
@@ -377,7 +456,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
             event(EventKind.PUBLISH_BEGIN, 4, BASE_NS + 700_000_000),
             event(EventKind.PUBLISH_RETURN, 4, BASE_NS + 710_000_000),
             event(
-                EventKind.RECEIVE_OR_READY, 4, CHECK_NS + 100,
+                EventKind.STATUS_RECEIVED, 4, CHECK_NS + 100,
                 domain='unix-epoch', metadata_supported=True,
             ),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 200),
@@ -405,9 +484,9 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
                 )
 
         duplicate = baseline_events() + [
-            event(EventKind.RECEIVE_OR_READY, 4, CHECK_NS + 1,
+            event(EventKind.STATUS_RECEIVED, 4, CHECK_NS + 1,
                   metadata_supported=True),
-            event(EventKind.RECEIVE_OR_READY, 4, CHECK_NS + 2,
+            event(EventKind.STATUS_RECEIVED, 4, CHECK_NS + 2,
                   metadata_supported=True),
         ]
         self.assertEqual(
@@ -416,7 +495,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         )
 
         unsupported = baseline_events() + [
-            event(EventKind.RECEIVE_OR_READY, 4, CHECK_NS + 10,
+            event(EventKind.STATUS_READY, 4, CHECK_NS + 10,
                   metadata_supported=False),
             event(EventKind.CALLBACK_ENTRY, 4, CHECK_NS + 20),
             event(EventKind.STATUS_VALIDATION, 4, CHECK_NS + 30,
@@ -424,7 +503,7 @@ class HeartbeatDiagnosisTests(unittest.TestCase):
         ]
         diagnosis = analyze(buffer_with(*unsupported), expected=EXPECTED)
         self.assertEqual(diagnosis.cause, Cause.UNKNOWN)
-        self.assertIn('not verified as supported', diagnosis.reason)
+        self.assertIn('metadata is not verified', diagnosis.reason)
 
     def test_uncertainty_straddling_deadline_is_unknown(self):
         items = [

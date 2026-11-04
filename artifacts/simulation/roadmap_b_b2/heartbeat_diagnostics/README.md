@@ -54,10 +54,14 @@ events.append(DiagnosticEvent(
 result = analyze(events, expected=binding)
 ```
 
-Các loại event được hỗ trợ: `publish_begin`, `publish_return`,
-`receive_or_ready`, `take`, `callback_entry`, `status_validation` và
-`heartbeat_check`. `status_validation` ghi rõ mẫu callback đã được chấp nhận
-hay bị từ chối; callback entry tự nó không chứng minh heartbeat được cập nhật.
+Các loại event được hỗ trợ gồm `publish_begin`, `publish_return`,
+`status_received`, `status_ready`, `take`, `callback_entry`,
+`status_validation` và `heartbeat_check`. `status_received` là mốc nhận middleware
+có provenance rõ; `status_ready` là mốc mẫu sẵn sàng được callback xử lý.
+Event cũ `receive_or_ready` vẫn được nhận diện để tương thích dữ liệu nhưng có
+nghĩa mơ hồ nên không được dùng để phân loại.
+`status_validation` ghi rõ mẫu callback đã được chấp nhận hay bị từ chối;
+callback entry tự nó không chứng minh heartbeat được cập nhật.
 Kết quả có thể phân loại `no_publish_attempt_observed`,
 `receive_path_delayed` hoặc `callback_service_delayed` chỉ khi đủ bằng chứng,
 mốc cùng miền đồng hồ và identity không mơ hồ. Thiếu event, metadata không
@@ -81,18 +85,23 @@ nguyên nhân là `UNKNOWN`, dù riêng phép so sánh heartbeat tại thời đ
 đã xác định gap vượt một giây.
 
 Các callback sau baseline được xét theo `status_sequence`, nhưng không được bỏ
-qua callback đã chạy trước lần kiểm lỗi nếu chưa có kết quả validation duy nhất
-và đã hoàn tất trước lần kiểm đó. Một mẫu được chấp nhận trước lần kiểm sẽ mâu
-thuẫn với giả định baseline cũ; thiếu hoặc sai thứ tự validation trả `UNKNOWN`.
-Mẫu phát sau lần kiểm không giải thích ngược lần kiểm trước.
+qua mẫu có thể ảnh hưởng lần kiểm lỗi cho đến khi kết quả validation và thứ tự
+callback → validation → check đã rõ. Validation bị từ chối sau check hoặc có
+khoảng sai số chồng lấn callback không giải quyết được mẫu tại thời điểm check;
+kết quả là `UNKNOWN` và nêu sequence. Một mẫu được chấp nhận trước check mâu
+thuẫn với giả định baseline cũ. Mẫu phát sau lần kiểm không giải thích ngược
+lần kiểm trước.
 
 Trước khi phân loại, công cụ cũng kiểm thứ tự nhân quả trên từng mẫu bằng các
 khoảng sai số: nếu có `publish_begin`, nó phải được chứng minh xảy ra trước
-`receive_or_ready`; ready phải đi trước callback; callback phải đi trước
-validation. `publish_return` không bắt buộc phải đi trước ready vì lời gọi
-publish có thể chưa trả về khi subscriber đã sẵn sàng nhận. `take` không thay
-thế mốc receive. Nếu thứ tự cần thiết chồng lấn sai số hoặc mâu thuẫn với các
-mốc danh nghĩa, nguyên nhân là `UNKNOWN`.
+`status_received` hoặc `status_ready`; ready phải đi trước callback; callback
+phải đi trước validation. `publish_return` không bắt buộc phải đi trước ready
+vì lời gọi publish có thể chưa trả về khi subscriber đã sẵn sàng nhận. `take`
+không thay thế mốc nhận. Chỉ `status_received` có nghĩa xác định mới được dùng
+để kết luận đường nhận bị trễ; chỉ `status_ready` có thể hỗ trợ phân loại
+callback bị phục vụ muộn. Ready hoặc `take` không chứng minh gói đến muộn.
+Nếu thứ tự cần thiết chồng lấn sai số hoặc mâu thuẫn với các mốc danh nghĩa,
+nguyên nhân là `UNKNOWN`.
 
 Publish event của sequence trước lần kiểm mà chưa có receive, callback hoặc
 validation là mẫu chưa được giải thích, không phải bằng chứng mẫu đã bị loại.

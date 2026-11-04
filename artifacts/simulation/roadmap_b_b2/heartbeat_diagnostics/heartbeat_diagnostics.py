@@ -20,7 +20,10 @@ T = TypeVar('T')
 class EventKind(str, Enum):
     PUBLISH_BEGIN = 'publish_begin'
     PUBLISH_RETURN = 'publish_return'
+    # Deprecated ambiguous event kind: never use it as receive or ready.
     RECEIVE_OR_READY = 'receive_or_ready'
+    STATUS_RECEIVED = 'status_received'
+    STATUS_READY = 'status_ready'
     TAKE = 'take'
     CALLBACK_ENTRY = 'callback_entry'
     STATUS_VALIDATION = 'status_validation'
@@ -338,39 +341,81 @@ def analyze(
     if any(len(items) > 1 for items in indexed.values()):
         return _unknown('duplicate event identity makes sample correlation ambiguous', True)
 
-    # A callback already serviced by the time of this check cannot be skipped
-    # in favor of a later sequence unless its validation outcome is known.
+    resolved_rejections: set[int] = set()
+    # Resolve every sample that could affect the check before considering a
+    # later sequence. A rejection is usable only if callback -> validation and
+    # validation -> check are established by non-overlapping time intervals.
     for sequence in sequences:
         callbacks = indexed.get((EventKind.CALLBACK_ENTRY, sequence), [])
         validations = indexed.get((EventKind.STATUS_VALIDATION, sequence), [])
+        receives = indexed.get((EventKind.STATUS_RECEIVED, sequence), [])
+        readies = indexed.get((EventKind.STATUS_READY, sequence), [])
+        takes = indexed.get((EventKind.TAKE, sequence), [])
+        ambiguous_times = indexed.get((EventKind.RECEIVE_OR_READY, sequence), [])
         publish_events = [
             event for kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
             for event in indexed.get((kind, sequence), [])
         ]
+        if ambiguous_times:
+            return _unknown(
+                f'seq={sequence} uses ambiguous receive_or_ready timestamp semantics',
+                True,
+            )
         if validations and not callbacks:
-            return _unknown('status validation has no matching callback', True)
+            return _unknown(f'seq={sequence} validation has no matching callback', True)
         for callback_event in callbacks:
             if callback_event.clock_domain != domain or not callback_event.source_verified:
                 return _unknown('callback clock/provenance is unverified', True)
             callback_earliest = callback_event.timestamp_ns - callback_event.uncertainty_ns
             callback_latest = callback_event.timestamp_ns + callback_event.uncertainty_ns
-            if callback_earliest > check_latest:
-                continue
-            if callback_latest > check_earliest:
-                return _unknown('callback/check order overlaps timestamp uncertainty', True)
-            if len(validations) != 1:
-                return _unknown('pre-check callback has no unique validation outcome', True)
-            validation = validations[0]
-            if (
-                validation.clock_domain != domain
-                or not validation.source_verified
-                or validation.timestamp_ns + validation.uncertainty_ns > check_earliest
-            ):
-                return _unknown('pre-check callback validation is not resolved before check', True)
-            if validation.timestamp_ns + validation.uncertainty_ns < callback_earliest:
-                return _unknown('validation timestamp precedes callback sample', True)
-            if validation.status_accepted:
-                return _unknown('check baseline conflicts with an earlier accepted status', True)
+            if callback_earliest <= check_latest:
+                if callback_latest > check_earliest:
+                    return _unknown(
+                        f'seq={sequence} callback/check order overlaps timestamp uncertainty',
+                        True,
+                    )
+                if len(validations) != 1:
+                    return _unknown(
+                        f'seq={sequence} pre-check callback has no unique validation outcome',
+                        True,
+                    )
+                validation = validations[0]
+                if (
+                    validation.clock_domain != domain
+                    or not validation.source_verified
+                    or validation.timestamp_ns + validation.uncertainty_ns > check_earliest
+                ):
+                    return _unknown(
+                        f'seq={sequence} pre-check validation is not resolved before check',
+                        True,
+                    )
+                if not _definitely_precedes(callback_event, validation):
+                    return _unknown(
+                        f'seq={sequence} callback/validation order overlaps uncertainty',
+                        True,
+                    )
+                if validation.status_accepted:
+                    return _unknown(
+                        f'seq={sequence} accepted status conflicts with check baseline',
+                        True,
+                    )
+                resolved_rejections.add(sequence)
+
+        precheck_times = receives + readies + takes
+        has_precheck_time = any(
+            item.timestamp_ns - item.uncertainty_ns <= check_latest
+            for item in precheck_times
+        )
+        if (
+            has_precheck_time
+            and validations
+            and validations[0].status_accepted is False
+            and sequence not in resolved_rejections
+        ):
+            return _unknown(
+                f'seq={sequence} rejection was not established by heartbeat check',
+                True,
+            )
 
         publish_may_precede_check = any(
             event.timestamp_ns - event.uncertainty_ns <= check_latest
@@ -379,7 +424,7 @@ def analyze(
         if (
             publish_may_precede_check
             and not callbacks
-            and not indexed.get((EventKind.RECEIVE_OR_READY, sequence), [])
+            and not precheck_times
             and not validations
         ):
             return _unknown(
@@ -400,55 +445,109 @@ def analyze(
 
         callback_items = sample[EventKind.CALLBACK_ENTRY]
         validation_items = sample[EventKind.STATUS_VALIDATION]
-        receive_items = sample[EventKind.RECEIVE_OR_READY]
+        receive_items = sample[EventKind.STATUS_RECEIVED]
+        ready_items = sample[EventKind.STATUS_READY]
+        take_items = sample[EventKind.TAKE]
+        ambiguous_items = sample[EventKind.RECEIVE_OR_READY]
+        if ambiguous_items:
+            return _unknown(
+                f'seq={sequence} receive_or_ready is not a typed timing source',
+                True,
+            )
         if not callback_items:
-            if receive_items:
-                return _unknown('receive/ready exists without callback entry', True)
+            if receive_items or ready_items or take_items:
+                return _unknown(
+                    f'seq={sequence} sample timing exists without callback entry',
+                    True,
+                )
             continue
         callback_event = callback_items[0]
         callback_earliest = callback_event.timestamp_ns - callback_event.uncertainty_ns
         if callback_earliest <= check_latest:
-            # Already resolved or rejected in the pre-check pass above.
-            if validation_items and validation_items[0].status_accepted is False:
+            if sequence in resolved_rejections:
                 continue
-            return _unknown('callback sequence was not resolved at heartbeat check', True)
+            return _unknown(
+                f'seq={sequence} callback outcome was not resolved at heartbeat check',
+                True,
+            )
         if len(validation_items) != 1:
-            return _unknown('post-check callback has no unique validation outcome', True)
+            if any(
+                item.timestamp_ns - item.uncertainty_ns <= check_latest
+                for item in receive_items + ready_items + take_items
+            ):
+                return _unknown(
+                    f'seq={sequence} pre-check receive/ready lacks validation', True,
+                )
+            return _unknown(
+                f'seq={sequence} post-check callback has no unique validation outcome',
+                True,
+            )
         validation = validation_items[0]
         if validation.status_accepted is False:
+            if sequence in resolved_rejections:
+                continue
+            if any(
+                item.timestamp_ns - item.uncertainty_ns <= check_latest
+                for item in receive_items + ready_items + take_items
+            ):
+                return _unknown(
+                    f'seq={sequence} rejection was not established by heartbeat check',
+                    True,
+                )
             continue
         if not _definitely_precedes(callback_event, validation):
-            return _unknown('callback/validation order is not established', True)
-        if not receive_items:
-            return _unknown('accepted callback has no receive/ready timestamp', True)
-        receive_event = receive_items[0]
-        if receive_event.metadata_supported is not True:
-            return _unknown('receive/ready metadata is not verified as supported', True)
+            return _unknown(
+                f'seq={sequence} callback/validation order is not established', True,
+            )
+        if not receive_items and not ready_items:
+            return _unknown(f'seq={sequence} lacks typed receive/ready timestamp', True)
+        timing_events = receive_items + ready_items
+        if any(item.metadata_supported is not True for item in timing_events):
+            return _unknown(
+                f'seq={sequence} typed receive/ready metadata is not verified', True,
+            )
         begin_items = sample[EventKind.PUBLISH_BEGIN]
         return_items = sample[EventKind.PUBLISH_RETURN]
-        if begin_items and not _definitely_precedes(begin_items[0], receive_event):
-            return _unknown('publish begin does not definitely precede ready/receive', True)
+        for timing_event in timing_events:
+            if begin_items and not _definitely_precedes(begin_items[0], timing_event):
+                return _unknown(
+                    f'seq={sequence} publish begin does not precede typed timing event',
+                    True,
+                )
         if begin_items and return_items and not _definitely_precedes(
             begin_items[0], return_items[0],
         ):
-            return _unknown('publish begin/return order is not established', True)
-        if not _definitely_precedes(receive_event, callback_event):
-            return _unknown('ready/receive does not definitely precede callback', True)
+            return _unknown(
+                f'seq={sequence} publish begin/return order is not established', True,
+            )
+        if receive_items and ready_items and not _definitely_precedes(
+            receive_items[0], ready_items[0],
+        ):
+            return _unknown(
+                f'seq={sequence} middleware receive/ready order is not established',
+                True,
+            )
+        if ready_items and not _definitely_precedes(ready_items[0], callback_event):
+            return _unknown(
+                f'seq={sequence} ready does not definitely precede callback', True,
+            )
+        if receive_items and not _definitely_precedes(receive_items[0], callback_event):
+            return _unknown(
+                f'seq={sequence} receive does not definitely precede callback', True,
+            )
 
-        receive_on_time = _definitely_before_or_at(
-            receive_event, earliest_deadline_ns,
+        ready_on_time = bool(ready_items) and _definitely_before_or_at(
+            ready_items[0], earliest_deadline_ns,
         )
-        receive_late = _definitely_after(receive_event, latest_deadline_ns)
+        receive_late = bool(receive_items) and _definitely_after(
+            receive_items[0], latest_deadline_ns,
+        )
         callback_late = _definitely_after(callback_event, latest_deadline_ns)
-        if receive_on_time and callback_late:
-            if callback_event.timestamp_ns + callback_event.uncertainty_ns < (
-                receive_event.timestamp_ns - receive_event.uncertainty_ns
-            ):
-                return _unknown('callback timestamp precedes receive/ready timestamp', True)
+        if ready_on_time and callback_late:
             return Diagnosis(
                 Cause.CALLBACK_SERVICE_DELAYED, True,
                 'verified ready is before the earliest deadline; callback starts after the latest deadline',
-                True, (last, receive_event, callback_event, validation, check),
+                True, (last, ready_items[0], callback_event, validation, check),
             )
         if receive_late and callback_late:
             begin = sample[EventKind.PUBLISH_BEGIN]
@@ -473,15 +572,11 @@ def analyze(
                 > returned[0].timestamp_ns - returned[0].uncertainty_ns
             ):
                 return _unknown('publish begin/return order is not verified', True)
-            if callback_event.timestamp_ns + callback_event.uncertainty_ns < (
-                receive_event.timestamp_ns - receive_event.uncertainty_ns
-            ):
-                return _unknown('callback timestamp precedes receive/ready timestamp', True)
             return Diagnosis(
                 Cause.RECEIVE_PATH_DELAYED, True,
                 'verified publish call completed before earliest deadline; receive/ready follows latest deadline',
                 True, (
-                    last, begin[0], returned[0], receive_event,
+                    last, begin[0], returned[0], receive_items[0],
                     callback_event, validation, check,
                 ),
             )
