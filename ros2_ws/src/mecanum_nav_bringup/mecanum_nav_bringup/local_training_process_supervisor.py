@@ -1260,6 +1260,10 @@ class LocalTrainingProcessSupervisor:
     def __init__(
         self, *, plan: LaunchPlan, launcher: ProcessLauncher,
         readiness: Readiness, evidence_sink: EvidenceSink,
+        heartbeat_diagnostics_enabled: bool = False,
+        heartbeat_trace_directory: Path | None = None,
+        heartbeat_observer_factory=None,
+        heartbeat_library_path: Path | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -1270,6 +1274,18 @@ class LocalTrainingProcessSupervisor:
         self.evidence_sink = evidence_sink
         self.monotonic = monotonic
         self.sleep = sleep
+        self.heartbeat_diagnostics_enabled = (
+            heartbeat_diagnostics_enabled is True
+        )
+        self.heartbeat_trace_directory = heartbeat_trace_directory
+        self.heartbeat_observer_factory = heartbeat_observer_factory
+        self.heartbeat_library_path = heartbeat_library_path
+        self._heartbeat_observer = None
+        self._heartbeat_files = ()
+        self._heartbeat_clock = None
+        self._heartbeat_trace_environment = {}
+        self._heartbeat_trace_error = None
+        self._heartbeat_trace_reported = False
         self.owned: list[ProcessRecord] = []
         self._observer_tasks: set[asyncio.Task] = set()
         self._cleanup_lock = asyncio.Lock()
@@ -1281,6 +1297,7 @@ class LocalTrainingProcessSupervisor:
     async def start(self) -> None:
         """Start the server and requested GUI, failing closed on readiness."""
         try:
+            await self._prepare_heartbeat_diagnostics()
             bind_environment = getattr(
                 self.readiness, 'bind_environment', None,
             )
@@ -1300,8 +1317,10 @@ class LocalTrainingProcessSupervisor:
                     'parameter_bridge_requested', self._facts(bridge_record),
                 )
             server_command = self.plan.commands[0]
+            server_environment = dict(self.plan.environment)
+            server_environment.update(self._heartbeat_trace_environment)
             server = await self.launcher.start(
-                server_command, self.plan.environment,
+                server_command, server_environment,
             )
             server_record = ProcessRecord(
                 'server', server_command, server.pid, server,
@@ -1361,6 +1380,76 @@ class LocalTrainingProcessSupervisor:
         except BaseException:
             await self.cleanup()
             raise
+
+    async def _prepare_heartbeat_diagnostics(self) -> None:
+        """Create optional trace resources only after an explicit opt-in."""
+        if not self.heartbeat_diagnostics_enabled:
+            return
+        try:
+            from importlib import import_module
+
+            trace_observer = import_module(
+                'mecanum_nav_bringup.local_training_heartbeat_trace_observer'
+            )
+
+            directory = self.heartbeat_trace_directory
+            if directory is None:
+                raise ValueError(
+                    'heartbeat trace directory was not configured'
+                )
+            self._heartbeat_clock = trace_observer.clock_context()
+            self._heartbeat_files = trace_observer.prepare_trace_pair(
+                directory, collection_id=self.plan.session_id,
+            )
+            backend_file = next(
+                entry for entry in self._heartbeat_files
+                if entry['role'] == 'backend'
+            )
+            observer_file = next(
+                entry for entry in self._heartbeat_files
+                if entry['role'] == 'observer'
+            )
+            library = self.heartbeat_library_path
+            if library is None:
+                prefix = Path(
+                    get_package_prefix('mecanum_sim_backend')
+                ).resolve(strict=True)
+                library = prefix / 'lib/libmecanum_heartbeat_trace_writer.so'
+            library = Path(library).resolve(strict=True)
+            observer_factory = self.heartbeat_observer_factory
+            if observer_factory is None:
+                observer_factory = (
+                    trace_observer.LocalTrainingHeartbeatTraceObserver
+                )
+            self._heartbeat_observer = observer_factory(
+                plan=self.plan, trace_file=observer_file,
+                collection_id=self.plan.session_id,
+                clock_provenance=self._heartbeat_clock['provenance'],
+                library_path=library,
+            )
+            self._heartbeat_observer.start()
+            self._heartbeat_trace_environment = {
+                'MECANUM_B2_HEARTBEAT_DIAGNOSTICS': '1',
+                'MECANUM_B2_HEARTBEAT_BACKEND_FILE': backend_file['path'],
+                'MECANUM_B2_HEARTBEAT_BACKEND_DEVICE': str(
+                    backend_file['device']
+                ),
+                'MECANUM_B2_HEARTBEAT_BACKEND_INODE': str(
+                    backend_file['inode']
+                ),
+                'MECANUM_B2_HEARTBEAT_COLLECTION_ID': self.plan.session_id,
+                'MECANUM_B2_HEARTBEAT_SESSION_ID': self.plan.session_id,
+                'MECANUM_B2_HEARTBEAT_CONFIG_HASH': self.plan.config_hash,
+                'MECANUM_B2_HEARTBEAT_WORLD': 'b2_training_arena',
+                'MECANUM_B2_HEARTBEAT_CLOCK': self._heartbeat_clock['clock'],
+                'MECANUM_B2_HEARTBEAT_CLOCK_PROVENANCE': (
+                    self._heartbeat_clock['provenance']
+                ),
+            }
+        except BaseException as error:
+            self._heartbeat_trace_error = (
+                f'{type(error).__name__}:{str(error)[:160]}'
+            )
 
     def _capture_output(self, record: ProcessRecord) -> None:
         """Drain child output into the injected evidence sink."""
@@ -1487,7 +1576,10 @@ class LocalTrainingProcessSupervisor:
     async def cleanup(self) -> None:
         """Stop all owned groups, including children whose leader exited."""
         async with self._cleanup_lock:
-            await self._cleanup_owned()
+            try:
+                await self._cleanup_owned()
+            finally:
+                await self._stop_heartbeat_diagnostics()
 
     async def _cleanup_owned(self) -> None:
         current = asyncio.current_task()
@@ -1541,6 +1633,55 @@ class LocalTrainingProcessSupervisor:
                         'owned_process_output_drain_timeout',
                         self._facts(record),
                     )
+
+    async def _stop_heartbeat_diagnostics(self) -> None:
+        if (not self.heartbeat_diagnostics_enabled
+                or self._heartbeat_trace_reported):
+            return
+        observer_state = None
+        if self._heartbeat_observer is not None:
+            try:
+                stop_async = getattr(
+                    self._heartbeat_observer, 'stop_async', None,
+                )
+                stopped = (
+                    await stop_async(2.0) if stop_async is not None
+                    else self._heartbeat_observer.stop(2.0)
+                )
+                observer_state = self._heartbeat_observer.snapshot()
+                if not stopped:
+                    self._heartbeat_trace_error = (
+                        self._heartbeat_trace_error
+                        or 'observer_join_residue_unknown'
+                    )
+            except BaseException as error:
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error or
+                    f'observer_cleanup:{type(error).__name__}'
+                )
+        facts = {
+            'session_id': self.plan.session_id,
+            'config_hash': self.plan.config_hash,
+            'world': 'b2_training_arena',
+            'clock_context': self._heartbeat_clock,
+            'files': list(self._heartbeat_files),
+            'observer': observer_state,
+            'trace_error': self._heartbeat_trace_error,
+            'coverage_note': (
+                'diagnostic records only; read after process/thread join'
+            ),
+            'sink_record_measurement': (
+                'NOT_INSTRUMENTED_NO_EXISTING_CALLBACK_CALL'
+            ),
+        }
+        self._heartbeat_trace_reported = True
+        try:
+            self.evidence_sink.record('heartbeat_trace_collection', facts)
+        except BaseException as error:
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error or
+                f'trace_summary_sink_failed:{type(error).__name__}'
+            )
 
 
 def _load_sink(specification: str) -> EvidenceSink:
@@ -1630,6 +1771,13 @@ async def _run_from_cli(args: argparse.Namespace) -> int:
         supervisor = LocalTrainingProcessSupervisor(
             plan=plan, launcher=SubprocessProcessLauncher(),
             readiness=RclpyReadiness(), evidence_sink=sink,
+            heartbeat_diagnostics_enabled=(
+                os.environ.get('MECANUM_B2_HEARTBEAT_DIAGNOSTICS') == '1'
+            ),
+            heartbeat_trace_directory=(
+                Path(os.environ['MECANUM_B2_HEARTBEAT_TRACE_DIR'])
+                if os.environ.get('MECANUM_B2_HEARTBEAT_TRACE_DIR') else None
+            ),
         )
         await supervisor.start()
         return await supervisor.monitor()

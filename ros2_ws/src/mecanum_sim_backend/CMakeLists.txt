@@ -27,6 +27,12 @@ target_include_directories(mecanum_sim_backend_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_compile_options(mecanum_sim_backend_core PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(mecanum_heartbeat_trace_writer SHARED src/heartbeat_trace_writer_c.cpp)
+target_include_directories(mecanum_heartbeat_trace_writer PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_options(mecanum_heartbeat_trace_writer PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(mecanum_sim_backend_system SHARED src/backend_system.cpp)
 target_include_directories(mecanum_sim_backend_system PRIVATE include)
 ament_target_dependencies(mecanum_sim_backend_system
@@ -34,10 +40,10 @@ ament_target_dependencies(mecanum_sim_backend_system
   mecanum_nav_rl_interfaces)
 target_link_libraries(mecanum_sim_backend_system
   mecanum_sim_backend_core gz-sim8::gz-sim8 gz-msgs10::gz-msgs10
-  gz-transport13::gz-transport13 OpenSSL::Crypto)
+  gz-transport13::gz-transport13 OpenSSL::Crypto mecanum_heartbeat_trace_writer)
 target_compile_options(mecanum_sim_backend_system PRIVATE -Wall -Wextra -Wpedantic)
 
-install(TARGETS mecanum_sim_backend_core mecanum_sim_backend_system
+install(TARGETS mecanum_sim_backend_core mecanum_sim_backend_system mecanum_heartbeat_trace_writer
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include)
 ament_environment_hooks(env-hooks/mecanum_sim_backend.dsv.in)
@@ -54,7 +60,11 @@ if(BUILD_TESTING)
     mecanum_nav_rl_interfaces)
   target_link_libraries(test_backend_invariants
     mecanum_sim_backend_core gz-sim8::gz-sim8 gz-msgs10::gz-msgs10
-    gz-transport13::gz-transport13 OpenSSL::Crypto)
+    gz-transport13::gz-transport13 OpenSSL::Crypto
+    mecanum_heartbeat_trace_writer)
+  ament_add_gtest(test_heartbeat_trace test/test_heartbeat_trace.cpp)
+  target_include_directories(test_heartbeat_trace PRIVATE include)
+  target_link_libraries(test_heartbeat_trace mecanum_heartbeat_trace_writer)
 endif()
 
 ament_export_include_directories(include)

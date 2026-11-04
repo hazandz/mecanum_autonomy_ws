@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
 #include <deque>
 #include <cmath>
 #include <cstdint>
@@ -59,9 +61,11 @@
 #include <ros_gz_interfaces/srv/delete_entity.hpp>
 #include <ros_gz_interfaces/srv/set_entity_pose.hpp>
 #include <ros_gz_interfaces/srv/spawn_entity.hpp>
+#include <sys/stat.h>
 
 #include "mecanum_sim_backend/backend_system.hpp"
 #include "mecanum_sim_backend/contact_coverage.hpp"
+#include "mecanum_sim_backend/heartbeat_trace_writer_c.h"
 #include "mecanum_sim_backend/receipt_gate.hpp"
 
 namespace mecanum_sim_backend
@@ -189,6 +193,43 @@ std::int64_t NowSteadyNs()
 {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
       SteadyClock::now().time_since_epoch()).count();
+}
+std::string TraceClockFingerprint()
+{
+  std::ifstream boot_file("/proc/sys/kernel/random/boot_id");
+  std::ifstream offsets_file("/proc/self/timens_offsets");
+  std::string boot_id;
+  if (!std::getline(boot_file, boot_id)) return {};
+  std::ostringstream offset_stream;
+  offset_stream << offsets_file.rdbuf();
+  const auto offsets = offset_stream.str();
+  if (offsets.empty()) return {};
+  struct stat ns_info {};
+  if (stat("/proc/self/ns/time", &ns_info) != 0) return {};
+  std::ostringstream material;
+  material << boot_id << '|' << static_cast<std::uint64_t>(ns_info.st_dev)
+           << '|' << static_cast<std::uint64_t>(ns_info.st_ino) << '|'
+           << offsets;
+  const auto input = material.str();
+  unsigned char digest[SHA256_DIGEST_LENGTH]{};
+  if (!SHA256(reinterpret_cast<const unsigned char *>(input.data()),
+              input.size(), digest)) return {};
+  std::ostringstream result;
+  result << std::hex << std::setfill('0');
+  for (const auto byte : digest)
+    result << std::setw(2) << static_cast<unsigned>(byte);
+  return result.str();
+}
+bool TraceEnvU64(const char *key, std::uint64_t &value)
+{
+  const char *raw = std::getenv(key);
+  if (!raw || !*raw) return false;
+  errno = 0;
+  char *end = nullptr;
+  const auto parsed = std::strtoull(raw, &end, 10);
+  if (errno || !end || *end != '\0' || parsed == 0) return false;
+  value = static_cast<std::uint64_t>(parsed);
+  return true;
 }
 std::int64_t TimeNs(const gz::sim::UpdateInfo &info)
 {
@@ -619,6 +660,7 @@ private:
     }
     CapturePhysicsEngineFingerprint(ecm);
     backend_instance_id_ = BootNonce();
+    InitializeHeartbeatTrace();
     if (tracked_count == 0 || tracked_count > 64 || asset_manifest_hash_.size() != 64)
       SetFault(BackendState::FAULT_CONTACT_COVERAGE, "invalid_asset_contact_manifest");
 
@@ -922,6 +964,13 @@ private:
   {
     bool expected = false;
     if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+    if (heartbeat_trace_writer_)
+    {
+      hbtrace_append(heartbeat_trace_writer_, 3,
+                    hbtrace_clock_monotonic_ns(), 0, nullptr, 0);
+      hbtrace_close(heartbeat_trace_writer_);
+      heartbeat_trace_writer_ = nullptr;
+    }
     if (initialization_state_ == InitializationState::PENDING)
     {
       initialization_state_ = InitializationState::CANCELLED;
@@ -964,6 +1013,54 @@ private:
     runtime_resource_releases_.clear();
     gate_.reset();
     contact_coverage_.reset();
+  }
+
+  void InitializeHeartbeatTrace()
+  {
+    const char *enabled = std::getenv("MECANUM_B2_HEARTBEAT_DIAGNOSTICS");
+    if (!enabled || std::string(enabled) != "1") return;
+    const char *path = std::getenv("MECANUM_B2_HEARTBEAT_BACKEND_FILE");
+    const char *collection = std::getenv("MECANUM_B2_HEARTBEAT_COLLECTION_ID");
+    const char *session = std::getenv("MECANUM_B2_HEARTBEAT_SESSION_ID");
+    const char *config = std::getenv("MECANUM_B2_HEARTBEAT_CONFIG_HASH");
+    const char *world = std::getenv("MECANUM_B2_HEARTBEAT_WORLD");
+    const char *clock = std::getenv("MECANUM_B2_HEARTBEAT_CLOCK");
+    const char *provenance = std::getenv("MECANUM_B2_HEARTBEAT_CLOCK_PROVENANCE");
+    std::uint64_t device = 0, inode = 0;
+    if (!path || !collection || !session || !config || !world || !clock ||
+        !provenance || session_id_ != session || config_hash_ != config ||
+        world_name_ != world || std::string(clock) != "CLOCK_MONOTONIC" ||
+        TraceClockFingerprint() != provenance ||
+        !TraceEnvU64("MECANUM_B2_HEARTBEAT_BACKEND_DEVICE", device) ||
+        !TraceEnvU64("MECANUM_B2_HEARTBEAT_BACKEND_INODE", inode))
+    {
+      heartbeat_trace_error_ = "backend_trace_binding_or_clock_mismatch";
+      return;
+    }
+    heartbeat_trace_writer_ = hbtrace_open_path(
+        path, device, inode, 4096, collection, session, backend_instance_id_,
+        config, world, clock, "backend", provenance);
+    if (!heartbeat_trace_writer_)
+    {
+      heartbeat_trace_error_ = "backend_trace_open_failed";
+      return;
+    }
+    if (hbtrace_append(heartbeat_trace_writer_, 1,
+                       hbtrace_clock_monotonic_ns(), 0, nullptr, 0) != 1)
+    {
+      heartbeat_trace_error_ = "backend_trace_begin_failed";
+      hbtrace_close(heartbeat_trace_writer_);
+      heartbeat_trace_writer_ = nullptr;
+    }
+  }
+
+  void RecordHeartbeatTrace(std::uint8_t event, std::uint64_t sequence)
+  {
+    if (!heartbeat_trace_writer_) return;
+    const unsigned char payload[1]{event};
+    if (hbtrace_append(heartbeat_trace_writer_, 2,
+                       hbtrace_clock_monotonic_ns(), sequence, payload, 1) != 1)
+      heartbeat_trace_error_ = "backend_trace_append_failed_or_overflow";
   }
 
   struct PendingControl
@@ -2651,9 +2748,26 @@ private:
       msg.applied_physics_iteration = 0; msg.applied_sim_stamp.sec = 0; msg.applied_sim_stamp.nanosec = 0;
     }
     if (backend_state_sink_)
+    {
       backend_state_sink_(msg);
+    }
     else
-      state_pub_->publish(msg);
+    {
+      if (heartbeat_trace_writer_)
+        RecordHeartbeatTrace(1, msg.status_sequence);
+      try
+      {
+        state_pub_->publish(msg);
+      }
+      catch (...)
+      {
+        if (heartbeat_trace_writer_)
+          RecordHeartbeatTrace(3, msg.status_sequence);
+        throw;
+      }
+      if (heartbeat_trace_writer_)
+        RecordHeartbeatTrace(2, msg.status_sequence);
+    }
     if (pending_applied_receipt_)
       last_accepted_key_ = pending_applied_receipt_->key;
     pending_applied_receipt_.reset();
@@ -2726,6 +2840,8 @@ private:
   ProbeServiceTransport probe_transport_;
   std::unique_ptr<gz::transport::Node> gt_pub_;
   std::unique_ptr<gz::transport::Node::Publisher> gt_publisher_;
+  hbtrace_writer *heartbeat_trace_writer_{};
+  std::string heartbeat_trace_error_;
   std::mutex callback_mutex_;
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
   std::deque<PendingControl> control_queue_;

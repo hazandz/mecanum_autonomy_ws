@@ -142,6 +142,130 @@ def test_server_only_starts_one_process_and_needs_no_gui_ack():
     asyncio.run(run())
 
 
+def test_heartbeat_diagnostics_default_off_creates_no_trace_resources():
+    """Keep trace imports, files and observer creation disabled by default."""
+    async def run():
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        calls = []
+
+        def observer_factory(**_kwargs):
+            calls.append('factory')
+            raise AssertionError('diagnostic observer must remain lazy')
+
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher, readiness=FakeReadiness(),
+            evidence_sink=sink, heartbeat_observer_factory=observer_factory,
+            heartbeat_library_path='/path/that/must/not/load.so',
+        )
+        await supervisor.start()
+        assert calls == []
+        assert all('MECANUM_B2_HEARTBEAT_DIAGNOSTICS' not in env
+                   for _, env, _ in launcher.started)
+        assert not any(event == 'heartbeat_trace_collection'
+                       for event, _ in sink.events)
+        assert supervisor._heartbeat_files == ()
+    asyncio.run(run())
+
+
+def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
+    """Let the supervisor own and join opt-in diagnostic resources."""
+    import os
+
+    class FakeObserver:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.stopped = False
+
+        def start(self):
+            return True
+
+        def stop(self, _timeout):
+            self.stopped = True
+            return True
+
+        def snapshot(self):
+            return {'joined': self.stopped, 'errors': ()}
+
+    async def run():
+        os.chmod(tmp_path, 0o700)
+        library = tmp_path / 'writer.so'
+        library.write_bytes(b'fake-test-library-path')
+        holder = {}
+
+        def observer_factory(**kwargs):
+            holder['observer'] = FakeObserver(**kwargs)
+            return holder['observer']
+
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher, readiness=FakeReadiness(),
+            evidence_sink=sink, heartbeat_diagnostics_enabled=True,
+            heartbeat_trace_directory=tmp_path,
+            heartbeat_observer_factory=observer_factory,
+            heartbeat_library_path=library,
+        )
+        await supervisor.start()
+        server_env = launcher.started[0][1]
+        assert server_env['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] == '1'
+        assert server_env['MECANUM_B2_HEARTBEAT_SESSION_ID'] == 'run-1'
+        assert len(supervisor._heartbeat_files) == 2
+        await supervisor.cleanup()
+        assert holder['observer'].stopped
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert event['observer']['joined'] is True
+        assert len(event['files']) == 2
+    asyncio.run(run())
+
+
+def test_heartbeat_diagnostic_cleanup_does_not_mask_start_failure(tmp_path):
+    """Preserve startup failure if diagnostic cleanup also fails."""
+    import os
+
+    class FakeObserver:
+        def __init__(self, **_kwargs):
+            self.stopped = False
+
+        def start(self):
+            return True
+
+        def stop(self, _timeout):
+            self.stopped = True
+            return True
+
+        def snapshot(self):
+            return {'joined': self.stopped, 'errors': ('injected',)}
+
+    class FailedReadiness(FakeReadiness):
+        async def server_scene(self, *_args):
+            raise RuntimeError('original readiness failure')
+
+    async def run():
+        os.chmod(tmp_path, 0o700)
+        library = tmp_path / 'writer.so'
+        library.write_bytes(b'fake-test-library-path')
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FailedReadiness(), evidence_sink=sink,
+            heartbeat_diagnostics_enabled=True,
+            heartbeat_trace_directory=tmp_path,
+            heartbeat_observer_factory=FakeObserver,
+            heartbeat_library_path=library,
+        )
+        try:
+            await supervisor.start()
+        except RuntimeError as error:
+            assert str(error) == 'original readiness failure'
+        else:
+            raise AssertionError('readiness failure was not preserved')
+        assert dict(sink.events)['heartbeat_trace_collection']['observer'][
+            'errors'
+        ] == ('injected',)
+    asyncio.run(run())
+
+
 def test_gui_mode_uses_same_partition_and_requires_owner_confirmation():
     """GUI launch shares its partition and requires owner confirmation."""
     async def run():
