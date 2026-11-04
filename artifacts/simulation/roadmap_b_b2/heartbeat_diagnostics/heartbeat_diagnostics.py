@@ -194,6 +194,15 @@ def _definitely_after(event: DiagnosticEvent, deadline_ns: int) -> bool:
     return event.timestamp_ns - event.uncertainty_ns > deadline_ns
 
 
+def _definitely_precedes(first: DiagnosticEvent, second: DiagnosticEvent) -> bool:
+    """Return true only when the timestamp intervals establish causal order."""
+
+    return (
+        first.timestamp_ns + first.uncertainty_ns
+        <= second.timestamp_ns - second.uncertainty_ns
+    )
+
+
 def analyze(
     buffer: BoundedEventBuffer,
     *,
@@ -301,6 +310,8 @@ def analyze(
         return _unknown('baseline acceptance is not established before heartbeat check')
     if baseline_validation.timestamp_ns + baseline_validation.uncertainty_ns < last_earliest:
         return _unknown('baseline validation predates its callback sample')
+    if not _definitely_precedes(last, baseline_validation):
+        return _unknown('baseline callback/validation order is not established')
 
     minimum_gap = check_earliest - last_latest
     maximum_gap = check_latest - last_earliest
@@ -332,6 +343,10 @@ def analyze(
     for sequence in sequences:
         callbacks = indexed.get((EventKind.CALLBACK_ENTRY, sequence), [])
         validations = indexed.get((EventKind.STATUS_VALIDATION, sequence), [])
+        publish_events = [
+            event for kind in (EventKind.PUBLISH_BEGIN, EventKind.PUBLISH_RETURN)
+            for event in indexed.get((kind, sequence), [])
+        ]
         if validations and not callbacks:
             return _unknown('status validation has no matching callback', True)
         for callback_event in callbacks:
@@ -356,6 +371,21 @@ def analyze(
                 return _unknown('validation timestamp precedes callback sample', True)
             if validation.status_accepted:
                 return _unknown('check baseline conflicts with an earlier accepted status', True)
+
+        publish_may_precede_check = any(
+            event.timestamp_ns - event.uncertainty_ns <= check_latest
+            for event in publish_events
+        )
+        if (
+            publish_may_precede_check
+            and not callbacks
+            and not indexed.get((EventKind.RECEIVE_OR_READY, sequence), [])
+            and not validations
+        ):
+            return _unknown(
+                f'seq={sequence} publish sample is unresolved at heartbeat check',
+                True,
+            )
 
     for sequence in sequences:
         sample = {
@@ -387,13 +417,23 @@ def analyze(
         validation = validation_items[0]
         if validation.status_accepted is False:
             continue
-        if validation.timestamp_ns - validation.uncertainty_ns < callback_event.timestamp_ns - callback_event.uncertainty_ns:
-            return _unknown('validation timestamp precedes callback sample', True)
+        if not _definitely_precedes(callback_event, validation):
+            return _unknown('callback/validation order is not established', True)
         if not receive_items:
             return _unknown('accepted callback has no receive/ready timestamp', True)
         receive_event = receive_items[0]
         if receive_event.metadata_supported is not True:
             return _unknown('receive/ready metadata is not verified as supported', True)
+        begin_items = sample[EventKind.PUBLISH_BEGIN]
+        return_items = sample[EventKind.PUBLISH_RETURN]
+        if begin_items and not _definitely_precedes(begin_items[0], receive_event):
+            return _unknown('publish begin does not definitely precede ready/receive', True)
+        if begin_items and return_items and not _definitely_precedes(
+            begin_items[0], return_items[0],
+        ):
+            return _unknown('publish begin/return order is not established', True)
+        if not _definitely_precedes(receive_event, callback_event):
+            return _unknown('ready/receive does not definitely precede callback', True)
 
         receive_on_time = _definitely_before_or_at(
             receive_event, earliest_deadline_ns,

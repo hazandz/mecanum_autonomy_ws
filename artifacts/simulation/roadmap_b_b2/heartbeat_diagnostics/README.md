@@ -86,6 +86,20 @@ và đã hoàn tất trước lần kiểm đó. Một mẫu được chấp nh�
 thuẫn với giả định baseline cũ; thiếu hoặc sai thứ tự validation trả `UNKNOWN`.
 Mẫu phát sau lần kiểm không giải thích ngược lần kiểm trước.
 
+Trước khi phân loại, công cụ cũng kiểm thứ tự nhân quả trên từng mẫu bằng các
+khoảng sai số: nếu có `publish_begin`, nó phải được chứng minh xảy ra trước
+`receive_or_ready`; ready phải đi trước callback; callback phải đi trước
+validation. `publish_return` không bắt buộc phải đi trước ready vì lời gọi
+publish có thể chưa trả về khi subscriber đã sẵn sàng nhận. `take` không thay
+thế mốc receive. Nếu thứ tự cần thiết chồng lấn sai số hoặc mâu thuẫn với các
+mốc danh nghĩa, nguyên nhân là `UNKNOWN`.
+
+Publish event của sequence trước lần kiểm mà chưa có receive, callback hoặc
+validation là mẫu chưa được giải thích, không phải bằng chứng mẫu đã bị loại.
+Công cụ trả `UNKNOWN` và nêu sequence đó. Mẫu sau chỉ được dùng khi mẫu trước
+đã được xác nhận bị loại bằng callback và validation đúng identity, đúng thứ
+tự, hoàn tất trước lần kiểm.
+
 `measure_once()` bọc một callable giả hoặc callable do caller sở hữu. Nó gọi
 callable đúng một lần, đo monotonic trước/sau kể cả khi callable ném exception,
 trả nguyên giá trị hoặc ném lại đúng exception đó. Measurement không tự ghi ra
