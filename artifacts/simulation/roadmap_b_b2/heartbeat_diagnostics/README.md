@@ -191,7 +191,18 @@ sequence; 32..87 payload zero-padded; 88 uint32 CRC32 của bytes 0..87; 92
 uint32 completion marker. Kind 1/2/3 lần lượt là begin/data/end của fixture;
 identity của mọi record được bind vào header. CRC32 theo IEEE/zlib. Reader kiểm
 file size chính xác, marker, checksum, sequence, identity/clock và boundaries;
-record hợp lệ được trả riêng khỏi `coverage_complete` và danh sách lỗi.
+record hợp lệ được trả riêng khỏi `structure_valid`, `coverage_complete` và
+danh sách lỗi. Slot sai sequence hoặc kind không được trả như record hợp lệ;
+sequence gốc của slot tốt được giữ nguyên. Identity/clock toàn file không khớp
+thì `records` rỗng, không cấp dữ liệu làm bằng chứng cho phiên yêu cầu.
+
+`structure_valid` chỉ nói cấu trúc slot và begin/end hợp lệ; không chứng minh
+coverage thời gian. Caller phải cung cấp `requested_window=(start, end)` và
+`clock_verified=True` sau khi đã xác minh miền clock/provenance. Reader không
+tự xác minh đồng hồ. Coverage chỉ đầy đủ khi file không lỗi, record timestamps
+không đi lùi và `collection_begin <= start <= end <= collection_end`; biên bằng
+nhau được chấp nhận. Không có cửa sổ hoặc clock chưa xác minh thì coverage
+không đầy đủ, dù vẫn có thể thu hồi records và báo cấu trúc hợp lệ.
 
 Trên host little-endian được test, mapping là `MAP_SHARED`; marker 32-bit được
 ghi aligned bằng atomic release sau payload/checksum, với yêu cầu compile-time

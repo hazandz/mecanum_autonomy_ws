@@ -16,6 +16,7 @@ RECORD_MARKER = 0x434F4D54
 @dataclass(frozen=True)
 class ReadResult:
     records: tuple
+    structure_valid: bool
     coverage_complete: bool
     issues: tuple
 
@@ -27,7 +28,7 @@ def _text(data):
     return raw.decode('ascii')
 
 
-def read_after_join(path, *, expected):
+def read_after_join(path, *, expected, requested_window=None, clock_verified=False):
     """Return recovered records and independent completeness; caller owns join."""
     path = Path(path)
     with path.open('rb') as stream:
@@ -52,11 +53,8 @@ def read_after_join(path, *, expected):
         'clock': _text(data[200:232]), 'role': _text(data[232:240]),
         'provenance': _text(data[240:304]),
     }
-    issues = []
-    if not identity['backend'] or identity != expected:
-        issues.append('identity_or_clock_mismatch')
-    if overflow:
-        issues.append('overflow_or_invalid_flag')
+    identity_matches = bool(identity['backend']) and identity == expected
+    structural_issues = []
     records = []
     for index in range(capacity):
         slot = data[HEADER_SIZE + index * RECORD_SIZE:HEADER_SIZE + (index + 1) * RECORD_SIZE]
@@ -65,19 +63,43 @@ def read_after_join(path, *, expected):
         seq, kind, length, timestamp, status_seq = struct.unpack_from('<QIIQQ', slot)
         checksum, marker = struct.unpack_from('<II', slot, 88)
         if marker != RECORD_MARKER:
-            issues.append(f'incomplete_slot:{index}')
+            structural_issues.append(f'incomplete_slot:{index}')
             continue
         if length > 56 or checksum != zlib.crc32(slot[:88]):
-            issues.append(f'corrupt_slot:{index}')
+            structural_issues.append(f'corrupt_slot:{index}')
             continue
         if seq != index + 1:
-            issues.append(f'sequence_gap:{index}')
+            structural_issues.append(f'sequence_gap:{index}')
+            continue
         if kind not in (1, 2, 3):
-            issues.append(f'unknown_kind:{index}')
+            structural_issues.append(f'unknown_kind:{index}')
+            continue
         records.append((seq, kind, timestamp, status_seq, slot[32:32 + length]))
     if [r[0] for r in records] != list(range(1, len(records) + 1)):
-        issues.append('record_sequence_incomplete')
+        structural_issues.append('record_sequence_incomplete')
     kinds = [r[1] for r in records]
     if not kinds or kinds[0] != 1 or kinds[-1] != 3 or kinds.count(1) != 1 or kinds.count(3) != 1:
-        issues.append('missing_or_invalid_boundaries')
-    return ReadResult(tuple(records), not issues, tuple(issues))
+        structural_issues.append('missing_or_invalid_boundaries')
+    structure_valid = not structural_issues
+    issues = list(structural_issues)
+    if not identity_matches:
+        issues.append('identity_or_clock_mismatch')
+    if overflow:
+        issues.append('overflow_or_invalid_flag')
+    if any(first[2] > second[2] for first, second in zip(records, records[1:])):
+        issues.append('timestamp_regression')
+    if clock_verified is not True:
+        issues.append('clock_not_verified')
+    if requested_window is None:
+        issues.append('coverage_window_missing')
+    elif (
+        not isinstance(requested_window, (tuple, list)) or len(requested_window) != 2
+        or any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in requested_window)
+        or requested_window[0] > requested_window[1]
+    ):
+        issues.append('coverage_window_invalid')
+    elif (not structure_valid or not records or records[0][2] > requested_window[0]
+          or requested_window[1] > records[-1][2]):
+        issues.append('coverage_window_outside_boundaries')
+    return ReadResult(tuple(records) if identity_matches else (), structure_valid,
+                      not issues, tuple(issues))

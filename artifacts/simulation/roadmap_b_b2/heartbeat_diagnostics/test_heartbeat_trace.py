@@ -1,6 +1,7 @@
 """Offline cross-language tests; child processes are owned and joined here."""
 
 import os
+import inspect
 from pathlib import Path
 import struct
 import subprocess
@@ -16,6 +17,13 @@ EXPECTED = {
     'config': 'config-1', 'world': 'world-1', 'clock': 'fake-monotonic',
     'role': 'backend', 'provenance': 'fixture-clock-v1',
 }
+
+
+def read_request(path, *, expected=EXPECTED, requested_window=(100, 400)):
+    kwargs = {'expected': expected}
+    if 'requested_window' in inspect.signature(read_after_join).parameters:
+        kwargs.update(requested_window=requested_window, clock_verified=True)
+    return read_after_join(path, **kwargs)
 
 
 class TraceBufferTests(unittest.TestCase):
@@ -41,12 +49,24 @@ class TraceBufferTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), str(self.path), mode],
                                 check=False, timeout=5, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        return read_after_join(self.path, expected=EXPECTED)
+        return read_request(self.path)
 
     def mutate(self, offset, payload):
         with self.path.open('r+b') as stream:
             stream.seek(offset)
             stream.write(payload)
+
+    def rewrite_record(self, index, *, timestamp=None, seq=None, kind=None):
+        raw = bytearray(self.path.read_bytes())
+        start = HEADER_SIZE + index * RECORD_SIZE
+        if timestamp is not None:
+            struct.pack_into('<Q', raw, start + 16, timestamp)
+        if seq is not None:
+            struct.pack_into('<Q', raw, start, seq)
+        if kind is not None:
+            struct.pack_into('<I', raw, start + 8, kind)
+        struct.pack_into('<I', raw, start + 88, zlib.crc32(raw[start:start + 88]))
+        self.path.write_bytes(raw)
 
     def test_normal_roundtrip_exact_values_and_boundaries(self):
         result = self.write_child()
@@ -118,6 +138,7 @@ class TraceBufferTests(unittest.TestCase):
                 expected = dict(EXPECTED, **{field: 'wrong'})
                 result = read_after_join(self.path, expected=expected)
                 self.assertFalse(result.coverage_complete)
+                self.assertEqual(result.records, ())
                 self.assertIn('identity_or_clock_mismatch', result.issues)
 
     def test_missing_end_is_incomplete(self):
@@ -127,6 +148,65 @@ class TraceBufferTests(unittest.TestCase):
         self.assertEqual(len(result.records), 2)
         self.assertFalse(result.coverage_complete)
         self.assertIn('missing_or_invalid_boundaries', result.issues)
+
+    def test_reversed_end_timestamp_is_not_coverage(self):
+        self.write_child()
+        self.rewrite_record(2, timestamp=50)
+        result = read_request(self.path, requested_window=(100, 200))
+        self.assertFalse(result.coverage_complete)
+
+    def test_intermediate_timestamp_regression_is_not_coverage(self):
+        self.write_child()
+        self.rewrite_record(1, timestamp=50)
+        result = read_request(self.path, requested_window=(100, 200))
+        self.assertFalse(result.coverage_complete)
+
+    def test_window_outside_collection_is_not_coverage(self):
+        self.write_child()
+        for window in ((99, 400), (100, 401), (200, 100)):
+            with self.subTest(window=window):
+                result = read_request(self.path, requested_window=window)
+                self.assertFalse(result.coverage_complete)
+
+    def test_missing_window_does_not_confirm_coverage(self):
+        self.write_child()
+        result = read_request(self.path, requested_window=None)
+        self.assertFalse(result.coverage_complete)
+        self.assertTrue(result.structure_valid)
+        self.assertIn('coverage_window_missing', result.issues)
+        self.assertEqual(len(result.records), 3)
+
+    def test_unverified_clock_does_not_confirm_coverage(self):
+        self.write_child()
+        result = read_after_join(self.path, expected=EXPECTED, requested_window=(100, 400))
+        self.assertTrue(result.structure_valid)
+        self.assertFalse(result.coverage_complete)
+        self.assertIn('clock_not_verified', result.issues)
+
+    def test_equal_window_boundaries_are_covered(self):
+        self.write_child()
+        for window in ((100, 400), (100, 100), (400, 400)):
+            with self.subTest(window=window):
+                self.assertTrue(read_request(self.path, requested_window=window).coverage_complete)
+
+    def test_bad_sequence_and_unknown_kind_are_not_valid_records(self):
+        self.write_child()
+        self.rewrite_record(1, seq=9)
+        result = read_request(self.path)
+        self.assertNotIn(9, [r[0] for r in result.records])
+        self.assertEqual([r[0] for r in result.records], [1, 3])
+        self.assertIn('sequence_gap:1', result.issues)
+        self.rewrite_record(1, seq=2, kind=99)
+        result = read_request(self.path)
+        self.assertNotIn(99, [r[1] for r in result.records])
+        self.assertEqual([r[0] for r in result.records], [1, 3])
+        self.assertIn('unknown_kind:1', result.issues)
+
+    def test_identity_mismatch_returns_no_usable_records(self):
+        self.write_child()
+        result = read_request(self.path, expected=dict(EXPECTED, session='wrong'))
+        self.assertFalse(result.coverage_complete)
+        self.assertEqual(result.records, ())
 
 
 if __name__ == '__main__':
