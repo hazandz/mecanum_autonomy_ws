@@ -2493,3 +2493,217 @@ def test_startup_cancellation_rolls_back_registered_children():
         await supervisor.cleanup()
         assert [pid for pid, _ in launcher.stopped] == [101, 100]
     asyncio.run(run())
+
+
+class _F11PendingLaunchLauncher:
+    """Hold a server launch while recording production cleanup dispatches."""
+
+    def __init__(self, *, hold_bridge_stop=False):
+        self.next_pid = 880
+        self.server_entered = asyncio.Event()
+        self.server_release = asyncio.Event()
+        self.bridge_stop = asyncio.Event()
+        self.bridge_stop_release = asyncio.Event()
+        self.server_stop = asyncio.Event()
+        self.calls = []
+        self.hold_bridge_stop = hold_bridge_stop
+        self.processes = []
+
+    async def start(self, command, _environment):
+        process = FakeProcess(self.next_pid)
+        self.next_pid += 1
+        self.processes.append((command, process))
+        if command[0] == 'ros2':
+            return process
+        self.server_entered.set()
+        try:
+            await self.server_release.wait()
+        except asyncio.CancelledError:
+            await self.server_release.wait()
+        return process
+
+    async def stop_group(self, process, sig):
+        self.calls.append((process.pid, sig))
+        if process.pid == 880:
+            self.bridge_stop.set()
+            if self.hold_bridge_stop:
+                await self.bridge_stop_release.wait()
+        else:
+            self.server_stop.set()
+        process.returncode = 0
+
+    def group_alive(self, process):
+        return process.returncode is None
+
+
+class _F11ImmediateLauncher(_F11PendingLaunchLauncher):
+    async def start(self, command, _environment):
+        process = FakeProcess(self.next_pid)
+        self.next_pid += 1
+        self.processes.append((command, process))
+        return process
+
+
+class _F11PendingReadiness(FakeReadiness):
+    def __init__(self):
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def server_scene(self, *_args):
+        self.entered.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            await self.release.wait()
+
+
+def _f11_supervisor(launcher, readiness=None, cap=0.8):
+    supervisor = LocalTrainingProcessSupervisor(
+        plan=_plan_with_bridge(False), launcher=launcher,
+        readiness=readiness or FakeReadiness(), evidence_sink=FakeSink(),
+        cleanup_evidence_publisher=FakeCleanupPublisher(),
+    )
+    supervisor.CLEANUP_CAP_S = cap
+    return supervisor
+
+
+async def _f11_expect(event, timeout, label):
+    try:
+        await asyncio.wait_for(event.wait(), timeout)
+    except TimeoutError as error:
+        raise AssertionError(
+            f'{label} was not observed before the bounded check'
+        ) from error
+
+
+async def _f11_release_and_join(
+    launcher, readiness, startup, cleanup_tasks,
+):
+    launcher.server_release.set()
+    launcher.bridge_stop_release.set()
+    if readiness is not None:
+        readiness.release.set()
+    if startup is not None and not startup.done():
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(startup, 0.7)
+    for task in cleanup_tasks:
+        if task is not None and not task.done():
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(task, 1.0)
+
+
+def test_f11a_registered_bridge_stopped_while_server_launch_unresolved():
+    """Stop a registered bridge before a server launcher joins."""
+    async def run():
+        launcher = _F11PendingLaunchLauncher()
+        supervisor = _f11_supervisor(launcher)
+        startup = asyncio.create_task(supervisor.start())
+        cleanup = None
+        try:
+            await asyncio.wait_for(launcher.server_entered.wait(), 0.3)
+            cleanup = asyncio.create_task(supervisor.cleanup())
+            await _f11_expect(launcher.bridge_stop, 0.25, 'bridge stop')
+            assert not launcher.server_release.is_set()
+        finally:
+            await _f11_release_and_join(
+                launcher, None, startup, (cleanup,),
+            )
+    asyncio.run(run())
+
+
+def test_f11b_registered_server_stopped_before_readiness_join():
+    """Stop a registered server while readiness ignores cancellation."""
+    async def run():
+        launcher = _F11ImmediateLauncher()
+        readiness = _F11PendingReadiness()
+        supervisor = _f11_supervisor(launcher, readiness)
+        startup = asyncio.create_task(supervisor.start())
+        cleanup = None
+        try:
+            await asyncio.wait_for(readiness.entered.wait(), 0.3)
+            cleanup = asyncio.create_task(supervisor.cleanup())
+            await _f11_expect(launcher.server_stop, 0.25, 'server stop')
+            assert not readiness.release.is_set()
+            assert not startup.done()
+            pending = [
+                item for item in supervisor.cleanup_snapshot()['task_facts']
+                if item.get('task_name') == startup.get_name()
+            ]
+            assert pending and pending[0]['joined'] is False
+        finally:
+            await _f11_release_and_join(
+                launcher, readiness, startup, (cleanup,),
+            )
+    asyncio.run(run())
+
+
+def test_f11c_late_handle_joins_same_cleanup_while_known_stop_is_pending():
+    """Reclaim a late server handle under the existing cleanup operation."""
+    async def run():
+        launcher = _F11PendingLaunchLauncher(hold_bridge_stop=True)
+        supervisor = _f11_supervisor(launcher, cap=1.2)
+        startup = asyncio.create_task(supervisor.start())
+        cleanup = None
+        try:
+            await asyncio.wait_for(launcher.server_entered.wait(), 0.3)
+            cleanup = asyncio.create_task(supervisor.cleanup())
+            await _f11_expect(launcher.bridge_stop, 0.25, 'bridge stop')
+            launcher.server_release.set()
+            await _f11_expect(launcher.server_stop, 0.3, 'late server stop')
+            assert sum(pid == 880 for pid, _ in launcher.calls) == 1
+            assert sum(pid == 881 for pid, _ in launcher.calls) == 1
+            launcher.bridge_stop_release.set()
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(startup, 0.5)
+            assert await asyncio.wait_for(cleanup, 0.7) is True
+            snapshot = supervisor.cleanup_snapshot()
+            assert snapshot['owned_process_count'] == 0
+            assert {item['pid'] for item in snapshot['process_facts']} == {
+                880, 881,
+            }
+        finally:
+            await _f11_release_and_join(
+                launcher, None, startup, (cleanup,),
+            )
+    asyncio.run(run())
+
+
+def test_f11d_shortened_deadline_retains_late_handle_without_redispatch():
+    """Retain late ownership after a caller shortens the deadline."""
+    async def run():
+        launcher = _F11PendingLaunchLauncher()
+        supervisor = _f11_supervisor(launcher, cap=1.2)
+        startup = asyncio.create_task(supervisor.start())
+        cleanup_a = cleanup_b = None
+        try:
+            await asyncio.wait_for(launcher.server_entered.wait(), 0.3)
+            cleanup_a = asyncio.create_task(supervisor.cleanup())
+            await _f11_expect(launcher.bridge_stop, 0.25, 'bridge stop')
+            cleanup_b = asyncio.create_task(supervisor.cleanup(
+                deadline=asyncio.get_running_loop().time() + 0.16,
+            ))
+            first, second = await asyncio.wait_for(
+                asyncio.gather(cleanup_a, cleanup_b), 0.6,
+            )
+            assert first is False and second is False
+            assert sum(pid == 880 for pid, _ in launcher.calls) == 1
+            launcher.server_release.set()
+            operation = next(iter(supervisor._launch_operations.values()))
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(operation.task, 0.4)
+            snapshot = supervisor.cleanup_snapshot()
+            assert snapshot['owned_process_count'] == 1
+            assert snapshot['launch_facts'][0][
+                'owned_process_residue'
+            ] == 'UNKNOWN'
+            assert not any(pid == 881 for pid, _ in launcher.calls)
+            assert sum(
+                item['pid'] == 880 for item in
+                snapshot['process_cleanup_operations']
+            ) == 1
+        finally:
+            await _f11_release_and_join(
+                launcher, None, startup, (cleanup_a, cleanup_b),
+            )
+    asyncio.run(run())

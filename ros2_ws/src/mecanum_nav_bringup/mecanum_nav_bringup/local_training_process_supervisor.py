@@ -1417,6 +1417,10 @@ class LocalTrainingProcessSupervisor:
         self._cleanup_batch_event_count = 0
         self._cleanup_publisher_task: asyncio.Task | None = None
         self._cleanup_process_facts: list[dict[str, object]] = []
+        self._cleanup_process_tasks: dict[int, asyncio.Task] = {}
+        self._cleanup_process_records: dict[int, ProcessRecord] = {}
+        self._cleanup_process_deadline: float | None = None
+        self._cleanup_observer_reserve_s = 0.0
         self._cleanup_task_facts: list[dict[str, object]] = []
         self._cleanup_launch_facts: list[dict[str, object]] = []
         self._cleanup_pipe_facts: list[dict[str, object]] = []
@@ -1582,8 +1586,20 @@ class LocalTrainingProcessSupervisor:
                 and self.monotonic() < self._cleanup_deadline
             )
             if cleanup_active:
+                self._ensure_owned_process_cleanup(
+                    record,
+                    self._cleanup_process_deadline
+                    if self._cleanup_process_deadline is not None
+                    else self._cleanup_deadline,
+                    self._cleanup_observer_reserve_s,
+                )
                 self._capture_output(record)
             else:
+                self._process_residue = 'UNKNOWN'
+                self._cleanup_residue = 'UNKNOWN'
+                self._append_cleanup_error(
+                    f'late_owned_process_after_deadline:{role}',
+                )
                 self._cleanup_pipe_facts.append({
                     'role': role, 'stream_task_name': None,
                     'task_done': None, 'cancelled': None,
@@ -2447,6 +2463,10 @@ class LocalTrainingProcessSupervisor:
                 for operation in self._launch_operations.values()
             )
             and not self._cleanup_residue_tasks
+            and not any(
+                not task.done()
+                for task in self._cleanup_process_tasks.values()
+            )
             and not self._cleanup_errors
             and self._cleanup_publication['acknowledged'] is True
             and self._cleanup_publication['failed'] is False
@@ -2479,6 +2499,8 @@ class LocalTrainingProcessSupervisor:
             if self.heartbeat_diagnostics_enabled else 0.0
         )
         process_deadline = deadline
+        self._cleanup_process_deadline = process_deadline
+        self._cleanup_observer_reserve_s = observer_reserve
         try:
             await self._cleanup_owned(
                 deadline, process_deadline, observer_reserve,
@@ -2826,11 +2848,64 @@ class LocalTrainingProcessSupervisor:
         })
         return '_THEN_'.join(escalation), process_joined, group_absent
 
+    def _ensure_owned_process_cleanup(
+        self, record: ProcessRecord, deadline: float,
+        observer_reserve_s: float,
+    ) -> asyncio.Task:
+        """Return the single cleanup operation owned for this process."""
+        key = id(record)
+        task = self._cleanup_process_tasks.get(key)
+        if task is not None:
+            return task
+        self._cleanup_process_records[key] = record
+        task = asyncio.create_task(
+            self._cleanup_owned_process(
+                record, deadline, observer_reserve_s,
+            ),
+            name=f'cleanup-owned-{record.name}-{record.pid}',
+        )
+        self._cleanup_process_tasks[key] = task
+        return task
+
+    async def _cleanup_owned_process(
+        self, record: ProcessRecord, deadline: float,
+        observer_reserve_s: float,
+    ) -> tuple[str, bool, bool]:
+        """Stop a process without waiting for startup joins."""
+        effective_deadline = self._effective_process_deadline(
+            deadline, observer_reserve_s,
+        )
+        if self.monotonic() >= effective_deadline:
+            self._process_residue = 'UNKNOWN'
+            self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                f'owned_group_deadline:{record.name}',
+            )
+            return 'DEADLINE_UNKNOWN', False, False
+        initial_dispatch = await self._dispatch_group_signal(
+            record, signal.SIGINT, effective_deadline,
+            observer_reserve_s,
+        )
+        return await self._cleanup_group(
+            record, deadline, observer_reserve_s, initial_dispatch,
+        )
+
     async def _cleanup_owned(
         self, deadline: float, process_deadline: float,
         observer_reserve_s: float,
     ) -> None:
         current = asyncio.current_task()
+        # Start stop/reap work for already-owned processes before awaiting any
+        # startup or launch operation.  This registry is also used by late
+        # handle registration, preventing duplicate dispatch for one record.
+        launch_operations = tuple(self._launch_operations.values())
+        for operation in launch_operations:
+            if not operation.task.done():
+                operation.task.cancel()
+        for record in reversed(self.owned):
+            self._ensure_owned_process_cleanup(
+                record, process_deadline, observer_reserve_s,
+            )
         startup_task = self._start_task
         if (startup_task is not None and startup_task is not current
                 and startup_task is not self._cleanup_requester_task):
@@ -2867,10 +2942,6 @@ class LocalTrainingProcessSupervisor:
                     except BaseException:
                         # The start path has retained any primary failure.
                         pass
-        launch_operations = tuple(self._launch_operations.values())
-        for operation in launch_operations:
-            if not operation.task.done():
-                operation.task.cancel()
         unresolved_launches = []
         for operation in launch_operations:
             task = operation.task
@@ -2976,47 +3047,9 @@ class LocalTrainingProcessSupervisor:
                     )
 
         records = list(reversed(self.owned))
-        effective_process_deadline = self._effective_process_deadline(
-            process_deadline, observer_reserve_s,
-        )
-        # Start the first stop dispatch for every independently verified
-        # group before waiting for any grace/reap phase.
-        initial_dispatches = [
-            (record, asyncio.create_task(
-                self._dispatch_group_signal(
-                    record, signal.SIGINT, effective_process_deadline,
-                    observer_reserve_s,
-                ),
-                name=f'cleanup-sigint-{record.name}-{record.pid}',
-            )) for record in records
-        ]
-        initial_results: dict[int, str] = {}
-        for record, dispatch_task in initial_dispatches:
-            if not await self._await_cleanup_task(
-                    dispatch_task, effective_process_deadline,
-                    observer_reserve_s):
-                dispatch_task.cancel()
-                self._retain_cleanup_task(dispatch_task)
-                initial_results[id(record)] = 'DISPATCH_UNKNOWN'
-                self._process_residue = 'UNKNOWN'
-            else:
-                try:
-                    initial_results[id(record)] = dispatch_task.result()
-                except BaseException as error:
-                    initial_results[id(record)] = 'DISPATCH_FAILED'
-                    self._append_cleanup_error(
-                        f'initial_group_dispatch:{record.name}:'
-                        f'{type(error).__name__}',
-                    )
-                    self._process_residue = 'UNKNOWN'
-
         group_tasks = [
-            (record, asyncio.create_task(
-                self._cleanup_group(
-                    record, process_deadline, observer_reserve_s,
-                    initial_results.get(id(record), 'IDENTITY_UNKNOWN'),
-                ),
-                name=f'cleanup-group-{record.name}-{record.pid}',
+            (record, self._ensure_owned_process_cleanup(
+                record, process_deadline, observer_reserve_s,
             )) for record in records
         ]
         results = {}
@@ -3025,7 +3058,6 @@ class LocalTrainingProcessSupervisor:
                     group_task, self._effective_process_deadline(
                         process_deadline, observer_reserve_s,
                     ), observer_reserve_s):
-                group_task.cancel()
                 self._retain_cleanup_task(group_task)
                 results[id(record)] = (
                     'DEADLINE_UNKNOWN', False, False,
@@ -3490,6 +3522,16 @@ class LocalTrainingProcessSupervisor:
             'process_residue': self._process_residue,
             'task_residue': self._task_residue,
             'process_facts': self._cleanup_process_facts,
+            'process_cleanup_operations': [
+                {
+                    'role': self._cleanup_process_records[key].name,
+                    'pid': self._cleanup_process_records[key].pid,
+                    'task_done': task.done(),
+                    'task_cancelled': task.cancelled(),
+                    'residue': 'NONE' if task.done() else 'UNKNOWN',
+                }
+                for key, task in self._cleanup_process_tasks.items()
+            ],
             'task_facts': self._cleanup_task_facts,
             'launch_facts': launch_facts,
             'pipe_facts': self._cleanup_pipe_facts,
