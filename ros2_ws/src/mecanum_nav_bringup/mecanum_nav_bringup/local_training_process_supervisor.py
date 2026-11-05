@@ -1810,10 +1810,10 @@ class LocalTrainingProcessSupervisor:
         cooperative_deadline = min(
             deadline, max(self.monotonic(), deadline - 0.75),
         )
-        if clean_ack and await self._wait_observer_reaped(
-                cooperative_deadline):
-            self._heartbeat_observer_termination = 'CLEAN_COOPERATIVE'
-        else:
+        clean_reaped = clean_ack and await self._wait_observer_reaped(
+            cooperative_deadline,
+        )
+        if not clean_reaped:
             if process.returncode is None:
                 remaining = deadline - self.monotonic()
                 term_wait = max(0.0, min(0.65, remaining - 0.75))
@@ -1858,6 +1858,23 @@ class LocalTrainingProcessSupervisor:
             group_absent = not self.launcher.group_alive(process)
         except BaseException:
             pass
+        if clean_reaped:
+            if (joined and group_absent
+                    and type(self._heartbeat_observer_exit_status) is int
+                    and self._heartbeat_observer_exit_status == 0):
+                self._heartbeat_observer_termination = 'CLEAN_COOPERATIVE'
+            else:
+                self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
+                if not joined:
+                    reason = 'observer_clean_ack_process_join_unconfirmed'
+                elif not group_absent:
+                    reason = 'observer_clean_ack_group_absence_unconfirmed'
+                else:
+                    reason = 'observer_stop_ack_exit_status_nonzero'
+                errors.append(reason)
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error or reason
+                )
         if self._heartbeat_observer_stderr_task is not None:
             remaining = max(0.0, deadline - self.monotonic())
             if remaining > 0:

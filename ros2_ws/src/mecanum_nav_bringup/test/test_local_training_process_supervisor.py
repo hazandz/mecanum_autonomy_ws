@@ -104,7 +104,9 @@ class ControlledObserverProcess:
                 }
                 self.process.stdout.feed_data(_control_frame(response))
             elif message['kind'] == 'stop':
-                joined = self.process.mode in {'clean', 'end-fail'}
+                joined = self.process.mode in {
+                    'clean', 'end-fail', 'clean-nonzero-exit',
+                }
                 end_written = joined and self.process.mode != 'end-fail'
                 handle_closed = joined
                 writer_closed = end_written and handle_closed
@@ -122,7 +124,11 @@ class ControlledObserverProcess:
                 }
                 self.process.stdout.feed_data(_control_frame(response))
                 if joined:
-                    self.process.finish(0 if writer_closed else 4)
+                    status = (
+                        9 if self.process.mode == 'clean-nonzero-exit'
+                        else 0 if writer_closed else 4
+                    )
+                    self.process.finish(status)
 
         async def drain(self):
             return None
@@ -591,7 +597,8 @@ def test_failed_end_marker_cannot_be_acknowledged_as_clean_close(tmp_path):
         )
         await _start_fake_observer(supervisor)
         await supervisor._stop_heartbeat_diagnostics()
-        join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
+        event = dict(sink.events)['heartbeat_trace_collection']
+        join = event['join_evidence']
         assert join['observer_process_joined'] is True
         assert join['observer_exit_status'] == 4
         assert join['observer_stop_acknowledged'] is False
@@ -600,6 +607,34 @@ def test_failed_end_marker_cannot_be_acknowledged_as_clean_close(tmp_path):
         assert join['observer_writer_closed'] is False
         assert join['observer_termination'] == 'UNCONFIRMED_EXIT'
         assert supervisor._heartbeat_trace_error is not None
+    asyncio.run(run())
+
+
+def test_clean_ack_with_nonzero_exit_is_not_clean_cooperative(tmp_path):
+    """A valid stop ACK cannot override an abnormal child exit status."""
+    async def run():
+        launcher = ControlledObserverLauncher('clean-nonzero-exit')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        await _start_fake_observer(supervisor)
+        await supervisor._stop_heartbeat_diagnostics()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        join = event['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_process_group_absent'] is True
+        assert join['observer_stop_acknowledged'] is True
+        assert join['observer_end_written'] is True
+        assert join['observer_handle_closed'] is True
+        assert join['observer_writer_closed'] is True
+        assert join['observer_exit_status'] == 9
+        assert join['observer_termination'] == 'UNCONFIRMED_EXIT'
+        assert 'observer_stop_ack_exit_status_nonzero' in (
+            event['observer']['errors']
+        )
+        assert supervisor._heartbeat_trace_error == (
+            'observer_stop_ack_exit_status_nonzero'
+        )
     asyncio.run(run())
 
 
