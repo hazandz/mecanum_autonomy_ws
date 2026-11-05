@@ -104,18 +104,25 @@ class ControlledObserverProcess:
                 }
                 self.process.stdout.feed_data(_control_frame(response))
             elif message['kind'] == 'stop':
-                joined = self.process.mode == 'clean'
+                joined = self.process.mode in {'clean', 'end-fail'}
+                end_written = joined and self.process.mode != 'end-fail'
+                handle_closed = joined
+                writer_closed = end_written and handle_closed
                 response = {
                     'kind': 'stopped', 'nonce': message['nonce'],
-                    'joined': joined, 'writer_closed': joined,
+                    'joined': joined, 'end_written': end_written,
+                    'handle_closed': handle_closed,
+                    'writer_closed': writer_closed,
                     'snapshot': {
                         'ready': True, 'joined': joined,
-                        'writer_closed': joined, 'errors': (),
+                        'end_written': end_written,
+                        'handle_closed': handle_closed,
+                        'writer_closed': writer_closed, 'errors': (),
                     },
                 }
                 self.process.stdout.feed_data(_control_frame(response))
                 if joined:
-                    self.process.finish(0)
+                    self.process.finish(0 if writer_closed else 4)
 
         async def drain(self):
             return None
@@ -355,6 +362,8 @@ def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
         def snapshot(self):
             return {
                 'ready': True, 'joined': self.stopped, 'thread_alive': False,
+                'end_written': self.stopped,
+                'handle_closed': self.stopped,
                 'writer_closed': self.stopped, 'errors': (),
             }
 
@@ -540,6 +549,8 @@ def test_isolated_observer_clean_exit_uses_process_join_evidence(tmp_path):
         assert join['observer_process_joined'] is True
         assert join['observer_process_group_absent'] is True
         assert join['observer_stop_acknowledged'] is True
+        assert join['observer_end_written'] is True
+        assert join['observer_handle_closed'] is True
         assert join['observer_writer_closed'] is True
         assert 'observer_thread_joined' not in join
         assert join['observer_termination'] == 'CLEAN_COOPERATIVE'
@@ -564,8 +575,31 @@ def test_isolated_observer_ignoring_term_escalates_and_is_not_clean(tmp_path):
         assert join['observer_process_joined'] is True
         assert join['observer_exit_status'] == -signal.SIGKILL
         assert join['observer_writer_closed'] is False
+        assert join['observer_end_written'] is False
+        assert join['observer_handle_closed'] is False
         assert join['observer_stop_acknowledged'] is False
         assert join['observer_termination'] == 'SIGKILL'
+    asyncio.run(run())
+
+
+def test_failed_end_marker_cannot_be_acknowledged_as_clean_close(tmp_path):
+    """A closed handle without a committed END remains incomplete."""
+    async def run():
+        launcher = ControlledObserverLauncher('end-fail')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        await _start_fake_observer(supervisor)
+        await supervisor._stop_heartbeat_diagnostics()
+        join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_exit_status'] == 4
+        assert join['observer_stop_acknowledged'] is False
+        assert join['observer_end_written'] is False
+        assert join['observer_handle_closed'] is True
+        assert join['observer_writer_closed'] is False
+        assert join['observer_termination'] == 'UNCONFIRMED_EXIT'
+        assert supervisor._heartbeat_trace_error is not None
     asyncio.run(run())
 
 
@@ -596,8 +630,31 @@ def test_observer_identity_change_blocks_signal_and_reports_residue(tmp_path):
     asyncio.run(run())
 
 
-def test_late_spawn_handle_is_retained_and_boundedly_reaped(tmp_path):
-    """A child returned after spawn timeout remains owned for cleanup."""
+def test_reaped_observer_group_wait_obeys_deadline(tmp_path):
+    """A reaped leader cannot make the remaining group wait spin forever."""
+    async def run():
+        launcher = ControlledObserverLauncher('clean')
+        launcher.group_alive = lambda _process: True
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.06
+        await _start_fake_observer(supervisor)
+        await asyncio.wait_for(
+            supervisor._stop_heartbeat_diagnostics(), timeout=0.3,
+        )
+        assert launcher.child.returncode == 0
+        assert launcher.signals == []
+        assert supervisor._process_residue == 'UNKNOWN'
+        join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_process_group_absent'] is False
+        assert join['observer_termination'] == 'UNKNOWN'
+    asyncio.run(run())
+
+
+def test_spawn_timeout_cancels_launcher_before_cleanup_summary(tmp_path):
+    """A canceled spawn cannot create a child after cleanup has returned."""
     async def run():
         gate = asyncio.Event()
 
@@ -615,21 +672,20 @@ def test_late_spawn_handle_is_retained_and_boundedly_reaped(tmp_path):
         supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.5
         await supervisor._prepare_heartbeat_diagnostics()
         assert supervisor._heartbeat_trace_error is not None
+        assert supervisor._heartbeat_observer_spawn_task.cancelled()
+        await supervisor._stop_heartbeat_diagnostics()
+        assert dict(sink.events)['heartbeat_trace_collection'][
+            'join_evidence'
+        ]['task_residue'] == 'UNKNOWN'
         gate.set()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        await supervisor._stop_heartbeat_diagnostics()
-        assert supervisor._heartbeat_observer_process is launcher.child
-        assert launcher.child.returncode == -signal.SIGKILL
-        assert supervisor._heartbeat_observer_wait_task.done()
-        event = dict(sink.events)['heartbeat_trace_collection']
-        assert event['join_evidence']['observer_process_joined'] is True
-        assert event['join_evidence']['observer_writer_closed'] is False
+        assert launcher.child is None
     asyncio.run(run())
 
 
-def test_spawn_cancellation_keeps_late_child_handle_for_cleanup(tmp_path):
-    """Cancellation propagates while the shielded late child remains owned."""
+def test_spawn_cancellation_prevents_child_after_cleanup_summary(tmp_path):
+    """Cancellation completes before cleanup and leaves no future spawn."""
     async def run():
         gate = asyncio.Event()
 
@@ -656,13 +712,54 @@ def test_spawn_cancellation_keeps_late_child_handle_for_cleanup(tmp_path):
             pass
         else:
             raise AssertionError('observer startup cancellation was swallowed')
+        assert supervisor._heartbeat_observer_spawn_task.cancelled()
+        await supervisor._stop_heartbeat_diagnostics()
         gate.set()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        await supervisor._stop_heartbeat_diagnostics()
+        assert launcher.child is None
+    asyncio.run(run())
+
+
+def test_spawn_timeout_reaps_process_returned_after_cancel_request(tmp_path):
+    """A nonconforming delayed launcher still yields its handle to cleanup."""
+    async def run():
+        gate = asyncio.Event()
+        started = asyncio.Event()
+
+        class DelayedLauncher(ControlledObserverLauncher):
+            async def start_controlled(self, command, environment):
+                started.set()
+                try:
+                    await gate.wait()
+                except asyncio.CancelledError:
+                    await gate.wait()
+                return await super().start_controlled(command, environment)
+
+        launcher = DelayedLauncher('hang')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.HEARTBEAT_OBSERVER_START_CAP_S = 0.01
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.5
+        prepare = asyncio.create_task(
+            supervisor._prepare_heartbeat_diagnostics(),
+        )
+        await started.wait()
+        await asyncio.sleep(0.02)
+        assert not prepare.done()
+        gate.set()
+        await prepare
+        assert supervisor._heartbeat_trace_error is not None
         assert supervisor._heartbeat_observer_process is launcher.child
-        assert launcher.child.returncode == -signal.SIGKILL
+        await supervisor._stop_heartbeat_diagnostics()
+        assert supervisor._heartbeat_observer_wait_task is not None
         assert supervisor._heartbeat_observer_wait_task.done()
+        assert launcher.child.returncode == -signal.SIGKILL
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert event['join_evidence']['observer_process_joined'] is True
+        assert event['join_evidence']['observer_writer_closed'] is False
+        assert event['trace_error'] is not None
     asyncio.run(run())
 
 

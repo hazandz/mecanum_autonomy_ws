@@ -76,6 +76,8 @@ def _join_evidence():
         'observer_process_joined': True,
         'observer_process_group_absent': True,
         'observer_exit_status': 0, 'observer_stop_acknowledged': True,
+        'observer_end_written': True,
+        'observer_handle_closed': True,
         'observer_writer_closed': True,
         'observer_termination': 'CLEAN_COOPERATIVE',
         'task_residue': 'NONE',
@@ -398,6 +400,8 @@ int main(int argc, char **argv) {
         evidence.update({
             'observer_exit_status': -9,
             'observer_stop_acknowledged': False,
+            'observer_end_written': False,
+            'observer_handle_closed': False,
             'observer_writer_closed': False,
             'observer_termination': 'SIGKILL',
         })
@@ -427,6 +431,35 @@ int main(int argc, char **argv) {
         self.assertEqual(result['records'], {})
         self.assertFalse(result['clean_close_verified'])
         self.assertFalse(result['trace_files_complete'])
+        self.assertFalse(result['coverage_complete'])
+
+    def test_inconsistent_end_and_handle_facts_block_raw_recovery(self):
+        """A contradictory close summary cannot authorize trace recovery."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        _write_fixture(backend, role='backend', provenance=self.provenance)
+        _write_fixture(observer, role='observer', provenance=self.provenance)
+        evidence = _join_evidence()
+        evidence.update({
+            'observer_end_written': False,
+            'observer_handle_closed': True,
+            'observer_writer_closed': True,
+        })
+        result = read_trace_pair(
+            backend, observer, session_id='session-1', config_hash='a' * 64,
+            world='b2_training_arena', collection_id='collection-1',
+            clock_provenance=self.provenance, joined=True,
+            requested_window=(100, 400),
+            allocated_files=(
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ), expected_backend_instance_id=42,
+            join_evidence=evidence,
+            readiness_backend_status=_readiness_binding(),
+            readiness_binding_verified=True,
+        )
+        self.assertFalse(result['raw_recovery_allowed'])
+        self.assertFalse(result['clean_close_verified'])
         self.assertFalse(result['coverage_complete'])
 
     def test_live_or_unreaped_observer_is_not_read(self):

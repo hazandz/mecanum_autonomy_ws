@@ -1326,6 +1326,8 @@ class LocalTrainingProcessSupervisor:
         self._heartbeat_observer_protocol_lock = asyncio.Lock()
         self._heartbeat_observer_cleanup_deadline = None
         self._heartbeat_observer_stop_acknowledged = False
+        self._heartbeat_observer_end_written = False
+        self._heartbeat_observer_handle_closed = False
         self._heartbeat_observer_writer_closed = False
         self._heartbeat_observer_termination = 'NOT_STARTED'
         self._heartbeat_observer_protocol_started = False
@@ -1548,19 +1550,20 @@ class LocalTrainingProcessSupervisor:
         command = (
             sys.executable, '-m', self.HEARTBEAT_OBSERVER_MODULE, '--worker',
         )
+        spawn_deadline = (
+            self.monotonic() + self.HEARTBEAT_OBSERVER_START_CAP_S
+        )
         self._heartbeat_observer_spawn_task = asyncio.create_task(
             starter(command, environment),
         )
-        try:
-            self._heartbeat_observer_process = await asyncio.wait_for(
-                asyncio.shield(self._heartbeat_observer_spawn_task),
-                timeout=self.HEARTBEAT_OBSERVER_START_CAP_S,
-            )
-        except BaseException:
-            self._heartbeat_observer_spawn_task.add_done_callback(
-                self._capture_late_observer_process,
-            )
-            raise
+        # Keep spawn owned by this operation.  On the pinned Linux/Python
+        # subprocess path, cancellation closes the transport, kills its exact
+        # Popen child, and awaits its reap before propagating.  Shielding would
+        # let a process handle materialize after supervisor cleanup returned.
+        self._heartbeat_observer_process = await asyncio.wait_for(
+            self._heartbeat_observer_spawn_task,
+            timeout=self.HEARTBEAT_OBSERVER_START_CAP_S,
+        )
         process = self._heartbeat_observer_process
         identity = self._heartbeat_identity_reader(process.pid)
         if not RclpyReadiness._valid_process_identity(identity, process.pid):
@@ -1569,6 +1572,8 @@ class LocalTrainingProcessSupervisor:
         self._heartbeat_observer_stderr_task = asyncio.create_task(
             self._drain_observer_stderr(process.stderr),
         )
+        if self.monotonic() >= spawn_deadline:
+            raise TimeoutError('observer_spawn_completed_after_start_deadline')
         deadline = self.monotonic() + self.HEARTBEAT_OBSERVER_START_CAP_S
         hello = await self._observer_read_frame(deadline)
         module_path = Path(trace_observer.__file__).resolve(strict=True)
@@ -1613,37 +1618,6 @@ class LocalTrainingProcessSupervisor:
         )
         self._heartbeat_observer_protocol_started = True
         self._heartbeat_observer_termination = 'RUNNING'
-
-    def _capture_late_observer_process(self, task):
-        """Keep ownership if a timed-out asynchronous spawn returns late."""
-        if task.cancelled():
-            self._process_residue = 'UNKNOWN'
-            return
-        try:
-            process = task.result()
-        except BaseException as error:
-            self._heartbeat_trace_error = (
-                self._heartbeat_trace_error
-                or f'observer_spawn_failed:{type(error).__name__}'
-            )
-            return
-        if self._heartbeat_observer_process is None:
-            self._heartbeat_observer_process = process
-        if (self._heartbeat_observer_stderr_task is None
-                and getattr(process, 'stderr', None) is not None):
-            self._heartbeat_observer_stderr_task = asyncio.create_task(
-                self._drain_observer_stderr(process.stderr),
-            )
-        try:
-            identity = self._heartbeat_identity_reader(process.pid)
-            if RclpyReadiness._valid_process_identity(identity, process.pid):
-                self._heartbeat_observer_identity = dict(identity)
-            else:
-                self._process_residue = 'UNKNOWN'
-        except BaseException:
-            self._process_residue = 'UNKNOWN'
-        if self._heartbeat_observer_cleanup_deadline is not None:
-            self._process_residue = 'UNKNOWN'
 
     async def _observer_send_frame(self, message, deadline):
         process = self._heartbeat_observer_process
@@ -1743,7 +1717,10 @@ class LocalTrainingProcessSupervisor:
                 return False
             if not group_alive:
                 return True
-            await self.sleep(min(0.02, max(0.0, deadline - self.monotonic())))
+            remaining = deadline - self.monotonic()
+            if remaining <= 0:
+                return False
+            await self.sleep(min(0.02, remaining))
 
     async def _stop_observer_process(self):
         """Stop the isolated child within one fixed cleanup deadline."""
@@ -1807,14 +1784,34 @@ class LocalTrainingProcessSupervisor:
                     response.get('kind') == 'stopped'
                     and response.get('nonce') == self._heartbeat_observer_nonce
                     and response.get('joined') is True
+                    and response.get('end_written') is True
+                    and response.get('handle_closed') is True
                     and response.get('writer_closed') is True
+                    and isinstance(response.get('snapshot'), dict)
+                    and response['snapshot'].get('end_written') is True
+                    and response['snapshot'].get('handle_closed') is True
+                    and response['snapshot'].get('writer_closed') is True
                 )
                 self._heartbeat_observer_stop_acknowledged = clean_ack
-                self._heartbeat_observer_writer_closed = clean_ack
-                self._heartbeat_observer_state = response.get('snapshot')
+                snapshot = response.get('snapshot')
+                self._heartbeat_observer_end_written = bool(
+                    snapshot and snapshot.get('end_written') is True
+                )
+                self._heartbeat_observer_handle_closed = bool(
+                    snapshot and snapshot.get('handle_closed') is True
+                )
+                self._heartbeat_observer_writer_closed = (
+                    self._heartbeat_observer_end_written
+                    and self._heartbeat_observer_handle_closed
+                )
+                self._heartbeat_observer_state = snapshot
             except BaseException as error:
                 errors.append(f'observer_stop_ack:{type(error).__name__}')
-        if clean_ack and await self._wait_observer_reaped(deadline):
+        cooperative_deadline = min(
+            deadline, max(self.monotonic(), deadline - 0.75),
+        )
+        if clean_ack and await self._wait_observer_reaped(
+                cooperative_deadline):
             self._heartbeat_observer_termination = 'CLEAN_COOPERATIVE'
         else:
             if process.returncode is None:
@@ -1900,6 +1897,8 @@ class LocalTrainingProcessSupervisor:
             'process_joined': joined, 'group_absent': group_absent,
             'exit_status': self._heartbeat_observer_exit_status,
             'stop_acknowledged': self._heartbeat_observer_stop_acknowledged,
+            'end_written': self._heartbeat_observer_end_written,
+            'handle_closed': self._heartbeat_observer_handle_closed,
             'writer_closed': self._heartbeat_observer_writer_closed,
             'termination': self._heartbeat_observer_termination,
             'stderr_bytes': self._heartbeat_observer_stderr_total,
@@ -1917,6 +1916,8 @@ class LocalTrainingProcessSupervisor:
             'identity_verified': self._heartbeat_observer_identity is not None,
             'exit_status': self._heartbeat_observer_exit_status,
             'stop_acknowledged': self._heartbeat_observer_stop_acknowledged,
+            'end_written': self._heartbeat_observer_end_written,
+            'handle_closed': self._heartbeat_observer_handle_closed,
             'writer_closed': self._heartbeat_observer_writer_closed,
             'termination': self._heartbeat_observer_termination,
             'errors': tuple(errors),
@@ -2276,6 +2277,14 @@ class LocalTrainingProcessSupervisor:
                 'observer_stop_acknowledged': bool(
                     observer_join
                     and observer_join.get('stop_acknowledged') is True
+                ),
+                'observer_end_written': bool(
+                    observer_join
+                    and observer_join.get('end_written') is True
+                ),
+                'observer_handle_closed': bool(
+                    observer_join
+                    and observer_join.get('handle_closed') is True
                 ),
                 'observer_writer_closed': bool(
                     observer_join

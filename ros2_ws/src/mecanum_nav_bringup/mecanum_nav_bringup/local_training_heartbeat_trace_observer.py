@@ -194,6 +194,8 @@ class LocalTrainingHeartbeatTraceObserver:
         self._api = None
         self._writer = None
         self._writer_was_opened = False
+        self._end_written = False
+        self._handle_closed = False
         self._writer_closed = False
         self._context = None
         self._node = None
@@ -485,19 +487,27 @@ class LocalTrainingHeartbeatTraceObserver:
                 closed = self._api.hbtrace_append(
                     writer, 3, self._clock(), 0, None, 0,
                 )
-                if closed != 1:
+                self._end_written = closed == 1
+                if not self._end_written:
                     self._append_error('observer_trace_end_failed_or_overflow')
-            finally:
+            except BaseException:
+                self._append_error('observer_trace_end_write_failed')
+            try:
                 self._api.hbtrace_close(writer)
-                self._writer_closed = True
+            except BaseException:
+                self._append_error('observer_trace_handle_close_failed')
+            else:
+                self._handle_closed = True
         else:
-            self._writer_closed = True
+            self._handle_closed = True
+        self._writer_closed = self._end_written and self._handle_closed
 
     def stop(self, timeout_s=2.0):
         """Stop and boundedly join the owned executor thread."""
         if self._thread is None:
             self._joined = True
-            self._writer_closed = True
+            self._handle_closed = self._writer is None
+            self._writer_closed = self._end_written and self._handle_closed
             return True
         self._stop.set()
         if self._context is not None and self._context.ok():
@@ -516,7 +526,8 @@ class LocalTrainingHeartbeatTraceObserver:
         """Signal the executor and join without blocking the owner loop."""
         if self._thread is None:
             self._joined = True
-            self._writer_closed = True
+            self._handle_closed = self._writer is None
+            self._writer_closed = self._end_written and self._handle_closed
             return True
         self._stop.set()
         deadline = time.monotonic() + max(0.0, timeout_s)
@@ -550,6 +561,8 @@ class LocalTrainingHeartbeatTraceObserver:
                 ),
                 'errors': tuple(self._errors),
                 'writer_opened': self._writer_was_opened,
+                'end_written': self._end_written,
+                'handle_closed': self._handle_closed,
                 'writer_closed': self._writer_closed,
             }
 
@@ -652,10 +665,16 @@ def _observer_worker_main():
             _worker_write({
                 'kind': 'stopped', 'nonce': nonce,
                 'joined': stopped is True,
+                'end_written': snapshot.get('end_written') is True,
+                'handle_closed': snapshot.get('handle_closed') is True,
                 'writer_closed': snapshot.get('writer_closed') is True,
                 'snapshot': snapshot,
             })
-            return 0 if stopped and snapshot.get('writer_closed') else 4
+            return 0 if (
+                stopped and snapshot.get('end_written') is True
+                and snapshot.get('handle_closed') is True
+                and snapshot.get('writer_closed') is True
+            ) else 4
         _worker_write({'kind': 'error', 'code': 'command_kind_invalid'})
         return 2
 

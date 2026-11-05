@@ -18,6 +18,7 @@ class FakeTraceApi:
         self.times = iter(times)
         self.records = []
         self.closed = []
+        self.end_result = 1
 
     def hbtrace_clock_monotonic_ns(self):
         """Return the next injected monotonic timestamp."""
@@ -32,7 +33,7 @@ class FakeTraceApi:
         """Append one diagnostic record to the in-memory fixture."""
         data = bytes(payload[:size]) if size else b''
         self.records.append((writer, kind, timestamp, sequence, data))
-        return 1
+        return self.end_result if kind == 3 else 1
 
     def hbtrace_close(self, writer):
         """Record closure of the fake native writer."""
@@ -477,3 +478,21 @@ def test_native_clock_outside_bracket_does_not_produce_domain_check(tmp_path):
         assert 'outside Python bracket' in str(error)
     else:
         raise AssertionError('invalid native clock bracket was accepted')
+
+
+def test_end_append_failure_is_distinct_from_native_handle_close():
+    """Closing a C handle cannot stand in for writing a valid end marker."""
+    api = FakeTraceApi([123])
+    api.end_result = 0
+    observer = _observer(api, ready=False)
+    observer._writer = 17
+    observer._writer_was_opened = True
+
+    observer._close_writer()
+
+    state = observer.snapshot()
+    assert api.closed == [17]
+    assert state['end_written'] is False
+    assert state['handle_closed'] is True
+    assert state['writer_closed'] is False
+    assert 'observer_trace_end_failed_or_overflow' in state['errors']

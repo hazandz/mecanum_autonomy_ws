@@ -160,6 +160,7 @@ def _valid_join_evidence(evidence):
         'observer_process_identity', 'observer_process_identity_verified',
         'observer_process_joined', 'observer_process_group_absent',
         'observer_exit_status', 'observer_stop_acknowledged',
+        'observer_end_written', 'observer_handle_closed',
         'observer_writer_closed', 'observer_termination', 'task_residue',
     }
     identity = evidence.get('observer_process_identity') if isinstance(
@@ -186,7 +187,13 @@ def _valid_join_evidence(evidence):
         and evidence['observer_process_group_absent'] is True
         and type(evidence['observer_exit_status']) is int
         and type(evidence['observer_stop_acknowledged']) is bool
+        and type(evidence['observer_end_written']) is bool
+        and type(evidence['observer_handle_closed']) is bool
         and type(evidence['observer_writer_closed']) is bool
+        and evidence['observer_writer_closed'] is (
+            evidence['observer_end_written']
+            and evidence['observer_handle_closed']
+        )
         and evidence['observer_termination'] in {
             'CLEAN_COOPERATIVE', 'SIGTERM', 'SIGKILL', 'UNCONFIRMED_EXIT',
         }
@@ -198,6 +205,8 @@ def _valid_clean_join_evidence(evidence):
     return (
         _valid_join_evidence(evidence)
         and evidence['observer_stop_acknowledged'] is True
+        and evidence['observer_end_written'] is True
+        and evidence['observer_handle_closed'] is True
         and evidence['observer_writer_closed'] is True
         and evidence['observer_exit_status'] == 0
         and evidence['observer_termination'] == 'CLEAN_COOPERATIVE'
