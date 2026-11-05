@@ -10,12 +10,14 @@ import asyncio
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import secrets
 import signal
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -1284,6 +1286,9 @@ class LocalTrainingProcessSupervisor:
     HEARTBEAT_OBSERVER_MAX_FRAME = 4096
     HEARTBEAT_OBSERVER_START_CAP_S = 3.0
     HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 3.0
+    CLEANUP_CAP_S = 30.0
+    CLEANUP_OBSERVER_TASK_JOIN_CAP_S = 0.25
+    CLEANUP_SIGNAL_DISPATCH_CAP_S = 0.25
 
     def __init__(
         self, *, plan: LaunchPlan, launcher: ProcessLauncher,
@@ -1340,10 +1345,21 @@ class LocalTrainingProcessSupervisor:
         self._heartbeat_trace_environment = {}
         self._heartbeat_trace_error = None
         self._heartbeat_trace_reported = False
+        self._heartbeat_trace_defer_sink = False
         self._server_process_record = None
         self.owned: list[ProcessRecord] = []
         self._observer_tasks: set[asyncio.Task] = set()
-        self._cleanup_lock = asyncio.Lock()
+        self._cleanup_deadline: float | None = None
+        self._cleanup_deadline_changed: asyncio.Event | None = None
+        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_residue_tasks: set[asyncio.Task] = set()
+        self._cleanup_wait_tasks: dict[int, asyncio.Task] = {}
+        self._cleanup_residue = 'NONE'
+        self._cleanup_errors: list[str] = []
+        self._cleanup_evidence: list[
+            tuple[str, dict[str, object]]
+        ] = []
+        self._cleanup_sink_thread: threading.Thread | None = None
         self.gui_opened = False
         bind_evidence_sink = getattr(readiness, 'bind_evidence_sink', None)
         if bind_evidence_sink is not None:
@@ -2032,14 +2048,14 @@ class LocalTrainingProcessSupervisor:
             self.readiness.owner_ack(self.OWNER_ACK_TIMEOUT_S),
         )
         gui_exit = asyncio.create_task(gui_record.process.wait())
+        self._track_observer(acknowledgement)
+        self._track_observer(gui_exit)
         done, pending = await asyncio.wait(
             (acknowledgement, gui_exit), timeout=self.OWNER_ACK_TIMEOUT_S,
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
         if gui_exit in done:
             acknowledgement.cancel()
             self.evidence_sink.record('gui_closed_or_crashed', {
@@ -2090,7 +2106,8 @@ class LocalTrainingProcessSupervisor:
             for task in waiters:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*waiters, return_exceptions=True)
+            # cleanup() owns and boundedly joins these tasks. Do not gather
+            # them here: a non-cooperative waiter must not bypass its deadline.
             await self.cleanup()
 
     def _track_observer(self, task: asyncio.Task) -> None:
@@ -2126,66 +2143,566 @@ class LocalTrainingProcessSupervisor:
             await self.sleep(min(0.05, remaining))
         return True
 
-    async def cleanup(self) -> None:
-        """Stop all owned groups, including children whose leader exited."""
-        async with self._cleanup_lock:
-            try:
-                await self._cleanup_owned()
-            finally:
-                await self._stop_heartbeat_diagnostics()
+    async def cleanup(self, *, deadline: float | None = None) -> bool:
+        """Run cleanup under one absolute monotonic deadline.
 
-    async def _cleanup_owned(self) -> None:
+        A caller may provide an earlier absolute deadline. Repeated calls can
+        only shorten the stored deadline and share the same cleanup task.
+        False means some task, process, group, pipe or observer is unconfirmed.
+        Async waits are bounded; synchronous sink calls and launcher identity /
+        signal syscalls cannot be preempted by asyncio and prevent a hard
+        wall-clock guarantee if one of those calls blocks inside the event
+        loop.
+        """
+        now = self.monotonic()
+        proposed = now + self.CLEANUP_CAP_S
+        if deadline is not None:
+            if type(deadline) not in (float, int) or not math.isfinite(
+                    float(deadline)):
+                raise TypeError('cleanup deadline must be an absolute number')
+            proposed = min(proposed, float(deadline))
+        if self._cleanup_deadline_changed is None:
+            self._cleanup_deadline_changed = asyncio.Event()
+        if self._cleanup_deadline is None:
+            self._cleanup_deadline = proposed
+        else:
+            shortened = min(self._cleanup_deadline, proposed)
+            if shortened < self._cleanup_deadline:
+                self._cleanup_deadline = shortened
+                self._cleanup_deadline_changed.set()
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup_once())
+            self._cleanup_task.add_done_callback(self._observe_cleanup_task)
+        task = self._cleanup_task
+        remaining = max(
+            0.0, self._cleanup_deadline - self.monotonic(),
+        )
+        if not task.done() and remaining > 0:
+            await asyncio.wait({task}, timeout=remaining)
+        if not task.done():
+            self._cleanup_residue = 'UNKNOWN'
+            if 'cleanup_deadline_exhausted' not in self._cleanup_errors:
+                self._cleanup_errors.append('cleanup_deadline_exhausted')
+            return False
+        try:
+            task.result()
+        except BaseException as error:
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append(
+                f'cleanup_task_failed:{type(error).__name__}',
+            )
+        return self._cleanup_residue == 'NONE'
+
+    def _observe_cleanup_task(self, task: asyncio.Task) -> None:
+        """Consume background cleanup exceptions without losing the handle."""
+        if task.cancelled():
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append('cleanup_task_cancelled')
+            return
+        error = task.exception()
+        if error is not None:
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append(
+                f'cleanup_task_failed:{type(error).__name__}',
+            )
+
+    async def _cleanup_once(self) -> None:
+        deadline = self._cleanup_deadline
+        if deadline is None:
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append('cleanup_deadline_missing')
+            return
+        observer_reserve = (
+            min(self.HEARTBEAT_OBSERVER_CLEANUP_CAP_S,
+                max(0.0, deadline - self.monotonic()))
+            if self.heartbeat_diagnostics_enabled else 0.0
+        )
+        process_deadline = deadline
+        try:
+            await self._cleanup_owned(
+                deadline, process_deadline, observer_reserve,
+            )
+        except BaseException as error:
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append(
+                f'owned_cleanup_failed:{type(error).__name__}',
+            )
+        if self.heartbeat_diagnostics_enabled:
+            deadline = self._effective_cleanup_deadline(deadline)
+            remaining = max(0.0, deadline - self.monotonic())
+            if remaining <= 0:
+                self._process_residue = 'UNKNOWN'
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error
+                    or 'cleanup_deadline_before_observer_stop'
+                )
+                self._cleanup_residue = 'UNKNOWN'
+            else:
+                if self._heartbeat_observer_cleanup_deadline is None:
+                    self._heartbeat_observer_cleanup_deadline = min(
+                        deadline,
+                        self.monotonic()
+                        + self.HEARTBEAT_OBSERVER_CLEANUP_CAP_S,
+                    )
+                else:
+                    self._heartbeat_observer_cleanup_deadline = min(
+                        deadline, self._heartbeat_observer_cleanup_deadline,
+                    )
+                self._heartbeat_trace_defer_sink = True
+                observer_task = asyncio.create_task(
+                    self._stop_heartbeat_diagnostics(),
+                )
+                if not await self._await_cleanup_task(
+                        observer_task, deadline):
+                    observer_task.cancel()
+                    self._retain_cleanup_task(observer_task)
+                    self._process_residue = 'UNKNOWN'
+                    self._heartbeat_trace_error = (
+                        self._heartbeat_trace_error
+                        or 'heartbeat_observer_cleanup_deadline_unknown'
+                    )
+                    self._cleanup_residue = 'UNKNOWN'
+                else:
+                    try:
+                        observer_task.result()
+                    except BaseException as error:
+                        self._process_residue = 'UNKNOWN'
+                        self._heartbeat_trace_error = (
+                            self._heartbeat_trace_error
+                            or 'heartbeat_observer_cleanup:'
+                            f'{type(error).__name__}'
+                        )
+                        self._cleanup_residue = 'UNKNOWN'
+        if self.owned or self._cleanup_residue_tasks:
+            self._cleanup_residue = 'UNKNOWN'
+        if self._process_residue != 'NONE' or self._task_residue != 'NONE':
+            self._cleanup_residue = 'UNKNOWN'
+        await self._flush_cleanup_evidence(deadline)
+
+    def _retain_cleanup_task(self, task: asyncio.Task) -> None:
+        self._cleanup_residue_tasks.add(task)
+        task.add_done_callback(self._cleanup_residue_task_finished)
+
+    def _cleanup_residue_task_finished(self, task: asyncio.Task) -> None:
+        self._cleanup_residue_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except BaseException as caught:
+            error = caught
+        if error is not None:
+            self._cleanup_residue = 'UNKNOWN'
+            self._cleanup_errors.append(
+                f'cleanup_residue_task:{type(error).__name__}',
+            )
+
+    def _effective_cleanup_deadline(self, ceiling: float) -> float:
+        return min(
+            ceiling,
+            self._cleanup_deadline if self._cleanup_deadline is not None
+            else ceiling,
+        )
+
+    def _effective_process_deadline(
+        self, ceiling: float, observer_reserve_s: float,
+    ) -> float:
+        total_deadline = (
+            self._cleanup_deadline if self._cleanup_deadline is not None
+            else ceiling
+        )
+        return max(
+            self.monotonic(),
+            min(ceiling, total_deadline - observer_reserve_s),
+        )
+
+    async def _await_cleanup_task(
+        self, task: asyncio.Task, deadline: float,
+        observer_reserve_s: float = 0.0,
+    ) -> bool:
+        while not task.done():
+            event = self._cleanup_deadline_changed
+            if event is not None:
+                event.clear()
+            effective = (
+                self._effective_process_deadline(
+                    deadline, observer_reserve_s,
+                ) if observer_reserve_s else
+                self._effective_cleanup_deadline(deadline)
+            )
+            remaining = max(0.0, effective - self.monotonic())
+            if remaining <= 0:
+                return task.done()
+            timeout_task = asyncio.create_task(self.sleep(remaining))
+            waiters = {task, timeout_task}
+            changed = None
+            if event is not None:
+                changed = asyncio.create_task(event.wait())
+                waiters.add(changed)
+            done, _ = await asyncio.wait(
+                waiters,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                await self._cancel_cleanup_waiters(
+                    timeout_task, changed,
+                )
+                return True
+            if timeout_task in done:
+                await self._cancel_cleanup_waiters(changed)
+                return task.done()
+            if timeout_task not in done:
+                await self._cancel_cleanup_waiters(timeout_task)
+        return True
+
+    async def _cancel_cleanup_waiters(self, *waiters) -> None:
+        """Cancel internal deadline waiters without unbounded joining."""
+        pending = [waiter for waiter in waiters
+                   if waiter is not None and not waiter.done()]
+        for waiter in pending:
+            waiter.cancel()
+        if pending:
+            # Give standard asyncio.sleep/Event.wait one loop turn to finish
+            # cancellation; an injected non-cooperative waiter stays owned.
+            await asyncio.sleep(0)
+        for waiter in pending:
+            if waiter.done():
+                try:
+                    waiter.result()
+                except BaseException:
+                    pass
+            else:
+                self._retain_cleanup_task(waiter)
+                self._task_residue = 'UNKNOWN'
+
+    async def _wait_group_until(
+        self, process: OwnedProcess, deadline: float,
+        observer_reserve_s: float = 0.0,
+    ) -> bool:
+        while True:
+            deadline = self._effective_process_deadline(
+                deadline, observer_reserve_s,
+            ) if observer_reserve_s else self._effective_cleanup_deadline(
+                deadline,
+            )
+            try:
+                alive = self.launcher.group_alive(process)
+            except BaseException:
+                self._process_residue = 'UNKNOWN'
+                return False
+            if not alive:
+                return True
+            remaining = deadline - self.monotonic()
+            if remaining <= 0:
+                return False
+            sleep_task = asyncio.create_task(
+                self.sleep(min(0.05, remaining)),
+            )
+            if not await self._await_cleanup_task(
+                    sleep_task, deadline, observer_reserve_s):
+                sleep_task.cancel()
+                self._retain_cleanup_task(sleep_task)
+                self._task_residue = 'UNKNOWN'
+                return False
+
+    async def _cleanup_group(
+        self, record: ProcessRecord, deadline: float,
+        observer_reserve_s: float,
+    ) -> tuple[str, bool, bool]:
+        process = record.process
+        deadline = self._effective_process_deadline(
+            deadline, observer_reserve_s,
+        )
+        escalation = []
+        try:
+            alive = self.launcher.group_alive(process)
+        except BaseException:
+            self._process_residue = 'UNKNOWN'
+            return 'IDENTITY_UNKNOWN', False, False
+        if alive:
+            for sig, label, phase_s in (
+                (signal.SIGINT, 'SIGINT', 5.0),
+                (signal.SIGTERM, 'SIGTERM', 3.0),
+                (signal.SIGKILL, 'SIGKILL', 3.0),
+            ):
+                deadline = self._effective_process_deadline(
+                    deadline, observer_reserve_s,
+                )
+                remaining = deadline - self.monotonic()
+                if remaining <= 0:
+                    break
+                dispatch = asyncio.create_task(
+                    self.launcher.stop_group(process, sig),
+                )
+                dispatch_deadline = min(
+                    deadline,
+                    self.monotonic() + self.CLEANUP_SIGNAL_DISPATCH_CAP_S,
+                )
+                if not await self._await_cleanup_task(
+                        dispatch, dispatch_deadline,
+                        observer_reserve_s):
+                    dispatch.cancel()
+                    self._retain_cleanup_task(dispatch)
+                    self._process_residue = 'UNKNOWN'
+                    escalation.append(f'{label}_DISPATCH_UNKNOWN')
+                    break
+                try:
+                    dispatch.result()
+                except BaseException as error:
+                    self._cleanup_errors.append(
+                        f'{label.lower()}_dispatch:{type(error).__name__}',
+                    )
+                    escalation.append(f'{label}_DISPATCH_FAILED')
+                    break
+                escalation.append(label)
+                phase_deadline = min(
+                    deadline, self.monotonic() + phase_s,
+                )
+                if await self._wait_group_until(
+                        process, phase_deadline, observer_reserve_s):
+                    break
+        try:
+            group_absent = not self.launcher.group_alive(process)
+        except BaseException:
+            group_absent = False
+        waiter = self._cleanup_wait_tasks.get(id(process))
+        if waiter is None:
+            waiter = asyncio.create_task(process.wait())
+            self._cleanup_wait_tasks[id(process)] = waiter
+        process_joined = False
+        if waiter is not None and not waiter.done():
+            process_joined = await self._await_cleanup_task(
+                waiter, deadline, observer_reserve_s,
+            )
+            if not process_joined:
+                self._retain_cleanup_task(waiter)
+        elif waiter is not None:
+            process_joined = True
+        if waiter is not None and waiter.done():
+            try:
+                waiter.result()
+                process_joined = process.returncode is not None
+            except BaseException as error:
+                self._cleanup_errors.append(
+                    f'owned_process_wait:{record.name}:{type(error).__name__}',
+                )
+                process_joined = False
+        if not process_joined or not group_absent:
+            self._process_residue = 'UNKNOWN'
+        if not escalation:
+            escalation = ['GROUP_ALREADY_EXITED' if group_absent
+                          else 'DEADLINE_OR_IDENTITY_UNKNOWN']
+        return '_THEN_'.join(escalation), process_joined, group_absent
+
+    async def _cleanup_owned(
+        self, deadline: float, process_deadline: float,
+        observer_reserve_s: float,
+    ) -> None:
         current = asyncio.current_task()
         observers = [
             task for task in self._observer_tasks if task is not current
         ]
         for task in observers:
-            task.cancel()
-        if observers:
-            await asyncio.gather(*observers, return_exceptions=True)
-        self._observer_tasks.difference_update(observers)
-        records, self.owned = list(reversed(self.owned)), []
-        for record in records:
-            process = record.process
-            if self.launcher.group_alive(process):
-                await self.launcher.stop_group(process, signal.SIGINT)
-                if await self._wait_group_exit(process, 5.0):
-                    escalation = 'SIGINT'
-                else:
-                    await self.launcher.stop_group(process, signal.SIGTERM)
-                    if await self._wait_group_exit(process, 3.0):
-                        escalation = 'SIGINT_THEN_SIGTERM'
-                    else:
-                        await self.launcher.stop_group(process, signal.SIGKILL)
-                        stopped = await self._wait_group_exit(process, 3.0)
-                        escalation = 'SIGINT_THEN_SIGTERM_THEN_SIGKILL'
-                        if not stopped:
-                            escalation += '_GROUP_STILL_PRESENT'
-            else:
-                escalation = 'GROUP_ALREADY_EXITED'
-            self.evidence_sink.record(
-                'owned_process_cleanup', {
-                    **self._facts(record), 'escalation': escalation,
-                },
-            )
-            if record.output_tasks:
+            if not task.done():
+                task.cancel()
+        task_deadline = min(
+            self._effective_process_deadline(
+                process_deadline, observer_reserve_s,
+            ),
+            self.monotonic() + self.CLEANUP_OBSERVER_TASK_JOIN_CAP_S,
+        )
+        pending_observers = {task for task in observers if not task.done()}
+        if pending_observers and self.monotonic() < task_deadline:
+            joins = asyncio.gather(*pending_observers, return_exceptions=True)
+            if await self._await_cleanup_task(joins, task_deadline):
+                pending_observers = set()
+        for task in pending_observers:
+            self._retain_cleanup_task(task)
+            self._task_residue = 'UNKNOWN'
+            self._cleanup_residue = 'UNKNOWN'
+        for task in observers:
+            if task.done() and not task.cancelled():
                 try:
-                    await asyncio.wait_for(
-                        asyncio.gather(
-                            *record.output_tasks, return_exceptions=True,
-                        ),
-                        timeout=1.0,
+                    error = task.exception()
+                except BaseException as caught:
+                    error = caught
+                if error is not None:
+                    self._cleanup_errors.append(
+                        f'observer_task:{type(error).__name__}',
                     )
-                except asyncio.TimeoutError:
-                    for task in record.output_tasks:
-                        task.cancel()
-                    await asyncio.gather(
-                        *record.output_tasks, return_exceptions=True,
+
+        records = list(reversed(self.owned))
+        results = {}
+        for index, record in enumerate(records):
+            effective_process_deadline = self._effective_process_deadline(
+                process_deadline, observer_reserve_s,
+            )
+            remaining = max(
+                0.0, effective_process_deadline - self.monotonic(),
+            )
+            groups_left = len(records) - index
+            group_deadline = min(
+                effective_process_deadline,
+                self.monotonic() + remaining / max(1, groups_left),
+            )
+            try:
+                escalation, joined, absent = await self._cleanup_group(
+                    record, group_deadline, observer_reserve_s,
+                )
+            except BaseException as error:
+                escalation, joined, absent = (
+                    f'CLEANUP_ERROR_{type(error).__name__}', False, False,
+                )
+                self._cleanup_errors.append(
+                    'owned_group_cleanup:'
+                    f'{record.name}:{type(error).__name__}',
+                )
+                self._process_residue = 'UNKNOWN'
+            results[id(record)] = (escalation, joined, absent)
+
+        drain_tasks = {
+            task for record in records for task in record.output_tasks
+            if not task.done()
+        }
+        effective_process_deadline = self._effective_process_deadline(
+            process_deadline, observer_reserve_s,
+        )
+        if drain_tasks and self.monotonic() < effective_process_deadline:
+            drain_join = asyncio.gather(*drain_tasks, return_exceptions=True)
+            if await self._await_cleanup_task(
+                    drain_join, effective_process_deadline,
+                    observer_reserve_s):
+                pending_drains = set()
+            else:
+                pending_drains = {
+                    task for task in drain_tasks if not task.done()
+                }
+        else:
+            pending_drains = drain_tasks
+        for task in drain_tasks:
+            if task in pending_drains:
+                task.cancel()
+                self._retain_cleanup_task(task)
+                self._task_residue = 'UNKNOWN'
+                self._cleanup_residue = 'UNKNOWN'
+
+        unresolved = []
+        for record in records:
+            escalation, joined, absent = results[id(record)]
+            output_task_outcomes = []
+            drains_joined = True
+            for task in record.output_tasks:
+                outcome = {
+                    'done': task.done(), 'cancelled': task.cancelled(),
+                    'error_type': None,
+                }
+                if task.cancelled() or not task.done():
+                    drains_joined = False
+                elif task.exception() is not None:
+                    error = task.exception()
+                    outcome['error_type'] = type(error).__name__
+                    self._cleanup_errors.append(
+                        f'output_drain:{record.name}:{type(error).__name__}',
                     )
-                    self.evidence_sink.record(
-                        'owned_process_output_drain_timeout',
-                        self._facts(record),
+                    drains_joined = False
+                output_task_outcomes.append(outcome)
+            if not drains_joined:
+                self._safe_cleanup_record(
+                    'owned_process_output_drain_timeout',
+                    self._facts(record),
+                )
+            clean = joined and absent and drains_joined
+            if not clean:
+                unresolved.append(record)
+                self._cleanup_residue = 'UNKNOWN'
+            self._safe_cleanup_record('owned_process_cleanup', {
+                **self._facts(record), 'escalation': escalation,
+                'process_joined': joined, 'group_absent': absent,
+                'exit_status': record.process.returncode,
+                'output_tasks_joined': drains_joined,
+                'output_task_outcomes': output_task_outcomes,
+                'residue': 'NONE' if clean else 'UNKNOWN',
+            })
+        self.owned = list(reversed(unresolved))
+
+    def _safe_cleanup_record(
+        self, event: str, facts: dict[str, object],
+    ) -> None:
+        """Buffer facts so sink I/O cannot block process cleanup."""
+        self._cleanup_evidence.append((event, dict(facts)))
+
+    async def _flush_cleanup_evidence(self, deadline: float) -> None:
+        """Publish buffered cleanup facts off-loop within remaining budget."""
+        if not self._cleanup_evidence:
+            return
+        if self._effective_cleanup_deadline(deadline) <= self.monotonic():
+            self._cleanup_errors.append(
+                'cleanup_evidence_not_published_deadline_exhausted',
+            )
+            self._cleanup_residue = 'UNKNOWN'
+            return
+        queued = tuple(self._cleanup_evidence)
+        self._cleanup_evidence.clear()
+
+        def write_records():
+            errors = []
+            for event, facts in queued:
+                try:
+                    self.evidence_sink.record(event, facts)
+                except BaseException as error:
+                    errors.append(
+                        f'cleanup_sink:{event}:{type(error).__name__}',
                     )
+            return errors
+
+        failures: list[str] = []
+        completed = threading.Event()
+
+        def write_and_signal():
+            try:
+                failures.extend(write_records())
+            except BaseException as error:
+                failures.append(
+                    f'cleanup_sink_worker:{type(error).__name__}',
+                )
+            finally:
+                completed.set()
+
+        thread = threading.Thread(
+            target=write_and_signal, name='b22-cleanup-evidence-sink',
+            daemon=False,
+        )
+        self._cleanup_sink_thread = thread
+        try:
+            thread.start()
+        except BaseException as error:
+            self._cleanup_errors.append(
+                f'cleanup_sink_thread_start:{type(error).__name__}',
+            )
+            self._cleanup_residue = 'UNKNOWN'
+            return
+        while thread.is_alive():
+            remaining = (
+                self._effective_cleanup_deadline(deadline)
+                - self.monotonic()
+            )
+            if remaining <= 0:
+                self._cleanup_errors.append(
+                    'cleanup_evidence_sink_deadline_unknown',
+                )
+                self._cleanup_residue = 'UNKNOWN'
+                return
+            await self.sleep(min(0.02, remaining))
+        thread.join(timeout=0)
+        if not completed.is_set():
+            self._cleanup_errors.append(
+                'cleanup_evidence_sink_completion_unknown',
+            )
+            self._cleanup_residue = 'UNKNOWN'
+            return
+        if failures:
+            self._cleanup_errors.extend(failures)
+            self._cleanup_residue = 'UNKNOWN'
 
     async def _stop_heartbeat_diagnostics(self) -> None:
         if (not self.heartbeat_diagnostics_enabled
@@ -2318,6 +2835,8 @@ class LocalTrainingProcessSupervisor:
                 ),
             },
             'trace_error': self._heartbeat_trace_error,
+            'cleanup_errors': tuple(self._cleanup_errors),
+            'cleanup_residue': self._cleanup_residue,
             'coverage_note': (
                 'diagnostic records require process reap and group absence'
             ),
@@ -2326,13 +2845,20 @@ class LocalTrainingProcessSupervisor:
             ),
         }
         self._heartbeat_trace_reported = True
-        try:
-            self.evidence_sink.record('heartbeat_trace_collection', facts)
-        except BaseException as error:
-            self._heartbeat_trace_error = (
-                self._heartbeat_trace_error or
-                f'trace_summary_sink_failed:{type(error).__name__}'
+        if self._heartbeat_trace_defer_sink:
+            self._cleanup_evidence.append(
+                ('heartbeat_trace_collection', facts),
             )
+        else:
+            try:
+                self.evidence_sink.record(
+                    'heartbeat_trace_collection', facts,
+                )
+            except BaseException as error:
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error or
+                    f'trace_summary_sink_failed:{type(error).__name__}'
+                )
 
 
 def _load_sink(specification: str) -> EvidenceSink:
