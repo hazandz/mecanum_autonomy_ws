@@ -7,6 +7,9 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest.mock import patch
+
+from heartbeat_diagnostics import Cause
 
 from heartbeat_trace_session import (
     CAPACITY, HEADER_MARKER, HEADER_SIZE, MAX_FILE_SIZE, RECORD_SIZE,
@@ -64,8 +67,17 @@ def _allocation(path, role):
 def _join_evidence():
     return {
         'server_exit_status': 0, 'server_process_joined': True,
-        'server_group_absent': True, 'observer_thread_joined': True,
-        'observer_thread_alive': False, 'observer_writer_closed': True,
+        'server_group_absent': True,
+        'observer_process_identity': {
+            'pid': 123, 'process_group_id': 123, 'session_id': 123,
+            'start_ticks': 456,
+        },
+        'observer_process_identity_verified': True,
+        'observer_process_joined': True,
+        'observer_process_group_absent': True,
+        'observer_exit_status': 0, 'observer_stop_acknowledged': True,
+        'observer_writer_closed': True,
+        'observer_termination': 'CLEAN_COOPERATIVE',
         'task_residue': 'NONE',
     }
 
@@ -80,6 +92,43 @@ def _readiness_binding():
 
 
 def _clock_certificate(context, *, width=0):
+    sample = {
+        'python_before_ns': 100, 'native_ns': 100 + width // 2,
+        'python_after_ns': 100 + width,
+    }
+    return {
+        'schema_id': 'b2_clock_domain_check/v1',
+        'clock': 'CLOCK_MONOTONIC', 'provenance': context['provenance'],
+        'boot_id': context['boot_id'],
+        'time_namespace_device': context['time_namespace_device'],
+        'time_namespace_inode': context['time_namespace_inode'],
+        'time_namespace_offsets': context['time_namespace_offsets'],
+        'source': 'hbtrace_clock_monotonic_ns',
+        'method': 'python_bracket_around_native_read',
+        'binary_sha256': 'd' * 64, 'samples': [sample, sample, sample],
+        'observed_max_bracket_width_ns': width,
+    }
+
+
+def _clock_proof(context, *, bound=0):
+    """Fixture for a separately supplied, scoped uncertainty proof."""
+    return {
+        'schema_id': 'b2_clock_uncertainty_proof/v1',
+        'clock': 'CLOCK_MONOTONIC',
+        'provenance': context['provenance'],
+        'boot_id': context['boot_id'],
+        'time_namespace_device': context['time_namespace_device'],
+        'time_namespace_inode': context['time_namespace_inode'],
+        'time_namespace_offsets': context['time_namespace_offsets'],
+        'scope': 'trace_timestamp_and_window_boundary',
+        'source_verified': True,
+        'evidence_sha256': 'e' * 64,
+        'error_bound_ns': bound,
+    }
+
+
+def _legacy_setup_bracket(context, *, width=0):
+    """Model the old setup bracket mistakenly treated as an error bound."""
     sample = {
         'python_before_ns': 100, 'native_ns': 100 + width // 2,
         'python_after_ns': 100 + width,
@@ -151,7 +200,8 @@ class HeartbeatTraceSessionTests(unittest.TestCase):
                 _allocation(observer, 'observer'),
             ),
             'join_evidence': _join_evidence(),
-            'clock_error_certificate': _clock_certificate(clock_context()),
+            'clock_domain_certificate': _clock_certificate(clock_context()),
+            'clock_error_bound_proof': _clock_proof(clock_context()),
             'expected_clock_library_sha256': 'd' * 64,
             'readiness_backend_status': _readiness_binding(),
             'readiness_binding_verified': True,
@@ -162,7 +212,9 @@ class HeartbeatTraceSessionTests(unittest.TestCase):
             backend, observer, joined=True, requested_window=(100, 400),
             **kwargs,
         )
-        self.assertTrue(result['coverage_complete'], result['issues'])
+        self.assertTrue(result['trace_files_complete'], result['issues'])
+        self.assertFalse(result['coverage_complete'])
+        self.assertIsNone(result['analysis'])
         self.assertEqual(result['backend_instance_id'], 42)
         self.assertEqual(result['records']['backend'][0], (1, 1, 100, 0, b''))
 
@@ -184,7 +236,8 @@ class HeartbeatTraceSessionTests(unittest.TestCase):
                 _allocation(observer, 'observer'),
             ), expected_backend_instance_id=42,
             join_evidence=_join_evidence(),
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
+            clock_error_bound_proof=_clock_proof(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
@@ -324,15 +377,82 @@ int main(int argc, char **argv) {
                 _allocation(backend, 'backend'),
                 _allocation(observer, 'observer'),
             ), expected_backend_instance_id=42,
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
         )
         self.assertFalse(result['coverage_complete'])
         self.assertIn(
-            'writer_join_or_residue_evidence_unverified', result['issues'],
+            'observer_process_reap_or_group_absence_unverified',
+            result['issues'],
         )
+
+    def test_killed_observer_allows_only_raw_recovery_after_group_reap(self):
+        """Reaped forced termination exposes raw bytes, not clean coverage."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        _write_fixture(backend, role='backend', provenance=self.provenance)
+        _write_fixture(observer, role='observer', provenance=self.provenance)
+        evidence = _join_evidence()
+        evidence.update({
+            'observer_exit_status': -9,
+            'observer_stop_acknowledged': False,
+            'observer_writer_closed': False,
+            'observer_termination': 'SIGKILL',
+        })
+        kwargs = {
+            'session_id': 'session-1', 'config_hash': 'a' * 64,
+            'world': 'b2_training_arena', 'collection_id': 'collection-1',
+            'clock_provenance': self.provenance,
+            'expected_backend_instance_id': 42,
+            'allocated_files': (
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ),
+            'join_evidence': evidence,
+            'clock_domain_certificate': _clock_certificate(clock_context()),
+            'clock_error_bound_proof': _clock_proof(clock_context()),
+            'expected_clock_library_sha256': 'd' * 64,
+            'readiness_backend_status': _readiness_binding(),
+            'readiness_binding_verified': True,
+        }
+        result = read_trace_pair(
+            backend, observer, joined=True, requested_window=(100, 400),
+            **kwargs,
+        )
+        self.assertTrue(result['raw_recovery_allowed'])
+        self.assertTrue(result['raw_recovery_records']['backend'])
+        self.assertTrue(result['raw_recovery_records']['observer'])
+        self.assertEqual(result['records'], {})
+        self.assertFalse(result['clean_close_verified'])
+        self.assertFalse(result['trace_files_complete'])
+        self.assertFalse(result['coverage_complete'])
+
+    def test_live_or_unreaped_observer_is_not_read(self):
+        """Do not expose records until the process and group are reaped."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        _write_fixture(backend, role='backend', provenance=self.provenance)
+        _write_fixture(observer, role='observer', provenance=self.provenance)
+        evidence = _join_evidence()
+        evidence['observer_process_joined'] = False
+        result = read_trace_pair(
+            backend, observer, session_id='session-1', config_hash='a' * 64,
+            world='b2_training_arena', collection_id='collection-1',
+            clock_provenance=self.provenance, joined=True,
+            requested_window=(100, 400),
+            allocated_files=(
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ), expected_backend_instance_id=42,
+            join_evidence=evidence,
+            readiness_backend_status=_readiness_binding(),
+            readiness_binding_verified=True,
+        )
+        self.assertFalse(result['raw_recovery_allowed'])
+        self.assertEqual(result['raw_recovery_records'], {})
+        self.assertFalse(result['coverage_complete'])
 
     def test_substituted_inode_is_not_usable_even_with_matching_header(self):
         """Reject content read through a path with a substituted inode."""
@@ -355,7 +475,7 @@ int main(int argc, char **argv) {
             joined=True, requested_window=(100, 400),
             allocated_files=allocated, expected_backend_instance_id=42,
             join_evidence=_join_evidence(),
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
@@ -397,7 +517,7 @@ int main(int argc, char **argv) {
             requested_window=(100, 400), allocated_files=allocated,
             expected_backend_instance_id=42,
             join_evidence=_join_evidence(),
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
@@ -424,7 +544,7 @@ int main(int argc, char **argv) {
                 _allocation(observer, 'observer'),
             ), expected_backend_instance_id=42,
             join_evidence=_join_evidence(),
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
@@ -445,6 +565,7 @@ int main(int argc, char **argv) {
             observer, role='observer', provenance=self.provenance,
             records=((1, 100), (2, 140, 8, b'\x06\x00'),
                      (2, 150, 8, b'\x07\x01'),
+                     (2, 151, 8, b'\x0a\x01'),
                      (2, 1_000_000_500, 8, b'\x08\x01'),
                      (3, 1_000_000_600)),
         )
@@ -458,7 +579,8 @@ int main(int argc, char **argv) {
                 _allocation(observer, 'observer'),
             ), expected_backend_instance_id=42,
             join_evidence=_join_evidence(),
-            clock_error_certificate=_clock_certificate(clock_context()),
+            clock_domain_certificate=_clock_certificate(clock_context()),
+            clock_error_bound_proof=_clock_proof(clock_context()),
             expected_clock_library_sha256='d' * 64,
             readiness_backend_status=_readiness_binding(),
             readiness_binding_verified=True,
@@ -482,8 +604,11 @@ int main(int argc, char **argv) {
                 _allocation(observer, 'observer'),
             ), 'expected_backend_instance_id': 42,
             'join_evidence': _join_evidence(),
-            'clock_error_certificate': _clock_certificate(
+            'clock_domain_certificate': _clock_certificate(
                 clock_context(), width=10,
+            ),
+            'clock_error_bound_proof': _clock_proof(
+                clock_context(), bound=10,
             ),
             'expected_clock_library_sha256': 'd' * 64,
             'readiness_backend_status': _readiness_binding(),
@@ -501,6 +626,153 @@ int main(int argc, char **argv) {
             backend, observer, requested_window=(90, 400), **kwargs,
         )
         self.assertFalse(end_overlap['coverage_complete'])
+
+    def test_setup_bracket_alone_is_not_a_record_timestamp_error_bound(self):
+        """Preserve raw bytes but do not promote observed setup jitter."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        _write_fixture(backend, role='backend', provenance=self.provenance)
+        _write_fixture(observer, role='observer', provenance=self.provenance)
+        result = read_trace_pair(
+            backend, observer, session_id='session-1', config_hash='a' * 64,
+            world='b2_training_arena', collection_id='collection-1',
+            clock_provenance=self.provenance, joined=True,
+            requested_window=(100, 400),
+            allocated_files=(
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ), expected_backend_instance_id=42,
+            join_evidence=_join_evidence(),
+            clock_domain_certificate=_legacy_setup_bracket(clock_context()),
+            expected_clock_library_sha256='d' * 64,
+            readiness_backend_status=_readiness_binding(),
+            readiness_binding_verified=True,
+        )
+        self.assertFalse(result['coverage_complete'])
+        self.assertIsNone(result['clock_error_bound_ns'])
+        self.assertTrue(result['raw_recovery_records']['backend'])
+
+    def test_clock_context_mismatch_keeps_raw_recovery_without_coverage(self):
+        """Clock mismatch preserves raw bytes but blocks diagnosis."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        _write_fixture(backend, role='backend', provenance=self.provenance)
+        _write_fixture(observer, role='observer', provenance=self.provenance)
+        foreign_clock = {
+            **clock_context(), 'provenance': 'f' * 64,
+            'boot_id': 'foreign-boot',
+        }
+        with patch('heartbeat_trace_session.clock_context',
+                   return_value=foreign_clock):
+            result = read_trace_pair(
+                backend, observer, session_id='session-1',
+                config_hash='a' * 64, world='b2_training_arena',
+                collection_id='collection-1',
+                clock_provenance=self.provenance, joined=True,
+                requested_window=(100, 400),
+                allocated_files=(
+                    _allocation(backend, 'backend'),
+                    _allocation(observer, 'observer'),
+                ), expected_backend_instance_id=42,
+                join_evidence=_join_evidence(),
+                readiness_backend_status=_readiness_binding(),
+                readiness_binding_verified=True,
+            )
+        self.assertFalse(result['clock_domain_verified'])
+        self.assertFalse(result['coverage_complete'])
+        self.assertTrue(result['raw_recovery_records']['backend'])
+        self.assertTrue(result['raw_recovery_records']['observer'])
+
+    def test_hbtrace_bytes_prove_no_publish_only_inside_window(self):
+        """Derive an in-window diagnosis from complete trace bytes."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        baseline = 100
+        check = baseline + 1_000_000_001
+        _write_fixture(
+            backend, role='backend', provenance=self.provenance,
+            records=((1, 1), (3, check + 100)),
+        )
+        _write_fixture(
+            observer, role='observer', provenance=self.provenance,
+            records=(
+                (1, 1), (2, baseline, 3, b'\x06\x00'),
+                (2, baseline + 1, 3, b'\x07\x01'),
+                (2, baseline + 1, 3, b'\x0a\x01'),
+                (2, check, 3, b'\x08\x01'), (3, check + 100),
+            ),
+        )
+        result = self._read_bound_pair(
+            backend, observer, requested_window=(baseline, check),
+        )
+        self.assertTrue(result['coverage_complete'], result['issues'])
+        self.assertEqual(result['analysis'].cause, Cause.NO_PUBLISH_ATTEMPT)
+        self.assertEqual(len(result['analysis'].supporting_events), 3)
+
+    def test_out_of_window_check_and_publish_cannot_prove_absence(self):
+        """Do not let out-of-window checks prove publish absence."""
+        backend = self.directory / 'backend.hbtrace'
+        observer = self.directory / 'observer.hbtrace'
+        baseline = 100
+        check = baseline + 1_000_000_001
+        _write_fixture(
+            backend, role='backend', provenance=self.provenance,
+            records=(
+                (1, 1), (2, baseline + 10, 4, b'\x01'),
+                (2, baseline + 11, 4, b'\x02'), (3, check + 100),
+            ),
+        )
+        _write_fixture(
+            observer, role='observer', provenance=self.provenance,
+            records=(
+                (1, 1), (2, baseline, 3, b'\x06\x00'),
+                (2, baseline + 1, 3, b'\x07\x01'),
+                (2, baseline + 1, 3, b'\x0a\x01'),
+                (2, check + 1, 3, b'\x08\x01'), (3, check + 100),
+            ),
+        )
+        result = read_trace_pair(
+            backend, observer, session_id='session-1', config_hash='a' * 64,
+            world='b2_training_arena', collection_id='collection-1',
+            clock_provenance=self.provenance, joined=True,
+            requested_window=(baseline, check),
+            allocated_files=(
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ), expected_backend_instance_id=42,
+            join_evidence=_join_evidence(),
+            clock_domain_certificate=_clock_certificate(clock_context()),
+            clock_error_bound_proof=_clock_proof(clock_context()),
+            expected_clock_library_sha256='d' * 64,
+            readiness_backend_status=_readiness_binding(),
+            readiness_binding_verified=True,
+        )
+        self.assertFalse(any(
+            event.kind.value == 'heartbeat_check'
+            for event in result['analyzer_events']
+        ))
+        self.assertEqual(result['analysis'].cause, Cause.UNKNOWN)
+        self.assertIn(
+            'heartbeat check is missing', result['analysis'].reason,
+        )
+
+    def _read_bound_pair(self, backend, observer, *, requested_window):
+        return read_trace_pair(
+            backend, observer, session_id='session-1', config_hash='a' * 64,
+            world='b2_training_arena', collection_id='collection-1',
+            clock_provenance=self.provenance, joined=True,
+            requested_window=requested_window,
+            allocated_files=(
+                _allocation(backend, 'backend'),
+                _allocation(observer, 'observer'),
+            ), expected_backend_instance_id=42,
+            join_evidence=_join_evidence(),
+            clock_domain_certificate=_clock_certificate(clock_context()),
+            clock_error_bound_proof=_clock_proof(clock_context()),
+            expected_clock_library_sha256='d' * 64,
+            readiness_backend_status=_readiness_binding(),
+            readiness_binding_verified=True,
+        )
 
     def test_plain_integer_is_not_clock_error_bound_evidence(self):
         """A caller-supplied integer does not prove either coverage edge."""

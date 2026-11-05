@@ -124,6 +124,20 @@ class SubprocessProcessLauncher:
             stderr=asyncio.subprocess.PIPE,
         )
 
+    async def start_controlled(
+        self, command: tuple[str, ...], environment: dict[str, str],
+    ) -> OwnedProcess:
+        """Start one private framed-control child in its own session."""
+        env = os.environ.copy()
+        env.update(environment)
+        return await asyncio.create_subprocess_exec(
+            *command, env=env, start_new_session=True,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=4096 + len(b'HBTRACE_CONTROL ') + 1,
+        )
+
     async def stop_group(self, process: OwnedProcess, sig: int) -> None:
         """Signal only the process group created by this launcher."""
         try:
@@ -1263,6 +1277,13 @@ class LocalTrainingProcessSupervisor:
     SERVER_READY_TIMEOUT_S = 30.0
     GUI_READY_TIMEOUT_S = 30.0
     OWNER_ACK_TIMEOUT_S = 60.0
+    HEARTBEAT_OBSERVER_MODULE = (
+        'mecanum_nav_bringup.local_training_heartbeat_trace_observer'
+    )
+    HEARTBEAT_OBSERVER_FRAME = b'HBTRACE_CONTROL '
+    HEARTBEAT_OBSERVER_MAX_FRAME = 4096
+    HEARTBEAT_OBSERVER_START_CAP_S = 3.0
+    HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 3.0
 
     def __init__(
         self, *, plan: LaunchPlan, launcher: ProcessLauncher,
@@ -1271,6 +1292,7 @@ class LocalTrainingProcessSupervisor:
         heartbeat_trace_directory: Path | None = None,
         heartbeat_observer_factory=None,
         heartbeat_library_path: Path | None = None,
+        heartbeat_identity_reader=None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -1287,10 +1309,31 @@ class LocalTrainingProcessSupervisor:
         self.heartbeat_trace_directory = heartbeat_trace_directory
         self.heartbeat_observer_factory = heartbeat_observer_factory
         self.heartbeat_library_path = heartbeat_library_path
+        self._heartbeat_identity_reader = (
+            heartbeat_identity_reader or RclpyReadiness._read_process_identity
+        )
         self._heartbeat_observer = None
+        self._heartbeat_observer_process = None
+        self._heartbeat_observer_identity = None
+        self._heartbeat_observer_nonce = None
+        self._heartbeat_observer_spawn_task = None
+        self._heartbeat_observer_wait_task = None
+        self._heartbeat_observer_exit_status = None
+        self._heartbeat_observer_state = None
+        self._heartbeat_observer_stderr_task = None
+        self._heartbeat_observer_stderr = bytearray()
+        self._heartbeat_observer_stderr_total = 0
+        self._heartbeat_observer_protocol_lock = asyncio.Lock()
+        self._heartbeat_observer_cleanup_deadline = None
+        self._heartbeat_observer_stop_acknowledged = False
+        self._heartbeat_observer_writer_closed = False
+        self._heartbeat_observer_termination = 'NOT_STARTED'
+        self._heartbeat_observer_protocol_started = False
+        self._task_residue = 'NONE'
+        self._process_residue = 'NONE'
         self._heartbeat_files = ()
         self._heartbeat_clock = None
-        self._heartbeat_clock_error_certificate = None
+        self._heartbeat_clock_domain_certificate = None
         self._heartbeat_library_sha256 = None
         self._heartbeat_trace_environment = {}
         self._heartbeat_trace_error = None
@@ -1348,7 +1391,7 @@ class LocalTrainingProcessSupervisor:
             await self.readiness.server_scene(
                 self.plan, server, self.SERVER_READY_TIMEOUT_S,
             )
-            self._bind_heartbeat_readiness()
+            await self._bind_heartbeat_readiness()
             self.evidence_sink.record(
                 'server_scene_ready',
                 {
@@ -1435,33 +1478,28 @@ class LocalTrainingProcessSupervisor:
             self._heartbeat_library_sha256 = hashlib.sha256(
                 library.read_bytes(),
             ).hexdigest()
-            try:
-                self._heartbeat_clock_error_certificate = (
-                    trace_observer.measure_clock_error_certificate(library)
+            if self.heartbeat_observer_factory is not None:
+                # Explicit test adapter only. Production always uses the child.
+                self._heartbeat_observer = self.heartbeat_observer_factory(
+                    plan=self.plan, trace_file=observer_file,
+                    collection_id=self.plan.session_id,
+                    clock_provenance=self._heartbeat_clock['provenance'],
+                    library_path=library,
                 )
-            except BaseException as error:
-                self._heartbeat_trace_error = (
-                    'clock_error_bound_unavailable:'
-                    f'{type(error).__name__}:{str(error)[:160]}'
+                started = self._heartbeat_observer.start()
+                snapshot = self._heartbeat_observer.snapshot()
+                if started is not True or snapshot.get('ready') is not True:
+                    self._heartbeat_trace_error = (
+                        'observer_initialization_failed:'
+                        + ','.join(snapshot.get('errors', ()))[:320]
+                    )
+                    return
+                self._heartbeat_observer_termination = 'TEST_ADAPTER'
+            else:
+                await self._start_heartbeat_observer_process(
+                    trace_observer, observer_file, library,
                 )
-            observer_factory = self.heartbeat_observer_factory
-            if observer_factory is None:
-                observer_factory = (
-                    trace_observer.LocalTrainingHeartbeatTraceObserver
-                )
-            self._heartbeat_observer = observer_factory(
-                plan=self.plan, trace_file=observer_file,
-                collection_id=self.plan.session_id,
-                clock_provenance=self._heartbeat_clock['provenance'],
-                library_path=library,
-            )
-            started = self._heartbeat_observer.start()
-            snapshot = self._heartbeat_observer.snapshot()
-            if started is not True or snapshot.get('ready') is not True:
-                self._heartbeat_trace_error = (
-                    'observer_initialization_failed:'
-                    + ','.join(snapshot.get('errors', ()))[:320]
-                )
+            if self._heartbeat_trace_error is not None:
                 return
             self._heartbeat_trace_environment = {
                 'MECANUM_B2_HEARTBEAT_DIAGNOSTICS': '1',
@@ -1481,12 +1519,435 @@ class LocalTrainingProcessSupervisor:
                     self._heartbeat_clock['provenance']
                 ),
             }
+        except asyncio.CancelledError:
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error or 'observer_prepare_cancelled'
+            )
+            raise
         except BaseException as error:
             self._heartbeat_trace_error = (
                 f'{type(error).__name__}:{str(error)[:160]}'
             )
 
-    def _bind_heartbeat_readiness(self) -> None:
+    async def _start_heartbeat_observer_process(
+        self, trace_observer, observer_file, library,
+    ):
+        """Start, identify and initialize the isolated observer child."""
+        starter = getattr(self.launcher, 'start_controlled', None)
+        if starter is None:
+            raise RuntimeError('launcher lacks controlled child support')
+        domain = self.plan.environment.get('ROS_DOMAIN_ID')
+        if (not isinstance(domain, str) or not domain.isascii()
+                or not domain.isdecimal() or not 0 <= int(domain) <= 232):
+            raise ValueError('observer ROS_DOMAIN_ID binding invalid')
+        self._heartbeat_observer_nonce = secrets.token_hex(16)
+        environment = dict(self.plan.environment)
+        environment['MECANUM_B2_HEARTBEAT_WORKER_NONCE'] = (
+            self._heartbeat_observer_nonce
+        )
+        command = (
+            sys.executable, '-m', self.HEARTBEAT_OBSERVER_MODULE, '--worker',
+        )
+        self._heartbeat_observer_spawn_task = asyncio.create_task(
+            starter(command, environment),
+        )
+        try:
+            self._heartbeat_observer_process = await asyncio.wait_for(
+                asyncio.shield(self._heartbeat_observer_spawn_task),
+                timeout=self.HEARTBEAT_OBSERVER_START_CAP_S,
+            )
+        except BaseException:
+            self._heartbeat_observer_spawn_task.add_done_callback(
+                self._capture_late_observer_process,
+            )
+            raise
+        process = self._heartbeat_observer_process
+        identity = self._heartbeat_identity_reader(process.pid)
+        if not RclpyReadiness._valid_process_identity(identity, process.pid):
+            raise RuntimeError('observer_process_identity_unverified')
+        self._heartbeat_observer_identity = dict(identity)
+        self._heartbeat_observer_stderr_task = asyncio.create_task(
+            self._drain_observer_stderr(process.stderr),
+        )
+        deadline = self.monotonic() + self.HEARTBEAT_OBSERVER_START_CAP_S
+        hello = await self._observer_read_frame(deadline)
+        module_path = Path(trace_observer.__file__).resolve(strict=True)
+        if (
+            hello.get('kind') != 'hello'
+            or set(hello) != {
+                'kind', 'nonce', 'module_path', 'executable', 'prefix',
+            }
+            or hello.get('nonce') != self._heartbeat_observer_nonce
+            or hello.get('module_path') != str(module_path)
+            or hello.get('executable') != str(Path(sys.executable).resolve())
+            or hello.get('prefix') != str(Path(sys.prefix).resolve())
+        ):
+            raise RuntimeError('observer_child_binding_unverified')
+        fields = {
+            'session_id': self.plan.session_id,
+            'config_hash': self.plan.config_hash,
+            'domain_id': int(domain),
+            'collection_id': self.plan.session_id,
+            'clock_provenance': self._heartbeat_clock['provenance'],
+            'trace_file': observer_file,
+            'library_path': str(library),
+        }
+        await self._observer_send_frame(
+            {'kind': 'start', 'nonce': self._heartbeat_observer_nonce,
+             'fields': fields}, deadline,
+        )
+        started = await self._observer_read_frame(deadline)
+        if (started.get('kind') != 'started'
+                or set(started) != {
+                    'kind', 'nonce', 'started', 'snapshot',
+                    'clock_domain_certificate',
+                }
+                or started.get('nonce') != self._heartbeat_observer_nonce
+                or started.get('started') is not True
+                or not isinstance(started.get('snapshot'), dict)
+                or started['snapshot'].get('ready') is not True):
+            self._heartbeat_trace_error = 'observer_initialization_failed'
+            return
+        self._heartbeat_clock_domain_certificate = started.get(
+            'clock_domain_certificate',
+        )
+        self._heartbeat_observer_protocol_started = True
+        self._heartbeat_observer_termination = 'RUNNING'
+
+    def _capture_late_observer_process(self, task):
+        """Keep ownership if a timed-out asynchronous spawn returns late."""
+        if task.cancelled():
+            self._process_residue = 'UNKNOWN'
+            return
+        try:
+            process = task.result()
+        except BaseException as error:
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error
+                or f'observer_spawn_failed:{type(error).__name__}'
+            )
+            return
+        if self._heartbeat_observer_process is None:
+            self._heartbeat_observer_process = process
+        if (self._heartbeat_observer_stderr_task is None
+                and getattr(process, 'stderr', None) is not None):
+            self._heartbeat_observer_stderr_task = asyncio.create_task(
+                self._drain_observer_stderr(process.stderr),
+            )
+        try:
+            identity = self._heartbeat_identity_reader(process.pid)
+            if RclpyReadiness._valid_process_identity(identity, process.pid):
+                self._heartbeat_observer_identity = dict(identity)
+            else:
+                self._process_residue = 'UNKNOWN'
+        except BaseException:
+            self._process_residue = 'UNKNOWN'
+        if self._heartbeat_observer_cleanup_deadline is not None:
+            self._process_residue = 'UNKNOWN'
+
+    async def _observer_send_frame(self, message, deadline):
+        process = self._heartbeat_observer_process
+        if process is None or process.stdin is None:
+            raise RuntimeError('observer_control_stdin_unavailable')
+        if not self._observer_identity_matches_live_process():
+            raise RuntimeError('observer_process_identity_unknown')
+        raw = self.HEARTBEAT_OBSERVER_FRAME + json.dumps(
+            message, sort_keys=True, separators=(',', ':'),
+        ).encode('utf-8') + b'\n'
+        if len(raw) > self.HEARTBEAT_OBSERVER_MAX_FRAME + len(
+                self.HEARTBEAT_OBSERVER_FRAME) + 1:
+            raise ValueError('observer_control_frame_oversized')
+        remaining = deadline - self.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('observer_control_deadline_expired')
+        process.stdin.write(raw[len(self.HEARTBEAT_OBSERVER_FRAME):])
+        await asyncio.wait_for(process.stdin.drain(), timeout=remaining)
+
+    async def _observer_read_frame(self, deadline):
+        process = self._heartbeat_observer_process
+        if process is None or process.stdout is None:
+            raise RuntimeError('observer_control_stdout_unavailable')
+        remaining = deadline - self.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('observer_control_deadline_expired')
+        raw = await asyncio.wait_for(
+            process.stdout.readline(), timeout=remaining,
+        )
+        if (not raw or not raw.endswith(b'\n')
+                or len(raw) > self.HEARTBEAT_OBSERVER_MAX_FRAME + len(
+                    self.HEARTBEAT_OBSERVER_FRAME) + 1):
+            raise ValueError('observer_control_frame_missing_or_oversized')
+        if not raw.startswith(self.HEARTBEAT_OBSERVER_FRAME):
+            raise ValueError('observer_control_frame_prefix_invalid')
+        result = json.loads(raw[len(self.HEARTBEAT_OBSERVER_FRAME):])
+        if (not isinstance(result, dict)
+                or result.get('nonce') not in (
+                    None, self._heartbeat_observer_nonce,
+                )):
+            raise ValueError('observer_control_frame_binding_invalid')
+        return result
+
+    def _observer_identity_matches_live_process(self):
+        process = self._heartbeat_observer_process
+        expected = self._heartbeat_observer_identity
+        if (process is None or expected is None
+                or process.returncode is not None):
+            return False
+        try:
+            current = self._heartbeat_identity_reader(process.pid)
+        except BaseException:
+            return False
+        return (
+            RclpyReadiness._valid_process_identity(current, process.pid)
+            and current == expected
+        )
+
+    async def _signal_observer_process(self, sig):
+        """Signal only a group with the captured live leader identity."""
+        process = self._heartbeat_observer_process
+        if (process is None
+                or not self._observer_identity_matches_live_process()):
+            return False
+        try:
+            await self.launcher.stop_group(process, sig)
+        except BaseException:
+            return False
+        return True
+
+    async def _wait_observer_reaped(self, deadline):
+        process = self._heartbeat_observer_process
+        if process is None:
+            return False
+        if self._heartbeat_observer_wait_task is None:
+            self._heartbeat_observer_wait_task = asyncio.create_task(
+                process.wait(),
+            )
+        waiter = self._heartbeat_observer_wait_task
+        while True:
+            if not waiter.done():
+                remaining = deadline - self.monotonic()
+                if remaining <= 0:
+                    return False
+                done, _ = await asyncio.wait(
+                    (waiter,), timeout=min(0.05, remaining),
+                )
+                if not done:
+                    continue
+            try:
+                self._heartbeat_observer_exit_status = waiter.result()
+            except BaseException:
+                return False
+            try:
+                group_alive = self.launcher.group_alive(process)
+            except BaseException:
+                return False
+            if not group_alive:
+                return True
+            await self.sleep(min(0.02, max(0.0, deadline - self.monotonic())))
+
+    async def _stop_observer_process(self):
+        """Stop the isolated child within one fixed cleanup deadline."""
+        if self._heartbeat_observer_cleanup_deadline is None:
+            self._heartbeat_observer_cleanup_deadline = (
+                self.monotonic() + self.HEARTBEAT_OBSERVER_CLEANUP_CAP_S
+            )
+        deadline = self._heartbeat_observer_cleanup_deadline
+        spawn_task = self._heartbeat_observer_spawn_task
+        if self._heartbeat_observer_process is None and spawn_task is not None:
+            remaining = deadline - self.monotonic()
+            if remaining > 0:
+                done, _ = await asyncio.wait((spawn_task,), timeout=remaining)
+                if done:
+                    try:
+                        self._heartbeat_observer_process = spawn_task.result()
+                        identity = self._heartbeat_identity_reader(
+                            self._heartbeat_observer_process.pid,
+                        )
+                        pid = self._heartbeat_observer_process.pid
+                        if RclpyReadiness._valid_process_identity(
+                                identity, pid):
+                            self._heartbeat_observer_identity = dict(identity)
+                        else:
+                            self._process_residue = 'UNKNOWN'
+                    except BaseException:
+                        pass
+            if self._heartbeat_observer_process is None:
+                self._process_residue = 'UNKNOWN'
+                self._heartbeat_observer_termination = 'UNKNOWN'
+                return {
+                    'joined': False, 'group_absent': False,
+                    'identity_verified': False, 'exit_status': None,
+                    'stop_acknowledged': False, 'writer_closed': False,
+                    'termination': 'UNKNOWN',
+                    'errors': ('observer_spawn_handle_unresolved',),
+                }
+        process = self._heartbeat_observer_process
+        if process is None:
+            return None
+        errors = []
+        clean_ack = False
+        if (
+            self._heartbeat_observer_protocol_started
+            and process.returncode is None
+            and self._observer_identity_matches_live_process()
+            and self.monotonic() < deadline
+        ):
+            phase_deadline = min(deadline, self.monotonic() + 0.35)
+            try:
+                async with self._heartbeat_observer_protocol_lock:
+                    await self._observer_send_frame({
+                        'kind': 'stop',
+                        'nonce': self._heartbeat_observer_nonce,
+                        'timeout_s': max(
+                            0.0, min(0.25, phase_deadline - self.monotonic()),
+                        ),
+                    }, phase_deadline)
+                    response = await self._observer_read_frame(phase_deadline)
+                clean_ack = (
+                    response.get('kind') == 'stopped'
+                    and response.get('nonce') == self._heartbeat_observer_nonce
+                    and response.get('joined') is True
+                    and response.get('writer_closed') is True
+                )
+                self._heartbeat_observer_stop_acknowledged = clean_ack
+                self._heartbeat_observer_writer_closed = clean_ack
+                self._heartbeat_observer_state = response.get('snapshot')
+            except BaseException as error:
+                errors.append(f'observer_stop_ack:{type(error).__name__}')
+        if clean_ack and await self._wait_observer_reaped(deadline):
+            self._heartbeat_observer_termination = 'CLEAN_COOPERATIVE'
+        else:
+            if process.returncode is None:
+                remaining = deadline - self.monotonic()
+                term_wait = max(0.0, min(0.65, remaining - 0.75))
+                if term_wait > 0:
+                    if await self._signal_observer_process(
+                            signal.SIGTERM):
+                        self._heartbeat_observer_termination = 'SIGTERM'
+                        await self._wait_observer_reaped(
+                            min(deadline, self.monotonic() + term_wait),
+                        )
+                    else:
+                        errors.append(
+                            'observer_sigterm_identity_or_dispatch_unknown'
+                        )
+            try:
+                leader_live_or_group_live = (
+                    process.returncode is None
+                    or self.launcher.group_alive(process)
+                )
+            except BaseException:
+                leader_live_or_group_live = True
+                errors.append('observer_group_state_unknown')
+            if leader_live_or_group_live:
+                if self.monotonic() < deadline:
+                    if await self._signal_observer_process(
+                            signal.SIGKILL):
+                        self._heartbeat_observer_termination = 'SIGKILL'
+                    else:
+                        errors.append(
+                            'observer_sigkill_identity_or_dispatch_unknown'
+                        )
+            if not await self._wait_observer_reaped(deadline):
+                errors.append('observer_process_reap_or_group_join_unknown')
+                self._process_residue = 'UNKNOWN'
+                self._heartbeat_observer_termination = 'UNKNOWN'
+        joined = self._heartbeat_observer_wait_task is not None and (
+            self._heartbeat_observer_wait_task.done()
+            and self._heartbeat_observer_exit_status is not None
+        )
+        group_absent = False
+        try:
+            group_absent = not self.launcher.group_alive(process)
+        except BaseException:
+            pass
+        if self._heartbeat_observer_stderr_task is not None:
+            remaining = max(0.0, deadline - self.monotonic())
+            if remaining > 0:
+                done, _ = await asyncio.wait(
+                    (self._heartbeat_observer_stderr_task,), timeout=remaining,
+                )
+                if not done:
+                    self._heartbeat_observer_stderr_task.cancel()
+                    errors.append('observer_stderr_drain_unknown')
+                    self._task_residue = 'UNKNOWN'
+            elif not self._heartbeat_observer_stderr_task.done():
+                self._heartbeat_observer_stderr_task.cancel()
+                errors.append('observer_stderr_drain_deadline')
+                self._task_residue = 'UNKNOWN'
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+                remaining = max(0.0, deadline - self.monotonic())
+                if remaining > 0:
+                    await asyncio.wait_for(
+                        process.stdin.wait_closed(), timeout=remaining,
+                    )
+            except BaseException:
+                errors.append('observer_control_stdin_close_unknown')
+        if not joined or not group_absent:
+            self._process_residue = 'UNKNOWN'
+        if (joined and not self._heartbeat_observer_stop_acknowledged
+                and self._heartbeat_observer_termination in {
+                    'NOT_STARTED', 'RUNNING',
+                }):
+            self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
+        self._heartbeat_observer_state = self._heartbeat_observer_state or {
+            'ready': False, 'errors': tuple(errors),
+        }
+        self._heartbeat_observer_state.update({
+            'process_identity': self._heartbeat_observer_identity,
+            'process_joined': joined, 'group_absent': group_absent,
+            'exit_status': self._heartbeat_observer_exit_status,
+            'stop_acknowledged': self._heartbeat_observer_stop_acknowledged,
+            'writer_closed': self._heartbeat_observer_writer_closed,
+            'termination': self._heartbeat_observer_termination,
+            'stderr_bytes': self._heartbeat_observer_stderr_total,
+            'stderr_excerpt': self._heartbeat_observer_stderr.decode(
+                'utf-8', errors='replace',
+            )[:1024],
+            'stderr_truncated': self._heartbeat_observer_stderr_total > len(
+                self._heartbeat_observer_stderr,
+            ),
+            'errors': tuple(self._heartbeat_observer_state.get('errors', ()))
+            + tuple(errors),
+        })
+        return {
+            'joined': joined, 'group_absent': group_absent,
+            'identity_verified': self._heartbeat_observer_identity is not None,
+            'exit_status': self._heartbeat_observer_exit_status,
+            'stop_acknowledged': self._heartbeat_observer_stop_acknowledged,
+            'writer_closed': self._heartbeat_observer_writer_closed,
+            'termination': self._heartbeat_observer_termination,
+            'errors': tuple(errors),
+        }
+
+    async def _drain_observer_stderr(self, stream):
+        """Drain stderr to avoid blocking, retaining only a bounded excerpt."""
+        if stream is None:
+            return
+        cap = 8192
+        while True:
+            chunk = await stream.read(1024)
+            if not chunk:
+                return
+            self._heartbeat_observer_stderr_total += len(chunk)
+            remaining = cap - len(self._heartbeat_observer_stderr)
+            if remaining > 0:
+                self._heartbeat_observer_stderr.extend(chunk[:remaining])
+
+    async def _bind_observer_child(self, status):
+        deadline = self.monotonic() + self.HEARTBEAT_OBSERVER_START_CAP_S
+        async with self._heartbeat_observer_protocol_lock:
+            await self._observer_send_frame({
+                'kind': 'bind', 'nonce': self._heartbeat_observer_nonce,
+                'status': status,
+            }, deadline)
+            result = await self._observer_read_frame(deadline)
+        return (result.get('kind') == 'bound'
+                and result.get('accepted') is True)
+
+    async def _bind_heartbeat_readiness(self) -> None:
         """Bind trace identity to status accepted by the readiness parent."""
         if not self.heartbeat_diagnostics_enabled:
             return
@@ -1499,7 +1960,25 @@ class LocalTrainingProcessSupervisor:
             return
         observer = self._heartbeat_observer
         binder = getattr(observer, 'bind_readiness_backend', None)
-        if binder is None or binder(status) is not True:
+        if observer is not None:
+            accepted = binder is not None and binder(status) is True
+        elif self._heartbeat_observer_process is not None:
+            try:
+                accepted = await self._bind_observer_child(status)
+            except asyncio.CancelledError:
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error or 'observer_bind_cancelled'
+                )
+                raise
+            except BaseException as error:
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error
+                    or f'observer_readiness_bind:{type(error).__name__}'
+                )
+                accepted = False
+        else:
+            accepted = False
+        if not accepted:
             self._heartbeat_trace_error = (
                 self._heartbeat_trace_error
                 or 'observer_readiness_backend_binding_failed'
@@ -1711,7 +2190,24 @@ class LocalTrainingProcessSupervisor:
                     self._heartbeat_trace_error
                     or f'server_group_identity_unknown:{type(error).__name__}'
                 )
-        if self._heartbeat_observer is not None:
+        observer_join = None
+        if self._heartbeat_observer_process is not None or (
+                self._heartbeat_observer_spawn_task is not None):
+            observer_join = await self._stop_observer_process()
+            observer_state = self._heartbeat_observer_state
+            if (observer_join is None
+                    or observer_join.get('joined') is not True):
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error
+                    or 'observer_process_reap_or_group_join_unknown'
+                )
+            if (observer_join
+                    and observer_join.get('writer_closed') is not True):
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error
+                    or 'observer_writer_close_unconfirmed'
+                )
+        elif self._heartbeat_observer is not None:
             try:
                 stop_async = getattr(
                     self._heartbeat_observer, 'stop_async', None,
@@ -1737,8 +2233,8 @@ class LocalTrainingProcessSupervisor:
             'world': 'b2_training_arena',
             'clock_context': self._heartbeat_clock,
             'clock_library_sha256': self._heartbeat_library_sha256,
-            'clock_error_certificate': (
-                self._heartbeat_clock_error_certificate
+            'clock_domain_certificate': (
+                self._heartbeat_clock_domain_certificate
             ),
             'files': list(self._heartbeat_files),
             'observer': observer_state,
@@ -1760,24 +2256,44 @@ class LocalTrainingProcessSupervisor:
                     and server_exit_status is not None
                 ),
                 'server_group_absent': server_group_absent,
-                'observer_thread_joined': bool(
-                    observer_state and observer_state.get('joined') is True
+                'observer_process_identity': (
+                    dict(self._heartbeat_observer_identity)
+                    if self._heartbeat_observer_identity else None
                 ),
-                'observer_thread_alive': bool(
-                    observer_state
-                    and observer_state.get('thread_alive') is True
+                'observer_process_identity_verified': bool(
+                    self._heartbeat_observer_identity
+                    and self._heartbeat_observer_process is not None
+                ),
+                'observer_process_joined': bool(
+                    observer_join and observer_join.get('joined') is True
+                ),
+                'observer_process_group_absent': bool(
+                    observer_join and observer_join.get('group_absent') is True
+                ),
+                'observer_exit_status': (
+                    observer_join.get('exit_status') if observer_join else None
+                ),
+                'observer_stop_acknowledged': bool(
+                    observer_join
+                    and observer_join.get('stop_acknowledged') is True
                 ),
                 'observer_writer_closed': bool(
-                    observer_state
-                    and observer_state.get('writer_closed') is True
+                    observer_join
+                    and observer_join.get('writer_closed') is True
+                ),
+                'observer_termination': (
+                    observer_join.get('termination') if observer_join
+                    else self._heartbeat_observer_termination
                 ),
                 'task_residue': (
-                    'NONE' if not self._observer_tasks else 'UNKNOWN'
+                    'NONE' if not self._observer_tasks
+                    and self._task_residue == 'NONE'
+                    and self._process_residue == 'NONE' else 'UNKNOWN'
                 ),
             },
             'trace_error': self._heartbeat_trace_error,
             'coverage_note': (
-                'diagnostic records only; read after process/thread join'
+                'diagnostic records require process reap and group absence'
             ),
             'sink_record_measurement': (
                 'NOT_INSTRUMENTED_NO_EXISTING_CALLBACK_CALL'

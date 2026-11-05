@@ -1,6 +1,7 @@
 """Injected process/readiness tests; no Gazebo or ROS process is spawned."""
 import asyncio
 import contextlib
+import json
 import os
 import signal
 import sys
@@ -44,6 +45,7 @@ class FakeLauncher:
         self.stopped = []
         self.fail_on = fail_on
         self.next_pid = 100
+        self.controlled_starts = []
 
     async def start(self, command, environment):
         """Record a launch request or raise at the selected call."""
@@ -61,6 +63,133 @@ class FakeLauncher:
 
     def group_alive(self, process):
         """Treat the fake group as alive until its leader is stopped."""
+        return process.returncode is None
+
+    async def start_controlled(self, command, environment):
+        """Reject child starts unless a test configures a protocol fake."""
+        raise AssertionError('controlled observer spawn was not configured')
+
+
+def _control_frame(message):
+    return b'HBTRACE_CONTROL ' + json.dumps(
+        message, sort_keys=True, separators=(',', ':'),
+    ).encode() + b'\n'
+
+
+class ControlledObserverProcess:
+    """Pipe-compatible child fake; it never imports or starts ROS."""
+
+    def __init__(self, pid, mode='clean'):
+        """Create a fake child and its private protocol pipes."""
+        self.pid = pid
+        self.returncode = None
+        self.mode = mode
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self._exit = asyncio.Event()
+        self.stdin = self._Stdin(self)
+
+    class _Stdin:
+        def __init__(self, process):
+            """Bind the writer to its simulated child."""
+            self.process = process
+            self.closed = False
+
+        def write(self, raw):
+            message = json.loads(raw)
+            if message['kind'] == 'bind':
+                response = {
+                    'kind': 'bound', 'nonce': message['nonce'],
+                    'accepted': True, 'snapshot': {'ready': True},
+                }
+                self.process.stdout.feed_data(_control_frame(response))
+            elif message['kind'] == 'stop':
+                joined = self.process.mode == 'clean'
+                response = {
+                    'kind': 'stopped', 'nonce': message['nonce'],
+                    'joined': joined, 'writer_closed': joined,
+                    'snapshot': {
+                        'ready': True, 'joined': joined,
+                        'writer_closed': joined, 'errors': (),
+                    },
+                }
+                self.process.stdout.feed_data(_control_frame(response))
+                if joined:
+                    self.process.finish(0)
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            return None
+
+    async def wait(self):
+        """Wait for the fake child to publish its exit status."""
+        await self._exit.wait()
+        return self.returncode
+
+    def finish(self, status):
+        """Close both output streams after assigning one exit status."""
+        if self.returncode is None:
+            self.returncode = status
+            self._exit.set()
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+
+
+class ControlledObserverLauncher(FakeLauncher):
+    """Supply an in-memory protocol child to the production supervisor path."""
+
+    def __init__(self, mode='clean'):
+        """Configure cooperative, stubborn, or TERM-responsive behavior."""
+        super().__init__()
+        self.mode = mode
+        self.signals = []
+        self.child = None
+
+    async def start_controlled(self, command, environment):
+        """Return a fake process with production-shaped handshake frames."""
+        import importlib.util
+        import pathlib
+
+        self.controlled_starts.append((command, environment))
+        self.child = ControlledObserverProcess(self.next_pid, self.mode)
+        self.next_pid += 1
+        spec = importlib.util.find_spec(
+            'mecanum_nav_bringup.local_training_heartbeat_trace_observer',
+        )
+        hello = {
+            'kind': 'hello',
+            'nonce': environment['MECANUM_B2_HEARTBEAT_WORKER_NONCE'],
+            'module_path': str(pathlib.Path(spec.origin).resolve()),
+            'executable': str(pathlib.Path(sys.executable).resolve()),
+            'prefix': str(pathlib.Path(sys.prefix).resolve()),
+        }
+        started = {
+            'kind': 'started',
+            'nonce': environment['MECANUM_B2_HEARTBEAT_WORKER_NONCE'],
+            'started': True,
+            'snapshot': {'ready': True, 'errors': ()},
+            'clock_domain_certificate': None,
+        }
+        self.child.stdout.feed_data(
+            _control_frame(hello) + _control_frame(started),
+        )
+        return self.child
+
+    async def stop_group(self, process, sig):
+        """Record the signal and apply the configured fake process response."""
+        self.signals.append((process.pid, sig))
+        if sig == signal.SIGTERM and process.mode == 'term-exits':
+            process.finish(-signal.SIGTERM)
+        elif sig == signal.SIGKILL:
+            process.finish(-signal.SIGKILL)
+
+    def group_alive(self, process):
+        """Report whether the fake process group still has its leader."""
         return process.returncode is None
 
 
@@ -166,6 +295,7 @@ def test_heartbeat_diagnostics_default_off_creates_no_trace_resources():
         )
         await supervisor.start()
         assert calls == []
+        assert launcher.controlled_starts == []
         assert all(env.get('MECANUM_B2_HEARTBEAT_DIAGNOSTICS') == '0'
                    for command, env, _ in launcher.started
                    if command == plan(False).commands[0])
@@ -301,6 +431,238 @@ def test_observer_initialization_failure_keeps_collection_unready(tmp_path):
         event = dict(sink.events)['heartbeat_trace_collection']
         assert event['trace_error']
         assert event['observer']['ready'] is False
+    asyncio.run(run())
+
+
+def test_nonjoined_observer_residue_is_reported_by_supervisor(tmp_path):
+    """Keep a live observer thread unknown instead of claiming a join."""
+    import os
+
+    class NonresponsiveObserver:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            return True
+
+        def bind_readiness_backend(self, _status):
+            return True
+
+        async def stop_async(self, _timeout):
+            return False
+
+        def snapshot(self):
+            return {
+                'ready': True, 'joined': False, 'thread_alive': True,
+                'writer_closed': False, 'errors': (
+                    'observer_thread_residue_unknown',
+                ),
+            }
+
+    async def run():
+        os.chmod(tmp_path, 0o700)
+        library = tmp_path / 'writer.so'
+        library.write_bytes(b'fake-test-library-path')
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=sink,
+            heartbeat_diagnostics_enabled=True,
+            heartbeat_trace_directory=tmp_path,
+            heartbeat_observer_factory=NonresponsiveObserver,
+            heartbeat_library_path=library,
+        )
+        await supervisor.start()
+        await supervisor.cleanup()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert event['observer']['thread_alive'] is True
+        assert event['observer']['joined'] is False
+        assert event['observer']['writer_closed'] is False
+        assert 'observer_thread_residue_unknown' in (
+            event['observer']['errors']
+        )
+
+    asyncio.run(run())
+
+
+def _fake_process_identity(pid, *, start_ticks=456):
+    return {
+        'pid': pid, 'process_group_id': pid, 'session_id': pid,
+        'start_ticks': start_ticks,
+    }
+
+
+def _controlled_supervisor(tmp_path, launcher, identity_reader):
+    os.chmod(tmp_path, 0o700)
+    library = tmp_path / 'writer.so'
+    library.write_bytes(b'fake-test-library-path')
+    sink = FakeSink()
+    supervisor = LocalTrainingProcessSupervisor(
+        plan=plan(False), launcher=launcher, readiness=FakeReadiness(),
+        evidence_sink=sink, heartbeat_diagnostics_enabled=True,
+        heartbeat_trace_directory=tmp_path,
+        heartbeat_library_path=library,
+        heartbeat_identity_reader=identity_reader,
+    )
+    return supervisor, sink
+
+
+async def _start_fake_observer(supervisor):
+    await supervisor._prepare_heartbeat_diagnostics()
+    await supervisor._bind_heartbeat_readiness()
+
+
+def test_isolated_observer_clean_exit_uses_process_join_evidence(tmp_path):
+    """The default path starts and joins a separate protocol child."""
+    async def run():
+        launcher = ControlledObserverLauncher('clean')
+        identities = {}
+
+        def read_identity(pid):
+            return identities.setdefault(pid, _fake_process_identity(pid))
+
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, read_identity,
+        )
+        await _start_fake_observer(supervisor)
+        assert len(launcher.controlled_starts) == 1
+        command, environment = launcher.controlled_starts[0]
+        assert command == (
+            sys.executable,
+            '-m',
+            'mecanum_nav_bringup.local_training_heartbeat_trace_observer',
+            '--worker',
+        )
+        assert environment['ROS_DOMAIN_ID'] == '83'
+        await supervisor._stop_heartbeat_diagnostics()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        join = event['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_process_group_absent'] is True
+        assert join['observer_stop_acknowledged'] is True
+        assert join['observer_writer_closed'] is True
+        assert 'observer_thread_joined' not in join
+        assert join['observer_termination'] == 'CLEAN_COOPERATIVE'
+    asyncio.run(run())
+
+
+def test_isolated_observer_ignoring_term_escalates_and_is_not_clean(tmp_path):
+    """TERM-resistant child is killed and cannot claim a clean close."""
+    async def run():
+        launcher = ControlledObserverLauncher('hang')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher,
+            lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 1.0
+        await _start_fake_observer(supervisor)
+        await supervisor._stop_heartbeat_diagnostics()
+        assert [sig for _, sig in launcher.signals] == [
+            signal.SIGTERM, signal.SIGKILL,
+        ]
+        join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_exit_status'] == -signal.SIGKILL
+        assert join['observer_writer_closed'] is False
+        assert join['observer_stop_acknowledged'] is False
+        assert join['observer_termination'] == 'SIGKILL'
+    asyncio.run(run())
+
+
+def test_observer_identity_change_blocks_signal_and_reports_residue(tmp_path):
+    """A changed process-start identity is never signalled."""
+    async def run():
+        launcher = ControlledObserverLauncher('hang')
+        calls = 0
+
+        def read_identity(pid):
+            nonlocal calls
+            calls += 1
+            return _fake_process_identity(
+                pid, start_ticks=456 if calls <= 2 else 999,
+            )
+
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, read_identity,
+        )
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.12
+        await _start_fake_observer(supervisor)
+        await supervisor._stop_heartbeat_diagnostics()
+        assert launcher.signals == []
+        assert supervisor._process_residue == 'UNKNOWN'
+        join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
+        assert join['observer_process_joined'] is False
+        assert join['observer_termination'] == 'UNKNOWN'
+    asyncio.run(run())
+
+
+def test_late_spawn_handle_is_retained_and_boundedly_reaped(tmp_path):
+    """A child returned after spawn timeout remains owned for cleanup."""
+    async def run():
+        gate = asyncio.Event()
+
+        class DelayedLauncher(ControlledObserverLauncher):
+            async def start_controlled(self, command, environment):
+                await gate.wait()
+                return await super().start_controlled(command, environment)
+
+        launcher = DelayedLauncher('hang')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher,
+            lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.HEARTBEAT_OBSERVER_START_CAP_S = 0.01
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.5
+        await supervisor._prepare_heartbeat_diagnostics()
+        assert supervisor._heartbeat_trace_error is not None
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await supervisor._stop_heartbeat_diagnostics()
+        assert supervisor._heartbeat_observer_process is launcher.child
+        assert launcher.child.returncode == -signal.SIGKILL
+        assert supervisor._heartbeat_observer_wait_task.done()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert event['join_evidence']['observer_process_joined'] is True
+        assert event['join_evidence']['observer_writer_closed'] is False
+    asyncio.run(run())
+
+
+def test_spawn_cancellation_keeps_late_child_handle_for_cleanup(tmp_path):
+    """Cancellation propagates while the shielded late child remains owned."""
+    async def run():
+        gate = asyncio.Event()
+
+        class DelayedLauncher(ControlledObserverLauncher):
+            async def start_controlled(self, command, environment):
+                await gate.wait()
+                return await super().start_controlled(command, environment)
+
+        launcher = DelayedLauncher('hang')
+        supervisor, _sink = _controlled_supervisor(
+            tmp_path, launcher,
+            lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.HEARTBEAT_OBSERVER_START_CAP_S = 2.0
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.5
+        prepare = asyncio.create_task(
+            supervisor._prepare_heartbeat_diagnostics(),
+        )
+        await asyncio.sleep(0)
+        prepare.cancel()
+        try:
+            await prepare
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError('observer startup cancellation was swallowed')
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await supervisor._stop_heartbeat_diagnostics()
+        assert supervisor._heartbeat_observer_process is launcher.child
+        assert launcher.child.returncode == -signal.SIGKILL
+        assert supervisor._heartbeat_observer_wait_task.done()
     asyncio.run(run())
 
 

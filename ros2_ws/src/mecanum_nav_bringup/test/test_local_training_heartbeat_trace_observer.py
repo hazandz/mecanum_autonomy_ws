@@ -3,9 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from mecanum_nav_bringup.local_training_heartbeat_trace_observer import (
-    EVENT_CALLBACK_ENTRY, EVENT_HEARTBEAT_CHECK, EVENT_STATUS_VALIDATION,
+    EVENT_CALLBACK_ENTRY, EVENT_HEARTBEAT_CHECK, EVENT_STATUS_BASELINE,
+    EVENT_STATUS_VALIDATION,
     LocalTrainingHeartbeatTraceObserver, clock_context,
-    measure_clock_error_certificate,
+    measure_clock_domain_certificate,
 )
 
 
@@ -38,7 +39,16 @@ class FakeTraceApi:
         self.closed.append(writer)
 
 
-def _observer(api):
+def _readiness_status(backend=42):
+    return {
+        'world_id': 'b2_training_arena', 'session_id': 'session-1',
+        'config_hash': 'a' * 64, 'backend_instance_id': backend,
+        'status_sequence': 1, 'fault_flags': 0,
+        'actuator_inhibited': True,
+    }
+
+
+def _observer(api, *, ready=True):
     """Construct an observer without importing or starting ROS."""
     plan = SimpleNamespace(
         session_id='session-1', config_hash='a' * 64,
@@ -54,6 +64,8 @@ def _observer(api):
         api_loader=lambda _path: api,
     )
     observer._api = api
+    if ready:
+        assert observer.bind_readiness_backend(_readiness_status())
     return observer
 
 
@@ -79,6 +91,7 @@ def test_status_callback_records_binding_validation_without_runtime_control():
     assert [record[4] for record in api.records[1:]] == [
         bytes((EVENT_CALLBACK_ENTRY, 0)),
         bytes((EVENT_STATUS_VALIDATION, 1)),
+        bytes((10, 1)),
     ]
     assert api.records[0][2] <= api.records[1][2]
     assert observer._last_accepted_sequence == 1
@@ -108,7 +121,7 @@ def test_session_identity_change_is_reported_and_not_recorded_as_same_sample():
     count = len(api.records)
     observer._on_status(_status(backend=43, sequence=2))
     assert len(api.records) == count
-    assert 'backend_instance_changed_within_session' in (
+    assert 'readiness_backend_instance_mismatch' in (
         observer.snapshot()['errors']
     )
 
@@ -118,8 +131,49 @@ def test_invalid_health_is_recorded_as_diagnostic_validation_failure():
     api = FakeTraceApi([100, 101, 102])
     observer = _observer(api)
     observer._on_status(_status(faults=1))
-    assert api.records[-1][4] == bytes((EVENT_STATUS_VALIDATION, 0))
+    assert api.records[-2][4] == bytes((EVENT_STATUS_VALIDATION, 0))
+    assert api.records[-1][4] == bytes((EVENT_STATUS_BASELINE, 0))
     assert observer._last_accepted_ns is None
+
+
+def test_status_before_readiness_cannot_open_writer_or_set_baseline():
+    """Only a callback after accepted readiness may initialize the trace."""
+    api = FakeTraceApi([100, 101, 102])
+    observer = _observer(api, ready=False)
+    observer._on_status(_status(sequence=1))
+    assert api.records == []
+    assert observer._last_accepted_sequence is None
+
+    assert observer.bind_readiness_backend(_readiness_status())
+    observer._on_status(_status(sequence=2))
+    assert api.open_args[6] == 42
+    assert observer._last_accepted_sequence == 2
+
+
+def test_readiness_instance_is_checked_before_writer_open_and_update():
+    """Do not bind a callback to a different ready backend instance."""
+    api = FakeTraceApi([100, 101, 102])
+    observer = _observer(api, ready=False)
+    assert observer.bind_readiness_backend(_readiness_status(backend=43))
+    observer._on_status(_status(backend=42, sequence=1))
+    assert api.records == []
+    assert observer._last_accepted_sequence is None
+    assert 'readiness_backend_instance_mismatch' in (
+        observer.snapshot()['errors']
+    )
+
+
+def test_health_validation_and_baseline_use_are_separate_trace_events():
+    """A healthy duplicate remains valid health but is not a baseline."""
+    api = FakeTraceApi([100, 101, 102, 200, 201, 202])
+    observer = _observer(api)
+    observer._on_status(_status(sequence=9))
+    observer._on_status(_status(sequence=9))
+    events = [record[4] for record in api.records if record[4]]
+    health = [item for item in events if item[0] == EVENT_STATUS_VALIDATION]
+    baseline = [item for item in events if item[0] == 10]
+    assert health == [bytes((EVENT_STATUS_VALIDATION, 1))] * 2
+    assert baseline == [bytes((10, 1)), bytes((10, 0))]
 
 
 def test_python_clock_context_matches_shared_linux_provenance_shape():
@@ -143,12 +197,14 @@ def test_duplicate_and_out_of_order_sequences_do_not_refresh_heartbeat():
     observer._on_status(_status(sequence=5))
     assert observer._last_accepted_ns == baseline_ns
     assert observer._last_accepted_sequence == baseline_sequence
-    assert api.records[-1][4] == bytes((9, 1))
+    assert bytes((9, 1)) in [record[4] for record in api.records]
+    assert api.records[-1][4] == bytes((10, 0))
 
     observer._on_status(_status(sequence=4))
     assert observer._last_accepted_ns == baseline_ns
     assert observer._last_accepted_sequence == baseline_sequence
-    assert api.records[-1][4] == bytes((9, 2))
+    assert bytes((9, 2)) in [record[4] for record in api.records]
+    assert api.records[-1][4] == bytes((10, 0))
 
     observer._on_status(_status(sequence=6))
     assert observer._last_accepted_ns == 300
@@ -211,6 +267,28 @@ def test_joined_is_false_while_observer_thread_is_alive():
     thread.start()
     try:
         assert observer.snapshot()['joined'] is False
+    finally:
+        gate.set()
+        thread.join(1)
+
+
+def test_nonresponsive_observer_stop_is_bounded_and_reports_residue():
+    """A live, nonresponsive thread is not joined or treated as closed."""
+    import asyncio
+    import threading
+
+    observer = _observer(FakeTraceApi([]))
+    gate = threading.Event()
+    thread = threading.Thread(target=gate.wait)
+    observer._thread = thread
+    thread.start()
+    try:
+        assert asyncio.run(observer.stop_async(timeout_s=0)) is False
+        snapshot = observer.snapshot()
+        assert snapshot['thread_alive'] is True
+        assert snapshot['joined'] is False
+        assert snapshot['writer_closed'] is False
+        assert 'observer_thread_residue_unknown' in snapshot['errors']
     finally:
         gate.set()
         thread.join(1)
@@ -357,8 +435,8 @@ def test_observer_initializes_fake_context_with_plan_domain_and_joins():
     assert observer.snapshot()['thread_alive'] is False
 
 
-def test_native_clock_certificate_is_bounded_and_hash_bound(tmp_path):
-    """Bracket only the native clock call and bind certificate to its bytes."""
+def test_native_clock_domain_check_does_not_claim_an_error_bound(tmp_path):
+    """Retain observed bracket width without calling it a bound."""
     binary = tmp_path / 'writer.so'
     binary.write_bytes(b'fake writer bytes')
     python_values = iter([90, 110] * 3)
@@ -368,17 +446,18 @@ def test_native_clock_certificate_is_bounded_and_hash_bound(tmp_path):
         def hbtrace_clock_monotonic_ns():
             return 100
 
-    certificate = measure_clock_error_certificate(
+    certificate = measure_clock_domain_certificate(
         binary, sample_count=3, api_loader=lambda _path: NativeClockApi(),
         python_clock_ns=lambda: next(python_values),
     )
-    assert certificate['error_bound_ns'] == 20
+    assert certificate['observed_max_bracket_width_ns'] == 20
+    assert 'error_bound_ns' not in certificate
     assert certificate['binary_sha256']
     assert len(certificate['samples']) == 3
 
 
-def test_native_clock_outside_bracket_does_not_produce_certificate(tmp_path):
-    """A native timestamp outside its Python bracket is not a bound."""
+def test_native_clock_outside_bracket_does_not_produce_domain_check(tmp_path):
+    """A native timestamp outside its Python bracket fails the clock check."""
     binary = tmp_path / 'writer.so'
     binary.write_bytes(b'fake writer bytes')
 
@@ -389,7 +468,7 @@ def test_native_clock_outside_bracket_does_not_produce_certificate(tmp_path):
 
     values = iter([90, 110] * 3)
     try:
-        measure_clock_error_certificate(
+        measure_clock_domain_certificate(
             binary, sample_count=3,
             api_loader=lambda _path: NativeClockApi(),
             python_clock_ns=lambda: next(values),

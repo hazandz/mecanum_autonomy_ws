@@ -157,18 +157,50 @@ def _open_trace(path, allocated):
 def _valid_join_evidence(evidence):
     required = {
         'server_exit_status', 'server_process_joined', 'server_group_absent',
-        'observer_thread_joined', 'observer_thread_alive',
-        'observer_writer_closed', 'task_residue',
+        'observer_process_identity', 'observer_process_identity_verified',
+        'observer_process_joined', 'observer_process_group_absent',
+        'observer_exit_status', 'observer_stop_acknowledged',
+        'observer_writer_closed', 'observer_termination', 'task_residue',
     }
+    identity = evidence.get('observer_process_identity') if isinstance(
+        evidence, dict,
+    ) else None
+    identity_valid = (
+        isinstance(identity, dict)
+        and set(identity) == {
+            'pid', 'process_group_id', 'session_id', 'start_ticks',
+        }
+        and all(type(identity[key]) is int and identity[key] > 0
+                for key in identity)
+        and identity['pid'] == identity['process_group_id']
+        and identity['pid'] == identity['session_id']
+    )
     return (
         isinstance(evidence, dict) and set(evidence) == required
         and type(evidence['server_exit_status']) is int
         and evidence['server_process_joined'] is True
         and evidence['server_group_absent'] is True
-        and evidence['observer_thread_joined'] is True
-        and evidence['observer_thread_alive'] is False
-        and evidence['observer_writer_closed'] is True
+        and evidence['observer_process_identity_verified'] is True
+        and identity_valid
+        and evidence['observer_process_joined'] is True
+        and evidence['observer_process_group_absent'] is True
+        and type(evidence['observer_exit_status']) is int
+        and type(evidence['observer_stop_acknowledged']) is bool
+        and type(evidence['observer_writer_closed']) is bool
+        and evidence['observer_termination'] in {
+            'CLEAN_COOPERATIVE', 'SIGTERM', 'SIGKILL', 'UNCONFIRMED_EXIT',
+        }
         and evidence['task_residue'] == 'NONE'
+    )
+
+
+def _valid_clean_join_evidence(evidence):
+    return (
+        _valid_join_evidence(evidence)
+        and evidence['observer_stop_acknowledged'] is True
+        and evidence['observer_writer_closed'] is True
+        and evidence['observer_exit_status'] == 0
+        and evidence['observer_termination'] == 'CLEAN_COOPERATIVE'
     )
 
 
@@ -196,21 +228,20 @@ def _valid_readiness_binding(
     )
 
 
-def _clock_error_bound(
-    certificate, current_clock, expected_provenance,
-    expected_binary_sha256,
+def _clock_domain_verified(
+    certificate, current_clock, expected_provenance, expected_binary_sha256,
 ):
-    """Validate a paired native/Python clock bracket certificate."""
+    """Check clock-source agreement; setup brackets are not an error bound."""
     required = {
         'schema_id', 'clock', 'provenance', 'boot_id',
         'time_namespace_device', 'time_namespace_inode',
         'time_namespace_offsets', 'source', 'method', 'binary_sha256',
-        'samples', 'error_bound_ns',
+        'samples', 'observed_max_bracket_width_ns',
     }
     if not isinstance(certificate, dict) or set(certificate) != required:
         return None
     if (
-        certificate['schema_id'] != 'b2_monotonic_error_bound/v1'
+        certificate['schema_id'] != 'b2_clock_domain_check/v1'
         or certificate['clock'] != 'CLOCK_MONOTONIC'
         or certificate['provenance'] != expected_provenance
         or certificate['source'] != 'hbtrace_clock_monotonic_ns'
@@ -249,82 +280,292 @@ def _clock_error_bound(
             return None
         widths.append(after - before)
     bound = max(widths)
-    if (type(certificate['error_bound_ns']) is not int
-            or certificate['error_bound_ns'] != bound):
+    if (type(certificate['observed_max_bracket_width_ns']) is not int
+            or certificate['observed_max_bracket_width_ns'] != bound):
         return None
-    return bound
+    return True
 
 
-def _decode_analyzer_events(records, *, binding, provenance, bound_ns):
-    """Decode only event meanings actually present in HBTRACE1 payloads."""
+def _clock_error_bound(proof, current_clock, expected_provenance):
+    """Accept only scoped, externally evidenced uncertainty, never jitter."""
+    required = {
+        'schema_id', 'clock', 'provenance', 'boot_id',
+        'time_namespace_device', 'time_namespace_inode',
+        'time_namespace_offsets', 'scope', 'source_verified',
+        'evidence_sha256', 'error_bound_ns',
+    }
+    if not isinstance(proof, dict) or set(proof) != required:
+        return None
+    if (
+        proof['schema_id'] != 'b2_clock_uncertainty_proof/v1'
+        or proof['clock'] != 'CLOCK_MONOTONIC'
+        or proof['provenance'] != expected_provenance
+        or proof['scope'] != 'trace_timestamp_and_window_boundary'
+        or proof['source_verified'] is not True
+        or type(proof['error_bound_ns']) is not int
+        or proof['error_bound_ns'] < 0
+        or not isinstance(proof['evidence_sha256'], str)
+        or len(proof['evidence_sha256']) != 64
+        or any(char not in '0123456789abcdef'
+               for char in proof['evidence_sha256'])
+    ):
+        return None
+    for key in (
+        'boot_id', 'time_namespace_device', 'time_namespace_inode',
+        'time_namespace_offsets',
+    ):
+        if proof[key] != current_clock.get(key):
+            return None
+    return proof['error_bound_ns']
+
+
+def _event_interval_in_window(timestamp, bound, window):
+    earliest = timestamp - bound
+    latest = timestamp + bound
+    start, end = window
+    if latest < start or earliest > end:
+        return False, False
+    if earliest < start or latest > end:
+        return True, False
+    return True, True
+
+
+def _publisher_coverage(
+    records, *, binding, window, bound_ns, clock_domain, provenance,
+):
+    """Build proof only from full boundaries and resolved publish lifetimes."""
+    from heartbeat_diagnostics import Binding, PublishCoverage
+
+    if not records:
+        return None, ('backend_trace_records_missing',)
+    start, end = window
+    if (records[0][1] != 1 or records[-1][1] != 3
+            or records[0][2] + bound_ns > start
+            or records[-1][2] - bound_ns < end):
+        return None, ('backend_publish_boundary_does_not_cover_window',)
+    calls = {}
+    issues = []
+    for record_sequence, kind, timestamp, status_sequence, payload in records:
+        if kind != 2:
+            continue
+        if (status_sequence <= 0 or len(payload) != 1
+                or payload[0] not in (1, 2, 3)):
+            issues.append(
+                f'backend_publish_record_unsupported:{record_sequence}'
+            )
+            continue
+        code = payload[0]
+        intersects, contained = _event_interval_in_window(
+            timestamp, bound_ns, window,
+        )
+        if intersects:
+            if not contained:
+                issues.append(
+                    'publish_event_uncertainty_overlaps_window:'
+                    f'{record_sequence}'
+                )
+        call = calls.setdefault(status_sequence, {'begin': [], 'terminal': []})
+        if code == 1:
+            call['begin'].append((timestamp, record_sequence))
+        else:
+            call['terminal'].append((timestamp, record_sequence, code))
+    clear_at_start = True
+    clear_at_end = True
+    for sequence, call in calls.items():
+        begins = call['begin']
+        terminals = call['terminal']
+        if len(begins) != 1 or len(terminals) > 1 or not begins:
+            issues.append(
+                f'publish_lifetime_unresolved:status_sequence={sequence}'
+            )
+            clear_at_start = False
+            clear_at_end = False
+            continue
+        begin = begins[0][0]
+        begin_low, begin_high = begin - bound_ns, begin + bound_ns
+        terminal = terminals[0][0] if terminals else None
+        terminal_low = terminal - bound_ns if terminal is not None else None
+        terminal_high = terminal + bound_ns if terminal is not None else None
+        if terminal is not None and begin_high >= terminal_low:
+            issues.append(
+                f'publish_begin_terminal_order_unverified:{sequence}'
+            )
+            clear_at_start = False
+            clear_at_end = False
+            continue
+        if begin_low <= start < begin_high:
+            clear_at_start = False
+            issues.append(f'publish_start_state_ambiguous:{sequence}')
+        elif begin_high <= start:
+            if terminal is None or terminal_high > start:
+                clear_at_start = False
+                if terminal is not None and terminal_low <= start:
+                    issues.append(f'publish_start_state_ambiguous:{sequence}')
+        elif begin_low > start:
+            pass
+        if begin_low <= end < begin_high:
+            clear_at_end = False
+            issues.append(f'publish_end_state_ambiguous:{sequence}')
+        elif begin_high <= end:
+            if terminal is None or terminal_high > end:
+                clear_at_end = False
+                if terminal is not None and terminal_low <= end:
+                    issues.append(f'publish_end_state_ambiguous:{sequence}')
+        elif begin_low > end:
+            pass
+    if issues or not clear_at_start or not clear_at_end:
+        return None, tuple(issues or ('publish_boundary_state_unresolved',))
+    return PublishCoverage(
+        binding=Binding(
+            binding['session'], binding['backend'], binding['config'],
+            binding['world'],
+        ),
+        start_ns=start, end_ns=end, clock_domain=clock_domain,
+        provenance=provenance, source_verified=True, complete=True,
+        in_flight_clear_at_start=True,
+    ), ()
+
+
+def _decode_analyzer_events(
+    records, *, binding, provenance, bound_ns, requested_window,
+):
+    """Decode source-supported events and keep only certain in-window facts."""
     from heartbeat_diagnostics import DiagnosticEvent, EventKind
 
     decoded = []
     issues = []
+    health = {}
+    baseline = {}
+    health_facts = []
+
+    def make_event(kind, timestamp, sequence, **kwargs):
+        return DiagnosticEvent(
+            kind=kind, session_id=binding['session'],
+            backend_instance_id=binding['backend'],
+            status_sequence=sequence, config_hash=binding['config'],
+            world=binding['world'], timestamp_ns=timestamp,
+            clock_domain='CLOCK_MONOTONIC', provenance=provenance,
+            source_verified=True, uncertainty_ns=bound_ns, **kwargs,
+        )
+
     for role, result in records.items():
-        for (
-            _record_sequence, kind, timestamp, status_sequence, payload
-        ) in result:
+        for record_sequence, kind, timestamp, sequence, payload in result:
             if kind != 2:
                 continue
             if role == ROLE_BACKEND:
-                if len(payload) == 1 and payload[0] == 3:
-                    issues.append(
-                        f'backend_publish_exception:status_sequence='
-                        f'{status_sequence}'
-                    )
-                    continue
-                if len(payload) != 1 or payload[0] not in (1, 2):
+                if len(payload) != 1 or payload[0] not in (1, 2, 3):
                     issues.append(
                         f'backend_event_payload_unsupported:record='
-                        f'{_record_sequence}'
+                        f'{record_sequence}'
+                    )
+                    continue
+                if payload[0] == 3:
+                    issues.append(
+                        f'backend_publish_exception:status_sequence={sequence}'
                     )
                     continue
                 event_kind = (
                     EventKind.PUBLISH_BEGIN if payload[0] == 1
                     else EventKind.PUBLISH_RETURN
                 )
-                accepted = None
-            else:
-                if len(payload) != 2:
+                decoded.append(make_event(event_kind, timestamp, sequence))
+                continue
+
+            if len(payload) != 2:
+                issues.append(
+                    f'observer_event_payload_unsupported:record='
+                    f'{record_sequence}'
+                )
+                continue
+            code, flags = payload
+            if code == 9:
+                if flags not in (1, 2):
                     issues.append(
-                        f'observer_event_payload_unsupported:record='
-                        f'{_record_sequence}'
+                        f'observer_event_flags_unsupported:record='
+                        f'{record_sequence}'
                     )
                     continue
-                code, flags = payload
-                if code == 9:
-                    label = {1: 'duplicate', 2: 'out_of_order'}.get(
-                        flags, 'unknown',
-                    )
-                    issues.append(
-                        f'observer_sequence_{label}:status_sequence='
-                        f'{status_sequence}'
-                    )
-                    continue
-                mapping = {
-                    6: EventKind.CALLBACK_ENTRY,
-                    7: EventKind.STATUS_VALIDATION,
-                    8: EventKind.HEARTBEAT_CHECK,
-                }
-                event_kind = mapping.get(code)
-                if event_kind is None:
-                    issues.append(
-                        f'observer_event_code_unsupported:record='
-                        f'{_record_sequence}:code={code}'
-                    )
-                    continue
-                accepted = bool(flags) if code == 7 else None
-            decoded.append(DiagnosticEvent(
-                kind=event_kind, session_id=binding['session'],
-                backend_instance_id=binding['backend'],
-                status_sequence=status_sequence,
-                config_hash=binding['config'], world=binding['world'],
-                timestamp_ns=timestamp, clock_domain='CLOCK_MONOTONIC',
-                provenance=provenance, source_verified=True,
-                uncertainty_ns=bound_ns, status_accepted=accepted,
-            ))
-    return tuple(decoded), tuple(issues)
+                label = {1: 'duplicate', 2: 'out_of_order'}.get(
+                    flags, 'unknown',
+                )
+                issues.append(
+                    f'observer_sequence_{label}:status_sequence={sequence}'
+                )
+                continue
+            if flags not in (0, 1):
+                issues.append(
+                    'observer_event_flags_unsupported:'
+                    f'record={record_sequence}'
+                )
+                continue
+            if code == 7:
+                health.setdefault(sequence, []).append(
+                    (timestamp, bool(flags)),
+                )
+                continue
+            if code == 10:
+                baseline.setdefault(sequence, []).append(
+                    (timestamp, bool(flags)),
+                )
+                continue
+            mapping = {
+                6: EventKind.CALLBACK_ENTRY,
+                8: EventKind.HEARTBEAT_CHECK,
+            }
+            event_kind = mapping.get(code)
+            if event_kind is None:
+                issues.append(
+                    f'observer_event_code_unsupported:record='
+                    f'{record_sequence}:code={code}'
+                )
+                continue
+            decoded.append(make_event(event_kind, timestamp, sequence))
+
+    for sequence in sorted(set(health) | set(baseline)):
+        health_items = health.get(sequence, ())
+        baseline_items = baseline.get(sequence, ())
+        if len(health_items) != 1 or len(baseline_items) != 1:
+            issues.append(
+                f'status_health_or_baseline_decision_missing_or_ambiguous:'
+                f'seq={sequence}'
+            )
+            continue
+        validation_ns, health_valid = health_items[0]
+        baseline_ns, baseline_used = baseline_items[0]
+        if baseline_ns < validation_ns:
+            issues.append(
+                f'baseline_decision_precedes_validation:seq={sequence}'
+            )
+            continue
+        health_facts.append({
+            'status_sequence': sequence, 'health_valid': health_valid,
+            'used_as_baseline': baseline_used,
+            'validation_timestamp_ns': validation_ns,
+            'baseline_decision_timestamp_ns': baseline_ns,
+        })
+        decoded.append(make_event(
+            EventKind.STATUS_VALIDATION, validation_ns, sequence,
+            status_accepted=health_valid and baseline_used,
+        ))
+
+    selected = []
+    for event in decoded:
+        intersects, contained = _event_interval_in_window(
+            event.timestamp_ns, bound_ns, requested_window,
+        )
+        if not intersects:
+            continue
+        if not contained:
+            issues.append(
+                f'event_uncertainty_overlaps_requested_window:'
+                f'{event.kind.value}:seq={event.status_sequence}'
+            )
+            continue
+        selected.append(event)
+    if any(issue.startswith('event_uncertainty_overlaps_requested_window')
+           for issue in issues):
+        return (), tuple(issues), tuple(health_facts)
+    return tuple(selected), tuple(issues), tuple(health_facts)
 
 
 def read_trace_pair(
@@ -332,7 +573,8 @@ def read_trace_pair(
     config_hash: str, world: str, collection_id: str, clock_provenance: str,
     joined: bool, requested_window=None, clock_error_bound_ns=None,
     allocated_files=None, expected_backend_instance_id=None,
-    join_evidence=None, clock_error_certificate=None,
+    join_evidence=None, clock_domain_certificate=None,
+    clock_error_bound_proof=None,
     expected_clock_library_sha256=None,
     readiness_backend_status=None, readiness_binding_verified=False,
 ):
@@ -342,26 +584,29 @@ def read_trace_pair(
     if joined is not True:
         raise ValueError('both trace writers must be joined before reading')
     issues = []
-    join_verified = _valid_join_evidence(join_evidence)
-    if not join_verified:
-        issues.append('writer_join_or_residue_evidence_unverified')
+    raw_recovery_allowed = _valid_join_evidence(join_evidence)
+    clean_join_verified = _valid_clean_join_evidence(join_evidence)
+    if not raw_recovery_allowed:
+        issues.append('observer_process_reap_or_group_absence_unverified')
+    elif not clean_join_verified:
+        issues.append('observer_not_cleanly_closed_raw_recovery_only')
     try:
         current_clock = clock_context()
     except (OSError, ValueError) as error:
-        return {
-            'records': {'backend': (), 'observer': ()},
-            'coverage_complete': False,
-            'issues': (f'clock_context_unavailable:{type(error).__name__}',),
-        }
-    if current_clock['provenance'] != clock_provenance:
-        return {
-            'records': {'backend': (), 'observer': ()},
-            'coverage_complete': False,
-            'issues': ('clock_boot_or_time_namespace_mismatch',),
-        }
-    bound_ns = _clock_error_bound(
-        clock_error_certificate, current_clock, clock_provenance,
+        current_clock = {}
+        issues.append(f'clock_context_unavailable:{type(error).__name__}')
+    if current_clock.get('provenance') != clock_provenance:
+        issues.append('clock_boot_or_time_namespace_mismatch')
+    clock_domain_verified = _clock_domain_verified(
+        clock_domain_certificate, current_clock, clock_provenance,
         expected_clock_library_sha256,
+    ) if current_clock.get('provenance') == clock_provenance else None
+    if not clock_domain_verified:
+        issues.append('clock_domain_agreement_unverified')
+    bound_ns = (
+        _clock_error_bound(
+            clock_error_bound_proof, current_clock, clock_provenance,
+        ) if clock_domain_verified else None
     )
     if bound_ns is None:
         issues.append('clock_error_bound_unverified')
@@ -407,7 +652,7 @@ def read_trace_pair(
     results = {}
     for role, path in paths.items():
         header = headers.get(role)
-        if header is None or not join_verified:
+        if header is None or not raw_recovery_allowed:
             continue
         expected = {
             'collection': collection_id, 'session': session_id,
@@ -422,7 +667,7 @@ def read_trace_pair(
             result = read_after_join(
                 f'/proc/self/fd/{opened[role]}', expected=expected,
                 requested_window=requested_window,
-                clock_verified=True,
+                clock_verified=clock_domain_verified,
             )
             results[role] = result
             issues.extend(f'{role}:{issue}' for issue in result.issues)
@@ -438,7 +683,7 @@ def read_trace_pair(
 
     pair_identity_valid = (
         readiness_binding_valid and len(headers) == 2
-        and all(role in results for role in paths) and join_verified
+        and all(role in results for role in paths) and raw_recovery_allowed
     )
     if pair_identity_valid:
         backend_header = headers['backend']
@@ -476,7 +721,10 @@ def read_trace_pair(
         'config': config_hash, 'world': world,
     }
     raw_records = {role: value.records for role, value in results.items()}
-    usable_records = raw_records if pair_identity_valid else {}
+    recoverable_records = raw_records if raw_recovery_allowed else {}
+    usable_records = (
+        raw_records if pair_identity_valid and clean_join_verified else {}
+    )
     requested_valid = (
         isinstance(requested_window, (tuple, list))
         and len(requested_window) == 2
@@ -502,46 +750,69 @@ def read_trace_pair(
             )
     if requested_window is None:
         issues.append('coverage_window_missing')
-    file_coverage_complete = bool(
-        pair_identity_valid and len(results) == 2 and join_verified
+    trace_files_complete = bool(
+        pair_identity_valid and len(results) == 2 and clean_join_verified
+        and clock_domain_verified
         and bound_ns is not None and requested_valid and edge_valid
         and all(result.structure_valid for result in results.values())
         and all(result.coverage_complete for result in results.values())
     )
     decoded = ()
     decode_issues = ()
+    health_facts = ()
     analysis = None
-    if file_coverage_complete:
-        decoded, decode_issues = _decode_analyzer_events(
+    publish_coverage = None
+    if trace_files_complete:
+        decoded, decode_issues, health_facts = _decode_analyzer_events(
             usable_records, binding=binding, provenance=clock_provenance,
-            bound_ns=bound_ns,
+            bound_ns=bound_ns, requested_window=requested_window,
         )
-        from heartbeat_diagnostics import (
-            BoundedEventBuffer, Binding, analyze,
-        )
-        event_buffer = BoundedEventBuffer(max(1, len(decoded)))
-        for event in decoded:
-            event_buffer.append(event)
-        analysis = None if decode_issues else analyze(
-            event_buffer, expected=Binding(
-                session_id, expected_backend_instance_id,
-                config_hash, world,
-            ),
-        ) if decoded else None
+        if not decode_issues:
+            publish_coverage, publish_issues = _publisher_coverage(
+                usable_records['backend'], binding=binding,
+                window=requested_window, bound_ns=bound_ns,
+                clock_domain='CLOCK_MONOTONIC',
+                provenance=clock_provenance,
+            )
+            issues.extend(publish_issues)
+        if not decode_issues and decoded:
+            from heartbeat_diagnostics import (
+                BoundedEventBuffer, Binding, analyze,
+            )
+            event_buffer = BoundedEventBuffer(max(1, len(decoded)))
+            for event in decoded:
+                event_buffer.append(event)
+            analysis = analyze(
+                event_buffer, expected=Binding(
+                    session_id, expected_backend_instance_id,
+                    config_hash, world,
+                ), publisher_coverage=publish_coverage,
+            )
+    diagnostic_coverage_complete = bool(
+        trace_files_complete and publish_coverage is not None
+        and analysis is not None and analysis.evidence_complete
+    )
     return {
         'records': usable_records,
-        'raw_recovery_records': raw_records,
+        'raw_recovery_records': recoverable_records,
         'paired_records': (
             {role: value.records for role, value in results.items()}
             if pair_identity_valid else {}
         ),
         'pair_identity_valid': pair_identity_valid,
-        'coverage_complete': file_coverage_complete,
+        'raw_recovery_allowed': raw_recovery_allowed,
+        'clean_close_verified': clean_join_verified,
+        'trace_files_complete': trace_files_complete,
+        'coverage_complete': diagnostic_coverage_complete,
+        'diagnostic_coverage_complete': diagnostic_coverage_complete,
         'issues': tuple(issues) + decode_issues,
         'backend_instance_id': headers.get('backend', {}).get('backend'),
-        'clock_identity_verified': True,
+        'clock_identity_verified': bool(clock_domain_verified),
+        'clock_domain_verified': bool(clock_domain_verified),
         'clock_error_bound_ns': bound_ns,
+        'publish_coverage': publish_coverage,
         'analyzer_events': decoded,
         'analysis': analysis,
+        'status_health_facts': health_facts,
         'diagnostic_events_complete': not decode_issues,
     }

@@ -5,15 +5,20 @@ side effects occur only after an explicit supervisor start request.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import ctypes
 import hashlib
+import importlib.util
+import json
 import os
 import stat
+import sys
 import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 HEARTBEAT_THRESHOLD_NS = 1_000_000_000
 TRACE_CAPACITY = 4096
@@ -24,8 +29,14 @@ EVENT_CALLBACK_ENTRY = 6
 EVENT_STATUS_VALIDATION = 7
 EVENT_HEARTBEAT_CHECK = 8
 EVENT_SEQUENCE_RESULT = 9
+EVENT_STATUS_BASELINE = 10
 SEQUENCE_DUPLICATE = 1
 SEQUENCE_OUT_OF_ORDER = 2
+WORKER_MODULE = (
+    'mecanum_nav_bringup.local_training_heartbeat_trace_observer'
+)
+WORKER_FRAME_PREFIX = 'HBTRACE_CONTROL '
+WORKER_MAX_FRAME_BYTES = 4096
 
 
 def clock_context():
@@ -117,11 +128,11 @@ def _load_api(library_path):
     return library
 
 
-def measure_clock_error_certificate(
+def measure_clock_domain_certificate(
     library_path, *, sample_count=8, api_loader=_load_api,
     python_clock_ns=None,
 ):
-    """Bound C/Python CLOCK_MONOTONIC comparison outside callback work."""
+    """Check C/Python clock agreement without claiming an error bound."""
     if type(sample_count) is not int or not 3 <= sample_count <= 32:
         raise ValueError('clock certificate sample count must be 3..32')
     path = Path(library_path).resolve(strict=True)
@@ -145,7 +156,7 @@ def measure_clock_error_certificate(
         })
     context = clock_context()
     return {
-        'schema_id': 'b2_monotonic_error_bound/v1',
+        'schema_id': 'b2_clock_domain_check/v1',
         'clock': 'CLOCK_MONOTONIC', 'provenance': context['provenance'],
         'boot_id': context['boot_id'],
         'time_namespace_device': context['time_namespace_device'],
@@ -154,7 +165,7 @@ def measure_clock_error_certificate(
         'source': 'hbtrace_clock_monotonic_ns',
         'method': 'python_bracket_around_native_read',
         'binary_sha256': binary_sha256, 'samples': samples,
-        'error_bound_ns': max(
+        'observed_max_bracket_width_ns': max(
             item['python_after_ns'] - item['python_before_ns']
             for item in samples
         ),
@@ -350,7 +361,6 @@ class LocalTrainingHeartbeatTraceObserver:
         return True
 
     def _on_status(self, message):
-        callback_ns = self._clock()
         session = str(message.session_id)
         if session != self.plan.session_id:
             return
@@ -361,14 +371,23 @@ class LocalTrainingHeartbeatTraceObserver:
             or str(message.header.frame_id) != 'b2_training_arena'
             or backend_id <= 0
             or sequence <= 0
-            or callback_ns <= 0
         ):
             self._append_error('status_binding_or_clock_invalid')
             return
+        if self._readiness_backend_id is None:
+            self._append_error('readiness_backend_binding_pending')
+            return
+        if backend_id != self._readiness_backend_id:
+            self._append_error('readiness_backend_instance_mismatch')
+            return
+        callback_ns = self._clock()
+        if callback_ns <= 0:
+            self._append_error('status_binding_or_clock_invalid')
+            return
         if self._backend_id is None:
-            self._backend_id = backend_id
             if not self._open_writer(backend_id, callback_ns):
                 return
+            self._backend_id = backend_id
         elif backend_id != self._backend_id:
             self._append_error('backend_instance_changed_within_session')
             return
@@ -390,6 +409,7 @@ class LocalTrainingHeartbeatTraceObserver:
         self._append_event(
             EVENT_STATUS_VALIDATION, validation_ns, sequence, flags,
         )
+        baseline_used = False
         if accepted:
             if self._last_accepted_sequence is not None:
                 if sequence == self._last_accepted_sequence:
@@ -398,6 +418,9 @@ class LocalTrainingHeartbeatTraceObserver:
                         SEQUENCE_DUPLICATE,
                     )
                     self._append_error('status_sequence_duplicate')
+                    self._append_event(
+                        EVENT_STATUS_BASELINE, validation_ns, sequence, 0,
+                    )
                     return
                 if sequence < self._last_accepted_sequence:
                     self._append_event(
@@ -405,10 +428,18 @@ class LocalTrainingHeartbeatTraceObserver:
                         SEQUENCE_OUT_OF_ORDER,
                     )
                     self._append_error('status_sequence_out_of_order')
+                    self._append_event(
+                        EVENT_STATUS_BASELINE, validation_ns, sequence, 0,
+                    )
                     return
             self._last_accepted_ns = callback_ns
             self._last_accepted_sequence = sequence
             self._expired_recorded = False
+            baseline_used = True
+        self._append_event(
+            EVENT_STATUS_BASELINE, validation_ns, sequence,
+            1 if baseline_used else 0,
+        )
 
     def bind_readiness_backend(self, status):
         """Bind observer records to the independently accepted readiness."""
@@ -421,6 +452,10 @@ class LocalTrainingHeartbeatTraceObserver:
                 or status.get('config_hash') != self.plan.config_hash
                 or status.get('world_id') != 'b2_training_arena'):
             self._append_error('readiness_backend_binding_invalid')
+            return False
+        if (self._readiness_backend_id is not None
+                and self._readiness_backend_id != backend_id):
+            self._append_error('readiness_backend_instance_changed')
             return False
         if self._backend_id is not None and self._backend_id != backend_id:
             self._append_error('readiness_backend_instance_mismatch')
@@ -517,3 +552,133 @@ class LocalTrainingHeartbeatTraceObserver:
                 'writer_opened': self._writer_was_opened,
                 'writer_closed': self._writer_closed,
             }
+
+
+def _worker_write(message):
+    """Write one bounded control frame, separate from trace bytes."""
+    encoded = json.dumps(
+        message, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    if len(encoded) > WORKER_MAX_FRAME_BYTES:
+        raise ValueError('observer control frame exceeds limit')
+    sys.stdout.buffer.write(
+        WORKER_FRAME_PREFIX.encode('ascii') + encoded + b'\n'
+    )
+    sys.stdout.buffer.flush()
+
+
+def _worker_read():
+    """Read one bounded parent command from the private stdin pipe."""
+    raw = sys.stdin.buffer.readline(WORKER_MAX_FRAME_BYTES + 1)
+    if not raw or len(raw) > WORKER_MAX_FRAME_BYTES or not raw.endswith(b'\n'):
+        raise ValueError('observer control command missing or oversized')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('observer control command must be an object')
+    return value
+
+
+def _observer_worker_main():
+    """Serve the parent protocol inside the isolated observer process."""
+    nonce = os.environ.get('MECANUM_B2_HEARTBEAT_WORKER_NONCE', '')
+    module = importlib.util.find_spec(WORKER_MODULE)
+    module_path = (
+        str(Path(module.origin).resolve(strict=True)) if module else ''
+    )
+    _worker_write({
+        'kind': 'hello', 'nonce': nonce, 'module_path': module_path,
+        'executable': str(Path(sys.executable).resolve(strict=True)),
+        'prefix': str(Path(sys.prefix).resolve(strict=True)),
+    })
+    command = _worker_read()
+    if command.get('kind') != 'start' or command.get('nonce') != nonce:
+        _worker_write({'kind': 'error', 'code': 'start_binding_invalid'})
+        return 2
+    fields = command.get('fields')
+    if not isinstance(fields, dict) or set(fields) != {
+        'session_id', 'config_hash', 'domain_id', 'collection_id',
+        'clock_provenance', 'trace_file', 'library_path',
+    }:
+        _worker_write({'kind': 'error', 'code': 'start_fields_invalid'})
+        return 2
+    plan = SimpleNamespace(
+        session_id=fields['session_id'], config_hash=fields['config_hash'],
+        environment={'ROS_DOMAIN_ID': str(fields['domain_id'])},
+    )
+    observer = LocalTrainingHeartbeatTraceObserver(
+        plan=plan, trace_file=fields['trace_file'],
+        collection_id=fields['collection_id'],
+        clock_provenance=fields['clock_provenance'],
+        library_path=fields['library_path'],
+    )
+    started = observer.start()
+    try:
+        clock_certificate = measure_clock_domain_certificate(
+            fields['library_path'],
+        ) if started is True else None
+    except BaseException:
+        clock_certificate = None
+    _worker_write({
+        'kind': 'started', 'nonce': nonce, 'started': started is True,
+        'snapshot': observer.snapshot(),
+        'clock_domain_certificate': clock_certificate,
+    })
+    if started is not True:
+        return 3
+    while True:
+        command = _worker_read()
+        if command.get('nonce') != nonce:
+            _worker_write({'kind': 'error', 'code': 'command_nonce_invalid'})
+            return 2
+        if command.get('kind') == 'bind':
+            accepted = observer.bind_readiness_backend(command.get('status'))
+            _worker_write({
+                'kind': 'bound', 'nonce': nonce,
+                'accepted': accepted is True,
+                'snapshot': observer.snapshot(),
+            })
+            continue
+        if command.get('kind') == 'stop':
+            timeout_s = command.get('timeout_s')
+            if (isinstance(timeout_s, bool)
+                    or not isinstance(timeout_s, (int, float))
+                    or not 0 <= timeout_s <= 2.0):
+                _worker_write({
+                    'kind': 'error', 'code': 'stop_timeout_invalid',
+                })
+                return 2
+            stopped = asyncio.run(observer.stop_async(float(timeout_s)))
+            snapshot = observer.snapshot()
+            _worker_write({
+                'kind': 'stopped', 'nonce': nonce,
+                'joined': stopped is True,
+                'writer_closed': snapshot.get('writer_closed') is True,
+                'snapshot': snapshot,
+            })
+            return 0 if stopped and snapshot.get('writer_closed') else 4
+        _worker_write({'kind': 'error', 'code': 'command_kind_invalid'})
+        return 2
+
+
+def main(argv=None):
+    """Private subprocess entry point; importing the module stays inert."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--worker', action='store_true')
+    args = parser.parse_args(argv)
+    if not args.worker:
+        return 2
+    try:
+        return _observer_worker_main()
+    except BaseException as error:
+        try:
+            _worker_write({
+                'kind': 'error', 'code': type(error).__name__,
+                'detail': str(error)[:256],
+            })
+        except BaseException:
+            pass
+        return 5
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
