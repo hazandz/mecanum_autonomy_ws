@@ -5,11 +5,11 @@ import json
 import os
 import signal
 import sys
-import threading
 from types import SimpleNamespace
 
 from mecanum_nav_bringup.local_training_launch_contract import LaunchPlan
 from mecanum_nav_bringup.local_training_process_supervisor import (
+    CleanupEvidenceAck,
     LocalTrainingProcessSupervisor,
     RclpyReadiness,
 )
@@ -248,6 +248,43 @@ class FakeSink:
         self.events.append((event, facts))
 
 
+def _thaw_cleanup_value(value):
+    if (isinstance(value, tuple) and all(
+            isinstance(item, tuple) and len(item) == 2
+            and isinstance(item[0], str) for item in value)):
+        return {key: _thaw_cleanup_value(item) for key, item in value}
+    if isinstance(value, tuple):
+        return [_thaw_cleanup_value(item) for item in value]
+    return value
+
+
+class FakeCleanupPublisher:
+    """Test-only async publisher requiring a batch-bound explicit ACK."""
+
+    def __init__(self, sink=None, *, behavior='ack', gate=None):
+        """Configure a deterministic publisher response for cleanup tests."""
+        self.sink = sink
+        self.behavior = behavior
+        self.gate = gate
+        self.calls = []
+
+    async def __call__(self, batch, deadline):
+        """Capture the batch and return or await the selected result."""
+        self.calls.append((batch, deadline))
+        if self.behavior == 'raise':
+            raise OSError('injected publisher failure')
+        if self.behavior == 'hold':
+            await self.gate.wait()
+        if self.behavior == 'false_ack':
+            return CleanupEvidenceAck(batch.batch_id, False)
+        if self.behavior == 'wrong_ack':
+            return CleanupEvidenceAck('different-batch', True)
+        if self.sink is not None:
+            for event, frozen_facts in batch.events:
+                self.sink.record(event, _thaw_cleanup_value(frozen_facts))
+        return CleanupEvidenceAck(batch.batch_id, True)
+
+
 def plan(gui):
     """Build an isolated launch plan for the fake supervisor."""
     commands = (
@@ -283,6 +320,7 @@ def test_server_only_starts_one_process_and_needs_no_gui_ack():
         supervisor = LocalTrainingProcessSupervisor(
             plan=plan(False), launcher=launcher, readiness=readiness,
             evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         assert len(launcher.started) == 1
@@ -392,6 +430,7 @@ def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
             heartbeat_trace_directory=tmp_path,
             heartbeat_observer_factory=observer_factory,
             heartbeat_library_path=library,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         server_env = launcher.started[0][1]
@@ -435,6 +474,7 @@ def test_observer_initialization_failure_keeps_collection_unready(tmp_path):
             heartbeat_trace_directory=tmp_path,
             heartbeat_observer_factory=FailedObserver,
             heartbeat_library_path=library,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         server_env = launcher.started[0][1]
@@ -487,6 +527,7 @@ def test_nonjoined_observer_residue_is_reported_by_supervisor(tmp_path):
             heartbeat_trace_directory=tmp_path,
             heartbeat_observer_factory=NonresponsiveObserver,
             heartbeat_library_path=library,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         await supervisor.cleanup()
@@ -685,7 +726,7 @@ def test_reaped_observer_group_wait_obeys_deadline(tmp_path):
         join = dict(sink.events)['heartbeat_trace_collection']['join_evidence']
         assert join['observer_process_joined'] is True
         assert join['observer_process_group_absent'] is False
-        assert join['observer_termination'] == 'UNKNOWN'
+        assert join['observer_termination'] == 'UNCONFIRMED_EXIT'
     asyncio.run(run())
 
 
@@ -833,6 +874,7 @@ def test_heartbeat_diagnostic_cleanup_does_not_mask_start_failure(tmp_path):
             heartbeat_trace_directory=tmp_path,
             heartbeat_observer_factory=FakeObserver,
             heartbeat_library_path=library,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         try:
             await supervisor.start()
@@ -842,7 +884,7 @@ def test_heartbeat_diagnostic_cleanup_does_not_mask_start_failure(tmp_path):
             raise AssertionError('readiness failure was not preserved')
         assert dict(sink.events)['heartbeat_trace_collection']['observer'][
             'errors'
-        ] == ('injected',)
+        ] == ['injected']
     asyncio.run(run())
 
 
@@ -988,6 +1030,7 @@ def test_cleanup_signals_owned_group_after_leader_exit():
         supervisor = LocalTrainingProcessSupervisor(
             plan=plan(False), launcher=launcher, readiness=readiness,
             evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         record = type('Record', (), {
             'name': 'server', 'command': ('gz', 'sim'),
@@ -1124,19 +1167,25 @@ def test_cleanup_reserves_observer_budget_across_owned_groups():
     asyncio.run(run())
 
 
-def test_cleanup_sink_failure_does_not_mask_start_failure_or_skip_groups():
-    """A cleanup journal error is secondary to startup failure and rollback."""
+def test_legacy_sink_is_not_called_during_cleanup_and_primary_is_preserved():
+    """Missing async publisher fails closed without blocking rollback."""
     class FailingCleanupSink(FakeSink):
+        def __init__(self):
+            super().__init__()
+            self.cleanup_calls = 0
+
         def record(self, event, facts):
             if event == 'owned_process_cleanup':
+                self.cleanup_calls += 1
                 raise OSError('injected cleanup sink failure')
             super().record(event, facts)
 
     async def run():
         launcher = FakeLauncher(fail_on=2)
+        sink = FailingCleanupSink()
         supervisor = LocalTrainingProcessSupervisor(
             plan=_plan_with_bridge(True), launcher=launcher,
-            readiness=FakeReadiness(), evidence_sink=FailingCleanupSink(),
+            readiness=FakeReadiness(), evidence_sink=sink,
         )
         try:
             await supervisor.start()
@@ -1148,8 +1197,13 @@ def test_cleanup_sink_failure_does_not_mask_start_failure_or_skip_groups():
             (101, signal.SIGINT), (100, signal.SIGINT),
         ]
         assert supervisor._cleanup_residue == 'UNKNOWN'
-        assert any('cleanup_sink:owned_process_cleanup:OSError' in item
-                   for item in supervisor._cleanup_errors)
+        assert sink.cleanup_calls == 0
+        assert 'cleanup_evidence_publisher_unavailable' in (
+            supervisor._cleanup_errors
+        )
+        assert supervisor.cleanup_snapshot()['primary_failure']['message'] == (
+            'process start failed'
+        )
     asyncio.run(run())
 
 
@@ -1228,22 +1282,20 @@ def test_cleanup_concurrent_call_shares_and_shortens_absolute_deadline():
     asyncio.run(run())
 
 
-def test_blocking_cleanup_sink_does_not_block_other_group_cleanup():
-    """Cleanup signals every group before bounded off-loop sink publication."""
-    class BlockingSink(FakeSink):
-        def __init__(self):
-            super().__init__()
-            self.entered = threading.Event()
-            self.release = threading.Event()
-
-        def record(self, event, facts):
-            if event.startswith('owned_process_cleanup'):
-                self.entered.set()
-                self.release.wait()
-            super().record(event, facts)
-
+def test_cleanup_never_calls_legacy_sync_sink_and_stops_all_groups():
+    """A blocking legacy sink is excluded from the cleanup critical path."""
     async def run():
         launcher = FakeLauncher()
+
+        class BlockingSink(FakeSink):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def record(self, event, facts):
+                self.calls += 1
+                raise AssertionError('sync sink must not run during cleanup')
+
         sink = BlockingSink()
         supervisor = LocalTrainingProcessSupervisor(
             plan=plan(False), launcher=launcher,
@@ -1255,25 +1307,13 @@ def test_blocking_cleanup_sink_does_not_block_other_group_cleanup():
                 'name': role, 'command': ('child',), 'pid': pid,
                 'process': FakeProcess(pid), 'output_tasks': (),
             })())
-        cleanup = asyncio.create_task(supervisor.cleanup())
-        try:
-            for _ in range(500):
-                if sink.entered.is_set():
-                    break
-                await asyncio.sleep(0.001)
-            assert sink.entered.is_set()
-            assert await asyncio.wait_for(cleanup, timeout=0.5) is False
-            assert {pid for pid, _sig in launcher.stopped} == {161, 162}
-            assert supervisor._cleanup_residue == 'UNKNOWN'
-            assert supervisor._cleanup_sink_thread is not None
-            assert supervisor._cleanup_sink_thread.is_alive()
-        finally:
-            sink.release.set()
-            if supervisor._cleanup_sink_thread is not None:
-                supervisor._cleanup_sink_thread.join(timeout=1.0)
-                assert not supervisor._cleanup_sink_thread.is_alive()
-            if not cleanup.done():
-                await asyncio.wait_for(cleanup, timeout=1.0)
+        assert await asyncio.wait_for(
+            supervisor.cleanup(), timeout=0.5,
+        ) is False
+        assert {pid for pid, _sig in launcher.stopped} == {161, 162}
+        assert supervisor._cleanup_residue == 'UNKNOWN'
+        assert sink.calls == 0
+        assert not hasattr(supervisor, '_cleanup_sink_thread')
     asyncio.run(run())
 
 
@@ -1286,6 +1326,7 @@ def test_cleanup_owns_all_processes_for_both_gui_modes():
             supervisor = LocalTrainingProcessSupervisor(
                 plan=plan(gui), launcher=launcher,
                 readiness=FakeReadiness(), evidence_sink=sink,
+                cleanup_evidence_publisher=FakeCleanupPublisher(sink),
             )
             await supervisor.start()
             assert await supervisor.cleanup() is True
@@ -1591,6 +1632,7 @@ def test_monitor_reports_server_exit_by_role_when_bridge_is_first():
         supervisor = LocalTrainingProcessSupervisor(
             plan=_plan_with_bridge(False), launcher=launcher,
             readiness=FakeReadiness(), evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         assert [record.name for record in supervisor.owned] == [
@@ -1643,6 +1685,7 @@ def test_monitor_records_gui_exit_by_role_with_bridge_and_server_alive():
         supervisor = LocalTrainingProcessSupervisor(
             plan=_plan_with_bridge(True), launcher=launcher,
             readiness=FakeReadiness(), evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         await supervisor.start()
         roles = {record.name: record.process for record in supervisor.owned}
@@ -1684,6 +1727,7 @@ def test_bridge_start_is_rolled_back_when_server_spawn_fails():
         supervisor = LocalTrainingProcessSupervisor(
             plan=_plan_with_bridge(False), launcher=launcher,
             readiness=FakeReadiness(), evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(sink),
         )
         try:
             await supervisor.start()
@@ -1699,6 +1743,432 @@ def test_bridge_start_is_rolled_back_when_server_spawn_fails():
             'parameter_bridge',
         ]
     asyncio.run(run())
+
+
+def test_cleanup_without_publisher_fails_closed_and_snapshot_is_detached():
+    """Missing publication fails closed while snapshots remain detached."""
+    async def run():
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+        )
+        supervisor._safe_cleanup_record('retained_fact', {'nested': [1]})
+        assert await supervisor.cleanup() is False
+        snapshot = supervisor.cleanup_snapshot()
+        assert 'cleanup_evidence_publisher_unavailable' in (
+            snapshot['cleanup_errors']
+        )
+        assert snapshot['publication']['failed'] is True
+        assert snapshot['publication']['pending'] is True
+        snapshot['cleanup_errors'].clear()
+        snapshot['pending_facts'][0][1]['nested'].append(2)
+        assert 'cleanup_evidence_publisher_unavailable' in (
+            supervisor.cleanup_snapshot()['cleanup_errors']
+        )
+        assert supervisor._cleanup_evidence[0][1]['nested'] == [1]
+    asyncio.run(run())
+
+
+def test_cleanup_batch_requires_exact_ack_and_is_not_republished():
+    """Only an exact ACK clears facts; later cleanup does not retry."""
+    async def run():
+        sink = FakeSink()
+        publisher = FakeCleanupPublisher(sink)
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=sink,
+            cleanup_evidence_publisher=publisher,
+        )
+        supervisor._safe_cleanup_record('batch_fact', {'value': 7})
+        assert await supervisor.cleanup() is True
+        snapshot = supervisor.cleanup_snapshot()
+        assert snapshot['publication']['acknowledged'] is True
+        assert snapshot['publication']['pending'] is False
+        assert snapshot['pending_facts'] == []
+        assert len(publisher.calls) == 1
+        assert isinstance(publisher.calls[0][0].events, tuple)
+        assert sink.events == [('batch_fact', {'value': 7})]
+        assert await supervisor.cleanup() is True
+        assert len(publisher.calls) == 1
+    asyncio.run(run())
+
+
+def test_cleanup_publisher_failure_and_false_ack_preserve_facts():
+    """Publisher errors and invalid ACKs preserve the pending batch."""
+    async def run():
+        for behavior in ('raise', 'false_ack', 'wrong_ack'):
+            publisher = FakeCleanupPublisher(behavior=behavior)
+            supervisor = LocalTrainingProcessSupervisor(
+                plan=plan(False), launcher=FakeLauncher(),
+                readiness=FakeReadiness(), evidence_sink=FakeSink(),
+                cleanup_evidence_publisher=publisher,
+            )
+            supervisor._safe_cleanup_record('must_remain', {'case': behavior})
+            assert await supervisor.cleanup() is False
+            state = supervisor.cleanup_snapshot()
+            assert state['pending_facts'][0][1]['case'] == behavior
+            assert state['publication']['acknowledged'] is False
+            assert state['publication']['pending'] is True
+            assert len(publisher.calls) == 1
+            assert await supervisor.cleanup() is False
+            assert len(publisher.calls) == 1
+    asyncio.run(run())
+
+
+def test_cleanup_publisher_timeout_keeps_owned_task_and_runs_no_retry():
+    """An unjoined publisher remains owned after the common deadline."""
+    async def run():
+        gate = asyncio.Event()
+        publisher = FakeCleanupPublisher(behavior='hold', gate=gate)
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=publisher,
+        )
+        supervisor.CLEANUP_CAP_S = 0.03
+        supervisor._safe_cleanup_record('held', {'value': 1})
+        assert await asyncio.wait_for(
+            supervisor.cleanup(), timeout=0.3,
+        ) is False
+        assert supervisor._cleanup_publisher_task is not None
+        assert not supervisor._cleanup_publisher_task.done()
+        assert supervisor.cleanup_snapshot()['publisher_task_done'] is False
+        assert supervisor.cleanup_snapshot()['publication']['pending'] is True
+        gate.set()
+        await asyncio.wait_for(supervisor._cleanup_publisher_task, timeout=0.3)
+        assert await supervisor.cleanup() is False
+        assert len(publisher.calls) == 1
+        assert supervisor._cleanup_evidence
+    asyncio.run(run())
+
+
+def test_cleanup_dispatches_each_group_before_waiting_for_a_stalled_group():
+    """Every group gets its initial stop dispatch before grace waits."""
+    async def run():
+        launcher = FakeLauncher()
+        alive = {201, 202}
+        launcher.group_alive = lambda process: process.pid in alive
+        gate = asyncio.Event()
+        dispatches = []
+
+        async def stop_group(process, sig):
+            dispatches.append((process.pid, sig))
+            if process.pid == 201 and sig == signal.SIGINT:
+                await gate.wait()
+            else:
+                alive.discard(process.pid)
+                process.returncode = 0
+
+        launcher.stop_group = stop_group
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.08
+        for pid in (201, 202):
+            process = FakeProcess(pid)
+            supervisor.owned.append(type('Record', (), {
+                'name': f'child-{pid}', 'command': ('child',),
+                'pid': pid, 'process': process, 'output_tasks': (),
+            })())
+        cleanup = asyncio.create_task(supervisor.cleanup())
+        try:
+            assert await asyncio.wait_for(cleanup, timeout=0.3) is False
+            assert {
+                pid for pid, sig in dispatches if sig == signal.SIGINT
+            } == {201, 202}
+            assert 202 not in alive
+        finally:
+            gate.set()
+            pending = list(supervisor._cleanup_residue_tasks)
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            if pending:
+                await asyncio.wait(pending, timeout=0.3)
+    asyncio.run(run())
+
+
+def test_group_dispatch_error_does_not_prevent_other_group_stop():
+    """A failed dispatch for one group does not block the next group."""
+    async def run():
+        launcher = FakeLauncher()
+        alive = {211, 212}
+        launcher.group_alive = lambda process: process.pid in alive
+        attempts = []
+
+        async def stop_group(process, sig):
+            attempts.append((process.pid, sig))
+            if process.pid == 211:
+                raise OSError('dispatch rejected')
+            alive.discard(process.pid)
+            process.returncode = 0
+
+        launcher.stop_group = stop_group
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.08
+        for pid in (211, 212):
+            process = FakeProcess(pid)
+            supervisor.owned.append(type('Record', (), {
+                'name': f'child-{pid}', 'command': ('child',),
+                'pid': pid, 'process': process, 'output_tasks': (),
+            })())
+        assert await asyncio.wait_for(
+            supervisor.cleanup(), timeout=0.3,
+        ) is False
+        assert (211, signal.SIGINT) in attempts
+        assert (212, signal.SIGINT) in attempts
+        assert 212 not in alive
+        assert any('sigint_dispatch:child-211:OSError' in item
+                   for item in supervisor._cleanup_errors)
+    asyncio.run(run())
+
+
+def test_cleanup_publisher_failure_does_not_skip_other_group_dispatches():
+    """Publisher failure does not prevent process-group stop attempts."""
+    async def run():
+        launcher = FakeLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(
+                behavior='raise',
+            ),
+        )
+        for pid in (221, 222):
+            process = FakeProcess(pid)
+            supervisor.owned.append(type('Record', (), {
+                'name': f'child-{pid}', 'command': ('child',),
+                'pid': pid, 'process': process, 'output_tasks': (),
+            })())
+        assert await asyncio.wait_for(
+            supervisor.cleanup(), timeout=0.5,
+        ) is False
+        assert {pid for pid, _sig in launcher.stopped} == {221, 222}
+        assert 'cleanup_evidence_publisher:OSError' in (
+            supervisor._cleanup_errors
+        )
+    asyncio.run(run())
+
+
+def test_observer_close_outcomes_are_part_of_cleanup_verdict(tmp_path):
+    """ACK, writer close, forced stop, and exit status all affect cleanup."""
+    async def run():
+        for mode in ('clean', 'clean-nonzero-exit', 'end-fail', 'hang'):
+            launcher = ControlledObserverLauncher(mode)
+            case_dir = tmp_path / mode
+            case_dir.mkdir()
+            supervisor, _sink = _controlled_supervisor(
+                case_dir, launcher,
+                lambda pid: _fake_process_identity(pid),
+            )
+            supervisor.cleanup_evidence_publisher = FakeCleanupPublisher()
+            supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.12
+            await _start_fake_observer(supervisor)
+            cleanup_ok = await supervisor.cleanup()
+            state = supervisor.cleanup_snapshot()
+            join = state['observer_facts']['join_evidence']
+            if mode == 'clean':
+                assert cleanup_ok is True
+                assert join['observer_exit_status'] == 0
+                assert join['observer_end_written'] is True
+                assert join['observer_handle_closed'] is True
+                assert join['observer_writer_closed'] is True
+            else:
+                assert cleanup_ok is False, (mode, state)
+                if mode == 'clean-nonzero-exit':
+                    assert join['observer_exit_status'] == 9
+                    assert join['observer_stop_acknowledged'] is True
+                    assert join['observer_termination'] == 'UNCONFIRMED_EXIT'
+                    assert 'observer_stop_ack_exit_status_nonzero' in (
+                        state['cleanup_errors'][0]
+                    )
+                if mode == 'end-fail':
+                    assert join['observer_exit_status'] == 4
+                    assert join['observer_handle_closed'] is True
+                    assert join['observer_writer_closed'] is False
+                if mode == 'hang':
+                    assert join['observer_exit_status'] == -signal.SIGKILL
+                    assert join['observer_termination'] == 'SIGKILL'
+                assert state['process_residue'] == 'NONE'
+            assert state['publication']['acknowledged'] is True
+    asyncio.run(run())
+
+
+def test_thread_observer_stop_async_false_fails_without_fake_process_residue():
+    """A failed thread observer join is not misreported as process residue."""
+    class Observer:
+        async def stop_async(self, _timeout):
+            return False
+
+        def snapshot(self):
+            return {
+                'joined': False, 'thread_alive': True,
+                'writer_closed': False, 'errors': ('not_joined',),
+            }
+
+    async def run():
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            heartbeat_diagnostics_enabled=True,
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        supervisor._heartbeat_observer = Observer()
+        assert await supervisor.cleanup() is False
+        state = supervisor.cleanup_snapshot()
+        assert state['observer_facts']['observer']['joined'] is False
+        assert state['observer_facts']['join_evidence'][
+            'observer_process_joined'
+        ] is False
+        assert state['process_facts'] == []
+        assert state['process_residue'] == 'NONE'
+        assert state['publication']['acknowledged'] is True
+        assert any('observer_join_residue_unknown' in error
+                   for error in state['cleanup_errors'])
+    asyncio.run(run())
+
+
+def test_monitor_surfaces_cleanup_publication_failure_after_exit_zero():
+    """Monitor raises when an exit-zero server has unconfirmed cleanup."""
+    async def run():
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(
+                behavior='false_ack',
+            ),
+        )
+        process = FakeProcess(231, exit_status=0)
+        supervisor.owned.append(type('Record', (), {
+            'name': 'server', 'command': ('server',), 'pid': 231,
+            'process': process, 'output_tasks': (),
+        })())
+        try:
+            await supervisor.monitor()
+        except RuntimeError as error:
+            assert 'cleanup/evidence was not confirmed' in str(error)
+        else:
+            raise AssertionError('monitor returned zero after cleanup failure')
+        assert supervisor.cleanup_snapshot()['publication']['failed'] is True
+        assert process.returncode == 0
+    asyncio.run(run())
+
+
+def test_cli_boundary_exits_nonzero_for_monitor_cleanup_failure(monkeypatch):
+    """The CLI maps a monitor cleanup failure to a nonzero process exit."""
+    import mecanum_nav_bringup.local_training_process_supervisor as module
+
+    async def failed_run(_args):
+        raise RuntimeError(
+            'owned server exited but cleanup/evidence was not confirmed',
+        )
+
+    monkeypatch.setattr(module, '_run_from_cli', failed_run)
+    monkeypatch.setattr(
+        sys, 'argv', ['local_training_process_supervisor', '--gui', 'false',
+                      '--resolved-config', '/unused/config.json'],
+    )
+    try:
+        module.main()
+    except SystemExit as error:
+        assert error.code != 0
+        assert 'cleanup/evidence was not confirmed' in str(error.code)
+    else:
+        raise AssertionError('CLI returned success after cleanup failure')
+
+
+def test_observer_writer_failure_does_not_falsify_reaped_process_facts(
+        tmp_path):
+    """Writer failure keeps its own fact without falsifying process reap."""
+    async def run():
+        launcher = ControlledObserverLauncher('end-fail')
+        supervisor, _sink = _controlled_supervisor(
+            tmp_path, launcher,
+            lambda pid: _fake_process_identity(pid),
+        )
+        supervisor.cleanup_evidence_publisher = FakeCleanupPublisher()
+        await _start_fake_observer(supervisor)
+        assert await supervisor.cleanup() is False
+        snapshot = supervisor.cleanup_snapshot()
+        join = snapshot['observer_facts']['join_evidence']
+        assert join['observer_process_joined'] is True
+        assert join['observer_process_group_absent'] is True
+        assert join['observer_exit_status'] == 4
+        assert join['observer_writer_closed'] is False
+        assert snapshot['process_residue'] == 'NONE'
+        assert snapshot['publication']['acknowledged'] is True
+    asyncio.run(run())
+
+
+def test_noncooperative_task_child_exits_only_after_parent_watchdog():
+    """Bounded cleanup can return while a non-cooperative whole child lives."""
+    import subprocess
+
+    child_code = r"""
+import asyncio, json
+from types import SimpleNamespace
+from mecanum_nav_bringup.local_training_process_supervisor import (
+    LocalTrainingProcessSupervisor,
+)
+class Launcher:
+    async def start(self, *_args): raise AssertionError
+    async def stop_group(self, *_args): raise AssertionError
+    def group_alive(self, *_args): return False
+class Readiness: pass
+class Sink:
+    def record(self, *_args): raise AssertionError("cleanup called sync sink")
+async def stubborn():
+    while True:
+        try: await asyncio.Future()
+        except asyncio.CancelledError: continue
+async def main():
+    plan=SimpleNamespace(
+        gui_requested=False, environment={}, session_id='child',
+        config_hash='config',
+    )
+    supervisor=LocalTrainingProcessSupervisor(
+        plan=plan, launcher=Launcher(), readiness=Readiness(),
+        evidence_sink=Sink(),
+    )
+    supervisor.CLEANUP_CAP_S=0.03
+    task=asyncio.create_task(stubborn(),name='stubborn-child-task')
+    supervisor._track_observer(task)
+    result=await supervisor.cleanup()
+    print(json.dumps({
+        'cleanup_returned': True, 'cleanup_ok': result,
+        'task_done': task.done(),
+        'residue': supervisor.cleanup_snapshot()['task_residue'],
+    }), flush=True)
+asyncio.run(main())
+"""
+    process = subprocess.Popen(
+        [sys.executable, '-c', child_code], stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=0.35)
+            raise AssertionError(
+                f'child unexpectedly exited before watchdog: {stdout} {stderr}'
+            )
+        except subprocess.TimeoutExpired as timeout:
+            output = timeout.output or b''
+            if isinstance(output, bytes):
+                output = output.decode('utf-8', errors='replace')
+            assert '"cleanup_returned": true' in output, output
+            assert '"cleanup_ok": false' in output, output
+            assert '"task_done": false' in output, output
+            assert '"residue": "UNKNOWN"' in output, output
+            assert process.poll() is None
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=1.0)
+        assert process.returncode is not None
 
 
 def test_startup_cancellation_rolls_back_registered_children():

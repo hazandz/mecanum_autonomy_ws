@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import importlib
 import json
@@ -17,7 +18,6 @@ import secrets
 import signal
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -61,6 +61,32 @@ class ProcessLauncher(Protocol):
         self, command: tuple[str, ...], environment: dict[str, str],
     ) -> OwnedProcess:
         """Start one process group and return its owned process handle."""
+        ...
+
+
+@dataclass(frozen=True)
+class CleanupEvidenceBatch:
+    """Immutable, serialized facts offered once to a cleanup publisher."""
+
+    batch_id: str
+    events: tuple[tuple[str, tuple], ...]
+
+
+@dataclass(frozen=True)
+class CleanupEvidenceAck:
+    """Explicit acknowledgement bound to one immutable cleanup batch."""
+
+    batch_id: str
+    acknowledged: bool
+
+
+class CleanupEvidencePublisher(Protocol):
+    """Publish one immutable batch within the supervisor's deadline."""
+
+    async def __call__(
+        self, batch: CleanupEvidenceBatch, deadline: float,
+    ) -> CleanupEvidenceAck:
+        """Return an acknowledgement bound to the submitted batch."""
         ...
 
     async def stop_group(self, process: OwnedProcess, sig: int) -> None:
@@ -1298,6 +1324,7 @@ class LocalTrainingProcessSupervisor:
         heartbeat_observer_factory=None,
         heartbeat_library_path: Path | None = None,
         heartbeat_identity_reader=None,
+        cleanup_evidence_publisher: CleanupEvidencePublisher | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -1306,6 +1333,7 @@ class LocalTrainingProcessSupervisor:
         self.launcher = launcher
         self.readiness = readiness
         self.evidence_sink = evidence_sink
+        self.cleanup_evidence_publisher = cleanup_evidence_publisher
         self.monotonic = monotonic
         self.sleep = sleep
         self.heartbeat_diagnostics_enabled = (
@@ -1356,10 +1384,22 @@ class LocalTrainingProcessSupervisor:
         self._cleanup_wait_tasks: dict[int, asyncio.Task] = {}
         self._cleanup_residue = 'NONE'
         self._cleanup_errors: list[str] = []
+        self._cleanup_primary_failure: dict[str, object] | None = None
+        self._cleanup_requested = False
         self._cleanup_evidence: list[
             tuple[str, dict[str, object]]
         ] = []
-        self._cleanup_sink_thread: threading.Thread | None = None
+        self._cleanup_publication = {
+            'attempted': False, 'acknowledged': False,
+            'failed': False, 'pending': False, 'batch_id': None,
+        }
+        self._cleanup_batch: CleanupEvidenceBatch | None = None
+        self._cleanup_batch_event_count = 0
+        self._cleanup_publisher_task: asyncio.Task | None = None
+        self._cleanup_process_facts: list[dict[str, object]] = []
+        self._cleanup_task_facts: list[dict[str, object]] = []
+        self._cleanup_pipe_facts: list[dict[str, object]] = []
+        self._cleanup_observer_facts: dict[str, object] = {}
         self.gui_opened = False
         bind_evidence_sink = getattr(readiness, 'bind_evidence_sink', None)
         if bind_evidence_sink is not None:
@@ -1454,8 +1494,14 @@ class LocalTrainingProcessSupervisor:
                     'confirmation_source': 'human_owner',
                 },
             )
-        except BaseException:
-            await self.cleanup()
+        except BaseException as primary:
+            self._set_primary_failure(primary, 'start')
+            try:
+                await self.cleanup()
+            except BaseException as cleanup_error:
+                self._append_cleanup_error(
+                    f'start_cleanup:{type(cleanup_error).__name__}',
+                )
             raise
 
     async def _prepare_heartbeat_diagnostics(self) -> None:
@@ -1874,7 +1920,7 @@ class LocalTrainingProcessSupervisor:
             group_absent = not self.launcher.group_alive(process)
         except BaseException:
             pass
-        if clean_reaped:
+        if clean_ack:
             if (joined and group_absent
                     and type(self._heartbeat_observer_exit_status) is int
                     and self._heartbeat_observer_exit_status == 0):
@@ -1885,8 +1931,11 @@ class LocalTrainingProcessSupervisor:
                     reason = 'observer_clean_ack_process_join_unconfirmed'
                 elif not group_absent:
                     reason = 'observer_clean_ack_group_absence_unconfirmed'
-                else:
+                elif (type(self._heartbeat_observer_exit_status) is int
+                      and self._heartbeat_observer_exit_status != 0):
                     reason = 'observer_stop_ack_exit_status_nonzero'
+                else:
+                    reason = 'observer_clean_ack_reap_unconfirmed'
                 errors.append(reason)
                 self._heartbeat_trace_error = (
                     self._heartbeat_trace_error or reason
@@ -2037,7 +2086,7 @@ class LocalTrainingProcessSupervisor:
             chunk = await stream.readline()
             if not chunk:
                 return
-            self.evidence_sink.record('owned_process_output', {
+            self._record_runtime_event('owned_process_output', {
                 **self._facts(record), 'stream': stream_name,
                 'text': chunk.decode('utf-8', errors='replace').rstrip('\r\n'),
             })
@@ -2058,7 +2107,7 @@ class LocalTrainingProcessSupervisor:
             task.cancel()
         if gui_exit in done:
             acknowledgement.cancel()
-            self.evidence_sink.record('gui_closed_or_crashed', {
+            self._record_runtime_event('gui_closed_or_crashed', {
                 **self._facts(gui_record), 'exit_status': gui_exit.result(),
                 'during_owner_confirmation': True,
             })
@@ -2086,6 +2135,8 @@ class LocalTrainingProcessSupervisor:
             self._track_observer(asyncio.create_task(
                 self._record_gui_exit(gui_record),
             ))
+        primary: BaseException | None = None
+        status: int | None = None
         try:
             done, _ = await asyncio.wait(
                 waiters, return_when=asyncio.FIRST_COMPLETED,
@@ -2100,15 +2151,32 @@ class LocalTrainingProcessSupervisor:
                 raise RuntimeError(
                     f'owned infrastructure {record.name} exited: {status}'
                 )
-            return next(status for record, status in completed
-                        if record.name == 'server')
+            status = next(status for record, status in completed
+                          if record.name == 'server')
+        except BaseException as error:
+            primary = error
+            self._set_primary_failure(error, 'monitor')
         finally:
             for task in waiters:
                 if not task.done():
                     task.cancel()
             # cleanup() owns and boundedly joins these tasks. Do not gather
             # them here: a non-cooperative waiter must not bypass its deadline.
-            await self.cleanup()
+            try:
+                cleanup_ok = await self.cleanup()
+            except BaseException as cleanup_error:
+                cleanup_ok = False
+                self._append_cleanup_error(
+                    f'monitor_cleanup:{type(cleanup_error).__name__}',
+                )
+        if primary is not None:
+            raise primary
+        if cleanup_ok is not True:
+            raise RuntimeError(
+                'owned server exited but cleanup/evidence was not confirmed'
+            )
+        assert status is not None
+        return status
 
     def _track_observer(self, task: asyncio.Task) -> None:
         self._observer_tasks.add(task)
@@ -2116,11 +2184,33 @@ class LocalTrainingProcessSupervisor:
 
     async def _record_gui_exit(self, gui: ProcessRecord) -> None:
         status = await gui.process.wait()
-        self.evidence_sink.record('gui_closed_or_crashed', {
+        self._record_runtime_event('gui_closed_or_crashed', {
             **self._facts(gui), 'exit_status': status,
             'server_restart': False, 'gui_restart': False,
             'motion_permission_changed_by_gui_exit': False,
         })
+
+    def _record_runtime_event(
+        self, event: str, facts: dict[str, object],
+    ) -> None:
+        """Keep events in RAM once cleanup owns the evidence path."""
+        if self._cleanup_requested:
+            self._safe_cleanup_record(event, facts)
+        else:
+            self.evidence_sink.record(event, facts)
+
+    def _set_primary_failure(
+        self, error: BaseException, source: str,
+    ) -> None:
+        if self._cleanup_primary_failure is None:
+            self._cleanup_primary_failure = {
+                'type': type(error).__name__, 'message': str(error)[:512],
+                'source': source,
+            }
+
+    def _append_cleanup_error(self, error: str) -> None:
+        if error not in self._cleanup_errors:
+            self._cleanup_errors.append(error)
 
     def _facts(self, record: ProcessRecord) -> dict[str, object]:
         return {
@@ -2149,18 +2239,23 @@ class LocalTrainingProcessSupervisor:
         A caller may provide an earlier absolute deadline. Repeated calls can
         only shorten the stored deadline and share the same cleanup task.
         False means some task, process, group, pipe or observer is unconfirmed.
-        Async waits are bounded; synchronous sink calls and launcher identity /
-        signal syscalls cannot be preempted by asyncio and prevent a hard
-        wall-clock guarantee if one of those calls blocks inside the event
-        loop.
+        Async waits are bounded while the event loop progresses. A publisher
+        implementation and launcher identity/signal methods must not block
+        synchronously; asyncio cannot preempt such calls or guarantee a hard
+        whole-invocation wall-clock bound.
         """
         now = self.monotonic()
-        proposed = now + self.CLEANUP_CAP_S
+        proposed = (
+            self._cleanup_deadline
+            if self._cleanup_deadline is not None
+            else now + min(30.0, self.CLEANUP_CAP_S)
+        )
         if deadline is not None:
             if type(deadline) not in (float, int) or not math.isfinite(
                     float(deadline)):
                 raise TypeError('cleanup deadline must be an absolute number')
             proposed = min(proposed, float(deadline))
+        self._cleanup_requested = True
         if self._cleanup_deadline_changed is None:
             self._cleanup_deadline_changed = asyncio.Event()
         if self._cleanup_deadline is None:
@@ -2177,32 +2272,48 @@ class LocalTrainingProcessSupervisor:
         remaining = max(
             0.0, self._cleanup_deadline - self.monotonic(),
         )
-        if not task.done() and remaining > 0:
-            await asyncio.wait({task}, timeout=remaining)
+        while not task.done() and remaining > 0:
+            await asyncio.wait({task}, timeout=min(0.05, remaining))
+            remaining = max(
+                0.0, self._cleanup_deadline - self.monotonic(),
+            )
         if not task.done():
             self._cleanup_residue = 'UNKNOWN'
-            if 'cleanup_deadline_exhausted' not in self._cleanup_errors:
-                self._cleanup_errors.append('cleanup_deadline_exhausted')
+            self._task_residue = 'UNKNOWN'
+            self._append_cleanup_error('cleanup_deadline_exhausted')
             return False
         try:
             task.result()
         except BaseException as error:
             self._cleanup_residue = 'UNKNOWN'
-            self._cleanup_errors.append(
+            self._append_cleanup_error(
                 f'cleanup_task_failed:{type(error).__name__}',
             )
-        return self._cleanup_residue == 'NONE'
+        return self._cleanup_is_clean()
+
+    def _cleanup_is_clean(self) -> bool:
+        return bool(
+            self._cleanup_residue == 'NONE'
+            and self._process_residue == 'NONE'
+            and self._task_residue == 'NONE'
+            and not self.owned
+            and not self._cleanup_residue_tasks
+            and not self._cleanup_errors
+            and self._cleanup_publication['acknowledged'] is True
+            and self._cleanup_publication['failed'] is False
+            and self._cleanup_publication['pending'] is False
+        )
 
     def _observe_cleanup_task(self, task: asyncio.Task) -> None:
         """Consume background cleanup exceptions without losing the handle."""
         if task.cancelled():
             self._cleanup_residue = 'UNKNOWN'
-            self._cleanup_errors.append('cleanup_task_cancelled')
+            self._append_cleanup_error('cleanup_task_cancelled')
             return
         error = task.exception()
         if error is not None:
             self._cleanup_residue = 'UNKNOWN'
-            self._cleanup_errors.append(
+            self._append_cleanup_error(
                 f'cleanup_task_failed:{type(error).__name__}',
             )
 
@@ -2210,7 +2321,7 @@ class LocalTrainingProcessSupervisor:
         deadline = self._cleanup_deadline
         if deadline is None:
             self._cleanup_residue = 'UNKNOWN'
-            self._cleanup_errors.append('cleanup_deadline_missing')
+            self._append_cleanup_error('cleanup_deadline_missing')
             return
         observer_reserve = (
             min(self.HEARTBEAT_OBSERVER_CLEANUP_CAP_S,
@@ -2224,7 +2335,7 @@ class LocalTrainingProcessSupervisor:
             )
         except BaseException as error:
             self._cleanup_residue = 'UNKNOWN'
-            self._cleanup_errors.append(
+            self._append_cleanup_error(
                 f'owned_cleanup_failed:{type(error).__name__}',
             )
         if self.heartbeat_diagnostics_enabled:
@@ -2236,6 +2347,7 @@ class LocalTrainingProcessSupervisor:
                     self._heartbeat_trace_error
                     or 'cleanup_deadline_before_observer_stop'
                 )
+                self._append_cleanup_error(self._heartbeat_trace_error)
                 self._cleanup_residue = 'UNKNOWN'
             else:
                 if self._heartbeat_observer_cleanup_deadline is None:
@@ -2261,6 +2373,9 @@ class LocalTrainingProcessSupervisor:
                         self._heartbeat_trace_error
                         or 'heartbeat_observer_cleanup_deadline_unknown'
                     )
+                    self._append_cleanup_error(
+                        self._heartbeat_trace_error,
+                    )
                     self._cleanup_residue = 'UNKNOWN'
                 else:
                     try:
@@ -2272,12 +2387,18 @@ class LocalTrainingProcessSupervisor:
                             or 'heartbeat_observer_cleanup:'
                             f'{type(error).__name__}'
                         )
+                        self._append_cleanup_error(
+                            self._heartbeat_trace_error,
+                        )
                         self._cleanup_residue = 'UNKNOWN'
         if self.owned or self._cleanup_residue_tasks:
             self._cleanup_residue = 'UNKNOWN'
         if self._process_residue != 'NONE' or self._task_residue != 'NONE':
             self._cleanup_residue = 'UNKNOWN'
         await self._flush_cleanup_evidence(deadline)
+        if self._cleanup_errors or not self._cleanup_publication[
+                'acknowledged']:
+            self._cleanup_residue = 'UNKNOWN'
 
     def _retain_cleanup_task(self, task: asyncio.Task) -> None:
         self._cleanup_residue_tasks.add(task)
@@ -2333,7 +2454,9 @@ class LocalTrainingProcessSupervisor:
             remaining = max(0.0, effective - self.monotonic())
             if remaining <= 0:
                 return task.done()
-            timeout_task = asyncio.create_task(self.sleep(remaining))
+            timeout_task = asyncio.create_task(
+                self.sleep(min(0.05, remaining)),
+            )
             waiters = {task, timeout_task}
             changed = None
             if event is not None:
@@ -2405,93 +2528,149 @@ class LocalTrainingProcessSupervisor:
                 self._task_residue = 'UNKNOWN'
                 return False
 
+    async def _dispatch_group_signal(
+        self, record: ProcessRecord, sig: int, deadline: float,
+        observer_reserve_s: float,
+    ) -> str:
+        """Verify a live group and attempt one bounded signal dispatch."""
+        try:
+            if not self.launcher.group_alive(record.process):
+                return 'GROUP_ALREADY_ABSENT'
+        except BaseException as error:
+            self._append_cleanup_error(
+                f'group_identity:{record.name}:{type(error).__name__}',
+            )
+            self._process_residue = 'UNKNOWN'
+            return 'IDENTITY_UNKNOWN'
+        if self.monotonic() >= self._effective_process_deadline(
+                deadline, observer_reserve_s):
+            return 'DEADLINE_EXPIRED'
+        dispatch = asyncio.create_task(
+            self.launcher.stop_group(record.process, sig),
+        )
+        dispatch_deadline = min(
+            self._effective_process_deadline(deadline, observer_reserve_s),
+            self.monotonic() + self.CLEANUP_SIGNAL_DISPATCH_CAP_S,
+        )
+        if not await self._await_cleanup_task(
+                dispatch, dispatch_deadline, observer_reserve_s):
+            dispatch.cancel()
+            self._retain_cleanup_task(dispatch)
+            self._process_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                f'{signal.Signals(sig).name.lower()}_dispatch_unknown:'
+                f'{record.name}',
+            )
+            return 'DISPATCH_UNKNOWN'
+        try:
+            dispatch.result()
+        except BaseException as error:
+            self._append_cleanup_error(
+                f'{signal.Signals(sig).name.lower()}_dispatch:'
+                f'{record.name}:{type(error).__name__}',
+            )
+            return 'DISPATCH_FAILED'
+        return 'DISPATCHED'
+
     async def _cleanup_group(
         self, record: ProcessRecord, deadline: float,
-        observer_reserve_s: float,
+        observer_reserve_s: float, initial_dispatch: str,
     ) -> tuple[str, bool, bool]:
         process = record.process
-        deadline = self._effective_process_deadline(
-            deadline, observer_reserve_s,
-        )
         escalation = []
-        try:
-            alive = self.launcher.group_alive(process)
-        except BaseException:
-            self._process_residue = 'UNKNOWN'
-            return 'IDENTITY_UNKNOWN', False, False
-        if alive:
-            for sig, label, phase_s in (
-                (signal.SIGINT, 'SIGINT', 5.0),
-                (signal.SIGTERM, 'SIGTERM', 3.0),
-                (signal.SIGKILL, 'SIGKILL', 3.0),
-            ):
-                deadline = self._effective_process_deadline(
-                    deadline, observer_reserve_s,
-                )
-                remaining = deadline - self.monotonic()
-                if remaining <= 0:
-                    break
-                dispatch = asyncio.create_task(
-                    self.launcher.stop_group(process, sig),
-                )
-                dispatch_deadline = min(
-                    deadline,
-                    self.monotonic() + self.CLEANUP_SIGNAL_DISPATCH_CAP_S,
-                )
-                if not await self._await_cleanup_task(
-                        dispatch, dispatch_deadline,
-                        observer_reserve_s):
-                    dispatch.cancel()
-                    self._retain_cleanup_task(dispatch)
-                    self._process_residue = 'UNKNOWN'
-                    escalation.append(f'{label}_DISPATCH_UNKNOWN')
-                    break
+        dispatch_state = initial_dispatch
+        phases = (
+            (signal.SIGINT, 'SIGINT', 5.0),
+            (signal.SIGTERM, 'SIGTERM', 3.0),
+            (signal.SIGKILL, 'SIGKILL', 3.0),
+        )
+        for index, (sig, label, phase_s) in enumerate(phases):
+            if index == 0:
+                dispatch_state = initial_dispatch
+            else:
                 try:
-                    dispatch.result()
+                    alive = self.launcher.group_alive(process)
                 except BaseException as error:
-                    self._cleanup_errors.append(
-                        f'{label.lower()}_dispatch:{type(error).__name__}',
+                    self._append_cleanup_error(
+                        f'group_identity:{record.name}:'
+                        f'{type(error).__name__}',
                     )
-                    escalation.append(f'{label}_DISPATCH_FAILED')
+                    self._process_residue = 'UNKNOWN'
+                    dispatch_state = 'IDENTITY_UNKNOWN'
                     break
-                escalation.append(label)
-                phase_deadline = min(
-                    deadline, self.monotonic() + phase_s,
+                if not alive:
+                    break
+                dispatch_state = await self._dispatch_group_signal(
+                    record, sig, deadline, observer_reserve_s,
                 )
-                if await self._wait_group_until(
-                        process, phase_deadline, observer_reserve_s):
-                    break
+            if dispatch_state == 'GROUP_ALREADY_ABSENT':
+                break
+            if dispatch_state in {
+                    'IDENTITY_UNKNOWN', 'DEADLINE_EXPIRED',
+                    'DISPATCH_UNKNOWN'}:
+                break
+            escalation.append(
+                label if dispatch_state == 'DISPATCHED'
+                else f'{label}_{dispatch_state}'
+            )
+            if dispatch_state == 'DISPATCH_FAILED':
+                continue
+            phase_deadline = min(
+                self._effective_process_deadline(
+                    deadline, observer_reserve_s,
+                ), self.monotonic() + phase_s,
+            )
+            if await self._wait_group_until(
+                    process, phase_deadline, observer_reserve_s):
+                break
         try:
             group_absent = not self.launcher.group_alive(process)
-        except BaseException:
+            group_identity_known = True
+        except BaseException as error:
             group_absent = False
+            group_identity_known = False
+            self._append_cleanup_error(
+                f'final_group_identity:{record.name}:'
+                f'{type(error).__name__}',
+            )
         waiter = self._cleanup_wait_tasks.get(id(process))
         if waiter is None:
             waiter = asyncio.create_task(process.wait())
             self._cleanup_wait_tasks[id(process)] = waiter
         process_joined = False
-        if waiter is not None and not waiter.done():
+        if not waiter.done():
             process_joined = await self._await_cleanup_task(
                 waiter, deadline, observer_reserve_s,
             )
             if not process_joined:
                 self._retain_cleanup_task(waiter)
-        elif waiter is not None:
+        else:
             process_joined = True
-        if waiter is not None and waiter.done():
+        if waiter.done():
             try:
                 waiter.result()
                 process_joined = process.returncode is not None
             except BaseException as error:
-                self._cleanup_errors.append(
-                    f'owned_process_wait:{record.name}:{type(error).__name__}',
+                self._append_cleanup_error(
+                    f'owned_process_wait:{record.name}:'
+                    f'{type(error).__name__}',
                 )
                 process_joined = False
-        if not process_joined or not group_absent:
+        if not process_joined or not group_absent or not group_identity_known:
             self._process_residue = 'UNKNOWN'
         if not escalation:
-            escalation = ['GROUP_ALREADY_EXITED' if group_absent
-                          else 'DEADLINE_OR_IDENTITY_UNKNOWN']
+            escalation = [
+                'GROUP_ALREADY_ABSENT' if group_absent
+                else 'DEADLINE_OR_IDENTITY_UNKNOWN',
+            ]
+        self._cleanup_process_facts.append({
+            'role': record.name, 'pid': record.pid,
+            'process_joined': process_joined,
+            'raw_exit_status': process.returncode,
+            'group_absent': group_absent,
+            'group_identity_known': group_identity_known,
+            'signal_dispatches': tuple(escalation),
+        })
         return '_THEN_'.join(escalation), process_joined, group_absent
 
     async def _cleanup_owned(
@@ -2505,6 +2684,12 @@ class LocalTrainingProcessSupervisor:
         for task in observers:
             if not task.done():
                 task.cancel()
+        self._cleanup_task_facts.extend({
+            'task_name': task.get_name(),
+            'cancel_requested': True,
+            'joined': task.done(),
+            'residue': 'NONE' if task.done() else 'PENDING',
+        } for task in observers)
         task_deadline = min(
             self._effective_process_deadline(
                 process_deadline, observer_reserve_s,
@@ -2532,33 +2717,84 @@ class LocalTrainingProcessSupervisor:
                     )
 
         records = list(reversed(self.owned))
+        effective_process_deadline = self._effective_process_deadline(
+            process_deadline, observer_reserve_s,
+        )
+        # Start the first stop dispatch for every independently verified
+        # group before waiting for any grace/reap phase.
+        initial_dispatches = [
+            (record, asyncio.create_task(
+                self._dispatch_group_signal(
+                    record, signal.SIGINT, effective_process_deadline,
+                    observer_reserve_s,
+                ),
+                name=f'cleanup-sigint-{record.name}-{record.pid}',
+            )) for record in records
+        ]
+        initial_results: dict[int, str] = {}
+        for record, dispatch_task in initial_dispatches:
+            if not await self._await_cleanup_task(
+                    dispatch_task, effective_process_deadline,
+                    observer_reserve_s):
+                dispatch_task.cancel()
+                self._retain_cleanup_task(dispatch_task)
+                initial_results[id(record)] = 'DISPATCH_UNKNOWN'
+                self._process_residue = 'UNKNOWN'
+            else:
+                try:
+                    initial_results[id(record)] = dispatch_task.result()
+                except BaseException as error:
+                    initial_results[id(record)] = 'DISPATCH_FAILED'
+                    self._append_cleanup_error(
+                        f'initial_group_dispatch:{record.name}:'
+                        f'{type(error).__name__}',
+                    )
+                    self._process_residue = 'UNKNOWN'
+
+        group_tasks = [
+            (record, asyncio.create_task(
+                self._cleanup_group(
+                    record, process_deadline, observer_reserve_s,
+                    initial_results.get(id(record), 'IDENTITY_UNKNOWN'),
+                ),
+                name=f'cleanup-group-{record.name}-{record.pid}',
+            )) for record in records
+        ]
         results = {}
-        for index, record in enumerate(records):
-            effective_process_deadline = self._effective_process_deadline(
-                process_deadline, observer_reserve_s,
-            )
-            remaining = max(
-                0.0, effective_process_deadline - self.monotonic(),
-            )
-            groups_left = len(records) - index
-            group_deadline = min(
-                effective_process_deadline,
-                self.monotonic() + remaining / max(1, groups_left),
-            )
-            try:
-                escalation, joined, absent = await self._cleanup_group(
-                    record, group_deadline, observer_reserve_s,
-                )
-            except BaseException as error:
-                escalation, joined, absent = (
-                    f'CLEANUP_ERROR_{type(error).__name__}', False, False,
-                )
-                self._cleanup_errors.append(
-                    'owned_group_cleanup:'
-                    f'{record.name}:{type(error).__name__}',
+        for record, group_task in group_tasks:
+            if not await self._await_cleanup_task(
+                    group_task, self._effective_process_deadline(
+                        process_deadline, observer_reserve_s,
+                    ), observer_reserve_s):
+                group_task.cancel()
+                self._retain_cleanup_task(group_task)
+                results[id(record)] = (
+                    'DEADLINE_UNKNOWN', False, False,
                 )
                 self._process_residue = 'UNKNOWN'
-            results[id(record)] = (escalation, joined, absent)
+                self._cleanup_process_facts.append({
+                    'role': record.name, 'pid': record.pid,
+                    'process_joined': False,
+                    'raw_exit_status': record.process.returncode,
+                    'group_absent': False,
+                    'group_identity_known': False,
+                    'signal_dispatches': ('DEADLINE_UNKNOWN',),
+                })
+                self._append_cleanup_error(
+                    f'owned_group_deadline:{record.name}',
+                )
+            else:
+                try:
+                    results[id(record)] = group_task.result()
+                except BaseException as error:
+                    results[id(record)] = (
+                        f'CLEANUP_ERROR_{type(error).__name__}', False, False,
+                    )
+                    self._append_cleanup_error(
+                        f'owned_group_cleanup:{record.name}:'
+                        f'{type(error).__name__}',
+                    )
+                    self._process_residue = 'UNKNOWN'
 
         drain_tasks = {
             task for record in records for task in record.output_tasks
@@ -2606,6 +2842,16 @@ class LocalTrainingProcessSupervisor:
                     )
                     drains_joined = False
                 output_task_outcomes.append(outcome)
+                self._cleanup_pipe_facts.append({
+                    'role': record.name, 'stream_task_name': task.get_name(),
+                    'task_done': task.done(),
+                    'cancelled': task.cancelled(),
+                    'pipe_drain_joined': (
+                        task.done() and not task.cancelled()
+                        and task.exception() is None
+                    ),
+                    'error_type': outcome['error_type'],
+                })
             if not drains_joined:
                 self._safe_cleanup_record(
                     'owned_process_output_drain_timeout',
@@ -2623,86 +2869,143 @@ class LocalTrainingProcessSupervisor:
                 'output_task_outcomes': output_task_outcomes,
                 'residue': 'NONE' if clean else 'UNKNOWN',
             })
+        self._cleanup_task_facts.extend({
+            'task_name': task.get_name(), 'done': task.done(),
+            'cancelled': task.cancelled(),
+            'joined': task.done(),
+            'residue': 'NONE' if task.done() else 'UNKNOWN',
+        } for task in drain_tasks)
         self.owned = list(reversed(unresolved))
 
     def _safe_cleanup_record(
         self, event: str, facts: dict[str, object],
     ) -> None:
-        """Buffer facts so sink I/O cannot block process cleanup."""
-        self._cleanup_evidence.append((event, dict(facts)))
+        """Retain cleanup facts in RAM without invoking shared sink I/O."""
+        self._cleanup_evidence.append((event, copy.deepcopy(facts)))
+
+    @classmethod
+    def _freeze_cleanup_value(cls, value):
+        """Convert JSON-like facts into recursively immutable tuples."""
+        if isinstance(value, dict):
+            return tuple(
+                (str(key), cls._freeze_cleanup_value(item))
+                for key, item in sorted(
+                    value.items(), key=lambda pair: str(pair[0]),
+                )
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._freeze_cleanup_value(item) for item in value)
+        if isinstance(value, (set, frozenset)):
+            return tuple(sorted(
+                (cls._freeze_cleanup_value(item) for item in value),
+                key=repr,
+            ))
+        if value is None or type(value) in (str, int, float, bool, bytes):
+            return value
+        return repr(value)[:512]
+
+    def _make_cleanup_batch(self) -> CleanupEvidenceBatch:
+        frozen = tuple(
+            (event, self._freeze_cleanup_value(facts))
+            for event, facts in self._cleanup_evidence
+        )
+        return CleanupEvidenceBatch(uuid.uuid4().hex, frozen)
 
     async def _flush_cleanup_evidence(self, deadline: float) -> None:
-        """Publish buffered cleanup facts off-loop within remaining budget."""
-        if not self._cleanup_evidence:
-            return
-        if self._effective_cleanup_deadline(deadline) <= self.monotonic():
-            self._cleanup_errors.append(
-                'cleanup_evidence_not_published_deadline_exhausted',
-            )
-            self._cleanup_residue = 'UNKNOWN'
-            return
-        queued = tuple(self._cleanup_evidence)
-        self._cleanup_evidence.clear()
-
-        def write_records():
-            errors = []
-            for event, facts in queued:
-                try:
-                    self.evidence_sink.record(event, facts)
-                except BaseException as error:
-                    errors.append(
-                        f'cleanup_sink:{event}:{type(error).__name__}',
-                    )
-            return errors
-
-        failures: list[str] = []
-        completed = threading.Event()
-
-        def write_and_signal():
+        """Offer one immutable batch to an injected async publisher only."""
+        if self._cleanup_batch is None and self._cleanup_evidence:
             try:
-                failures.extend(write_records())
+                self._cleanup_batch = self._make_cleanup_batch()
+                self._cleanup_batch_event_count = len(self._cleanup_evidence)
+                self._cleanup_publication['batch_id'] = (
+                    self._cleanup_batch.batch_id
+                )
             except BaseException as error:
-                failures.append(
-                    f'cleanup_sink_worker:{type(error).__name__}',
-                )
-            finally:
-                completed.set()
-
-        thread = threading.Thread(
-            target=write_and_signal, name='b22-cleanup-evidence-sink',
-            daemon=False,
-        )
-        self._cleanup_sink_thread = thread
-        try:
-            thread.start()
-        except BaseException as error:
-            self._cleanup_errors.append(
-                f'cleanup_sink_thread_start:{type(error).__name__}',
-            )
-            self._cleanup_residue = 'UNKNOWN'
-            return
-        while thread.is_alive():
-            remaining = (
-                self._effective_cleanup_deadline(deadline)
-                - self.monotonic()
-            )
-            if remaining <= 0:
-                self._cleanup_errors.append(
-                    'cleanup_evidence_sink_deadline_unknown',
-                )
+                self._cleanup_publication['failed'] = True
+                self._cleanup_publication['pending'] = True
                 self._cleanup_residue = 'UNKNOWN'
+                self._append_cleanup_error(
+                    f'cleanup_batch_freeze:{type(error).__name__}',
+                )
                 return
-            await self.sleep(min(0.02, remaining))
-        thread.join(timeout=0)
-        if not completed.is_set():
-            self._cleanup_errors.append(
-                'cleanup_evidence_sink_completion_unknown',
+        if self.cleanup_evidence_publisher is None:
+            self._cleanup_publication['failed'] = True
+            self._cleanup_publication['pending'] = bool(
+                self._cleanup_evidence or self._cleanup_batch is not None
             )
             self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                'cleanup_evidence_publisher_unavailable',
+            )
             return
-        if failures:
-            self._cleanup_errors.extend(failures)
+        if self._cleanup_batch is None:
+            self._cleanup_batch = self._make_cleanup_batch()
+            self._cleanup_batch_event_count = 0
+            self._cleanup_publication['batch_id'] = (
+                self._cleanup_batch.batch_id
+            )
+        if self._cleanup_publication['attempted']:
+            return
+        self._cleanup_publication['attempted'] = True
+        self._cleanup_publication['pending'] = True
+        current_deadline = self._effective_cleanup_deadline(deadline)
+        remaining = current_deadline - self.monotonic()
+        if remaining <= 0:
+            self._cleanup_publication['failed'] = True
             self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                'cleanup_evidence_publication_deadline_exhausted',
+            )
+            return
+        task = asyncio.create_task(
+            self.cleanup_evidence_publisher(
+                self._cleanup_batch, current_deadline,
+            ),
+            name=f'cleanup-publisher-{self._cleanup_batch.batch_id}',
+        )
+        self._cleanup_publisher_task = task
+        if not await self._await_cleanup_task(task, current_deadline):
+            self._retain_cleanup_task(task)
+            self._cleanup_publication['failed'] = True
+            self._cleanup_publication['pending'] = True
+            self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error('cleanup_evidence_publication_timeout')
+            return
+        try:
+            acknowledgement = task.result()
+        except BaseException as error:
+            self._cleanup_publication['failed'] = True
+            self._cleanup_publication['pending'] = True
+            self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                f'cleanup_evidence_publisher:{type(error).__name__}',
+            )
+            return
+        valid_ack = (
+            type(acknowledgement) is CleanupEvidenceAck
+            and acknowledgement.batch_id == self._cleanup_batch.batch_id
+            and type(acknowledgement.acknowledged) is bool
+            and acknowledgement.acknowledged is True
+        )
+        if not valid_ack:
+            self._cleanup_publication['failed'] = True
+            self._cleanup_publication['pending'] = True
+            self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                'cleanup_evidence_ack_missing_or_wrong_batch',
+            )
+            return
+        if len(self._cleanup_evidence) != self._cleanup_batch_event_count:
+            self._cleanup_publication['failed'] = True
+            self._cleanup_publication['pending'] = True
+            self._cleanup_residue = 'UNKNOWN'
+            self._append_cleanup_error(
+                'cleanup_facts_arrived_after_publication_batch',
+            )
+            return
+        self._cleanup_evidence.clear()
+        self._cleanup_publication['acknowledged'] = True
+        self._cleanup_publication['pending'] = False
 
     async def _stop_heartbeat_diagnostics(self) -> None:
         if (not self.heartbeat_diagnostics_enabled
@@ -2844,21 +3147,46 @@ class LocalTrainingProcessSupervisor:
                 'NOT_INSTRUMENTED_NO_EXISTING_CALLBACK_CALL'
             ),
         }
+        self._cleanup_observer_facts = copy.deepcopy(facts)
+        if self._heartbeat_trace_error:
+            self._append_cleanup_error(
+                f'heartbeat_trace:{self._heartbeat_trace_error}',
+            )
         self._heartbeat_trace_reported = True
         if self._heartbeat_trace_defer_sink:
             self._cleanup_evidence.append(
                 ('heartbeat_trace_collection', facts),
             )
         else:
-            try:
-                self.evidence_sink.record(
-                    'heartbeat_trace_collection', facts,
-                )
-            except BaseException as error:
-                self._heartbeat_trace_error = (
-                    self._heartbeat_trace_error or
-                    f'trace_summary_sink_failed:{type(error).__name__}'
-                )
+            self._record_runtime_event('heartbeat_trace_collection', facts)
+
+    def cleanup_snapshot(self) -> dict[str, object]:
+        """Return a detached view of cleanup state and retained evidence."""
+        return copy.deepcopy({
+            'deadline': self._cleanup_deadline,
+            'overall_status': self._cleanup_is_clean(),
+            'cleanup_residue': self._cleanup_residue,
+            'primary_failure': self._cleanup_primary_failure,
+            'cleanup_errors': self._cleanup_errors,
+            'process_residue': self._process_residue,
+            'task_residue': self._task_residue,
+            'process_facts': self._cleanup_process_facts,
+            'task_facts': self._cleanup_task_facts,
+            'pipe_facts': self._cleanup_pipe_facts,
+            'observer_facts': self._cleanup_observer_facts,
+            'pending_batch': (
+                self._cleanup_batch
+                if self._cleanup_publication['pending'] is True else None
+            ),
+            'pending_facts': self._cleanup_evidence,
+            'publication': self._cleanup_publication,
+            'owned_process_count': len(self.owned),
+            'residue_task_count': len(self._cleanup_residue_tasks),
+            'publisher_task_done': (
+                self._cleanup_publisher_task.done()
+                if self._cleanup_publisher_task is not None else None
+            ),
+        })
 
 
 def _load_sink(specification: str) -> EvidenceSink:
