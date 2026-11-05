@@ -12,6 +12,7 @@ import os
 import stat
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 HEARTBEAT_THRESHOLD_NS = 1_000_000_000
@@ -22,6 +23,9 @@ TRACE_DATA_KIND = 2
 EVENT_CALLBACK_ENTRY = 6
 EVENT_STATUS_VALIDATION = 7
 EVENT_HEARTBEAT_CHECK = 8
+EVENT_SEQUENCE_RESULT = 9
+SEQUENCE_DUPLICATE = 1
+SEQUENCE_OUT_OF_ORDER = 2
 
 
 def clock_context():
@@ -113,6 +117,50 @@ def _load_api(library_path):
     return library
 
 
+def measure_clock_error_certificate(
+    library_path, *, sample_count=8, api_loader=_load_api,
+    python_clock_ns=None,
+):
+    """Bound C/Python CLOCK_MONOTONIC comparison outside callback work."""
+    if type(sample_count) is not int or not 3 <= sample_count <= 32:
+        raise ValueError('clock certificate sample count must be 3..32')
+    path = Path(library_path).resolve(strict=True)
+    binary_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    api = api_loader(path)
+    python_clock_ns = python_clock_ns or (
+        lambda: time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    )
+    samples = []
+    for _ in range(sample_count):
+        before = python_clock_ns()
+        native = int(api.hbtrace_clock_monotonic_ns())
+        after = python_clock_ns()
+        if (type(before) is not int or type(after) is not int
+                or before < 0 or after < before
+                or native < before or native > after):
+            raise ValueError('native clock sample is outside Python bracket')
+        samples.append({
+            'python_before_ns': before, 'native_ns': native,
+            'python_after_ns': after,
+        })
+    context = clock_context()
+    return {
+        'schema_id': 'b2_monotonic_error_bound/v1',
+        'clock': 'CLOCK_MONOTONIC', 'provenance': context['provenance'],
+        'boot_id': context['boot_id'],
+        'time_namespace_device': context['time_namespace_device'],
+        'time_namespace_inode': context['time_namespace_inode'],
+        'time_namespace_offsets': context['time_namespace_offsets'],
+        'source': 'hbtrace_clock_monotonic_ns',
+        'method': 'python_bracket_around_native_read',
+        'binary_sha256': binary_sha256, 'samples': samples,
+        'error_bound_ns': max(
+            item['python_after_ns'] - item['python_before_ns']
+            for item in samples
+        ),
+    }
+
+
 class LocalTrainingHeartbeatTraceObserver:
     """Own one optional rclpy subscription and one observer trace writer."""
 
@@ -135,33 +183,73 @@ class LocalTrainingHeartbeatTraceObserver:
         self._api = None
         self._writer = None
         self._writer_was_opened = False
+        self._writer_closed = False
         self._context = None
         self._node = None
         self._executor = None
         self._timer = None
         self._backend_id = None
+        self._readiness_backend_id = None
+        self._ros_domain_id = None
         self._last_accepted_ns = None
         self._last_accepted_sequence = None
         self._expired_recorded = False
         self._errors = []
         self._started = False
         self._joined = False
+        self._startup_succeeded = False
 
     def start(self):
         """Load the pinned native API and start an isolated executor thread."""
         if self._started:
             raise RuntimeError('heartbeat observer already started')
         self._started = True
+        environment = getattr(self.plan, 'environment', None)
+        domain = environment.get('ROS_DOMAIN_ID') if isinstance(
+            environment, Mapping,
+        ) else None
+        try:
+            if (not isinstance(domain, str) or not domain.isascii()
+                    or not domain.isdecimal()):
+                raise ValueError('ROS_DOMAIN_ID is missing or invalid')
+            self._ros_domain_id = int(domain)
+            if not 0 <= self._ros_domain_id <= 232:
+                raise ValueError('ROS_DOMAIN_ID is outside supported range')
+        except (ValueError, TypeError) as error:
+            self._append_error(f'launch_domain:{error}')
+            self._ready.set()
+            self._joined = True
+            return False
         try:
             self._api = self.api_loader(self.library_path)
         except BaseException as error:
             self._append_error(f'native_library:{type(error).__name__}')
             self._ready.set()
+            self._joined = True
             return False
         self._thread = threading.Thread(
             target=self._thread_main, name='b2-heartbeat-trace', daemon=False,
         )
         self._thread.start()
+        if not self._ready.wait(max(0.0, self.ready_timeout_s)):
+            self._append_error('observer_startup_timeout')
+            self._stop.set()
+            if self._context is not None and self._context.ok():
+                try:
+                    self._context.shutdown()
+                except BaseException as error:
+                    self._append_error(
+                        f'observer_startup_stop:{type(error).__name__}'
+                    )
+            self._thread.join(max(0.0, self.ready_timeout_s))
+            if not self._thread.is_alive():
+                self._joined = True
+            else:
+                self._append_error('observer_thread_residue_unknown')
+            return False
+        if not self._startup_succeeded or not self._thread.is_alive():
+            self.stop(timeout_s=max(0.0, self.ready_timeout_s))
+            return False
         return True
 
     def _thread_main(self):
@@ -172,7 +260,7 @@ class LocalTrainingHeartbeatTraceObserver:
             from mecanum_nav_rl_interfaces.msg import SimulationContactState
 
             self._context = Context()
-            self._context.init(args=None)
+            self._context.init(args=None, domain_id=self._ros_domain_id)
             self._node = Node(
                 'b2_heartbeat_trace_observer', context=self._context,
             )
@@ -184,10 +272,13 @@ class LocalTrainingHeartbeatTraceObserver:
                 self._on_status, 50,
             )
             self._timer = self._node.create_timer(0.05, self._check_heartbeat)
+            self._startup_succeeded = True
             self._ready.set()
             while not self._stop.is_set() and self._context.ok():
                 self._executor.spin_once(timeout_sec=0.05)
         except BaseException as error:
+            if not self._ready.is_set():
+                self._startup_succeeded = False
             self._append_error(f'observer_loop:{type(error).__name__}')
             self._ready.set()
         finally:
@@ -216,7 +307,6 @@ class LocalTrainingHeartbeatTraceObserver:
                     self._append_error(
                         f'context_shutdown:{type(error).__name__}'
                     )
-            self._joined = True
 
     def _append_error(self, message):
         with self._lock:
@@ -301,9 +391,42 @@ class LocalTrainingHeartbeatTraceObserver:
             EVENT_STATUS_VALIDATION, validation_ns, sequence, flags,
         )
         if accepted:
+            if self._last_accepted_sequence is not None:
+                if sequence == self._last_accepted_sequence:
+                    self._append_event(
+                        EVENT_SEQUENCE_RESULT, validation_ns, sequence,
+                        SEQUENCE_DUPLICATE,
+                    )
+                    self._append_error('status_sequence_duplicate')
+                    return
+                if sequence < self._last_accepted_sequence:
+                    self._append_event(
+                        EVENT_SEQUENCE_RESULT, validation_ns, sequence,
+                        SEQUENCE_OUT_OF_ORDER,
+                    )
+                    self._append_error('status_sequence_out_of_order')
+                    return
             self._last_accepted_ns = callback_ns
             self._last_accepted_sequence = sequence
             self._expired_recorded = False
+
+    def bind_readiness_backend(self, status):
+        """Bind observer records to the independently accepted readiness."""
+        if not isinstance(status, dict):
+            self._append_error('readiness_backend_binding_missing')
+            return False
+        backend_id = status.get('backend_instance_id')
+        if (type(backend_id) is not int or backend_id <= 0
+                or status.get('session_id') != self.plan.session_id
+                or status.get('config_hash') != self.plan.config_hash
+                or status.get('world_id') != 'b2_training_arena'):
+            self._append_error('readiness_backend_binding_invalid')
+            return False
+        if self._backend_id is not None and self._backend_id != backend_id:
+            self._append_error('readiness_backend_instance_mismatch')
+            return False
+        self._readiness_backend_id = backend_id
+        return True
 
     def _check_heartbeat(self):
         if (self._writer is None or self._last_accepted_ns is None
@@ -331,11 +454,15 @@ class LocalTrainingHeartbeatTraceObserver:
                     self._append_error('observer_trace_end_failed_or_overflow')
             finally:
                 self._api.hbtrace_close(writer)
+                self._writer_closed = True
+        else:
+            self._writer_closed = True
 
     def stop(self, timeout_s=2.0):
         """Stop and boundedly join the owned executor thread."""
         if self._thread is None:
             self._joined = True
+            self._writer_closed = True
             return True
         self._stop.set()
         if self._context is not None and self._context.ok():
@@ -354,6 +481,7 @@ class LocalTrainingHeartbeatTraceObserver:
         """Signal the executor and join without blocking the owner loop."""
         if self._thread is None:
             self._joined = True
+            self._writer_closed = True
             return True
         self._stop.set()
         deadline = time.monotonic() + max(0.0, timeout_s)
@@ -372,7 +500,20 @@ class LocalTrainingHeartbeatTraceObserver:
         with self._lock:
             return {
                 'backend_instance_id': self._backend_id,
-                'joined': self._joined,
+                'readiness_backend_instance_id': self._readiness_backend_id,
+                'ready': self._startup_succeeded and bool(
+                    self._thread is not None and self._thread.is_alive()
+                ) and not any(
+                    error.startswith(('observer_loop:', 'native_library:'))
+                    for error in self._errors
+                ),
+                'thread_alive': bool(
+                    self._thread is not None and self._thread.is_alive()
+                ),
+                'joined': self._joined and not bool(
+                    self._thread is not None and self._thread.is_alive()
+                ),
                 'errors': tuple(self._errors),
                 'writer_opened': self._writer_was_opened,
+                'writer_closed': self._writer_closed,
             }

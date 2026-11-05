@@ -184,6 +184,7 @@ class RclpyReadiness:
         self._protocol_error = None
         self._protocol_state = 'EXPECT_WORKER_STARTED'
         self._protocol_last_status = None
+        self._accepted_backend_status = None
         self._protocol_last_scene = None
         self._protocol_last_scene_outcome = None
         self._protocol_last_query_service = None
@@ -207,6 +208,11 @@ class RclpyReadiness:
                 and self._evidence_sink is not evidence_sink):
             raise RuntimeError('readiness evidence sink already bound')
         self._evidence_sink = evidence_sink
+
+    @property
+    def accepted_backend_status(self):
+        """Status independently accepted by the production readiness path."""
+        return dict(self._accepted_backend_status or {})
 
     @staticmethod
     def _read_process_identity(pid):
@@ -840,6 +846,7 @@ class RclpyReadiness:
                 raise TimeoutError(
                     'readiness validation evidence completed after deadline'
                 )
+            self._accepted_backend_status = dict(ready_facts['status'])
             self._residue = 'NONE'
         except BaseException as error:
             detection = self._monotonic_ns()
@@ -1283,9 +1290,12 @@ class LocalTrainingProcessSupervisor:
         self._heartbeat_observer = None
         self._heartbeat_files = ()
         self._heartbeat_clock = None
+        self._heartbeat_clock_error_certificate = None
+        self._heartbeat_library_sha256 = None
         self._heartbeat_trace_environment = {}
         self._heartbeat_trace_error = None
         self._heartbeat_trace_reported = False
+        self._server_process_record = None
         self.owned: list[ProcessRecord] = []
         self._observer_tasks: set[asyncio.Task] = set()
         self._cleanup_lock = asyncio.Lock()
@@ -1318,6 +1328,10 @@ class LocalTrainingProcessSupervisor:
                 )
             server_command = self.plan.commands[0]
             server_environment = dict(self.plan.environment)
+            for name in tuple(server_environment):
+                if name.startswith('MECANUM_B2_HEARTBEAT_'):
+                    server_environment.pop(name)
+            server_environment['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] = '0'
             server_environment.update(self._heartbeat_trace_environment)
             server = await self.launcher.start(
                 server_command, server_environment,
@@ -1325,6 +1339,7 @@ class LocalTrainingProcessSupervisor:
             server_record = ProcessRecord(
                 'server', server_command, server.pid, server,
             )
+            self._server_process_record = server_record
             self.owned.append(server_record)
             self._capture_output(server_record)
             self.evidence_sink.record(
@@ -1333,6 +1348,7 @@ class LocalTrainingProcessSupervisor:
             await self.readiness.server_scene(
                 self.plan, server, self.SERVER_READY_TIMEOUT_S,
             )
+            self._bind_heartbeat_readiness()
             self.evidence_sink.record(
                 'server_scene_ready',
                 {
@@ -1416,6 +1432,18 @@ class LocalTrainingProcessSupervisor:
                 ).resolve(strict=True)
                 library = prefix / 'lib/libmecanum_heartbeat_trace_writer.so'
             library = Path(library).resolve(strict=True)
+            self._heartbeat_library_sha256 = hashlib.sha256(
+                library.read_bytes(),
+            ).hexdigest()
+            try:
+                self._heartbeat_clock_error_certificate = (
+                    trace_observer.measure_clock_error_certificate(library)
+                )
+            except BaseException as error:
+                self._heartbeat_trace_error = (
+                    'clock_error_bound_unavailable:'
+                    f'{type(error).__name__}:{str(error)[:160]}'
+                )
             observer_factory = self.heartbeat_observer_factory
             if observer_factory is None:
                 observer_factory = (
@@ -1427,7 +1455,14 @@ class LocalTrainingProcessSupervisor:
                 clock_provenance=self._heartbeat_clock['provenance'],
                 library_path=library,
             )
-            self._heartbeat_observer.start()
+            started = self._heartbeat_observer.start()
+            snapshot = self._heartbeat_observer.snapshot()
+            if started is not True or snapshot.get('ready') is not True:
+                self._heartbeat_trace_error = (
+                    'observer_initialization_failed:'
+                    + ','.join(snapshot.get('errors', ()))[:320]
+                )
+                return
             self._heartbeat_trace_environment = {
                 'MECANUM_B2_HEARTBEAT_DIAGNOSTICS': '1',
                 'MECANUM_B2_HEARTBEAT_BACKEND_FILE': backend_file['path'],
@@ -1450,6 +1485,27 @@ class LocalTrainingProcessSupervisor:
             self._heartbeat_trace_error = (
                 f'{type(error).__name__}:{str(error)[:160]}'
             )
+
+    def _bind_heartbeat_readiness(self) -> None:
+        """Bind trace identity to status accepted by the readiness parent."""
+        if not self.heartbeat_diagnostics_enabled:
+            return
+        status = getattr(self.readiness, 'accepted_backend_status', None)
+        if not isinstance(status, dict) or not status:
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error
+                or 'independent_readiness_backend_binding_unavailable'
+            )
+            return
+        observer = self._heartbeat_observer
+        binder = getattr(observer, 'bind_readiness_backend', None)
+        if binder is None or binder(status) is not True:
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error
+                or 'observer_readiness_backend_binding_failed'
+            )
+            return
+        self._heartbeat_readiness_status = dict(status)
 
     def _capture_output(self, record: ProcessRecord) -> None:
         """Drain child output into the injected evidence sink."""
@@ -1639,6 +1695,22 @@ class LocalTrainingProcessSupervisor:
                 or self._heartbeat_trace_reported):
             return
         observer_state = None
+        server_record = self._server_process_record
+        server_exit_status = (
+            server_record.process.returncode
+            if server_record is not None else None
+        )
+        server_group_absent = False
+        if server_record is not None:
+            try:
+                server_group_absent = not self.launcher.group_alive(
+                    server_record.process,
+                )
+            except BaseException as error:
+                self._heartbeat_trace_error = (
+                    self._heartbeat_trace_error
+                    or f'server_group_identity_unknown:{type(error).__name__}'
+                )
         if self._heartbeat_observer is not None:
             try:
                 stop_async = getattr(
@@ -1664,8 +1736,45 @@ class LocalTrainingProcessSupervisor:
             'config_hash': self.plan.config_hash,
             'world': 'b2_training_arena',
             'clock_context': self._heartbeat_clock,
+            'clock_library_sha256': self._heartbeat_library_sha256,
+            'clock_error_certificate': (
+                self._heartbeat_clock_error_certificate
+            ),
             'files': list(self._heartbeat_files),
             'observer': observer_state,
+            'readiness_backend_status': getattr(
+                self, '_heartbeat_readiness_status', None,
+            ),
+            'readiness_binding_verified': bool(
+                getattr(self, '_heartbeat_readiness_status', None)
+                and observer_state
+                and observer_state.get('readiness_backend_instance_id')
+                == self._heartbeat_readiness_status.get(
+                    'backend_instance_id',
+                )
+            ),
+            'join_evidence': {
+                'server_exit_status': server_exit_status,
+                'server_process_joined': bool(
+                    server_record is not None
+                    and server_exit_status is not None
+                ),
+                'server_group_absent': server_group_absent,
+                'observer_thread_joined': bool(
+                    observer_state and observer_state.get('joined') is True
+                ),
+                'observer_thread_alive': bool(
+                    observer_state
+                    and observer_state.get('thread_alive') is True
+                ),
+                'observer_writer_closed': bool(
+                    observer_state
+                    and observer_state.get('writer_closed') is True
+                ),
+                'task_residue': (
+                    'NONE' if not self._observer_tasks else 'UNKNOWN'
+                ),
+            },
             'trace_error': self._heartbeat_trace_error,
             'coverage_note': (
                 'diagnostic records only; read after process/thread join'

@@ -72,6 +72,12 @@ class FakeReadiness:
         self.ack = ack
         self.failure = failure
         self.calls = []
+        self.accepted_backend_status = {
+            'world_id': 'b2_training_arena', 'session_id': 'run-1',
+            'config_hash': 'a' * 64, 'backend_instance_id': 42,
+            'status_sequence': 1, 'fault_flags': 0,
+            'actuator_inhibited': True,
+        }
 
     async def server_scene(self, plan, process, timeout_s):
         """Record the server scene check."""
@@ -160,12 +166,40 @@ def test_heartbeat_diagnostics_default_off_creates_no_trace_resources():
         )
         await supervisor.start()
         assert calls == []
-        assert all('MECANUM_B2_HEARTBEAT_DIAGNOSTICS' not in env
-                   for _, env, _ in launcher.started)
+        assert all(env.get('MECANUM_B2_HEARTBEAT_DIAGNOSTICS') == '0'
+                   for command, env, _ in launcher.started
+                   if command == plan(False).commands[0])
         assert not any(event == 'heartbeat_trace_collection'
                        for event, _ in sink.events)
         assert supervisor._heartbeat_files == ()
     asyncio.run(run())
+
+
+def test_inherited_backend_writer_flag_is_forced_off_for_default_server():
+    """A parent-shell opt-in cannot turn on the backend writer by accident."""
+    import os
+    old = os.environ.get('MECANUM_B2_HEARTBEAT_DIAGNOSTICS')
+    os.environ['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] = '1'
+    try:
+        async def run():
+            launcher = FakeLauncher()
+            supervisor = LocalTrainingProcessSupervisor(
+                plan=plan(False), launcher=launcher,
+                readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            )
+            await supervisor.start()
+            server_env = next(
+                env for command, env, _ in launcher.started
+                if command == plan(False).commands[0]
+            )
+            assert server_env['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] == '0'
+            assert 'MECANUM_B2_HEARTBEAT_BACKEND_FILE' not in server_env
+        asyncio.run(run())
+    finally:
+        if old is None:
+            os.environ.pop('MECANUM_B2_HEARTBEAT_DIAGNOSTICS', None)
+        else:
+            os.environ['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] = old
 
 
 def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
@@ -180,12 +214,19 @@ def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
         def start(self):
             return True
 
+        def bind_readiness_backend(self, status):
+            self.readiness_status = status
+            return True
+
         def stop(self, _timeout):
             self.stopped = True
             return True
 
         def snapshot(self):
-            return {'joined': self.stopped, 'errors': ()}
+            return {
+                'ready': True, 'joined': self.stopped, 'thread_alive': False,
+                'writer_closed': self.stopped, 'errors': (),
+            }
 
     async def run():
         os.chmod(tmp_path, 0o700)
@@ -216,6 +257,50 @@ def test_heartbeat_diagnostics_opt_in_is_supervisor_owned_and_joined(tmp_path):
         event = dict(sink.events)['heartbeat_trace_collection']
         assert event['observer']['joined'] is True
         assert len(event['files']) == 2
+        assert event['readiness_backend_status']['backend_instance_id'] == 42
+    asyncio.run(run())
+
+
+def test_observer_initialization_failure_keeps_collection_unready(tmp_path):
+    """A failed optional observer never enables backend trace writes."""
+    class FailedObserver:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            return False
+
+        def snapshot(self):
+            return {'ready': False, 'joined': True, 'errors': ('init',)}
+
+        def stop(self, _timeout):
+            return True
+
+    async def run():
+        os.chmod(tmp_path, 0o700)
+        library = tmp_path / 'writer.so'
+        library.write_bytes(b'fake-test-library-path')
+        launcher = FakeLauncher()
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=sink,
+            heartbeat_diagnostics_enabled=True,
+            heartbeat_trace_directory=tmp_path,
+            heartbeat_observer_factory=FailedObserver,
+            heartbeat_library_path=library,
+        )
+        await supervisor.start()
+        server_env = launcher.started[0][1]
+        assert server_env['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] == '0'
+        assert (
+            'observer_initialization_failed'
+            in supervisor._heartbeat_trace_error
+        )
+        await supervisor.cleanup()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert event['trace_error']
+        assert event['observer']['ready'] is False
     asyncio.run(run())
 
 
@@ -278,7 +363,14 @@ def test_gui_mode_uses_same_partition_and_requires_owner_confirmation():
         )
         await supervisor.start()
         assert len(launcher.started) == 2
-        assert launcher.started[0][1] == launcher.started[1][1]
+        server_environment = launcher.started[0][1]
+        gui_environment = launcher.started[1][1]
+        assert server_environment['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] == '0'
+        assert gui_environment == plan(True).environment
+        assert (
+            server_environment['GZ_PARTITION']
+            == gui_environment['GZ_PARTITION']
+        )
         assert [call[0] for call in readiness.calls] == [
             'server', 'gui', 'ack',
         ]
@@ -309,10 +401,14 @@ def test_bridge_server_gui_and_scene_query_share_run_environment():
         assert [item[0] for item in launcher.started] == [
             bridge, *base_plan.commands,
         ]
-        assert all(
-            environment == base_plan.environment
-            for _, environment, _ in launcher.started
+        assert launcher.started[0][1] == base_plan.environment
+        server_environment = launcher.started[1][1]
+        assert server_environment['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] == '0'
+        assert (
+            server_environment['GZ_PARTITION']
+            == base_plan.environment['GZ_PARTITION']
         )
+        assert launcher.started[2][1] == base_plan.environment
         assert isinstance(base_plan.environment, type(plan(False).environment))
     asyncio.run(run())
 
