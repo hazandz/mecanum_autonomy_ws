@@ -106,7 +106,7 @@ class ControlledObserverProcess:
                 self.process.stdout.feed_data(_control_frame(response))
             elif message['kind'] == 'stop':
                 joined = self.process.mode in {
-                    'clean', 'end-fail', 'clean-nonzero-exit',
+                    'clean', 'end-fail', 'clean-nonzero-exit', 'ack-hang',
                 }
                 end_written = joined and self.process.mode != 'end-fail'
                 handle_closed = joined
@@ -124,7 +124,7 @@ class ControlledObserverProcess:
                     },
                 }
                 self.process.stdout.feed_data(_control_frame(response))
-                if joined:
+                if joined and self.process.mode != 'ack-hang':
                     status = (
                         9 if self.process.mode == 'clean-nonzero-exit'
                         else 0 if writer_closed else 4
@@ -200,7 +200,9 @@ class ControlledObserverLauncher(FakeLauncher):
         if sig == signal.SIGTERM and process.mode == 'term-exits':
             process.finish(-signal.SIGTERM)
         elif sig == signal.SIGKILL:
-            process.finish(-signal.SIGKILL)
+            process.finish(
+                0 if process.mode == 'ack-hang' else -signal.SIGKILL,
+            )
 
     def group_alive(self, process):
         """Report whether the fake process group still has its leader."""
@@ -1121,14 +1123,7 @@ def test_cleanup_output_drain_cancel_join_is_bounded():
 
 def test_cleanup_reserves_observer_budget_across_owned_groups():
     """Several groups cannot spend the observer's reserved cleanup budget."""
-    class Clock:
-        now = 0.0
-
-        async def sleep(self, duration):
-            self.now += duration
-
     async def run():
-        clock = Clock()
         launcher = FakeLauncher()
         launcher.group_alive = lambda _process: True
 
@@ -1139,10 +1134,10 @@ def test_cleanup_reserves_observer_budget_across_owned_groups():
         supervisor = LocalTrainingProcessSupervisor(
             plan=plan(False), launcher=launcher,
             readiness=FakeReadiness(), evidence_sink=FakeSink(),
-            monotonic=lambda: clock.now, sleep=clock.sleep,
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
         )
-        supervisor.CLEANUP_CAP_S = 2.0
-        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.25
+        supervisor.CLEANUP_CAP_S = 0.3
+        supervisor.HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 0.1
         supervisor.heartbeat_diagnostics_enabled = True
         for pid, role in ((131, 'gui'), (132, 'server'),
                           (133, 'parameter_bridge')):
@@ -1153,14 +1148,14 @@ def test_cleanup_reserves_observer_budget_across_owned_groups():
         observed = []
 
         async def stop_heartbeat():
-            observed.append(clock.now)
+            observed.append(asyncio.get_running_loop().time())
         supervisor._stop_heartbeat_diagnostics = stop_heartbeat
         await supervisor.cleanup()
-        assert observed and observed[0] <= supervisor.CLEANUP_CAP_S
+        assert observed
+        assert observed[0] <= supervisor._cleanup_deadline
         assert supervisor._cleanup_residue == 'UNKNOWN'
         assert {pid for pid, _sig in launcher.stopped} == {131, 132, 133}
         original_deadline = supervisor._cleanup_deadline
-        clock.now = 10.0
         await supervisor.cleanup()
         assert supervisor._cleanup_deadline == original_deadline
         assert observed == [observed[0]]
@@ -1957,7 +1952,9 @@ def test_cleanup_publisher_failure_does_not_skip_other_group_dispatches():
 def test_observer_close_outcomes_are_part_of_cleanup_verdict(tmp_path):
     """ACK, writer close, forced stop, and exit status all affect cleanup."""
     async def run():
-        for mode in ('clean', 'clean-nonzero-exit', 'end-fail', 'hang'):
+        for mode in (
+                'clean', 'clean-nonzero-exit', 'end-fail', 'hang',
+                'ack-hang'):
             launcher = ControlledObserverLauncher(mode)
             case_dir = tmp_path / mode
             case_dir.mkdir()
@@ -1993,6 +1990,22 @@ def test_observer_close_outcomes_are_part_of_cleanup_verdict(tmp_path):
                 if mode == 'hang':
                     assert join['observer_exit_status'] == -signal.SIGKILL
                     assert join['observer_termination'] == 'SIGKILL'
+                if mode == 'ack-hang':
+                    assert join['observer_exit_status'] == 0
+                    assert join['observer_stop_acknowledged'] is True
+                    assert join['observer_termination'] == (
+                        'ESCALATED_AFTER_ACK'
+                    )
+                    assert join['observer_signal_dispatches'][-1][
+                        'signal'
+                    ] == 'SIGKILL'
+                    assert join['observer_signal_dispatches'][-1][
+                        'outcome'
+                    ] == 'DISPATCHED'
+                    assert any(
+                        item.endswith('observer_ack_followed_by_escalation')
+                        for item in state['cleanup_errors']
+                    )
                 assert state['process_residue'] == 'NONE'
             assert state['publication']['acknowledged'] is True
     asyncio.run(run())
@@ -2102,6 +2115,285 @@ def test_observer_writer_failure_does_not_falsify_reaped_process_facts(
         assert snapshot['process_residue'] == 'NONE'
         assert snapshot['publication']['acknowledged'] is True
     asyncio.run(run())
+
+
+def test_cleanup_waits_past_first_poll_for_publisher_ack():
+    """An ACK after several 50 ms polls is still observed before deadline."""
+    async def run():
+        entered = asyncio.Event()
+
+        class DelayedPublisher(FakeCleanupPublisher):
+            async def __call__(self, batch, deadline):
+                self.calls.append((batch, deadline))
+                entered.set()
+                await asyncio.sleep(0.14)
+                return CleanupEvidenceAck(batch.batch_id, True)
+
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=DelayedPublisher(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.8
+        supervisor._safe_cleanup_record('delayed_ack', {'value': 1})
+        result = await asyncio.wait_for(supervisor.cleanup(), timeout=0.7)
+        assert entered.is_set()
+        assert result is True
+        assert supervisor.cleanup_snapshot()['publication']['acknowledged']
+    asyncio.run(run())
+
+
+def test_cleanup_waits_past_first_poll_for_process_group_reap():
+    """A group that exits after 50 ms remains within the shared deadline."""
+    class DelayedLauncher(FakeLauncher):
+        async def stop_group(self, process, sig):
+            self.stopped.append((process.pid, sig))
+            await asyncio.sleep(0.14)
+            process.returncode = 0
+
+    async def run():
+        launcher = DelayedLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.8
+        process = FakeProcess(701)
+        supervisor.owned.append(type('Record', (), {
+            'name': 'server', 'command': ('server',), 'pid': 701,
+            'process': process, 'output_tasks': (),
+        })())
+        assert await asyncio.wait_for(supervisor.cleanup(), timeout=0.7)
+        assert process.returncode == 0
+        assert launcher.stopped == [(701, signal.SIGINT)]
+    asyncio.run(run())
+
+
+def test_cleanup_task_wait_reaches_deadline_and_accepts_shorter_caller():
+    """A pending publisher follows the shorter concurrent absolute deadline."""
+    async def run():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class HeldPublisher(FakeCleanupPublisher):
+            async def __call__(self, batch, deadline):
+                self.calls.append((batch, deadline))
+                entered.set()
+                await release.wait()
+                return CleanupEvidenceAck(batch.batch_id, True)
+
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=HeldPublisher(),
+        )
+        supervisor.CLEANUP_CAP_S = 1.0
+        supervisor._safe_cleanup_record('held', {'value': 1})
+        started = asyncio.get_running_loop().time()
+        first = asyncio.create_task(supervisor.cleanup())
+        await entered.wait()
+        second = asyncio.create_task(supervisor.cleanup(
+            deadline=asyncio.get_running_loop().time() + 0.16,
+        ))
+        assert await asyncio.wait_for(asyncio.gather(first, second), 0.6) == [
+            False, False,
+        ]
+        assert asyncio.get_running_loop().time() - started < 0.5
+        assert supervisor.cleanup_snapshot()['publication']['pending'] is True
+        release.set()
+        if supervisor._cleanup_publisher_task is not None:
+            await asyncio.wait_for(supervisor._cleanup_publisher_task, 0.3)
+    asyncio.run(run())
+
+
+def test_start_launch_operation_is_owned_when_cleanup_races_startup():
+    """Cleanup closes admission and owns a launcher that ignores cancel."""
+    class DelayedLauncher(FakeLauncher):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancel_seen = False
+
+        async def start(self, command, environment):
+            self.entered.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancel_seen = True
+                await self.release.wait()
+            process = FakeProcess(self.next_pid)
+            self.next_pid += 1
+            self.started.append((command, environment, process))
+            return process
+
+    async def run():
+        launcher = DelayedLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.35
+        startup = asyncio.create_task(supervisor.start(), name='startup-test')
+        await launcher.entered.wait()
+        cleanup = asyncio.create_task(supervisor.cleanup())
+        await asyncio.sleep(0.04)
+        assert not cleanup.done()
+        launcher.release.set()
+        with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+            await asyncio.wait_for(startup, 0.3)
+        assert await asyncio.wait_for(cleanup, 0.5) is True
+        assert launcher.cancel_seen
+        assert [record.name for record in supervisor.owned] == []
+        assert supervisor.cleanup_snapshot()['launch_facts'][0][
+            'handle_registered'
+        ] is True
+    asyncio.run(run())
+
+
+def test_start_unresolved_launch_is_unknown_and_late_handle_stays_owned():
+    """A handle after cleanup summary is retained without restart/readiness."""
+    class DelayedLauncher(FakeLauncher):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancel_seen = False
+
+        async def start(self, command, environment):
+            self.entered.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancel_seen = True
+                await self.release.wait()
+            process = FakeProcess(self.next_pid)
+            self.next_pid += 1
+            self.started.append((command, environment, process))
+            return process
+
+    async def run():
+        launcher = DelayedLauncher()
+        sink = FakeSink()
+        readiness = FakeReadiness()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=readiness, evidence_sink=sink,
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        supervisor.CLEANUP_CAP_S = 0.12
+        startup = asyncio.create_task(supervisor.start(), name='late-startup')
+        await launcher.entered.wait()
+        assert await asyncio.wait_for(supervisor.cleanup(), 0.4) is False
+        pending_snapshot = supervisor.cleanup_snapshot()
+        assert pending_snapshot['launch_facts'][0]['task_done'] is False
+        assert pending_snapshot['launch_facts'][0][
+            'handle_registered'
+        ] is False
+        launcher.release.set()
+        operation = next(iter(supervisor._launch_operations.values()))
+        await asyncio.wait_for(operation.task, 0.3)
+        with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+            await asyncio.wait_for(startup, 0.3)
+        snapshot = supervisor.cleanup_snapshot()
+        assert snapshot['owned_process_count'] == 1
+        assert snapshot['launch_facts'][0][
+            'owned_process_residue'
+        ] == 'UNKNOWN'
+        assert any(
+            fact.get('reason') == 'handle_registered_after_cleanup_deadline'
+            for fact in snapshot['pipe_facts']
+        )
+        assert readiness.calls == []
+        assert not any(event == 'server_requested' for event, _ in sink.events)
+        supervisor.owned.clear()
+    asyncio.run(run())
+
+
+def test_start_admission_is_closed_after_cleanup_request():
+    """A new start after cleanup cannot create a child."""
+    async def run():
+        launcher = FakeLauncher()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=launcher,
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        assert await supervisor.cleanup() is True
+        try:
+            await supervisor.start()
+        except RuntimeError as error:
+            assert 'admission_closed' in str(error)
+        else:
+            raise AssertionError('startup continued after cleanup request')
+        assert launcher.started == []
+    asyncio.run(run())
+
+
+def test_cleanup_task_facts_show_bounded_join_result_and_are_detached():
+    """Final task facts agree with a successful cancellation join."""
+    async def run():
+        entered = asyncio.Event()
+
+        async def observed_task():
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.02)
+
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(False), launcher=FakeLauncher(),
+            readiness=FakeReadiness(), evidence_sink=FakeSink(),
+            cleanup_evidence_publisher=FakeCleanupPublisher(),
+        )
+        task = asyncio.create_task(observed_task(), name='join-facts')
+        supervisor._track_observer(task)
+        await entered.wait()
+        supervisor._safe_cleanup_record('task', {'value': 1})
+        assert await supervisor.cleanup() is True
+        snapshot = supervisor.cleanup_snapshot()
+        fact = next(item for item in snapshot['task_facts']
+                    if item['task_name'] == 'join-facts')
+        assert fact['phase'] == 'final_after_bounded_join'
+        assert fact['cancel_requested'] is True
+        assert fact['joined'] is True
+        assert fact['residue'] == 'NONE'
+        snapshot['task_facts'][0]['joined'] = False
+        final_fact = next(
+            item for item in supervisor.cleanup_snapshot()['task_facts']
+            if item['task_name'] == 'join-facts'
+        )
+        assert final_fact['joined'] is True
+    asyncio.run(run())
+
+
+def test_process_launcher_protocol_owns_group_methods():
+    """The protocol assigns process-group operations to their owner."""
+    import inspect
+
+    launcher_type = __import__(
+            'mecanum_nav_bringup.local_training_process_supervisor',
+            fromlist=['ProcessLauncher'],
+        ).ProcessLauncher
+    publisher_type = __import__(
+            'mecanum_nav_bringup.local_training_process_supervisor',
+            fromlist=['CleanupEvidencePublisher'],
+        ).CleanupEvidencePublisher
+    launcher_methods = {
+        name for name, member in inspect.getmembers(launcher_type)
+        if callable(member)
+    }
+    publisher_methods = {
+        name for name, member in inspect.getmembers(publisher_type)
+        if callable(member)
+    }
+    assert {'start', 'stop_group', 'group_alive'} <= launcher_methods
+    assert '__call__' in publisher_methods
+    assert 'stop_group' not in publisher_methods
+    assert 'group_alive' not in publisher_methods
 
 
 def test_noncooperative_task_child_exits_only_after_parent_watchdog():

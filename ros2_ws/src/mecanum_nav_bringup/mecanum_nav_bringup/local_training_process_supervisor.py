@@ -55,12 +55,20 @@ class OwnedProcess(Protocol):
 
 
 class ProcessLauncher(Protocol):
-    """Define process launch and owned process-group shutdown operations."""
+    """Define owned process launch and process-group shutdown operations."""
 
     async def start(
         self, command: tuple[str, ...], environment: dict[str, str],
     ) -> OwnedProcess:
         """Start one process group and return its owned process handle."""
+        ...
+
+    async def stop_group(self, process: OwnedProcess, sig: int) -> None:
+        """Send a signal to the process group owned by this launcher."""
+        ...
+
+    def group_alive(self, process: OwnedProcess) -> bool:
+        """Check whether the launcher-owned process group still exists."""
         ...
 
 
@@ -87,14 +95,6 @@ class CleanupEvidencePublisher(Protocol):
         self, batch: CleanupEvidenceBatch, deadline: float,
     ) -> CleanupEvidenceAck:
         """Return an acknowledgement bound to the submitted batch."""
-        ...
-
-    async def stop_group(self, process: OwnedProcess, sig: int) -> None:
-        """Send a signal to the process group owned by this launcher."""
-        ...
-
-    def group_alive(self, process: OwnedProcess) -> bool:
-        """Check whether the launcher-owned process group still exists."""
         ...
 
 
@@ -135,6 +135,20 @@ class ProcessRecord:
     pid: int
     process: OwnedProcess
     output_tasks: tuple[asyncio.Task[None], ...] = ()
+
+
+@dataclass
+class LaunchOperation:
+    """Own a launch await from admission through handle registration."""
+
+    operation_id: str
+    role: str
+    command: tuple[str, ...]
+    task: asyncio.Task
+    process: OwnedProcess | None = None
+    record: ProcessRecord | None = None
+    state: str = 'PENDING'
+    error_type: str | None = None
 
 
 class SubprocessProcessLauncher:
@@ -1363,6 +1377,9 @@ class LocalTrainingProcessSupervisor:
         self._heartbeat_observer_handle_closed = False
         self._heartbeat_observer_writer_closed = False
         self._heartbeat_observer_termination = 'NOT_STARTED'
+        self._heartbeat_observer_signal_dispatches: list[
+            dict[str, object]
+        ] = []
         self._heartbeat_observer_protocol_started = False
         self._task_residue = 'NONE'
         self._process_residue = 'NONE'
@@ -1386,6 +1403,9 @@ class LocalTrainingProcessSupervisor:
         self._cleanup_errors: list[str] = []
         self._cleanup_primary_failure: dict[str, object] | None = None
         self._cleanup_requested = False
+        self._start_task: asyncio.Task | None = None
+        self._cleanup_requester_task: asyncio.Task | None = None
+        self._launch_operations: dict[str, LaunchOperation] = {}
         self._cleanup_evidence: list[
             tuple[str, dict[str, object]]
         ] = []
@@ -1398,6 +1418,7 @@ class LocalTrainingProcessSupervisor:
         self._cleanup_publisher_task: asyncio.Task | None = None
         self._cleanup_process_facts: list[dict[str, object]] = []
         self._cleanup_task_facts: list[dict[str, object]] = []
+        self._cleanup_launch_facts: list[dict[str, object]] = []
         self._cleanup_pipe_facts: list[dict[str, object]] = []
         self._cleanup_observer_facts: dict[str, object] = {}
         self.gui_opened = False
@@ -1407,26 +1428,24 @@ class LocalTrainingProcessSupervisor:
 
     async def start(self) -> None:
         """Start the server and requested GUI, failing closed on readiness."""
+        self._start_task = asyncio.current_task()
         try:
+            self._ensure_start_admission()
             await self._prepare_heartbeat_diagnostics()
+            self._ensure_start_admission()
             bind_environment = getattr(
                 self.readiness, 'bind_environment', None,
             )
             if bind_environment is not None:
                 bind_environment(self.plan.environment)
+            self._ensure_start_admission()
             bridge_command = getattr(self.plan, 'bridge_command', None)
             if bridge_command:
-                bridge = await self.launcher.start(
-                    bridge_command, self.plan.environment,
+                await self._launch_owned_process(
+                    'parameter_bridge', bridge_command,
+                    self.plan.environment,
                 )
-                bridge_record = ProcessRecord(
-                    'parameter_bridge', bridge_command, bridge.pid, bridge,
-                )
-                self.owned.append(bridge_record)
-                self._capture_output(bridge_record)
-                self.evidence_sink.record(
-                    'parameter_bridge_requested', self._facts(bridge_record),
-                )
+                self._ensure_start_admission()
             server_command = self.plan.commands[0]
             server_environment = dict(self.plan.environment)
             for name in tuple(server_environment):
@@ -1434,44 +1453,37 @@ class LocalTrainingProcessSupervisor:
                     server_environment.pop(name)
             server_environment['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] = '0'
             server_environment.update(self._heartbeat_trace_environment)
-            server = await self.launcher.start(
-                server_command, server_environment,
+            server_record = await self._launch_owned_process(
+                'server', server_command, server_environment,
             )
-            server_record = ProcessRecord(
-                'server', server_command, server.pid, server,
-            )
+            self._ensure_start_admission()
+            server = server_record.process
             self._server_process_record = server_record
-            self.owned.append(server_record)
-            self._capture_output(server_record)
-            self.evidence_sink.record(
-                'server_requested', self._facts(server_record),
-            )
             await self.readiness.server_scene(
                 self.plan, server, self.SERVER_READY_TIMEOUT_S,
             )
+            self._ensure_start_admission()
             await self._bind_heartbeat_readiness()
+            self._ensure_start_admission()
             self.evidence_sink.record(
                 'server_scene_ready',
                 {
-                    **self._facts(self.owned[-1]),
+                    **self._facts(server_record),
                     'session_id': self.plan.session_id,
                 },
             )
             if not self.plan.gui_requested:
                 return
             gui_command = self.plan.commands[1]
-            gui = await self.launcher.start(
-                gui_command, self.plan.environment,
+            gui_record = await self._launch_owned_process(
+                'gui', gui_command, self.plan.environment,
             )
-            gui_record = ProcessRecord('gui', gui_command, gui.pid, gui)
-            self.owned.append(gui_record)
-            self._capture_output(gui_record)
-            self.evidence_sink.record(
-                'gui_requested', self._facts(self.owned[-1]),
-            )
+            self._ensure_start_admission()
+            gui = gui_record.process
             await self.readiness.gui_process_started(
                 self.plan, gui, self.GUI_READY_TIMEOUT_S,
             )
+            self._ensure_start_admission()
             self.evidence_sink.record(
                 'gui_process_started', self._facts(gui_record),
             )
@@ -1485,24 +1497,106 @@ class LocalTrainingProcessSupervisor:
                 raise RuntimeError(
                     'GUI scene confirmation is required before collection'
                 )
+            self._ensure_start_admission()
             self.gui_opened = True
             self.evidence_sink.record(
                 'gui_scene_owner_confirmed',
                 {
-                    **self._facts(self.owned[-1]),
+                    **self._facts(gui_record),
                     'screenshot_ref': screenshot_ref,
                     'confirmation_source': 'human_owner',
                 },
             )
         except BaseException as primary:
             self._set_primary_failure(primary, 'start')
-            try:
-                await self.cleanup()
-            except BaseException as cleanup_error:
-                self._append_cleanup_error(
-                    f'start_cleanup:{type(cleanup_error).__name__}',
-                )
+            if not self._cleanup_requested:
+                try:
+                    await self.cleanup()
+                except BaseException as cleanup_error:
+                    self._append_cleanup_error(
+                        f'start_cleanup:{type(cleanup_error).__name__}',
+                    )
             raise
+        finally:
+            self._start_task = None
+
+    def _ensure_start_admission(self) -> None:
+        if self._cleanup_requested:
+            raise RuntimeError('startup_admission_closed_by_cleanup')
+
+    async def _launch_owned_process(
+        self, role: str, command: tuple[str, ...],
+        environment: dict[str, str],
+    ) -> ProcessRecord:
+        """Register a launch operation before yielding to its launcher."""
+        self._ensure_start_admission()
+        operation_id = uuid.uuid4().hex
+        task = asyncio.create_task(
+            self._complete_launch_operation(
+                operation_id, role, command, environment,
+            ),
+            name=f'owned-launch-{role}-{operation_id[:8]}',
+        )
+        operation = LaunchOperation(
+            operation_id, role, command, task,
+        )
+        self._launch_operations[operation_id] = operation
+        return await asyncio.shield(task)
+
+    async def _complete_launch_operation(
+        self, operation_id: str, role: str, command: tuple[str, ...],
+        environment: dict[str, str],
+    ) -> ProcessRecord:
+        operation = self._launch_operations[operation_id]
+        try:
+            process = await self.launcher.start(command, environment)
+        except BaseException as error:
+            operation.state = 'FAILED'
+            operation.error_type = type(error).__name__
+            raise
+        record = ProcessRecord(role, command, process.pid, process)
+        operation.process = process
+        operation.record = record
+        operation.state = 'HANDLE_REGISTERED'
+        # No await between receiving the handle and publishing ownership.
+        self.owned.append(record)
+        if role == 'server':
+            self._server_process_record = record
+        if self._cleanup_requested:
+            self._safe_cleanup_record('late_owned_process_handle', {
+                **self._facts(record),
+                'launch_operation_id': operation_id,
+                'launch_state': operation.state,
+                'cleanup_deadline': self._cleanup_deadline,
+            })
+            if self._cleanup_publication['attempted']:
+                self._cleanup_publication['failed'] = True
+                self._cleanup_publication['pending'] = True
+                self._append_cleanup_error(
+                    'cleanup_facts_arrived_after_publication_batch',
+                )
+            cleanup_active = (
+                self._cleanup_task is not None
+                and not self._cleanup_task.done()
+                and self._cleanup_deadline is not None
+                and self.monotonic() < self._cleanup_deadline
+            )
+            if cleanup_active:
+                self._capture_output(record)
+            else:
+                self._cleanup_pipe_facts.append({
+                    'role': role, 'stream_task_name': None,
+                    'task_done': None, 'cancelled': None,
+                    'pipe_drain_joined': False,
+                    'residue': 'UNKNOWN',
+                    'reason': 'handle_registered_after_cleanup_deadline',
+                })
+        else:
+            self._capture_output(record)
+            self.evidence_sink.record(
+                f'{role}_requested', self._facts(record),
+            )
+        return record
 
     async def _prepare_heartbeat_diagnostics(self) -> None:
         """Create optional trace resources only after an explicit opt-in."""
@@ -1741,13 +1835,28 @@ class LocalTrainingProcessSupervisor:
     async def _signal_observer_process(self, sig):
         """Signal only a group with the captured live leader identity."""
         process = self._heartbeat_observer_process
-        if (process is None
-                or not self._observer_identity_matches_live_process()):
+        identity_verified = (
+            process is not None
+            and self._observer_identity_matches_live_process()
+        )
+        fact = {
+            'signal': signal.Signals(sig).name,
+            'identity_verified': identity_verified,
+            'raw_exit_status_before_dispatch': (
+                process.returncode if process is not None else None
+            ),
+            'outcome': 'IDENTITY_UNKNOWN',
+        }
+        self._heartbeat_observer_signal_dispatches.append(fact)
+        if not identity_verified:
             return False
         try:
             await self.launcher.stop_group(process, sig)
-        except BaseException:
+        except BaseException as error:
+            fact['outcome'] = 'DISPATCH_FAILED'
+            fact['error_type'] = type(error).__name__
             return False
+        fact['outcome'] = 'DISPATCHED'
         return True
 
     async def _wait_observer_reaped(self, deadline):
@@ -1921,25 +2030,47 @@ class LocalTrainingProcessSupervisor:
         except BaseException:
             pass
         if clean_ack:
-            if (joined and group_absent
+            escalation_occurred = any(
+                item.get('outcome') == 'DISPATCHED'
+                and item.get('signal') in ('SIGTERM', 'SIGKILL')
+                for item in self._heartbeat_observer_signal_dispatches
+            )
+            if (joined and group_absent and not escalation_occurred
                     and type(self._heartbeat_observer_exit_status) is int
                     and self._heartbeat_observer_exit_status == 0):
                 self._heartbeat_observer_termination = 'CLEAN_COOPERATIVE'
             else:
-                self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
-                if not joined:
+                if escalation_occurred:
+                    self._heartbeat_observer_termination = (
+                        'ESCALATED_AFTER_ACK'
+                    )
+                    reason = 'observer_ack_followed_by_escalation'
+                elif not joined:
+                    self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
                     reason = 'observer_clean_ack_process_join_unconfirmed'
                 elif not group_absent:
+                    self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
                     reason = 'observer_clean_ack_group_absence_unconfirmed'
                 elif (type(self._heartbeat_observer_exit_status) is int
                       and self._heartbeat_observer_exit_status != 0):
+                    self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
                     reason = 'observer_stop_ack_exit_status_nonzero'
                 else:
+                    self._heartbeat_observer_termination = 'UNCONFIRMED_EXIT'
                     reason = 'observer_clean_ack_reap_unconfirmed'
                 errors.append(reason)
                 self._heartbeat_trace_error = (
                     self._heartbeat_trace_error or reason
                 )
+        elif any(
+                item.get('outcome') == 'DISPATCHED'
+                and item.get('signal') in ('SIGTERM', 'SIGKILL')
+                for item in self._heartbeat_observer_signal_dispatches):
+            self._heartbeat_trace_error = (
+                self._heartbeat_trace_error
+                or 'observer_forced_termination_unconfirmed'
+            )
+            errors.append('observer_forced_termination_unconfirmed')
         if self._heartbeat_observer_stderr_task is not None:
             remaining = max(0.0, deadline - self.monotonic())
             if remaining > 0:
@@ -1983,6 +2114,9 @@ class LocalTrainingProcessSupervisor:
             'handle_closed': self._heartbeat_observer_handle_closed,
             'writer_closed': self._heartbeat_observer_writer_closed,
             'termination': self._heartbeat_observer_termination,
+            'signal_dispatches': copy.deepcopy(
+                self._heartbeat_observer_signal_dispatches,
+            ),
             'stderr_bytes': self._heartbeat_observer_stderr_total,
             'stderr_excerpt': self._heartbeat_observer_stderr.decode(
                 'utf-8', errors='replace',
@@ -2002,6 +2136,9 @@ class LocalTrainingProcessSupervisor:
             'handle_closed': self._heartbeat_observer_handle_closed,
             'writer_closed': self._heartbeat_observer_writer_closed,
             'termination': self._heartbeat_observer_termination,
+            'signal_dispatches': copy.deepcopy(
+                self._heartbeat_observer_signal_dispatches,
+            ),
             'errors': tuple(errors),
         }
 
@@ -2256,6 +2393,14 @@ class LocalTrainingProcessSupervisor:
                 raise TypeError('cleanup deadline must be an absolute number')
             proposed = min(proposed, float(deadline))
         self._cleanup_requested = True
+        current = asyncio.current_task()
+        if self._cleanup_task is None:
+            self._cleanup_requester_task = current
+        startup_task = self._start_task
+        if (startup_task is not None and startup_task is not current
+                and startup_task is not self._cleanup_requester_task
+                and not startup_task.done()):
+            startup_task.cancel()
         if self._cleanup_deadline_changed is None:
             self._cleanup_deadline_changed = asyncio.Event()
         if self._cleanup_deadline is None:
@@ -2297,11 +2442,16 @@ class LocalTrainingProcessSupervisor:
             and self._process_residue == 'NONE'
             and self._task_residue == 'NONE'
             and not self.owned
+            and not any(
+                not operation.task.done()
+                for operation in self._launch_operations.values()
+            )
             and not self._cleanup_residue_tasks
             and not self._cleanup_errors
             and self._cleanup_publication['acknowledged'] is True
             and self._cleanup_publication['failed'] is False
             and self._cleanup_publication['pending'] is False
+            and not self._cleanup_evidence
         )
 
     def _observe_cleanup_task(self, task: asyncio.Task) -> None:
@@ -2473,7 +2623,10 @@ class LocalTrainingProcessSupervisor:
                 return True
             if timeout_task in done:
                 await self._cancel_cleanup_waiters(changed)
-                return task.done()
+                # A polling interval is not the cleanup deadline. Recompute
+                # the effective deadline (which may have been shortened)
+                # before deciding whether the operation is still pending.
+                continue
             if timeout_task not in done:
                 await self._cancel_cleanup_waiters(timeout_task)
         return True
@@ -2678,18 +2831,106 @@ class LocalTrainingProcessSupervisor:
         observer_reserve_s: float,
     ) -> None:
         current = asyncio.current_task()
+        startup_task = self._start_task
+        if (startup_task is not None and startup_task is not current
+                and startup_task is not self._cleanup_requester_task):
+            startup_fact = {
+                'task_name': startup_task.get_name(),
+                'cancel_requested': True,
+                'joined': False,
+                'phase': 'before_bounded_join',
+                'residue': 'PENDING',
+            }
+            self._cleanup_task_facts.append(startup_fact)
+            if not startup_task.done() and not await self._await_cleanup_task(
+                    startup_task, self._effective_process_deadline(
+                        process_deadline, observer_reserve_s,
+                    ), observer_reserve_s):
+                self._retain_cleanup_task(startup_task)
+                self._task_residue = 'UNKNOWN'
+                self._cleanup_residue = 'UNKNOWN'
+                startup_fact.update({
+                    'phase': 'final_after_bounded_join',
+                    'joined': False, 'residue': 'UNKNOWN',
+                })
+            else:
+                startup_fact.update({
+                    'phase': 'final_after_bounded_join',
+                    'joined': startup_task.done(),
+                    'residue': (
+                        'NONE' if startup_task.done() else 'UNKNOWN'
+                    ),
+                })
+                if startup_task.done():
+                    try:
+                        startup_task.result()
+                    except BaseException:
+                        # The start path has retained any primary failure.
+                        pass
+        launch_operations = tuple(self._launch_operations.values())
+        for operation in launch_operations:
+            if not operation.task.done():
+                operation.task.cancel()
+        unresolved_launches = []
+        for operation in launch_operations:
+            task = operation.task
+            if not task.done() and not await self._await_cleanup_task(
+                    task, self._effective_process_deadline(
+                        process_deadline, observer_reserve_s,
+                    ), observer_reserve_s):
+                self._retain_cleanup_task(task)
+                unresolved_launches.append(operation)
+                self._task_residue = 'UNKNOWN'
+                self._cleanup_residue = 'UNKNOWN'
+                self._append_cleanup_error(
+                    f'owned_launch_deadline:{operation.role}',
+                )
+                continue
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                operation.state = 'CANCELLED_NO_HANDLE'
+            except BaseException as error:
+                operation.error_type = type(error).__name__
+                if operation.state == 'PENDING':
+                    operation.state = 'FAILED'
+        self._cleanup_launch_facts = [
+            {
+                'operation_id': operation.operation_id,
+                'role': operation.role,
+                'command': operation.command,
+                'state': operation.state,
+                'handle_registered': operation.process is not None,
+                'task_done': operation.task.done(),
+                'task_cancelled': operation.task.cancelled(),
+                'error_type': operation.error_type,
+                'residue': (
+                    'UNKNOWN' if not operation.task.done()
+                    else 'NONE'
+                ),
+            }
+            for operation in self._launch_operations.values()
+        ]
         observers = [
             task for task in self._observer_tasks if task is not current
         ]
+        observer_cancel_requested = {}
         for task in observers:
-            if not task.done():
+            requested = not task.done()
+            observer_cancel_requested[task] = requested
+            if requested:
                 task.cancel()
-        self._cleanup_task_facts.extend({
-            'task_name': task.get_name(),
-            'cancel_requested': True,
-            'joined': task.done(),
-            'residue': 'NONE' if task.done() else 'PENDING',
-        } for task in observers)
+        observer_task_facts = {}
+        for task in observers:
+            fact = {
+                'task_name': task.get_name(),
+                'cancel_requested': observer_cancel_requested[task],
+                'joined': False,
+                'phase': 'before_bounded_join',
+                'residue': 'PENDING',
+            }
+            observer_task_facts[task] = fact
+            self._cleanup_task_facts.append(fact)
         task_deadline = min(
             self._effective_process_deadline(
                 process_deadline, observer_reserve_s,
@@ -2701,10 +2942,28 @@ class LocalTrainingProcessSupervisor:
             joins = asyncio.gather(*pending_observers, return_exceptions=True)
             if await self._await_cleanup_task(joins, task_deadline):
                 pending_observers = set()
+                for task in observers:
+                    observer_task_facts[task].update({
+                        'phase': 'final_after_bounded_join',
+                        'joined': task.done(),
+                        'residue': 'NONE' if task.done() else 'UNKNOWN',
+                    })
         for task in pending_observers:
+            observer_task_facts[task].update({
+                'phase': 'final_after_bounded_join',
+                'joined': False,
+                'residue': 'UNKNOWN',
+            })
             self._retain_cleanup_task(task)
             self._task_residue = 'UNKNOWN'
             self._cleanup_residue = 'UNKNOWN'
+        for task, fact in observer_task_facts.items():
+            if task not in pending_observers:
+                fact.update({
+                    'phase': 'final_after_bounded_join',
+                    'joined': task.done(),
+                    'residue': 'NONE' if task.done() else 'UNKNOWN',
+                })
         for task in observers:
             if task.done() and not task.cancelled():
                 try:
@@ -2869,13 +3128,48 @@ class LocalTrainingProcessSupervisor:
                 'output_task_outcomes': output_task_outcomes,
                 'residue': 'NONE' if clean else 'UNKNOWN',
             })
-        self._cleanup_task_facts.extend({
-            'task_name': task.get_name(), 'done': task.done(),
-            'cancelled': task.cancelled(),
-            'joined': task.done(),
-            'residue': 'NONE' if task.done() else 'UNKNOWN',
-        } for task in drain_tasks)
-        self.owned = list(reversed(unresolved))
+        for task in drain_tasks:
+            joined = task.done() and task not in pending_drains
+            self._cleanup_task_facts.append({
+                'task_name': task.get_name(), 'done': task.done(),
+                'cancelled': task.cancelled(), 'joined': joined,
+                'phase': 'final_after_bounded_join',
+                'residue': 'NONE' if joined else 'UNKNOWN',
+            })
+        # Do not overwrite a handle registered after the cleanup snapshot.
+        # Late handles remain owned and visible as residue for this operation.
+        unresolved_ids = {id(record) for record in unresolved}
+        current_records = list(self.owned)
+        retained = [
+            record for record in current_records
+            if id(record) not in {id(item) for item in records}
+        ]
+        retained.extend(
+            record for record in records if id(record) in unresolved_ids
+        )
+        self.owned = retained
+        for operation in self._launch_operations.values():
+            if (operation.task.done() and operation.process is not None
+                    and operation.record is not None
+                    and operation.record in retained):
+                operation.state = 'HANDLE_REGISTERED_RESIDUE'
+        self._cleanup_launch_facts = [
+            {
+                'operation_id': operation.operation_id,
+                'role': operation.role,
+                'command': operation.command,
+                'state': operation.state,
+                'handle_registered': operation.process is not None,
+                'task_done': operation.task.done(),
+                'task_cancelled': operation.task.cancelled(),
+                'error_type': operation.error_type,
+                'owned_process_residue': (
+                    'UNKNOWN' if operation.record in retained
+                    else 'NONE'
+                ),
+            }
+            for operation in self._launch_operations.values()
+        ]
 
     def _safe_cleanup_record(
         self, event: str, facts: dict[str, object],
@@ -3131,6 +3425,11 @@ class LocalTrainingProcessSupervisor:
                     observer_join.get('termination') if observer_join
                     else self._heartbeat_observer_termination
                 ),
+                'observer_signal_dispatches': copy.deepcopy(
+                    observer_join.get('signal_dispatches', ())
+                    if observer_join else
+                    self._heartbeat_observer_signal_dispatches
+                ),
                 'task_residue': (
                     'NONE' if not self._observer_tasks
                     and self._task_residue == 'NONE'
@@ -3162,6 +3461,26 @@ class LocalTrainingProcessSupervisor:
 
     def cleanup_snapshot(self) -> dict[str, object]:
         """Return a detached view of cleanup state and retained evidence."""
+        launch_facts = [
+            {
+                'operation_id': operation.operation_id,
+                'role': operation.role,
+                'command': operation.command,
+                'state': operation.state,
+                'handle_registered': operation.process is not None,
+                'task_done': operation.task.done(),
+                'task_cancelled': operation.task.cancelled(),
+                'error_type': operation.error_type,
+                'owned_process_residue': (
+                    'UNKNOWN' if operation.record is not None
+                    and any(
+                        record is operation.record for record in self.owned
+                    )
+                    else 'NONE'
+                ),
+            }
+            for operation in self._launch_operations.values()
+        ]
         return copy.deepcopy({
             'deadline': self._cleanup_deadline,
             'overall_status': self._cleanup_is_clean(),
@@ -3172,6 +3491,7 @@ class LocalTrainingProcessSupervisor:
             'task_residue': self._task_residue,
             'process_facts': self._cleanup_process_facts,
             'task_facts': self._cleanup_task_facts,
+            'launch_facts': launch_facts,
             'pipe_facts': self._cleanup_pipe_facts,
             'observer_facts': self._cleanup_observer_facts,
             'pending_batch': (
