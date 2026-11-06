@@ -144,6 +144,9 @@ class Capture:
         self.command_records_error = None
         self.primary_samples = {}
         self.cleanup_end_limit_ns = None
+        self.global_end_limit_ns = None
+        self.finalization_started_ns = None
+        self.finalization_deadline_ns = None
 
     def append(self, path, item):
         with path.open("a", encoding="utf-8") as stream:
@@ -406,6 +409,21 @@ class Capture:
                         helper_pids[role] = parsed["pid"]
                 except (ValueError, TypeError) as exc:
                     record["parse_error"] = f"{type(exc).__name__}:{exc}"
+                    error = {
+                        "kind": "helper_metadata_json_parse_error",
+                        "path": record["path"],
+                        "snapshot_index": index,
+                        "snapshot_label": label,
+                        "snapshot_started": begin,
+                        "metadata_read_started": record.get("started"),
+                        "metadata_read_finished": record.get("finished"),
+                        "raw_size": record.get("size"),
+                        "raw_sha256": record.get("sha256"),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                    record["capture_error"] = error
+                    self.errors.append(error)
             metadata[name] = record
         item["helper_metadata_raw"] = metadata
         item["helper_proc"] = {role: self.read_proc(pid) for role, pid in helper_pids.items()}
@@ -525,7 +543,8 @@ class Capture:
         self.helper_out.mkdir(exist_ok=True)
         self.primary_start_ns = time.monotonic_ns()
         self.primary_deadline_ns = self.primary_start_ns + WINDOW_NS
-        self.cleanup_end_limit_ns = self.primary_deadline_ns + CLEANUP_NS
+        self.global_end_limit_ns = self.primary_deadline_ns + CLEANUP_NS
+        self.cleanup_end_limit_ns = self.global_end_limit_ns
         self.primary_samples = {
             str(offset): {"status": "pending", "offset_ns": offset}
             for offset in SAMPLE_OFFSETS_NS
@@ -578,8 +597,24 @@ class Capture:
             self.errors.append({"kind": "controller_error", **self.controller_error})
             self._mark_pending_samples_missed("controller_exception_after_launch_request")
         finally:
-            # One fixed cleanup end-limit is established before launch and never extended.
-            cleanup_deadline = self.cleanup_end_limit_ns
+            # Finalization receives at most three seconds and never exceeds the global end-limit.
+            self.finalization_started_ns = time.monotonic_ns()
+            self.finalization_deadline_ns = min(
+                self.global_end_limit_ns,
+                self.finalization_started_ns + CLEANUP_NS,
+            )
+            self.cleanup_end_limit_ns = self.finalization_deadline_ns
+            cleanup_deadline = self.finalization_deadline_ns
+            try:
+                self.append(self.events_path, {
+                    "kind": "finalization_window",
+                    "started_monotonic_ns": self.finalization_started_ns,
+                    "deadline_monotonic_ns": self.finalization_deadline_ns,
+                    "global_end_limit_monotonic_ns": self.global_end_limit_ns,
+                })
+            except BaseException as exc:
+                self.errors.append({"kind": "finalization_event_write_error",
+                                    "type": type(exc).__name__, "message": str(exc), "at": stamp()})
             try:
                 self.guarded_cleanup(cleanup_deadline)
             except BaseException as exc:
@@ -669,10 +704,14 @@ class Capture:
                    "helper_file_sha256": hashlib.sha256(self.helper.read_bytes()).hexdigest(),
                    "primary_window_start_ns": self.primary_start_ns,
                    "primary_deadline_ns": self.primary_deadline_ns,
+                   "global_end_limit_ns": self.global_end_limit_ns,
+                   "finalization_started_ns": self.finalization_started_ns,
+                   "finalization_deadline_ns": self.finalization_deadline_ns,
                    "snapshot_count": self.snapshots, "errors": self.errors,
                    "primary_sample_status": self.primary_samples,
                    "controller_error": self.controller_error,
                    "cleanup_error": self.cleanup_error,
+                   "summary_error": self.summary_error,
                    "command_records_error": self.command_records_error,
                    "launch_record": self.launch_record, "finished": stamp()}
         if extra: summary.update(extra)
