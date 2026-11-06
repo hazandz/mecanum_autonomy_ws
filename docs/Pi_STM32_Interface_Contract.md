@@ -1,6 +1,6 @@
 # Raspberry Pi–STM32 Interface Contract
 
-**Contract version:** `0.2.1-draft`
+**Contract version:** `0.2.2-draft`
 **Protocol version:** `0x0001` — `PROPOSED_FOR_APPROVAL`
 **Status:** Draft. The UART v1 rules below are normative within this draft, but
 they are not `APPROVED`; motor enable remains prohibited until every applicable
@@ -217,7 +217,18 @@ The TELEMETRY payload is exactly 65 bytes. Ticks use the locked logical order
 | 48 | `ticks_rr` | `int64_le` | Cumulative RR encoder ticks |
 | 56 | `last_accepted_command_sequence` | `uint32_le` | Latest COMMAND accepted by STM32 |
 | 60 | `mcu_fault_bits` | `uint32_le` | Firmware fault state mapped to `Heartbeat.msg` `FAULT_*` constants |
-| 64 | `estop_aux_active` | `uint8` | Physical E-stop auxiliary-contact diagnostic state |
+| 64 | `estop_aux_active` | `uint8` | Physical E-stop auxiliary-contact diagnostic: `0=INACTIVE`, `1=ACTIVE`, `2=UNKNOWN` (no valid input); all other values are invalid |
+
+The auxiliary-contact value is diagnostics only. `UNKNOWN` does not invalidate
+otherwise valid encoder/session telemetry and does not by itself create
+`FAULT_ESTOP_ACTIVE`. It does not grant motor permission or alter existing
+COMMAND, lifecycle, freshness, epoch, watchdog, reset/rearm, reconnect, or
+error gates. Heartbeat must be unhealthy while the value is `UNKNOWN`, with
+detail `E-stop auxiliary unavailable`, while preserving valid MCU fault bits
+and telemetry freshness. A receiver that only accepts values 0 and 1 will
+reject value 2; both Pi and STM32 implementations must be updated together.
+This semantic extension keeps UART protocol version `0x0001`, all offsets,
+payload length, framing, CRC, packet types, and A1 CONFIG gating unchanged.
 
 - Pi bridge MUST validate protocol version, telemetry sequence, `mcu_boot_id`,
   `reset_epoch`, and MCU monotonic time before calculating wheel deltas.

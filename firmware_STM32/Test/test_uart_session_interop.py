@@ -223,6 +223,8 @@ def test_production_c_encoder_telemetry_queue_codec_and_pi_fk_interoperate():
         assert first is not None
         assert (first.packet.ticks_fl, first.packet.ticks_fr,
                 first.packet.ticks_rl, first.packet.ticks_rr) == (0, 0, 0, 0)
+        assert first.packet.estop_aux_active == 2
+        assert first.packet.mcu_fault_bits & 2 == 0
 
         # Chỉ hardware counters giả được inject; TELEMETRY bytes phát sinh từ
         # encoder.c + telemetry.c + queue/codec C thật, không serialize ở Python.
@@ -237,6 +239,7 @@ def test_production_c_encoder_telemetry_queue_codec_and_pi_fk_interoperate():
         assert second is not None
         assert (second.packet.ticks_fl, second.packet.ticks_fr,
                 second.packet.ticks_rl, second.packet.ticks_rr) == (100, 100, 100, 100)
+        assert second.packet.estop_aux_active == 2
         wheel_odom = WheelOdometry(0.097, 0.216, 0.190, 937.2, (1, 1, 1, 1))
         assert wheel_odom.update(first.packet, 1_000_000_000) is None
         sample = wheel_odom.update(second.packet, 1_020_000_000)

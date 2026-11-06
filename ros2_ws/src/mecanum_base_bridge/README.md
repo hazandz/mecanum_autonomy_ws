@@ -104,4 +104,18 @@ Pi dùng session U4 và codec hiện có, giữ tối đa 8 accepted reports; ov
 
 Unit/host tests có thể dùng ticks, lifecycle và E-stop synthetic có nhãn; đó không phải ROS runtime hay hardware evidence. E-stop mapping, encoder signs, U6 physical UART/HIL và U7 clean production consolidation/audit/integration vẫn còn. Motor permission luôn false; chưa có Gate 3/4, deploy_real hoặc robot validation.
 
+### U6 corrective — E-stop auxiliary UNKNOWN (offline)
+
+UART v1 telemetry giữ payload 65 byte, protocol `0x0001` và offset hiện hữu.
+Byte `estop_aux_active` nhận `0=INACTIVE`, `1=ACTIVE`, `2=UNKNOWN`; giá trị
+khác bị từ chối. Firmware đọc validity riêng với value; auxiliary chưa có
+mapping tạo UNKNOWN, không tự đặt `FAULT_ESTOP_ACTIVE`, còn telemetry chỉ được
+enqueue sau CONFIG và các gate snapshot/encoder/session/motor-disabled hiện
+hữu. Pi giữ session ACTIVE và telemetry fresh khi session hợp lệ; Heartbeat báo
+unhealthy với detail `E-stop auxiliary unavailable` và giữ fault MCU khác.
+UNKNOWN chỉ là diagnostic; không thêm gate COMMAND hoặc motor permission.
+Receiver cũ chỉ hiểu 0/1 sẽ từ chối 2, nên hai đầu phải được cập nhật đồng bộ.
+Đây là evidence offline; không chứng minh UART vật lý, E-stop độc lập, HIL,
+motor output hay runtime.
+
 Build package/interface ngoại tuyến (không chạy node): `colcon --log-base /tmp/wp07-u5-roslog build --base-paths ros2_ws/src --build-base /tmp/wp07-u5-rosbuild --install-base /tmp/wp07-u5-rosinstall --packages-up-to mecanum_base_bridge --symlink-install`. Chạy Python suite cần venv U4 cùng ROS Jazzy Python paths đã cài; CTest/native và ARM build commands U4 vẫn dùng cùng CMake modes, đổi output directory thành `/tmp/wp07-u5-host` và `/tmp/wp07-u5-arm`. ROS package build không phải ROS runtime evidence.

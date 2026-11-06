@@ -20,10 +20,14 @@ def make_heartbeat(sequence: int, reset_epoch: int, session_active: bool,
     trusted = bool(telemetry_fresh and report is not None
                    and type(report.packet.mcu_fault_bits) is int
                    and report.packet.mcu_fault_bits & ~ALLOWED_MCU_FAULTS == 0
-                   and report.packet.estop_aux_active in (0, 1))
+                   and type(report.packet.estop_aux_active) is int
+                   and report.packet.estop_aux_active in (0, 1, 2))
     faults = report.packet.mcu_fault_bits if trusted else 0
     estop = bool(trusted and report.packet.estop_aux_active == 1)
-    healthy = bool(session_active and trusted and transport_healthy and faults == 0 and not estop)
-    detail = "MCU telemetry fresh" if trusted else "Pi observed UART/session loss"
+    unknown = bool(trusted and report.packet.estop_aux_active == 2)
+    healthy = bool(session_active and trusted and transport_healthy and faults == 0
+                   and not estop and not unknown)
+    detail = ("E-stop auxiliary unavailable" if unknown else
+              ("MCU telemetry fresh" if trusted else "Pi observed UART/session loss"))
     return HeartbeatState(SOURCE_MCU, sequence & 0xFFFFFFFF, reset_epoch,
                           healthy, faults, detail)

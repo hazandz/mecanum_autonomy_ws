@@ -452,7 +452,7 @@ class BridgeSession:
             return False
         if type(packet.mcu_fault_bits) is not int or packet.mcu_fault_bits & ~ALLOWED_MCU_FAULTS:
             return False
-        if type(packet.estop_aux_active) is not int or packet.estop_aux_active not in (0, 1):
+        if type(packet.estop_aux_active) is not int or packet.estop_aux_active not in (0, 1, 2):
             return False
         if (type(packet.last_accepted_command_sequence) is not int
                 or packet.last_accepted_command_sequence > self._highest_command_sent

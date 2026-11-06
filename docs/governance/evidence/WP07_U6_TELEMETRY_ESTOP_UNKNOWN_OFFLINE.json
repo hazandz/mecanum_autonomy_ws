@@ -1,0 +1,134 @@
+{
+  "candidate_id": "WP07_U6_TELEMETRY_ESTOP_UNKNOWN_OFFLINE",
+  "step": "U6",
+  "classification": "IMPLEMENTED_OFFLINE_ONLY",
+  "evidence_ceiling": "OFFLINE_ONLY; pending independent audit",
+  "identity": {
+    "repository": "https://github.com/hazandz/mecanum_autonomy_ws.git",
+    "worktree": "/home/hazan/mecanum_autonomy_ws_uart_wp07",
+    "branch": "wp07-pi5-stm32-uart-parallel-fdc0e299",
+    "parent_source_sha": "55427c3a39733ce297766c7d1310ed057049ef01"
+  },
+  "decision": {
+    "owner_scope": "Emit real encoder/session telemetry when E-stop auxiliary input is unavailable; motor remains disabled.",
+    "implementation": "estop_aux_active 0=INACTIVE, 1=ACTIVE, 2=UNKNOWN; diagnostics only.",
+    "authority_basis": "Architecture section 34 assigns auxiliary contact to MCU/IO Heartbeat/Safety diagnostics; independent physical E-stop remains a separate hardware requirement.",
+    "protocol": "UART v1 0x0001; TELEMETRY payload 65 bytes; offsets, framing, CRC, packet types, CONFIG gating and A1 unchanged.",
+    "compatibility": "Receivers accepting only 0/1 reject UNKNOWN; Pi and STM32 must update together; backward compatibility is not claimed.",
+    "command_and_motor": "No auxiliary-only COMMAND gate or cache-clearing behavior added; existing lifecycle and command gates retained; firmware motor-disabled gate retained."
+  },
+  "implementation_paths": [
+    "firmware_STM32/Core/Inc/communication.h",
+    "firmware_STM32/Core/Src/communication.c",
+    "firmware_STM32/Core/Src/telemetry.c",
+    "firmware_STM32/Test/test_communication_codec.c",
+    "firmware_STM32/Test/test_communication_runtime.c",
+    "firmware_STM32/Test/test_telemetry.c",
+    "firmware_STM32/Test/test_uart_session_interop.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_node.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/bridge_session.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/heartbeat.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/protocol_constants.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/telemetry_state.py",
+    "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/uart_v1_codec.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_bridge_session.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_heartbeat.py",
+    "ros2_ws/src/mecanum_base_bridge/test/test_uart_v1_valid_vectors.py",
+    "docs/Pi_STM32_Interface_Contract.md",
+    "docs/governance/decisions/WP07_PI5_STM32_UART_RUNTIME_CLOSURE_L2.md",
+    "firmware_STM32/README.md",
+    "ros2_ws/src/mecanum_base_bridge/README.md"
+  ],
+  "python_environment": {
+    "interpreter": "/tmp/wp07-u6-venv/bin/python",
+    "python": "3.12.3",
+    "PyYAML": "6.0.1",
+    "rfc8785": "0.1.4",
+    "pytest": "7.4.4",
+    "pyserial": "3.5 from /usr/lib/python3/dist-packages; no package installed",
+    "ROS_interface_build": "Used existing /usr/bin/python3 because the venv lacks ROS empy; generated overlay only under /tmp. No package was installed."
+  },
+  "verification": {
+    "native_CTest": {
+      "build_dir": "/tmp/wp07-u6-unknown-host",
+      "result": "33 passed, 0 failed, 0 skipped",
+      "sanitizers": "ASan and UBSan enabled by existing CMake capability configuration; LeakSanitizer disabled with ASAN_OPTIONS=detect_leaks=0.",
+      "Python_C_interop": "Included; C telemetry producer emitted UNKNOWN and Python session accepted it after CONFIG. Encoder values are test-double/synthetic, not hardware evidence."
+    },
+    "bridge_pytest": {
+      "result": "264 passed, 0 failed, 0 skipped",
+      "scope": "Full mecanum_base_bridge test directory, including codec, session, transport, heartbeat, odometry and offline ROS adapter tests. No ROS node or runtime launched."
+    },
+    "ROS_package_build": {
+      "result": "mecanum_nav_rl_interfaces and mecanum_base_bridge built",
+      "install_dir": "/tmp/wp07-u6-unknown-rosinstall2",
+      "scope": "Offline package build only; no node launch or DDS runtime."
+    },
+    "source_diff_check": "git diff --check passed before commit; no source conflict markers found.",
+    "map_diff_check": "30 trailing-whitespace findings; individually inspected, all are linker-generated *fill* lines in the new map. Bytes retained. Not reported as PASS and no prior-map waiver claimed."
+  },
+  "arm_build": {
+    "build_dir": "/tmp/wp07-u6-unknown-arm",
+    "manifest": "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml",
+    "manifest_sha256": "497929bc75f699b3649d5f5beb44fac03d1a2da586b6fec5da191ca3896247ba",
+    "hardware_config_hash": "efe7d25a2a26fa4a83000959cc3060826793b74dbedca7b1c2e2a881d3d1ed06",
+    "toolchain": "GNU Tools for STM32 14.3.rel1; arm-none-eabi-gcc 14.3.1 (20250623)",
+    "ELF": {
+      "path": "/tmp/wp07-u6-unknown-arm/stm32_uart_runtime.elf",
+      "sha256": "39af7a4c5201ffc374ecc03448fcc0a0752548cb16fd1162d6fa3efc31cdb88f",
+      "size_bytes": 54208,
+      "flash_load_range": "0x08000000-0x08005C64"
+    },
+    "map": {
+      "path": "/tmp/wp07-u6-unknown-arm/stm32_uart_runtime.map",
+      "sha256": "b5e5a7a870eb5f55cbf9dd80c39f7c16e64127c5f09c03555796dd0512982992",
+      "size_bytes": 252464,
+      "fill_line_findings": 30
+    },
+    "generated_hardware_config": {
+      "path": "/tmp/wp07-u6-unknown-arm/generated/hardware_config.json",
+      "sha256": "ecc20f4a44c5bf716994549f4348c0a45169cf3d73c43b871494356070d278bf",
+      "size_bytes": 613
+    },
+    "flash_reservation": "Linker FLASH region is 384 KiB from 0x08000000; load end 0x08005C64 is below sector 7 start 0x08060000. Sector 7 remains reserved and untouched.",
+    "ram": "data+bss end 0x20006BE0; heap+stack reserve 0x600 bytes ends at 0x200071E0; RAM region is 128 KiB.",
+    "symbols_checked": [
+      "telemetry_runtime_service_once",
+      "safety_io_read_estop_aux",
+      "control_safety_runtime_enqueue_telemetry_if_current",
+      "communication_runtime_enqueue_telemetry",
+      "xTaskCreateStatic"
+    ],
+    "build_command": "PATH=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin:$PATH cmake -S firmware_STM32 -B /tmp/wp07-u6-unknown-arm -DSTM32_ARM_BUILD=ON -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_COMPILER=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc -DCMAKE_ASM_COMPILER=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin/arm-none-eabi-gcc -DPython3_EXECUTABLE=/tmp/wp07-u6-venv/bin/python -DMECANUM_HARDWARE_MANIFEST=/home/hazan/mecanum_autonomy_ws_uart_wp07/artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml && PATH=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin:$PATH cmake --build /tmp/wp07-u6-unknown-arm --parallel 4"
+  },
+  "pi_owner_observation": {
+    "ssh_target": "hazan@172.20.10.14 (mecanum-pi5)",
+    "python_for_future_uart_preparation": "/home/hazan/venvs/mecanum-uart/bin/python",
+    "imports": {
+      "pyserial": "3.5",
+      "PyYAML": "6.0.1",
+      "rfc8785": "0.1.4"
+    },
+    "serial": "/dev/ttyAMA0 reportedly maps to RP1 serial@30000; GPIO14/15 pinmux remains unverified.",
+    "console_getty_permissions": "Owner reports no console=ttyAMA0,115200, serial-getty@ttyAMA0 disabled/inactive, and hazan in dialout.",
+    "local_SSH_attempt": "Permission denied (publickey,password); Pi details in this record are Owner-provided, not independently read over SSH.",
+    "runtime_accessed": false
+  },
+  "owner_hardware_facts": {
+    "tb6612_stby": "Both STBY pins are directly tied to STM32 PB10 per Owner; this is not evidence of an independent hardware E-stop gate.",
+    "motor_power": "12 V nominal GA25-370 motor, 21.3:1 gearbox; actual supply voltage/current not measured in this task.",
+    "encoder": "Owner-confirmed 11 pulses/channel/revolution, quadrature x4, CPR 937.2; do not multiply again.",
+    "orientation": "Owner reports wiring/orientation unchanged from historical PID/KIN test; current signs not rechecked physically.",
+    "independent_estop": "No independent E-stop circuit verified."
+  },
+  "runtime_and_safety_boundary": {
+    "flash_or_ST_Link_or_MCU_connect_reset": false,
+    "UART_open_or_config_or_command": false,
+    "ROS_node_or_HIL_or_motor_run": false,
+    "mass_erase_or_sector_7_write": false,
+    "E_stop_auxiliary": "INVALID input maps to telemetry UNKNOWN; no GPIO/polarity guessed.",
+    "encoder_signs": "Unconfirmed.",
+    "TELEMETRY_production_or_HIL_physical_proven": false,
+    "REAL_READY": false
+  }
+}

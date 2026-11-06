@@ -3,8 +3,8 @@ import pytest
 from mecanum_base_bridge.protocol_constants import MESSAGE_COMMAND, MESSAGE_CONFIG, MESSAGE_TELEMETRY
 from mecanum_base_bridge.uart_v1_codec import (
     CommandPacket, ConfigRequestPacket, ConfigStatusPacket, TelemetryPacket,
-    build_raw_frame, build_wire_frame, decode_frame, parse_typed_packet,
-    serialize_packet,
+    build_raw_frame, build_wire_frame, decode_frame, parse_telemetry,
+    parse_typed_packet, serialize_packet, serialize_telemetry,
 )
 
 
@@ -69,3 +69,23 @@ def test_dataclass_serialization_matches_golden_vector_bytes(
     assert serialized_payload == payload
     assert build_raw_frame(serialized_message_type, serialized_payload) == raw
     assert build_wire_frame(serialized_message_type, serialized_payload) == wire
+
+
+@pytest.mark.parametrize('state', [0, 1, 2])
+def test_estop_auxiliary_domain_round_trips_all_defined_states(state):
+    packet = TelemetryPacket(1, 2, 3, 4, 5, 6, 7, 8, 0, 0, state)
+    payload = serialize_telemetry(packet)
+    assert payload[64] == state
+    assert parse_telemetry(payload) == packet
+
+
+@pytest.mark.parametrize('state', [3, 255])
+def test_estop_auxiliary_domain_rejects_reserved_values(state):
+    packet = TelemetryPacket(1, 2, 3, 4, 5, 6, 7, 8, 0, 0, state)
+    with pytest.raises(ValueError, match='estop_aux_active'):
+        serialize_telemetry(packet)
+    payload = bytearray(serialize_telemetry(
+        TelemetryPacket(1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0)))
+    payload[64] = state
+    with pytest.raises(ValueError, match='estop_aux_active'):
+        parse_telemetry(bytes(payload))

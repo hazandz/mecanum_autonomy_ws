@@ -9,6 +9,7 @@ from .crc16_ccitt_false import crc16_ccitt_false
 from .protocol_constants import (
     COMMAND_PAYLOAD_LENGTH, CONFIG_REQUEST_PAYLOAD_LENGTH,
     CONFIG_STATUS_PAYLOAD_LENGTH, CRC_LENGTH, HEADER_LENGTH,
+    ESTOP_AUX_UNKNOWN,
     MAX_RAW_FRAME_LENGTH, MAX_WIRE_FRAME_LENGTH, MESSAGE_COMMAND,
     MESSAGE_CONFIG, MESSAGE_TELEMETRY, PROTOCOL_VERSION,
     TELEMETRY_PAYLOAD_LENGTH, VALID_MESSAGE_TYPES, WIRE_DELIMITER,
@@ -176,7 +177,8 @@ def serialize_telemetry(packet: TelemetryPacket) -> bytes:
     _validate_uint(packet.mcu_monotonic_time_us, 64, 'mcu_monotonic_time_us')
     _validate_uint(packet.last_accepted_command_sequence, 32, 'last_accepted_command_sequence')
     _validate_uint(packet.mcu_fault_bits, 32, 'mcu_fault_bits')
-    _validate_uint(packet.estop_aux_active, 8, 'estop_aux_active')
+    if type(packet.estop_aux_active) is not int or not 0 <= packet.estop_aux_active <= ESTOP_AUX_UNKNOWN:
+        raise ValueError('estop_aux_active must be INACTIVE(0), ACTIVE(1), or UNKNOWN(2)')
     return struct.pack(
         '<IQIQqqqqIIB', packet.telemetry_sequence, packet.mcu_boot_id,
         packet.reset_epoch, packet.mcu_monotonic_time_us, packet.ticks_fl,
@@ -188,7 +190,10 @@ def serialize_telemetry(packet: TelemetryPacket) -> bytes:
 
 def parse_telemetry(payload: bytes) -> TelemetryPacket:
     _validate_payload_length(MESSAGE_TELEMETRY, payload)
-    return TelemetryPacket(*struct.unpack('<IQIQqqqqIIB', payload))
+    packet = TelemetryPacket(*struct.unpack('<IQIQqqqqIIB', payload))
+    if packet.estop_aux_active > ESTOP_AUX_UNKNOWN:
+        raise ValueError('estop_aux_active must be INACTIVE(0), ACTIVE(1), or UNKNOWN(2)')
+    return packet
 
 
 def build_raw_frame(message_type: int, payload: bytes) -> bytes:

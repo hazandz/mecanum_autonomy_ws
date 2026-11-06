@@ -1,5 +1,19 @@
 # Firmware STM32F411
 
+## U6 corrective — telemetry E-stop auxiliary UNKNOWN (offline)
+
+Telemetry byte `estop_aux_active` uses `0=INACTIVE`, `1=ACTIVE`, and
+`2=UNKNOWN` when input is invalid; the codec rejects other values. `safety_io`
+continues to report invalid until a real hardware mapping exists. The
+telemetry producer maps invalid to UNKNOWN while preserving CONFIG, encoder,
+session-revision, sequence, motor-disabled, and enqueue-if-current gates;
+UNKNOWN does not set `FAULT_ESTOP_ACTIVE`. UART protocol remains `0x0001`,
+payload remains 65 bytes, and A1 no telemetry before CONFIG_ACCEPTED remains
+in force. This semantic extension is incompatible with older receivers that
+accept only 0/1, so Pi and STM32 must be updated together. This is offline
+implementation/test/build evidence only; UART, HIL, and motor operation have
+not been demonstrated, and motor permission remains disabled.
+
 ## UART runtime U3 (offline candidate)
 
 `communication.c` vẫn là codec stateless UART v1. `communication_runtime.c`

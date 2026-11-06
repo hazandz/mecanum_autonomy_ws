@@ -44,14 +44,16 @@ bool telemetry_runtime_service_once(void)
     control_safety_snapshot_t after;
     encoder_snapshot_t enc;
     mecanum_uart_v1_telemetry_t packet = {0};
-    bool estop_active;
+    bool estop_active = false;
+    bool estop_valid;
     uint32_t faults;
     if ((__get_IPSR() != 0U) || task_handle == NULL
         || xTaskGetCurrentTaskHandle() != task_handle) return false;
     if (!control_safety_runtime_copy_snapshot(&session) || !session.configured
         || !session.telemetry_allowed || session.motor_enabled || !encoder_snapshot(&enc)
-        || !safety_io_read_estop_aux(&estop_active) || sequence_exhausted
-        || !control_safety_runtime_copy_snapshot(&after)
+        || sequence_exhausted) return false;
+    estop_valid = safety_io_read_estop_aux(&estop_active);
+    if (!control_safety_runtime_copy_snapshot(&after)
         || after.snapshot_revision != session.snapshot_revision
         || after.configured != session.configured
         || after.reset_epoch != session.reset_epoch
@@ -64,7 +66,7 @@ bool telemetry_runtime_service_once(void)
         return false;
     }
     faults = session.mcu_fault_bits;
-    if (estop_active) faults |= MECANUM_FAULT_ESTOP_ACTIVE;
+    if (estop_valid && estop_active) faults |= MECANUM_FAULT_ESTOP_ACTIVE;
     packet.telemetry_sequence = telemetry_sequence;
     packet.mcu_boot_id = session.mcu_boot_id;
     packet.reset_epoch = session.reset_epoch;
@@ -73,7 +75,9 @@ bool telemetry_runtime_service_once(void)
     packet.ticks_rl = enc.ticks_rl; packet.ticks_rr = enc.ticks_rr;
     packet.last_accepted_command_sequence = session.last_accepted_command_sequence;
     packet.mcu_fault_bits = faults;
-    packet.estop_aux_active = estop_active ? 1U : 0U;
+    packet.estop_aux_active = !estop_valid ? MECANUM_UART_V1_ESTOP_AUX_UNKNOWN
+        : (estop_active ? MECANUM_UART_V1_ESTOP_AUX_ACTIVE
+                        : MECANUM_UART_V1_ESTOP_AUX_INACTIVE);
     if (!control_safety_runtime_enqueue_telemetry_if_current(&session, &packet)) return false;
     ++telemetry_sequence;
     return true;

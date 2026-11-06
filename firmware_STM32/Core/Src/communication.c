@@ -286,6 +286,9 @@ mecanum_uart_v1_status_t mecanum_uart_v1_serialize_telemetry(
     if (payload_capacity < MECANUM_UART_V1_TELEMETRY_PAYLOAD_LENGTH) {
         return MECANUM_UART_V1_ERROR_BUFFER_TOO_SMALL;
     }
+    if (telemetry->estop_aux_active > MECANUM_UART_V1_ESTOP_AUX_UNKNOWN) {
+        return MECANUM_UART_V1_ERROR_FIELD_VALUE;
+    }
     write_u32_le(&payload[0], telemetry->telemetry_sequence);
     write_u64_le(&payload[4], telemetry->mcu_boot_id);
     write_u32_le(&payload[12], telemetry->reset_epoch);
@@ -309,6 +312,9 @@ mecanum_uart_v1_status_t mecanum_uart_v1_parse_telemetry(
     }
     if (payload_length != MECANUM_UART_V1_TELEMETRY_PAYLOAD_LENGTH) {
         return MECANUM_UART_V1_ERROR_PAYLOAD_LENGTH;
+    }
+    if (payload[64] > MECANUM_UART_V1_ESTOP_AUX_UNKNOWN) {
+        return MECANUM_UART_V1_ERROR_FIELD_VALUE;
     }
     telemetry->telemetry_sequence = read_u32_le(&payload[0]);
     telemetry->mcu_boot_id = read_u64_le(&payload[4]);

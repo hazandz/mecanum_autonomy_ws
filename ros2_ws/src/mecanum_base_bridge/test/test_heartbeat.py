@@ -27,11 +27,22 @@ def test_pi_loss_and_stale_report_do_not_fabricate_mcu_faults():
 
 def test_reserved_fault_and_invalid_estop_are_rejected():
     invalid = make_heartbeat(1, 0, True, True, report(8192), True)
-    estop = make_heartbeat(1, 0, True, True, report(0, 2), True)
+    estop = make_heartbeat(1, 0, True, True, report(0, 3), True)
     assert not invalid.healthy and invalid.fault_bits == 0
     assert not estop.healthy and estop.fault_bits == 0
     assert not telemetry_health(True, True, report(256)).active
     assert not telemetry_health(True, False, report(0)).fresh
+
+
+def test_unknown_estop_is_fresh_diagnostic_with_unhealthy_heartbeat_and_faults_preserved():
+    diagnostic = make_heartbeat(4, 7, True, True, report(256, 2), True)
+    assert not diagnostic.healthy
+    assert diagnostic.fault_bits == 256
+    assert diagnostic.detail == "E-stop auxiliary unavailable"
+    health = telemetry_health(True, True, report(256, 2))
+    assert health.fresh and not health.active and health.fault_bits == 256
+    no_fault_health = telemetry_health(True, True, report(0, 2))
+    assert no_fault_health.fresh and not no_fault_health.active
 
 
 class _Clock:
@@ -49,7 +60,7 @@ class _Transport:
     def inject(self, frame): self.rx.extend(frame)
 
 
-def _fault_report_from_real_session_path(bits):
+def _fault_report_from_real_session_path(bits, estop=0, expect_disconnected=True):
     from mecanum_base_bridge.bridge_session import BridgeSession, LifecycleIdentity, SessionState
     from mecanum_base_bridge.protocol_constants import MESSAGE_CONFIG, MESSAGE_TELEMETRY
     from mecanum_base_bridge.uart_v1_codec import (
@@ -66,14 +77,28 @@ def _fault_report_from_real_session_path(bits):
     clock.value = 0.001
     session.io_once()
     assert session.state == SessionState.CONFIGURING
-    packet = TelemetryPacket(1, 44, 1, 1000, 1, 1, 1, 1, 0, bits, 0)
+    packet = TelemetryPacket(1, 44, 1, 1000, 1, 1, 1, 1, 0, bits, estop)
     transport.inject(build_wire_frame(MESSAGE_TELEMETRY, serialize_telemetry(packet)))
     clock.value = 0.002
     session.io_once()
-    assert session.state == SessionState.DISCONNECTED
+    assert session.state == (SessionState.DISCONNECTED if expect_disconnected else SessionState.ACTIVE)
     accepted = session.take_accepted_telemetry()
     assert accepted is not None and accepted.packet.mcu_fault_bits == bits
     return clock, session, accepted
+
+
+def test_unknown_estop_through_session_is_not_transport_loss_and_preserves_fault():
+    from mecanum_base_bridge.bridge_node import UartBridgeNode
+    clock, session, accepted = _fault_report_from_real_session_path(
+        4096, estop=2, expect_disconnected=False)
+    assert session.state.value == "ACTIVE"
+    assert session.transport_healthy
+    adapter = _heartbeat_adapter(clock, session, accepted, owner_epoch=1)
+    UartBridgeNode._heartbeat_tick(adapter)
+    message = adapter._heartbeat_pub.messages[-1]
+    assert not message.healthy
+    assert message.fault_bits == 4096
+    assert message.detail == "E-stop auxiliary unavailable"
 
 
 class _HeartbeatPublisher:

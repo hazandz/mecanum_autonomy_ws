@@ -320,6 +320,8 @@ static void test_v6_telemetry(void)
     mecanum_uart_v1_telemetry_t decoded;
     mecanum_uart_v1_frame_t frame;
     uint8_t payload[MECANUM_UART_V1_TELEMETRY_PAYLOAD_LENGTH];
+    uint8_t invalid_payload[MECANUM_UART_V1_TELEMETRY_PAYLOAD_LENGTH];
+    uint8_t allowed_state;
 
     assert(mecanum_uart_v1_serialize_telemetry(&telemetry, payload, sizeof(payload))
            == MECANUM_UART_V1_OK);
@@ -339,6 +341,24 @@ static void test_v6_telemetry(void)
     assert(decoded.last_accepted_command_sequence == telemetry.last_accepted_command_sequence);
     assert(decoded.mcu_fault_bits == telemetry.mcu_fault_bits);
     assert(decoded.estop_aux_active == telemetry.estop_aux_active);
+
+    for (allowed_state = MECANUM_UART_V1_ESTOP_AUX_INACTIVE;
+         allowed_state <= MECANUM_UART_V1_ESTOP_AUX_UNKNOWN; ++allowed_state) {
+        telemetry.estop_aux_active = allowed_state;
+        assert(mecanum_uart_v1_serialize_telemetry(&telemetry, payload, sizeof(payload))
+               == MECANUM_UART_V1_OK);
+        assert(payload[64] == allowed_state);
+        assert(mecanum_uart_v1_parse_telemetry(payload, sizeof(payload), &decoded)
+               == MECANUM_UART_V1_OK);
+        assert(decoded.estop_aux_active == allowed_state);
+    }
+    telemetry.estop_aux_active = UINT8_C(3);
+    assert(mecanum_uart_v1_serialize_telemetry(&telemetry, payload, sizeof(payload))
+           == MECANUM_UART_V1_ERROR_FIELD_VALUE);
+    memcpy(invalid_payload, v6_payload, sizeof(invalid_payload));
+    invalid_payload[64] = UINT8_C(3);
+    assert(mecanum_uart_v1_parse_telemetry(invalid_payload, sizeof(invalid_payload), &decoded)
+           == MECANUM_UART_V1_ERROR_FIELD_VALUE);
 }
 
 static void test_invalid_codec_and_finite_helper(void)

@@ -208,7 +208,8 @@ class UartBridgeNode(Node):
         health = telemetry_health(self._session.state == SessionState.ACTIVE, fresh, report)
         state = make_heartbeat(self._heartbeat_sequence,
             report.packet.reset_epoch if report is not None else (owner_epoch or 0),
-            health.active, health.fresh, report if health.fresh else None,
+            self._session.state == SessionState.ACTIVE, health.fresh,
+            report if health.fresh else None,
             self._session.transport_healthy)
         message = Heartbeat()
         stamp = self.get_clock().now().to_msg()

@@ -124,3 +124,25 @@ the transport change is recorded under `Unreleased`. The earlier prompt-level
 metadata bump request was withdrawn by a later coordinator disposition. It is
 not attributed to this Owner decision. Production release versioning is
 reconciled at U7.
+
+## U6 Amendment — E-stop auxiliary UNKNOWN diagnostics
+
+The Owner's U6 decision requests production telemetry with diagnostics when
+the E-stop auxiliary input has no valid hardware mapping. This amendment keeps
+A1 (`NO_PRECONFIG_TELEMETRY`) and every UART v1 frame size, offset, packet
+type, framing, and CRC unchanged. Byte 64 `estop_aux_active` means `0` valid
+inactive, `1` valid active, and `2` unavailable/invalid; all other values are
+rejected. UART protocol remains `0x0001`. A receiver that accepts only 0/1
+will reject UNKNOWN, so Pi and STM32 must be updated together; backward
+compatibility is not claimed.
+
+This is a diagnostics semantic. UNKNOWN does not block otherwise valid
+telemetry, assert `FAULT_ESTOP_ACTIVE`, grant motor permission, or add a direct
+COMMAND eligibility gate. Existing lifecycle/READY/freshness/epoch,
+watchdog, reset/rearm, reconnect, and error handling remain authoritative.
+Heartbeat reports `healthy=false` and `E-stop auxiliary unavailable`, while
+preserving telemetry freshness and other valid MCU fault bits. The firmware
+motor-disabled gate remains in place. The Owner decision authorizes this
+offline corrective scope; the implementation details above are the selected
+coordinator implementation. This amendment is not runtime or HIL evidence and
+does not change `approval.yaml` or canonical U6/U7 status.

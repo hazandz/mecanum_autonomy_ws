@@ -336,12 +336,24 @@ static int run_u5_telemetry_case(const char *name)
         accept_u5_test_config(wire);
         estop_input_valid = false;
         fake_tick += 20U;
-        assert(!service_telemetry_task());
+        assert(service_telemetry_task()); /* Invalid auxiliary input is UNKNOWN, not a telemetry gate. */
+        in_task = true; service_task(); in_task = false;
+        assert(transmit_calls == 2U);
+        {
+            mecanum_uart_v1_frame_t frame;
+            mecanum_uart_v1_telemetry_t decoded;
+            assert(mecanum_uart_v1_decode_wire_frame(transmitted[1], transmitted_size[1],
+                &frame) == MECANUM_UART_V1_OK);
+            assert(mecanum_uart_v1_parse_telemetry(frame.payload, frame.payload_length,
+                &decoded) == MECANUM_UART_V1_OK);
+            assert(decoded.estop_aux_active == MECANUM_UART_V1_ESTOP_AUX_UNKNOWN);
+            assert((decoded.mcu_fault_bits & MECANUM_FAULT_ESTOP_ACTIVE) == 0U);
+        }
         estop_input_valid = true;
         assert(!encoder_sample_raw(UINT32_C(0x80000000), 0U, 0U, 0U, fake_tick));
         assert(!service_telemetry_task());
         in_task = true; service_task(); in_task = false;
-        assert(transmit_calls == 1U); /* Only CONFIG_STATUS; no fabricated input report. */
+        assert(transmit_calls == 2U); /* Invalid encoder input still blocks telemetry. */
         return 0;
     }
     assert(!"unknown U5 telemetry case");
@@ -572,7 +584,7 @@ static int run_telemetry_interop_peer(const char *hash_hex, const char *boot_tex
     }
     memset(fake_tim, 0, sizeof(fake_tim));
     fake_tick = 100U;
-    estop_input_valid = true;
+    estop_input_valid = false; /* Match safety_io.c: unconfigured auxiliary input -> UNKNOWN. */
     estop_input_active = false;
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     if (!communication_runtime_prepare(&uart)

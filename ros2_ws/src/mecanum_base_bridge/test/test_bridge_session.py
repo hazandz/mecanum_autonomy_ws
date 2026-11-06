@@ -112,6 +112,27 @@ def test_a1_status_gates_activation_and_requires_fresh_post_activation_command()
     assert command.vy_mps == pytest.approx(0.25)
 
 
+def test_unknown_estop_telemetry_is_accepted_without_transport_loss_or_command_gate():
+    clock, transport, session = new_session()
+    transport.inject(status_for())
+    clock.value = 0.001
+    session.io_once()
+    assert session.state == SessionState.CONFIGURING
+    transport.inject(telemetry(1, estop=2))
+    clock.value = 0.002
+    session.io_once()
+    assert session.state == SessionState.ACTIVE
+    assert session.transport_healthy
+    report = session.take_accepted_telemetry()
+    assert report is not None and report.packet.estop_aux_active == 2
+    session.observe_lifecycle_snapshot(LifecycleIdentity(1, 1, True, sequence=3, fresh=True))
+    clock.value += 0.001
+    assert session.receive_cmd_vel(0.1, 0.0, 0.0, received_at=clock.value)
+    clock.value += 0.001
+    session.io_once()
+    assert len(transport.writes) == 2
+
+
 @pytest.mark.parametrize(('age', 'sent'), [(0.099, True), (0.100, False), (0.101, False)])
 def test_command_freshness_boundary_never_synthesizes_zero(age, sent):
     clock, transport, session = new_session()
@@ -733,16 +754,12 @@ def test_policy_imu_and_reserved_mcu_fault_bits_are_never_reported(faults):
     assert session.state == SessionState.DISCONNECTED
 
 
-@pytest.mark.parametrize('packet', [
-    telemetry(1, tick=100, ack=1),
-    telemetry(1, tick=100, estop=2),
-])
-def test_first_telemetry_rejected_before_activation_when_ack_or_estop_invalid(packet):
+def test_first_telemetry_rejected_before_activation_when_ack_invalid():
     clock, transport, session = new_session()
     transport.inject(status_for(sequence=1))
     clock.value = 0.001
     session.io_once()
-    transport.inject(packet)
+    transport.inject(telemetry(1, tick=100, ack=1))
     clock.value = 0.002
     session.io_once()
     assert session.state == SessionState.DISCONNECTED
