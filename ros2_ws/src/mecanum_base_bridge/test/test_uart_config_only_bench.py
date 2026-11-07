@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -18,6 +19,7 @@ from mecanum_base_bridge.uart_v1_codec import (
     ConfigStatusPacket,
     TelemetryPacket,
     build_wire_frame,
+    cobs_encode,
     decode_frame,
     parse_config_request,
     serialize_config_status,
@@ -72,6 +74,30 @@ class FakeTransport:
         self.close_calls += 1
 
 
+class ScheduledTransport(FakeTransport):
+    """Fake nonblocking RX whose clock advances to the next scheduled packet."""
+
+    def __init__(self, clock, events=()):
+        super().__init__()
+        self.clock = clock
+        self.events = list(events)
+        self.config_sent_at = None
+
+    def write(self, frame):
+        super().write(frame)
+        self.config_sent_at = self.clock.now
+
+    def read(self, max_bytes=256):
+        assert max_bytes == 256
+        if not self.writes or not self.events:
+            return b""
+        offset, data = self.events[0]
+        if self.clock.now >= self.config_sent_at + offset:
+            self.events.pop(0)
+            return data
+        return b""
+
+
 def status_frame(*, sequence=7, epoch=19, digest=None, boot=23, status=CONFIG_ACCEPTED, reject=REJECT_NONE):
     if digest is None:
         digest = bench.manifest_digest(bench.load_manifest(MANIFEST))
@@ -88,7 +114,7 @@ def telemetry_frame(*, sequence=0, boot=23, epoch=19, time_us=1000, ticks=(0, 0,
 
 
 def invoke(tmp_path, transport, *, clock=None, a1_window=0.01, duration=0.02, epoch=19, sequence=7,
-           output_path=None):
+           output_path=None, sleeper=None):
     clock = clock or FakeClock()
     if output_path is None:
         output_path = tmp_path / "evidence.json"
@@ -105,7 +131,7 @@ def invoke(tmp_path, transport, *, clock=None, a1_window=0.01, duration=0.02, ep
         source_fingerprint={"git_commit": "test-double"},
         repository_root=ROOT,
         clock=clock,
-        sleeper=clock.sleep,
+        sleeper=sleeper or clock.sleep,
     )
 
 
@@ -150,10 +176,10 @@ def test_rejects_mismatched_or_rejected_config_status(tmp_path, status_kwargs, c
 
 
 def test_status_timeout_and_telemetry_timeout_are_distinct(tmp_path):
-    no_status = invoke(tmp_path, FakeTransport())
+    no_status = invoke(tmp_path, FakeTransport(), duration=0.6)
     assert no_status["error"]["code"] == "config_status_timeout"
     status_only = invoke(tmp_path, FakeTransport(post_tx=[status_frame()]))
-    assert status_only["error"]["code"] == "telemetry_timeout"
+    assert status_only["error"]["code"] == "telemetry_initial_timeout"
 
 
 def test_rejects_preconfig_telemetry_and_incomplete_a1_frame(tmp_path):
@@ -262,3 +288,237 @@ def test_rejects_evidence_path_inside_repository_before_open(tmp_path):
     assert transport.open_calls == 0
     assert transport.writes == []
     assert transport.close_calls == 1
+
+
+def test_refuses_to_overwrite_existing_evidence_before_open(tmp_path):
+    output = tmp_path / "already-recorded.json"
+    original = b'{"existing":"evidence"}\n'
+    output.write_bytes(original)
+    transport = FakeTransport()
+    evidence = invoke(tmp_path, transport, output_path=output)
+    assert evidence["error"]["code"] == "FileExistsError"
+    assert transport.open_calls == 0
+    assert transport.writes == []
+    assert output.read_bytes() == original
+
+
+def test_f2_repository_root_uses_git_for_linked_worktree_with_bounded_timeout(monkeypatch):
+    assert (ROOT / ".git").is_file()
+    real_run = subprocess.run
+    timeouts = []
+
+    def checked_run(*args, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(bench.subprocess, "run", checked_run)
+    assert bench._repository_root() == ROOT.resolve()
+    assert timeouts and all(value is not None and value <= 3.0 for value in timeouts)
+
+
+def _run_scheduled(tmp_path, events, *, duration):
+    clock = FakeClock()
+    transport = ScheduledTransport(clock, events)
+
+    def scheduled_sleep(seconds):
+        target = clock.now + seconds
+        if transport.writes and transport.events:
+            next_event = transport.config_sent_at + transport.events[0][0]
+            if clock.now <= next_event <= target:
+                clock.now = next_event
+                return
+        clock.now = target
+
+    evidence = invoke(tmp_path, transport, clock=clock, duration=duration, sleeper=scheduled_sleep)
+    return evidence, transport, clock
+
+
+def test_f1_config_status_deadline_reproductions_fail_in_config_phase(tmp_path):
+    late_status = status_frame()
+    late_telemetry = telemetry_frame()
+    evidence, transport, _ = _run_scheduled(
+        tmp_path, [(0.800, late_status), (0.810, late_telemetry)], duration=1.0
+    )
+    assert evidence["error"]["code"] == "config_status_timeout"
+    assert evidence["error"]["phase"] == "status_and_telemetry_rx"
+    assert transport.open_calls == 1 and len(transport.writes) == 1
+
+
+@pytest.mark.parametrize("offset, expected", [
+    (0.499, "accepted"),
+    (0.500, "config_status_timeout"),
+    (0.501, "config_status_timeout"),
+])
+def test_f1_config_status_deadline_before_at_and_after(tmp_path, offset, expected):
+    events = [(offset, status_frame())]
+    if expected == "accepted":
+        events.extend([
+            (0.550, telemetry_frame(sequence=1, time_us=1000)),
+            (0.700, telemetry_frame(sequence=2, time_us=2000)),
+            (0.850, telemetry_frame(sequence=3, time_us=3000)),
+        ])
+    evidence, _, _ = _run_scheduled(tmp_path, events, duration=1.0)
+    actual = "accepted" if evidence["result"] == "observed" else evidence["error"]["code"]
+    assert actual == expected
+
+
+def test_f1_initial_telemetry_deadline_reproductions_and_boundaries(tmp_path):
+    late, _, _ = _run_scheduled(
+        tmp_path, [(0.0, status_frame()), (0.300, telemetry_frame())], duration=0.5
+    )
+    assert late["error"]["code"] == "telemetry_initial_timeout"
+
+    for offset, expected in ((0.199, "observed"), (0.200, "telemetry_initial_timeout"),
+                             (0.201, "telemetry_initial_timeout")):
+        evidence, _, _ = _run_scheduled(
+            tmp_path, [(0.0, status_frame()), (offset, telemetry_frame())], duration=0.210
+        )
+        actual = "observed" if evidence["result"] == "observed" else evidence["error"]["code"]
+        assert actual == expected
+
+
+def test_f1_telemetry_freshness_and_late_packet_cannot_recover_session(tmp_path):
+    sparse, _, _ = _run_scheduled(
+        tmp_path, [(0.0, status_frame()), (0.010, telemetry_frame())], duration=1.0
+    )
+    assert sparse["error"]["code"] == "telemetry_freshness_timeout"
+
+    late_recovery, _, _ = _run_scheduled(
+        tmp_path,
+        [(0.0, status_frame()), (0.010, telemetry_frame()), (0.300, telemetry_frame(sequence=1, time_us=2000))],
+        duration=0.5,
+    )
+    assert late_recovery["error"]["code"] == "telemetry_freshness_timeout"
+
+
+@pytest.mark.parametrize("gap, expected", [
+    (0.199, "observed"),
+    (0.200, "telemetry_freshness_timeout"),
+    (0.201, "telemetry_freshness_timeout"),
+])
+def test_f1_subsequent_telemetry_deadline_boundaries(tmp_path, gap, expected):
+    evidence, _, _ = _run_scheduled(
+        tmp_path,
+        [(0.0, status_frame()), (0.010, telemetry_frame()),
+         (0.010 + gap, telemetry_frame(sequence=1, time_us=2000))],
+        duration=0.250,
+    )
+    actual = "observed" if evidence["result"] == "observed" else evidence["error"]["code"]
+    assert actual == expected
+
+
+def test_f1_valid_stream_persists_past_each_telemetry_timeout_with_raw_deltas(tmp_path):
+    events = [(0.0, status_frame())]
+    for index, offset in enumerate((0.010, 0.180, 0.350, 0.520, 0.690), start=0):
+        events.append((offset, telemetry_frame(
+            sequence=index, time_us=(index + 1) * 100_000,
+            ticks=(index, 2 * index, -index, 0),
+        )))
+    evidence, _, _ = _run_scheduled(tmp_path, events, duration=0.800)
+    assert evidence["result"] == "observed"
+    assert len(evidence["counter_observations"]) == 5
+    assert evidence["counter_observations"][-1]["delta_ticks"] == {
+        "FL": 1, "FR": 2, "RL": -1, "RR": 0,
+    }
+
+
+def test_f3_partial_frame_at_capture_end_is_recorded_without_failure(tmp_path):
+    first = telemetry_frame(sequence=0, time_us=1000)
+    second = telemetry_frame(sequence=1, time_us=2000, ticks=(1, 2, 3, 4))
+    third = telemetry_frame(sequence=2, time_us=3000)
+    prefix = third[:12]
+    suffix = third[12:]
+    evidence, _, _ = _run_scheduled(
+        tmp_path,
+        [(0.0, status_frame()), (0.005, first), (0.025, second), (0.045, prefix), (0.051, suffix)],
+        duration=0.050,
+    )
+    assert evidence["result"] == "observed"
+    assert evidence["rx_counts"]["telemetry"] == 2
+    assert evidence["rx_counts"]["trailing_partial_bytes"] == 12
+
+
+def test_f3_complete_bad_frame_fails_and_partial_bytes_do_not_refresh_freshness(tmp_path):
+    decoded = decode_frame(telemetry_frame(sequence=1, time_us=2000))
+    raw = bytearray(decoded.raw_frame)
+    raw[-1] ^= 0x01
+    damaged = cobs_encode(bytes(raw)) + b"\x00"
+    malformed, _, _ = _run_scheduled(
+        tmp_path, [(0.0, status_frame()), (0.005, telemetry_frame()), (0.045, bytes(damaged))], duration=0.2
+    )
+    assert malformed["error"]["code"] == "crc_error"
+
+    partial, _, _ = _run_scheduled(
+        tmp_path, [(0.0, status_frame()), (0.005, telemetry_frame()), (0.150, b"\x01" * 12)], duration=0.4
+    )
+    assert partial["error"]["code"] == "telemetry_freshness_timeout"
+    assert partial["rx_counts"]["trailing_partial_bytes"] == 12
+
+
+@pytest.mark.parametrize("relative_output", [
+    Path("audit-must-reject.json"),
+    Path("artifacts/audit-must-reject.json"),
+    Path("ros2_ws/audit-must-reject.json"),
+])
+def test_f2_main_rejects_output_anywhere_in_git_root_before_open(tmp_path, monkeypatch, relative_output):
+    fake_root = tmp_path / "fake-repo"
+    (fake_root / "artifacts").mkdir(parents=True)
+    (fake_root / "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(fake_root)], check=True)
+    fake_module_path = (fake_root / "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/"
+                        "uart_config_only_bench.py")
+    fake_module_path.write_bytes(Path(bench.__file__).read_bytes())
+    monkeypatch.setattr(bench, "__file__", str(fake_module_path))
+    monkeypatch.setattr(bench, "_git_source_fingerprint", lambda root: {"git_commit": "test"}, raising=False)
+    transports = []
+
+    def transport_factory(device):
+        transport = FakeTransport()
+        transports.append(transport)
+        return transport
+
+    monkeypatch.setattr(bench, "SerialTransport", transport_factory)
+    output = fake_root / relative_output
+    args = [
+        "--serial-device", "/dev/fake", "--hardware-manifest", str(MANIFEST),
+        "--reset-epoch", "19", "--config-sequence", "7", "--a1-window", "0.001",
+        "--duration", "0.001", "--output", str(output),
+        "--confirm-firmware-just-booted-no-config",
+    ]
+    try:
+        bench.main(args)
+    except SystemExit:
+        pass
+    assert transports and transports[0].open_calls == 0
+    assert transports[0].writes == []
+    assert not output.exists()
+
+
+def test_f2_main_rejects_symlink_output_resolving_inside_git_root(tmp_path, monkeypatch):
+    fake_root = tmp_path / "fake-repo"
+    (fake_root / "artifacts").mkdir(parents=True)
+    (fake_root / "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(fake_root)], check=True)
+    fake_module_path = (fake_root / "ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/"
+                        "uart_config_only_bench.py")
+    fake_module_path.write_bytes(Path(bench.__file__).read_bytes())
+    monkeypatch.setattr(bench, "__file__", str(fake_module_path))
+    monkeypatch.setattr(bench, "_git_source_fingerprint", lambda root: {"git_commit": "test"}, raising=False)
+    link = tmp_path / "repo-alias"
+    link.symlink_to(fake_root, target_is_directory=True)
+    transports = []
+    monkeypatch.setattr(bench, "SerialTransport", lambda device: transports.append(FakeTransport()) or transports[-1])
+    output = link / "artifacts/symlink-must-reject.json"
+    args = [
+        "--serial-device", "/dev/fake", "--hardware-manifest", str(MANIFEST),
+        "--reset-epoch", "19", "--config-sequence", "7", "--a1-window", "0.001",
+        "--duration", "0.001", "--output", str(output),
+        "--confirm-firmware-just-booted-no-config",
+    ]
+    try:
+        bench.main(args)
+    except SystemExit:
+        pass
+    assert transports and transports[0].open_calls == 0
+    assert transports[0].writes == []
+    assert not (fake_root / "artifacts/symlink-must-reject.json").exists()

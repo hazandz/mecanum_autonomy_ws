@@ -49,6 +49,8 @@ from .uart_v1_codec import (
 
 MAX_OBSERVATION_SECONDS = 300.0
 MAX_A1_WINDOW_SECONDS = 30.0
+CONFIG_STATUS_TIMEOUT_SECONDS = 0.500
+TELEMETRY_TIMEOUT_SECONDS = 0.200
 MAX_WIRE_ACCUMULATOR = MAX_WIRE_FRAME_LENGTH - 1
 ALLOWED_MCU_FAULTS = 1 | 2 | 256 | 512 | 1024 | 2048 | 4096
 INT64_MIN = -(1 << 63)
@@ -205,6 +207,28 @@ def _validate_status(
         )
 
 
+def _check_session_deadline(
+    now: float,
+    *,
+    config_status_accepted: bool,
+    telemetry_count: int,
+    config_status_deadline: float,
+    first_telemetry_deadline: float | None,
+    telemetry_deadline: float | None,
+) -> None:
+    """Expire the active protocol phase before accepting any newly-read bytes."""
+    if not config_status_accepted:
+        if now >= config_status_deadline:
+            raise BenchFailure("config_status_timeout", "CONFIG_STATUS deadline expired")
+        return
+    if telemetry_count == 0:
+        if first_telemetry_deadline is None or now >= first_telemetry_deadline:
+            raise BenchFailure("telemetry_initial_timeout", "first TELEMETRY deadline expired")
+        return
+    if telemetry_deadline is None or now >= telemetry_deadline:
+        raise BenchFailure("telemetry_freshness_timeout", "TELEMETRY freshness deadline expired")
+
+
 def _telemetry_observation(
     packet: TelemetryPacket,
     *,
@@ -310,7 +334,10 @@ def run_bench(
             "config_request": 0,
             "command": 0,
         },
-        "rx_counts": {"bytes": 0, "complete_frames": 0, "valid_frames": 0, "telemetry": 0},
+        "rx_counts": {
+            "bytes": 0, "complete_frames": 0, "valid_frames": 0, "telemetry": 0,
+            "trailing_partial_bytes": 0,
+        },
         "config_status": None,
         "boot_id": None,
         "epoch": None,
@@ -329,7 +356,10 @@ def run_bench(
     accepted_boot_id: int | None = None
     previous_telemetry: TelemetryPacket | None = None
     config_status_accepted = False
-    deadline = None
+    capture_deadline: float | None = None
+    config_status_deadline: float | None = None
+    first_telemetry_deadline: float | None = None
+    telemetry_deadline: float | None = None
 
     try:
         manifest, digest, manifest_sha256 = _validate_parameters(
@@ -383,15 +413,51 @@ def run_bench(
         transport.write(config_frame)
         evidence["tx_counts"]["write_successes"] += 1
         evidence["tx_counts"]["config_request"] += 1
-        deadline = clock() + duration
+        sent_at = clock()
+        capture_deadline = sent_at + duration
+        config_status_deadline = sent_at + CONFIG_STATUS_TIMEOUT_SECONDS
         current_phase = "status_and_telemetry_rx"
 
-        while clock() < deadline:
+        while True:
+            now = clock()
+            _check_session_deadline(
+                now,
+                config_status_accepted=config_status_accepted,
+                telemetry_count=evidence["rx_counts"]["telemetry"],
+                config_status_deadline=config_status_deadline,
+                first_telemetry_deadline=first_telemetry_deadline,
+                telemetry_deadline=telemetry_deadline,
+            )
+            if now >= capture_deadline:
+                break
+
             chunk = transport.read(256)
+            rx_at = clock()
             if chunk:
                 evidence["rx_counts"]["bytes"] += len(chunk)
+            _check_session_deadline(
+                rx_at,
+                config_status_accepted=config_status_accepted,
+                telemetry_count=evidence["rx_counts"]["telemetry"],
+                config_status_deadline=config_status_deadline,
+                first_telemetry_deadline=first_telemetry_deadline,
+                telemetry_deadline=telemetry_deadline,
+            )
+            if rx_at >= capture_deadline:
+                break
+
+            if chunk:
                 for wire in _feed_frames(accumulator, chunk):
                     evidence["rx_counts"]["complete_frames"] += 1
+                    evidence["rx_counts"]["trailing_partial_bytes"] = accumulator.pending_bytes
+                    _check_session_deadline(
+                        clock(),
+                        config_status_accepted=config_status_accepted,
+                        telemetry_count=evidence["rx_counts"]["telemetry"],
+                        config_status_deadline=config_status_deadline,
+                        first_telemetry_deadline=first_telemetry_deadline,
+                        telemetry_deadline=telemetry_deadline,
+                    )
                     _, packet = _decode_packet(wire)
                     evidence["rx_counts"]["valid_frames"] += 1
                     if isinstance(packet, ConfigStatusPacket):
@@ -400,6 +466,7 @@ def run_bench(
                         _validate_status(packet, expected)
                         config_status_accepted = True
                         accepted_boot_id = packet.mcu_boot_id
+                        first_telemetry_deadline = rx_at + TELEMETRY_TIMEOUT_SECONDS
                         evidence["config_status"] = {
                             "config_sequence": packet.config_sequence,
                             "reset_epoch": packet.reset_epoch,
@@ -424,20 +491,32 @@ def run_bench(
                         evidence["counter_observations"].append(observation)
                         evidence["rx_counts"]["telemetry"] += 1
                         previous_telemetry = packet
+                        telemetry_deadline = rx_at + TELEMETRY_TIMEOUT_SECONDS
                     else:  # pragma: no cover - _decode_packet returns only the two accepted types.
                         raise BenchFailure("unexpected_frame", "unexpected packet type")
+                evidence["rx_counts"]["trailing_partial_bytes"] = accumulator.pending_bytes
             else:
-                sleeper(min(0.005, max(0.0, deadline - clock())))
+                phase_deadline = config_status_deadline
+                if config_status_accepted:
+                    phase_deadline = first_telemetry_deadline if evidence["rx_counts"]["telemetry"] == 0 else telemetry_deadline
+                wake_at = min(capture_deadline, phase_deadline)
+                remaining = max(0.0, wake_at - clock())
+                if remaining:
+                    sleeper(min(0.005, remaining))
 
-        if accumulator.pending_bytes:
-            raise BenchFailure(
-                "incomplete_frame",
-                f"received {accumulator.pending_bytes} unterminated byte(s) before observation deadline",
-            )
+        evidence["rx_counts"]["trailing_partial_bytes"] = accumulator.pending_bytes
+        _check_session_deadline(
+            clock(),
+            config_status_accepted=config_status_accepted,
+            telemetry_count=evidence["rx_counts"]["telemetry"],
+            config_status_deadline=config_status_deadline,
+            first_telemetry_deadline=first_telemetry_deadline,
+            telemetry_deadline=telemetry_deadline,
+        )
         if not config_status_accepted:
-            raise BenchFailure("config_status_timeout", "no matching CONFIG_STATUS ACCEPTED before deadline")
+            raise BenchFailure("config_status_timeout", "no matching CONFIG_STATUS before capture ended")
         if evidence["rx_counts"]["telemetry"] == 0:
-            raise BenchFailure("telemetry_timeout", "no valid UNKNOWN TELEMETRY before deadline")
+            raise BenchFailure("telemetry_initial_timeout", "no valid TELEMETRY before capture ended")
         evidence["result"] = "observed"
         evidence["termination_reason"] = "finite_observation_window_elapsed"
     except KeyboardInterrupt:
@@ -449,6 +528,7 @@ def run_bench(
         evidence["error"] = {"code": code, "detail": str(exc), "phase": current_phase}
         evidence["termination_reason"] = code
     finally:
+        evidence["rx_counts"]["trailing_partial_bytes"] = accumulator.pending_bytes
         try:
             transport.close()
         except Exception as exc:
@@ -464,10 +544,30 @@ def run_bench(
     return evidence
 
 
+def _repository_root() -> Path:
+    module_path = Path(__file__).resolve()
+    result = subprocess.run(
+        ["git", "-C", str(module_path.parent), "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=3.0,
+    )
+    root = Path(result.stdout.strip()).resolve()
+    if not root.is_dir():
+        raise RuntimeError("Git repository root is not a directory")
+    return root
+
+
 def _git_source_fingerprint(repository_root: Path) -> dict:
-    commit = subprocess.check_output(
-        ["git", "-C", str(repository_root), "rev-parse", "HEAD"], text=True
-    ).strip()
+    result = subprocess.run(
+        ["git", "-C", str(repository_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=3.0,
+    )
+    commit = result.stdout.strip()
     script_path = Path(__file__).resolve()
     return {
         "git_commit": commit,
@@ -507,7 +607,6 @@ def write_evidence(path: Path, evidence: dict, repository_root: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    repository_root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description="One-shot CONFIG-only UART bench; never sends COMMAND")
     parser.add_argument("--serial-device", required=True, help="explicit serial device path; no default is selected")
     parser.add_argument("--hardware-manifest", required=True, type=Path)
@@ -530,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.duration > MAX_OBSERVATION_SECONDS:
         parser.error(f"--duration must not exceed {MAX_OBSERVATION_SECONDS} seconds")
     try:
+        repository_root = _repository_root()
         source_fingerprint = _git_source_fingerprint(repository_root)
         transport = SerialTransport(args.serial_device)
         evidence = run_bench(
