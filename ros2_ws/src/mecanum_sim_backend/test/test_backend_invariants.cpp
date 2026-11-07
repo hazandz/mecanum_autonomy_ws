@@ -925,6 +925,17 @@ public:
     return system.probe_machine_.Phase() == ProbePhase::AwaitRemove;
   }
 
+  static bool CompleteMachineRemoval(BackendSystem &system)
+  {
+    return system.probe_machine_.LiftRequested() &&
+        AdvanceMachineToRemoval(system) &&
+        system.probe_machine_.RemoveRequested() &&
+        system.probe_machine_.RemoveCompleted(true) &&
+        system.probe_machine_.ObserveRemoval(true) &&
+        system.probe_machine_.ModelEntity() != 0 &&
+        !system.probe_machine_.NeedsCleanup();
+  }
+
   static void RequestLift(BackendSystem &system)
   {
     system.RequestProbeLift();
@@ -3904,4 +3915,24 @@ TEST(ContactOnlyMode, InvalidatesProofForIdentityEngineClockAndRestartWithoutGat
   }
   BackendSystem restarted;
   EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(restarted));
+}
+
+TEST(ContactOnlyMode, ShutdownSeparatesRetainedProofIdentityFromFixtureResidue)
+{
+  for (const bool removal_observed : {false, true})
+  {
+    BackendSystem system;
+    BackendSystemTestPeer::SeedRunDescriptor(system);
+    BackendSystemTestPeer::EnableContactOnly(system);
+    ASSERT_TRUE(BackendSystemTestPeer::PrepareMachineAtLift(system));
+    if (removal_observed)
+      ASSERT_TRUE(BackendSystemTestPeer::CompleteMachineRemoval(system));
+    const auto mailbox = BackendSystemTestPeer::ProbeMailbox(system);
+    ASSERT_TRUE(mailbox);
+    BackendSystemTestPeer::Shutdown(system);
+    std::lock_guard<std::mutex> lock(mailbox->mutex);
+    EXPECT_TRUE(mailbox->closed);
+    EXPECT_EQ(mailbox->possible_fixture_residue, !removal_observed);
+    EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system));
+  }
 }

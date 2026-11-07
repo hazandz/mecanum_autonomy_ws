@@ -1130,7 +1130,7 @@ private:
       std::lock_guard<std::mutex> lock(probe_service_mailbox_->mutex);
       probe_service_mailbox_->closed = true;
       const bool owned_fixture_or_spawn = probe_spawn_inflight_ ||
-          late_spawn_cleanup_pending_ || probe_machine_.ModelEntity() != 0;
+          late_spawn_cleanup_pending_ || probe_machine_.NeedsCleanup();
       const bool pending_spawn_result = std::any_of(
           probe_service_mailbox_->results.begin(),
           probe_service_mailbox_->results.end(), [](const auto &result) {
