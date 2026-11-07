@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 REPOSITORY = Path(__file__).resolve().parents[5]
 HISTORICAL_TOOLS = REPOSITORY / 'artifacts/simulation/roadmap_b_b2/gui_observation_run008/tools'
@@ -68,6 +69,11 @@ def verify_profile(args):
     if digest(raw) != args.profile_sha256:
         raise ValueError('profile SHA-256 mismatch')
     profile = capture.strict_json_loads(raw, max_bytes=4*1024*1024)
+    if profile.get('mode', 'gui') not in ('gui', 'contact_probe_only'):
+        raise ValueError('unsupported run mode')
+    if profile.get('mode') == 'contact_probe_only':
+        if digest(Path(profile['engine_file']).read_bytes()) != profile['physics_engine_sha256']:
+            raise ValueError('contact engine fingerprint mismatch')
     if profile.get('schema') != 'b22_gui_profile/v2':
         raise ValueError('unsupported profile schema')
     if (not re.fullmatch(r'b22-[a-z0-9-]+\.service', profile.get('unit', ''))
@@ -537,13 +543,204 @@ async def run(args):
         'execution': execution,
     }).encode())
     try:
-        return await run_consumed(args, run_root, consumed_ns, profile)
+        entry = run_contact if profile.get('mode') == 'contact_probe_only' else run_consumed
+        return await entry(args, run_root, consumed_ns, profile)
     except BaseException as error:
         capture.atomic_publish(run_root/'invocation-failure.json', json.dumps({
             'type': type(error).__name__, 'reason': str(error),
             'notes': getattr(error, '__notes__', []), 'at_ns': time.monotonic_ns(),
         }).encode())
         raise
+
+
+def contact_proof_errors(proof, expected):
+    """Chỉ chấp nhận proof backend thật của chính phiên infrastructure."""
+    errors = []
+    for key, value in expected.items():
+        if proof.get(key) != value:
+            errors.append('proof_identity:'+key)
+    if proof.get('result') != 3 or proof.get('reason_code') != 0 or proof.get('contact_capability_state') != 2:
+        errors.append('backend_not_verified')
+    world = expected['proof_world_name']
+    for key, value in {'probe_model_scoped_name':world+'::b2_capability_probe',
+        'probe_collision_scoped_name':world+'::b2_capability_probe::link::collision',
+        'floor_collision_scoped_name':world+'::ground_plane::link::collision'}.items():
+        if proof.get(key) != value:
+            errors.append('fixture_identity:'+key)
+    ids = [proof.get(k) for k in ('probe_model_entity_id','probe_collision_entity_id','floor_collision_entity_id')]
+    if any(type(v) is not int or v <= 0 for v in ids) or len(set(ids)) != 3:
+        errors.append('fixture_entity_ids')
+    for count, prefix in [('contact_sample_count','contact'),('covered_empty_sample_count','empty')]:
+        n = proof.get(count, 0)
+        first, last = proof[prefix+'_first_iteration'], proof[prefix+'_last_iteration']
+        stamps = [proof[prefix+'_'+edge+'_stamp'] for edge in ('first','last')]
+        ns = [s['sec']*1_000_000_000+s['nanosec'] for s in stamps]
+        if n < 3 or first <= 0 or last-first+1 != n or ns[1]-ns[0] < 20_000_000:
+            errors.append('sample_coverage:'+prefix)
+    if proof['empty_first_iteration'] <= proof['contact_last_iteration']:
+        errors.append('separation_order')
+    if not proof.get('proof_gz_sim_version','').startswith('8.') or len(proof.get('proof_collision_registry_sha256','')) != 64:
+        errors.append('engine_registry_provenance')
+    return errors
+
+
+async def run_contact(args, run_root, start_ns, profile):
+    """Route contact-only: không dựng lifecycle, publisher hay actuator gate."""
+    import rclpy
+    from rclpy.context import Context
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rosidl_runtime_py.convert import message_to_ordereddict as message_dict
+    from ros_gz_interfaces.srv import ControlWorld
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_bringup.local_training_launch_contract import build_launch_plan, write_bound_world
+    from mecanum_nav_bringup import local_training_process_supervisor as sp
+    from observation_sink import ObservationEvidenceSink
+    prefix = Path(args.install).resolve(strict=True)
+    verify_import_origins(prefix, {'supervisor':sp})
+    desc = prefix/'share/ROBOT_URDF_final_description'; rl = prefix/'share/mecanum_nav_rl'; bringup = prefix/'share/mecanum_nav_bringup'
+    sid = str(uuid.uuid4()); deadline = (start_ns+240_000_000_000)/1e9; total = (start_ns+300_000_000_000)/1e9
+    sink = ObservationEvidenceSink(run_root,args.run_id,sid)
+    plan = build_launch_plan(gui='false',resolved_config=rl/'config/v3/resolved/sim_train_local_training_soak.resolved.json',
+        world_file=desc/'worlds/b2_training_arena.sdf',gui_config=bringup/'config/gui/local_training.config',
+        session_id=sid,partition='mecanum_b2_'+sid.replace('-',''),bridge_config=bringup/'config/bridge/local_training.runtime.yaml',
+        resource_paths=(desc.parent,desc/'models'),plugin_path=prefix/'lib',physics_engine_plugin_path=sp._physics_engine_plugin_path(),
+        asset_manifest_file=desc/'manifests/b2/asset_manifest.json',scenario_directory=rl/'scenarios/local_training',
+        runtime_world_directory=run_root,coordinator_ingress_instance_id=secrets.randbits(64) or 1)
+    plan = replace(plan,environment={**plan.environment,'ROS_DOMAIN_ID':'83'})
+    write_bound_world(plan,desc/'worlds/b2_training_arena.sdf',desc/'models/mecanum_b2/model.sdf')
+    tree = ET.parse(plan.world_file);plugin = tree.find(".//plugin[@name='mecanum_sim_backend::BackendSystem']")
+    if plugin is None: raise ValueError('bound backend plugin missing')
+    ET.SubElement(plugin,'contact_probe_only').text = 'true'
+    plugin.find('first_safe_stop_sequence').text = '0'
+    tree.write(plan.world_file,encoding='utf-8',xml_declaration=True)
+    capture.atomic_publish(run_root/'bindings.json',json.dumps({'source_commit':args.source_commit,
+        'profile_sha256':args.profile_sha256,'world_sha256':digest(plan.world_file.read_bytes()),
+        'mode':'contact_probe_only','session_id':sid,'coordinator_ingress_instance_id':plan.coordinator_ingress_instance_id,
+        'config_hash':plan.config_hash,'asset_manifest_sha256':plan.asset_manifest_sha256,
+        'commands':plan.commands,'environment':dict(plan.environment),'verified_profile':profile},default=str).encode())
+    async def publisher(batch, end):
+        await asyncio.to_thread(capture.atomic_publish,run_root/'cleanup-batch.json',
+            json.dumps({'batch_id':batch.batch_id,'events':batch.events},default=str).encode())
+        return sp.CleanupEvidenceAck(batch.batch_id,True)
+    sup = sp.LocalTrainingProcessSupervisor(plan=plan,launcher=sp.SubprocessProcessLauncher(),
+        readiness=sp.RclpyReadiness(),evidence_sink=sink,heartbeat_diagnostics_enabled=True,
+        heartbeat_trace_directory=run_root/'trace',cleanup_evidence_publisher=publisher)
+    (run_root/'trace').mkdir(mode=0o700)
+    context = Context(); node = executor = None; failures = []; outcomes = {}; statuses = []
+    probe_end = None; sequence = 0
+    try:
+        await asyncio.wait_for(sup.start(),max(.001,deadline-time.monotonic()))
+        rclpy.init(context=context,domain_id=83)
+        node = Node('b22_contact_probe_client',context=context)
+        executor = SingleThreadedExecutor(context=context);executor.add_node(node)
+        node.create_subscription(SimulationContactState,'/mecanum/local_training/backend_state',
+            lambda message:statuses.append((time.monotonic_ns(),message)),50)
+        client = node.create_client(Control,'/mecanum/local_training/backend_control')
+        world_client = node.create_client(ControlWorld,'/world/b2_training_arena/control')
+        def health():
+            if statuses:
+                now, status = statuses[-1]
+                if (status.session_id != sid or status.config_hash != plan.config_hash or
+                    not status.actuator_inhibited or status.applied_receipt_valid or status.fault_flags):
+                    raise RuntimeError('contact session/health/inhibit violation')
+                if time.monotonic_ns()-now > 1_000_000_000:raise RuntimeError('contact heartbeat expired')
+            for owned in sup.owned:
+                if owned.process.returncode is not None:raise RuntimeError('owned process exited: '+owned.name)
+        async def spin():
+            executor.spin_once(timeout_sec=.005);health();await asyncio.sleep(.001)
+        async def call(client, request, end, kind):
+            if end<=time.monotonic():raise TimeoutError(kind+' before submission')
+            sink.record('contact_request',{'kind':kind,'request':message_dict(request)})
+            future = client.call_async(request)
+            while not future.done():
+                if time.monotonic()>=end:raise TimeoutError(kind+' response deadline')
+                await spin()
+            response=future.result();sink.record('contact_response',{'kind':kind,'response':message_dict(response)})
+            return response
+        ready_end=min(deadline,time.monotonic()+5)
+        while not statuses or not client.service_is_ready() or not world_client.service_is_ready():
+            if time.monotonic()>=ready_end:raise TimeoutError('contact clients/status not ready')
+            await spin()
+        backend = statuses[-1][1].backend_instance_id
+        graph = node.get_node_names_and_namespaces()
+        writers = {topic:node.count_publishers(topic) for topic in ('/cmd_vel','/mecanum/final_issued_command')}
+        sink.record('contact_graph',{'participants':graph,'actuator_publishers':writers})
+        if any(writers.values()):raise RuntimeError('foreign actuator publisher in contact domain')
+        control=ControlWorld.Request();control.world_control.pause=False
+        control_end=min(deadline,time.monotonic()+1)
+        response=await call(world_client,control,control_end,'resume_inhibited')
+        if not response.success:raise RuntimeError('resume rejected')
+        while statuses[-1][1].paused:
+            if time.monotonic()>=control_end:raise TimeoutError('resume not measured')
+            await spin()
+        sequence=0
+        def request(action):
+            nonlocal sequence
+            sequence+=1;req=Control.Request();req.schema_version=1;req.operation=5;req.probe_action=action
+            req.coordinator_ingress_instance_id=plan.coordinator_ingress_instance_id;req.request_sequence=sequence
+            req.expected_backend_instance_id=backend;req.session_id=sid;req.config_hash=plan.config_hash
+            req.asset_manifest_sha256=plan.asset_manifest_sha256
+            if action!=1:req.probe_start_request_sequence=1
+            return req
+        probe_end=min(deadline,time.monotonic()+5)
+        req=request(1)
+        while True:
+            response=await call(client,req,min(probe_end-1,time.monotonic()+1),'START' if req.request_sequence==1 else 'QUERY')
+            if response.result==2:
+                await spin();continue  # exact cached request, never a second START
+            if response.result!=3:raise RuntimeError('backend rejected contact request: '+str(message_dict(response)))
+            if response.contact_capability_state==2:break
+            if time.monotonic()>=probe_end-1:raise TimeoutError('contact proof cleanup reserve reached')
+            req=request(2);await spin()
+        proof=message_dict(response)
+        expected={'proof_session_id':sid,'proof_backend_instance_id':backend,'proof_config_hash':plan.config_hash,
+            'proof_asset_manifest_sha256':plan.asset_manifest_sha256,'proof_world_name':'b2_training_arena',
+            'proof_physics_engine_fingerprint_sha256':profile['physics_engine_sha256']}
+        errors=contact_proof_errors(proof,expected)
+        if errors:raise RuntimeError('contact proof invalid: '+str(errors))
+        control.world_control.pause=True
+        control_end=min(deadline,time.monotonic()+1)
+        response=await call(world_client,control,control_end,'pause_after_verified')
+        if not response.success:raise RuntimeError('pause rejected')
+        while not statuses[-1][1].paused:
+            if time.monotonic()>=control_end:raise TimeoutError('pause not measured')
+            await spin()
+        capture.atomic_publish(run_root/'contact-proof.json',json.dumps(proof).encode())
+        outcomes={'contact_verdict':'CAPABILITY_VERIFIED','session_id':sid,'backend_instance_id':backend}
+    except BaseException as error:
+        failures.append({'type':type(error).__name__,'reason':str(error)})
+        if probe_end is not None and sequence and time.monotonic() < probe_end:
+            try:
+                abort = request(3)
+                sink.record('contact_abort_request',{'request':message_dict(abort)})
+                future = client.call_async(abort)
+                while not future.done() and time.monotonic() < probe_end:
+                    executor.spin_once(timeout_sec=min(.005,max(0,probe_end-time.monotonic())))
+                    await asyncio.sleep(.001)
+                sink.record('contact_abort_result',{'complete':future.done(),
+                    'response':message_dict(future.result()) if future.done() else None})
+            except BaseException as abort_error:
+                failures.append({'type':'AbortCleanup','reason':str(abort_error)})
+        raise
+    finally:
+        for close in (
+            lambda: executor.shutdown(timeout_sec=max(0,min(1,total-time.monotonic()))) if executor is not None else None,
+            lambda: node.destroy_node() if node is not None else None,
+            lambda: context.shutdown() if context.ok() else None,
+        ):
+            try:close()
+            except BaseException as close_error:failures.append({'type':'ClientCleanup','reason':str(close_error)})
+        clean=await sup.cleanup(deadline=min(total,time.monotonic()+30))
+        capture.atomic_publish(run_root/'cleanup.json',json.dumps(sup.cleanup_snapshot(),default=str).encode())
+        sink.record('contact_final',{'outcomes':outcomes,'failures':failures,'cleanup_clean':clean,
+            'statuses':[{'at_ns':t,'sequence':s.status_sequence,'paused':s.paused,'inhibited':s.actuator_inhibited,
+                         'fault_flags':s.fault_flags} for t,s in statuses]})
+        sink.close()
+        final_exit=publish_completion(run_root,{'outcomes':outcomes,'failures':failures,'cleanup_clean':clean,
+            'owner_visual_review':'NOT_PERFORMED','trace_audit':'PENDING'},start_ns)
+    return final_exit
 
 
 async def run_consumed(args, run_root, start_ns, profile):

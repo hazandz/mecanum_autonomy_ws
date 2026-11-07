@@ -508,6 +508,13 @@ private:
     asset_manifest_hash_ = sdf->Get<std::string>("asset_manifest_sha256", "").first;
     coordinator_ingress_instance_id_ =
         ParseU64(sdf, "coordinator_ingress_instance_id");
+    const auto probe_only = sdf->Get<std::string>("contact_probe_only", "false").first;
+    if (probe_only != "true" && probe_only != "false")
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "contact_probe_only_flag_invalid");
+      return;
+    }
+    contact_probe_only_ = probe_only == "true";
     const auto final_instance = ParseU64(sdf, "final_publisher_instance_id");
     const auto safe_instance = ParseU64(sdf, "safe_stop_source_instance_id");
     policy_instance_id_ = ParseU64(sdf, "policy_source_instance_id");
@@ -567,12 +574,15 @@ private:
       // B2.3 binds source identities through the pinned control service. An
       // absent startup anchor is inhibited state, not a fabricated binding.
     }
-    else
+    else if (!contact_probe_only_)
     {
       gate_ = gate_factory_(std::move(binding));
       if (!gate_)
         SetFault(BackendState::FAULT_CONTEXT, "receipt_gate_factory_failed");
     }
+    if (contact_probe_only_ && (final_instance || safe_instance || policy_instance_id_ ||
+        ParseU64(sdf, "barrier_stamp_ns") || ParseU64(sdf, "first_safe_stop_sequence")))
+      SetFault(BackendState::FAULT_CONTEXT, "contact_only_must_not_bind_actuator_sources");
     if (coordinator_ingress_instance_id_ == 0)
       SetFault(BackendState::FAULT_CONTEXT,
                "trusted_coordinator_ingress_pin_missing");
@@ -733,6 +743,7 @@ public:
     }
     const auto steady_now_ns = steady_clock_now_();
     physics_iteration_ = info.iterations;
+    ValidateContactOnlyContext(ecm, TimeNs(info));
     ProcessBackendControlRequests(
         ecm, TimeNs(info), info.iterations, steady_now_ns, info.paused);
     ProcessProbeServiceResults();
@@ -740,7 +751,7 @@ public:
     ProcessCallbackInputs(TimeNs(info), steady_now_ns);
     const auto pending_faults = callback_fault_flags_.exchange(0);
     if (pending_faults != 0) SetFault(pending_faults, "ros_callback_queue_or_context_fault");
-    if (!configured_ || !gate_ || !contact_coverage_ ||
+    if (contact_probe_only_ || !configured_ || !gate_ || !contact_coverage_ ||
         base_link_.Entity() == gz::sim::kNullEntity ||
         !base_link_.Valid(ecm) || info.paused)
     {
@@ -958,12 +969,48 @@ public:
 private:
   friend class BackendSystemTestPeer;
 
+  void CaptureContactOnlyContext(std::int64_t sim_ns)
+  {
+    proof_backend_instance_id_ = backend_instance_id_;
+    proof_session_id_ = session_id_;
+    proof_config_hash_ = config_hash_;
+    proof_asset_manifest_hash_ = asset_manifest_hash_;
+    proof_world_name_ = world_name_;
+    contact_only_engine_fingerprint_ = proof_physics_engine_fingerprint_sha256_;
+    last_probe_sim_ns_ = sim_ns;
+  }
+
+  void ValidateContactOnlyContext(
+      const gz::sim::EntityComponentManager &ecm, std::int64_t sim_ns)
+  {
+    if (!contact_probe_only_ || (!probe_machine_.Running() && !contact_capability_verified_))
+      return;
+    const auto *engine = ecm.Component<gz::sim::components::PhysicsEnginePlugin>(world_entity_);
+    const auto *world = ecm.Component<gz::sim::components::Name>(world_entity_);
+    if (gate_ || control_session_bound_ || proof_backend_instance_id_ != backend_instance_id_ ||
+        proof_session_id_ != session_id_ || proof_config_hash_ != config_hash_ ||
+        proof_asset_manifest_hash_ != asset_manifest_hash_ || proof_world_name_ != world_name_ ||
+        !world || world->Data() != world_name_ || !engine ||
+        ResolvePhysicsEngineLibrary(engine->Data()).string() != observed_engine_plugin_path_ ||
+        contact_only_engine_fingerprint_ != proof_physics_engine_fingerprint_sha256_)
+      SetFault(BackendState::FAULT_CONTEXT, "contact_only_context_identity_changed");
+    if (sim_ns < last_probe_sim_ns_)
+      SetFault(BackendState::FAULT_CLOCK, "contact_only_clock_rollback");
+    last_probe_sim_ns_ = sim_ns;
+  }
+
   std::atomic_bool shutdown_started_{};
 
   void Shutdown()
   {
     bool expected = false;
     if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+    if (contact_probe_only_)
+    {
+      contact_capability_verified_ = false;
+      probe_machine_.Invalidate();
+      probe_running_ = false;
+    }
     if (heartbeat_trace_writer_)
     {
       hbtrace_append(heartbeat_trace_writer_, 3,
@@ -1645,6 +1692,11 @@ private:
           probe_remove_sent_ = false;
           probe_spawn_sent_ = false;
           probe_lift_sent_ = false;
+          if (contact_probe_only_)
+            gzmsg << "B22_CONTACT_REMOVAL session=" << session_id_ << " backend="
+                  << backend_instance_id_ << " iteration=" << info.iterations
+                  << " stamp_ns=" << TimeNs(info) << " absent=1 verified="
+                  << contact_capability_verified_ << std::endl;
         }
         break;
       }
@@ -1760,11 +1812,36 @@ private:
         Finite(probe_pose->Data()) && probe_pose->Data().Pos().Z() > 0.07;
     if (observation.fixture_measured_separated)
       last_probe_pose_iteration_ = info.iterations;
+    if (contact_probe_only_ && (observation.exact_fixture_floor_pair ||
+        observation.fixture_measured_separated || phase == ProbePhase::AwaitEmpty))
+    {
+      gzmsg << "B22_CONTACT_SAMPLE session=" << session_id_ << " backend="
+            << backend_instance_id_ << " iteration=" << info.iterations
+            << " stamp_ns=" << sim_stamp_ns << " phase=" << static_cast<int>(phase)
+            << " component=" << observation.component_present
+            << " coverage=" << observation.coverage_complete
+            << " floor_pair=" << observation.exact_fixture_floor_pair
+            << " normal_depth_valid=" << observation.normal_depth_valid
+            << " separated=" << observation.fixture_measured_separated << std::endl;
+      if (component)
+      {
+        const auto raw = component->Data().ShortDebugString();
+        gzmsg << "B22_CONTACT_RAW session=" << session_id_ << " backend="
+              << backend_instance_id_ << " iteration=" << info.iterations
+              << " raw_bytes=" << raw.size() << " truncated=" << (raw.size() > 8192)
+              << " data=" << raw.substr(0, 8192) << std::endl;
+      }
+    }
     if (!probe_machine_.Observe(observation))
     {
       probe_running_ = false;
       contact_capability_verified_ = false;
       probe_reason_ = "probe_contact_coverage_or_identity_invalid";
+      if (contact_probe_only_)
+        gzerr << "B22_CONTACT_FAILED iteration=" << info.iterations
+              << " component=" << observation.component_present
+              << " coverage=" << observation.coverage_complete
+              << " reason=" << probe_reason_ << std::endl;
     }
   }
 
@@ -2060,6 +2137,20 @@ private:
       CacheControlResponse(request.request_sequence, request_bytes, response);
       return;
     }
+    if (contact_probe_only_ &&
+        (request.operation != ControlRequest::OP_INHIBIT &&
+         request.operation != ControlRequest::OP_VERIFY_CONTACT_CAPABILITY))
+    {
+      response.reason_code = ControlResponse::REASON_BAD_OPERATION;
+      CacheControlResponse(request.request_sequence, request_bytes, response);
+      return;
+    }
+    if (contact_probe_only_ && (!LifecycleFieldsZero(request) || !SourceFieldsZero(request)))
+    {
+      response.reason_code = ControlResponse::REASON_UNUSED_FIELD_NONZERO;
+      CacheControlResponse(request.request_sequence, request_bytes, response);
+      return;
+    }
     if (request.operation != ControlRequest::OP_INHIBIT &&
         request.expected_binding_revision != control_binding_revision_)
     {
@@ -2315,8 +2406,12 @@ private:
             probe_transport_.spawn_ready() && probe_transport_.pose_ready() &&
             probe_transport_.remove_ready() && probe_transport_.spawn &&
             probe_transport_.set_pose && probe_transport_.remove;
+        const bool fixture_context = contact_probe_only_ && !gate_ && !control_session_bound_ &&
+            backend_instance_id_ != 0 && coordinator_ingress_instance_id_ != 0 &&
+            !session_id_.empty() && LowerHex64(config_hash_) && LowerHex64(asset_manifest_hash_);
         const auto admission = EvaluateProbeAdmission(
-            lifecycle_matches, !policy_open_, world_paused, fault_flags_ != 0,
+            contact_probe_only_ ? fixture_context : lifecycle_matches,
+            !policy_open_, world_paused, fault_flags_ != 0,
             observation0_authorized_, gate_ && gate_->HasPendingPolicyStep(),
             probe_machine_.Running() || probe_machine_.NeedsCleanup() ||
               probe_spawn_inflight_ || late_spawn_cleanup_pending_,
@@ -2352,6 +2447,7 @@ private:
           contact_capability_verified_ = false;
           ++capability_revision_;
           probe_reason_.clear();
+          if (contact_probe_only_) CaptureContactOnlyContext(sim_stamp_ns);
           applied = true;
         }
       }
@@ -2871,6 +2967,9 @@ private:
   bool local_zero_override_{true}, measurement_healthy_{};
   bool contact_capability_verified_{};
   bool probe_running_{};
+  bool contact_probe_only_{};
+  std::string contact_only_engine_fingerprint_;
+  std::int64_t last_probe_sim_ns_{};
   bool observation0_authorized_{};
   bool safety_admission_candidate_{};
   std::int64_t observation0_cutoff_ns_{};

@@ -80,6 +80,32 @@ public:
     system.backend_instance_id_ = 8;
   }
 
+  static void EnableContactOnly(BackendSystem &system) { system.contact_probe_only_ = true; }
+  static bool ContactOnly(const BackendSystem &system) { return system.contact_probe_only_; }
+  static bool HasActuatorGate(const BackendSystem &system) { return bool(system.gate_); }
+  static bool ContactVerified(const BackendSystem &system) { return system.contact_capability_verified_; }
+  static void SeedContactOnlyProof(BackendSystem &system)
+  {
+    system.CaptureContactOnlyContext(100);
+    system.contact_capability_verified_ = true;
+  }
+  static void CheckContactContext(BackendSystem &system,
+      const gz::sim::EntityComponentManager &ecm, std::int64_t stamp)
+  { system.ValidateContactOnlyContext(ecm, stamp); }
+  static void MutateContactIdentity(BackendSystem &system, int field)
+  {
+    switch (field) {
+      case 0: ++system.backend_instance_id_; break;
+      case 1: system.session_id_ = "foreign"; break;
+      case 2: system.config_hash_ = std::string(64, 'c'); break;
+      case 3: system.asset_manifest_hash_ = std::string(64, 'c'); break;
+      case 4: system.world_name_ = "foreign"; break;
+      case 5: system.proof_physics_engine_fingerprint_sha256_ = std::string(64, 'c'); break;
+      default: break;
+    }
+  }
+  static void StopContactOnly(BackendSystem &system) { system.Shutdown(); }
+
   static void SetSteadyClockNow(BackendSystem &system, std::int64_t now_ns)
   {
     system.steady_clock_now_ = [now_ns] { return now_ns; };
@@ -295,7 +321,7 @@ public:
 
   static bool ConfigureForNativeResetChain(
       BackendSystem &system, gz::sim::EntityComponentManager &ecm,
-      const std::shared_ptr<NativeResetChainIo> &io)
+      const std::shared_ptr<NativeResetChainIo> &io, bool contact_only = false)
   {
     const auto description_share = std::filesystem::path(
         ament_index_cpp::get_package_share_directory(
@@ -333,6 +359,15 @@ public:
         root.Model()->Plugins().empty())
       return false;
     auto plugin = root.Model()->Plugins().front().Element();
+    if (contact_only)
+    {
+      auto flag = std::make_shared<sdf::Element>();
+      flag->SetName("contact_probe_only");
+      flag->AddValue("string", "true", true);
+      flag->Set<std::string>("true");
+      plugin->InsertElement(flag);
+      plugin->GetElement("first_safe_stop_sequence")->Set<std::uint64_t>(0);
+    }
     const auto set_string = [&plugin](
         const std::string &key, const std::string &value) {
       const auto element = plugin->GetElement(key);
@@ -3789,4 +3824,84 @@ TEST(BackendSystemLifecycle,
   EXPECT_TRUE(mailbox->closed);
   EXPECT_TRUE(mailbox->possible_fixture_residue);
   EXPECT_TRUE(mailbox->results.empty());
+}
+
+TEST(ContactOnlyMode, DefaultAndConfiguredHardLockUseProductionHooks)
+{
+  BackendSystem normal;
+  EXPECT_FALSE(BackendSystemTestPeer::ContactOnly(normal));
+  BackendSystem isolated;
+  gz::sim::EntityComponentManager ecm;
+  auto io = std::make_shared<NativeResetChainIo>();
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(isolated, ecm, io, true));
+  EXPECT_TRUE(BackendSystemTestPeer::ContactOnly(isolated));
+  EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(isolated));
+  BackendSystemTestPeer::RunProductionTick(isolated, ecm, 1, 10'000'000);
+  ASSERT_FALSE(io->applied_commands.empty());
+  for (const auto &command : io->applied_commands) {
+    for (const auto value : command.linear) EXPECT_DOUBLE_EQ(value, 0);
+    for (const auto value : command.angular) EXPECT_DOUBLE_EQ(value, 0);
+  }
+}
+
+TEST(ContactOnlyMode, RejectsAllActuatorBindingOperationsWithoutCreatingGate)
+{
+  for (auto operation : {ControlRequest::OP_BIND_SESSION, ControlRequest::OP_BIND_PENDING_STEP,
+                         ControlRequest::OP_CONFIRM_OBSERVATION0, ControlRequest::OP_BIND_RESET_CONTEXT}) {
+    BackendSystem system;
+    BackendSystemTestPeer::SeedRunDescriptor(system);
+    BackendSystemTestPeer::EnableContactOnly(system);
+    auto request = BaseControlRequest(1); request.operation = operation;
+    const auto response = BackendSystemTestPeer::Receive(system, request);
+    EXPECT_EQ(response.result, ControlResponse::RESULT_REJECTED);
+    EXPECT_EQ(response.reason_code, ControlResponse::REASON_BAD_OPERATION);
+    EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+    EXPECT_FALSE(BackendSystemTestPeer::SessionBound(system));
+  }
+}
+
+TEST(ContactOnlyMode, StartAndInhibitRequireRealDescriptorButNoLifecycle)
+{
+  BackendSystem system; gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::EnableContactOnly(system);
+  BackendSystemTestPeer::SeedProbeWorld(system, ecm);
+  BackendSystemTestPeer::PrepareProbe(system);
+  BackendSystemTestPeer::InjectProbeTransport(system,
+      [](const auto &, auto done) { done(true); },
+      [](const auto &, auto done) { done(true); },
+      [](const auto &, auto done) { done(true); });
+  auto start = BaseControlRequest(1); start.operation = ControlRequest::OP_VERIFY_CONTACT_CAPABILITY;
+  start.probe_action = ControlRequest::PROBE_ACTION_START;
+  EXPECT_EQ(BackendSystemTestPeer::Receive(system, start).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm);
+  EXPECT_EQ(BackendSystemTestPeer::Cached(system, 1).result, ControlResponse::RESULT_APPLIED);
+  EXPECT_TRUE(BackendSystemTestPeer::ProbeRunning(system));
+  EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+  auto inhibit = BaseControlRequest(2); inhibit.operation = ControlRequest::OP_INHIBIT;
+  BackendSystemTestPeer::Receive(system, inhibit); BackendSystemTestPeer::Tick(system, ecm);
+  EXPECT_FALSE(BackendSystemTestPeer::ProbeRunning(system));
+  EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system));
+}
+
+TEST(ContactOnlyMode, InvalidatesProofForIdentityEngineClockAndRestartWithoutGate)
+{
+  for (int change = 0; change < 9; ++change) {
+    BackendSystem system; gz::sim::EntityComponentManager ecm;
+    BackendSystemTestPeer::SeedRunDescriptor(system);
+    BackendSystemTestPeer::EnableContactOnly(system);
+    BackendSystemTestPeer::SeedProbeWorld(system, ecm);
+    BackendSystemTestPeer::SeedContactOnlyProof(system);
+    BackendSystemTestPeer::CheckContactContext(system, ecm, 101);
+    ASSERT_TRUE(BackendSystemTestPeer::ContactVerified(system));
+    if (change < 6) BackendSystemTestPeer::MutateContactIdentity(system, change);
+    if (change == 6) ecm.SetComponentData<gz::sim::components::PhysicsEnginePlugin>(
+        BackendSystemTestPeer::ProbeWorld(system), "missing-engine");
+    if (change == 8) BackendSystemTestPeer::StopContactOnly(system);
+    else BackendSystemTestPeer::CheckContactContext(system, ecm, change == 7 ? 99 : 102);
+    EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system)) << change;
+    EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+  }
+  BackendSystem restarted;
+  EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(restarted));
 }

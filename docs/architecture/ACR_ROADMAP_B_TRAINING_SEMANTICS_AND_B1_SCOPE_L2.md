@@ -791,3 +791,39 @@ runtime evidence is created here. RUN001–RUN007 remain consumed/FAIL. Offline
 tests or packet delivery do not establish runtime, Gate PASS or B2 closure.
 The cause of RUN007's uniform image remains UNKNOWN. No L2 change to capture
 API/backend, desktop interaction or acceptance is included.
+
+## 18. Contact-only infrastructure session — Owner L2 decision (2026-11-07)
+
+Owner phê duyệt thiết kế `contact_probe_only` trong prompt “Owner chốt giao
+Codex hoàn tất phần kỹ thuật B2.2”, tiếp nối source `e63110240437b1dee465f5d33c2fb08a91c0d391`.
+Đây là ngoại lệ có giới hạn cho context contact tại §5.9; không tạo hoặc giả
+lifecycle, publisher, receipt hay observation0 của B2.3 theo §8.
+
+Cờ SDF `contact_probe_only` mặc định `false`, chỉ nhận literal `true`/`false`,
+được đọc một lần trong khởi tạo backend và pin trong runtime world/profile.
+Phiên contact-only dùng session/config/asset/world, coordinator-ingress từ
+run descriptor và backend instance thật; không gọi `BIND_SESSION`, không
+khởi tạo actuator gate. Các lifecycle/source/step/observation0 fields phải
+zero/empty. Receiver chỉ chấp nhận `VERIFY_CONTACT_CAPABILITY` với
+START/QUERY/ABORT và `INHIBIT`, sau toàn bộ kiểm identity, sequence, revision,
+cache và deadline hiện hữu. Các operation binding/reset/rearm/observation0
+bị từ chối. POLICY không mở; emergency zero được giữ ở mỗi update kể cả khi
+contact capability đã VERIFIED. Mode không đổi được qua service.
+
+Phiên được phép resume simulation khi robot vẫn inhibited để Physics đo
+fixture riêng. Giữ nguyên hình học, pose spawn/lift, exact fixture-floor
+pair, ít nhất ba mẫu liên tiếp spanning 20 ms cho contact và covered-empty,
+đo separation sau Physics và xác minh fixture đã xóa khỏi ECM của §5.9.
+START chỉ bắt đầu phép thử, không phải proof. Giữ 5 s steady từ ingress,
+dành 1 s cuối cleanup; timeout/ABORT không retry cùng START. Context/proof
+bị hủy khi đổi session/backend/config/asset/world/engine/fingerprint, clock
+rollback hoặc restart, độc lập sự tồn tại actuator gate. Proof chỉ thuộc
+phiên infrastructure này, không chuyển thành motion eligibility của B2.3.
+
+Owner cấp trước runtime mô phỏng có điều kiện sau khi Codex tự kiểm offline,
+build/install và exact packet. Mỗi packet có ID/guard capacity-one/evidence
+mới, chỉ chạy một lần; không consume lại GUI 001 hoặc các run/probe lịch sử.
+Codex tự review kỹ thuật và tiếp tục trong phạm vi này. Không hardware,
+training, B2.3, integration hoặc Gate. Workspace audit độc lập ở bàn giao;
+Owner quyết định milestone/integration riêng. Mục này ghi authority và
+contract, không tự tuyên bố test/build/runtime hoặc CAPABILITY_VERIFIED.

@@ -459,3 +459,36 @@ def test_proc_normalization_rejects_wrong_ownership(tmp_path, mutation):
         raw['parent']['status'] = b'Uid:\t0\t0\t0\t0\n'.hex()
     with pytest.raises(ValueError):
         runner.normalize_execution(profile, argv, raw)
+
+
+def contact_proof_fixture():
+    world = 'b2_training_arena'
+    proof = {'result':3,'reason_code':0,'contact_capability_state':2,
+        'proof_session_id':'actual-session','proof_backend_instance_id':123,
+        'proof_config_hash':'a'*64,'proof_asset_manifest_sha256':'b'*64,
+        'proof_world_name':world,'proof_physics_engine_fingerprint_sha256':'c'*64,
+        'probe_model_scoped_name':world+'::b2_capability_probe',
+        'probe_collision_scoped_name':world+'::b2_capability_probe::link::collision',
+        'floor_collision_scoped_name':world+'::ground_plane::link::collision',
+        'probe_model_entity_id':10,'probe_collision_entity_id':11,'floor_collision_entity_id':2,
+        'contact_sample_count':3,'covered_empty_sample_count':3,
+        'contact_first_iteration':100,'contact_last_iteration':102,
+        'empty_first_iteration':110,'empty_last_iteration':112,
+        'contact_first_stamp':{'sec':1,'nanosec':0},'contact_last_stamp':{'sec':1,'nanosec':20_000_000},
+        'empty_first_stamp':{'sec':1,'nanosec':100_000_000},'empty_last_stamp':{'sec':1,'nanosec':120_000_000},
+        'proof_gz_sim_version':'8.11.0','proof_collision_registry_sha256':'d'*64}
+    expected={k:proof[k] for k in ['proof_session_id','proof_backend_instance_id','proof_config_hash',
+        'proof_asset_manifest_sha256','proof_world_name','proof_physics_engine_fingerprint_sha256']}
+    return proof,expected
+
+
+def test_contact_proof_requires_backend_bound_geometry_and_coverage():
+    proof,expected=contact_proof_fixture()
+    assert runner.contact_proof_errors(proof,expected)==[]
+    for key,value in [('contact_capability_state',1),('proof_session_id','foreign'),
+        ('proof_physics_engine_fingerprint_sha256','f'*64),('probe_model_entity_id',0),
+        ('contact_sample_count',2),('empty_last_iteration',113),
+        ('probe_collision_scoped_name','foreign::collision')]:
+        assert runner.contact_proof_errors({**proof,key:value},expected),key
+    broken={**proof,'empty_last_stamp':{'sec':1,'nanosec':110_000_000}}
+    assert runner.contact_proof_errors(broken,expected)
