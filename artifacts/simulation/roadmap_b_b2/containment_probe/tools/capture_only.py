@@ -3,6 +3,7 @@
 This program records observations and operation status only; it never grades containment.
 """
 import base64
+import argparse
 import datetime as dt
 import hashlib
 import json
@@ -70,6 +71,14 @@ if __name__=='__main__':
 
 WINDOW_NS = 12_000_000_000
 CLEANUP_NS = 3_000_000_000
+RECORDED_FAILED_SCOPE_UNIT = "vte-spawn-7661a27d-614b-4a9f-b08c-83a57811f382.scope"
+RECORDED_FAILED_SCOPE_PROPERTIES = {
+    "Id": RECORDED_FAILED_SCOPE_UNIT,
+    "ActiveState": "failed",
+    "Result": "oom-kill",
+    "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.gnome.Terminal.slice/vte-spawn-7661a27d-614b-4a9f-b08c-83a57811f382.scope",
+    "StateChangeTimestamp": "Fri 2026-11-06 07:56:22 +07",
+}
 SAMPLE_OFFSETS_NS = (50_000_000, 500_000_000, 1_500_000_000, 3_000_000_000,
                      3_800_000_000, 4_200_000_000, 5_500_000_000,
                      7_500_000_000, 9_500_000_000, 11_400_000_000)
@@ -101,6 +110,36 @@ def parse_properties(text):
     return result
 
 
+def parse_failed_units(text):
+    units = []
+    valid_suffixes = (".service", ".scope", ".socket", ".target", ".mount",
+                      ".automount", ".timer", ".path", ".slice", ".device",
+                      ".swap", ".busname")
+    for line_number, line in enumerate(text.splitlines(), 1):
+        fields = line.split(None, 4)
+        if (len(fields) < 4 or not fields[0].endswith(valid_suffixes)
+                or fields[2] != "failed"):
+            raise ValueError(f"unrecognized_failed_unit_row_{line_number}:{line}")
+        units.append(fields[0])
+    return units
+
+
+def parse_required_properties(text, required):
+    result = {}
+    duplicates = set()
+    for line in text.splitlines():
+        if "=" not in line:
+            raise ValueError(f"unrecognized_systemd_property_line:{line}")
+        key, value = line.split("=", 1)
+        if key in result:
+            duplicates.add(key)
+        result[key] = value
+    missing = set(required) - result.keys()
+    if duplicates or missing:
+        raise ValueError(f"duplicate_properties={sorted(duplicates)};missing_properties={sorted(missing)}")
+    return {key: result[key] for key in required}
+
+
 def stat_fields(raw):
     text = decoded(raw)
     tail = text[text.rfind(")") + 2:].split()
@@ -113,8 +152,18 @@ def cgroup_v2_path(raw):
     return matches[0] if len(matches) == 1 else None
 
 
+def command_record_identity(record):
+    """Hash the complete serialized command record for narrow exception binding."""
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class Capture:
-    def __init__(self):
+    def __init__(self, allow_recorded_failed_scope=None):
+        if (allow_recorded_failed_scope is not None
+                and allow_recorded_failed_scope != RECORDED_FAILED_SCOPE_UNIT):
+            raise ValueError("allow_recorded_failed_scope_not_the_pinned_unit")
         self.root = pathlib.Path(tempfile.mkdtemp(prefix="b22-containment-raw-", dir="/tmp"))
         self.nonce = secrets.token_hex(16)
         self.unit = f"b22-containment-raw-{self.nonce}.service"
@@ -147,6 +196,8 @@ class Capture:
         self.global_end_limit_ns = None
         self.finalization_started_ns = None
         self.finalization_deadline_ns = None
+        self.allow_recorded_failed_scope = allow_recorded_failed_scope
+        self.preflight_exception = None
 
     def append(self, path, item):
         with path.open("a", encoding="utf-8") as stream:
@@ -292,8 +343,85 @@ class Capture:
         checks.append({"name": "systemd_major_255", "ok": bool(version_line)
                        and version_words[0] == "systemd" and systemd_major == "255"})
         manager = self.command_run(["systemctl", "--user", "is-system-running"], 2.0, "preflight")
-        checks.append({"name": "user_manager_running", "ok": manager.get("returncode") == 0
-                       and manager.get("stdout_text", "").strip() == "running"})
+        manager_state = manager.get("stdout_text", "").strip()
+        manager_running = manager.get("returncode") == 0 and manager_state == "running"
+        manager_ok = manager_running
+        failed_units_query = None
+        failed_units = None
+        failed_unit_show = None
+        failed_unit_properties = None
+        manager_exception_reason = None
+        if manager_running:
+            manager_exception_reason = "normal_running_state"
+        elif (self.allow_recorded_failed_scope == RECORDED_FAILED_SCOPE_UNIT
+              and manager.get("returncode") == 1 and manager_state == "degraded"):
+            failed_units_query = self.command_run(
+                ["systemctl", "--user", "list-units", "--failed", "--full", "--plain",
+                 "--no-legend", "--no-pager"], 2.0, "preflight_failed_units")
+            if failed_units_query.get("returncode") != 0 or failed_units_query.get("timeout") or failed_units_query.get("error"):
+                manager_exception_reason = "failed_units_query_incomplete"
+            else:
+                try:
+                    failed_units = parse_failed_units(failed_units_query.get("stdout_text", ""))
+                except ValueError as exc:
+                    manager_exception_reason = f"failed_units_parse_error:{exc}"
+                else:
+                    if failed_units != [RECORDED_FAILED_SCOPE_UNIT]:
+                        manager_exception_reason = "failed_unit_set_does_not_match_single_pinned_unit"
+                    else:
+                        property_args = [f"--property={name}" for name in RECORDED_FAILED_SCOPE_PROPERTIES]
+                        failed_unit_show = self.command_run(
+                            ["systemctl", "--user", "show", RECORDED_FAILED_SCOPE_UNIT,
+                             "--no-pager", *property_args], 2.0,
+                            "preflight_recorded_failed_scope_properties")
+                        if (failed_unit_show.get("returncode") != 0
+                                or failed_unit_show.get("timeout") or failed_unit_show.get("error")):
+                            manager_exception_reason = "failed_unit_properties_query_incomplete"
+                        else:
+                            try:
+                                failed_unit_properties = parse_required_properties(
+                                    failed_unit_show.get("stdout_text", ""),
+                                    RECORDED_FAILED_SCOPE_PROPERTIES,
+                                )
+                            except ValueError as exc:
+                                manager_exception_reason = f"failed_unit_properties_parse_error:{exc}"
+                            else:
+                                if failed_unit_properties != RECORDED_FAILED_SCOPE_PROPERTIES:
+                                    manager_exception_reason = "failed_unit_properties_do_not_match_recorded_evidence"
+                                else:
+                                    manager_ok = True
+                                    manager_exception_reason = "exact_recorded_failed_scope_exception_used"
+                                    self.preflight_exception = {
+                                        "used": True,
+                                        "kind": "recorded_failed_scope_only",
+                                        "unit": RECORDED_FAILED_SCOPE_UNIT,
+                                        "manager_state": "degraded",
+                                        "manager_returncode": manager.get("returncode"),
+                                        "manager_command_record_sha256": command_record_identity(manager),
+                                        "manager_command_record_identity": {
+                                            "argv": manager.get("argv"),
+                                            "bucket": manager.get("bucket"),
+                                            "returncode": manager.get("returncode"),
+                                            "stdout_b64": manager.get("stdout_b64"),
+                                            "stderr_b64": manager.get("stderr_b64"),
+                                            "started": manager.get("started"),
+                                            "finished": manager.get("finished"),
+                                        },
+                                        "observed_properties": failed_unit_properties,
+                                        "expected_properties": dict(RECORDED_FAILED_SCOPE_PROPERTIES),
+                                        "failed_units": failed_units,
+                                    }
+        elif manager.get("returncode") == 1 and manager_state == "degraded":
+            manager_exception_reason = "degraded_state_requires_exact_opt_in"
+        elif manager.get("timeout") or manager.get("error") or manager.get("returncode") != 0:
+            manager_exception_reason = "manager_state_command_failed_or_unrecognized"
+        else:
+            manager_exception_reason = "manager_state_not_running"
+        checks.append({"name": "user_manager_state_preflight", "ok": manager_ok,
+                       "observed_state": manager_state,
+                       "normal_running_path": manager_running,
+                       "recorded_exception_used": bool(self.preflight_exception),
+                       "decision": manager_exception_reason})
         cgroup_raw = self.read_raw("/proc/self/cgroup")
         mount_raw = self.read_raw("/proc/self/mountinfo")
         controllers = self.read_raw("/sys/fs/cgroup/cgroup.controllers")
@@ -305,7 +433,14 @@ class Capture:
         load_state = collision.get("stdout_text", "").strip()
         checks.append({"name": "unique_unit_not_loaded", "ok": load_state == "not-found"})
         facts.update({"checks": checks, "systemd_version_command": systemd,
-                      "user_manager_command": manager, "cgroup_self": cgroup_raw,
+                      "user_manager_command": manager, "user_manager_state": manager_state,
+                      "preflight_exception": self.preflight_exception,
+                      "manager_exception_decision": manager_exception_reason,
+                      "failed_units_query": failed_units_query,
+                      "failed_units_parsed": failed_units,
+                      "recorded_failed_unit_properties_command": failed_unit_show,
+                      "recorded_failed_unit_properties_parsed": failed_unit_properties,
+                      "cgroup_self": cgroup_raw,
                       "cgroup_mountinfo": mount_raw, "cgroup_controllers": controllers,
                       "unit_collision_query": collision, "finished": stamp()})
         self.append(self.events_path, {"kind": "preflight", **facts})
@@ -641,11 +776,29 @@ class Capture:
                                           "at": stamp()}
             self.errors.append({"kind": "command_records_error", **self.command_records_error})
             command_records = None
+        accepted_manager_id = None
+        accepted_manager_matches = []
+        if self.preflight_exception and self.preflight_exception.get("used"):
+            accepted_manager_id = self.preflight_exception.get("manager_command_record_sha256")
+            if command_records is not None and accepted_manager_id:
+                accepted_manager_matches = [
+                    index for index, row in enumerate(command_records)
+                    if command_record_identity(row) == accepted_manager_id
+                ]
+            if len(accepted_manager_matches) != 1:
+                self.errors.append({
+                    "kind": "accepted_manager_command_record_binding_error",
+                    "expected_record_sha256": accepted_manager_id,
+                    "matched_record_count": len(accepted_manager_matches),
+                })
+                accepted_manager_id = None
         failed_commands = [] if command_records is None else [
-            row for row in command_records
+            row for index, row in enumerate(command_records)
             if row.get("returncode") not in (0, None)
             and not (row.get("bucket") == "preflight_unit_collision"
-                     and row.get("stdout_text", "").strip() == "not-found")]
+                     and row.get("stdout_text", "").strip() == "not-found")
+            and not (accepted_manager_id is not None
+                     and index == accepted_manager_matches[0])]
         timed_out = [] if command_records is None else [row for row in command_records if row.get("timeout")]
         primary_complete = all(
             self.primary_samples.get(str(offset), {}).get("status") == "collected_within_primary_window"
@@ -665,6 +818,12 @@ class Capture:
                  "launch_accepted_by_systemd_run": launch_accepted,
                  "helper_execution_inferred": False,
                  "failed_command_count": len(failed_commands),
+                 "accepted_manager_command_record": (
+                     None if accepted_manager_id is None else {
+                         "sha256": accepted_manager_id,
+                         "reason": "exact manager-status record bound to validated recorded-failed-scope exception",
+                         "record": command_records[accepted_manager_matches[0]],
+                     }),
                  "timed_out_command_count": len(timed_out),
                  "command_records_error": self.command_records_error,
                  "controller_error": self.controller_error,
@@ -721,8 +880,19 @@ class Capture:
         return exit_code
 
 
-def main():
-    capture = Capture()
+def parse_cli_args(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--allow-recorded-failed-scope",
+        choices=(RECORDED_FAILED_SCOPE_UNIT,),
+        default=None,
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_cli_args(argv)
+    capture = Capture(allow_recorded_failed_scope=args.allow_recorded_failed_scope)
     try:
         return capture.run()
     except BaseException as exc:
