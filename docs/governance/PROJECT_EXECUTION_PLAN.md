@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.16` Roadmap B B2.1 packaging correction scope |
+| Revision | `0.10.17` Roadmap B B2.2 closure and exact-candidate integration |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -1129,3 +1129,29 @@ runtime status, transition a milestone, or grant runtime, training or
 integration authority. The historical Markdown source was read and supplied
 by the workspace; it was not directly accessed by Codex and is not treated as
 fully approved design. This section records documentation routing only.
+
+## Roadmap B B2.2 closure and exact-candidate integration — PEP-001 rev.0.10.17
+
+This status transition applies only to the B2.2 simulation-substrate work
+package. It becomes canonical when this PEP revision and its append-only Ledger
+record are present on `integration/implementation` and the remote ref is
+verified. Historical B2.2 authorization and candidate entries above remain
+unchanged; this record supersedes their pending-audit/pending-integration
+disposition for the exact candidate below.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.10.16` -> `0.10.17` |
+| Work package | `ROADMAP_B_B22_SIMULATION_SUBSTRATE_CLOSURE_INTEGRATION` |
+| Work branch / candidate | `roadmap-b-b22-simulation-substrate` / `e705d55ba05534003b35bb22b4ef6ff224c42aad` |
+| Audited source corrective | `a95463dbe265355e12bf891937e080e95f8b58d0` |
+| Integration base and method | `ef9e0281cfb9de04d89a2698d6d7899bcde92803`; fast-forward to the exact candidate, with no merge commit |
+| Audit authority | Independent workspace audit disposition supplied in the Owner instruction: PASS for the candidate's B2.2 simulation scope |
+| Exact status transition | `B2.2: candidate / pending independent audit and integration -> CLOSED / INTEGRATED` |
+| Activation condition | Effective only after this PEP/Ledger status record is committed on the integration line and the resulting remote integration ref is directly read back |
+| Evidence basis | Candidate `e705d55…` contains the audit evidence delivery; its parent source corrective is `a95463d…`. The evidence package is under `artifacts/simulation/roadmap_b_b2/audit_evidence/query_cache_a95463d/`. Audit PASS is scoped to B2.2 simulation evidence and is not inferred from ancestry. |
+| Preserved limits | RUN008 root cause remains `UNKNOWN`; Owner visual ACK remains `NOT_PERFORMED`; B2.3 has not started. B2 as a whole remains open; no Gate, training, HIL, hardware, or real-readiness status changes. |
+| Architecture/ACR impact | None. Existing Architecture and Roadmap B ACR semantics are unchanged. |
+| Ledger entry | `ROADMAP_B_B22_CLOSED_INTEGRATED`, appended to `PROJECT_PROGRESS_LEDGER.md`. |
+| Integration commit SHA | Resolved from canonical Git history after this record is committed; not self-embedded. |
+| Next action | Independent workspace may audit the integrated source and closure record; any B2.3 start remains a separate Owner decision. |

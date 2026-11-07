@@ -1955,3 +1955,21 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Status transition | None. No milestone status changed. |
 | Authority boundary | This candidate grants no runtime/training/integration authority and does not supersede Architecture, ACR, canonical integration governance, or historical Ledger entries. |
 | Next action | Independent review of the exact documentation delta; RUN002 decisions remain pending. |
+
+
+### ROADMAP_B_B22_CLOSED_INTEGRATED — 2026-11-08
+
+| Field | Value |
+|---|---|
+| Work package | `ROADMAP_B_B22_SIMULATION_SUBSTRATE_CLOSURE_INTEGRATION` |
+| Supersedes | Earlier B2.2 candidate/pending-audit/pending-integration dispositions only for the exact candidate and B2.2 status; historical run records remain immutable. |
+| Owner authority | Owner instruction `Thực hiện đóng B2.2 và tích hợp candidate đã được audit độc lập PASS`; integration and B2.2 closure explicitly authorized. |
+| Work branch and exact candidate | `roadmap-b-b22-simulation-substrate`; `e705d55ba05534003b35bb22b4ef6ff224c42aad` |
+| Audited source corrective | `a95463dbe265355e12bf891937e080e95f8b58d0` |
+| Integration lineage | Remote integration base `ef9e0281cfb9de04d89a2698d6d7899bcde92803`; exact candidate fast-forwarded to integration before this governance record. The final governance commit is its descendant. |
+| Audit/evidence | Independent workspace audit disposition: PASS for B2.2 simulation scope. Evidence delivery is committed under `artifacts/simulation/roadmap_b_b2/audit_evidence/query_cache_a95463d/`. This entry records the supplied audit disposition; it does not reproduce or broaden it. |
+| Status transition | `B2.2: candidate / pending independent audit and integration -> CLOSED / INTEGRATED`, effective on canonical integration after PEP-001 rev.0.10.17 and this entry are remotely verified. |
+| Preserved status/evidence limits | RUN008 root cause `UNKNOWN`; Owner visual ACK `NOT_PERFORMED`; B2.3 not started. Roadmap B B2 overall, Gate, training, HIL, hardware and real-readiness statuses are unchanged. |
+| Architecture/ACR impact | None; no Architecture or ACR bytes changed. |
+| Runtime/build/test | No runtime, build, or test rerun for this integration/closure transaction; the independent audit and existing evidence were relied upon. |
+| Next action | Workspace audit of the integrated source and governance record; B2.3 remains a separate Owner decision. |

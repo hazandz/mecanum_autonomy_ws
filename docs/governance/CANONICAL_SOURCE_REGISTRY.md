@@ -1014,6 +1014,20 @@ success. Any eventual offline evidence remains below independent exact-commit
 audit. Probe capability, contact engine operation, GUI scene, reset, motion,
 Gate, and integration remain unverified and outside this source routing entry.
 
+### B2.2 exact-candidate integration disposition
+
+The exact candidate `e705d55ba05534003b35bb22b4ef6ff224c42aad` on
+`roadmap-b-b22-simulation-substrate` was independently audited PASS for the
+B2.2 simulation scope and fast-forwarded from integration base
+`ef9e0281cfb9de04d89a2698d6d7899bcde92803`. The audited source corrective is
+`a95463dbe265355e12bf891937e080e95f8b58d0`; the evidence delivery lives under
+`artifacts/simulation/roadmap_b_b2/audit_evidence/query_cache_a95463d/`.
+Canonical B2.2 closure status is recorded by PEP-001 rev.0.10.17 and the
+append-only Ledger entry `ROADMAP_B_B22_CLOSED_INTEGRATED`. This disposition
+does not close Roadmap B B2 as a whole, change Gate status, or start B2.3.
+RUN008 root cause remains `UNKNOWN`, and Owner visual ACK remains
+`NOT_PERFORMED`.
+
 ## Roadmap B full-plan and status master — documentation candidate
 
 As of 2026-11-02, the work-branch candidate
