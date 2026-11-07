@@ -1,0 +1,24 @@
+{
+  "phase": "launch_requested_once",
+  "at_ns": 25341497015187,
+  "packet_sha256": "5210494f62ee230d5095fc8528d1ee2e109c8929d62dea449c13e3202d53ce37",
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=b22-qcache-gui-001-694e2e772c.service",
+    "--property=Type=exec",
+    "--property=RemainAfterExit=yes",
+    "--property=Restart=no",
+    "--property=RuntimeMaxSec=300s",
+    "--property=TimeoutStartSec=3s",
+    "--property=TimeoutStopSec=5s",
+    "--property=KillMode=control-group",
+    "--property=SendSIGKILL=yes",
+    "--property=MemoryMax=5G",
+    "--property=StandardOutput=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/gui-001.stdout",
+    "--property=StandardError=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/gui-001.stderr",
+    "/bin/bash",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-gui-001.sh"
+  ],
+  "authority": "Owner authorized B2.2 cached QUERY corrective: Codex packet review, fresh capacity-one contact and GUI confirmation; no B2.3 or hardware"
+}

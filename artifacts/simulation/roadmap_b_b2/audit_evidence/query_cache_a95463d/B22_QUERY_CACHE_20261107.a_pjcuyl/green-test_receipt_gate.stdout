@@ -1,0 +1,33 @@
+Running main() from /opt/ros/jazzy/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 12 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 12 tests from ReceiptGate
+[ RUN      ] ReceiptGate.RequiresBoundPostBarrierSafeStopAnchorAndNextPolicy
+[       OK ] ReceiptGate.RequiresBoundPostBarrierSafeStopAnchorAndNextPolicy (1 ms)
+[ RUN      ] ReceiptGate.ExactDuplicateDoesNotRefreshWatchdog
+[       OK ] ReceiptGate.ExactDuplicateDoesNotRefreshWatchdog (0 ms)
+[ RUN      ] ReceiptGate.SameKeyChangedPayloadFaults
+[       OK ] ReceiptGate.SameKeyChangedPayloadFaults (0 ms)
+[ RUN      ] ReceiptGate.RejectsReplayAndFaultsSequenceGap
+[       OK ] ReceiptGate.RejectsReplayAndFaultsSequenceGap (0 ms)
+[ RUN      ] ReceiptGate.PendingBarrierKeepsCurrentAndSafeStopLiveUntilPromotion
+[       OK ] ReceiptGate.PendingBarrierKeepsCurrentAndSafeStopLiveUntilPromotion (0 ms)
+[ RUN      ] ReceiptGate.FinalPublicationSequenceGapFaultsBeforePolicyApply
+[       OK ] ReceiptGate.FinalPublicationSequenceGapFaultsBeforePolicyApply (0 ms)
+[ RUN      ] ReceiptGate.RejectsWrongIdentityFrameBarrierAndNonPlanarPayload
+[       OK ] ReceiptGate.RejectsWrongIdentityFrameBarrierAndNonPlanarPayload (0 ms)
+[ RUN      ] ReceiptGate.WatchdogUsesSteadyClockStrictlyBeyondOneHundredMilliseconds
+[       OK ] ReceiptGate.WatchdogUsesSteadyClockStrictlyBeyondOneHundredMilliseconds (0 ms)
+[ RUN      ] ReceiptGate.StartupRemainsInhibitedUntilValidAnchorArrives
+[       OK ] ReceiptGate.StartupRemainsInhibitedUntilValidAnchorArrives (0 ms)
+[ RUN      ] ReceiptGate.QueueOverflowIsStickyFault
+[       OK ] ReceiptGate.QueueOverflowIsStickyFault (0 ms)
+[ RUN      ] ReceiptGate.SourceTimestampRollbackClosesAdmission
+[       OK ] ReceiptGate.SourceTimestampRollbackClosesAdmission (0 ms)
+[ RUN      ] ReceiptGate.ResetContextPreservesPublicationWatermarkAndRequiresNewAnchor
+[       OK ] ReceiptGate.ResetContextPreservesPublicationWatermarkAndRequiresNewAnchor (0 ms)
+[----------] 12 tests from ReceiptGate (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 12 tests from 1 test suite ran. (1 ms total)
+[  PASSED  ] 12 tests.

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "timeout",
+    "--kill-after=2s",
+    "20s",
+    "env",
+    "GIT_TERMINAL_PROMPT=0",
+    "git",
+    "ls-remote",
+    "origin",
+    "refs/heads/roadmap-b-b22-simulation-substrate",
+    "refs/heads/integration/implementation"
+  ],
+  "started_ns": 25529722322917,
+  "finished_ns": 25530741097890,
+  "exit": 0,
+  "stdout": "ef9e0281cfb9de04d89a2698d6d7899bcde92803\trefs/heads/integration/implementation\na95463dbe265355e12bf891937e080e95f8b58d0\trefs/heads/roadmap-b-b22-simulation-substrate\n",
+  "stderr": ""
+}

@@ -1,0 +1,6 @@
+{
+  "production_source": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/src/backend_system.cpp",
+  "sha256": "d56ca7e41e965e4449b932b9274a7f3a5dd3c2970f703a08280e0a749ed97e7c",
+  "test_source": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp",
+  "test_sha256": "7d91027ffcbcf1dda6586ddbdc5b97fbe98343657e624910c74a45b39446f62b"
+}

@@ -1,0 +1,10 @@
+{
+  "base": "7764d9d4d2f264b24505e7dfff3083e76c6cb4fd",
+  "status": " M artifacts/simulation/roadmap_b_b2/heartbeat_diagnostics/README.md\n?? build/\n?? install/\n?? log/\n",
+  "hashes": {
+    "ros2_ws/src/mecanum_sim_backend/src/backend_system.cpp": "d56ca7e41e965e4449b932b9274a7f3a5dd3c2970f703a08280e0a749ed97e7c",
+    "ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp": "92281fc52d6233213bd6fe40980b18de089aaa3f11f78a873cc7421364df2f6f",
+    "artifacts/simulation/roadmap_b_b2/heartbeat_diagnostics/README.md": "0ecf89f0b31bd77bf0872c32f61629da12fa8787aa3e2ac75866fb4ee33b5390"
+  },
+  "authority": "Owner audit corrective: stale cached contact-only QUERY; scoped source/test, derived manifest/config, offline/build and new B2.2 runtime packets"
+}

@@ -1,0 +1,652 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="3" disabled="0" errors="0" time="0.258" timestamp="2026-11-07T20:36:56.158" name="AllTests">
+  <testsuite name="ContactOnlyMode" tests="3" failures="3" disabled="0" skipped="0" errors="0" time="0.258" timestamp="2026-11-07T20:36:56.158">
+    <testcase name="CachedQueryRevokedAfterClockRollback" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp" line="4055" status="run" result="completed" time="0.092" timestamp="2026-11-07T20:36:56.158" classname="ContactOnlyMode">
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004&#x0A;Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: &apos;\x2&apos; (2) vs &apos;\x2&apos; (2)&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004
+Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: '\x2' (2) vs '\x2' (2)
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005&#x0A;Expected equality of these values:&#x0A;  response.proof_backend_instance_id&#x0A;    Which is: 517694204266370501&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005
+Expected equality of these values:
+  response.proof_backend_instance_id
+    Which is: 517694204266370501
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;native-reset-chain&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+native-reset-chain
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;gz-physics-dartsim-plugin&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+gz-physics-dartsim-plugin
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;8.11.0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+8.11.0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::ground_plane::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::ground_plane::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012&#x0A;Expected equality of these values:&#x0A;  response.probe_model_entity_id&#x0A;    Which is: 22&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012
+Expected equality of these values:
+  response.probe_model_entity_id
+    Which is: 22
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013&#x0A;Expected equality of these values:&#x0A;  response.probe_collision_entity_id&#x0A;    Which is: 24&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013
+Expected equality of these values:
+  response.probe_collision_entity_id
+    Which is: 24
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014&#x0A;Expected equality of these values:&#x0A;  response.floor_collision_entity_id&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014
+Expected equality of these values:
+  response.floor_collision_entity_id
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015&#x0A;Expected equality of these values:&#x0A;  response.contact_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015
+Expected equality of these values:
+  response.contact_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016&#x0A;Expected equality of these values:&#x0A;  response.covered_empty_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016
+Expected equality of these values:
+  response.covered_empty_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017&#x0A;Expected equality of these values:&#x0A;  response.contact_first_iteration&#x0A;    Which is: 2&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017
+Expected equality of these values:
+  response.contact_first_iteration
+    Which is: 2
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018&#x0A;Expected equality of these values:&#x0A;  response.contact_last_iteration&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018
+Expected equality of these values:
+  response.contact_last_iteration
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019&#x0A;Expected equality of these values:&#x0A;  response.empty_first_iteration&#x0A;    Which is: 7&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019
+Expected equality of these values:
+  response.empty_first_iteration
+    Which is: 7
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020&#x0A;Expected equality of these values:&#x0A;  response.empty_last_iteration&#x0A;    Which is: 9&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020
+Expected equality of these values:
+  response.empty_last_iteration
+    Which is: 9
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 210000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 210000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 230000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 230000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 260000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 260000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 280000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 280000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015&#x0A;Expected equality of these values:&#x0A;  response.contact_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015
+Expected equality of these values:
+  response.contact_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016&#x0A;Expected equality of these values:&#x0A;  response.covered_empty_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016
+Expected equality of these values:
+  response.covered_empty_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017&#x0A;Expected equality of these values:&#x0A;  response.contact_first_iteration&#x0A;    Which is: 2&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017
+Expected equality of these values:
+  response.contact_first_iteration
+    Which is: 2
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018&#x0A;Expected equality of these values:&#x0A;  response.contact_last_iteration&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018
+Expected equality of these values:
+  response.contact_last_iteration
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019&#x0A;Expected equality of these values:&#x0A;  response.empty_first_iteration&#x0A;    Which is: 7&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019
+Expected equality of these values:
+  response.empty_first_iteration
+    Which is: 7
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020&#x0A;Expected equality of these values:&#x0A;  response.empty_last_iteration&#x0A;    Which is: 9&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020
+Expected equality of these values:
+  response.empty_last_iteration
+    Which is: 9
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 210000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 210000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 230000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 230000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 260000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 260000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 280000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 280000000
+  0u
+    Which is: 0
+]]></failure>
+    </testcase>
+    <testcase name="CachedQueryRevokedAfterEngineChange" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp" line="4060" status="run" result="completed" time="0.083" timestamp="2026-11-07T20:36:56.250" classname="ContactOnlyMode">
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004&#x0A;Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: &apos;\x2&apos; (2) vs &apos;\x2&apos; (2)&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004
+Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: '\x2' (2) vs '\x2' (2)
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005&#x0A;Expected equality of these values:&#x0A;  response.proof_backend_instance_id&#x0A;    Which is: 9484654721680111727&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005
+Expected equality of these values:
+  response.proof_backend_instance_id
+    Which is: 9484654721680111727
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;native-reset-chain&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+native-reset-chain
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;gz-physics-dartsim-plugin&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+gz-physics-dartsim-plugin
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;8.11.0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+8.11.0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::ground_plane::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::ground_plane::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012&#x0A;Expected equality of these values:&#x0A;  response.probe_model_entity_id&#x0A;    Which is: 22&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012
+Expected equality of these values:
+  response.probe_model_entity_id
+    Which is: 22
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013&#x0A;Expected equality of these values:&#x0A;  response.probe_collision_entity_id&#x0A;    Which is: 24&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013
+Expected equality of these values:
+  response.probe_collision_entity_id
+    Which is: 24
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014&#x0A;Expected equality of these values:&#x0A;  response.floor_collision_entity_id&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014
+Expected equality of these values:
+  response.floor_collision_entity_id
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015&#x0A;Expected equality of these values:&#x0A;  response.contact_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015
+Expected equality of these values:
+  response.contact_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016&#x0A;Expected equality of these values:&#x0A;  response.covered_empty_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016
+Expected equality of these values:
+  response.covered_empty_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017&#x0A;Expected equality of these values:&#x0A;  response.contact_first_iteration&#x0A;    Which is: 2&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017
+Expected equality of these values:
+  response.contact_first_iteration
+    Which is: 2
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018&#x0A;Expected equality of these values:&#x0A;  response.contact_last_iteration&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018
+Expected equality of these values:
+  response.contact_last_iteration
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019&#x0A;Expected equality of these values:&#x0A;  response.empty_first_iteration&#x0A;    Which is: 7&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019
+Expected equality of these values:
+  response.empty_first_iteration
+    Which is: 7
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020&#x0A;Expected equality of these values:&#x0A;  response.empty_last_iteration&#x0A;    Which is: 9&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020
+Expected equality of these values:
+  response.empty_last_iteration
+    Which is: 9
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 210000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 210000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 230000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 230000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 260000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 260000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 280000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 280000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015&#x0A;Expected equality of these values:&#x0A;  response.contact_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015
+Expected equality of these values:
+  response.contact_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016&#x0A;Expected equality of these values:&#x0A;  response.covered_empty_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016
+Expected equality of these values:
+  response.covered_empty_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017&#x0A;Expected equality of these values:&#x0A;  response.contact_first_iteration&#x0A;    Which is: 2&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017
+Expected equality of these values:
+  response.contact_first_iteration
+    Which is: 2
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018&#x0A;Expected equality of these values:&#x0A;  response.contact_last_iteration&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018
+Expected equality of these values:
+  response.contact_last_iteration
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019&#x0A;Expected equality of these values:&#x0A;  response.empty_first_iteration&#x0A;    Which is: 7&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019
+Expected equality of these values:
+  response.empty_first_iteration
+    Which is: 7
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020&#x0A;Expected equality of these values:&#x0A;  response.empty_last_iteration&#x0A;    Which is: 9&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020
+Expected equality of these values:
+  response.empty_last_iteration
+    Which is: 9
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 210000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 210000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 230000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 230000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 260000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 260000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 280000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 280000000
+  0u
+    Which is: 0
+]]></failure>
+    </testcase>
+    <testcase name="CallbackWaitingOnControlMutexSeesProofRevocation" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp" line="4065" status="run" result="completed" time="0.082" timestamp="2026-11-07T20:36:56.334" classname="ContactOnlyMode">
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004&#x0A;Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: &apos;\x2&apos; (2) vs &apos;\x2&apos; (2)&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4004
+Expected: (response.contact_capability_state) != (ControlResponse::CAPABILITY_VERIFIED), actual: '\x2' (2) vs '\x2' (2)
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005&#x0A;Expected equality of these values:&#x0A;  response.proof_backend_instance_id&#x0A;    Which is: 14233114810345325346&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4005
+Expected equality of these values:
+  response.proof_backend_instance_id
+    Which is: 14233114810345325346
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;native-reset-chain&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+native-reset-chain
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;gz-physics-dartsim-plugin&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+gz-physics-dartsim-plugin
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;8.11.0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+8.11.0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::b2_capability_probe::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::b2_capability_probe::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011&#x0A;Value of: field.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;b2_training_arena::ground_plane::link::collision&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4011
+Value of: field.empty()
+  Actual: false
+Expected: true
+b2_training_arena::ground_plane::link::collision
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012&#x0A;Expected equality of these values:&#x0A;  response.probe_model_entity_id&#x0A;    Which is: 22&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4012
+Expected equality of these values:
+  response.probe_model_entity_id
+    Which is: 22
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013&#x0A;Expected equality of these values:&#x0A;  response.probe_collision_entity_id&#x0A;    Which is: 24&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4013
+Expected equality of these values:
+  response.probe_collision_entity_id
+    Which is: 24
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014&#x0A;Expected equality of these values:&#x0A;  response.floor_collision_entity_id&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4014
+Expected equality of these values:
+  response.floor_collision_entity_id
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015&#x0A;Expected equality of these values:&#x0A;  response.contact_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4015
+Expected equality of these values:
+  response.contact_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016&#x0A;Expected equality of these values:&#x0A;  response.covered_empty_sample_count&#x0A;    Which is: 3&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4016
+Expected equality of these values:
+  response.covered_empty_sample_count
+    Which is: 3
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017&#x0A;Expected equality of these values:&#x0A;  response.contact_first_iteration&#x0A;    Which is: 2&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4017
+Expected equality of these values:
+  response.contact_first_iteration
+    Which is: 2
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018&#x0A;Expected equality of these values:&#x0A;  response.contact_last_iteration&#x0A;    Which is: 4&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4018
+Expected equality of these values:
+  response.contact_last_iteration
+    Which is: 4
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019&#x0A;Expected equality of these values:&#x0A;  response.empty_first_iteration&#x0A;    Which is: 7&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4019
+Expected equality of these values:
+  response.empty_first_iteration
+    Which is: 7
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020&#x0A;Expected equality of these values:&#x0A;  response.empty_last_iteration&#x0A;    Which is: 9&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4020
+Expected equality of these values:
+  response.empty_last_iteration
+    Which is: 9
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 210000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 210000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 230000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 230000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 260000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 260000000
+  0u
+    Which is: 0
+]]></failure>
+      <failure message="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025&#x0A;Expected equality of these values:&#x0A;  stamp.nanosec&#x0A;    Which is: 280000000&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/red-snapshot/ros2_ws/src/mecanum_sim_backend/test/test_backend_invariants.cpp:4025
+Expected equality of these values:
+  stamp.nanosec
+    Which is: 280000000
+  0u
+    Which is: 0
+]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,83 @@
+{
+  "run_id": "B22_GUI_QUERY_CACHE_VERIFY_001",
+  "source_commit": "a95463dbe265355e12bf891937e080e95f8b58d0",
+  "observation": {
+    "backend_identity": [
+      "bef6d8d1-f045-43d3-b0d9-4b778e280dac",
+      "d21bc64ea892dd168d5d85bc15dbee53b8d53df7894844f20b476f75a2df1973",
+      2571895317130860096,
+      "b2_training_arena"
+    ],
+    "last_status_sequence": 71153,
+    "backend_status_samples": 20264,
+    "heartbeat_last_steady": 25444.549394846,
+    "clock_samples": 20226,
+    "clock_stamp": [
+      0,
+      0
+    ],
+    "observed_seconds": 60.00064254600147
+  },
+  "evaluator_max_gap_ns": 268178099,
+  "clock_max_gap_ns": 554528739,
+  "terminal": {
+    "timing_verdict": "PASS",
+    "errors": [],
+    "scope": "completion publication and exact unit process exit deadline",
+    "unit": "b22-qcache-gui-001-694e2e772c.service",
+    "invocation_id": "e315fb03f91541469b0b8c0378ca5121",
+    "process_exit_ns_upper_bound": 25445559939000,
+    "evidence_sha256": "588dcc6d192752e7733bd78d421e1a80a633731669423660e8d0b57ccd397543",
+    "source_commit": "a95463dbe265355e12bf891937e080e95f8b58d0",
+    "run_id": "B22_GUI_QUERY_CACHE_VERIFY_001",
+    "packet_sha256": "5210494f62ee230d5095fc8528d1ee2e109c8929d62dea449c13e3202d53ce37",
+    "profile_sha256": "7e37e51cf61cc4105b337e601b215238c0269989fde6c738f6d62edc7ca4e618",
+    "worker_pid": 54923
+  },
+  "consume_to_exit_s": 103.551597247,
+  "cleanup_ack": {
+    "attempted": true,
+    "acknowledged": true,
+    "failed": false,
+    "pending": false,
+    "batch_id": "39d481464c634cbcabf3cd7ff6429653"
+  },
+  "process_residue": "NONE",
+  "task_residue": "NONE",
+  "outer_cgroup_absent": true,
+  "screenshot_sha256": "969360eace7cbb01a866112b38e8cf52ee7d9d1fb89faa0911db858fbe6d4014",
+  "review_sha256": "a386d8c9fecc30d0c30a2cca61daed698324c8b303808e90ca2fe80c74c812ae",
+  "traces": {
+    "backend": {
+      "sha256": "092b65d4d9108ba204146da0cfed0212d1a109e024f1292a5cf57dd47db44854",
+      "records": 142504,
+      "structure_valid": true,
+      "file_window_coverage": true,
+      "issues": [],
+      "event_counts": {
+        "1": 71251,
+        "2": 71251
+      },
+      "begin_ns": 25348076330406,
+      "end_ns": 25444658984748
+    },
+    "observer": {
+      "sha256": "429db6217bae556e91734221bc9080ba7db61158bb2fd46af0d9d6b3aa7113ed",
+      "records": 213698,
+      "structure_valid": true,
+      "file_window_coverage": true,
+      "issues": [],
+      "event_counts": {
+        "6": 71232,
+        "7": 71232,
+        "10": 71232
+      },
+      "begin_ns": 25348829605463,
+      "end_ns": 25444949619186
+    }
+  },
+  "clock_domain_certificate_sha256": "82b48a08da9d3ee44368a8bcd107e37413d6c2b38198c2b949ef33c0d39e5c26",
+  "trace_requested_window": "review accepted through last validated status; startup callbacks before observer BEGIN are excluded",
+  "clock_error_bound": "NOT_CLAIMED",
+  "historical_RUN008_cause": "UNKNOWN"
+}

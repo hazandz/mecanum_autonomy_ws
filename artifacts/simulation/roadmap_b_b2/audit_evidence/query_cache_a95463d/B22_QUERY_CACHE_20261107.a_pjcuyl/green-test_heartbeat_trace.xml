@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="0" disabled="0" errors="0" time="0." timestamp="2026-11-07T20:40:16.478" name="AllTests">
+  <testsuite name="HeartbeatTraceWriter" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0." timestamp="2026-11-07T20:40:16.478">
+    <testcase name="WritesReaderCompatibleV1BytesAndBoundaries" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/snapshot/ros2_ws/src/mecanum_sim_backend/test/test_heartbeat_trace.cpp" line="37" status="run" result="completed" time="0." timestamp="2026-11-07T20:40:16.478" classname="HeartbeatTraceWriter" />
+    <testcase name="OverflowIsStickyAndDoesNotOverwriteSlots" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/snapshot/ros2_ws/src/mecanum_sim_backend/test/test_heartbeat_trace.cpp" line="65" status="run" result="completed" time="0." timestamp="2026-11-07T20:40:16.479" classname="HeartbeatTraceWriter" />
+    <testcase name="RejectsWrongInodeAndNonPrivateMode" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/snapshot/ros2_ws/src/mecanum_sim_backend/test/test_heartbeat_trace.cpp" line="80" status="run" result="completed" time="0." timestamp="2026-11-07T20:40:16.479" classname="HeartbeatTraceWriter" />
+    <testcase name="CAbiEnforcesSingleWriterAndUsesMonotonicClock" file="/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/snapshot/ros2_ws/src/mecanum_sim_backend/test/test_heartbeat_trace.cpp" line="96" status="run" result="completed" time="0." timestamp="2026-11-07T20:40:16.479" classname="HeartbeatTraceWriter" />
+  </testsuite>
+</testsuites>

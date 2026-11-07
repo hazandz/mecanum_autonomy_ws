@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+    "-B",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/runtime-snapshot/artifacts/simulation/roadmap_b_b2/gui_verification/tools/observation_runner.py",
+    "--validate-terminal",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_CONTACT_QUERY_CACHE_VERIFY_001",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001-terminal.json",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001-packet.json",
+    "decfd761b9c4480adce3b08a8bb56a044c3edf635269962600cf70bcf103401b"
+  ],
+  "stdout": "{\"timing_verdict\": \"PASS\", \"errors\": [], \"scope\": \"completion publication and exact unit process exit deadline\", \"unit\": \"b22-qcache-contact-001-8427d1c047.service\", \"invocation_id\": \"b5ccd4764d0a48c4866fcf5701255f87\", \"process_exit_ns_upper_bound\": 25316055070000, \"evidence_sha256\": \"bbac3797056c8f44f054ac356deb80fd1df6ff4dfa822527c1dd8f305b0ef0d3\", \"source_commit\": \"a95463dbe265355e12bf891937e080e95f8b58d0\", \"run_id\": \"B22_CONTACT_QUERY_CACHE_VERIFY_001\", \"packet_sha256\": \"decfd761b9c4480adce3b08a8bb56a044c3edf635269962600cf70bcf103401b\", \"profile_sha256\": \"85f5d844864ffde80b07f63e1be818c1346634c37cd6c76b42a2573dd3ce29c5\", \"worker_pid\": 54660}\n",
+  "stderr": "",
+  "exit": 0
+}

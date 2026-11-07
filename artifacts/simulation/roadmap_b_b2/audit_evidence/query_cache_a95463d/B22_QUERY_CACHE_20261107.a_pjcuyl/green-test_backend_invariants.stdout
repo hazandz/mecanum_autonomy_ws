@@ -1,0 +1,157 @@
+Running main() from /opt/ros/jazzy/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 65 tests from 7 test suites.
+[----------] Global test environment set-up.
+[----------] 11 tests from BackendInvariants
+[ RUN      ] BackendInvariants.BodyFrameConversionPreservesVyAndMeasuredVerticalComponents
+[       OK ] BackendInvariants.BodyFrameConversionPreservesVyAndMeasuredVerticalComponents (0 ms)
+[ RUN      ] BackendInvariants.PhysicsEngineFingerprintResolvesSelectedBinary
+[       OK ] BackendInvariants.PhysicsEngineFingerprintResolvesSelectedBinary (94 ms)
+[ RUN      ] BackendInvariants.ConvertsYawPlusMinusNinetyWithoutDoubleRotation
+[       OK ] BackendInvariants.ConvertsYawPlusMinusNinetyWithoutDoubleRotation (0 ms)
+[ RUN      ] BackendInvariants.RollPitchOrientationAndMissingMeasurementFailClosed
+[       OK ] BackendInvariants.RollPitchOrientationAndMissingMeasurementFailClosed (0 ms)
+[ RUN      ] BackendInvariants.ZeroCommandIsNotAZeroMeasurement
+[       OK ] BackendInvariants.ZeroCommandIsNotAZeroMeasurement (0 ms)
+[ RUN      ] BackendInvariants.ContactPairsUseCollisionEntityIdsAndExactFloorPair
+[       OK ] BackendInvariants.ContactPairsUseCollisionEntityIdsAndExactFloorPair (0 ms)
+[ RUN      ] BackendInvariants.ServerSceneRequiresOneExpectedRobotInExpectedWorld
+[       OK ] BackendInvariants.ServerSceneRequiresOneExpectedRobotInExpectedWorld (0 ms)
+[ RUN      ] BackendInvariants.ResetContextMustAdvanceWithoutRewindingIdentity
+[       OK ] BackendInvariants.ResetContextMustAdvanceWithoutRewindingIdentity (0 ms)
+[ RUN      ] BackendInvariants.Observation0RequiresSelectedAppliedZeroAndAdjacentBoundary
+[       OK ] BackendInvariants.Observation0RequiresSelectedAppliedZeroAndAdjacentBoundary (0 ms)
+[ RUN      ] BackendInvariants.Observation0RejectsOverrideContactAndHistoryGaps
+[       OK ] BackendInvariants.Observation0RejectsOverrideContactAndHistoryGaps (0 ms)
+[ RUN      ] BackendInvariants.Observation0RejectsStaleAndFutureBoundaryReceipts
+[       OK ] BackendInvariants.Observation0RejectsStaleAndFutureBoundaryReceipts (0 ms)
+[----------] 11 tests from BackendInvariants (94 ms total)
+
+[----------] 8 tests from BackendSystemLifecycle
+[ RUN      ] BackendSystemLifecycle.MissingModelAndEarlyCallbackRemainInhibited
+[       OK ] BackendSystemLifecycle.MissingModelAndEarlyCallbackRemainInhibited (0 ms)
+[ RUN      ] BackendSystemLifecycle.MissingWorldAndLinkStayInhibitedAcrossHooks
+[       OK ] BackendSystemLifecycle.MissingWorldAndLinkStayInhibitedAcrossHooks (105 ms)
+[ RUN      ] BackendSystemLifecycle.SdfEntityCreatorDefersBackendInitializationUntilParentExists
+[       OK ] BackendSystemLifecycle.SdfEntityCreatorDefersBackendInitializationUntilParentExists (119 ms)
+[ RUN      ] BackendSystemLifecycle.FirstPausedUpdateLatchesMissingParentWithoutRetry
+[       OK ] BackendSystemLifecycle.FirstPausedUpdateLatchesMissingParentWithoutRetry (45 ms)
+[ RUN      ] BackendSystemLifecycle.ShutdownBeforeFirstUpdateCancelsPendingInitialization
+[       OK ] BackendSystemLifecycle.ShutdownBeforeFirstUpdateCancelsPendingInitialization (46 ms)
+[ RUN      ] BackendSystemLifecycle.FirstUpdateRejectsWrongIdentityDuplicateAndMissingLink
+[       OK ] BackendSystemLifecycle.FirstUpdateRejectsWrongIdentityDuplicateAndMissingLink (181 ms)
+[ RUN      ] BackendSystemLifecycle.NativeResourceFactoryFailureRollsBackExactlyOnce
+[       OK ] BackendSystemLifecycle.NativeResourceFactoryFailureRollsBackExactlyOnce (685 ms)
+[ RUN      ] BackendSystemLifecycle.SpawnPoseAndRemoveCallbacksRemainSafeAfterBackendDestruction
+[       OK ] BackendSystemLifecycle.SpawnPoseAndRemoveCallbacksRemainSafeAfterBackendDestruction (3 ms)
+[----------] 8 tests from BackendSystemLifecycle (1188 ms total)
+
+[----------] 32 tests from BackendSystemControlReceiver
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainUsesProductionFacts
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainUsesProductionFacts (80 ms)
+[ RUN      ] BackendSystemControlReceiver.PolicyReceiptTraversesReceiverObservationProofAndActuatorSeam
+[       OK ] BackendSystemControlReceiver.PolicyReceiptTraversesReceiverObservationProofAndActuatorSeam (81 ms)
+[ RUN      ] BackendSystemControlReceiver.RetainedSafetyInputRosAgeExpiryClosesPolicyAtActuator
+[       OK ] BackendSystemControlReceiver.RetainedSafetyInputRosAgeExpiryClosesPolicyAtActuator (81 ms)
+[ RUN      ] BackendSystemControlReceiver.RetainedSafetyInputSteadyAgeExpiryClosesPolicyAtActuator
+[       OK ] BackendSystemControlReceiver.RetainedSafetyInputSteadyAgeExpiryClosesPolicyAtActuator (81 ms)
+[ RUN      ] BackendSystemControlReceiver.RetainedSafetyInputExactAgeBoundaryRemainsAdmissible
+[       OK ] BackendSystemControlReceiver.RetainedSafetyInputExactAgeBoundaryRemainsAdmissible (79 ms)
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsConfirmationContextMismatch
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsConfirmationContextMismatch (97 ms)
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsReceiptWithoutMeasurementApplication
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsReceiptWithoutMeasurementApplication (108 ms)
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsAfterNewResetContext
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsAfterNewResetContext (82 ms)
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainInhibitCancelsQueuedConfirmation
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainInhibitCancelsQueuedConfirmation (81 ms)
+[ RUN      ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsContactCoverageGap
+[       OK ] BackendSystemControlReceiver.NativeResetObservation0ChainRejectsContactCoverageGap (81 ms)
+[ RUN      ] BackendSystemControlReceiver.ResetContextKeepsPublicationWatermark
+[       OK ] BackendSystemControlReceiver.ResetContextKeepsPublicationWatermark (0 ms)
+[ RUN      ] BackendSystemControlReceiver.PendingPolicyReceiptMustBeStrictlyAfterItsActionBarrier
+[       OK ] BackendSystemControlReceiver.PendingPolicyReceiptMustBeStrictlyAfterItsActionBarrier (0 ms)
+[ RUN      ] BackendSystemControlReceiver.MutationDeadlineStartsAtReceiverIngress
+[       OK ] BackendSystemControlReceiver.MutationDeadlineStartsAtReceiverIngress (0 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeDeadlineIncludesIngressAndQueueDelay
+[       OK ] BackendSystemControlReceiver.ProbeDeadlineIncludesIngressAndQueueDelay (1 ms)
+[ RUN      ] BackendSystemControlReceiver.Observation0AppliesOnlyOnUpdateAndCachesResult
+[       OK ] BackendSystemControlReceiver.Observation0AppliesOnlyOnUpdateAndCachesResult (0 ms)
+[ RUN      ] BackendSystemControlReceiver.AdmissionEnumCannotOpenPolicyWithoutProof
+[       OK ] BackendSystemControlReceiver.AdmissionEnumCannotOpenPolicyWithoutProof (46 ms)
+[ RUN      ] BackendSystemControlReceiver.Observation0RejectsInvalidApplicationAndBoundary
+[       OK ] BackendSystemControlReceiver.Observation0RejectsInvalidApplicationAndBoundary (0 ms)
+[ RUN      ] BackendSystemControlReceiver.Observation0RejectsApplicationAndContextMismatch
+[       OK ] BackendSystemControlReceiver.Observation0RejectsApplicationAndContextMismatch (0 ms)
+[ RUN      ] BackendSystemControlReceiver.InhibitCancelsQueuedMutationBeforeApply
+[       OK ] BackendSystemControlReceiver.InhibitCancelsQueuedMutationBeforeApply (0 ms)
+[ RUN      ] BackendSystemControlReceiver.CasIsRecheckedAtUpdateAndCacheEvictsOldReplay
+[       OK ] BackendSystemControlReceiver.CasIsRecheckedAtUpdateAndCacheEvictsOldReplay (1 ms)
+[ RUN      ] BackendSystemControlReceiver.ExactDuplicateConflictGapAndQueueOverflow
+[       OK ] BackendSystemControlReceiver.ExactDuplicateConflictGapAndQueueOverflow (0 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeStartUsesReceiverUpdateAndInjectedTransport
+[       OK ] BackendSystemControlReceiver.ProbeStartUsesReceiverUpdateAndInjectedTransport (2 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeSpawnReplyRequiresOwnedEcmEntity
+[       OK ] BackendSystemControlReceiver.ProbeSpawnReplyRequiresOwnedEcmEntity (3 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeLiftAndCleanupFailuresStayInhibited
+[       OK ] BackendSystemControlReceiver.ProbeLiftAndCleanupFailuresStayInhibited (34 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeRemoveAckDoesNotVerifyWhileFixtureRemains
+[       OK ] BackendSystemControlReceiver.ProbeRemoveAckDoesNotVerifyWhileFixtureRemains (34 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeRemoveFailureAfterValidCoverageStaysInhibited
+[       OK ] BackendSystemControlReceiver.ProbeRemoveFailureAfterValidCoverageStaysInhibited (34 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeNameConflictNeverRemovesUnownedFixture
+[       OK ] BackendSystemControlReceiver.ProbeNameConflictNeverRemovesUnownedFixture (2 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeRejectsMalformedAndDiscontinuousSamples
+[       OK ] BackendSystemControlReceiver.ProbeRejectsMalformedAndDiscontinuousSamples (105 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeReadsCollisionEcmAndWaitsForOwnedTeardown
+[       OK ] BackendSystemControlReceiver.ProbeReadsCollisionEcmAndWaitsForOwnedTeardown (35 ms)
+[ RUN      ] BackendSystemControlReceiver.SensorEntityDataCannotProveProbeContact
+[       OK ] BackendSystemControlReceiver.SensorEntityDataCannotProveProbeContact (35 ms)
+[ RUN      ] BackendSystemControlReceiver.ProbeQueryDoesNotExtendDeadlineAndLateSpawnCannotReviveAbort
+[       OK ] BackendSystemControlReceiver.ProbeQueryDoesNotExtendDeadlineAndLateSpawnCannotReviveAbort (68 ms)
+[ RUN      ] BackendSystemControlReceiver.TimedOutLateSpawnReportsResidueAndKeepsInhibit
+[       OK ] BackendSystemControlReceiver.TimedOutLateSpawnReportsResidueAndKeepsInhibit (36 ms)
+[----------] 32 tests from BackendSystemControlReceiver (1299 ms total)
+
+[----------] 4 tests from ContactProbeMachine
+[ RUN      ] ContactProbeMachine.RequiresContactSeparationAndOwnedTeardown
+[       OK ] ContactProbeMachine.RequiresContactSeparationAndOwnedTeardown (0 ms)
+[ RUN      ] ContactProbeMachine.RejectsMissingDataGapsRobotContactAndBadTeardown
+[       OK ] ContactProbeMachine.RejectsMissingDataGapsRobotContactAndBadTeardown (0 ms)
+[ RUN      ] ContactProbeMachine.DeadlineAbortAndInvalidationNeverVerify
+[       OK ] ContactProbeMachine.DeadlineAbortAndInvalidationNeverVerify (0 ms)
+[ RUN      ] ContactProbeMachine.LateRemoveCompletionAfterAbortOrDeadlineCannotVerify
+[       OK ] ContactProbeMachine.LateRemoveCompletionAfterAbortOrDeadlineCannotVerify (0 ms)
+[----------] 4 tests from ContactProbeMachine (0 ms total)
+
+[----------] 1 test from ContactProbeAdmission
+[ RUN      ] ContactProbeAdmission.UsesProductionFailClosedPreconditions
+[       OK ] ContactProbeAdmission.UsesProductionFailClosedPreconditions (0 ms)
+[----------] 1 test from ContactProbeAdmission (0 ms total)
+
+[----------] 1 test from BackendSystemContactBinding
+[ RUN      ] BackendSystemContactBinding.RegisteredCoverageReadsCollisionEntity
+[       OK ] BackendSystemContactBinding.RegisteredCoverageReadsCollisionEntity (39 ms)
+[----------] 1 test from BackendSystemContactBinding (39 ms total)
+
+[----------] 8 tests from ContactOnlyMode
+[ RUN      ] ContactOnlyMode.DefaultAndConfiguredHardLockUseProductionHooks
+[       OK ] ContactOnlyMode.DefaultAndConfiguredHardLockUseProductionHooks (52 ms)
+[ RUN      ] ContactOnlyMode.RejectsAllActuatorBindingOperationsWithoutCreatingGate
+[       OK ] ContactOnlyMode.RejectsAllActuatorBindingOperationsWithoutCreatingGate (0 ms)
+[ RUN      ] ContactOnlyMode.StartAndInhibitRequireRealDescriptorButNoLifecycle
+[       OK ] ContactOnlyMode.StartAndInhibitRequireRealDescriptorButNoLifecycle (12 ms)
+[ RUN      ] ContactOnlyMode.InvalidatesProofForIdentityEngineClockAndRestartWithoutGate
+[       OK ] ContactOnlyMode.InvalidatesProofForIdentityEngineClockAndRestartWithoutGate (16 ms)
+[ RUN      ] ContactOnlyMode.ShutdownSeparatesRetainedProofIdentityFromFixtureResidue
+[       OK ] ContactOnlyMode.ShutdownSeparatesRetainedProofIdentityFromFixtureResidue (0 ms)
+[ RUN      ] ContactOnlyMode.CachedQueryRevokedAfterClockRollback
+[       OK ] ContactOnlyMode.CachedQueryRevokedAfterClockRollback (83 ms)
+[ RUN      ] ContactOnlyMode.CachedQueryRevokedAfterEngineChange
+[       OK ] ContactOnlyMode.CachedQueryRevokedAfterEngineChange (84 ms)
+[ RUN      ] ContactOnlyMode.CallbackWaitingOnControlMutexSeesProofRevocation
+[       OK ] ContactOnlyMode.CallbackWaitingOnControlMutexSeesProofRevocation (86 ms)
+[----------] 8 tests from ContactOnlyMode (335 ms total)
+
+[----------] Global test environment tear-down
+[==========] 65 tests from 7 test suites ran. (2958 ms total)
+[  PASSED  ] 65 tests.

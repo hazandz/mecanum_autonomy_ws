@@ -1,0 +1,12 @@
+{
+  "checked_ns": 25334410313665,
+  "pinned_invocation": "b5ccd4764d0a48c4866fcf5701255f87",
+  "pinned_cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/b22-qcache-contact-001-8427d1c047.service",
+  "guarded_stop_exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "remaining_cgroup_exists": false,
+  "members": {},
+  "scan_errors": [],
+  "unit_raw": "Type=exec\nRestart=no\nTimeoutStopUSec=5s\nRuntimeMaxUSec=5min\nRemainAfterExit=yes\nMainPID=0\nResult=success\nExecMainExitTimestampMonotonic=25316055069\nExecMainPID=54642\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/bin/bash ; argv[]=/bin/bash /home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-contact-001.sh ; ignore_errors=no ; start_time=[Sat 2026-11-07 20:42:13 +07] ; stop_time=[Sat 2026-11-07 20:42:18 +07] ; pid=54642 ; code=exited ; status=0 }\nControlGroup=\nMemoryMax=5368709120\nKillMode=control-group\nSendSIGKILL=yes\nId=b22-qcache-contact-001-8427d1c047.service\nLoadState=loaded\nActiveState=active\nSubState=exited\nInvocationID=b5ccd4764d0a48c4866fcf5701255f87\n"
+}

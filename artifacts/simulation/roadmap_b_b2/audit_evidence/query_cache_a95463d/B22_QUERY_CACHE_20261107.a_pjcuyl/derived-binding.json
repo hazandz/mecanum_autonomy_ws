@@ -1,0 +1,18 @@
+{
+  "artifacts/simulation/roadmap_b_b2/asset_manifest.json": {
+    "before": "e43b465a0bd753c2b5bee74252fa54494c31662567aee599ef08f05948140637",
+    "after": "9e69c398c6e54858596afaae3b83468586b61c4ce937111791b48105f64e4070"
+  },
+  "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_soak.resolved.json": {
+    "before": "f14e313d52dab70f3cfef19305eac5958775634b3ea3289082be8191db6f451c",
+    "after": "926193d2c389ca127f8d4302b27396b51abba7619150e6fce3e4bc0d20f8f9fb"
+  },
+  "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_goal_settle.resolved.json": {
+    "before": "04c5af479559e3816aff697ae710cbc6216b5bfd85fb9abdd0c4373499381bbe",
+    "after": "35ed125561ad0f0f781b98b59185c55a4fb49d399e5a2f546195d33e514fbd8b"
+  },
+  "ros2_ws/src/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_contact.resolved.json": {
+    "before": "4e6d4b11602ff9abc49a0cd17cf787d80a8190877aebc51e407d89f63eb0d2b7",
+    "after": "0739077f8d453e997bf4d263d4a67c40f3097187f884a05dfb042862f11b536c"
+  }
+}

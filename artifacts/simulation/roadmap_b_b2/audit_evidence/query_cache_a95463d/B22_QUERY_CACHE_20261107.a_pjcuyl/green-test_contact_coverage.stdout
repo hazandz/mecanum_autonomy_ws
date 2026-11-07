@@ -1,0 +1,27 @@
+Running main() from /opt/ros/jazzy/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 9 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 9 tests from ContactCoverage
+[ RUN      ] ContactCoverage.RequiresCompleteCoverageAndConsecutiveTwentyMillisecondClear
+[       OK ] ContactCoverage.RequiresCompleteCoverageAndConsecutiveTwentyMillisecondClear (0 ms)
+[ RUN      ] ContactCoverage.PauseDoesNotAdvanceClearOrCoverage
+[       OK ] ContactCoverage.PauseDoesNotAdvanceClearOrCoverage (0 ms)
+[ RUN      ] ContactCoverage.MissingNormalOrDepthIsUnhealthyWithoutInventedPulse
+[       OK ] ContactCoverage.MissingNormalOrDepthIsUnhealthyWithoutInventedPulse (0 ms)
+[ RUN      ] ContactCoverage.WheelFloorOnlyFilteredWithinApprovedNormalAndDepth
+[       OK ] ContactCoverage.WheelFloorOnlyFilteredWithinApprovedNormalAndDepth (0 ms)
+[ RUN      ] ContactCoverage.AggregatedContactsNeverHideAnUnclassifiableWheelFloorPair
+[       OK ] ContactCoverage.AggregatedContactsNeverHideAnUnclassifiableWheelFloorPair (0 ms)
+[ RUN      ] ContactCoverage.AggregatedNonIgnorableWheelFloorPairIsContact
+[       OK ] ContactCoverage.AggregatedNonIgnorableWheelFloorPairIsContact (0 ms)
+[ RUN      ] ContactCoverage.GapAndOverflowInputsCloseSegmentUntilReset
+[       OK ] ContactCoverage.GapAndOverflowInputsCloseSegmentUntilReset (0 ms)
+[ RUN      ] ContactCoverage.RequiredMaskMustMatchManifestExactly
+[       OK ] ContactCoverage.RequiredMaskMustMatchManifestExactly (0 ms)
+[ RUN      ] ContactCoverage.ConfirmedPulseSurvivesConcurrentHealthFault
+[       OK ] ContactCoverage.ConfirmedPulseSurvivesConcurrentHealthFault (0 ms)
+[----------] 9 tests from ContactCoverage (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 9 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 9 tests.

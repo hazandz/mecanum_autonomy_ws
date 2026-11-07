@@ -1,0 +1,13 @@
+Starting >>> ROBOT_URDF_final_description
+Finished <<< ROBOT_URDF_final_description [0.85s]
+Starting >>> mecanum_nav_rl_interfaces
+Finished <<< mecanum_nav_rl_interfaces [19.8s]
+Starting >>> mecanum_nav_rl
+Finished <<< mecanum_nav_rl [0.90s]
+Starting >>> mecanum_sim_backend
+Finished <<< mecanum_sim_backend [30.1s]
+Starting >>> mecanum_nav_bringup
+Finished <<< mecanum_nav_bringup [0.85s]
+
+Summary: 5 packages finished [52.6s]
+  3 packages had stderr output: ROBOT_URDF_final_description mecanum_nav_bringup mecanum_nav_rl

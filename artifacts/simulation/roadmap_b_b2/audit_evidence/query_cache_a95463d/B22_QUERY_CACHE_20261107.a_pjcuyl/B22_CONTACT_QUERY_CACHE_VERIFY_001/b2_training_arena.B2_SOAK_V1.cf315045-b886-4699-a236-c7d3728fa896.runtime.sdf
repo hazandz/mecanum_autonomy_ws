@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='utf-8'?>
+<sdf version="1.11">
+  <world name="b2_training_arena">
+    <gravity>0 0 -9.8</gravity>
+    <light name="b2_scene_sun" type="directional">
+      <pose>0 0 10 0 0 0</pose><cast_shadows>true</cast_shadows>
+      <diffuse>1 1 1 1</diffuse><specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <physics name="b2_fixed_step" type="ignored">
+      <max_step_size>0.01</max_step_size><real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>100</real_time_update_rate>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics" />
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster" />
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands" />
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact" />
+
+    <model name="ground_plane">
+      <static>true</static><link name="link">
+        <collision name="collision"><pose>0 0 -0.1 0 0 0</pose><geometry><box><size>20 20 0.2</size></box></geometry></collision>
+        <visual name="visual"><pose>0 0 -0.1 0 0 0</pose><geometry><box><size>20 20 0.2</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.55 0.55 0.55 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="arena_walls"><static>true</static>
+      <link name="wall_west"><pose>-4.1 0 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>0.2 8.4 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 8.4 1</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual></link>
+      <link name="wall_east"><pose>4.1 0 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>0.2 8.4 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 8.4 1</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual></link>
+      <link name="wall_south"><pose>0 -4.1 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>8 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>8 0.2 1</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual></link>
+      <link name="wall_north"><pose>0 4.1 0.5 0 0 0</pose><collision name="collision"><geometry><box><size>8 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>8 0.2 1</size></box></geometry><material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material></visual></link>
+    </model>
+    <model name="obstacle_0"><static>true</static><pose>2.5 0 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.2 1 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 1 1</size></box></geometry><material><ambient>0.6 0.3 0.2 1</ambient><diffuse>0.6 0.3 0.2 1</diffuse></material></visual></link></model>
+    <model name="mecanum_b2">
+    <pose>0 0 0.10 0 0 0</pose><static>false</static><self_collide>false</self_collide>
+    <link name="base_link">
+      <inertial><pose>-0.004680971074212348 0.001013778159962492 0.022702840329693212 0 0 0</pose><mass>2</mass><inertia><ixx>0.032621</ixx><iyy>0.088559</iyy><izz>0.100296</izz><ixy>-0.000027</ixy><iyz>0.000162</iyz><ixz>0.003248</ixz></inertia></inertial>
+      <collision name="s3_d3_base_contact_collision"><geometry><box><size>0.4 0.28 0.10</size></box></geometry><surface><contact><collision>default</collision></contact><friction><ode><mu>0.2</mu><mu2>0.2</mu2></ode></friction></surface></collision>
+      <visual name="base_visual"><geometry><mesh><uri>model://ROBOT_URDF_final_description/meshes/base_link.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry></visual>
+      <sensor name="s3_d3_base_contact_collision_contact_sensor" type="contact"><always_on>true</always_on><update_rate>100</update_rate><contact><collision>s3_d3_base_contact_collision</collision></contact></sensor>
+    </link>
+    <link name="Wheel_LF_1"><pose>0.108 0.11109 -0.0175 0 0 0</pose><inertial><mass>0.15</mass><inertia><ixx>0.000111</ixx><iyy>0.000179</iyy><izz>0.000111</izz></inertia></inertial><collision name="Wheel_LF_1_collision"><pose>0 0 0 1.5708 0 0</pose><geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry></collision><visual name="wheel_visual"><geometry><mesh><uri>model://ROBOT_URDF_final_description/meshes/Wheel_LF_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry></visual><sensor name="Wheel_LF_1_collision_contact_sensor" type="contact"><always_on>true</always_on><update_rate>100</update_rate><contact><collision>Wheel_LF_1_collision</collision></contact></sensor></link>
+    <link name="Wheel_RF_1"><pose>0.108 -0.11109 -0.0175 0 0 0</pose><inertial><mass>0.15</mass><inertia><ixx>0.000111</ixx><iyy>0.000179</iyy><izz>0.000111</izz></inertia></inertial><collision name="Wheel_RF_1_collision"><pose>0 0 0 1.5708 0 0</pose><geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry></collision><visual name="wheel_visual"><geometry><mesh><uri>model://ROBOT_URDF_final_description/meshes/Wheel_RF_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry></visual><sensor name="Wheel_RF_1_collision_contact_sensor" type="contact"><always_on>true</always_on><update_rate>100</update_rate><contact><collision>Wheel_RF_1_collision</collision></contact></sensor></link>
+    <link name="Wheel_RB_1"><pose>-0.108 -0.11109 -0.0175 0 0 0</pose><inertial><mass>0.15</mass><inertia><ixx>0.000111</ixx><iyy>0.000179</iyy><izz>0.000111</izz></inertia></inertial><collision name="Wheel_RB_1_collision"><pose>0 0 0 1.5708 0 0</pose><geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry></collision><visual name="wheel_visual"><geometry><mesh><uri>model://ROBOT_URDF_final_description/meshes/Wheel_RB_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry></visual><sensor name="Wheel_RB_1_collision_contact_sensor" type="contact"><always_on>true</always_on><update_rate>100</update_rate><contact><collision>Wheel_RB_1_collision</collision></contact></sensor></link>
+    <link name="Wheel_LB_1"><pose>-0.108 0.11109 -0.0175 0 0 0</pose><inertial><mass>0.15</mass><inertia><ixx>0.000111</ixx><iyy>0.000179</iyy><izz>0.000111</izz></inertia></inertial><collision name="Wheel_LB_1_collision"><pose>0 0 0 1.5708 0 0</pose><geometry><cylinder><radius>0.0485</radius><length>0.04</length></cylinder></geometry></collision><visual name="wheel_visual"><geometry><mesh><uri>model://ROBOT_URDF_final_description/meshes/Wheel_LB_1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry></visual><sensor name="Wheel_LB_1_collision_contact_sensor" type="contact"><always_on>true</always_on><update_rate>100</update_rate><contact><collision>Wheel_LB_1_collision</collision></contact></sensor></link>
+    <link name="lidar_frame"><pose>-0.031765 0 0.140 0 0 0</pose><sensor name="B2_GENERIC_2D_V1" type="gpu_lidar"><topic>/b2/scan</topic><update_rate>10</update_rate><always_on>true</always_on><visualize>false</visualize><lidar><scan><horizontal><samples>500</samples><resolution>1</resolution><min_angle>-3.141592653589793</min_angle><max_angle>3.141592653589793</max_angle></horizontal></scan><range><min>0.10</min><max>8.0</max></range></lidar></sensor></link>
+    <joint name="base_to_lidar" type="fixed"><parent>base_link</parent><child>lidar_frame</child></joint>
+    <joint name="base_to_wheel_lf" type="fixed"><parent>base_link</parent><child>Wheel_LF_1</child></joint>
+    <joint name="base_to_wheel_rf" type="fixed"><parent>base_link</parent><child>Wheel_RF_1</child></joint>
+    <joint name="base_to_wheel_rb" type="fixed"><parent>base_link</parent><child>Wheel_RB_1</child></joint>
+    <joint name="base_to_wheel_lb" type="fixed"><parent>base_link</parent><child>Wheel_LB_1</child></joint>
+    <plugin filename="mecanum_sim_backend_system" name="mecanum_sim_backend::BackendSystem"><world_name>b2_training_arena</world_name><robot_entity>mecanum_b2</robot_entity><base_link>base_link</base_link><session_id>cf315045-b886-4699-a236-c7d3728fa896</session_id><config_hash>d21bc64ea892dd168d5d85bc15dbee53b8d53df7894844f20b476f75a2df1973</config_hash><asset_manifest_sha256>9e69c398c6e54858596afaae3b83468586b61c4ce937111791b48105f64e4070</asset_manifest_sha256><coordinator_ingress_instance_id>7843255746268193923</coordinator_ingress_instance_id><final_publisher_instance_id>0</final_publisher_instance_id><safe_stop_source_instance_id>0</safe_stop_source_instance_id><first_safe_stop_sequence>0</first_safe_stop_sequence><policy_source_instance_id>0</policy_source_instance_id><contact_probe_collision>b2_training_arena::b2_contact_probe::link::collision</contact_probe_collision>
+      <tracked_collision name="b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision" sensor="b2_training_arena::mecanum_b2::base_link::s3_d3_base_contact_collision_contact_sensor" wheel_floor_ignore="false" /><tracked_collision name="b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision" sensor="b2_training_arena::mecanum_b2::Wheel_LF_1::Wheel_LF_1_collision_contact_sensor" wheel_floor_ignore="true" /><tracked_collision name="b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision" sensor="b2_training_arena::mecanum_b2::Wheel_RF_1::Wheel_RF_1_collision_contact_sensor" wheel_floor_ignore="true" /><tracked_collision name="b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision" sensor="b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision_contact_sensor" wheel_floor_ignore="true" /><tracked_collision name="b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision" sensor="b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision_contact_sensor" wheel_floor_ignore="true" />
+    <contact_probe_only>true</contact_probe_only></plugin>
+  </model></world>
+</sdf>

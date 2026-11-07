@@ -1,0 +1,203 @@
+{
+  "run_id": "B22_CONTACT_QUERY_CACHE_VERIFY_001",
+  "source_commit": "a95463dbe265355e12bf891937e080e95f8b58d0",
+  "proof": {
+    "schema_version": 1,
+    "result": 3,
+    "reason_code": 0,
+    "request_sequence": 9,
+    "backend_instance_id": 7038052106981565511,
+    "binding_revision": 0,
+    "applied_binding_revision": 0,
+    "applied_physics_iteration": 21,
+    "applied_sim_stamp": {
+      "sec": 0,
+      "nanosec": 210000000
+    },
+    "contact_capability_state": 2,
+    "capability_revision": 2,
+    "proof_backend_instance_id": 7038052106981565511,
+    "proof_session_id": "cf315045-b886-4699-a236-c7d3728fa896",
+    "proof_config_hash": "d21bc64ea892dd168d5d85bc15dbee53b8d53df7894844f20b476f75a2df1973",
+    "proof_asset_manifest_sha256": "9e69c398c6e54858596afaae3b83468586b61c4ce937111791b48105f64e4070",
+    "proof_collision_registry_sha256": "77f238d5a2287b8a49d46465810ab72178baf5892d0b130993b220fda1c301d5",
+    "proof_world_name": "b2_training_arena",
+    "proof_physics_engine_plugin": "gz-physics-dartsim-plugin",
+    "proof_gz_sim_version": "8.11.0",
+    "proof_physics_engine_fingerprint_sha256": "9f4ae6736fc6d4751b937ca7c14b056baf423553e20530f6d10d3ec8fd28bdd9",
+    "probe_model_scoped_name": "b2_training_arena::b2_capability_probe",
+    "probe_model_entity_id": 55,
+    "probe_collision_scoped_name": "b2_training_arena::b2_capability_probe::link::collision",
+    "probe_collision_entity_id": 58,
+    "floor_collision_scoped_name": "b2_training_arena::ground_plane::link::collision",
+    "floor_collision_entity_id": 7,
+    "contact_sample_count": 3,
+    "contact_first_iteration": 10,
+    "contact_last_iteration": 12,
+    "contact_first_stamp": {
+      "sec": 0,
+      "nanosec": 100000000
+    },
+    "contact_last_stamp": {
+      "sec": 0,
+      "nanosec": 120000000
+    },
+    "covered_empty_sample_count": 3,
+    "empty_first_iteration": 15,
+    "empty_last_iteration": 17,
+    "empty_first_stamp": {
+      "sec": 0,
+      "nanosec": 150000000
+    },
+    "empty_last_stamp": {
+      "sec": 0,
+      "nanosec": 170000000
+    }
+  },
+  "raw_samples": [
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "10",
+      "stamp_ns": "100000000",
+      "phase": "3",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "1",
+      "normal_depth_valid": "1",
+      "separated": "0"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "11",
+      "stamp_ns": "110000000",
+      "phase": "3",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "1",
+      "normal_depth_valid": "1",
+      "separated": "0"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "12",
+      "stamp_ns": "120000000",
+      "phase": "3",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "1",
+      "normal_depth_valid": "1",
+      "separated": "0"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "13",
+      "stamp_ns": "130000000",
+      "phase": "5",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "1",
+      "normal_depth_valid": "1",
+      "separated": "0"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "14",
+      "stamp_ns": "140000000",
+      "phase": "5",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "0",
+      "normal_depth_valid": "1",
+      "separated": "1"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "15",
+      "stamp_ns": "150000000",
+      "phase": "6",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "0",
+      "normal_depth_valid": "1",
+      "separated": "1"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "16",
+      "stamp_ns": "160000000",
+      "phase": "6",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "0",
+      "normal_depth_valid": "1",
+      "separated": "1"
+    },
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "17",
+      "stamp_ns": "170000000",
+      "phase": "6",
+      "component": "1",
+      "coverage": "1",
+      "floor_pair": "0",
+      "normal_depth_valid": "1",
+      "separated": "1"
+    }
+  ],
+  "removal": [
+    {
+      "session": "cf315045-b886-4699-a236-c7d3728fa896",
+      "backend": "7038052106981565511",
+      "iteration": "20",
+      "stamp_ns": "200000000",
+      "absent": "1",
+      "verified": "1"
+    }
+  ],
+  "cleanup_ack": {
+    "attempted": true,
+    "acknowledged": true,
+    "failed": false,
+    "pending": false,
+    "batch_id": "077da330a2304c18899d13f75be9bf45"
+  },
+  "residue": {
+    "checked_ns": 25334410313665,
+    "pinned_invocation": "b5ccd4764d0a48c4866fcf5701255f87",
+    "pinned_cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/b22-qcache-contact-001-8427d1c047.service",
+    "guarded_stop_exit": 0,
+    "stdout": "",
+    "stderr": "",
+    "remaining_cgroup_exists": false,
+    "members": {},
+    "scan_errors": [],
+    "unit_raw": "Type=exec\nRestart=no\nTimeoutStopUSec=5s\nRuntimeMaxUSec=5min\nRemainAfterExit=yes\nMainPID=0\nResult=success\nExecMainExitTimestampMonotonic=25316055069\nExecMainPID=54642\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/bin/bash ; argv[]=/bin/bash /home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-contact-001.sh ; ignore_errors=no ; start_time=[Sat 2026-11-07 20:42:13 +07] ; stop_time=[Sat 2026-11-07 20:42:18 +07] ; pid=54642 ; code=exited ; status=0 }\nControlGroup=\nMemoryMax=5368709120\nKillMode=control-group\nSendSIGKILL=yes\nId=b22-qcache-contact-001-8427d1c047.service\nLoadState=loaded\nActiveState=active\nSubState=exited\nInvocationID=b5ccd4764d0a48c4866fcf5701255f87\n"
+  },
+  "terminal": {
+    "timing_verdict": "PASS",
+    "errors": [],
+    "scope": "completion publication and exact unit process exit deadline",
+    "unit": "b22-qcache-contact-001-8427d1c047.service",
+    "invocation_id": "b5ccd4764d0a48c4866fcf5701255f87",
+    "process_exit_ns_upper_bound": 25316055070000,
+    "evidence_sha256": "bbac3797056c8f44f054ac356deb80fd1df6ff4dfa822527c1dd8f305b0ef0d3",
+    "source_commit": "a95463dbe265355e12bf891937e080e95f8b58d0",
+    "run_id": "B22_CONTACT_QUERY_CACHE_VERIFY_001",
+    "packet_sha256": "decfd761b9c4480adce3b08a8bb56a044c3edf635269962600cf70bcf103401b",
+    "profile_sha256": "85f5d844864ffde80b07f63e1be818c1346634c37cd6c76b42a2573dd3ce29c5",
+    "worker_pid": 54660
+  },
+  "stream_sha256": "da4157102ad7604990f2ca603e3fcfca03498a1d73cf9fa415acd0e2bde7eb5f",
+  "batch_sha256": "17b352e0df60ab6d5a9f37e3c0ca327e1573a50d9df57ae20392c8fdd4d8e653",
+  "proof_sha256": "4c5664f70ca5a94e61e5a6cf64807d0c74af6d45a6219eabd9f8b69689351604",
+  "raw_lines_count": 8,
+  "scope": "same inhibited fixture-only session; no B2.3 motion eligibility"
+}

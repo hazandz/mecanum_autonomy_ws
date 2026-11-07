@@ -1,0 +1,463 @@
+{
+  "deadline": 25474.555693941,
+  "overall_status": true,
+  "cleanup_residue": "NONE",
+  "primary_failure": null,
+  "cleanup_errors": [],
+  "process_residue": "NONE",
+  "task_residue": "NONE",
+  "process_facts": [
+    {
+      "role": "gui",
+      "pid": 55106,
+      "process_joined": true,
+      "raw_exit_status": 1,
+      "group_absent": true,
+      "group_identity_known": true,
+      "signal_dispatches": [
+        "SIGINT"
+      ]
+    },
+    {
+      "role": "x11_display",
+      "pid": 54939,
+      "process_joined": true,
+      "raw_exit_status": 0,
+      "group_absent": true,
+      "group_identity_known": true,
+      "signal_dispatches": [
+        "SIGINT"
+      ]
+    },
+    {
+      "role": "server",
+      "pid": 55002,
+      "process_joined": true,
+      "raw_exit_status": 0,
+      "group_absent": true,
+      "group_identity_known": true,
+      "signal_dispatches": [
+        "SIGINT"
+      ]
+    },
+    {
+      "role": "parameter_bridge",
+      "pid": 54978,
+      "process_joined": true,
+      "raw_exit_status": 0,
+      "group_absent": true,
+      "group_identity_known": true,
+      "signal_dispatches": [
+        "SIGINT"
+      ]
+    },
+    {
+      "role": "robot_state_publisher",
+      "pid": 54947,
+      "process_joined": true,
+      "raw_exit_status": 0,
+      "group_absent": true,
+      "group_identity_known": true,
+      "signal_dispatches": [
+        "SIGINT"
+      ]
+    }
+  ],
+  "process_cleanup_operations": [
+    {
+      "role": "gui",
+      "pid": 55106,
+      "task_done": true,
+      "task_cancelled": false,
+      "residue": "NONE"
+    },
+    {
+      "role": "server",
+      "pid": 55002,
+      "task_done": true,
+      "task_cancelled": false,
+      "residue": "NONE"
+    },
+    {
+      "role": "parameter_bridge",
+      "pid": 54978,
+      "task_done": true,
+      "task_cancelled": false,
+      "residue": "NONE"
+    },
+    {
+      "role": "robot_state_publisher",
+      "pid": 54947,
+      "task_done": true,
+      "task_cancelled": false,
+      "residue": "NONE"
+    },
+    {
+      "role": "x11_display",
+      "pid": 54939,
+      "task_done": true,
+      "task_cancelled": false,
+      "residue": "NONE"
+    }
+  ],
+  "task_facts": [],
+  "launch_facts": [
+    {
+      "operation_id": "6c40299087ec4ea7a4ab901b49d4e9de",
+      "role": "x11_display",
+      "command": [
+        "Xephyr",
+        ":105",
+        "-screen",
+        "1280x800",
+        "-nolisten",
+        "tcp",
+        "-noreset",
+        "-auth",
+        "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_GUI_QUERY_CACHE_VERIFY_001/display.Xauthority"
+      ],
+      "state": "HANDLE_REGISTERED",
+      "handle_registered": true,
+      "task_done": true,
+      "task_cancelled": false,
+      "error_type": null,
+      "owned_process_residue": "NONE"
+    },
+    {
+      "operation_id": "10e378605e544c0cbf9a470d87ca0e66",
+      "role": "robot_state_publisher",
+      "command": [
+        "/opt/ros/jazzy/lib/robot_state_publisher/robot_state_publisher",
+        "--ros-args",
+        "--params-file",
+        "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_GUI_QUERY_CACHE_VERIFY_001/rsp-params.json"
+      ],
+      "state": "HANDLE_REGISTERED",
+      "handle_registered": true,
+      "task_done": true,
+      "task_cancelled": false,
+      "error_type": null,
+      "owned_process_residue": "NONE"
+    },
+    {
+      "operation_id": "6e241f2bad3c480dadd8f6f873a43dac",
+      "role": "parameter_bridge",
+      "command": [
+        "ros2",
+        "run",
+        "ros_gz_bridge",
+        "parameter_bridge",
+        "--ros-args",
+        "-p",
+        "config_file:=/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/install/share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml"
+      ],
+      "state": "HANDLE_REGISTERED",
+      "handle_registered": true,
+      "task_done": true,
+      "task_cancelled": false,
+      "error_type": null,
+      "owned_process_residue": "NONE"
+    },
+    {
+      "operation_id": "c5ec928af3fe435fa6d2f73348a6b425",
+      "role": "server",
+      "command": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-s",
+        "--headless-rendering",
+        "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_GUI_QUERY_CACHE_VERIFY_001/b2_training_arena.B2_SOAK_V1.bef6d8d1-f045-43d3-b0d9-4b778e280dac.runtime.sdf"
+      ],
+      "state": "HANDLE_REGISTERED",
+      "handle_registered": true,
+      "task_done": true,
+      "task_cancelled": false,
+      "error_type": null,
+      "owned_process_residue": "NONE"
+    },
+    {
+      "operation_id": "a17eac22a73e4562942c3fa73344a9e0",
+      "role": "gui",
+      "command": [
+        "gz",
+        "sim",
+        "--force-version",
+        "8",
+        "-g",
+        "--gui-config",
+        "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/install/share/mecanum_nav_bringup/config/gui/local_training.config"
+      ],
+      "state": "HANDLE_REGISTERED",
+      "handle_registered": true,
+      "task_done": true,
+      "task_cancelled": false,
+      "error_type": null,
+      "owned_process_residue": "NONE"
+    }
+  ],
+  "pipe_facts": [
+    {
+      "role": "gui",
+      "stream_task_name": "Task-52",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "gui",
+      "stream_task_name": "Task-53",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "server",
+      "stream_task_name": "Task-40",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "server",
+      "stream_task_name": "Task-41",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "parameter_bridge",
+      "stream_task_name": "Task-35",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "parameter_bridge",
+      "stream_task_name": "Task-36",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "robot_state_publisher",
+      "stream_task_name": "Task-25",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "robot_state_publisher",
+      "stream_task_name": "Task-26",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "x11_display",
+      "stream_task_name": "Task-14",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    },
+    {
+      "role": "x11_display",
+      "stream_task_name": "Task-15",
+      "task_done": true,
+      "cancelled": false,
+      "pipe_drain_joined": true,
+      "error_type": null
+    }
+  ],
+  "observer_facts": {
+    "session_id": "bef6d8d1-f045-43d3-b0d9-4b778e280dac",
+    "config_hash": "d21bc64ea892dd168d5d85bc15dbee53b8d53df7894844f20b476f75a2df1973",
+    "world": "b2_training_arena",
+    "clock_context": {
+      "clock": "CLOCK_MONOTONIC",
+      "provenance": "70f60b017f7420189acc3fe1777a55ab5d22506956a4848cf7a295aac887e317",
+      "boot_id": "ea8e7074-2dc2-429d-b310-4035714fdc0e",
+      "time_namespace_device": 5,
+      "time_namespace_inode": 4026531834,
+      "time_namespace_offsets": "monotonic           0         0\nboottime            0         0\n",
+      "clock_resolution_ns": 1,
+      "clock_error_bound_ns": null
+    },
+    "clock_library_sha256": "ebc190a30eefb48ef2557bba8a2e6c5e9c79baebb81ed8e07deba169fade71f5",
+    "clock_domain_certificate": {
+      "binary_sha256": "ebc190a30eefb48ef2557bba8a2e6c5e9c79baebb81ed8e07deba169fade71f5",
+      "boot_id": "ea8e7074-2dc2-429d-b310-4035714fdc0e",
+      "clock": "CLOCK_MONOTONIC",
+      "method": "python_bracket_around_native_read",
+      "observed_max_bracket_width_ns": 3416,
+      "provenance": "70f60b017f7420189acc3fe1777a55ab5d22506956a4848cf7a295aac887e317",
+      "samples": [
+        {
+          "native_ns": 25345249672752,
+          "python_after_ns": 25345249674178,
+          "python_before_ns": 25345249670762
+        },
+        {
+          "native_ns": 25345249676136,
+          "python_after_ns": 25345249676493,
+          "python_before_ns": 25345249675666
+        },
+        {
+          "native_ns": 25345249677685,
+          "python_after_ns": 25345249677928,
+          "python_before_ns": 25345249677477
+        },
+        {
+          "native_ns": 25345249678523,
+          "python_after_ns": 25345249678704,
+          "python_before_ns": 25345249678398
+        },
+        {
+          "native_ns": 25345249679169,
+          "python_after_ns": 25345249679374,
+          "python_before_ns": 25345249679004
+        },
+        {
+          "native_ns": 25345249679859,
+          "python_after_ns": 25345249680023,
+          "python_before_ns": 25345249679745
+        },
+        {
+          "native_ns": 25345249680367,
+          "python_after_ns": 25345249680526,
+          "python_before_ns": 25345249680252
+        },
+        {
+          "native_ns": 25345249680853,
+          "python_after_ns": 25345249681016,
+          "python_before_ns": 25345249680746
+        }
+      ],
+      "schema_id": "b2_clock_domain_check/v1",
+      "source": "hbtrace_clock_monotonic_ns",
+      "time_namespace_device": 5,
+      "time_namespace_inode": 4026531834,
+      "time_namespace_offsets": "monotonic           0         0\nboottime            0         0\n"
+    },
+    "files": [
+      {
+        "role": "backend",
+        "path": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_GUI_QUERY_CACHE_VERIFY_001/trace/backend.hbtrace",
+        "device": 66311,
+        "inode": 2260086,
+        "size": 50331968
+      },
+      {
+        "role": "observer",
+        "path": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/B22_GUI_QUERY_CACHE_VERIFY_001/trace/observer.hbtrace",
+        "device": 66311,
+        "inode": 2260087,
+        "size": 50331968
+      }
+    ],
+    "observer": {
+      "backend_instance_id": 2571895317130860096,
+      "end_written": true,
+      "errors": [
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending",
+        "readiness_backend_binding_pending"
+      ],
+      "handle_closed": true,
+      "joined": true,
+      "readiness_backend_instance_id": 2571895317130860096,
+      "ready": false,
+      "thread_alive": false,
+      "writer_closed": true,
+      "writer_opened": true,
+      "process_identity": {
+        "pid": 54963,
+        "process_group_id": 54963,
+        "session_id": 54963,
+        "start_ticks": 3109706
+      },
+      "process_joined": true,
+      "group_absent": true,
+      "exit_status": 0,
+      "stop_acknowledged": true,
+      "termination": "CLEAN_COOPERATIVE",
+      "signal_dispatches": [],
+      "stderr_bytes": 0,
+      "stderr_excerpt": "",
+      "stderr_truncated": false
+    },
+    "readiness_backend_status": {
+      "actuator_inhibited": true,
+      "backend_instance_id": 2571895317130860096,
+      "config_hash": "d21bc64ea892dd168d5d85bc15dbee53b8d53df7894844f20b476f75a2df1973",
+      "fault_flags": 0,
+      "session_id": "bef6d8d1-f045-43d3-b0d9-4b778e280dac",
+      "status_sequence": 3,
+      "world_id": "b2_training_arena"
+    },
+    "readiness_binding_verified": true,
+    "join_evidence": {
+      "server_exit_status": 0,
+      "server_process_joined": true,
+      "server_group_absent": true,
+      "observer_process_identity": {
+        "pid": 54963,
+        "process_group_id": 54963,
+        "session_id": 54963,
+        "start_ticks": 3109706
+      },
+      "observer_process_identity_verified": true,
+      "observer_process_joined": true,
+      "observer_process_group_absent": true,
+      "observer_exit_status": 0,
+      "observer_stop_acknowledged": true,
+      "observer_end_written": true,
+      "observer_handle_closed": true,
+      "observer_writer_closed": true,
+      "observer_termination": "CLEAN_COOPERATIVE",
+      "observer_signal_dispatches": [],
+      "task_residue": "NONE"
+    },
+    "trace_error": null,
+    "cleanup_errors": [],
+    "cleanup_residue": "NONE",
+    "coverage_note": "diagnostic records require process reap and group absence",
+    "sink_record_measurement": "NOT_INSTRUMENTED_NO_EXISTING_CALLBACK_CALL"
+  },
+  "pending_batch": null,
+  "pending_facts": [],
+  "publication": {
+    "attempted": true,
+    "acknowledged": true,
+    "failed": false,
+    "pending": false,
+    "batch_id": "39d481464c634cbcabf3cd7ff6429653"
+  },
+  "owned_process_count": 0,
+  "residue_task_count": 0,
+  "publisher_task_done": true
+}

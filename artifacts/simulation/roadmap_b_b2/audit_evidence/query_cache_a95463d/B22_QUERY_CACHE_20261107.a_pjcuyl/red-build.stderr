@@ -1,0 +1,16 @@
+WARNING: Package name "ROBOT_URDF_final_description" does not follow the naming conventions. It should start with a lower case letter and only contain lower case letters, digits, underscores, and dashes.
+[0.167s] WARNING:colcon.colcon_core.package_selection:Some selected packages are already built in one or more underlay workspaces:
+	'mecanum_sim_backend' is in: /home/hazan/mecanum_runtime_evidence/B22_CONTACT_ONLY_20261107.vyuE1i/install-closure
+If a package in a merged underlay workspace is overridden and it installs headers, then all packages in the overlay must sort their include directories by workspace order. Failure to do so may result in build failures or undefined behavior at run time.
+If the overridden package is used by another package in any underlay, then the overriding package in the overlay must be API and ABI compatible or undefined behavior at run time may occur.
+
+If you understand the risks and want to override a package anyways, add the following to the command line:
+	--allow-overriding mecanum_sim_backend
+
+This may be promoted to an error in a future release of colcon-override-check.
+[0.172s] WARNING:colcon.colcon_core.shell:The following packages are in the workspace but haven't been built:
+- mecanum_nav_rl_interfaces
+They are being used from the following locations instead:
+- /home/hazan/mecanum_runtime_evidence/B22_CONTACT_ONLY_20261107.vyuE1i/install-closure
+To suppress this warning ignore these packages in the workspace:
+--packages-ignore mecanum_nav_rl_interfaces

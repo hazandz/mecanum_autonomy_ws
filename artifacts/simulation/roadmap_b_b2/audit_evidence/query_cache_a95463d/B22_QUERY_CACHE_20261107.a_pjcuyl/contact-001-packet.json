@@ -1,0 +1,62 @@
+{
+  "source_commit": "a95463dbe265355e12bf891937e080e95f8b58d0",
+  "run_id": "B22_CONTACT_QUERY_CACHE_VERIFY_001",
+  "unit": "b22-qcache-contact-001-8427d1c047.service",
+  "source_runner_sha256": "dc6f0705104b6e2d8d7046626e8a3ce7e5d25a3219b5d2e429dd2ef221a7ebdf",
+  "profile": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001-profile.json",
+  "profile_sha256": "85f5d844864ffde80b07f63e1be818c1346634c37cd6c76b42a2573dd3ce29c5",
+  "parent_argv": [
+    "/bin/bash",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-contact-001.sh"
+  ],
+  "worker_argv": [
+    "/home/hazan/step07_runtime_python312_pydantic_2_10_6/bin/python",
+    "-B",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/runtime-snapshot/artifacts/simulation/roadmap_b_b2/gui_verification/tools/observation_runner.py",
+    "--evidence",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl",
+    "--run-id",
+    "B22_CONTACT_QUERY_CACHE_VERIFY_001",
+    "--install",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/install",
+    "--source-commit",
+    "a95463dbe265355e12bf891937e080e95f8b58d0",
+    "--authority",
+    "Owner authorized B2.2 cached QUERY corrective: Codex packet review, fresh capacity-one contact and GUI confirmation; no B2.3 or hardware",
+    "--profile",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001-profile.json",
+    "--profile-sha256",
+    "85f5d844864ffde80b07f63e1be818c1346634c37cd6c76b42a2573dd3ce29c5"
+  ],
+  "wrapper_sha256": "dd66a88df1caeda149dd67a29302b86370247f6c98af476b895f437234b9803e",
+  "launch_command": [
+    "systemd-run",
+    "--user",
+    "--unit=b22-qcache-contact-001-8427d1c047.service",
+    "--property=Type=exec",
+    "--property=RemainAfterExit=yes",
+    "--property=Restart=no",
+    "--property=RuntimeMaxSec=300s",
+    "--property=TimeoutStartSec=3s",
+    "--property=TimeoutStopSec=5s",
+    "--property=KillMode=control-group",
+    "--property=SendSIGKILL=yes",
+    "--property=MemoryMax=5G",
+    "--property=StandardOutput=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001.stdout",
+    "--property=StandardError=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001.stderr",
+    "/bin/bash",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-contact-001.sh"
+  ],
+  "unit_properties_command": [
+    "systemctl",
+    "--user",
+    "show",
+    "b22-qcache-contact-001-8427d1c047.service",
+    "-p",
+    "Id,LoadState,ActiveState,SubState,InvocationID,ControlGroup,MainPID,ExecMainPID,ExecMainCode,ExecMainStatus,ExecMainExitTimestampMonotonic,Result,ExecStart,Type,RemainAfterExit,Restart,RuntimeMaxUSec,TimeoutStopUSec,KillMode,SendSIGKILL,MemoryMax"
+  ],
+  "authority": "Owner authorized B2.2 cached QUERY corrective: Codex packet review, fresh capacity-one contact and GUI confirmation; no B2.3 or hardware",
+  "capacity": 1,
+  "install": "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/install",
+  "mode": "contact_probe_only"
+}

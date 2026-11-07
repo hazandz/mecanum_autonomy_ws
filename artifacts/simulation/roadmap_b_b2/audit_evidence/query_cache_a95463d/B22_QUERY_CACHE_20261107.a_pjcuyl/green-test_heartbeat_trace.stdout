@@ -1,0 +1,17 @@
+Running main() from /opt/ros/jazzy/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 4 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 4 tests from HeartbeatTraceWriter
+[ RUN      ] HeartbeatTraceWriter.WritesReaderCompatibleV1BytesAndBoundaries
+[       OK ] HeartbeatTraceWriter.WritesReaderCompatibleV1BytesAndBoundaries (0 ms)
+[ RUN      ] HeartbeatTraceWriter.OverflowIsStickyAndDoesNotOverwriteSlots
+[       OK ] HeartbeatTraceWriter.OverflowIsStickyAndDoesNotOverwriteSlots (0 ms)
+[ RUN      ] HeartbeatTraceWriter.RejectsWrongInodeAndNonPrivateMode
+[       OK ] HeartbeatTraceWriter.RejectsWrongInodeAndNonPrivateMode (0 ms)
+[ RUN      ] HeartbeatTraceWriter.CAbiEnforcesSingleWriterAndUsesMonotonicClock
+[       OK ] HeartbeatTraceWriter.CAbiEnforcesSingleWriterAndUsesMonotonicClock (0 ms)
+[----------] 4 tests from HeartbeatTraceWriter (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 4 tests.

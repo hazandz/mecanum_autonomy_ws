@@ -1,0 +1,24 @@
+{
+  "phase": "launch_requested_once",
+  "at_ns": 25310140840806,
+  "packet_sha256": "decfd761b9c4480adce3b08a8bb56a044c3edf635269962600cf70bcf103401b",
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=b22-qcache-contact-001-8427d1c047.service",
+    "--property=Type=exec",
+    "--property=RemainAfterExit=yes",
+    "--property=Restart=no",
+    "--property=RuntimeMaxSec=300s",
+    "--property=TimeoutStartSec=3s",
+    "--property=TimeoutStopSec=5s",
+    "--property=KillMode=control-group",
+    "--property=SendSIGKILL=yes",
+    "--property=MemoryMax=5G",
+    "--property=StandardOutput=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001.stdout",
+    "--property=StandardError=append:/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/contact-001.stderr",
+    "/bin/bash",
+    "/home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-contact-001.sh"
+  ],
+  "authority": "Owner authorized B2.2 cached QUERY corrective: Codex packet review, fresh capacity-one contact and GUI confirmation; no B2.3 or hardware"
+}

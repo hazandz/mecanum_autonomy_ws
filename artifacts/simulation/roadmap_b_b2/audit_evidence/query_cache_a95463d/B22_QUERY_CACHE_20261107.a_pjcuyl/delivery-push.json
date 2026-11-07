@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "timeout",
+    "--kill-after=2s",
+    "45s",
+    "env",
+    "GIT_TERMINAL_PROMPT=0",
+    "git",
+    "push",
+    "origin",
+    "HEAD:refs/heads/roadmap-b-b22-simulation-substrate"
+  ],
+  "started_ns": 25527299568141,
+  "finished_ns": 25529721639617,
+  "exit": 0,
+  "stdout": "",
+  "stderr": "To https://github.com/hazandz/mecanum_autonomy_ws.git\n   7764d9d..a95463d  HEAD -> roadmap-b-b22-simulation-substrate\n",
+  "commit": "a95463dbe265355e12bf891937e080e95f8b58d0"
+}

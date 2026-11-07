@@ -1,0 +1,12 @@
+{
+  "checked_ns": 25461589637525,
+  "pinned_invocation": "e315fb03f91541469b0b8c0378ca5121",
+  "pinned_cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/b22-qcache-gui-001-694e2e772c.service",
+  "guarded_stop_exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "remaining_cgroup_exists": false,
+  "members": {},
+  "scan_errors": [],
+  "unit_raw": "Type=exec\nRestart=no\nTimeoutStopUSec=5s\nRuntimeMaxUSec=5min\nRemainAfterExit=yes\nMainPID=0\nResult=success\nExecMainExitTimestampMonotonic=25445559938\nExecMainPID=54905\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/bin/bash ; argv[]=/bin/bash /home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-gui-001.sh ; ignore_errors=no ; start_time=[Sat 2026-11-07 20:42:44 +07] ; stop_time=[Sat 2026-11-07 20:44:28 +07] ; pid=54905 ; code=exited ; status=0 }\nControlGroup=\nMemoryMax=5368709120\nKillMode=control-group\nSendSIGKILL=yes\nId=b22-qcache-gui-001-694e2e772c.service\nLoadState=loaded\nActiveState=active\nSubState=exited\nInvocationID=e315fb03f91541469b0b8c0378ca5121\n"
+}

@@ -1,0 +1,6 @@
+{
+  "stdout": "Type=exec\nRestart=no\nTimeoutStopUSec=5s\nRuntimeMaxUSec=5min\nRemainAfterExit=yes\nMainPID=54905\nResult=success\nExecMainExitTimestampMonotonic=0\nExecMainPID=54905\nExecMainCode=0\nExecMainStatus=0\nExecStart={ path=/bin/bash ; argv[]=/bin/bash /home/hazan/mecanum_runtime_evidence/B22_QUERY_CACHE_20261107.a_pjcuyl/execute-gui-001.sh ; ignore_errors=no ; start_time=[Sat 2026-11-07 20:42:44 +07] ; stop_time=[n/a] ; pid=54905 ; code=(null) ; status=0/0 }\nControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/b22-qcache-gui-001-694e2e772c.service\nMemoryMax=5368709120\nKillMode=control-group\nSendSIGKILL=yes\nId=b22-qcache-gui-001-694e2e772c.service\nLoadState=loaded\nActiveState=active\nSubState=running\nInvocationID=e315fb03f91541469b0b8c0378ca5121\n",
+  "stderr": "",
+  "exit": 0,
+  "collected_ns": 25341527992573
+}
