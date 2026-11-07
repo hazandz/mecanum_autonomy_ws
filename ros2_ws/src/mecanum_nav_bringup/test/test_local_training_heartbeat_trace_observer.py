@@ -89,6 +89,8 @@ def test_status_callback_records_binding_validation_without_runtime_control():
     observer = _observer(api)
     observer._on_status(_status())
     assert api.open_args[6] == 42
+    assert api.open_args[10] == b'observer'
+    assert api.open_args[11] == b'c' * 64
     assert [record[4] for record in api.records[1:]] == [
         bytes((EVENT_CALLBACK_ENTRY, 0)),
         bytes((EVENT_STATUS_VALIDATION, 1)),

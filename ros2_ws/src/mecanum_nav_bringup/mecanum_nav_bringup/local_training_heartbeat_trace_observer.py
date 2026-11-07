@@ -338,7 +338,7 @@ class LocalTrainingHeartbeatTraceObserver:
             TRACE_CAPACITY, self.collection_id.encode(),
             self.plan.session_id.encode(), backend_id,
             self.plan.config_hash.encode(), b'b2_training_arena',
-            b'CLOCK_MONOTONIC', self.clock_provenance.encode(), b'observer',
+            b'CLOCK_MONOTONIC', b'observer', self.clock_provenance.encode(),
         )
         if not self._writer:
             self._append_error('observer_trace_open_failed')
