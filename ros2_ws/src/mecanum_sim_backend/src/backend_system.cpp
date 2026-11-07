@@ -956,7 +956,7 @@ public:
       fault_flags_ |= contact_decision_.fault_flags ? contact_decision_.fault_flags : BackendState::FAULT_CONTACT_COVERAGE;
       if (contact_capability_verified_)
       {
-        contact_capability_verified_ = false;
+        ClearContactCapability();
         ++capability_revision_;
       }
       probe_machine_.Invalidate();
@@ -968,6 +968,15 @@ public:
 
 private:
   friend class BackendSystemTestPeer;
+
+  void ClearContactCapability()
+  {
+    // Chỉ update/shutdown ghi proof; callback đọc generation atomic, không đọc
+    // bool/state machine đang bị update. Không khóa callback_mutex_ lồng nhau.
+    if (contact_probe_only_ && contact_capability_verified_)
+      contact_only_proof_generation_.fetch_add(1, std::memory_order_release);
+    contact_capability_verified_ = false;
+  }
 
   void CaptureContactOnlyContext(std::int64_t sim_ns)
   {
@@ -1007,7 +1016,7 @@ private:
     if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
     if (contact_probe_only_)
     {
-      contact_capability_verified_ = false;
+      ClearContactCapability();
       probe_machine_.Invalidate();
       probe_running_ = false;
     }
@@ -1120,6 +1129,7 @@ private:
   {
     std::vector<std::uint8_t> request_bytes;
     ControlResponse response;
+    std::uint64_t contact_proof_generation{};
   };
 
   void CloseProbeServiceMailbox()
@@ -1180,7 +1190,7 @@ private:
       if (!result.success)
       {
         probe_running_ = false;
-        contact_capability_verified_ = false;
+        ClearContactCapability();
         probe_reason_ = "probe_world_service_failed";
       }
     }
@@ -1489,7 +1499,7 @@ private:
         probe_machine_.ModelEntity() == 0 || probe_machine_.CollisionEntity() == 0)
     {
       probe_machine_.Invalidate();
-      contact_capability_verified_ = false;
+      ClearContactCapability();
       probe_reason_ = "observed_physics_engine_or_probe_identity_missing";
       return;
     }
@@ -1499,7 +1509,7 @@ private:
         proof_physics_engine_fingerprint_sha256_.size() != 64)
     {
       probe_machine_.Invalidate();
-      contact_capability_verified_ = false;
+      ClearContactCapability();
       probe_reason_ = "observed_physics_engine_binary_fingerprint_unavailable:" +
           resolved_engine_path + ":" + observed_engine_plugin_path_;
       return;
@@ -1552,6 +1562,9 @@ private:
           probe_machine_.Phase() == ProbePhase::Cancelled ?
             ControlResponse::CAPABILITY_FAILED : ControlResponse::CAPABILITY_UNKNOWN));
     response.capability_revision = capability_revision_;
+    // Không xuất counter/stamp của proof cũ trong QUERY mới sau thu hồi.
+    if (contact_probe_only_ && !contact_capability_verified_ && !probe_machine_.Running())
+      return;
     response.proof_backend_instance_id = contact_capability_verified_ ?
         proof_backend_instance_id_ : 0;
     if (contact_capability_verified_)
@@ -1835,7 +1848,7 @@ private:
     if (!probe_machine_.Observe(observation))
     {
       probe_running_ = false;
-      contact_capability_verified_ = false;
+      ClearContactCapability();
       probe_reason_ = "probe_contact_coverage_or_identity_invalid";
       if (contact_probe_only_)
         gzerr << "B22_CONTACT_FAILED iteration=" << info.iterations
@@ -2106,6 +2119,19 @@ private:
         response.result = ControlResponse::RESULT_FAULTED;
         response.reason_code =
             ControlResponse::REASON_DUPLICATE_CONTENT_CONFLICT;
+        return;
+      }
+      // Cache vẫn giữ replay/exactly-once. Một proof thuộc generation đã thu
+      // hồi không được xuất lại, kể cả khi phiên sau có proof mới.
+      if (contact_probe_only_ &&
+          cached->second.response.contact_capability_state == ControlResponse::CAPABILITY_VERIFIED &&
+          cached->second.contact_proof_generation !=
+              contact_only_proof_generation_.load(std::memory_order_acquire))
+      {
+        // Response mới khởi tạo phía trên có toàn bộ proof/counter/stamp zero.
+        response.result = ControlResponse::RESULT_REJECTED;
+        response.reason_code = ControlResponse::REASON_CONTACT_PROBE_FAILED;
+        response.contact_capability_state = ControlResponse::CAPABILITY_FAILED;
         return;
       }
       response = cached->second.response;
@@ -2444,7 +2470,7 @@ private:
           probe_lift_request_iteration_ = 0;
           probe_lift_ack_iteration_ = 0;
           probe_link_entity_ = gz::sim::kNullEntity;
-          contact_capability_verified_ = false;
+          ClearContactCapability();
           ++capability_revision_;
           probe_reason_.clear();
           if (contact_probe_only_) CaptureContactOnlyContext(sim_stamp_ns);
@@ -2474,7 +2500,7 @@ private:
         {
           probe_machine_.Abort();
           probe_running_ = false;
-          contact_capability_verified_ = false;
+          ClearContactCapability();
           ++capability_revision_;
           probe_reason_ = "probe_aborted_by_control_request";
           applied = true;
@@ -2573,6 +2599,9 @@ private:
     }
     response.backend_instance_id = backend_instance_id_;
     PopulateProbeResponse(response);
+    // Cùng callback_mutex_ bảo vệ response và generation của entry cache.
+    cached->second.contact_proof_generation =
+        contact_only_proof_generation_.load(std::memory_order_acquire);
     control_mutation_pending_ = false;
     if (request.operation == ControlRequest::OP_INHIBIT ||
         request.operation == ControlRequest::OP_BIND_SESSION ||
@@ -2880,7 +2909,7 @@ private:
     policy_open_ = false;
     if (contact_capability_verified_ || probe_machine_.Running())
     {
-      contact_capability_verified_ = false;
+      ClearContactCapability();
       ++capability_revision_;
       probe_machine_.Invalidate();
       probe_running_ = false;
@@ -2966,6 +2995,7 @@ private:
   std::function<std::int64_t()> steady_clock_now_{[] { return NowSteadyNs(); }};
   bool local_zero_override_{true}, measurement_healthy_{};
   bool contact_capability_verified_{};
+  std::atomic<std::uint64_t> contact_only_proof_generation_{};
   bool probe_running_{};
   bool contact_probe_only_{};
   std::string contact_only_engine_fingerprint_;

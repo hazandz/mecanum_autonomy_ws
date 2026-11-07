@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <limits>
+#include <future>
+#include <thread>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -808,6 +810,11 @@ public:
   static std::size_t QueueSize(const BackendSystem &system)
   {
     return system.control_queue_.size();
+  }
+
+  static std::unique_lock<std::mutex> LockControl(BackendSystem &system)
+  {
+    return std::unique_lock<std::mutex>(system.callback_mutex_);
   }
 
   static ControlResponse Cached(const BackendSystem &system, std::uint64_t seq)
@@ -3935,4 +3942,151 @@ TEST(ContactOnlyMode, ShutdownSeparatesRetainedProofIdentityFromFixtureResidue)
     EXPECT_EQ(mailbox->possible_fixture_residue, !removal_observed);
     EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system));
   }
+}
+
+namespace
+{
+// Fixture chỉ giả Physics/transport; START, QUERY và proof đi qua production.
+void PrepareCachedContactOnlyQuery(
+    BackendSystem &system, gz::sim::EntityComponentManager &ecm,
+    const std::shared_ptr<NativeResetChainIo> &io,
+    ControlRequest &start, ControlRequest &query, ControlResponse &verified)
+{
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'000);
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(system, ecm, io, true));
+  start = BaseControlRequest(1);
+  BindTestRequestToConfiguredBackend(start, system);
+  start.operation = ControlRequest::OP_VERIFY_CONTACT_CAPABILITY;
+  start.probe_action = ControlRequest::PROBE_ACTION_START;
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, start).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 200'000'000);
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, start).result, ControlResponse::RESULT_APPLIED);
+  ASSERT_EQ(io->spawn_calls, 1u);
+  ASSERT_TRUE(BackendSystemTestPeer::AddProbeFixture(ecm, BackendSystemTestPeer::WorldEntity(system)));
+  const auto collision = gz::sim::entitiesFromScopedName("b2_training_arena::b2_capability_probe::link::collision", ecm);
+  const auto floor = gz::sim::entitiesFromScopedName("b2_training_arena::ground_plane::link::collision", ecm);
+  ASSERT_EQ(collision.size(), 1u);
+  ASSERT_EQ(floor.size(), 1u);
+  for (std::uint64_t i = 2; i <= 4; ++i)
+  {
+    BackendSystemTestPeer::SetProbeContact(ecm, *collision.begin(), *collision.begin(), *floor.begin(), true);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, i, 190'000'000 + i * 10'000'000);
+  }
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 5, 240'000'000);
+  ASSERT_EQ(io->lift_calls, 1u);
+  BackendSystemTestPeer::SetProbePose(ecm, BackendSystemTestPeer::ProbeLink(system, ecm), 0.20);
+  BackendSystemTestPeer::SetProbeContact(ecm, *collision.begin(), *collision.begin(), *floor.begin(), false);
+  for (std::uint64_t i = 6; i <= 11; ++i)
+    BackendSystemTestPeer::RunProductionTick(system, ecm, i, 190'000'000 + i * 10'000'000);
+  ASSERT_EQ(io->remove_calls, 1u);
+  BackendSystemTestPeer::RemoveProbeFixture(ecm);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 12, 310'000'000);
+  ASSERT_TRUE(BackendSystemTestPeer::ContactVerified(system));
+  query = BaseControlRequest(2);
+  BindTestRequestToConfiguredBackend(query, system);
+  query.operation = ControlRequest::OP_VERIFY_CONTACT_CAPABILITY;
+  query.probe_action = ControlRequest::PROBE_ACTION_QUERY;
+  query.probe_start_request_sequence = 1;
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, query).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 13, 320'000'000);
+  verified = BackendSystemTestPeer::Receive(system, query);
+  ASSERT_EQ(verified.result, ControlResponse::RESULT_APPLIED);
+  ASSERT_EQ(verified.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+  ASSERT_FALSE(verified.proof_session_id.empty());
+  ASSERT_GT(verified.probe_model_entity_id, 0u);
+  EXPECT_EQ(BackendSystemTestPeer::Receive(system, query), verified);
+  EXPECT_EQ(io->spawn_calls, 1u);
+  EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+}
+
+void ExpectNoContactProof(const ControlResponse &response)
+{
+  EXPECT_NE(response.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+  EXPECT_EQ(response.proof_backend_instance_id, 0u);
+  for (const auto &field : {response.proof_session_id, response.proof_config_hash,
+       response.proof_asset_manifest_sha256, response.proof_collision_registry_sha256,
+       response.proof_world_name, response.proof_physics_engine_plugin,
+       response.proof_gz_sim_version, response.proof_physics_engine_fingerprint_sha256,
+       response.probe_model_scoped_name, response.probe_collision_scoped_name,
+       response.floor_collision_scoped_name}) EXPECT_TRUE(field.empty()) << field;
+  EXPECT_EQ(response.probe_model_entity_id, 0u);
+  EXPECT_EQ(response.probe_collision_entity_id, 0u);
+  EXPECT_EQ(response.floor_collision_entity_id, 0u);
+  EXPECT_EQ(response.contact_sample_count, 0u);
+  EXPECT_EQ(response.covered_empty_sample_count, 0u);
+  EXPECT_EQ(response.contact_first_iteration, 0u);
+  EXPECT_EQ(response.contact_last_iteration, 0u);
+  EXPECT_EQ(response.empty_first_iteration, 0u);
+  EXPECT_EQ(response.empty_last_iteration, 0u);
+  for (const auto &stamp : {response.contact_first_stamp, response.contact_last_stamp,
+       response.empty_first_stamp, response.empty_last_stamp})
+  {
+    EXPECT_EQ(stamp.sec, 0);
+    EXPECT_EQ(stamp.nanosec, 0u);
+  }
+}
+
+void CheckCachedQueryRevocation(bool engine_change)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  auto io = std::make_shared<NativeResetChainIo>();
+  ControlRequest start, query;
+  ControlResponse verified;
+  ASSERT_NO_FATAL_FAILURE(PrepareCachedContactOnlyQuery(system, ecm, io, start, query, verified));
+  const auto original_start = BackendSystemTestPeer::Receive(system, start);
+  if (engine_change)
+    ecm.SetComponentData<gz::sim::components::PhysicsEnginePlugin>(BackendSystemTestPeer::WorldEntity(system), "missing-engine");
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 14, engine_change ? 330'000'000 : 319'000'000);
+  ASSERT_FALSE(BackendSystemTestPeer::ContactVerified(system));
+  ExpectNoContactProof(BackendSystemTestPeer::Receive(system, query));
+  query.request_sequence = 3;
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, query).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 15, 340'000'000);
+  ExpectNoContactProof(BackendSystemTestPeer::Receive(system, query));
+  EXPECT_EQ(BackendSystemTestPeer::Receive(system, start), original_start);
+  EXPECT_EQ(BackendSystemTestPeer::QueueSize(system), 0u);
+  EXPECT_EQ(io->spawn_calls, 1u);
+  EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+}
+}
+
+TEST(ContactOnlyMode, CachedQueryRevokedAfterClockRollback)
+{
+  CheckCachedQueryRevocation(false);
+}
+
+TEST(ContactOnlyMode, CachedQueryRevokedAfterEngineChange)
+{
+  CheckCachedQueryRevocation(true);
+}
+
+TEST(ContactOnlyMode, CallbackWaitingOnControlMutexSeesProofRevocation)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  auto io = std::make_shared<NativeResetChainIo>();
+  ControlRequest start, query;
+  ControlResponse verified, replay;
+  ASSERT_NO_FATAL_FAILURE(PrepareCachedContactOnlyQuery(system, ecm, io, start, query, verified));
+  auto lock = BackendSystemTestPeer::LockControl(system);
+  std::promise<void> entered, finished;
+  auto ready = entered.get_future();
+  auto done = finished.get_future();
+  std::thread callback([&] {
+    entered.set_value();
+    replay = BackendSystemTestPeer::Receive(system, query);
+    finished.set_value();
+  });
+  ready.wait();
+  const bool blocked = done.wait_for(std::chrono::seconds(0)) == std::future_status::timeout;
+  // Đây là bước validation đầu PreUpdate, không giữ mutex callback.
+  BackendSystemTestPeer::CheckContactContext(system, ecm, 319'000'000);
+  lock.unlock();
+  callback.join();
+  EXPECT_TRUE(blocked);
+  EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system));
+  ExpectNoContactProof(replay);
+  EXPECT_EQ(io->spawn_calls, 1u);
 }
