@@ -50,7 +50,7 @@ class Writer {
          std::uint64_t expected_inode)
       : size_(header_size + static_cast<std::size_t>(capacity) * record_size),
         capacity_(capacity) {
-    if (!capacity || capacity > 4096 || !backend)
+    if (!capacity || capacity > 524288 || !backend)
       throw std::invalid_argument("invalid capacity or backend identity");
     const std::uint32_t endian = 1;
     if (*reinterpret_cast<const unsigned char *>(&endian) != 1)

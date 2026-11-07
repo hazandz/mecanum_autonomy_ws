@@ -39,7 +39,7 @@
     "wall_thickness_m": 0.2
   },
   "backend_contract": {
-    "fingerprint_sha256": "8c689000e73c1038c9dd505b5d3c48b76d8d114137df43f888d88eeea6beec5c",
+    "fingerprint_sha256": "d7f7da28af1e6805ca826881898c7c051d26da17b32c1180b0d4b96176600bb0",
     "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "cc1a379939e06c7982d38fbb5e94c5f4975634ff1bce3a331faade7203375261",
     "mecanum_nav_rl_interfaces/CMakeLists.txt": "34dd61114b01846adf78328e9c6b7b72c3c4b1273f08337e2809f5c074c06859",
     "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
@@ -47,13 +47,13 @@
     "mecanum_nav_rl_interfaces/msg/SimulationContactState.msg": "5fc9972b844b038042590805d8557a69065a922eabafc670075e45b85c467a36",
     "mecanum_nav_rl_interfaces/package.xml": "089500f4eccd611ac8b12e6b47be322479691dc186d26c805fcea41cfc04ff73",
     "mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl.srv": "fb03a5b9a09bd8f5ebc540db00aea52ed1ddbce62cde7c0578d894d8abe5ac83",
-    "mecanum_sim_backend/CMakeLists.txt": "47eeacbaa57fb5ff5b627c5422ebe52ce208137084b6625ace7bfc363a2a2284",
+    "mecanum_sim_backend/CMakeLists.txt": "7e02d9f43cf4071208cc9ca424a69d77dde9c13d5611bef66da5a85bddafd434",
     "mecanum_sim_backend/env-hooks/mecanum_sim_backend.dsv.in": "777d044a3a3d3751f77abe96cc461d03fbbb59e8b80c6921338cda4f74dcfbf3",
     "mecanum_sim_backend/include/mecanum_sim_backend/backend_system.hpp": "42390be366b9a169d554454ca85da337708ded8fdf19397893c599244ad961ba",
     "mecanum_sim_backend/include/mecanum_sim_backend/contact_coverage.hpp": "a5b4bf4323cb2739fda9c47d2f9ec3e7abe9e2aa41bccc654670b3e67f72506d",
     "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "21b4fc6d8e9fe55378a2ef8531060f435e660d4c748628cc20d9197ed000762b",
     "mecanum_sim_backend/package.xml": "97b144b11c483e38689439fc47bb1d62286aaac137f54cb5989199228b9ffaad",
-    "mecanum_sim_backend/src/backend_system.cpp": "c6cdbdf31848d77a89c589b30a3829344190812d9651c5ec2fb73ba27bcd5045",
+    "mecanum_sim_backend/src/backend_system.cpp": "b013b4f3307793baec1baa79e375ef7122fcd598ece1749a57a137b9ad9d3da2",
     "mecanum_sim_backend/src/contact_coverage.cpp": "840a38cb229a0487ccb358abefc403ba58848c613b5faf054bb7a5db5988c07a",
     "mecanum_sim_backend/src/receipt_gate.cpp": "5beabd7e5498dce0f22492b950aace988f4308a39bdae75160a5e72a4147c17a"
   },
@@ -162,7 +162,7 @@
     "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "c99626191563ad7e5949cc5fb8b83fcb1a65681d90ffe8b365bd5791264e8e06",
     "ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
     "ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
-    "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb"
+    "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "059cb35022941dc6d3ec7ce65efbedc6acce60984b3e86b848a19c37278d1525"
   },
   "robot_entity": "mecanum_b2",
   "scenario_artifacts": {
@@ -170,21 +170,21 @@
       "active_contact_probe": true,
       "coordinate_reference_id": "GT_ODOM_2D",
       "file": "B2_CONTACT_V1.json",
-      "scenario_content_sha256": "44ba8efb3b795fb23c6d62b7f398b6c941e40e30bf1d899b111b06088ebe94d3",
+      "scenario_content_sha256": "dd9687e100c66d51dfceaedb89a0b2576890cd64fb41da577ce403fc0baae59d",
       "world_to_task_mapping": "IDENTITY_XY_YAW"
     },
     "B2_GOAL_SETTLE_V1": {
       "active_contact_probe": false,
       "coordinate_reference_id": "GT_ODOM_2D",
       "file": "B2_GOAL_SETTLE_V1.json",
-      "scenario_content_sha256": "0ba7f620a00fc7660bcfa47a8f345310c2e4ee5a8fa8a248a2b90ce17f526bb3",
+      "scenario_content_sha256": "6890c1a775bc2fa7dae8b3a937d895238bb6a438dee0ddd5ec05a04f7dad0a6a",
       "world_to_task_mapping": "IDENTITY_XY_YAW"
     },
     "B2_SOAK_V1": {
       "active_contact_probe": false,
       "coordinate_reference_id": "GT_ODOM_2D",
       "file": "B2_SOAK_V1.json",
-      "scenario_content_sha256": "2e3d65f51db1a5543977449e11715a7d0ea833962e620ebea6e5a9ec61bdcd46",
+      "scenario_content_sha256": "268b0042e8508c0b091c22ad2dd5ed4627670f604c7e5e6f20cfd18f54d45961",
       "world_to_task_mapping": "IDENTITY_XY_YAW"
     }
   },
@@ -215,6 +215,6 @@
     "topic": "/b2/scan"
   },
   "world_file": "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf",
-  "world_file_sha256": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb",
+  "world_file_sha256": "059cb35022941dc6d3ec7ce65efbedc6acce60984b3e86b848a19c37278d1525",
   "world_id": "b2_training_arena"
 }

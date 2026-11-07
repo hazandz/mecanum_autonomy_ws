@@ -181,3 +181,26 @@ def test_production_binder_semantically_validates_b2_asset_sources():
         'b2_training_arena::mecanum_b2::Wheel_RB_1::Wheel_RB_1_collision',
         'b2_training_arena::mecanum_b2::Wheel_LB_1::Wheel_LB_1_collision',
     }
+
+
+def test_arena_has_visual_directional_light_without_physics_changes():
+    """Nguồn sáng giúp đọc scene; không thêm model hoặc collider."""
+    world = ET.parse(_ROOT/'worlds/b2_training_arena.sdf').getroot().find('world')
+    light = world.find("light[@name='b2_scene_sun'][@type='directional']")
+    assert light is not None
+    assert light.findtext('diffuse') == '1 1 1 1'
+    assert light.findtext('direction') == '-0.5 0.1 -0.9'
+    assert world.findtext('physics/max_step_size') == '0.01'
+    assert {model.attrib['name'] for model in world.findall('model')} == {
+        'ground_plane', 'arena_walls', 'obstacle_0',
+    }
+
+
+def test_static_arena_visuals_have_nonblack_diffuse_material():
+    """Không phụ thuộc diffuse mặc định bằng không của SDFormat."""
+    world = ET.parse(_ROOT/'worlds/b2_training_arena.sdf').getroot().find('world')
+    visuals = world.findall('model/link/visual')
+    assert len(visuals) == 6
+    for visual in visuals:
+        diffuse = [float(v) for v in visual.findtext('material/diffuse').split()]
+        assert max(diffuse[:3]) > 0

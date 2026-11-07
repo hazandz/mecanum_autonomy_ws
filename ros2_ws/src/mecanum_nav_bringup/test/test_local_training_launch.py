@@ -114,3 +114,12 @@ def test_bridge_contains_exact_fixture_service_mappings():
         'gz.msgs.WorldControl', 'gz.msgs.Boolean',
     )
     assert len(services) == 4
+
+
+def test_minimal_scene_is_docked_without_changing_render_engine():
+    """Widget 3D phải có layout docked để xuất hiện trong GUI Sim 8."""
+    text = (Path(__file__).resolve().parents[1]/'config/gui/local_training.config').read_text()
+    root = ET.fromstring('<root>'+text.split('?>',1)[1]+'</root>')
+    scene = root.find("plugin[@filename='MinimalScene']")
+    assert scene.findtext("gz-gui/property[@key='state']") == 'docked'
+    assert scene.findtext('engine') == 'ogre2'

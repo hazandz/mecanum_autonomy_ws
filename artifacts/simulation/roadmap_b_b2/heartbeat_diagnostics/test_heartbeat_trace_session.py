@@ -825,3 +825,20 @@ int main(int argc, char **argv) {
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CurrentSupervisorJoinSchemaTests(unittest.TestCase):
+    def test_known_empty_signal_history_preserves_clean_join(self):
+        from heartbeat_trace_session import _valid_clean_join_evidence
+        evidence = {**_join_evidence(), 'observer_signal_dispatches': []}
+        self.assertTrue(_valid_clean_join_evidence(evidence))
+        self.assertFalse(_valid_clean_join_evidence({**evidence, 'unknown': True}))
+        self.assertFalse(_valid_clean_join_evidence({**evidence, 'observer_signal_dispatches': False}))
+
+    def test_dispatched_signal_cannot_be_claimed_as_cooperative_clean_join(self):
+        from heartbeat_trace_session import _valid_clean_join_evidence
+        evidence = {**_join_evidence(), 'observer_signal_dispatches': [{
+            'signal': 'SIGTERM', 'identity_verified': True,
+            'raw_exit_status_before_dispatch': None, 'outcome': 'DISPATCHED',
+        }]}
+        self.assertFalse(_valid_clean_join_evidence(evidence))

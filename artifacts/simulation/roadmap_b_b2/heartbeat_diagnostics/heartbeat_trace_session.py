@@ -11,7 +11,7 @@ from pathlib import Path
 
 HEADER_SIZE = 320
 RECORD_SIZE = 96
-CAPACITY = 4096
+CAPACITY = 524288
 MAX_FILE_SIZE = HEADER_SIZE + CAPACITY * RECORD_SIZE
 HEADER_MARKER = 0x48445231
 ROLE_BACKEND = 'backend'
@@ -176,8 +176,25 @@ def _valid_join_evidence(evidence):
         and identity['pid'] == identity['process_group_id']
         and identity['pid'] == identity['session_id']
     )
+    dispatches = evidence.get('observer_signal_dispatches', ()) if isinstance(evidence, dict) else None
+    dispatches_valid = isinstance(dispatches, (list, tuple))
+    if dispatches_valid:
+        for item in dispatches:
+            fields = {'signal', 'identity_verified', 'raw_exit_status_before_dispatch', 'outcome'}
+            if (not isinstance(item, dict) or not fields <= set(item)
+                    or not set(item) <= fields | {'error_type'}
+                    or item['signal'] not in ('SIGTERM', 'SIGKILL')
+                    or type(item['identity_verified']) is not bool
+                    or item['outcome'] not in ('DISPATCHED', 'DISPATCH_FAILED', 'IDENTITY_UNKNOWN')
+                    or (item['outcome'] == 'DISPATCHED' and not item['identity_verified'])
+                    or (item['raw_exit_status_before_dispatch'] is not None
+                        and type(item['raw_exit_status_before_dispatch']) is not int)):
+                dispatches_valid = False
+                break
     return (
-        isinstance(evidence, dict) and set(evidence) == required
+        isinstance(evidence, dict)
+        and set(evidence) in (required, required | {'observer_signal_dispatches'})
+        and dispatches_valid
         and type(evidence['server_exit_status']) is int
         and evidence['server_process_joined'] is True
         and evidence['server_group_absent'] is True
@@ -210,6 +227,7 @@ def _valid_clean_join_evidence(evidence):
         and evidence['observer_writer_closed'] is True
         and evidence['observer_exit_status'] == 0
         and evidence['observer_termination'] == 'CLEAN_COOPERATIVE'
+        and not evidence.get('observer_signal_dispatches', ())
     )
 
 

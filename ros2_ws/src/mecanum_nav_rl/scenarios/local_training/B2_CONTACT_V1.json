@@ -4,10 +4,10 @@
     "artifact_schema_version": "s3_scenario_artifact/v1",
     "coordinate_reference_id": "GT_ODOM_2D",
     "gazebo_world_name": "b2_training_arena",
-    "scenario_content_sha256": "44ba8efb3b795fb23c6d62b7f398b6c941e40e30bf1d899b111b06088ebe94d3",
+    "scenario_content_sha256": "dd9687e100c66d51dfceaedb89a0b2576890cd64fb41da577ce403fc0baae59d",
     "scenario_id": "B2_CONTACT_V1",
     "scenario_version": "1.0.0",
-    "world_file_sha256": "dcf78d7cfad78e4a1d84cdcba782cd22dbd721b24ec72be52011ff991cef96bb"
+    "world_file_sha256": "059cb35022941dc6d3ec7ce65efbedc6acce60984b3e86b848a19c37278d1525"
   },
   "task_definition": {
     "candidate_task_bounds": {

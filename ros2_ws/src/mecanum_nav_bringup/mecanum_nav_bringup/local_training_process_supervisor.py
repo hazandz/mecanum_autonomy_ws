@@ -1503,12 +1503,18 @@ class LocalTrainingProcessSupervisor:
                 )
             self._ensure_start_admission()
             self.gui_opened = True
+            confirmation_source = getattr(
+                self.readiness, 'gui_confirmation_source', 'human_owner',
+            )
+            if confirmation_source not in ('human_owner', 'codex_image_review'):
+                raise RuntimeError('unsupported GUI confirmation source')
             self.evidence_sink.record(
-                'gui_scene_owner_confirmed',
+                ('gui_scene_owner_confirmed' if confirmation_source == 'human_owner'
+                 else 'gui_scene_codex_confirmed'),
                 {
                     **self._facts(gui_record),
                     'screenshot_ref': screenshot_ref,
-                    'confirmation_source': 'human_owner',
+                    'confirmation_source': confirmation_source,
                 },
             )
         except BaseException as primary:

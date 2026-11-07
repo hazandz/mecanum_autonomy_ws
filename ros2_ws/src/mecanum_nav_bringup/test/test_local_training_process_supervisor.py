@@ -2399,6 +2399,7 @@ def test_process_launcher_protocol_owns_group_methods():
 def test_noncooperative_task_child_exits_only_after_parent_watchdog():
     """Bounded cleanup can return while a non-cooperative whole child lives."""
     import subprocess
+    import select
 
     child_code = r"""
 import asyncio, json
@@ -2406,6 +2407,7 @@ from types import SimpleNamespace
 from mecanum_nav_bringup.local_training_process_supervisor import (
     LocalTrainingProcessSupervisor,
 )
+print('CHILD_READY', flush=True)
 class Launcher:
     async def start(self, *_args): raise AssertionError
     async def stop_group(self, *_args): raise AssertionError
@@ -2442,6 +2444,10 @@ asyncio.run(main())
         stderr=subprocess.PIPE, text=True,
     )
     try:
+        # Thời gian import không thuộc ngân sách đo cleanup của child.
+        ready, _, _ = select.select([process.stdout], [], [], 5.0)
+        assert ready, 'child did not finish imports'
+        assert process.stdout.readline().strip() == 'CHILD_READY'
         try:
             stdout, stderr = process.communicate(timeout=0.35)
             raise AssertionError(
@@ -2706,4 +2712,23 @@ def test_f11d_shortened_deadline_retains_late_handle_without_redispatch():
             await _f11_release_and_join(
                 launcher, None, startup, (cleanup_a, cleanup_b),
             )
+    asyncio.run(run())
+
+
+def test_codex_gui_confirmation_is_not_recorded_as_human_ack():
+    """Giữ nguồn review Codex riêng với xác nhận của Owner."""
+    async def run():
+        readiness = FakeReadiness()
+        readiness.gui_confirmation_source = 'codex_image_review'
+        sink = FakeSink()
+        supervisor = LocalTrainingProcessSupervisor(
+            plan=plan(True), launcher=FakeLauncher(), readiness=readiness,
+            evidence_sink=sink,
+        )
+        await supervisor.start()
+        events = dict(sink.events)
+        assert 'gui_scene_owner_confirmed' not in events
+        assert events['gui_scene_codex_confirmed']['confirmation_source'] == (
+            'codex_image_review'
+        )
     asyncio.run(run())

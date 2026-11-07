@@ -1038,7 +1038,7 @@ private:
       return;
     }
     heartbeat_trace_writer_ = hbtrace_open_path(
-        path, device, inode, 4096, collection, session, backend_instance_id_,
+        path, device, inode, 524288, collection, session, backend_instance_id_,
         config, world, clock, "backend", provenance);
     if (!heartbeat_trace_writer_)
     {
