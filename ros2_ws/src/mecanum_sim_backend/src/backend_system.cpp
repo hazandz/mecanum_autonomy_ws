@@ -973,8 +973,8 @@ private:
   {
     // Chỉ update/shutdown ghi proof; callback đọc generation atomic, không đọc
     // bool/state machine đang bị update. Không khóa callback_mutex_ lồng nhau.
-    if (contact_probe_only_ && contact_capability_verified_)
-      contact_only_proof_generation_.fetch_add(1, std::memory_order_release);
+    if (contact_capability_verified_)
+      contact_proof_generation_.fetch_add(1, std::memory_order_release);
     contact_capability_verified_ = false;
   }
 
@@ -1563,7 +1563,7 @@ private:
             ControlResponse::CAPABILITY_FAILED : ControlResponse::CAPABILITY_UNKNOWN));
     response.capability_revision = capability_revision_;
     // Không xuất counter/stamp của proof cũ trong QUERY mới sau thu hồi.
-    if (contact_probe_only_ && !contact_capability_verified_ && !probe_machine_.Running())
+    if (!contact_capability_verified_ && !probe_machine_.Running())
       return;
     response.proof_backend_instance_id = contact_capability_verified_ ?
         proof_backend_instance_id_ : 0;
@@ -2123,10 +2123,9 @@ private:
       }
       // Cache vẫn giữ replay/exactly-once. Một proof thuộc generation đã thu
       // hồi không được xuất lại, kể cả khi phiên sau có proof mới.
-      if (contact_probe_only_ &&
-          cached->second.response.contact_capability_state == ControlResponse::CAPABILITY_VERIFIED &&
+      if (cached->second.response.contact_capability_state == ControlResponse::CAPABILITY_VERIFIED &&
           cached->second.contact_proof_generation !=
-              contact_only_proof_generation_.load(std::memory_order_acquire))
+              contact_proof_generation_.load(std::memory_order_acquire))
       {
         // Response mới khởi tạo phía trên có toàn bộ proof/counter/stamp zero.
         response.result = ControlResponse::RESULT_REJECTED;
@@ -2601,7 +2600,7 @@ private:
     PopulateProbeResponse(response);
     // Cùng callback_mutex_ bảo vệ response và generation của entry cache.
     cached->second.contact_proof_generation =
-        contact_only_proof_generation_.load(std::memory_order_acquire);
+        contact_proof_generation_.load(std::memory_order_acquire);
     control_mutation_pending_ = false;
     if (request.operation == ControlRequest::OP_INHIBIT ||
         request.operation == ControlRequest::OP_BIND_SESSION ||
@@ -2995,7 +2994,7 @@ private:
   std::function<std::int64_t()> steady_clock_now_{[] { return NowSteadyNs(); }};
   bool local_zero_override_{true}, measurement_healthy_{};
   bool contact_capability_verified_{};
-  std::atomic<std::uint64_t> contact_only_proof_generation_{};
+  std::atomic<std::uint64_t> contact_proof_generation_{};
   bool probe_running_{};
   bool contact_probe_only_{};
   std::string contact_only_engine_fingerprint_;

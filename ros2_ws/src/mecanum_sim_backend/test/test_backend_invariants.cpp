@@ -1833,7 +1833,7 @@ static void RunNativeResetObservation0Chain(
     bool inhibit_before_confirmation_apply = false,
     bool contact_gap_after_application = false,
     bool positive_policy_admission = false,
-    int safety_freshness_case = 0)
+    int safety_freshness_case = 0, int query_revocation_case = 0)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -1933,6 +1933,40 @@ static void RunNativeResetObservation0Chain(
   EXPECT_EQ(BackendSystemTestPeer::Cached(system, 3).contact_capability_state,
             ControlResponse::CAPABILITY_VERIFIED);
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+
+  if (query_revocation_case != 0)
+  {
+    const auto verified = BackendSystemTestPeer::Receive(system, query);
+    ASSERT_EQ(verified.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, query), verified);
+    const auto original_start = BackendSystemTestPeer::Receive(system, start);
+    if (query_revocation_case == 2)
+      ecm.SetComponentData<gz::sim::components::PhysicsEnginePlugin>(
+          BackendSystemTestPeer::WorldEntity(system), "missing-engine");
+    BackendSystemTestPeer::RunProductionTick(
+        system, ecm, 15, query_revocation_case == 1 ? 339'000'000 : 350'000'000);
+    ASSERT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+    const auto no_proof = [](const ControlResponse &response) {
+      EXPECT_NE(response.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+      EXPECT_EQ(response.proof_backend_instance_id, 0u);
+      EXPECT_TRUE(response.proof_session_id.empty());
+      EXPECT_TRUE(response.proof_config_hash.empty());
+      EXPECT_TRUE(response.proof_asset_manifest_sha256.empty());
+      EXPECT_EQ(response.contact_sample_count, 0u);
+      EXPECT_EQ(response.covered_empty_sample_count, 0u);
+      EXPECT_EQ(response.probe_model_entity_id, 0u);
+    };
+    no_proof(BackendSystemTestPeer::Receive(system, query));
+    query.request_sequence = 4;
+    const auto submitted = BackendSystemTestPeer::Receive(system, query);
+    if (submitted.result == ControlResponse::RESULT_QUEUED)
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 16, 360'000'000);
+    no_proof(BackendSystemTestPeer::Receive(system, query));
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, start), original_start);
+    EXPECT_EQ(io->spawn_calls, 1u);
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    return;
+  }
 
   for (std::uint64_t iteration = 15; iteration <= 16; ++iteration)
     BackendSystemTestPeer::RunProductionTick(
@@ -4089,4 +4123,14 @@ TEST(ContactOnlyMode, CallbackWaitingOnControlMutexSeesProofRevocation)
   EXPECT_FALSE(BackendSystemTestPeer::ContactVerified(system));
   ExpectNoContactProof(replay);
   EXPECT_EQ(io->spawn_calls, 1u);
+}
+
+TEST(NormalContactQuery, CachedProofRevokedAfterClockRollback)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, false, 0, 1);
+}
+
+TEST(NormalContactQuery, CachedProofRevokedAfterEngineChange)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, false, 0, 2);
 }
