@@ -28,6 +28,165 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+INSTALL_INPUTS = (
+    'lib/libmecanum_sim_backend_system.so',
+    'lib/libmecanum_sim_backend_core.so',
+    'lib/libmecanum_heartbeat_trace_writer.so',
+    'lib/python3.12/site-packages/mecanum_nav_bringup/local_training_process_supervisor.py',
+    'lib/python3.12/site-packages/mecanum_nav_bringup/local_training_launch_contract.py',
+    'lib/python3.12/site-packages/mecanum_nav_bringup/local_training_readiness_worker.py',
+    'lib/python3.12/site-packages/mecanum_nav_bringup/local_training_heartbeat_trace_observer.py',
+    'lib/python3.12/site-packages/mecanum_nav_rl/config/v3_models.py',
+    'lib/python3.12/site-packages/mecanum_nav_rl_interfaces/msg/__init__.py',
+    'share/mecanum_nav_bringup/config/gui/local_training.config',
+    'share/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml',
+    'share/ROBOT_URDF_final_description/worlds/b2_training_arena.sdf',
+    'share/ROBOT_URDF_final_description/models/mecanum_b2/model.sdf',
+    'share/ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf',
+    'share/ROBOT_URDF_final_description/manifests/b2/asset_manifest.json',
+    'share/mecanum_nav_rl/config/v3/resolved/sim_train_local_training_soak.resolved.json',
+    'share/mecanum_nav_rl/scenarios/local_training/B2_SOAK_V1.json',
+)
+
+
+def profile_inputs(prefix):
+    """Pin toàn bộ install và các module capture dùng từ source snapshot."""
+    paths = {prefix / rel for rel in INSTALL_INPUTS}
+    paths.update(p for p in prefix.rglob('*')
+                 if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc')
+    paths.add(Path(__file__).resolve())
+    paths.update(HISTORICAL_TOOLS / name for name in (
+        'observation_runner.py', 'observation_sink.py', 'observation_guard.py',
+    ))
+    return paths
+
+
+def verify_profile(args):
+    """Kiểm hồ sơ/hash trước consume và trước mọi subprocess của lượt."""
+    raw = Path(args.profile).resolve(strict=True).read_bytes()
+    if digest(raw) != args.profile_sha256:
+        raise ValueError('profile SHA-256 mismatch')
+    profile = capture.strict_json_loads(raw, max_bytes=4*1024*1024)
+    if profile.get('schema') != 'b22_gui_profile/v1':
+        raise ValueError('unsupported profile schema')
+    for key in ('run_id', 'source_commit', 'authority'):
+        if profile.get(key) != getattr(args, key):
+            raise ValueError('profile binding mismatch: '+key)
+    if not re.fullmatch(r'[0-9a-f]{40}', args.source_commit):
+        raise ValueError('source commit must be an exact full SHA')
+    if not re.fullmatch(r'[A-Za-z0-9_]+', args.run_id) or not args.authority.strip():
+        raise ValueError('invalid run ID or missing authority')
+    prefix = Path(args.install).resolve(strict=True)
+    root = Path(args.evidence).resolve(strict=True)
+    if (profile.get('install') != str(prefix)
+            or profile.get('evidence') != str(root)
+            or profile.get('python') != str(Path(sys.executable).resolve())):
+        raise ValueError('profile path/interpreter mismatch')
+    expected = profile.get('files')
+    required = {str(p) for p in profile_inputs(prefix)}
+    if not isinstance(expected, dict) or set(expected) != required:
+        raise ValueError('profile file inventory incomplete or changed')
+    for path, checksum in expected.items():
+        if (not isinstance(checksum, str) or not re.fullmatch(r'[0-9a-f]{64}', checksum)
+                or digest(Path(path).read_bytes()) != checksum):
+            raise ValueError('profile file SHA-256 mismatch: '+path)
+    return profile
+
+
+def verify_import_origins(prefix, modules):
+    """Không chấp nhận module production lọt vào từ checkout/underlay cũ."""
+    origins = {}
+    for name, module in modules.items():
+        path = Path(module.__file__).resolve(strict=True)
+        if not path.is_relative_to(prefix):
+            raise ValueError('module outside pinned install: '+name)
+        origins[name] = str(path)
+    return origins
+
+
+async def prepare_xauthority(path, display, deadline, total_deadline):
+    """Giữ handle spawn; timeout/cancel luôn thu hồi và reap đúng xauth child."""
+    record = {'role': 'xauth', 'started_ns': time.monotonic_ns(),
+              'parent_pid': os.getpid(), 'uid': os.getuid(),
+              'cleanup_errors': [], 'joined': False}
+    process = None
+    spawn = None
+    communication = None
+    primary = None
+
+    async def bounded(awaitable, end):
+        remaining = end-time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('xauth deadline expired')
+        return await asyncio.wait_for(asyncio.shield(awaitable), remaining)
+
+    try:
+        operation_deadline = min(deadline, time.monotonic()+3)
+        if time.monotonic() >= deadline:
+            raise TimeoutError('active deadline before xauth spawn')
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            'xauth', '-f', str(path), 'add', display,
+            'MIT-MAGIC-COOKIE-1', secrets.token_hex(16), start_new_session=True,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE))
+        process = await bounded(spawn, operation_deadline)
+        record['pid'] = process.pid
+        communication = asyncio.create_task(process.communicate())
+        stdout, stderr = await bounded(communication, operation_deadline)
+        record.update(exit_status=process.returncode, stdout_sha256=digest(stdout),
+                      stderr_sha256=digest(stderr))
+        if process.returncode != 0:
+            raise RuntimeError('xauth preparation failed')
+        path.chmod(0o600)
+    except BaseException as error:
+        primary = error
+        record['primary_error'] = {'type': type(error).__name__, 'reason': str(error)}
+        raise
+    finally:
+        # Ngân sách riêng hữu hạn, không đổi mốc consume hay total deadline.
+        end = min(total_deadline, time.monotonic()+3)
+        record['cleanup_deadline_ns'] = int(end*1e9)
+        try:
+            if spawn is not None and process is None:
+                process = await bounded(spawn, end)
+                record['pid'] = process.pid
+            if process is not None:
+                if communication is None:
+                    communication = asyncio.create_task(process.communicate())
+                if process.returncode is None:
+                    # PID là direct child chưa reap từ chính handle này; không tra theo tên.
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        record['gone_at_terminate'] = True
+                    record['terminated'] = True
+                    try:
+                        await bounded(communication, min(end, time.monotonic()+.25))
+                    except TimeoutError:
+                        if process.returncode is None:
+                            try:
+                                process.kill()
+                            except ProcessLookupError:
+                                record['gone_at_kill'] = True
+                            record['killed'] = True
+                await bounded(communication, end)
+                await bounded(asyncio.create_task(process.wait()), end)
+                record.update(joined=True, exit_status=process.returncode)
+        except BaseException as error:
+            record['cleanup_errors'].append({'type': type(error).__name__, 'reason': str(error)})
+        record['ended_ns'] = time.monotonic_ns()
+        try:
+            capture.atomic_publish(path.parent/'xauth-record.json', json.dumps(record).encode())
+        except BaseException as error:
+            record['cleanup_errors'].append({'type': type(error).__name__, 'reason': str(error)})
+        if record['cleanup_errors']:
+            reason = 'xauth cleanup/evidence incomplete: '+str(record['cleanup_errors'])
+            if primary is not None:
+                primary.add_note(reason)
+            else:
+                raise RuntimeError(reason)
+    return record
+
+
 def validate_window_metadata(info, properties, pid):
     """Yêu cầu cửa sổ viewable, geometry/depth thật và đúng PID tại capture."""
     if 'Map State: IsViewable' not in info:
@@ -52,10 +211,13 @@ def xcb_environment(environment, display, authority):
             'QT_QPA_PLATFORM': 'xcb'}
 
 
-def review_result(request, review, png, now_ns):
+def review_result(request, review, png, now_ns, request_bytes):
     """Kiểm review gắn request/ảnh và deadline; không suy human ACK."""
     if now_ns >= request['deadline_ns']:
         raise ValueError('review expired')
+    if (capture.strict_json_loads(request_bytes) != request
+            or review.get('request_sha256') != digest(request_bytes)):
+        raise ValueError('review request SHA-256 mismatch')
     for key in ('run_id', 'session_id', 'nonce', 'screenshot_sha256'):
         if review.get(key) != request[key]:
             raise ValueError('review binding mismatch: ' + key)
@@ -142,22 +304,44 @@ async def await_start(supervisor, evaluator, monitor, deadline, total_deadline):
 
 
 async def run(args):
+    profile = verify_profile(args)
+    root = Path(args.evidence).resolve(strict=True)
+    run_root = root / args.run_id
+    run_root.mkdir(mode=0o700)
+    # Một mốc consume duy nhất, bao gồm setup/xauth/startup/review/observation.
+    consumed_ns = time.monotonic_ns()
+    capture.atomic_publish(run_root / 'consumed.json', json.dumps({
+        'run_id': args.run_id, 'authority': args.authority,
+        'source_commit': args.source_commit, 'at_ns': consumed_ns,
+        'active_deadline_ns': consumed_ns+240_000_000_000,
+        'total_deadline_ns': consumed_ns+300_000_000_000,
+        'profile_sha256': args.profile_sha256,
+    }).encode())
+    try:
+        return await run_consumed(args, run_root, consumed_ns, profile)
+    except BaseException as error:
+        capture.atomic_publish(run_root/'invocation-failure.json', json.dumps({
+            'type': type(error).__name__, 'reason': str(error),
+            'notes': getattr(error, '__notes__', []), 'at_ns': time.monotonic_ns(),
+        }).encode())
+        raise
+
+
+async def run_consumed(args, run_root, start_ns, profile):
     from mecanum_nav_bringup.local_training_launch_contract import build_launch_plan, write_bound_world
     from mecanum_nav_bringup import local_training_process_supervisor as sp
     from mecanum_nav_bringup import local_training_heartbeat_trace_observer as trace_api
     from observation_sink import ObservationEvidenceSink
     api = load_capture_api()
-    root = Path(args.evidence).resolve(strict=True)
-    if not re.fullmatch(r'[A-Za-z0-9_]+', args.run_id):
-        raise ValueError('invalid run ID')
-    # mkdir độc quyền là chốt; mỗi lượt dùng ID/path mới.
-    run_root = root / args.run_id
-    run_root.mkdir(mode=0o700)
-    capture.atomic_publish(run_root / 'consumed.json', json.dumps({
-        'run_id': args.run_id, 'authority': args.authority,
-        'source_commit': args.source_commit, 'at_ns': time.monotonic_ns(),
-    }).encode())
+    deadline = (start_ns+240_000_000_000)/1e9
+    total_deadline = (start_ns+300_000_000_000)/1e9
     prefix = Path(args.install).resolve(strict=True)
+    from mecanum_nav_rl.config import v3_models
+    from mecanum_nav_rl_interfaces import msg as interfaces
+    origins = verify_import_origins(prefix, {
+        'supervisor': sp, 'trace_observer': trace_api,
+        'v3_models': v3_models, 'interfaces': interfaces,
+    })
     desc = prefix / 'share/ROBOT_URDF_final_description'
     bringup = prefix / 'share/mecanum_nav_bringup'
     rl = prefix / 'share/mecanum_nav_rl'
@@ -180,14 +364,7 @@ async def run(args):
                           if not Path(f'/tmp/.X11-unix/X{n}').exists()
                           and not Path(f'/tmp/.X{n}-lock').exists())
     authority = run_root/'display.Xauthority'
-    cookie = secrets.token_hex(16)
-    proc = await asyncio.create_subprocess_exec('xauth','-f',str(authority),'add',
-        f':{display_number}','MIT-MAGIC-COOKIE-1',cookie,
-        stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-    _, err = await asyncio.wait_for(proc.communicate(),3)
-    if proc.returncode:
-        raise RuntimeError('xauth preparation failed: '+err.decode()[:160])
-    authority.chmod(0o600)
+    await prepare_xauthority(authority, f':{display_number}', deadline, total_deadline)
     parent_environment = dict(os.environ)
     environment = xcb_environment({**plan.environment,'ROS_DOMAIN_ID':str(args.domain)},
                                   f':{display_number}',authority)
@@ -202,14 +379,14 @@ async def run(args):
              rl/'scenarios/local_training/B2_SOAK_V1.json']
     files += list((prefix/'lib').glob('libmecanum*.so'))
     pins = {str(p):digest(p.read_bytes()) for p in files}
-    (run_root/'bindings.json').write_text(json.dumps({'pins':pins,'origins':bindings,
+    (run_root/'bindings.json').write_text(json.dumps({'pins':pins,'origins':{**bindings, **origins},
         'environment':environment,'commands':plan.commands,'clock':trace_api.clock_context(),
-        'source_commit':args.source_commit,'authority':args.authority},indent=2))
+        'source_commit':args.source_commit,'authority':args.authority,
+        'profile_sha256':args.profile_sha256, 'verified_profile':profile,
+        'consumed_ns':start_ns, 'active_deadline_ns':int(deadline*1e9),
+        'total_deadline_ns':int(total_deadline*1e9)},indent=2))
     ack = asyncio.Event()
     ready = asyncio.Event()
-    start_ns = time.monotonic_ns()
-    deadline = time.monotonic()+240
-    total_deadline = deadline+60
     outcomes = {'owner_visual_review':'NOT_PERFORMED','heartbeat_historical_RUN008':'UNKNOWN'}
     failures = []
 
@@ -272,7 +449,8 @@ async def run(args):
                 result = Path(request['result_path'])
                 if result.exists():
                     data = capture.read_published(result)
-                    accepted = review_result(request,json.loads(data),image.read_bytes(),time.monotonic_ns())
+                    accepted = review_result(request,capture.strict_json_loads(data),
+                        image.read_bytes(),time.monotonic_ns(),request_bytes)
                     sink.record('codex_review_validated',{'request_sha256':digest(request_bytes),
                         'result_sha256':digest(data),'accepted':accepted,'owner_visual_review':'NOT_PERFORMED'})
                     if accepted: ack.set()
@@ -292,15 +470,18 @@ async def run(args):
         heartbeat_trace_directory=trace_dir,cleanup_evidence_publisher=publisher)
     passive = api.PassiveBackendObserver()
     # API observer lịch sử pin domain 83; chỉ chấp nhận đúng domain đó ở runner này.
-    passive.start()
-    evaluator = asyncio.create_task(api.evaluate_observation(plan=plan,observer=passive,
-        duration_s=60,ack_event=ack,deadline=deadline,sink=sink,
-        expected_nodes=api.EXPECTED_ROS_NODES|{('b2_heartbeat_trace_observer','/')},
-        readiness_complete_event=ready))
+    evaluator = monitor = None
     stop = asyncio.Event()
-    monitor = asyncio.create_task(monitor_owned(supervisor,stop,deadline,api,sink))
     clean = False
     try:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('active deadline before ROS startup')
+        passive.start()
+        evaluator = asyncio.create_task(api.evaluate_observation(plan=plan,observer=passive,
+            duration_s=60,ack_event=ack,deadline=deadline,sink=sink,
+            expected_nodes=api.EXPECTED_ROS_NODES|{('b2_heartbeat_trace_observer','/')},
+            readiness_complete_event=ready))
+        monitor = asyncio.create_task(monitor_owned(supervisor,stop,deadline,api,sink))
         await supervisor._launch_owned_process('x11_display',
             ('Xephyr',f':{display_number}','-screen','1280x800','-nolisten','tcp','-noreset',
              '-auth',str(authority)),parent_environment)
@@ -326,9 +507,10 @@ async def run(args):
         raise
     finally:
         stop.set()
-        for task in (evaluator,monitor):
+        tasks = [task for task in (evaluator,monitor) if task is not None]
+        for task in tasks:
             if not task.done(): task.cancel()
-        await asyncio.gather(evaluator,monitor,return_exceptions=True)
+        await asyncio.gather(*tasks,return_exceptions=True)
         try:
             passive.close(deadline=min(total_deadline,time.monotonic()+3))
         except BaseException as error:
@@ -392,7 +574,7 @@ def publish_review(request_path, verdict, notes):
                    'verdict':verdict,'notes':notes,'request_sha256':digest(request_bytes),
                    'publisher_identity':capture.process_start_identity(os.getpid()),
                    'at_ns':time.monotonic_ns()})
-    review_result(request,result,png,time.monotonic_ns())
+    review_result(request,result,png,time.monotonic_ns(),request_bytes)
     target = Path(request['result_path'])
     if target.parent != request_path.parent or image.parent != request_path.parent:
         raise ValueError('review paths must belong to this run')
@@ -412,6 +594,8 @@ def main():
     parser.add_argument('--install',required=True)
     parser.add_argument('--source-commit',required=True)
     parser.add_argument('--authority',required=True)
+    parser.add_argument('--profile',required=True)
+    parser.add_argument('--profile-sha256',required=True)
     parser.add_argument('--domain',type=int,choices=(83,),default=83)
     return asyncio.run(run(parser.parse_args()))
 
