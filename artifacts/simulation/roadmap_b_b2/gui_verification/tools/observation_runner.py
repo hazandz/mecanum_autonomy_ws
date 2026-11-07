@@ -608,7 +608,9 @@ async def run_contact(args, run_root, start_ns, profile):
         resource_paths=(desc.parent,desc/'models'),plugin_path=prefix/'lib',physics_engine_plugin_path=sp._physics_engine_plugin_path(),
         asset_manifest_file=desc/'manifests/b2/asset_manifest.json',scenario_directory=rl/'scenarios/local_training',
         runtime_world_directory=run_root,coordinator_ingress_instance_id=secrets.randbits(64) or 1)
-    plan = replace(plan,environment={**plan.environment,'ROS_DOMAIN_ID':'83'})
+    # gzmsg chứa raw sample; chỉ tăng verbosity của phiên contact cô lập.
+    plan = replace(plan,environment={**plan.environment,'ROS_DOMAIN_ID':'83'},
+                   commands=tuple(command[:2]+('-v','3')+command[2:] for command in plan.commands))
     write_bound_world(plan,desc/'worlds/b2_training_arena.sdf',desc/'models/mecanum_b2/model.sdf')
     tree = ET.parse(plan.world_file);plugin = tree.find(".//plugin[@name='mecanum_sim_backend::BackendSystem']")
     if plugin is None: raise ValueError('bound backend plugin missing')
