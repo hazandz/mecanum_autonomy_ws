@@ -77,15 +77,17 @@ class FakeTransport:
 class ScheduledTransport(FakeTransport):
     """Fake nonblocking RX whose clock advances to the next scheduled packet."""
 
-    def __init__(self, clock, events=()):
+    def __init__(self, clock, events=(), *, write_delay=0.0):
         super().__init__()
         self.clock = clock
         self.events = list(events)
         self.config_sent_at = None
+        self.write_delay = write_delay
 
     def write(self, frame):
         super().write(frame)
         self.config_sent_at = self.clock.now
+        self.clock.now += self.write_delay
 
     def read(self, max_bytes=256):
         assert max_bytes == 256
@@ -302,8 +304,27 @@ def test_refuses_to_overwrite_existing_evidence_before_open(tmp_path):
     assert output.read_bytes() == original
 
 
-def test_f2_repository_root_uses_git_for_linked_worktree_with_bounded_timeout(monkeypatch):
-    assert (ROOT / ".git").is_file()
+def test_f2_repository_root_uses_git_for_linked_worktree_with_bounded_timeout(tmp_path, monkeypatch):
+    # Build a real linked worktree fixture so this test behaves the same when
+    # the suite itself is run from either a clone or a linked worktree.
+    clone = tmp_path / "fixture-clone"
+    relative_module = Path("ros2_ws/src/mecanum_base_bridge/mecanum_base_bridge/uart_config_only_bench.py")
+    module_in_clone = clone / relative_module
+    module_in_clone.parent.mkdir(parents=True)
+    module_in_clone.write_bytes(Path(bench.__file__).read_bytes())
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    subprocess.run(["git", "-C", str(clone), "add", str(relative_module)], check=True)
+    subprocess.run([
+        "git", "-C", str(clone), "-c", "user.name=Fixture", "-c",
+        "user.email=fixture@example.invalid", "commit", "-qm", "fixture base",
+    ], check=True)
+    linked = tmp_path / "fixture-linked-worktree"
+    subprocess.run([
+        "git", "-C", str(clone), "worktree", "add", "-qb", "fixture-linked", str(linked), "HEAD",
+    ], check=True)
+    module_in_linked = linked / relative_module
+    assert (linked / ".git").is_file()
+    monkeypatch.setattr(bench, "__file__", str(module_in_linked))
     real_run = subprocess.run
     timeouts = []
 
@@ -312,13 +333,13 @@ def test_f2_repository_root_uses_git_for_linked_worktree_with_bounded_timeout(mo
         return real_run(*args, **kwargs)
 
     monkeypatch.setattr(bench.subprocess, "run", checked_run)
-    assert bench._repository_root() == ROOT.resolve()
+    assert bench._repository_root() == linked.resolve()
     assert timeouts and all(value is not None and value <= 3.0 for value in timeouts)
 
 
-def _run_scheduled(tmp_path, events, *, duration):
+def _run_scheduled(tmp_path, events, *, duration, write_delay=0.0, wake_overshoot=0.0):
     clock = FakeClock()
-    transport = ScheduledTransport(clock, events)
+    transport = ScheduledTransport(clock, events, write_delay=write_delay)
 
     def scheduled_sleep(seconds):
         target = clock.now + seconds
@@ -327,6 +348,10 @@ def _run_scheduled(tmp_path, events, *, duration):
             if clock.now <= next_event <= target:
                 clock.now = next_event
                 return
+        capture_end = transport.config_sent_at + write_delay + duration if transport.config_sent_at is not None else None
+        if (wake_overshoot and capture_end is not None and clock.now < capture_end <= target):
+            clock.now = capture_end + wake_overshoot
+            return
         clock.now = target
 
     evidence = invoke(tmp_path, transport, clock=clock, duration=duration, sleeper=scheduled_sleep)
@@ -341,6 +366,37 @@ def test_f1_config_status_deadline_reproductions_fail_in_config_phase(tmp_path):
     )
     assert evidence["error"]["code"] == "config_status_timeout"
     assert evidence["error"]["phase"] == "status_and_telemetry_rx"
+    assert transport.open_calls == 1 and len(transport.writes) == 1
+
+
+def test_f1a_config_deadline_starts_before_a_slow_write(tmp_path):
+    events = [
+        (0.510, status_frame()),
+        (0.515, telemetry_frame(sequence=0, time_us=1000)),
+        (0.665, telemetry_frame(sequence=1, time_us=2000)),
+        (0.815, telemetry_frame(sequence=2, time_us=3000)),
+        (0.965, telemetry_frame(sequence=3, time_us=4000)),
+    ]
+    evidence, transport, _ = _run_scheduled(tmp_path, events, duration=1.0, write_delay=0.019)
+    assert evidence["error"]["code"] == "config_status_timeout"
+    assert evidence["rx_counts"]["telemetry"] == 0
+    assert len(transport.writes) == 1
+
+
+@pytest.mark.parametrize("duration, expected", [
+    (0.195, "observed"),
+    (0.210, "telemetry_freshness_timeout"),
+    (0.215, "telemetry_freshness_timeout"),
+])
+def test_f1b_capture_cutoff_controls_final_freshness(duration, expected, tmp_path):
+    evidence, transport, _ = _run_scheduled(
+        tmp_path,
+        [(0.0, status_frame()), (0.010, telemetry_frame())],
+        duration=duration,
+        wake_overshoot=0.015,
+    )
+    actual = "observed" if evidence["result"] == "observed" else evidence["error"]["code"]
+    assert actual == expected
     assert transport.open_calls == 1 and len(transport.writes) == 1
 
 

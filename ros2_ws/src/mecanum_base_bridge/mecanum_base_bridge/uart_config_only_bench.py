@@ -410,16 +410,18 @@ def run_bench(
         _guard_config_tx(config_frame, expected)
         evidence["tx_counts"]["write_attempts"] += 1
         evidence["tx_counts"]["config_request_attempts"] += 1
+        sent_at = clock()
+        config_status_deadline = sent_at + CONFIG_STATUS_TIMEOUT_SECONDS
         transport.write(config_frame)
         evidence["tx_counts"]["write_successes"] += 1
         evidence["tx_counts"]["config_request"] += 1
-        sent_at = clock()
-        capture_deadline = sent_at + duration
-        config_status_deadline = sent_at + CONFIG_STATUS_TIMEOUT_SECONDS
+        capture_deadline = clock() + duration
         current_phase = "status_and_telemetry_rx"
 
         while True:
             now = clock()
+            if now >= capture_deadline:
+                break
             _check_session_deadline(
                 now,
                 config_status_accepted=config_status_accepted,
@@ -428,13 +430,12 @@ def run_bench(
                 first_telemetry_deadline=first_telemetry_deadline,
                 telemetry_deadline=telemetry_deadline,
             )
-            if now >= capture_deadline:
-                break
-
             chunk = transport.read(256)
             rx_at = clock()
             if chunk:
                 evidence["rx_counts"]["bytes"] += len(chunk)
+            if rx_at >= capture_deadline:
+                break
             _check_session_deadline(
                 rx_at,
                 config_status_accepted=config_status_accepted,
@@ -443,8 +444,6 @@ def run_bench(
                 first_telemetry_deadline=first_telemetry_deadline,
                 telemetry_deadline=telemetry_deadline,
             )
-            if rx_at >= capture_deadline:
-                break
 
             if chunk:
                 for wire in _feed_frames(accumulator, chunk):
@@ -506,7 +505,7 @@ def run_bench(
 
         evidence["rx_counts"]["trailing_partial_bytes"] = accumulator.pending_bytes
         _check_session_deadline(
-            clock(),
+            min(clock(), capture_deadline),
             config_status_accepted=config_status_accepted,
             telemetry_count=evidence["rx_counts"]["telemetry"],
             config_status_deadline=config_status_deadline,
