@@ -78,7 +78,8 @@ def profile_fixture(tmp_path):
     args = SimpleNamespace(profile=str(tmp_path/'profile.json'),
         install=str(prefix), evidence=str(tmp_path), run_id='TEST_A01',
         source_commit='a'*40, authority='Owner offline fakes')
-    profile = {'schema': 'b22_gui_profile/v1', 'run_id': args.run_id,
+    profile = {'schema': 'b22_gui_profile/v2', 'run_id': args.run_id,
+        'unit': 'b22-test.service', 'parent_argv': ['/bin/bash', str(tmp_path/'wrapper.sh')],
         'source_commit': args.source_commit, 'authority': args.authority,
         'install': str(prefix), 'evidence': str(tmp_path),
         'python': str(Path(runner.sys.executable).resolve()),
@@ -87,6 +88,22 @@ def profile_fixture(tmp_path):
     Path(args.profile).write_bytes(raw)
     args.profile_sha256 = runner.digest(raw)
     return args, profile
+
+
+def execution_fixture(profile, argv):
+    """Dữ liệu /proc giả cùng schema Linux; toàn bộ kiểm tra do runner thật làm."""
+    group = '/user.slice/app.slice/'+profile['unit']
+    def process(pid, ppid, command):
+        fields = ['S', str(ppid), str(pid), str(pid)]+['0']*16
+        fields[19] = str(pid*100)
+        stat = (str(pid)+' (fixture) '+' '.join(fields)+'\n').encode().hex()
+        return {'stat': stat, 'stat_after': stat,
+            'cmdline': (b'\0'.join(s.encode() for s in command)+b'\0').hex(),
+            'cgroup': ('0::'+group+'\n').encode().hex(),
+            'status': ('Uid:\t'+'\t'.join([str(runner.os.geteuid())]*4)+'\n').encode().hex()}
+    return {'parent': process(321, 1, profile['parent_argv']),
+            'worker': process(322, 321, argv), 'invocation_id': '1'*32,
+            'collected_ns': 1234}
 
 
 def test_profile_checks_every_required_install_and_source_input(tmp_path):
@@ -141,6 +158,8 @@ def test_single_consume_timestamp_is_passed_without_refresh(tmp_path, monkeypatc
     args, profile = profile_fixture(tmp_path)
     observed = []
     monkeypatch.setattr(runner.time, 'monotonic_ns', lambda: 123456789)
+    raw = execution_fixture(profile, runner.worker_command(args))
+    monkeypatch.setattr(runner, 'execution_observations', lambda: raw)
     async def downstream(actual, root, consumed, verified):
         observed.append((actual, root, consumed, verified))
         return 0
@@ -337,17 +356,35 @@ def test_process_ending_late_fails_even_with_successful_marker(tmp_path):
 
 
 @pytest.mark.parametrize('case', ['on_time', 'late', 'invocation_changed', 'unloaded_defaults',
-                                'terminal_group_not_retained', 'different_group'])
+    'terminal_group_not_retained', 'different_group', 'foreign_unit', 'foreign_initial_invocation',
+    'foreign_main_pid', 'wrong_command', 'wrong_run_id', 'wrong_profile_hash', 'wrong_worker_argv',
+    'changed_wrapper', 'wrong_packet_hash', 'wrong_executable_path'])
 def test_terminal_cli_uses_real_exit_properties_and_timing_gate(tmp_path, monkeypatch, case):
+    args, profile = profile_fixture(tmp_path)
+    root = tmp_path/args.run_id
+    root.mkdir()
+    wrapper = Path(profile['parent_argv'][1])
+    wrapper.write_text('#!/bin/bash\n# fixture only; never executed\n')
+    argv = runner.worker_command(args)
+    execution_raw = execution_fixture(profile, argv)
+    execution_raw['collected_ns'] = 500
+    execution = runner.normalize_execution(profile, argv, execution_raw)
     start = 1000
     deadline = start+300_000_000_000
-    (tmp_path/'consumed.json').write_text(json.dumps({
-        'at_ns': start, 'total_deadline_ns': deadline, 'source_commit': 'a'*40}))
-    (tmp_path/'observation.jsonl').write_bytes(b'log\n')
-    assert runner.publish_completion(tmp_path, {'cleanup_clean': True, 'failures': []},
+    consumed = {'at_ns': start, 'total_deadline_ns': deadline, 'source_commit': 'a'*40,
+        'run_id': args.run_id, 'profile_sha256': args.profile_sha256, 'execution': execution}
+    (root/'observation.jsonl').write_bytes(b'log\n')
+    assert runner.publish_completion(root, {'cleanup_clean': True, 'failures': []},
         start, now_ns=lambda: start+1000) == 0
-    initial = {'Id': 'probe-test.service', 'InvocationID': 'inv-1',
-               'ControlGroup': '/exact/probe', 'MainPID': '321'}
+    packet = {'run_id': args.run_id, 'source_commit': args.source_commit,
+        'profile': args.profile, 'profile_sha256': args.profile_sha256,
+        'source_runner_sha256': runner.digest(Path(runner.__file__).read_bytes()),
+        'unit': profile['unit'], 'parent_argv': profile['parent_argv'],
+        'worker_argv': argv, 'wrapper_sha256': runner.digest(wrapper.read_bytes()),
+        'launch_command': ['systemd-run', '--unit='+profile['unit'], *profile['parent_argv']]}
+    initial = {'Id': profile['unit'], 'InvocationID': '1'*32,
+               'ControlGroup': execution['parent']['cgroup'], 'MainPID': '321',
+               'ExecStart': '{ path=/bin/bash ; argv[]='+ ' '.join(profile['parent_argv'])+' ; ignore_errors=no ; }'}
     terminal = {**initial, 'MainPID': '0', 'ExecMainPID': '321',
         'ExecMainCode': str(runner.os.CLD_EXITED), 'ExecMainStatus': '0',
         'ExecMainExitTimestampMonotonic': '20', 'Result': 'success',
@@ -363,12 +400,62 @@ def test_terminal_cli_uses_real_exit_properties_and_timing_gate(tmp_path, monkey
         terminal['ControlGroup'] = ''
     elif case == 'different_group':
         terminal['ControlGroup'] = '/different/group'
+    elif case == 'foreign_unit':
+        initial['Id'] = terminal['Id'] = 'b22-foreign.service'
+    elif case == 'foreign_initial_invocation':
+        initial['InvocationID'] = terminal['InvocationID'] = '2'*32
+    elif case == 'foreign_main_pid':
+        initial['MainPID'] = terminal['ExecMainPID'] = '999'
+    elif case == 'wrong_command':
+        initial['ExecStart'] = terminal['ExecStart'] = '{ path=/bin/bash ; argv[]=/bin/bash /different.sh ; ignore_errors=no ; }'
+    elif case == 'wrong_executable_path':
+        initial['ExecStart'] = terminal['ExecStart'] = initial['ExecStart'].replace('path=/bin/bash', 'path=/foreign/program')
+    elif case == 'wrong_run_id':
+        consumed['run_id'] = 'ANOTHER_RUN'
+    elif case == 'wrong_profile_hash':
+        consumed['profile_sha256'] = '0'*64
+    elif case == 'wrong_worker_argv':
+        packet['worker_argv'] = ['different', 'command']
+    elif case == 'changed_wrapper':
+        wrapper.write_text('changed after packet hash')
+    (root/'consumed.json').write_text(json.dumps(consumed))
     serialize = lambda values: ''.join(k+'='+v+'\n' for k,v in values.items())
     evidence = tmp_path/'unit.json'
     evidence.write_text(json.dumps({'initial_unit': serialize(initial),
         'terminal_unit': serialize(terminal), 'collected_end_ns': deadline+10_000}))
-    monkeypatch.setattr(runner.sys, 'argv', ['runner', '--validate-terminal', str(tmp_path), str(evidence)])
+    packet_path = tmp_path/'packet.json'
+    packet_path.write_text(json.dumps(packet))
+    checksum = runner.digest(packet_path.read_bytes())
+    if case == 'wrong_packet_hash':
+        checksum = '0'*64
+    monkeypatch.setattr(runner.sys, 'argv', ['runner', '--validate-terminal', str(root), str(evidence), str(packet_path), checksum])
+    if case == 'wrong_packet_hash':
+        with pytest.raises(ValueError, match='packet SHA-256'):
+            runner.main()
+        assert not (root/'completion-acceptance.json').exists()
+        return
     accepted = case in ('on_time', 'terminal_group_not_retained')
     assert runner.main() == (0 if accepted else 3)
-    result = json.loads((tmp_path/'completion-acceptance.json').read_text())
+    result = json.loads((root/'completion-acceptance.json').read_text())
     assert result['timing_verdict'] == ('PASS' if accepted else 'FAIL')
+
+
+@pytest.mark.parametrize('mutation', ['nonce', 'parent_argv', 'worker_argv', 'cgroup', 'identity', 'uid'])
+def test_proc_normalization_rejects_wrong_ownership(tmp_path, mutation):
+    args, profile = profile_fixture(tmp_path)
+    argv = runner.worker_command(args)
+    raw = execution_fixture(profile, argv)
+    if mutation == 'nonce':
+        raw['invocation_id'] = None
+    elif mutation == 'parent_argv':
+        raw['parent']['cmdline'] = b'/bin/bash\0/foreign\0'.hex()
+    elif mutation == 'worker_argv':
+        raw['worker']['cmdline'] = b'foreign\0'.hex()
+    elif mutation == 'cgroup':
+        raw['worker']['cgroup'] = b'0::/foreign\n'.hex()
+    elif mutation == 'identity':
+        raw['worker']['stat_after'] = raw['parent']['stat']
+    elif mutation == 'uid':
+        raw['parent']['status'] = b'Uid:\t0\t0\t0\t0\n'.hex()
+    with pytest.raises(ValueError):
+        runner.normalize_execution(profile, argv, raw)

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 import time
@@ -67,8 +68,13 @@ def verify_profile(args):
     if digest(raw) != args.profile_sha256:
         raise ValueError('profile SHA-256 mismatch')
     profile = capture.strict_json_loads(raw, max_bytes=4*1024*1024)
-    if profile.get('schema') != 'b22_gui_profile/v1':
+    if profile.get('schema') != 'b22_gui_profile/v2':
         raise ValueError('unsupported profile schema')
+    if (not re.fullmatch(r'b22-[a-z0-9-]+\.service', profile.get('unit', ''))
+            or profile.get('parent_argv', [None])[0] != '/bin/bash'
+            or len(profile['parent_argv']) != 2
+            or Path(profile['parent_argv'][1]).parent != Path(args.evidence)):
+        raise ValueError('profile unit/parent command invalid')
     for key in ('run_id', 'source_commit', 'authority'):
         if profile.get(key) != getattr(args, key):
             raise ValueError('profile binding mismatch: '+key)
@@ -91,6 +97,68 @@ def verify_profile(args):
                 or digest(Path(path).read_bytes()) != checksum):
             raise ValueError('profile file SHA-256 mismatch: '+path)
     return profile
+
+
+def worker_command(args):
+    """Một argv canonical cho packet và quan sát /proc, không hash lệnh dự đoán."""
+    return [sys.executable, '-B', str(Path(__file__).resolve()),
+            '--evidence', args.evidence, '--run-id', args.run_id,
+            '--install', args.install, '--source-commit', args.source_commit,
+            '--authority', args.authority, '--profile', args.profile,
+            '--profile-sha256', args.profile_sha256]
+
+
+def execution_observations():
+    """Biên I/O: giữ chính bytes /proc đã dùng để suy identity và argv."""
+    def observe(pid):
+        directory = Path('/proc')/str(pid)
+        raw = {name: (directory/name).read_bytes().hex()
+               for name in ('stat', 'cmdline', 'cgroup', 'status')}
+        raw['stat_after'] = (directory/'stat').read_bytes().hex()
+        return raw
+    return {'parent': observe(os.getppid()), 'worker': observe(os.getpid()),
+            'invocation_id': os.environ.get('INVOCATION_ID'),
+            'collected_ns': time.monotonic_ns()}
+
+
+def normalize_execution(profile, expected_worker, raw):
+    """Ràng buộc unit/process thật với profile trước consume/spawn ROS."""
+    def parse(record):
+        def identity(hex_stat):
+            data = bytes.fromhex(hex_stat).decode('utf-8')
+            fields = data[data.rfind(')')+2:].split()
+            if fields[0] not in ('R', 'S', 'D'):
+                raise ValueError('execution process not live')
+            return {'pid': int(data.split(' ', 1)[0]), 'parent_pid': int(fields[1]),
+                    'process_group_id': int(fields[2]), 'session_id': int(fields[3]),
+                    'start_ticks': int(fields[19])}
+        result = identity(record['stat'])
+        if result != identity(record['stat_after']):
+            raise ValueError('execution identity changed during observation')
+        cmdline = bytes.fromhex(record['cmdline'])
+        if not cmdline.endswith(b'\0') or not cmdline[:-1]:
+            raise ValueError('execution cmdline incomplete')
+        result['argv'] = [part.decode('utf-8') for part in cmdline[:-1].split(b'\0')]
+        groups = bytes.fromhex(record['cgroup']).decode().splitlines()
+        unified = [line[3:] for line in groups if line.startswith('0::')]
+        status = bytes.fromhex(record['status']).decode().splitlines()
+        uids = [line.split()[1:] for line in status if line.startswith('Uid:')]
+        if (len(unified) != 1 or len(uids) != 1 or len(uids[0]) != 4
+                or any(int(v) != os.geteuid() for v in uids[0])):
+            raise ValueError('execution cgroup/UID unverified')
+        result['cgroup'] = unified[0]
+        return result
+    parent, worker = parse(raw['parent']), parse(raw['worker'])
+    invocation = raw.get('invocation_id')
+    if (not isinstance(invocation, str) or not re.fullmatch(r'[0-9a-f]{32}', invocation)
+            or parent['argv'] != profile['parent_argv']
+            or worker['argv'] != expected_worker
+            or worker['parent_pid'] != parent['pid']
+            or worker['cgroup'] != parent['cgroup']
+            or not parent['cgroup'].endswith('/'+profile['unit'])):
+        raise ValueError('execution does not belong to planned unit/command')
+    return {'unit': profile['unit'], 'invocation_id': invocation,
+            'parent': parent, 'worker': worker, 'raw': raw}
 
 
 def verify_import_origins(prefix, modules):
@@ -361,10 +429,14 @@ def completion_timing_errors(consumed, completion_raw, publication,
     return tuple(errors)
 
 
-def validate_terminal(run_root, evidence_path):
+def validate_terminal(run_root, evidence_path, packet_path, packet_sha256):
     """Chốt thời hạn từ terminal systemd của đúng invocation, không từ marker."""
     raw = evidence_path.read_bytes()
     evidence = capture.strict_json_loads(raw)
+    packet_raw = packet_path.read_bytes()
+    if digest(packet_raw) != packet_sha256:
+        raise ValueError('approved packet SHA-256 mismatch')
+    packet = capture.strict_json_loads(packet_raw)
     def properties(text):
         pairs = [line.split('=', 1) for line in text.splitlines() if '=' in line]
         result = dict(pairs)
@@ -373,8 +445,47 @@ def validate_terminal(run_root, evidence_path):
         return result
     initial = properties(evidence['initial_unit'])
     terminal = properties(evidence['terminal_unit'])
-    consumed = capture.strict_json_loads((run_root/'consumed.json').read_bytes())
+    consumed = capture.strict_json_loads((run_root/'consumed.json').read_bytes(), max_bytes=64*1024)
     errors = []
+    profile_raw = Path(packet['profile']).read_bytes()
+    if digest(profile_raw) != packet['profile_sha256']:
+        raise ValueError('packet profile SHA-256 mismatch')
+    profile = capture.strict_json_loads(profile_raw, max_bytes=4*1024*1024)
+    expected_args = argparse.Namespace(**{
+        key: profile[key] for key in ('evidence', 'run_id', 'install', 'source_commit', 'authority')
+    }, profile=packet['profile'], profile_sha256=packet['profile_sha256'])
+    if (packet['run_id'] != run_root.name or consumed['run_id'] != packet['run_id']
+            or profile['run_id'] != packet['run_id']
+            or str(run_root.parent) != profile['evidence']
+            or consumed['source_commit'] != packet['source_commit']
+            or profile['source_commit'] != packet['source_commit']
+            or consumed['profile_sha256'] != packet['profile_sha256']
+            or digest(Path(__file__).read_bytes()) != packet['source_runner_sha256']
+            or profile['unit'] != packet['unit']
+            or profile['parent_argv'] != packet['parent_argv']
+            or digest(Path(packet['parent_argv'][1]).read_bytes()) != packet['wrapper_sha256']
+            or packet['worker_argv'] != worker_command(expected_args)
+            or packet['launch_command'][-2:] != packet['parent_argv']
+            or packet['launch_command'].count('--unit='+packet['unit']) != 1):
+        errors.append('packet_run_source_or_command_binding_mismatch')
+    execution = normalize_execution(profile, worker_command(expected_args), consumed['execution']['raw'])
+    if execution != consumed['execution']:
+        errors.append('consume_execution_record_inconsistent')
+    if (type(execution['raw']['collected_ns']) is not int
+            or not 0 < execution['raw']['collected_ns'] <= consumed['at_ns']):
+        errors.append('execution_observation_time_unverified')
+    if (initial.get('Id') != packet['unit']
+            or initial.get('InvocationID') != execution['invocation_id']
+            or int(initial['MainPID']) != execution['parent']['pid']
+            or initial.get('ControlGroup') != execution['parent']['cgroup']):
+        errors.append('terminal_not_bound_to_consumed_execution')
+    for record in (initial, terminal):
+        # Lệnh hiện hành chỉ gồm các path ASCII không whitespace; mơ hồ thì reject.
+        start_text = record.get('ExecStart', '')
+        starts = re.findall(r'argv\[\]=(.*?) ;', start_text)
+        if (not start_text.startswith('{ path='+packet['parent_argv'][0]+' ; ')
+                or len(starts) != 1 or shlex.split(starts[0]) != packet['parent_argv']):
+            errors.append('systemd_exec_start_command_mismatch')
     if (not initial.get('InvocationID') or not initial.get('ControlGroup')
             or int(initial['MainPID']) <= 0
             or terminal.get('InvocationID') != initial['InvocationID']
@@ -401,6 +512,9 @@ def validate_terminal(run_root, evidence_path):
               'unit': initial['Id'], 'invocation_id': initial['InvocationID'],
               'process_exit_ns_upper_bound': exit_ns,
               'evidence_sha256': digest(raw), 'source_commit': consumed['source_commit']}
+    result.update(run_id=consumed['run_id'], packet_sha256=packet_sha256,
+                  profile_sha256=packet['profile_sha256'],
+                  worker_pid=execution['worker']['pid'])
     capture.atomic_publish(run_root/'completion-acceptance.json', json.dumps(result).encode())
     print(json.dumps(result))
     return 3 if errors else 0
@@ -408,6 +522,7 @@ def validate_terminal(run_root, evidence_path):
 
 async def run(args):
     profile = verify_profile(args)
+    execution = normalize_execution(profile, worker_command(args), execution_observations())
     root = Path(args.evidence).resolve(strict=True)
     run_root = root / args.run_id
     run_root.mkdir(mode=0o700)
@@ -419,6 +534,7 @@ async def run(args):
         'active_deadline_ns': consumed_ns+240_000_000_000,
         'total_deadline_ns': consumed_ns+300_000_000_000,
         'profile_sha256': args.profile_sha256,
+        'execution': execution,
     }).encode())
     try:
         return await run_consumed(args, run_root, consumed_ns, profile)
@@ -683,8 +799,9 @@ def publish_review(request_path, verdict, notes):
 
 
 def main():
-    if len(sys.argv) == 4 and sys.argv[1] == '--validate-terminal':
-        return validate_terminal(Path(sys.argv[2]), Path(sys.argv[3]))
+    if len(sys.argv) == 6 and sys.argv[1] == '--validate-terminal':
+        return validate_terminal(Path(sys.argv[2]), Path(sys.argv[3]),
+                                 Path(sys.argv[4]), sys.argv[5])
     if len(sys.argv) == 3 and sys.argv[1] == '--capture-worker':
         return capture_worker(sys.argv[2])
     if len(sys.argv) == 5 and sys.argv[1] == '--publish-review':
