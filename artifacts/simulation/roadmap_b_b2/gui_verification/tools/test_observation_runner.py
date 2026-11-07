@@ -288,3 +288,87 @@ def test_startup_cleanup_preserves_primary_over_late_graph_error():
         evaluator.exception()
         monitor.cancel()
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('late_at', ['none', 'hash', 'completion', 'receipt'])
+def test_completion_deadline_includes_hash_and_publications(tmp_path, late_at):
+    clock = [1_000_000_000]
+    start = clock[0]
+    deadline = start+300_000_000_000
+    stored = {}
+    def read_log(path):
+        assert path == tmp_path/'observation.jsonl'
+        if late_at == 'hash':
+            clock[0] = deadline
+        return b'original evidence bytes\n'
+    def publish(path, raw):
+        stored[path.name] = raw
+        if ((late_at == 'completion' and path.name == 'completion.json')
+                or (late_at == 'receipt' and path.name == 'completion-publication.json')):
+            clock[0] = deadline+1
+    status = runner.publish_completion(tmp_path, {'cleanup_clean': True, 'failures': []},
+        start, now_ns=lambda: clock[0], publish=publish, read_log=read_log)
+    assert set(stored) == {'completion.json', 'completion-publication.json'}
+    assert status == (0 if late_at == 'none' else 3)
+    errors = runner.completion_timing_errors(
+        {'at_ns': start, 'total_deadline_ns': deadline}, stored['completion.json'],
+        json.loads(stored['completion-publication.json']), status, clock[0])
+    assert bool(errors) == (late_at != 'none'), errors
+
+
+def test_process_ending_late_fails_even_with_successful_marker(tmp_path):
+    start = 100
+    deadline = start+300_000_000_000
+    stored = {}
+    assert runner.publish_completion(tmp_path, {'cleanup_clean': True, 'failures': []},
+        start, now_ns=lambda: start+1, read_log=lambda path: b'log',
+        publish=lambda path, raw: stored.setdefault(path.name, raw)) == 0
+    consumed = {'at_ns': start, 'total_deadline_ns': deadline}
+    receipt = json.loads(stored['completion-publication.json'])
+    assert runner.completion_timing_errors(consumed, stored['completion.json'], receipt, 0, start+2) == ()
+    for ended in [deadline, deadline+1]:
+        assert 'completion_or_process_after_total_deadline' in runner.completion_timing_errors(
+            consumed, stored['completion.json'], receipt, 0, ended)
+    assert 'process_exit_nonzero' in runner.completion_timing_errors(
+        consumed, stored['completion.json'], receipt, 3, start+2)
+    assert runner.completion_timing_errors(consumed, stored['completion.json'], receipt, 0, None)
+    assert 'completion_hash_mismatch' in runner.completion_timing_errors(
+        consumed, stored['completion.json']+b'\n', receipt, 0, start+2)
+
+
+@pytest.mark.parametrize('case', ['on_time', 'late', 'invocation_changed', 'unloaded_defaults',
+                                'terminal_group_not_retained', 'different_group'])
+def test_terminal_cli_uses_real_exit_properties_and_timing_gate(tmp_path, monkeypatch, case):
+    start = 1000
+    deadline = start+300_000_000_000
+    (tmp_path/'consumed.json').write_text(json.dumps({
+        'at_ns': start, 'total_deadline_ns': deadline, 'source_commit': 'a'*40}))
+    (tmp_path/'observation.jsonl').write_bytes(b'log\n')
+    assert runner.publish_completion(tmp_path, {'cleanup_clean': True, 'failures': []},
+        start, now_ns=lambda: start+1000) == 0
+    initial = {'Id': 'probe-test.service', 'InvocationID': 'inv-1',
+               'ControlGroup': '/exact/probe', 'MainPID': '321'}
+    terminal = {**initial, 'MainPID': '0', 'ExecMainPID': '321',
+        'ExecMainCode': str(runner.os.CLD_EXITED), 'ExecMainStatus': '0',
+        'ExecMainExitTimestampMonotonic': '20', 'Result': 'success',
+        'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'exited'}
+    if case == 'late':
+        terminal['ExecMainExitTimestampMonotonic'] = str(deadline//1000)
+    elif case == 'invocation_changed':
+        terminal['InvocationID'] = 'inv-2'
+    elif case == 'unloaded_defaults':
+        terminal.update(InvocationID='', ControlGroup='', LoadState='not-found',
+                        ActiveState='inactive', SubState='dead', ExecMainCode='0')
+    elif case == 'terminal_group_not_retained':
+        terminal['ControlGroup'] = ''
+    elif case == 'different_group':
+        terminal['ControlGroup'] = '/different/group'
+    serialize = lambda values: ''.join(k+'='+v+'\n' for k,v in values.items())
+    evidence = tmp_path/'unit.json'
+    evidence.write_text(json.dumps({'initial_unit': serialize(initial),
+        'terminal_unit': serialize(terminal), 'collected_end_ns': deadline+10_000}))
+    monkeypatch.setattr(runner.sys, 'argv', ['runner', '--validate-terminal', str(tmp_path), str(evidence)])
+    accepted = case in ('on_time', 'terminal_group_not_retained')
+    assert runner.main() == (0 if accepted else 3)
+    result = json.loads((tmp_path/'completion-acceptance.json').read_text())
+    assert result['timing_verdict'] == ('PASS' if accepted else 'FAIL')

@@ -303,6 +303,109 @@ async def await_start(supervisor, evaluator, monitor, deadline, total_deadline):
             task.exception()
 
 
+def publish_completion(run_root, payload, consumed_ns, *, now_ns=None,
+                       publish=None, read_log=None):
+    """Marker chỉ là candidate; kiểm hạn sau hash và cả hai lần công bố."""
+    clock = now_ns or time.monotonic_ns
+    writer = publish or capture.atomic_publish
+    reader = read_log or Path.read_bytes
+    deadline = consumed_ns+300_000_000_000
+    completion = {
+        **payload, 'stream_sha256': digest(reader(run_root/'observation.jsonl')),
+        'acceptance_state': 'CANDIDATE_REQUIRES_PROCESS_EXIT_VALIDATION',
+        'consumed_ns': consumed_ns, 'total_deadline_ns': deadline,
+        'prepared_ns': clock(),
+    }
+    raw = json.dumps(completion, default=str).encode()
+    writer(run_root/'completion.json', raw)
+    publication_end = clock()
+    receipt = {'completion_sha256': digest(raw), 'consumed_ns': consumed_ns,
+               'total_deadline_ns': deadline,
+               'completion_publication_end_ns': publication_end}
+    writer(run_root/'completion-publication.json', json.dumps(receipt).encode())
+    finished = clock()
+    return 0 if (completion['cleanup_clean'] and not completion['failures']
+                 and consumed_ns <= completion['prepared_ns'] < deadline
+                 and completion['prepared_ns'] <= publication_end < deadline
+                 and publication_end <= finished < deadline) else 3
+
+
+def completion_timing_errors(consumed, completion_raw, publication,
+                             process_exit_status, process_exit_ns):
+    """Lớp nghiệm thu phải gọi sau terminal; marker xuất hiện không đủ để đạt."""
+    completion = capture.strict_json_loads(completion_raw)
+    start = consumed['at_ns']
+    deadline = start+300_000_000_000
+    errors = []
+    if (type(start) is not int or type(process_exit_ns) is not int
+            or type(process_exit_status) is not int):
+        return ('terminal_process_evidence_missing',)
+    if (consumed.get('total_deadline_ns') != deadline
+            or any(document.get('consumed_ns') != start
+                   or document.get('total_deadline_ns') != deadline
+                   for document in (completion, publication))):
+        errors.append('consume_deadline_binding_mismatch')
+    if completion.get('acceptance_state') != 'CANDIDATE_REQUIRES_PROCESS_EXIT_VALIDATION':
+        errors.append('completion_not_terminal_gated')
+    if publication.get('completion_sha256') != digest(completion_raw):
+        errors.append('completion_hash_mismatch')
+    prepared = completion.get('prepared_ns')
+    published = publication.get('completion_publication_end_ns')
+    if (type(prepared) is not int or type(published) is not int
+            or not start <= prepared <= published <= process_exit_ns < deadline):
+        errors.append('completion_or_process_after_total_deadline')
+    if process_exit_status != 0:
+        errors.append('process_exit_nonzero')
+    if completion.get('cleanup_clean') is not True or completion.get('failures') != []:
+        errors.append('completion_reports_failure')
+    return tuple(errors)
+
+
+def validate_terminal(run_root, evidence_path):
+    """Chốt thời hạn từ terminal systemd của đúng invocation, không từ marker."""
+    raw = evidence_path.read_bytes()
+    evidence = capture.strict_json_loads(raw)
+    def properties(text):
+        pairs = [line.split('=', 1) for line in text.splitlines() if '=' in line]
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError('duplicate systemd property')
+        return result
+    initial = properties(evidence['initial_unit'])
+    terminal = properties(evidence['terminal_unit'])
+    consumed = capture.strict_json_loads((run_root/'consumed.json').read_bytes())
+    errors = []
+    if (not initial.get('InvocationID') or not initial.get('ControlGroup')
+            or int(initial['MainPID']) <= 0
+            or terminal.get('InvocationID') != initial['InvocationID']
+            or terminal.get('Id') != initial.get('Id')
+            or terminal.get('ControlGroup') not in ('', initial['ControlGroup'])
+            or terminal.get('LoadState') != 'loaded'
+            or terminal.get('ActiveState') != 'active'
+            or terminal.get('SubState') != 'exited'
+            or int(terminal['MainPID']) != 0
+            or int(terminal['ExecMainPID']) != int(initial['MainPID'])
+            or int(terminal['ExecMainCode']) != os.CLD_EXITED
+            or terminal.get('Result') != 'success'):
+        errors.append('terminal_unit_identity_or_state_unverified')
+    # systemd xuất microseconds: dùng biên trên để không nhận nhầm sát deadline.
+    exit_ns = int(terminal['ExecMainExitTimestampMonotonic'])*1000+1000
+    if not consumed['at_ns'] <= exit_ns <= evidence['collected_end_ns']:
+        errors.append('terminal_timestamp_unverified')
+    errors.extend(completion_timing_errors(
+        consumed, (run_root/'completion.json').read_bytes(),
+        capture.strict_json_loads((run_root/'completion-publication.json').read_bytes()),
+        int(terminal['ExecMainStatus']), exit_ns))
+    result = {'timing_verdict': 'FAIL' if errors else 'PASS', 'errors': errors,
+              'scope': 'completion publication and exact unit process exit deadline',
+              'unit': initial['Id'], 'invocation_id': initial['InvocationID'],
+              'process_exit_ns_upper_bound': exit_ns,
+              'evidence_sha256': digest(raw), 'source_commit': consumed['source_commit']}
+    capture.atomic_publish(run_root/'completion-acceptance.json', json.dumps(result).encode())
+    print(json.dumps(result))
+    return 3 if errors else 0
+
+
 async def run(args):
     profile = verify_profile(args)
     root = Path(args.evidence).resolve(strict=True)
@@ -525,15 +628,11 @@ async def run_consumed(args, run_root, start_ns, profile):
         sink.record('final_observation',{'outcomes':outcomes,'failures':failures,
                     'cleanup_clean':clean,'elapsed_ns':time.monotonic_ns()-start_ns})
         sink.close()
-        if time.monotonic() >= total_deadline:
-            clean = False
-            failures.append({'type':'TotalDeadline','reason':'completion exceeded 300 seconds'})
-        # Completion nằm sau sink close; trace phải kiểm đủ coverage riêng trước khi chốt B2.2.
-        capture.atomic_publish(run_root/'completion.json',json.dumps({
+        # Marker không phải verdict: receipt và terminal process được kiểm riêng.
+        final_exit = publish_completion(run_root, {
             'outcomes':outcomes,'failures':failures,'cleanup_clean':clean,
-            'stream_sha256':digest((run_root/'observation.jsonl').read_bytes()),
-            'trace_audit':'PENDING','owner_visual_review':'NOT_PERFORMED'},default=str).encode())
-    return 0 if clean and not failures else 3
+            'trace_audit':'PENDING','owner_visual_review':'NOT_PERFORMED'}, start_ns)
+    return final_exit
 
 
 def capture_worker(window_id):
@@ -584,6 +683,8 @@ def publish_review(request_path, verdict, notes):
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == '--validate-terminal':
+        return validate_terminal(Path(sys.argv[2]), Path(sys.argv[3]))
     if len(sys.argv) == 3 and sys.argv[1] == '--capture-worker':
         return capture_worker(sys.argv[2])
     if len(sys.argv) == 5 and sys.argv[1] == '--publish-review':
