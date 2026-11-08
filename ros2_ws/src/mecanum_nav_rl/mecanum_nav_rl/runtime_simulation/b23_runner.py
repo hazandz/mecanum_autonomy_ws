@@ -805,9 +805,15 @@ class TrainingWorkerIO:
                 except B1SnapshotPending as error:
                     last_pending = str(error)
                 else:
+                    if self.now() >= deadline:
+                        self.emit('B1_STEP_COMMITTED_LATE', {'step_index':token.step_index,
+                            'transition_id':token.transition_id,'observed_ns':self.now(),'deadline_ns':deadline})
+                        raise TimeoutError('B1 commit completed after step deadline')
                     self.emit('POLICY_STEP_COMPLETE', {'step_index': token.step_index,
                         'transition_id': token.transition_id, 'started_ns': started,
                         'completed_ns': self.now(), 'deadline_ns': deadline, 'cutoff_ns': cutoff})
+                    if self.now() >= deadline:
+                        raise TimeoutError('completion evidence published after step deadline')
                     return transition
             await self.pause(min(0.002, max(0., (deadline - self.now()) / 1e9)))
         raise TimeoutError('POLICY step missing facts before deadline: ' + str(last_pending))
@@ -1558,7 +1564,7 @@ def unit_parent_command(packet, packet_path, packet_sha256):
     """Giữ InvocationID thật từ systemd trong env sạch, không expand argv packet."""
     wrapper = 'exec /usr/bin/env -i "INVOCATION_ID=${INVOCATION_ID:?}" "$@"'
     return ['/bin/bash','-c',wrapper,'b23-owned-env',
-        *[key+'='+value for key,value in packet['environment'].items()],
+        *[key+'='+value for key,value in sorted(packet['environment'].items())],
         packet['python'],'-B','-m',MODULE,'parent','--packet',packet_path,
         '--packet-sha256',packet_sha256]
 

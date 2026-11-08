@@ -161,7 +161,8 @@ def test_freeze_step_streams_keeps_closing_order_without_issuing_stop(last_sourc
     assert not any(name == 'hold' for name, *rest in calls)
 
 
-def test_policy_step_orders_ack_sample_issue_safety_application_and_commit():
+@pytest.mark.parametrize('timing', ['ready','late_commit','late_publish'])
+def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -189,7 +190,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit():
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=2,
         applied_final_publisher_instance_id=55, local_zero_override=False)
     value.read_native_input_watermark = lambda: 1
-    value.emit = lambda event, facts: history.append((event, facts))
+    def emit(event, facts):
+        history.append((event, facts))
+        if event == 'POLICY_STEP_COMPLETE' and timing == 'late_publish': clock.ns = 3_000_000_000
+    value.emit = emit
     async def transact(operation, **fields):
         history.append(('bind', operation))
         req, res = Control.Request(), Control.Response()
@@ -224,16 +228,21 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit():
     def commit(cutoff):
         commit_calls.append(cutoff)
         if len(commit_calls) == 1: raise B1SnapshotPending('application not received yet')
+        if timing == 'late_commit': clock.ns = 3_000_000_000
         return transition
     b1 = NS(begin_step=lambda: pending, record_issuance=record, commit_step=commit)
-    assert asyncio.run(value.policy_step(b1, (0., .4, 0.))) is transition
+    if timing == 'ready':
+        assert asyncio.run(value.policy_step(b1, (0., .4, 0.))) is transition
+    else:
+        with pytest.raises(TimeoutError, match='step deadline'):
+            asyncio.run(value.policy_step(b1, (0., .4, 0.)))
     tags = [row[0] for row in history]
     assert tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued') < tags.index('hold')
     envelope = next(row[1] for row in history if row[0] == 'publish')
     assert envelope.twist.linear.y == pytest.approx(.08)
     assert len([row for row in history if row[0] == 'publish']) == 1
     assert len(commit_calls) == 2 and min(commit_calls) >= 1_102_000_000
-    assert clock.ns < 3_000_000_000
+    assert clock.ns < 3_000_000_000 if timing == 'ready' else clock.ns == 3_000_000_000
 
 
 def test_evidence_sink_routes_actual_server_output_and_keeps_books_distinct(tmp_path):
@@ -492,3 +501,13 @@ def test_worker_publishes_envelope_on_architecture_canonical_policy_topic():
     statement = ast.fix_missing_locations(ast.Module(body=[assignment],type_ignores=[]))
     exec(compile(statement,module.__file__,'exec'), {'self':node,'CommandEnvelope':CommandEnvelope,'reliable':qos})
     assert calls == [(CommandEnvelope,'/mecanum/cmd_policy',qos)]
+
+
+def test_packet_argv_is_stable_across_canonical_json_roundtrip():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import service_launch_command
+    packet = dict(unit='b23-test.service',python='/pinned/python',
+        environment={'Z_LAST':'literal value','A_FIRST':'other'})
+    before = service_launch_command(packet,'/packet.json','{PACKET_SHA256}')
+    restored = json.loads(json.dumps(packet,sort_keys=True,separators=(',',':')))
+    after = service_launch_command(restored,'/packet.json','{PACKET_SHA256}')
+    assert before == after
