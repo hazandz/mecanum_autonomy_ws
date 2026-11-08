@@ -253,6 +253,11 @@ class LocalTrainingIngress:
             if stamp == self._last_gt_stamp:
                 if raw != self._last_gt_bytes:
                     if self._pose_mutation is None:
+                        self.emit('ORACLE_STAMP_CONFLICT', {'source_stamp_ns':stamp,
+                            'received_ns':received, 'previous_cdr_hex':self._last_gt_bytes.hex(),
+                            'current_cdr_hex':raw.hex(),
+                            'backend_paused':None if self.backend_state is None else self.backend_state.paused,
+                            'backend_iteration':None if self.backend_state is None else self.backend_state.physics_iteration})
                         self._fail('oracle same stamp changed bytes')
                     if raw != self._paused_pose_raw:
                         self.emit('RESET_PAUSED_ORACLE', {'source_stamp_ns': stamp,

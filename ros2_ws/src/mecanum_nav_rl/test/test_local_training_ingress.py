@@ -452,3 +452,17 @@ def test_paused_pose_bytes_require_native_reset_ack_and_never_create_noisy_tick(
     changed = f.gt(); changed.pose.pose.position.x = 5.
     with pytest.raises(ValueError, match='same stamp changed bytes'):
         f.ingress.on_ground_truth(changed)
+
+
+def test_oracle_conflict_preserves_both_original_payloads_before_rejection(source):
+    from rclpy.serialization import deserialize_message
+    f=source;original=f.gt();f.ingress.on_ground_truth(original)
+    saved=f.ingress._last_gt_bytes
+    modified=f.gt();modified.twist.twist.linear.z=-.1
+    with pytest.raises(ValueError,match='oracle same stamp changed bytes'):
+        f.ingress.on_ground_truth(modified)
+    events=[data for event,data in f.events if event=='ORACLE_STAMP_CONFLICT']
+    assert len(events)==1 and bytes.fromhex(events[0]['previous_cdr_hex'])==saved
+    assert deserialize_message(bytes.fromhex(events[0]['previous_cdr_hex']),Odometry)==original
+    assert deserialize_message(bytes.fromhex(events[0]['current_cdr_hex']),Odometry)==modified
+    assert events[0]['source_stamp_ns']==f.clock.ros and f.ingress.fault is not None
