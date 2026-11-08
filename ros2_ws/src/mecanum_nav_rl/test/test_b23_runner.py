@@ -561,3 +561,19 @@ def test_failed_state_clear_only_targets_the_bound_completed_invocation(monkeypa
         module.clear_owned_failed_state('b23-test.service','inv-1','77','a'*64,deadline_ns=1_000_000_000,
             now_ns=lambda:1_000_000_000,emit=lambda n,r:None)
     assert not calls
+
+
+def test_packet_environment_keeps_gazebo_vendor_discovery_without_unlisted_values():
+    import ast
+    from pathlib import Path
+    from mecanum_nav_rl.runtime_simulation import b23_runner as module
+    tree=ast.parse(Path(module.__file__).read_bytes())
+    producer=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='prepare_packet')
+    statements=[node for node in producer.body if isinstance(node,ast.Assign) and
+        any(isinstance(target,ast.Name) and target.id in ('environment_keys','environment') for target in node.targets)]
+    namespace={'os':NS(environ={'GZ_CONFIG_PATH':'/vendor/sim/share/gz:/vendor/transport/share/gz',
+        'PATH':'/vendor/bin','UNLISTED_SECRET':'must-not-leak'})}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=statements,type_ignores=[])),module.__file__,'exec'),namespace)
+    environment=namespace['environment']
+    assert environment.get('GZ_CONFIG_PATH')==namespace['os'].environ['GZ_CONFIG_PATH'], environment
+    assert environment['PATH']=='/vendor/bin' and 'UNLISTED_SECRET' not in environment
