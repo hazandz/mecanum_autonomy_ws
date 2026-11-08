@@ -211,7 +211,7 @@ class BackendControlSession:
                     expected = request.expected_binding_revision + int(mutates)
                     if (response.binding_revision != expected
                             or response.applied_binding_revision != expected
-                            or response.applied_physics_iteration == 0
+                            or (response.applied_physics_iteration == 0 and operation != Control.Request.OP_INHIBIT)
                             or response.applied_sim_stamp.sec < 0
                             or not 0 <= response.applied_sim_stamp.nanosec < 1_000_000_000):
                         raise BackendControlError('backend APPLIED revision/application fact invalid', ack)

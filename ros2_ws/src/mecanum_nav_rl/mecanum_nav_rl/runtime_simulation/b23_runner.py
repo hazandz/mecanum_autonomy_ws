@@ -270,6 +270,10 @@ class TrainingWorkerIO:
             cmd = self.node.get_publishers_info_by_topic('/cmd_vel')
             safety = self.node.get_publishers_info_by_topic('/mecanum/safety_state')
             ingress = self.node.get_publishers_info_by_topic('/mecanum/local_training/safety_input')
+            self.emit('GRAPH_OBSERVATION', {name: [{'node': item.node_name,
+                'namespace': item.node_namespace, 'type': item.topic_type,
+                'gid_hex': bytes(item.endpoint_gid).hex()} for item in values]
+                for name, values in [('cmd_vel',cmd),('safety',safety),('ingress',ingress)]})
             if not (len(cmd) == len(safety) == len(ingress) == 1):
                 return None
             if (cmd[0].node_name != 'final_twist_publisher' or safety[0].node_name != 'safety_supervisor'

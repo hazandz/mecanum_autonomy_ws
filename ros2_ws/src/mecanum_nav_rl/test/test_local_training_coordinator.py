@@ -262,3 +262,19 @@ def test_waiting_for_control_lock_uses_original_absolute_budget():
         finally:
             session._lock.release()
     asyncio.run(exercise())
+
+
+def test_inhibit_accepts_native_paused_initial_iteration_without_fabricated_proof():
+    def respond(req):
+        out=response(req);out.applied_physics_iteration=0
+        out.applied_sim_stamp.sec=0;out.applied_sim_stamp.nanosec=0
+        return out
+    session,client,clock,events=setup(respond)
+    ack=asyncio.run(session.transact(Control.Request.OP_INHIBIT,deadline_ns=clock.ns+1_000_000_000))
+    assert ack.response.applied_physics_iteration==0 and ack.response.applied_sim_stamp.sec==0
+    assert session.revision==1 and len(client.raw)==1
+    assert events[-1][0]=='ACK_OBSERVED'
+    session,client,clock,events=setup(respond)
+    with pytest.raises(BackendControlError,match='revision/application'):
+        asyncio.run(session.transact(Control.Request.OP_BIND_SESSION,deadline_ns=clock.ns+1_000_000_000))
+    assert session.revision==0
