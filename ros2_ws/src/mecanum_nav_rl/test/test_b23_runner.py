@@ -616,3 +616,26 @@ def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline
     with pytest.raises(TimeoutError,match='source graph binding'):
         asyncio.run(value.pin_graph(deadline_ns=deadline))
     assert not bound and clock.ns==deadline
+
+
+def test_subscription_keeps_actual_wire_before_decode_and_callback_failure():
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import serialize_message
+    import hashlib
+    value,clock=worker();events=[];seen=[]
+    value.emit=lambda event,facts:events.append((event,facts))
+    original=Odometry();original.header.frame_id='world';original.pose.pose.orientation.w=1.
+    wire=serialize_message(original);info={'source_timestamp':123,'received_timestamp':456}
+    def consumer(msg):
+        seen.append(msg)
+        assert events[-1][0]=='INGRESS_WIRE_RECEIVED'
+        assert events[-1][1]['wire_cdr_hex']==wire.hex()
+        return 'actual-result'
+    receive=value.observed_callback(Odometry,'/actual/oracle',consumer)
+    assert receive(wire,info)=='actual-result' and seen==[original]
+    assert events[0][1]['message_info']==info
+    def reject(msg):raise ValueError('actual rejected sample')
+    receive=value.observed_callback(Odometry,'/actual/oracle',reject)
+    with pytest.raises(ValueError,match='actual rejected sample'):receive(wire,info)
+    assert [x[0] for x in events][-2:]==['INGRESS_WIRE_RECEIVED','INGRESS_CALLBACK_ERROR']
+    assert events[-1][1]['wire_sha256']==hashlib.sha256(wire).hexdigest()

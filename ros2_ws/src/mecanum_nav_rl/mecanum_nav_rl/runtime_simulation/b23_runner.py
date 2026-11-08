@@ -127,7 +127,8 @@ class TrainingWorkerIO:
                 (FinalIssuedCommandReceipt, '/mecanum/final_issued_command', self.ingress.on_receipt, receipt_qos),
                 (SafetyState, '/mecanum/safety_state', self.ingress.on_safety_state, reliable),
             ):
-                self.subscriptions.append(self.node.create_subscription(message, topic, callback, qos))
+                self.subscriptions.append(self.node.create_subscription(message, topic,
+                    self.observed_callback(message, topic, callback), qos, raw=True))
             self.safety.local_training.state_observer = lambda state: self.ingress.register_safety_publication(
                 state, source_instance_id=self.safe_stop_source_id)
             self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
@@ -146,6 +147,24 @@ class TrainingWorkerIO:
         except BaseException:
             self.close_context()
             raise
+
+    def observed_callback(self, message_type, topic, callback):
+        """Giữ CDR do DDS trả trước decode/validator; không sửa payload nguồn."""
+        from rclpy.serialization import deserialize_message
+        def receive(raw, info):
+            if not isinstance(raw,(bytes,bytearray,memoryview)):
+                raise TypeError('raw subscription did not return serialized bytes')
+            wire=bytes(raw)
+            self.emit('INGRESS_WIRE_RECEIVED', {'topic':topic,
+                'received_ns':self.now(), 'wire_cdr_hex':wire.hex(),
+                'message_info':{key:value for key,value in info.items() if type(value) is int}})
+            try:
+                return callback(deserialize_message(wire,message_type))
+            except BaseException as error:
+                self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
+                    'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
+                raise
+        return receive
 
     def ros_now(self):
         return self.node.get_clock().now().nanoseconds
