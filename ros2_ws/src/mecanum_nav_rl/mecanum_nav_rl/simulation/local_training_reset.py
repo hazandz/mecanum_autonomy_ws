@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Iterable, Protocol, Sequence
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,8 @@ class ResetMeasurement:
     receive_steady_ns: int = -1
     episode_generation: int = 0
     runtime_generation: int = 0
+    oracle_receive_steady_ns: int = -1
+    oracle_stamp_ns: int = -1
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,9 @@ class LocalTrainingResetAdapter:
         expected_barrier_stamp_ns: int,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        oracle_max_age_ns: int | None = None,
+        now_ros_ns: Callable[[], int] | None = None,
+        native_pause: Callable[[AppliedZeroReceiptFact, float], bool] | None = None,
     ) -> None:
         """Inject reset services, confirmed state, measurement and clocks."""
         self._services = services
@@ -253,6 +258,14 @@ class LocalTrainingResetAdapter:
             raise ValueError('reset identity binding must be complete')
         self._sleep = sleep
         self._monotonic = monotonic
+        if ((native_pause is None) != (oracle_max_age_ns is None)
+                or (oracle_max_age_ns is not None and (
+                    type(oracle_max_age_ns) is not int or oracle_max_age_ns <= 0
+                    or not callable(now_ros_ns) or not callable(native_pause)))):
+            raise ValueError('B23 reset requires native pause and explicit oracle freshness budget/clock')
+        self._oracle_max_age_ns = oracle_max_age_ns
+        self._now_ros_ns = now_ros_ns
+        self._native_pause = native_pause
 
     @staticmethod
     def validate_standstill_window(
@@ -413,6 +426,18 @@ class LocalTrainingResetAdapter:
                 raise ValueError(
                     'reset measurement exceeds receive freshness'
                 )
+            if self._oracle_max_age_ns is not None:
+                now_ns = round(self._monotonic() * 1_000_000_000)
+                ros_ns = self._now_ros_ns()
+                if (type(sample.oracle_receive_steady_ns) is not int
+                        or sample.oracle_receive_steady_ns < 0
+                        or sample.oracle_receive_steady_ns > now_ns
+                        or now_ns - sample.oracle_receive_steady_ns > self._oracle_max_age_ns
+                        or sample.oracle_receive_steady_ns < round(after_steady_s * 1_000_000_000)
+                        or sample.oracle_stamp_ns != sample.stamp_ns
+                        or type(ros_ns) is not int or sample.stamp_ns > ros_ns
+                        or ros_ns - sample.stamp_ns > self._oracle_max_age_ns):
+                    raise ValueError('reset oracle pair is missing, mismatched, stale or future')
             if (
                 after_stamp_ns is not None
                 and sample.stamp_ns <= after_stamp_ns
@@ -420,6 +445,41 @@ class LocalTrainingResetAdapter:
                 raise ValueError(
                     'reset measurement is not newer than reset barrier'
                 )
+
+    def _collect_window(
+        self, source: Iterable[ResetMeasurement], *, deadline: float,
+        after_steady_s: float, after_stamp_ns: int | None = None,
+    ) -> tuple[ResetMeasurement, ...]:
+        """Kiểm từng cặp lúc ghép; tại quyết định chỉ kiểm lại mẫu cuối.
+
+        Iterator của production phải chờ I/O với budget còn lại của reset.
+        Sequence legacy vẫn được kiểm toàn bộ, không bỏ qua tail hỏng.
+        """
+        if not isinstance(source, Iterable) or isinstance(source, (str, bytes)):
+            raise ValueError('post-resume measurement must be a sample sequence or iterator')
+        count = len(source) if isinstance(source, Sequence) else 21
+        if count < 21:
+            raise ValueError('standstill requires at least 21 measured 100 Hz samples')
+        if count > 64:
+            raise ValueError('reset measurement buffer exceeds 64 samples')
+        samples = []
+        iterator = iter(source)
+        for _ in range(count):
+            self._remaining(deadline, self.TOTAL_DEADLINE_S, 'measurement join')
+            try:
+                sample = next(iterator)
+            except StopIteration as error:
+                raise ValueError('standstill requires at least 21 measured 100 Hz samples') from error
+            self._remaining(deadline, self.TOTAL_DEADLINE_S, 'measurement join')
+            self._validate_identity_and_freshness(
+                (sample,), after_steady_s=after_steady_s, after_stamp_ns=after_stamp_ns,
+            )
+            samples.append(sample)
+        self.validate_standstill_window(samples)
+        self._validate_identity_and_freshness(
+            (samples[-1],), after_steady_s=after_steady_s, after_stamp_ns=after_stamp_ns,
+        )
+        return tuple(samples)
 
     def _validate_applied_zero_receipt(
         self, fact: AppliedZeroReceiptFact,
@@ -494,6 +554,10 @@ class LocalTrainingResetAdapter:
             raise ValueError(
                 'applied zero receipt timing/barrier proof is invalid'
             )
+        if self._now_ros_ns is not None:
+            now_ros_ns = self._now_ros_ns()
+            if type(now_ros_ns) is not int or fact.applied_sim_stamp_ns > now_ros_ns:
+                raise ValueError('applied zero receipt application stamp is future')
         now_ns = int(self._monotonic() * 1_000_000_000)
         if (
             type(fact.receive_steady_ns) is not int
@@ -507,28 +571,43 @@ class LocalTrainingResetAdapter:
 
     def execute(
         self, *, target: ResetTarget,
-        measured_standstill: Sequence[ResetMeasurement],
-        applied_zero_receipt: AppliedZeroReceiptFact,
+        measured_standstill: Iterable[ResetMeasurement],
+        applied_zero_receipt: AppliedZeroReceiptFact | Callable[[], AppliedZeroReceiptFact],
         reset_emulator_and_buffers: Callable[[], None],
+        reset_deadline: float | None = None,
+        paused_hold_s: float = 0.0,
     ) -> ResetFacts:
         """Perform bounded reset actions and return fresh measured facts."""
         start = self._monotonic()
         deadline = start + self.TOTAL_DEADLINE_S
+        if reset_deadline is not None:
+            if type(reset_deadline) not in (int, float) or not math.isfinite(reset_deadline):
+                raise ValueError('reset deadline must be finite')
+            deadline = min(deadline, reset_deadline)
+        if type(paused_hold_s) not in (int, float) or not math.isfinite(paused_hold_s) or paused_hold_s < 0:
+            raise ValueError('pause hold must be finite and non-negative')
+        self._remaining(deadline, self.TOTAL_DEADLINE_S, 'start')
+        if not callable(applied_zero_receipt):
+            self._validate_applied_zero_receipt(applied_zero_receipt)
+        measured_standstill = self._collect_window(
+            measured_standstill, deadline=min(deadline, start + 5.0),
+            after_steady_s=start - 5.0,
+        )
+        if callable(applied_zero_receipt):
+            applied_zero_receipt = applied_zero_receipt()
         self._validate_applied_zero_receipt(applied_zero_receipt)
-        self.validate_standstill_window(measured_standstill)
         self._validate_identity_and_freshness(
-            measured_standstill, after_steady_s=start - 5.0,
+            (measured_standstill[-1],), after_steady_s=start - 5.0,
         )
-        if self._monotonic() - start > 5.0:
-            raise TimeoutError('standstill phase exceeded 5 s steady')
-        pre_reset_stamp = measured_standstill[-1].stamp_ns
-        self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'pause service')
-        pause_ack = self._services.control_world(
-            world_name=self.WORLD, pause=True,
-            timeout_s=self._remaining(
-                deadline, self.SERVICE_TIMEOUT_S, 'pause service',
-            ),
-        )
+        self._remaining(min(deadline, start + 5.0), 5.0, 'standstill/W1 proof')
+        pre_reset_stamp = max(measured_standstill[-1].stamp_ns, applied_zero_receipt.applied_sim_stamp_ns)
+        pause_budget = self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'pause service')
+        if self._native_pause is not None:
+            pause_ack = self._native_pause(applied_zero_receipt, pause_budget)
+        else:
+            pause_ack = self._services.control_world(
+                world_name=self.WORLD, pause=True, timeout_s=pause_budget,
+            )
         if type(pause_ack) is not bool or not pause_ack:
             raise TimeoutError(
                 'Gazebo pause service failed or exceeded its shared 1 s '
@@ -542,6 +621,11 @@ class LocalTrainingResetAdapter:
         )
         if type(pause_confirmed) is not bool or not pause_confirmed:
             raise TimeoutError('world pause was not confirmed within 2 s')
+        if paused_hold_s:
+            if self._remaining(deadline, self.TOTAL_DEADLINE_S, 'paused hold') < paused_hold_s:
+                raise TimeoutError('reset deadline cannot cover requested paused hold')
+            self._sleep(paused_hold_s)
+            self._remaining(deadline, self.TOTAL_DEADLINE_S, 'paused hold')
         pose_ack = self._services.set_entity_pose(
             world_name=self.WORLD, entity_name=self.ENTITY, target=target,
             timeout_s=self._remaining(
@@ -578,20 +662,15 @@ class LocalTrainingResetAdapter:
         self._remaining(
             deadline, self.PAUSE_RESUME_TIMEOUT_S, 'post-resume settling',
         )
-        settled = self._measurement()
-        if (
-            not isinstance(settled, Sequence)
-            or isinstance(settled, (str, bytes))
-        ):
-            raise ValueError(
-                'post-resume measurement must be a sample sequence'
-            )
-        self.validate_standstill_window(settled)
-        self._validate_identity_and_freshness(
-            settled, after_steady_s=resumed_at, after_stamp_ns=pre_reset_stamp,
+        settled = self._collect_window(
+            self._measurement(), deadline=min(deadline, resumed_at + self.PAUSE_RESUME_TIMEOUT_S),
+            after_steady_s=resumed_at, after_stamp_ns=pre_reset_stamp,
         )
         for sample in settled:
             self.validate_target(sample, target)
+        self._validate_identity_and_freshness(
+            (settled[-1],), after_steady_s=resumed_at, after_stamp_ns=pre_reset_stamp,
+        )
         self._remaining(deadline, self.TOTAL_DEADLINE_S, 'completion')
         measured = settled[-1]
         return ResetFacts(

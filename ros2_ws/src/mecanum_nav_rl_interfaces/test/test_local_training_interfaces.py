@@ -47,8 +47,9 @@ def test_safety_input_field_order_types_bounds_and_constants() -> None:
         ('observation0_cutoff', 'builtin_interfaces/Time'),
         ('observation0_final_publisher_instance_id', 'uint64'),
         ('observation0_final_publish_sequence', 'uint64'),
+        ('admission_token', 'uint8[16]'),
     ]
-    assert LocalTrainingSafetyInput.SCHEMA_VERSION == 1
+    assert LocalTrainingSafetyInput.SCHEMA_VERSION == 2
     assert (LocalTrainingSafetyInput.ODOM_VALID,
             LocalTrainingSafetyInput.ODOM_DELAYED,
             LocalTrainingSafetyInput.ODOM_DROPPED) == (0, 1, 2)
@@ -106,7 +107,8 @@ def test_generated_messages_round_trip_without_ros_context() -> None:
     safety = LocalTrainingSafetyInput()
     safety.header.stamp = Time(sec=10, nanosec=20)
     safety.header.frame_id = 'base_link'
-    safety.schema_version = 1
+    safety.schema_version = safety.SCHEMA_VERSION
+    safety.admission_token = list(range(16))
     safety.session_id = 'session'
     safety.config_hash = 'a' * 64
     safety.ingress_instance_id = 3
@@ -122,6 +124,7 @@ def test_generated_messages_round_trip_without_ros_context() -> None:
     restored = deserialize_message(raw, LocalTrainingSafetyInput)
     assert list(restored.measured_twist) == [0.1, -0.2, 0.3]
     assert restored.header.frame_id == 'base_link'
+    assert list(restored.admission_token) == list(range(16))
     assert restored.observation0_cutoff == safety.observation0_cutoff
 
     state = SimulationContactState()
@@ -152,7 +155,7 @@ def test_generated_messages_round_trip_without_ros_context() -> None:
 def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
     """Pin package generation and preserve every prior message definition."""
     package = ET.parse(_PACKAGE_ROOT / 'package.xml').getroot()
-    assert package.findtext('version') == '2.7.0'
+    assert package.findtext('version') == '2.8.0'
     cmake = (_PACKAGE_ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
     generation = re.search(
         'rosidl_generate_interfaces\\(\\$\\{PROJECT_NAME\\}(.*?)\\n\\)',
@@ -171,8 +174,8 @@ def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
         '"(srv/[^"\\n]+\\.srv)"', generation.group(1)
     )
     assert generated_services == ['srv/LocalTrainingBackendControl.srv']
-    assert LocalTrainingBackendControl.Request.SCHEMA_VERSION == 1
-    assert LocalTrainingBackendControl.Response.RESPONSE_SCHEMA_VERSION == 1
+    assert LocalTrainingBackendControl.Request.SCHEMA_VERSION == 2
+    assert LocalTrainingBackendControl.Response.RESPONSE_SCHEMA_VERSION == 2
     repository_root = _PACKAGE_ROOT.parents[2]
     base = 'bbd5a3c68e6745b5d143688266e044fa25093390'
     for message_path in generated[:-2]:
@@ -191,7 +194,7 @@ def test_rosidl_package_version_generation_and_legacy_message_bytes() -> None:
 def test_control_service_generated_types_and_round_trip_without_ros_context():
     """Generated request and response preserve fields through serialization."""
     request = LocalTrainingBackendControl.Request()
-    request.schema_version = 1
+    request.schema_version = request.SCHEMA_VERSION
     request.operation = request.OP_INHIBIT
     request.probe_action = request.PROBE_ACTION_NONE
     request.coordinator_ingress_instance_id = 1

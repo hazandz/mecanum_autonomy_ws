@@ -84,3 +84,21 @@ def test_backend_control_adapter_uses_canonical_endpoint_and_injected_client():
     )
     assert port.submit(request) is client.future
     assert client.request is request
+
+
+def test_backend_control_port_rejects_old_schema_before_transport():
+    """Schema 1 bị chặn trước biên transport; không dùng install lẫn schema."""
+    import pytest
+
+    class Client:
+        def call_async(self, request):
+            raise AssertionError('không được gửi request schema cũ')
+
+    assert LocalTrainingBackendControl.Request.SCHEMA_VERSION == 2
+    port = LocalTrainingBackendControlPort(Client())
+    request = LocalTrainingBackendControl.Request()
+    request.schema_version = 1
+    request.coordinator_ingress_instance_id = 17
+    request.request_sequence = 1
+    with pytest.raises(ValueError, match='schema_invalid'):
+        port.submit(request)

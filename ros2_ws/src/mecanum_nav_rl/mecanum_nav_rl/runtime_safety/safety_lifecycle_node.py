@@ -11,9 +11,16 @@ from mecanum_nav_rl.runtime_safety.safety_contract import SafetyLifecycleCore
 
 
 class SafetyLifecycleNode(LifecycleNode):
-    def __init__(self) -> None:
-        super().__init__("safety_lifecycle")
-        self._core = SafetyLifecycleCore()
+    def __init__(self, **node_options) -> None:
+        super().__init__("safety_lifecycle", **node_options)
+        self.declare_parameter('navigation_mode', 'NAV2_BASELINE')
+        mode = self.get_parameter('navigation_mode').value
+        if mode not in ('NAV2_BASELINE', 'LOCAL_TRAINING'):
+            raise ValueError('unsupported SafetyLifecycle mode')
+        self._local_training = mode == 'LOCAL_TRAINING'
+        if self._local_training and self.get_parameter('use_sim_time').value is not True:
+            raise ValueError('LOCAL_TRAINING lifecycle requires simulation clock')
+        self._core = SafetyLifecycleCore(fixed_barrier=self._local_training)
         state_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST, depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -90,7 +97,7 @@ class SafetyLifecycleNode(LifecycleNode):
         identity = self._core.snapshot()
         msg = SafetyLifecycleState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
+        msg.header.frame_id = "b2_training_arena" if self._local_training else "base_link"
         msg.episode_generation = identity.episode_generation
         msg.reset_epoch = identity.reset_epoch
         msg.runtime_generation = identity.runtime_generation

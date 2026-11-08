@@ -32,8 +32,8 @@ struct NativeFactoryCounters
   std::uint32_t runtime_boundary_calls{};
   std::uint32_t context_created{};
   std::uint32_t context_released{};
-  std::array<std::uint32_t, 15> runtime_created{};
-  std::array<std::uint32_t, 15> runtime_released{};
+  std::array<std::uint32_t, backend_detail::kRuntimeResourceOrder.size()> runtime_created{};
+  std::array<std::uint32_t, backend_detail::kRuntimeResourceOrder.size()> runtime_released{};
   std::uint32_t actuator_calls{};
   std::uint32_t backend_state_calls{};
   std::uint32_t ground_truth_calls{};
@@ -59,6 +59,25 @@ struct DeferredInitializationIo
   std::vector<BackendState> statuses;
 };
 
+class ReceiptGateTestPeer
+{
+public:
+  static bool InjectCurrentTokenState(ReceiptGate &gate, int state)
+  {
+    if (!gate.current_policy_) return false;
+    if (state == 0) gate.current_policy_->token.fill(0);
+    else if (state == 1) gate.current_policy_->token.fill(255);
+    else gate.RevokePolicyAdmission();
+    return true;
+  }
+};
+
+struct NativePauseIo
+{
+  std::uint32_t dispatches{};
+  std::function<void(bool, std::int64_t)> completion;
+};
+
 class BackendSystemTestPeer
 {
 public:
@@ -68,6 +87,21 @@ public:
         ament_index_cpp::get_package_share_directory(
             "ROBOT_URDF_final_description")) / relative;
   }
+
+  static bool InjectCurrentTokenState(BackendSystem &system, int state)
+  { return system.gate_ && ReceiptGateTestPeer::InjectCurrentTokenState(*system.gate_, state); }
+
+  static void InjectPauseTransport(BackendSystem &system, std::shared_ptr<NativePauseIo> io)
+  {
+    system.reset_pause_ready_ = [] { return true; };
+    system.reset_pause_dispatch_ = [io](auto completion) {
+      ++io->dispatches;
+      io->completion = std::move(completion);
+    };
+  }
+  static std::int64_t LastGateReceiptNs(const BackendSystem &system)
+  { return system.gate_ ? system.gate_->LastAcceptedSteadyNs() : -1; }
+  static bool PauseHeld(const BackendSystem &system) { return system.reset_pause_hold_; }
 
   static void SeedRunDescriptor(BackendSystem &system)
   {
@@ -589,12 +623,12 @@ public:
 
   static void RunProductionTick(
       BackendSystem &system, gz::sim::EntityComponentManager &ecm,
-      std::uint64_t iteration, std::int64_t sim_ns)
+      std::uint64_t iteration, std::int64_t sim_ns, bool paused = false)
   {
     gz::sim::UpdateInfo info;
     info.iterations = iteration;
     info.simTime = std::chrono::nanoseconds(sim_ns);
-    info.paused = false;
+    info.paused = paused;
     system.PreUpdate(info, ecm);
     // Inject the next Physics-owned pose update after production PreUpdate has
     // requested/initialized the component and before its PostUpdate consumer.
@@ -821,6 +855,10 @@ public:
   {
     return system.control_cache_.at(seq).response;
   }
+
+  static bool AdmitGateSample(BackendSystem &system, const AdmissionToken &token,
+      std::int64_t source_ns, std::int64_t received_ns)
+  { return system.gate_ && system.gate_->RecordPolicyAdmission(token, source_ns, received_ns); }
 
   static std::uint64_t GateWatermark(const BackendSystem &system)
   {
@@ -1654,7 +1692,7 @@ TEST(BackendSystemLifecycle, SdfEntityCreatorDefersBackendInitializationUntilPar
   BackendSystemTestPeer::CallPausedUpdateHooks(system, ecm);
   EXPECT_TRUE(BackendSystemTestPeer::Configured(system));
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
-  EXPECT_EQ(io->runtime_creates, 15u);
+  EXPECT_EQ(io->runtime_creates, backend_detail::kRuntimeResourceOrder.size());
   EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
   ASSERT_FALSE(io->applied_commands.empty());
   const auto &paused_command = io->applied_commands.back();
@@ -1673,9 +1711,9 @@ TEST(BackendSystemLifecycle, SdfEntityCreatorDefersBackendInitializationUntilPar
   EXPECT_NE(BackendSystemTestPeer::FaultReason(system),
             "parent_world_missing");
   BackendSystemTestPeer::Shutdown(system);
-  EXPECT_EQ(io->runtime_releases, 15u);
+  EXPECT_EQ(io->runtime_releases, backend_detail::kRuntimeResourceOrder.size());
   BackendSystemTestPeer::Shutdown(system);
-  EXPECT_EQ(io->runtime_releases, 15u);
+  EXPECT_EQ(io->runtime_releases, backend_detail::kRuntimeResourceOrder.size());
 }
 
 TEST(BackendSystemLifecycle, FirstPausedUpdateLatchesMissingParentWithoutRetry)
@@ -1767,7 +1805,7 @@ TEST(BackendSystemLifecycle, FirstUpdateRejectsWrongIdentityDuplicateAndMissingL
 
 TEST(BackendSystemLifecycle, NativeResourceFactoryFailureRollsBackExactlyOnce)
 {
-  for (std::size_t fail_after = 1; fail_after <= 15; ++fail_after)
+  for (std::size_t fail_after = 1; fail_after <= backend_detail::kRuntimeResourceOrder.size(); ++fail_after)
   {
     BackendSystem system;
     gz::sim::EntityComponentManager ecm;
@@ -1786,7 +1824,7 @@ TEST(BackendSystemLifecycle, NativeResourceFactoryFailureRollsBackExactlyOnce)
 
     std::uint32_t created = 0;
     std::uint32_t released = 0;
-    for (std::size_t index = 0; index < 15; ++index)
+    for (std::size_t index = 0; index < backend_detail::kRuntimeResourceOrder.size(); ++index)
     {
       const auto expected = index < fail_after ? 1u : 0u;
       EXPECT_EQ(counters->runtime_created[index], expected);
@@ -1812,12 +1850,12 @@ TEST(BackendSystemLifecycle, NativeResourceFactoryFailureRollsBackExactlyOnce)
 
     BackendSystemTestPeer::Shutdown(system);
     EXPECT_EQ(counters->contact_released, 1u);
-    for (std::size_t index = 0; index < 15; ++index)
+    for (std::size_t index = 0; index < backend_detail::kRuntimeResourceOrder.size(); ++index)
       EXPECT_EQ(counters->runtime_released[index], index < fail_after ? 1u : 0u);
     BackendSystemTestPeer::Shutdown(system);
     BackendSystemTestPeer::CallUpdateHooks(system, ecm);
     EXPECT_EQ(counters->contact_released, 1u);
-    for (std::size_t index = 0; index < 15; ++index)
+    for (std::size_t index = 0; index < backend_detail::kRuntimeResourceOrder.size(); ++index)
       EXPECT_EQ(counters->runtime_released[index], index < fail_after ? 1u : 0u);
     EXPECT_FALSE(BackendSystemTestPeer::Configured(system));
     EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
@@ -1833,7 +1871,9 @@ static void RunNativeResetObservation0Chain(
     bool inhibit_before_confirmation_apply = false,
     bool contact_gap_after_application = false,
     bool positive_policy_admission = false,
-    int safety_freshness_case = 0, int query_revocation_case = 0)
+    int safety_freshness_case = 0, int query_revocation_case = 0,
+    int admission_case = 0, int pause_case = 0, int closing_case = 0,
+    bool lifecycle_heartbeat = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -1853,6 +1893,7 @@ static void RunNativeResetObservation0Chain(
   EXPECT_FALSE(BackendSystemTestPeer::ObservationAuthorized(system));
 
   auto start = ProbeStartRequest();
+  if (lifecycle_heartbeat) SetStamp(start.lifecycle_header_stamp, 200'000'000);
   BindTestRequestToConfiguredBackend(start, system);
   ASSERT_EQ(BackendSystemTestPeer::Receive(system, start).result,
             ControlResponse::RESULT_QUEUED);
@@ -2057,7 +2098,7 @@ static void RunNativeResetObservation0Chain(
   confirm.reset_epoch = mismatch_confirmation_context ? 5 : 4;
   confirm.runtime_generation = 4;
   confirm.lifecycle_sequence = 2;
-  SetStamp(confirm.lifecycle_header_stamp, 370'000'000);
+  SetStamp(confirm.lifecycle_header_stamp, lifecycle_heartbeat ? 420'000'000 : 370'000'000);
   SetStamp(confirm.barrier_stamp, 360'000'000);
   SetStamp(confirm.observation0_cutoff, 400'000'000);
   confirm.selected_zero_final_publish_sequence = 1;
@@ -2136,7 +2177,18 @@ static void RunNativeResetObservation0Chain(
     ASSERT_EQ(BackendSystemTestPeer::Cached(system, 6).result,
               ControlResponse::RESULT_APPLIED);
 
+    const auto admission_ack = BackendSystemTestPeer::Receive(system, pending);
+    if (admission_case != 0)
+    {
+      EXPECT_TRUE(std::all_of(pending_queued.pending_admission_token.begin(),
+          pending_queued.pending_admission_token.end(), [](auto v) { return v == 0; }));
+      EXPECT_TRUE(std::any_of(admission_ack.pending_admission_token.begin(),
+          admission_ack.pending_admission_token.end(), [](auto v) { return v != 0; }));
+      EXPECT_EQ(BackendSystemTestPeer::Receive(system, pending).pending_admission_token,
+                admission_ack.pending_admission_token);
+    }
     SafetyInput safety;
+    safety.admission_token = admission_ack.pending_admission_token;
     safety.header.frame_id = "base_link";
     SetStamp(safety.header.stamp, 460'000'000);
     safety.schema_version = SafetyInput::SCHEMA_VERSION;
@@ -2153,7 +2205,8 @@ static void RunNativeResetObservation0Chain(
     SetStamp(safety.observation0_cutoff, 400'000'000);
     safety.observation0_final_publisher_instance_id = 11;
     safety.observation0_final_publish_sequence = 1;
-    BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+    if (admission_case == 3) SetStamp(safety.header.stamp, 430'000'000);
+    if (admission_case != 1) BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
 
     Receipt policy;
     policy.header.frame_id = "base_link";
@@ -2171,6 +2224,23 @@ static void RunNativeResetObservation0Chain(
     policy.final_command.linear.x = 0.12;
     BackendSystemTestPeer::EarlyReceipt(system, policy);
     BackendSystemTestPeer::RunProductionTick(system, ecm, 23, 470'000'000);
+    if (admission_case == 1 || admission_case == 3)
+    {
+      EXPECT_EQ(BackendSystemTestPeer::GateWatermark(system), 2u);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), 2u);
+      EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      if (admission_case == 3)
+      {
+        BackendSystemTestPeer::SetSteadyClockNow(system, 2'040'000'001);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 24, 480'000'000);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), 2u);
+        return;
+      }
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'010'000'000);
+      BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 24, 480'000'000);
+    }
     EXPECT_TRUE(BackendSystemTestPeer::AdmissionCandidate(system))
         << "faults=" << BackendSystemTestPeer::FaultFlags(system)
         << " policy=" << BackendSystemTestPeer::PolicyOpen(system)
@@ -2186,6 +2256,209 @@ static void RunNativeResetObservation0Chain(
     EXPECT_FALSE(admitted_applications.back().local_zero_override);
     ASSERT_FALSE(io->applied_commands.empty());
     EXPECT_NEAR(io->applied_commands.back().linear[0], 0.12, 1.0e-9);
+
+    if (closing_case != 0)
+    {
+      const int path = (closing_case - 1) / 3;
+      const int token_state = (closing_case - 1) % 3;
+      ASSERT_TRUE(BackendSystemTestPeer::InjectCurrentTokenState(system, token_state));
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'010'000'000);
+      if (path == 0)
+      {
+        // Payload receipt không có token: chỉ thay trạng thái token của gate.
+        BackendSystemTestPeer::EarlyReceipt(system, SafeStopReceipt(4, 3, 3, 4, 480'000'000));
+      }
+      else if (path == 1 || path == 2)
+      {
+        safety.sample_sequence = 2;
+        safety.admission_state = path == 1 ? SafetyInput::ADMISSION_INHIBITED : SafetyInput::ADMISSION_ZERO_ONLY;
+        if (token_state == 0) safety.admission_token.fill(0);
+        else if (token_state == 1) safety.admission_token.fill(255);
+        // state 2 giữ token gốc đã thu hồi, không tạo token giả thay thế.
+        SetStamp(safety.header.stamp, 480'000'000);
+        BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+      }
+      else
+      {
+        auto inhibit = BaseControlRequest(7);
+        BindTestRequestToConfiguredBackend(inhibit, system);
+        inhibit.operation = ControlRequest::OP_INHIBIT;
+        ASSERT_EQ(BackendSystemTestPeer::Receive(system, inhibit).result, ControlResponse::RESULT_QUEUED);
+      }
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 24, 490'000'000);
+      ASSERT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_FALSE(io->applied_commands.empty());
+      EXPECT_EQ(io->applied_commands.back().linear, (std::array<double, 3>{0, 0, 0}));
+      EXPECT_EQ(io->applied_commands.back().angular, (std::array<double, 3>{0, 0, 0}));
+      if (path == 3)
+        EXPECT_EQ(BackendSystemTestPeer::Cached(system, 7).result, ControlResponse::RESULT_APPLIED);
+      const auto applied_count = BackendSystemTestPeer::ApplicationHistory(system).size();
+      safety.sample_sequence = 3;
+      safety.admission_state = SafetyInput::ADMISSION_POLICY_OPEN;
+      safety.admission_token = admission_ack.pending_admission_token;
+      SetStamp(safety.header.stamp, 500'000'000);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'020'000'000);
+      BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+      auto late = policy;
+      late.final_publish_sequence = path == 0 ? 5 : 4;
+      SetStamp(late.header.stamp, 500'000'000);
+      BackendSystemTestPeer::EarlyReceipt(system, late);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 25, 510'000'000);
+      EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applied_count);
+      EXPECT_EQ(io->applied_commands.back().linear, (std::array<double, 3>{0, 0, 0}));
+      return;
+    }
+
+    if (pause_case != 0)
+    {
+      auto pause_io = std::make_shared<NativePauseIo>();
+      BackendSystemTestPeer::InjectPauseTransport(system, pause_io);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'010'000'000);
+      safety.sample_sequence = 2;
+      safety.admission_state = SafetyInput::ADMISSION_INHIBITED;
+      safety.admission_token.fill(0);
+      SetStamp(safety.header.stamp, 480'000'000);
+      BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+      const auto w0 = SafeStopReceipt(4, 3, 3, 4, 480'000'000);
+      BackendSystemTestPeer::EarlyReceipt(system, w0);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 24, 490'000'000);
+      ASSERT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_EQ(BackendSystemTestPeer::ApplicationHistory(system).back().publish_sequence, 4u);
+
+      auto l1 = ResetContextRequest();
+      BindTestRequestToConfiguredBackend(l1, system);
+      l1.request_sequence = 7; l1.expected_binding_revision = 4;
+      l1.episode_generation = 4; l1.reset_epoch = 5; l1.runtime_generation = 4;
+      l1.lifecycle_sequence = 3; l1.barrier_state = ControlRequest::BARRIER_NON_READY;
+      l1.next_safe_stop_sequence = 4;
+      SetStamp(l1.lifecycle_header_stamp, 500'000'000);
+      SetStamp(l1.barrier_stamp, 495'000'000);
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, l1).result, ControlResponse::RESULT_QUEUED);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'020'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 25, 510'000'000);
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, l1).result, ControlResponse::RESULT_APPLIED);
+      const auto w1 = SafeStopReceipt(5, 4, 4, 5, 520'000'000);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'030'000'000);
+      BackendSystemTestPeer::EarlyReceipt(system, w1);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 26, 530'000'000);
+      ASSERT_EQ(BackendSystemTestPeer::ApplicationHistory(system).back().publish_sequence, 5u);
+      const auto applications_before_pause = BackendSystemTestPeer::ApplicationHistory(system).size();
+      const auto accepted_ns = BackendSystemTestPeer::LastGateReceiptNs(system);
+
+      auto pause = BaseControlRequest(8);
+      BindTestRequestToConfiguredBackend(pause, system);
+      pause.operation = ControlRequest::OP_PREPARE_RESET_PAUSE;
+      pause.expected_binding_revision = 5;
+      pause.episode_generation = l1.episode_generation; pause.reset_epoch = l1.reset_epoch;
+      pause.runtime_generation = l1.runtime_generation; pause.lifecycle_sequence = l1.lifecycle_sequence;
+      pause.primary_state = l1.primary_state; pause.barrier_state = l1.barrier_state;
+      pause.lifecycle_header_stamp = l1.lifecycle_header_stamp;
+      pause.lifecycle_frame_id = l1.lifecycle_frame_id; pause.barrier_stamp = l1.barrier_stamp;
+      pause.final_publisher_instance_id = 11;
+      pause.pause_fence_final_publish_sequence = 5; pause.pause_enter_budget_ms = 100;
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_QUEUED);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'040'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, pause_case == 6 ? 26 : 27,
+          pause_case == 6 ? 530'000'000 : 540'000'000, pause_case == 6);
+      if (pause_case == 6)
+      {
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_REJECTED);
+        EXPECT_EQ(pause_io->dispatches, 0u);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        return;
+      }
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_QUEUED);
+      ASSERT_EQ(pause_io->dispatches, 0u);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'050'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, pause_case == 5 ? 27 : 28,
+          pause_case == 5 ? 540'000'000 : 550'000'000, pause_case == 5);
+      if (pause_case == 5)
+      {
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_REJECTED);
+        EXPECT_EQ(pause_io->dispatches, 0u);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        return;
+      }
+      ASSERT_EQ(pause_io->dispatches, 1u);
+      ASSERT_TRUE(pause_io->completion);
+      EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_QUEUED);
+      if (pause_case == 7)
+      {
+        BackendSystemTestPeer::SetSteadyClockNow(system, 2'130'000'001);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 29, 560'000'000);
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_REJECTED);
+        EXPECT_EQ(pause_io->dispatches, 1u);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        return;
+      }
+      if (pause_case == 1) pause_io->completion(true, 2'055'000'000);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'060'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+      if (pause_case == 2)
+      {
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_QUEUED);
+        pause_io->completion(true, 2'070'000'000);
+        BackendSystemTestPeer::SetSteadyClockNow(system, 2'080'000'000);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+      }
+      if (pause_case == 3 || pause_case == 4)
+      {
+        if (pause_case == 4) pause_io->completion(true, 3'051'000'000);
+        BackendSystemTestPeer::SetSteadyClockNow(system, 3'052'000'000);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+        const auto failed = BackendSystemTestPeer::Receive(system, pause);
+        EXPECT_EQ(failed.result, ControlResponse::RESULT_REJECTED);
+        EXPECT_EQ(failed.reason_code, ControlResponse::REASON_CONTROL_EXPIRED);
+        pause_io->completion(true, 3'060'000'000);
+        BackendSystemTestPeer::SetSteadyClockNow(system, 3'070'000'000);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause), failed);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_before_pause);
+        return;
+      }
+      const auto applied_pause = BackendSystemTestPeer::Receive(system, pause);
+      ASSERT_EQ(applied_pause.result, ControlResponse::RESULT_APPLIED);
+      EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause), applied_pause);
+      EXPECT_EQ(pause_io->dispatches, 1u);
+      EXPECT_TRUE(BackendSystemTestPeer::PauseHeld(system));
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'330'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+      EXPECT_EQ(BackendSystemTestPeer::FaultFlags(system), 0u);
+      EXPECT_EQ(BackendSystemTestPeer::LastGateReceiptNs(system), accepted_ns);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_before_pause);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'340'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 29, 560'000'000);
+      BackendSystemTestPeer::EarlyReceipt(system, w1);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'350'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 30, 570'000'000);
+      EXPECT_EQ(BackendSystemTestPeer::GateWatermark(system), 5u);
+      EXPECT_EQ(BackendSystemTestPeer::LastGateReceiptNs(system), accepted_ns);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_before_pause);
+      EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+
+      auto l2 = l1;
+      l2.request_sequence = 9; l2.expected_binding_revision = applied_pause.binding_revision;
+      l2.runtime_generation = 5; l2.lifecycle_sequence = 4;
+      l2.barrier_state = ControlRequest::BARRIER_READY;
+      l2.next_safe_stop_sequence = 5;
+      SetStamp(l2.lifecycle_header_stamp, 580'000'000);
+      SetStamp(l2.barrier_stamp, 575'000'000);
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, l2).result, ControlResponse::RESULT_QUEUED);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'360'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 31, 590'000'000);
+      ASSERT_EQ(BackendSystemTestPeer::Receive(system, l2).result, ControlResponse::RESULT_APPLIED);
+      EXPECT_FALSE(BackendSystemTestPeer::PauseHeld(system));
+      auto new_anchor = SafeStopReceipt(6, 5, 4, 5, 600'000'000);
+      new_anchor.runtime_generation = 5;
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'370'000'000);
+      BackendSystemTestPeer::EarlyReceipt(system, new_anchor);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 32, 610'000'000);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).back().publish_sequence, 6u);
+      EXPECT_EQ(BackendSystemTestPeer::FaultFlags(system), 0u);
+      return;
+    }
 
     if (safety_freshness_case != 0)
     {
@@ -2416,7 +2689,7 @@ TEST(BackendSystemControlReceiver,
     anchor.stamp_ns = 91;
     anchor.frame_id = "base_link";
     const auto anchored = BackendSystemTestPeer::ConsumeGateReceipt(
-        system, anchor, 100, 100);
+        system, anchor, 100, 2'000'000'000);
     EXPECT_EQ(anchored.disposition, GateDisposition::Anchored);
 
     auto pending = BaseControlRequest(2);
@@ -2428,7 +2701,12 @@ TEST(BackendSystemControlReceiver,
     SetStamp(pending.action_barrier_stamp, 110);
     EXPECT_EQ(BackendSystemTestPeer::Receive(system, pending).result,
               ControlResponse::RESULT_QUEUED);
-    BackendSystemTestPeer::Tick(system, ecm, 120, 21, 2'000'000'000);
+    BackendSystemTestPeer::Tick(system, ecm, 100, 21, 2'000'000'000);
+    const auto ack = BackendSystemTestPeer::Receive(system, pending);
+    EXPECT_EQ(ack.result, ControlResponse::RESULT_APPLIED);
+    // Fixture chỉ đo biên receipt: cấp admission hợp lệ từ ACK thật, cùng clock.
+    EXPECT_TRUE(BackendSystemTestPeer::AdmitGateSample(
+        system, ack.pending_admission_token, 101, 2'000'000'001));
 
     ReceiptFacts policy = anchor;
     policy.key.publish_sequence = 2;
@@ -2440,7 +2718,7 @@ TEST(BackendSystemControlReceiver,
     policy.stamp_ns = receipt_stamp_ns;
     policy.twist[0] = 0.1;
     const auto result = BackendSystemTestPeer::ConsumeGateReceipt(
-        system, policy, receipt_stamp_ns + 1, 200);
+        system, policy, receipt_stamp_ns + 1, 2'000'000'100);
     return std::pair{result.disposition, BackendSystemTestPeer::GateWatermark(system)};
   };
 
@@ -4133,4 +4411,179 @@ TEST(NormalContactQuery, CachedProofRevokedAfterClockRollback)
 TEST(NormalContactQuery, CachedProofRevokedAfterEngineChange)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, false, 0, 2);
+}
+
+TEST(BackendSchema2, OldRequestSchemaRejectedBeforeQueue)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  auto request = BindSessionRequest();
+  request.schema_version = 1;
+  const auto response = BackendSystemTestPeer::Receive(system, request);
+  EXPECT_EQ(response.result, ControlResponse::RESULT_REJECTED);
+  EXPECT_EQ(response.reason_code, ControlResponse::REASON_BAD_SCHEMA);
+  EXPECT_EQ(BackendSystemTestPeer::QueueSize(system), 0u);
+}
+
+TEST(BackendSchema2, PauseFieldsCannotHideInOtherOperations)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  auto request = BindSessionRequest();
+  request.pause_enter_budget_ms = 100;
+  request.pause_fence_final_publish_sequence = 42;
+  const auto response = BackendSystemTestPeer::Receive(system, request);
+  EXPECT_EQ(response.result, ControlResponse::RESULT_REJECTED);
+  EXPECT_EQ(response.reason_code, ControlResponse::REASON_UNUSED_FIELD_NONZERO);
+  EXPECT_EQ(BackendSystemTestPeer::QueueSize(system), 0u);
+}
+
+TEST(NativeAdmissionToken, ReceiptWaitsWithoutPromotionUntilMatchingAdmission)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 1);
+}
+
+TEST(NativeAdmissionToken, AdmissionBeforeReceiptAppliesOnceWithStableReplayToken)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 2);
+}
+
+TEST(NativeAdmissionToken, PreBindSourceSampleCannotOpenPendingSlot)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 3);
+}
+
+TEST(NativeResetPause, AckBeforeEdgeHoldResumeAndNewAnchor)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 1);
+}
+
+TEST(NativeResetPause, EdgeBeforeAck)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 2);
+}
+
+TEST(NativeResetPause, MissingAckCannotApplyOrRevive)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 3);
+}
+
+TEST(NativeResetPause, LateAckCannotApplyOrRevive)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 4);
+}
+
+TEST(NativeResetPause, UnexpectedPauseWhileArmedNeverDispatches)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 5);
+}
+
+TEST(NativeResetPause, PausedBeforeIntentProcessingNeverDispatches)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 6);
+}
+
+TEST(NativeResetPause, MissingEdgeExpiresOriginalBudget)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 7);
+}
+
+TEST(BackendSchema2, PauseOperationQueuesForSimulationThreadValidation)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  auto request = BaseControlRequest(1);
+  request.operation = ControlRequest::OP_PREPARE_RESET_PAUSE;
+  request.final_publisher_instance_id = 11;
+  request.pause_fence_final_publish_sequence = 5;
+  request.pause_enter_budget_ms = 100;
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, request).result,
+            ControlResponse::RESULT_QUEUED);
+  // Chưa bound L1: update thật từ chối, không suy QUEUED là quyền pause.
+  BackendSystemTestPeer::Tick(system, ecm);
+  const auto result = BackendSystemTestPeer::Receive(system, request);
+  EXPECT_EQ(result.result, ControlResponse::RESULT_REJECTED);
+  EXPECT_EQ(result.reason_code, ControlResponse::REASON_BARRIER_INVALID);
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+}
+
+TEST(BackendLifecycleFacts, RealReadyMotionFlagDoesNotOpenNativePolicy)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  auto request = BindSessionRequest();
+  request.motion_permitted = true;  // SafetyLifecycle Active/READY thật, không giả false.
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, request).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm);
+  const auto response = BackendSystemTestPeer::Receive(system, request);
+  EXPECT_EQ(response.result, ControlResponse::RESULT_APPLIED);
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_FALSE(BackendSystemTestPeer::ObservationAuthorized(system));
+}
+
+TEST(NativeClosingAuthority, SafeStopWithEmptyTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 1);
+}
+
+TEST(NativeClosingAuthority, SafeStopWithWrongTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 2);
+}
+
+TEST(NativeClosingAuthority, SafeStopWithRevokedTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 3);
+}
+
+TEST(NativeClosingAuthority, AdmissionInhibitedWithEmptyTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 4);
+}
+
+TEST(NativeClosingAuthority, AdmissionInhibitedWithWrongTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 5);
+}
+
+TEST(NativeClosingAuthority, AdmissionInhibitedWithRevokedTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 6);
+}
+
+TEST(NativeClosingAuthority, ZeroOnlyWithEmptyTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 7);
+}
+
+TEST(NativeClosingAuthority, ZeroOnlyWithWrongTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 8);
+}
+
+TEST(NativeClosingAuthority, ZeroOnlyWithRevokedTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 9);
+}
+
+TEST(NativeClosingAuthority, ControlInhibitWithEmptyTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 10);
+}
+
+TEST(NativeClosingAuthority, ControlInhibitWithWrongTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 11);
+}
+
+TEST(NativeClosingAuthority, ControlInhibitWithRevokedTokenClosesAndCannotReopen)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 12);
+}
+
+TEST(BackendLifecycleFacts, FreshHeartbeatOfSameEventCanStartAndConfirm)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 0, true);
 }

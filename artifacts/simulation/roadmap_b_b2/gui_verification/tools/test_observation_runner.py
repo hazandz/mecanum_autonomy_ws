@@ -492,3 +492,34 @@ def test_contact_proof_requires_backend_bound_geometry_and_coverage():
         assert runner.contact_proof_errors({**proof,key:value},expected),key
     broken={**proof,'empty_last_stamp':{'sec':1,'nanosec':110_000_000}}
     assert runner.contact_proof_errors(broken,expected)
+
+
+def test_contact_production_request_builder_uses_generated_schema():
+    """Chạy đúng builder lồng trong run_contact, không dựng ROS context."""
+    import ast
+    import copy
+    import inspect
+
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl
+
+    tree = ast.parse(inspect.getsource(runner.run_contact))
+    builder = next(node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef) and node.name == 'request')
+    wrapper = ast.parse('def factory(Control, plan, backend, sid):\n sequence=0\n pass\n return request\n')
+    wrapper.body[0].body[1] = copy.deepcopy(builder)
+    ast.fix_missing_locations(wrapper)
+    namespace = {}
+    exec(compile(wrapper, runner.__file__, 'exec'), namespace)
+    plan = SimpleNamespace(coordinator_ingress_instance_id=7,
+                           config_hash='a'*64, asset_manifest_sha256='b'*64)
+    build = namespace['factory'](LocalTrainingBackendControl, plan, 8, 'session')
+    start = build(LocalTrainingBackendControl.Request.PROBE_ACTION_START)
+    query = build(LocalTrainingBackendControl.Request.PROBE_ACTION_QUERY)
+    assert start.schema_version == start.SCHEMA_VERSION == 2
+    assert query.schema_version == query.SCHEMA_VERSION
+    assert start.operation == start.OP_VERIFY_CONTACT_CAPABILITY
+    assert (start.request_sequence, query.request_sequence) == (1, 2)
+    assert start.probe_start_request_sequence == 0
+    assert query.probe_start_request_sequence == 1
+    assert query.expected_backend_instance_id == 8
+    assert query.session_id == 'session'

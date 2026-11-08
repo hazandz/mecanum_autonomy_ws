@@ -1,4 +1,4 @@
-uint16 SCHEMA_VERSION=1
+uint16 SCHEMA_VERSION=2
 
 uint8 ODOM_VALID=0
 uint8 ODOM_DELAYED=1
@@ -26,3 +26,4 @@ uint8 admission_state
 builtin_interfaces/Time observation0_cutoff
 uint64 observation0_final_publisher_instance_id
 uint64 observation0_final_publish_sequence
+uint8[16] admission_token

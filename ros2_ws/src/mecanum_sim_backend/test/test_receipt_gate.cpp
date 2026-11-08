@@ -237,3 +237,169 @@ TEST(ReceiptGate, ResetContextPreservesPublicationWatermarkAndRequiresNewAnchor)
   EXPECT_EQ(gate.Watermark(), watermark + 1);
   EXPECT_FALSE(gate.BindResetContext(1'999, 4, 5, 6, 2));
 }
+
+namespace
+{
+AdmissionToken Token(std::uint8_t value)
+{
+  AdmissionToken token{};
+  token.fill(value);
+  return token;
+}
+GateBinding AdmissionBinding()
+{
+  auto binding = Binding();
+  binding.require_policy_admission = true;
+  binding.expected_step_index = 0;
+  binding.next_policy_sequence = 0;
+  binding.expected_transition_id.clear();
+  return binding;
+}
+void BindFirstAdmission(ReceiptGate &gate)
+{
+  AcceptAnchor(gate);
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(1, 1, "policy-uuid-1", 1'100,
+                                        Token(1), 1'100, 2'000));
+}
+ReceiptFacts AdmissionPolicy()
+{
+  auto policy = Policy();
+  policy.stamp_ns = 1'200;
+  return policy;
+}
+}
+
+TEST(ReceiptAdmission, ReceiptFirstDoesNotPromoteOrRefreshUntilMatchingSample)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  const auto waiting = gate.ConsumeNext(1'300, 3'000);
+  EXPECT_EQ(waiting.disposition, GateDisposition::Inhibited);
+  EXPECT_EQ(waiting.reason, "waiting_for_matching_admission");
+  EXPECT_FALSE(waiting.refresh_watchdog);
+  EXPECT_EQ(gate.Watermark(), 100u);
+  EXPECT_EQ(gate.LastAcceptedSteadyNs(), 2'000);
+  EXPECT_TRUE(gate.HasPendingPolicyStep());
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'201, 3'001));
+  const auto applied = gate.ConsumeNext(1'400, 3'002);
+  ASSERT_EQ(applied.disposition, GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 101u);
+  EXPECT_FALSE(gate.HasPendingPolicyStep());
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 4'000));
+  EXPECT_EQ(gate.ConsumeNext(1'500, 4'000).disposition, GateDisposition::Duplicate);
+  EXPECT_EQ(gate.LastAcceptedSteadyNs(), 3'000);
+}
+
+TEST(ReceiptAdmission, AdmissionFirstRejectsWrongEmptyAndPreBindSamples)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(0), 1'201, 3'001));
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(2), 1'201, 3'001));
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(1), 1'100, 3'001));
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(1), 1'201, 1'999));
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'201, 2'001));
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  EXPECT_EQ(gate.ConsumeNext(1'400, 3'000).disposition, GateDisposition::Applied);
+}
+
+TEST(ReceiptAdmission, ReceiptWaitExpiresWithoutApplyAtFortyMilliseconds)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  EXPECT_EQ(gate.ConsumeNext(1'300, 40'002'999).disposition, GateDisposition::Inhibited);
+  const auto expired = gate.ConsumeNext(1'400, 40'003'000);
+  EXPECT_EQ(expired.disposition, GateDisposition::Faulted);
+  EXPECT_EQ(expired.reason, "policy_admission_wait_expired");
+  EXPECT_EQ(gate.Watermark(), 100u);
+  EXPECT_EQ(gate.LastAcceptedSteadyNs(), 2'000);
+}
+
+TEST(ReceiptAdmission, SafeStopBehindWaitingPolicyClosesBeforeAnyPolicyApply)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  auto stop = Anchor();
+  stop.key.publish_sequence = 102;
+  stop.sequence = 2;
+  stop.stamp_ns = 1'300;
+  ASSERT_TRUE(gate.Enqueue(stop, 3'001));
+  const auto closed = gate.ConsumeNext(1'400, 3'002);
+  EXPECT_EQ(closed.disposition, GateDisposition::Faulted);
+  EXPECT_EQ(closed.reason, "safe_stop_cancelled_queued_policy_before_apply");
+  EXPECT_EQ(gate.Watermark(), 100u);
+  EXPECT_FALSE(closed.accepted);
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(1), 1'400, 3'003));
+}
+
+TEST(ReceiptAdmission, SafeStopRevokesPreviouslyOpenTokenAndLatePolicy)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'201, 2'001));
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  ASSERT_EQ(gate.ConsumeNext(1'400, 3'000).disposition, GateDisposition::Applied);
+  auto stop = Anchor();
+  stop.key.publish_sequence = 102;
+  stop.sequence = 2;
+  stop.stamp_ns = 1'400;
+  ASSERT_TRUE(gate.Enqueue(stop, 3'001));
+  const auto closed = gate.ConsumeNext(1'500, 3'002);
+  ASSERT_EQ(closed.disposition, GateDisposition::Applied);
+  ASSERT_TRUE(closed.accepted);
+  EXPECT_EQ(closed.accepted->source, 4);
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(1), 1'500, 3'003));
+  auto late = AdmissionPolicy(); late.key.publish_sequence = 103; late.stamp_ns = 1'600;
+  ASSERT_TRUE(gate.Enqueue(late, 3'004));
+  EXPECT_EQ(gate.ConsumeNext(1'700, 3'005).reason, "policy_admission_revoked");
+  EXPECT_EQ(gate.Watermark(), 102u);
+}
+
+TEST(ReceiptAdmission, CurrentTokenCannotPromoteNewPendingSlot)
+{
+  ReceiptGate gate(AdmissionBinding());
+  BindFirstAdmission(gate);
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'201, 2'001));
+  ASSERT_TRUE(gate.Enqueue(AdmissionPolicy(), 3'000));
+  ASSERT_EQ(gate.ConsumeNext(1'400, 3'000).disposition, GateDisposition::Applied);
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(2, 2, "policy-uuid-2", 1'400,
+                                        Token(2), 1'400, 3'001));
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'501, 3'002));
+  auto next = AdmissionPolicy(); next.key.publish_sequence = 102;
+  next.step_index = next.sequence = 2; next.transition_id = "policy-uuid-2"; next.stamp_ns = 1'500;
+  ASSERT_TRUE(gate.Enqueue(next, 3'003));
+  EXPECT_EQ(gate.ConsumeNext(1'600, 3'004).disposition, GateDisposition::Inhibited);
+  EXPECT_EQ(gate.Watermark(), 101u);
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(2), 1'501, 3'004));
+  EXPECT_EQ(gate.ConsumeNext(1'600, 3'005).disposition, GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 102u);
+}
+
+TEST(ReceiptResetFence, DuplicateAcrossResetDoesNotRefreshAndConflictsFault)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  ASSERT_TRUE(gate.PinResetFence(100));
+  ASSERT_TRUE(gate.Enqueue(Anchor(), 3'000));
+  EXPECT_EQ(gate.ConsumeNext(2'000, 3'000).disposition, GateDisposition::Duplicate);
+  EXPECT_EQ(gate.LastAcceptedSteadyNs(), 2'000);
+  ASSERT_TRUE(gate.BindResetContext(2'000, 3, 4, 5, 2));
+  ASSERT_TRUE(gate.Enqueue(Anchor(), 4'000));
+  EXPECT_EQ(gate.ConsumeNext(2'100, 4'000).disposition, GateDisposition::Duplicate);
+  EXPECT_EQ(gate.Watermark(), 100u);
+  auto conflict = Anchor(); conflict.twist[0] = 0.1;
+  ASSERT_TRUE(gate.Enqueue(conflict, 4'001));
+  EXPECT_EQ(gate.ConsumeNext(2'100, 4'001).reason, "publication_key_content_conflict");
+}
+
+TEST(ReceiptResetFence, ReceiptBeyondPinnedWatermarkFaultsWithoutApply)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  ASSERT_TRUE(gate.PinResetFence(100));
+  EXPECT_FALSE(gate.Enqueue(Policy(), 3'000));
+  EXPECT_TRUE(gate.Faulted());
+  EXPECT_EQ(gate.FaultReason(), "receipt_beyond_reset_fence");
+  EXPECT_EQ(gate.Watermark(), 100u);
+}

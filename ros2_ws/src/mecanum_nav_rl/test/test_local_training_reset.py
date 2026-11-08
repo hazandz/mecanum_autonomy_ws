@@ -548,3 +548,145 @@ def test_reset_rejects_unbound_or_invalid_selected_zero_facts(override, match):
             applied_zero_receipt=fact,
             reset_emulator_and_buffers=lambda: None,
         )
+
+
+class ResetStreamClock:
+    """Clock giả chỉ tiến khi nguồn phát mẫu hoặc phép pause chủ động tiến."""
+
+    def __init__(self):
+        self.ns = 1_000_000_000
+        self.ros_ns = 300_000_000
+
+    def now(self):
+        return self.ns / 1_000_000_000
+
+    def sleep(self, duration):
+        self.ns += round(duration * 1_000_000_000)
+
+    def stream(self, first_iteration, first_stamp, mutation=None):
+        for index in range(21):
+            self.ns += 10_000_000
+            self.ros_ns = first_stamp + index * 10_000_000
+            sample = replace(_measurement(first_iteration + index, self.ros_ns),
+                             receive_steady_ns=self.ns,
+                             oracle_receive_steady_ns=self.ns,
+                             oracle_stamp_ns=self.ros_ns)
+            if mutation is not None:
+                sample = mutation(sample, index)
+            yield sample
+
+    def zero(self):
+        return _applied_zero_fact(receive_steady_ns=self.ns,
+                                  receipt_stamp_ns=self.ros_ns,
+                                  applied_sim_stamp_ns=self.ros_ns)
+
+
+def stream_reset_adapter(clock, services, pause_calls):
+    return LocalTrainingResetAdapter(
+        services, lambda paused, timeout: True,
+        lambda: clock.stream(50, clock.ros_ns + 10_000_000),
+        expected_session_id='run-1', expected_config_hash='a' * 64,
+        expected_backend_instance_id=7, expected_reset_epoch=2,
+        expected_episode_generation=3, expected_runtime_generation=4,
+        expected_final_publisher_instance_id=11,
+        expected_safe_stop_source_instance_id=12,
+        expected_barrier_stamp_ns=100_000_000,
+        monotonic=clock.now, sleep=clock.sleep,
+        oracle_max_age_ns=100_000_000, now_ros_ns=lambda: clock.ros_ns,
+        native_pause=lambda fact, timeout: pause_calls.append((fact, timeout)) or True,
+    )
+
+
+def test_d03_live_rtf1_checks_each_join_then_last_and_uses_native_pause():
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+    result = adapter.execute(
+        target=ResetTarget(0, 0, 0.1, 0),
+        measured_standstill=clock.stream(1, 300_000_000),
+        applied_zero_receipt=clock.zero,
+        reset_emulator_and_buffers=lambda: None,
+        reset_deadline=clock.now() + 15, paused_hold_s=0.25,
+    )
+    assert len(pauses) == 1
+    assert pauses[0][0].receive_steady_ns == 1_210_000_000
+    assert 0 < pauses[0][1] <= 1
+    assert result.measurement.iteration == 70
+    assert clock.ns == 1_670_000_000
+    assert [kind for kind, _ in services.calls] == ['pose', 'control']
+    assert services.calls[-1][1]['pause'] is False
+
+
+@pytest.mark.parametrize('mutation, expected', [
+    (lambda s, i: replace(s, oracle_receive_steady_ns=s.oracle_receive_steady_ns - 100_000_001), 'oracle pair'),
+    (lambda s, i: replace(s, oracle_stamp_ns=s.stamp_ns + 1), 'oracle pair'),
+    (lambda s, i: replace(s, receive_steady_ns=s.receive_steady_ns - 200_000_001), 'receive freshness'),
+    (lambda s, i: replace(s, iteration=s.iteration + (1 if i == 10 else 0)), 'missing physics iteration'),
+])
+def test_d03_stale_or_mismatched_pair_and_missing_iteration_reject_before_pause(mutation, expected):
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+    with pytest.raises(ValueError, match=expected):
+        adapter.execute(target=ResetTarget(0, 0, 0.1, 0),
+                        measured_standstill=clock.stream(1, 300_000_000, mutation),
+                        applied_zero_receipt=clock.zero,
+                        reset_emulator_and_buffers=lambda: None)
+    assert not services.calls and not pauses
+
+
+def test_d03_rechecks_final_sample_after_fresh_w1_acquisition():
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+
+    def delayed_zero():
+        clock.ns += 101_000_000
+        clock.ros_ns += 101_000_000
+        return clock.zero()
+
+    with pytest.raises(ValueError, match='oracle pair'):
+        adapter.execute(target=ResetTarget(0, 0, 0.1, 0),
+                        measured_standstill=clock.stream(1, 300_000_000),
+                        applied_zero_receipt=delayed_zero,
+                        reset_emulator_and_buffers=lambda: None)
+    assert not services.calls and not pauses
+
+
+def test_d03_zero_proof_cannot_age_through_standstill_collection():
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+    with pytest.raises(ValueError, match='zero receipt proof is stale'):
+        adapter.execute(target=ResetTarget(0, 0, 0.1, 0),
+                        measured_standstill=clock.stream(1, 300_000_000),
+                        applied_zero_receipt=clock.zero(),
+                        reset_emulator_and_buffers=lambda: None)
+    assert not services.calls and not pauses
+
+
+def test_d03_shared_reset_deadline_is_not_restarted_by_adapter():
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+    with pytest.raises(TimeoutError, match='total reset deadline'):
+        adapter.execute(target=ResetTarget(0, 0, 0.1, 0),
+                        measured_standstill=clock.stream(1, 300_000_000),
+                        applied_zero_receipt=clock.zero,
+                        reset_emulator_and_buffers=lambda: None,
+                        reset_deadline=clock.now() + 0.15)
+    assert not services.calls and not pauses
+
+
+def test_d03_future_application_fact_rejects_before_native_pause():
+    clock = ResetStreamClock()
+    services, pauses = Services(), []
+    adapter = stream_reset_adapter(clock, services, pauses)
+    def future_zero():
+        return replace(clock.zero(), applied_sim_stamp_ns=clock.ros_ns + 1)
+    with pytest.raises(ValueError, match='application stamp is future'):
+        adapter.execute(target=ResetTarget(0, 0, 0.1, 0),
+                        measured_standstill=clock.stream(1, 300_000_000),
+                        applied_zero_receipt=future_zero,
+                        reset_emulator_and_buffers=lambda: None)
+    assert not services.calls and not pauses

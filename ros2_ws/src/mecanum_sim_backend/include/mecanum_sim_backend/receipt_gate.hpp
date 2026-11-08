@@ -5,9 +5,12 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace mecanum_sim_backend
 {
+using AdmissionToken = std::array<std::uint8_t, 16>;
+
 struct ReceiptKey
 {
   std::uint64_t publisher_instance_id{};
@@ -63,6 +66,7 @@ struct GateBinding
   std::string expected_transition_id;
   std::int64_t max_ros_age_ns{500'000'000};
   std::int64_t max_steady_age_ns{500'000'000};
+  bool require_policy_admission{};
   double max_vx{0.25};
   double max_vy{0.20};
   double max_wz{0.80};
@@ -80,7 +84,17 @@ public:
   bool SetExpectedPolicyStep(std::uint64_t step_index,
                              std::uint64_t source_sequence,
                              std::string transition_id,
-                             std::int64_t action_barrier_ns = 0);
+                             std::int64_t action_barrier_ns = 0,
+                             AdmissionToken token = {},
+                             std::int64_t bound_ros_ns = -1,
+                             std::int64_t bound_steady_ns = -1);
+  bool RecordPolicyAdmission(const AdmissionToken &token,
+                            std::int64_t source_ros_ns,
+                            std::int64_t receive_steady_ns);
+  void RevokePolicyAdmission();
+  bool PinResetFence(std::uint64_t sequence);
+  bool ResetFenceHeld() const;
+  bool QueueEmpty() const;
   bool BindResetContext(std::int64_t barrier_stamp_ns,
                         std::uint64_t episode_generation,
                         std::uint32_t reset_epoch,
@@ -95,12 +109,18 @@ public:
   std::string FaultReason() const;
 
 private:
+  friend class ReceiptGateTestPeer;
   struct PolicyIdentity
   {
     std::uint64_t step_index{};
     std::uint64_t source_sequence{};
     std::string transition_id;
     std::int64_t action_barrier_ns{};
+    AdmissionToken token{};
+    std::int64_t bound_ros_ns{-1};
+    std::int64_t bound_steady_ns{-1};
+    std::optional<std::pair<std::int64_t, std::int64_t>> admission;
+
   };
   struct QueuedReceipt { ReceiptFacts facts; std::int64_t receive_steady_ns{}; };
   GateResult Fault(std::string reason);
@@ -111,6 +131,9 @@ private:
   std::optional<ReceiptFacts> last_receipt_;
   std::optional<std::int64_t> last_source_stamp_ns_;
   std::optional<PolicyIdentity> pending_policy_;
+  std::optional<PolicyIdentity> current_policy_;
+  std::optional<std::uint64_t> reset_fence_;
+  std::deque<ReceiptFacts> replay_history_;
   std::int64_t current_action_barrier_ns_{};
   std::uint64_t watermark_{};
   std::int64_t last_accepted_steady_ns_{};

@@ -64,6 +64,8 @@ def test_request_and_response_field_order_types_and_bounds() -> None:
         ('adjacent_boundary_final_publisher_instance_id', 'uint64'),
         ('adjacent_boundary_final_publish_sequence', 'uint64'),
         ('probe_start_request_sequence', 'uint64'),
+        ('pause_fence_final_publish_sequence', 'uint64'),
+        ('pause_enter_budget_ms', 'uint32'),
     ]
     assert _fields(response_lines) == [
         ('schema_version', 'uint16'), ('result', 'uint8'),
@@ -99,6 +101,7 @@ def test_request_and_response_field_order_types_and_bounds() -> None:
         ('empty_last_iteration', 'uint64'),
         ('empty_first_stamp', 'builtin_interfaces/Time'),
         ('empty_last_stamp', 'builtin_interfaces/Time'),
+        ('pending_admission_token', 'uint8[16]'),
     ]
     request_types = (
         LocalTrainingBackendControl.Request.get_fields_and_field_types()
@@ -116,12 +119,13 @@ def test_exact_operation_result_reason_and_capability_constants() -> None:
     """Pin exact operation, result, reason and capability enumerations."""
     request = LocalTrainingBackendControl.Request
     response = LocalTrainingBackendControl.Response
-    assert request.SCHEMA_VERSION == 1
-    assert response.RESPONSE_SCHEMA_VERSION == 1
+    assert request.SCHEMA_VERSION == 2
+    assert response.RESPONSE_SCHEMA_VERSION == 2
     assert [getattr(request, field) for field in (
         'OP_BIND_SESSION', 'OP_BIND_PENDING_STEP', 'OP_CONFIRM_OBSERVATION0',
         'OP_INHIBIT', 'OP_VERIFY_CONTACT_CAPABILITY', 'OP_BIND_RESET_CONTEXT',
-    )] == [1, 2, 3, 4, 5, 6]
+        'OP_PREPARE_RESET_PAUSE',
+    )] == [1, 2, 3, 4, 5, 6, 7]
     assert [getattr(request, field) for field in (
         'PROBE_ACTION_NONE', 'PROBE_ACTION_START', 'PROBE_ACTION_QUERY',
         'PROBE_ACTION_ABORT', 'PRIMARY_UNCONFIGURED', 'PRIMARY_INACTIVE',
@@ -155,8 +159,10 @@ def test_exact_operation_result_reason_and_capability_constants() -> None:
 def test_generated_service_serialization_without_ros_context() -> None:
     """Round-trip generated service request and response without ROS init."""
     request = LocalTrainingBackendControl.Request()
-    request.schema_version = 1
-    request.operation = request.OP_INHIBIT
+    request.schema_version = request.SCHEMA_VERSION
+    request.operation = request.OP_PREPARE_RESET_PAUSE
+    request.pause_fence_final_publish_sequence = 123
+    request.pause_enter_budget_ms = 100
     request.probe_action = request.PROBE_ACTION_NONE
     request.coordinator_ingress_instance_id = 2
     request.request_sequence = 1
@@ -167,6 +173,7 @@ def test_generated_service_serialization_without_ros_context() -> None:
     request.lifecycle_header_stamp = Time(sec=10, nanosec=2)
     response = LocalTrainingBackendControl.Response()
     response.schema_version = response.RESPONSE_SCHEMA_VERSION
+    response.pending_admission_token = list(range(16))
     response.result = response.RESULT_APPLIED
     response.request_sequence = 1
     response.backend_instance_id = 9
@@ -182,3 +189,6 @@ def test_generated_service_serialization_without_ros_context() -> None:
         == request.lifecycle_header_stamp
     )
     assert restored_response.backend_instance_id == 9
+    assert restored_request.pause_fence_final_publish_sequence == 123
+    assert restored_request.pause_enter_budget_ms == 100
+    assert list(restored_response.pending_admission_token) == list(range(16))

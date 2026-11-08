@@ -36,7 +36,10 @@ class LifecycleIdentity:
 class SafetyLifecycleCore:
     """Single owner for identity counters and explicit motion rearm barrier."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fixed_barrier: bool = False) -> None:
+        if type(fixed_barrier) is not bool:
+            raise ValueError('fixed_barrier must be boolean')
+        self._fixed_barrier = fixed_barrier
         self.episode_generation = 0
         self.reset_epoch = 0
         self.runtime_generation = 0
@@ -117,7 +120,8 @@ class SafetyLifecycleCore:
         """Refresh timestamp; a backwards ROS clock transition faults closed."""
         if type(now_ns) is not int or now_ns < self._last_clock_ns:
             return self._set(BarrierState.FAULT, "LIFECYCLE_CLOCK_REGRESSION", self._last_clock_ns)
-        self.barrier_ros_time_ns = now_ns
+        if not self._fixed_barrier:
+            self.barrier_ros_time_ns = now_ns
         self._last_clock_ns = now_ns
         return self.snapshot()
 

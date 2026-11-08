@@ -133,3 +133,92 @@ for value in (False, 1, "true"):
     env["PYTHONPATH"] = str(Path(__file__).parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_local_training_publisher_preserves_policy_key_and_safe_stop_counter(monkeypatch):
+    """Callback thật, generated messages; không tạo ROS context/publisher thật."""
+    from types import SimpleNamespace as NS
+    from geometry_msgs.msg import Twist
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState
+    from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity, policy_transition_identity
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: 2_000_000_000)
+    events, receipts, commands, evidence = [], [], [], []
+
+    def publish_cmd(msg):
+        events.append('cmd'); commands.append(msg)
+
+    def publish_receipt(msg):
+        events.append('receipt'); receipts.append(msg)
+
+    life = SafetyLifecycleState()
+    life.header.stamp = Time(sec=10)
+    life.primary_state, life.barrier_state = life.PRIMARY_ACTIVE, life.BARRIER_READY
+    life.motion_permitted = True
+    life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
+    node = NS(_local_training=True, _session_id='b23-test', _policy_source=123,
+              _safe_stop_source=456, _identity=life, _identity_received_ns=1_900_000_000,
+              _final_publish_sequence=0, _publisher_instance_id=789,
+              _cmd_pub=NS(publish=publish_cmd), _receipt_pub=NS(publish=publish_receipt),
+              _emit=lambda name, record: evidence.append((name, record)),
+              get_clock=lambda: NS(now=lambda: NS(nanoseconds=10_100_000_000,
+                                        to_msg=lambda: Time(sec=10, nanosec=100_000_000))),
+              get_logger=lambda: NS(error=lambda message: evidence.append(('ERROR', message))))
+    command = CommandEnvelope()
+    command.header.stamp = Time(sec=10)
+    command.header.frame_id = 'base_link'
+    command.source, command.sequence, command.source_instance_id = command.SOURCE_POLICY, 1, 123
+    command.episode_generation, command.reset_epoch, command.runtime_generation = 1, 2, 3
+    command.twist.linear.y = 0.1
+    for value in (0.1, 0.12):
+        command.twist.linear.y = value
+        module.FinalTwistPublisherNode._on_accepted(node, command)
+    assert events == ['cmd', 'receipt', 'cmd', 'receipt']
+    expected = policy_transition_identity(identity=EpisodeLifecycleIdentity(1, 2, 3),
+        session_id='b23-test', source_instance_id=123, source_sequence=1, step_index=1)
+    assert [r.transition_id for r in receipts] == [expected.transition_id] * 2
+    assert [r.sequence for r in receipts] == [1, 1]
+    assert [r.final_publish_sequence for r in receipts] == [1, 2]
+    assert receipts[-1].final_command.linear.y == 0.12
+    assert [r.step_index for r in receipts] == [1, 1]
+    command.source, command.sequence, command.source_instance_id = command.SOURCE_SAFE_STOP, 7, 456
+    command.twist = Twist()
+    life.motion_permitted = False
+    module.FinalTwistPublisherNode._on_accepted(node, command)
+    assert receipts[-1].step_index == 0 and receipts[-1].transition_id == ''
+    assert receipts[-1].sequence == 7 and receipts[-1].source_instance_id == 456
+    assert receipts[-1].final_publish_sequence == 3
+    for source, instance in ((command.SOURCE_POLICY, 123), (command.SOURCE_SAFE_STOP, 999),
+                              (command.SOURCE_NAV2, 123)):
+        command.source, command.source_instance_id = source, instance
+        module.FinalTwistPublisherNode._on_accepted(node, command)
+        assert len(receipts) == 3
+    assert evidence[-1][0] == 'ERROR'
+
+
+def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):
+    from types import SimpleNamespace as NS
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
+    import pytest
+    events = []
+    msg = CommandEnvelope()
+    msg.header.frame_id = 'base_link'
+    msg.source, msg.source_instance_id, msg.sequence = msg.SOURCE_SAFE_STOP, 456, 1
+
+    def fail(_):
+        raise RuntimeError('receipt transport failure')
+
+    node = NS(_local_training=True, _identity=None, _safe_stop_source=456,
+              _final_publish_sequence=0, _publisher_instance_id=789,
+              _cmd_pub=NS(publish=lambda m: events.append('cmd')), _receipt_pub=NS(publish=fail),
+              _emit=lambda name, record: events.append((name, record)),
+              get_clock=lambda: NS(now=lambda: NS(to_msg=lambda: Time(sec=1))),
+              get_logger=lambda: NS(error=lambda _: None))
+    with pytest.raises(RuntimeError, match='receipt transport failure'):
+        module.FinalTwistPublisherNode._on_accepted(node, msg)
+    assert events[0] == 'cmd'
+    assert events[1][0] == 'FINAL_PUBLISHED_WITHOUT_RECEIPT'
+    assert node._final_publish_sequence == 1

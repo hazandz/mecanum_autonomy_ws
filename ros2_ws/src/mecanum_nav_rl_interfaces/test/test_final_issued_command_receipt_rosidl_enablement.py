@@ -21,7 +21,7 @@ EXPECTED_RECEIPT_SHA256 = (
 HISTORICAL_RECEIPT_SHA256 = (
     "0c6446674bf17373ec646519043f506a9a7a15f95d5fdd10829b0cedb956500a"
 )
-# Live ROSIDL inventory for package version 2.7.0.
+# Live ROSIDL inventory for package version 2.8.0.
 EXPECTED_LIVE_INTERFACE_FILES = [
     "msg/Heartbeat.msg",
     "msg/SafetyState.msg",
@@ -79,7 +79,7 @@ def test_receipt_hash_and_rosidl_interface_list_are_exact() -> None:
 
 def test_version_and_no_runtime_executable_or_library() -> None:
     package = ET.parse(PACKAGE_ROOT / "package.xml").getroot()
-    assert package.findtext('version') == '2.7.0'
+    assert package.findtext('version') == '2.8.0'
     cmake = (PACKAGE_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_executable(" not in cmake
     assert "add_library(" not in cmake

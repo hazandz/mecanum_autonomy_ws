@@ -680,7 +680,7 @@ async def run_contact(args, run_root, start_ns, profile):
         sequence=0
         def request(action):
             nonlocal sequence
-            sequence+=1;req=Control.Request();req.schema_version=1;req.operation=5;req.probe_action=action
+            sequence+=1;req=Control.Request();req.schema_version=req.SCHEMA_VERSION;req.operation=req.OP_VERIFY_CONTACT_CAPABILITY;req.probe_action=action
             req.coordinator_ingress_instance_id=plan.coordinator_ingress_instance_id;req.request_sequence=sequence
             req.expected_backend_instance_id=backend;req.session_id=sid;req.config_hash=plan.config_hash
             req.asset_manifest_sha256=plan.asset_manifest_sha256

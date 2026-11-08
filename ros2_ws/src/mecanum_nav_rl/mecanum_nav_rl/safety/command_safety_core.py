@@ -270,6 +270,47 @@ def _memory_is_within_envelope(m: SafetyMemory, c: SafetyContext) -> bool:
     )
 
 
+def limit_motion_command(
+    command: VelocityCommand, previous_velocity: VelocityCommand,
+    previous_acceleration: VelocityCommand, dt_s: float, limits: MotionLimits,
+) -> tuple[VelocityCommand, VelocityCommand]:
+    """Giao ba khoảng velocity/acceleration/jerk; dùng chung các profile Safety.
+
+    Hàm chỉ giới hạn lệnh đã được selector kiểm context/freshness. Emergency
+    zero đi ngoài limiter. Không phát lệnh hoặc tạo receipt.
+    """
+    if (not all(_is_velocity(v) for v in (command, previous_velocity, previous_acceleration))
+            or not _valid_limits(limits) or not _finite(dt_s) or dt_s <= 0):
+        raise ValueError('INVALID_MOTION_LIMIT_INPUT')
+    raw = _triple(command)
+    previous_v, previous_a = _triple(previous_velocity), _triple(previous_acceleration)
+    vmax, amax, jmax = (_bounds(limits, family) for family in
+                        ('hard_max', 'acceleration_max', 'jerk_max'))
+    if (any(abs(v) > bound for v, bound in zip(previous_v, vmax))
+            or any(abs(a) > bound for a, bound in zip(previous_a, amax))):
+        raise ValueError('MEMORY_OUTSIDE_INJECTED_ENVELOPE')
+    output_values, acceleration_values = [], []
+    dt = float(dt_s)
+    for axis in range(3):
+        lower = max(-amax[axis], previous_a[axis] - jmax[axis] * dt,
+                    (-vmax[axis] - previous_v[axis]) / dt)
+        upper = min(amax[axis], previous_a[axis] + jmax[axis] * dt,
+                    (vmax[axis] - previous_v[axis]) / dt)
+        if not math.isfinite(lower) or not math.isfinite(upper) or lower > upper:
+            raise ValueError('INFEASIBLE_HARD_VELOCITY_ACCELERATION_JERK_ENVELOPE')
+        limited_acceleration = _between((raw[axis] - previous_v[axis]) / dt, lower, upper)
+        final_velocity = previous_v[axis] + limited_acceleration * dt
+        actual_acceleration = (final_velocity - previous_v[axis]) / dt
+        if (not math.isfinite(final_velocity) or not math.isfinite(actual_acceleration)
+                or abs(final_velocity) > vmax[axis] + 1e-12
+                or abs(actual_acceleration) > amax[axis] + 1e-12
+                or abs(actual_acceleration - previous_a[axis]) > jmax[axis] * dt + 1e-12):
+            raise ValueError('INFEASIBLE_HARD_VELOCITY_ACCELERATION_JERK_ENVELOPE')
+        output_values.append(final_velocity)
+        acceleration_values.append(actual_acceleration)
+    return _velocity(tuple(output_values)), _velocity(tuple(acceleration_values))
+
+
 def evaluate_safety(
     context: SafetyContext,
     memory: SafetyMemory,
@@ -359,11 +400,6 @@ def evaluate_safety(
         return _zero_decision(SafetyState.STOPPED, "TTL_INVALID_OR_EXPIRED", _zero_preserving_sequence(memory, when=now), raw=cmd.twist)
 
     raw = _triple(cmd.twist)
-    previous_v = _triple(memory.previous_final_velocity)
-    previous_a = _triple(memory.previous_final_acceleration)
-    vmax = _bounds(context.motion_limits, "hard_max")
-    amax = _bounds(context.motion_limits, "acceleration_max")
-    jmax = _bounds(context.motion_limits, "jerk_max")
     dt = None if memory.last_evaluation_steady_s is None else now - memory.last_evaluation_steady_s
 
     accepted = SafetyMemory(
@@ -382,48 +418,16 @@ def evaluate_safety(
     if not _finite(dt) or dt <= 0:
         return _zero_decision(SafetyState.STOPPED, "STEADY_TIME_NOT_INCREASING", _zero_preserving_sequence(memory, when=now), raw=cmd.twist)
 
-    output_values = []
-    acceleration_values = []
-    for axis in range(3):
-        # All three admissible acceleration intervals are intersected before
-        # deriving velocity. No post-limit velocity clipping is performed.
-        lower = max(
-            -amax[axis],
-            previous_a[axis] - jmax[axis] * dt,
-            (-vmax[axis] - previous_v[axis]) / dt,
+    try:
+        bounded, bounded_acceleration = limit_motion_command(
+            cmd.twist, memory.previous_final_velocity, memory.previous_final_acceleration,
+            dt, context.motion_limits,
         )
-        upper = min(
-            +amax[axis],
-            previous_a[axis] + jmax[axis] * dt,
-            (+vmax[axis] - previous_v[axis]) / dt,
-        )
-        if not math.isfinite(lower) or not math.isfinite(upper) or lower > upper:
-            return _zero_decision(
-                SafetyState.FAULT,
-                "INFEASIBLE_HARD_VELOCITY_ACCELERATION_JERK_ENVELOPE",
-                _clear(memory, when=now),
-                raw=cmd.twist,
-            )
-        desired_acceleration = (raw[axis] - previous_v[axis]) / dt
-        limited_acceleration = _between(desired_acceleration, lower, upper)
-        final_velocity = previous_v[axis] + limited_acceleration * dt
-        actual_acceleration = (final_velocity - previous_v[axis]) / dt
-        tol = 1e-12
-        if (
-            not math.isfinite(final_velocity)
-            or not math.isfinite(actual_acceleration)
-            or abs(final_velocity) > vmax[axis] + tol
-            or abs(actual_acceleration) > amax[axis] + tol
-            or abs(actual_acceleration - previous_a[axis]) > jmax[axis] * dt + tol
-        ):
-            return _zero_decision(
-                SafetyState.FAULT,
-                "INFEASIBLE_HARD_VELOCITY_ACCELERATION_JERK_ENVELOPE",
-                _clear(memory, when=now),
-                raw=cmd.twist,
-            )
-        output_values.append(final_velocity)
-        acceleration_values.append(actual_acceleration)
+    except ValueError as error:
+        return _zero_decision(SafetyState.FAULT, str(error),
+                              _clear(memory, when=now), raw=cmd.twist)
+    output_values = _triple(bounded)
+    acceleration_values = _triple(bounded_acceleration)
 
     final = _velocity(tuple(output_values))
     actual_acceleration = _velocity(tuple(acceleration_values))

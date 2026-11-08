@@ -2,6 +2,17 @@
 
 All notable changes to `mecanum_nav_rl_interfaces` are documented in this file.
 
+## [2.8.0] - Unreleased
+
+### B2.3 — interface được Owner duyệt
+
+- `LocalTrainingBackendControl` và `LocalTrainingSafetyInput` dùng schema 2.
+- Thêm `OP_PREPARE_RESET_PAUSE`, fence final-publication và budget vào pause.
+- Response mang token admission 128 bit; Safety input mang token tương ứng.
+  Token chỉ dùng mở POLICY; các đường đóng motion không phụ thuộc token.
+- Receipt-v2, sáu message còn lại và inventory tám message/một service giữ nguyên.
+- Đây là khai báo interface; chưa chứng minh pause/admission runtime B2.3.
+
 ## [2.7.0] - Unreleased
 
 ### Added

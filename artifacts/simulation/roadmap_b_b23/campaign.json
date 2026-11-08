@@ -1,0 +1,299 @@
+{
+  "schema": "roadmap_b_b23_campaign/v1",
+  "status": "AUTHORIZED_PENDING_IMPLEMENTATION_AND_OFFLINE_VERIFICATION",
+  "base_commit": "c035d95be8631cba87daf788a36d47cc47b8fe07",
+  "work_branch": "roadmap-b-b23-local-training-integration",
+  "authority": {
+    "source": "Owner approval in current conversation",
+    "L2-PAUSE": "APPROVED",
+    "L2-ADMISSION": "APPROVED",
+    "D03-RESET-FRESHNESS": "APPROVED",
+    "D04-SOAK": "APPROVED",
+    "D05-ACCEPTANCE-ID": "APPROVED",
+    "offline": "APPROVED",
+    "runtime": "B23_CAMPAIGN_APPROVED"
+  },
+  "scope": {
+    "profile": "sim_train",
+    "navigation_mode": "LOCAL_TRAINING",
+    "gui": false,
+    "gym": false,
+    "ppo": false,
+    "hardware": false
+  },
+  "interfaces": {
+    "package_version": "2.8.0",
+    "backend_control_schema": 2,
+    "safety_input_schema": 2,
+    "token_bits": 128,
+    "token_role": "POLICY opening only; closing paths independent"
+  },
+  "deadlines_ns": {
+    "reset": 15000000000,
+    "step": 2000000000,
+    "mutation": 1000000000,
+    "probe": 5000000000,
+    "probe_cleanup_reserve": 1000000000,
+    "pause_enter_max": 100000000,
+    "receipt_admission_wait_max": 40000000,
+    "watchdog": 100000000,
+    "unexpected_stall_zero": 200000000,
+    "unexpected_stall_abort": 1000000000
+  },
+  "run_budgets_s": {
+    "smoke_fault_task": {
+      "active": 120,
+      "cleanup": 60
+    },
+    "soak": {
+      "active": 900,
+      "cleanup": 60
+    },
+    "active_origin": "guard consume"
+  },
+  "phase_order": [
+    "offline",
+    "smoke",
+    "fault_task",
+    "soak"
+  ],
+  "cases": {
+    "R01a": {
+      "trigger": "normal_contact_reset_policy_reset",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R01b": {
+      "trigger": "external_pause_between_W1_and_native_dispatch",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R01c": {
+      "trigger": "delay_real_pause_ack",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R01d": {
+      "trigger": "drop_real_pause_ack",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R01e": {
+      "trigger": "replay_exact_pause_intent",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02a": {
+      "trigger": "admission_before_receipt",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02b": {
+      "trigger": "receipt_before_admission",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02c": {
+      "trigger": "safe_stop_while_receipt_waits",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02d": {
+      "trigger": "late_release_after_abort",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02e": {
+      "trigger": "pre_bind_admission_sample",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02f": {
+      "trigger": "safety_hold_after_adapter_issuance",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R02g": {
+      "trigger": "closing_paths_with_empty_wrong_revoked_token",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R03a": {
+      "trigger": "drop_native_receipt",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R03b": {
+      "trigger": "mutate_native_receipt_uuid",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R04a": {
+      "trigger": "delay_noisy_odometry",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R04b": {
+      "trigger": "drop_noisy_odometry",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R04c": {
+      "trigger": "delay_scan",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R04d": {
+      "trigger": "delay_lifecycle",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R05": {
+      "trigger": "revoke_contact_component_or_mask",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R06a": {
+      "trigger": "set_pose_ack_wrong_achieved_pose",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R06b": {
+      "trigger": "missing_measurement_iteration",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R06c": {
+      "trigger": "missing_adjacent_cutoff_receipt",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R07a": {
+      "trigger": "unexpected_pause_stall",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R07b": {
+      "trigger": "time_only_rollback",
+      "status": "NOT_RUN",
+      "authority": "PENDING_EXACT_PACKET_OWNER_APPROVAL"
+    },
+    "R07c": {
+      "trigger": "owned_backend_restart",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R07d": {
+      "trigger": "owned_final_publisher_restart",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R09a": {
+      "trigger": "goal_settle_zero",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R09b": {
+      "trigger": "task_fixture_contact",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    },
+    "R08": {
+      "trigger": "clean_30_reset_1000_step_soak",
+      "status": "NOT_RUN",
+      "authority": "CAMPAIGN_CONDITIONAL_ON_OFFLINE_AND_PRIOR_PHASE_PASS"
+    }
+  },
+  "pending_authority": {
+    "R07b": "Pin installed time_only API, command, target, parameters, stop condition and obtain Owner approval",
+    "R09b_active_fixture_pose": "Pin fixture identity, pose, frame, command, zero condition and obtain Owner approval; existing scenario fixture remains authorized"
+  },
+  "soak": {
+    "scenario": "B2_SOAK_V1",
+    "world": "b2_training_arena",
+    "world_seed": 20261029,
+    "episode_seeds": [
+      2026102900,
+      2026102901,
+      2026102902,
+      2026102903,
+      2026102904,
+      2026102905,
+      2026102906,
+      2026102907,
+      2026102908,
+      2026102909,
+      2026102910,
+      2026102911,
+      2026102912,
+      2026102913,
+      2026102914,
+      2026102915,
+      2026102916,
+      2026102917,
+      2026102918,
+      2026102919,
+      2026102920,
+      2026102921,
+      2026102922,
+      2026102923,
+      2026102924,
+      2026102925,
+      2026102926,
+      2026102927,
+      2026102928,
+      2026102929
+    ],
+    "noise": "B2_NOISE_N0_V1",
+    "steps_per_episode": [
+      34,
+      34,
+      34,
+      34,
+      34,
+      34,
+      34,
+      34,
+      34,
+      34,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33,
+      33
+    ],
+    "required_successful_resets": 30,
+    "required_adapter_issued": 1000,
+    "required_backend_applied_steps": 1000,
+    "required_b1_commits": 1000,
+    "terminal_before_last_slot": "FAIL_NO_REPLACEMENT",
+    "unfinished_last_slot": "COLLECTION_CUTOFF",
+    "fault_hooks": false
+  },
+  "evidence_root": "/home/hazan/mecanum_runtime_evidence",
+  "guard_capacity": 1,
+  "parallel_runs_allowed": false,
+  "acceptance_disposition": {
+    "legacy_id": "ROADMAP_B_B2_BOUNDED_SOAK_PENDING_ASSET_BINDING",
+    "disposition": "Historical pre-binding identifier; B2.3 requires actual BOUND config plus installed asset closure. It is not a PASS marker."
+  },
+  "historical_limits": {
+    "RUN008_root_cause": "UNKNOWN",
+    "Owner_visual_ACK": "NOT_PERFORMED"
+  }
+}

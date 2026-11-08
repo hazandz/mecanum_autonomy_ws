@@ -27,6 +27,7 @@
 
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <gz/math/Quaternion.hh>
 #include <gz/common/SystemPaths.hh>
@@ -59,6 +60,7 @@
 #include <mecanum_nav_rl_interfaces/msg/simulation_contact_state.hpp>
 #include <mecanum_nav_rl_interfaces/srv/local_training_backend_control.hpp>
 #include <ros_gz_interfaces/srv/delete_entity.hpp>
+#include <ros_gz_interfaces/srv/control_world.hpp>
 #include <ros_gz_interfaces/srv/set_entity_pose.hpp>
 #include <ros_gz_interfaces/srv/spawn_entity.hpp>
 #include <sys/stat.h>
@@ -75,6 +77,7 @@ namespace backend_detail
 using SpawnEntity = ros_gz_interfaces::srv::SpawnEntity;
 using SetEntityPose = ros_gz_interfaces::srv::SetEntityPose;
 using DeleteEntity = ros_gz_interfaces::srv::DeleteEntity;
+using ControlWorld = ros_gz_interfaces::srv::ControlWorld;
 
 enum class ProbeServiceKind { Spawn, Lift, Remove };
 enum class RuntimeResourceKind
@@ -89,13 +92,14 @@ enum class RuntimeResourceKind
   ProbeSpawnClient,
   ProbePoseClient,
   ProbeDeleteClient,
+  ResetPauseClient,
   Executor,
   ExecutorNodeRegistration,
   ExecutorThread,
   GazeboTransportNode,
   GroundTruthPublisher,
 };
-constexpr std::array<RuntimeResourceKind, 15> kRuntimeResourceOrder{
+constexpr std::array<RuntimeResourceKind, 16> kRuntimeResourceOrder{
   RuntimeResourceKind::Context,
   RuntimeResourceKind::Node,
   RuntimeResourceKind::ReceiptSubscription,
@@ -106,6 +110,7 @@ constexpr std::array<RuntimeResourceKind, 15> kRuntimeResourceOrder{
   RuntimeResourceKind::ProbeSpawnClient,
   RuntimeResourceKind::ProbePoseClient,
   RuntimeResourceKind::ProbeDeleteClient,
+  RuntimeResourceKind::ResetPauseClient,
   RuntimeResourceKind::Executor,
   RuntimeResourceKind::ExecutorNodeRegistration,
   RuntimeResourceKind::ExecutorThread,
@@ -328,6 +333,8 @@ std::vector<std::uint8_t> SerializeControlRequest(
   append_integer(request.adjacent_boundary_final_publisher_instance_id);
   append_integer(request.adjacent_boundary_final_publish_sequence);
   append_integer(request.probe_start_request_sequence);
+  append_integer(request.pause_fence_final_publish_sequence);
+  append_integer(request.pause_enter_budget_ms);
   return bytes;
 }
 bool IsZero(const builtin_interfaces::msg::Time &stamp)
@@ -368,8 +375,12 @@ bool Observation0FieldsZero(const ControlRequest &request)
 }
 bool OperationFieldsValid(const ControlRequest &request)
 {
+  if (request.operation != ControlRequest::OP_PREPARE_RESET_PAUSE &&
+      (request.pause_fence_final_publish_sequence != 0 || request.pause_enter_budget_ms != 0))
+    return false;
   const auto operation = request.operation;
-  const bool lifecycle_used =
+  const bool pause_used = operation == ControlRequest::OP_PREPARE_RESET_PAUSE;
+  const bool lifecycle_used = pause_used ||
       operation == ControlRequest::OP_BIND_SESSION ||
       operation == ControlRequest::OP_BIND_RESET_CONTEXT ||
       operation == ControlRequest::OP_CONFIRM_OBSERVATION0 ||
@@ -385,10 +396,14 @@ bool OperationFieldsValid(const ControlRequest &request)
   const bool probe_used =
       operation == ControlRequest::OP_VERIFY_CONTACT_CAPABILITY;
   if ((!lifecycle_used && !LifecycleFieldsZero(request)) ||
-      (!sources_used && !SourceFieldsZero(request)) ||
+      (!sources_used && !pause_used && !SourceFieldsZero(request)) ||
       (!pending_used && !PendingStepFieldsZero(request)) ||
       (!observation_used && !Observation0FieldsZero(request)))
     return false;
+  if (pause_used && (request.final_publisher_instance_id == 0 ||
+      request.policy_source_instance_id != 0 || request.safe_stop_source_instance_id != 0 ||
+      request.next_safe_stop_sequence != 0 || request.pause_fence_final_publish_sequence == 0 ||
+      request.pause_enter_budget_ms == 0 || request.pause_enter_budget_ms > 100)) return false;
   if (!probe_used &&
       (request.probe_action != ControlRequest::PROBE_ACTION_NONE ||
        request.probe_start_request_sequence != 0))
@@ -561,6 +576,7 @@ private:
     GateBinding binding;
     binding.session_id = session_id_;
     binding.config_hash = config_hash_;
+    binding.require_policy_admission = true;
     binding.final_publisher_instance_id = final_instance;
     binding.safe_stop_source_instance_id = safe_instance;
     binding.policy_source_instance_id = policy_instance_id_;
@@ -744,13 +760,30 @@ public:
     const auto steady_now_ns = steady_clock_now_();
     physics_iteration_ = info.iterations;
     ValidateContactOnlyContext(ecm, TimeNs(info));
+    ValidateNormalContext(ecm, TimeNs(info), steady_now_ns);
     ProcessBackendControlRequests(
         ecm, TimeNs(info), info.iterations, steady_now_ns, info.paused);
+    ProgressResetPause(info, steady_now_ns);
     ProcessProbeServiceResults();
     AdvanceContactProbe(info, ecm, steady_now_ns);
     ProcessCallbackInputs(TimeNs(info), steady_now_ns);
     const auto pending_faults = callback_fault_flags_.exchange(0);
     if (pending_faults != 0) SetFault(pending_faults, "ros_callback_queue_or_context_fault");
+    if (pause_intent_ || reset_pause_hold_)
+    {
+      // Fence chỉ nhận replay đã biết; không ghi application hoặc refresh W1.
+      std::lock_guard<std::mutex> lock(callback_mutex_);
+      if (gate_ && !gate_->QueueEmpty())
+      {
+        const auto replay = gate_->ConsumeNext(TimeNs(info), steady_now_ns);
+        if (replay.disposition != GateDisposition::Duplicate)
+          SetFault(BackendState::FAULT_CONTEXT, "non_replay_receipt_during_reset_hold");
+      }
+      if (gate_ && gate_->Faulted()) SetFault(BackendState::FAULT_CONTEXT, gate_->FaultReason());
+      policy_open_ = false;
+      if (base_link_.Valid(ecm)) ApplyEmergencyZero(ecm);
+      return;
+    }
     if (contact_probe_only_ || !configured_ || !gate_ || !contact_coverage_ ||
         base_link_.Entity() == gz::sim::kNullEntity ||
         !base_link_.Valid(ecm) || info.paused)
@@ -762,30 +795,6 @@ public:
     }
     const auto now_steady = steady_clock_now_();
     const auto now_sim = TimeNs(info);
-    if (contact_capability_verified_)
-    {
-      const auto *engine = ecm.Component<gz::sim::components::PhysicsEnginePlugin>(
-          world_entity_);
-      if (!engine || engine->Data() != proof_physics_engine_plugin_ ||
-          ResolvePhysicsEngineLibrary(engine->Data()) !=
-              observed_engine_plugin_path_)
-        SetFault(BackendState::FAULT_CONTEXT,
-                 "observed_physics_engine_identity_changed");
-    }
-    if (now_sim < last_sim_ns_)
-    {
-      probe_machine_.Invalidate();
-      {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        gate_->Invalidate("simulation_clock_rollback");
-      }
-      SetFault(BackendState::FAULT_CLOCK, "simulation_clock_rollback");
-    }
-    if (now_sim > last_sim_ns_)
-    {
-      last_sim_ns_ = now_sim;
-      last_sim_advance_steady_ns_ = now_steady;
-    }
     const auto stalled_ns = now_steady - last_sim_advance_steady_ns_;
     if (stalled_ns > 1'000'000'000)
       SetFault(BackendState::FAULT_CLOCK, "simulation_clock_stall_infrastructure_abort");
@@ -969,6 +978,36 @@ public:
 private:
   friend class BackendSystemTestPeer;
 
+  void ValidateNormalContext(const gz::sim::EntityComponentManager &ecm,
+      std::int64_t sim_ns, std::int64_t steady_ns)
+  {
+    if (contact_probe_only_) return;
+    if (contact_capability_verified_)
+    {
+      const auto *engine = ecm.Component<gz::sim::components::PhysicsEnginePlugin>(
+          world_entity_);
+      if (!engine || engine->Data() != proof_physics_engine_plugin_ ||
+          ResolvePhysicsEngineLibrary(engine->Data()) !=
+              observed_engine_plugin_path_)
+        SetFault(BackendState::FAULT_CONTEXT,
+                 "observed_physics_engine_identity_changed");
+    }
+    if (sim_ns < last_sim_ns_)
+    {
+      probe_machine_.Invalidate();
+      {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (gate_) gate_->Invalidate("simulation_clock_rollback");
+      }
+      SetFault(BackendState::FAULT_CLOCK, "simulation_clock_rollback");
+    }
+    if (sim_ns > last_sim_ns_)
+    {
+      last_sim_ns_ = sim_ns;
+      last_sim_advance_steady_ns_ = steady_ns;
+    }
+  }
+
   void ClearContactCapability()
   {
     // Chỉ update/shutdown ghi proof; callback đọc generation atomic, không đọc
@@ -1033,6 +1072,7 @@ private:
       pending_sdf_.reset();
     }
     CloseProbeServiceMailbox();
+    { std::lock_guard<std::mutex> lock(pause_mailbox_->mutex); pause_mailbox_->closed = true; }
     configured_ = false;
     runtime_resources_ready_ = false;
     policy_open_ = false;
@@ -1043,6 +1083,7 @@ private:
     probe_spawn_client_.reset();
     probe_pose_client_.reset();
     probe_delete_client_.reset();
+    reset_pause_client_.reset();
     receipt_sub_.reset();
     twist_sub_.reset();
     safety_sub_.reset();
@@ -1124,6 +1165,21 @@ private:
     ControlRequest request;
     std::vector<std::uint8_t> request_bytes;
     std::int64_t ingress_steady_ns{};
+  };
+  struct PauseAck { std::uint64_t request_sequence; bool success; std::int64_t received_ns; };
+  struct PauseMailbox
+  {
+    std::mutex mutex;
+    std::deque<PauseAck> results;
+    bool closed{}, overflow{};
+  };
+  struct PauseIntent
+  {
+    std::uint64_t request_sequence{}, revision{}, arm_iteration{};
+    std::int64_t enter_deadline_ns{}, mutation_deadline_ns{}, dispatched_ns{}, edge_ns{};
+    std::uint64_t edge_iteration{};
+    std::int64_t edge_sim_ns{};
+    std::optional<PauseAck> ack;
   };
   struct CachedControl
   {
@@ -2047,6 +2103,27 @@ private:
             "ROBOT_URDF_final_description") +
             "/models/b2_contact_probe/model.sdf";
         return;
+      case backend_detail::RuntimeResourceKind::ResetPauseClient:
+      {
+        reset_pause_client_ = node_->create_client<backend_detail::ControlWorld>(
+            "/world/" + world_name_ + "/control");
+        if (!reset_pause_client_) throw std::runtime_error("reset_pause_client_missing");
+        reset_pause_ready_ = [this] { return reset_pause_client_ && reset_pause_client_->service_is_ready(); };
+        reset_pause_dispatch_ = [this](std::function<void(bool, std::int64_t)> completion) {
+          auto request = std::make_shared<backend_detail::ControlWorld::Request>();
+          request->world_control.pause = true;
+          const auto clock = steady_clock_now_;
+          reset_pause_client_->async_send_request(request,
+              [completion = std::move(completion), clock](
+                  rclcpp::Client<backend_detail::ControlWorld>::SharedFuture future) {
+                bool success = false;
+                try { auto response = future.get(); success = response && response->success; }
+                catch (const std::exception &) { success = false; }
+                completion(success, clock());
+              });
+        };
+        return;
+      }
       case backend_detail::RuntimeResourceKind::Executor:
       {
         rclcpp::ExecutorOptions options;
@@ -2150,7 +2227,7 @@ private:
     }
     ++next_control_request_sequence_;
     if (request.operation < ControlRequest::OP_BIND_SESSION ||
-        request.operation > ControlRequest::OP_BIND_RESET_CONTEXT)
+        request.operation > ControlRequest::OP_PREPARE_RESET_PAUSE)
     {
       response.reason_code = ControlResponse::REASON_BAD_OPERATION;
       CacheControlResponse(request.request_sequence, request_bytes, response);
@@ -2259,6 +2336,7 @@ private:
     }
     else if (request.operation == ControlRequest::OP_INHIBIT)
     {
+      if (pause_intent_) FailPauseLocked(ControlResponse::REASON_CANCELLED, "pause_cancelled_by_inhibit");
       policy_open_ = false;
       if (gate_) gate_->Invalidate("backend_control_inhibit");
       if (probe_machine_.Running())
@@ -2276,7 +2354,7 @@ private:
     {
       const auto barrier_ns = TimeNs(request.barrier_stamp);
       const auto lifecycle_ns = TimeNs(request.lifecycle_header_stamp);
-      if (control_session_bound_ || request.motion_permitted ||
+      if (control_session_bound_ || policy_open_ || world_paused ||
           request.primary_state > ControlRequest::PRIMARY_ACTIVE ||
           request.barrier_state != ControlRequest::BARRIER_READY ||
           request.lifecycle_sequence == 0 || barrier_ns <= 0 ||
@@ -2293,6 +2371,7 @@ private:
         GateBinding binding;
         binding.session_id = session_id_;
         binding.config_hash = config_hash_;
+        binding.require_policy_admission = true;
         binding.final_publisher_instance_id =
             request.final_publisher_instance_id;
         binding.safe_stop_source_instance_id =
@@ -2316,6 +2395,7 @@ private:
           bound_safe_stop_source_instance_id_ =
               request.safe_stop_source_instance_id;
           lifecycle_sequence_ = request.lifecycle_sequence;
+          bound_barrier_state_ = request.barrier_state;
           lifecycle_header_stamp_ns_ = lifecycle_ns;
           barrier_stamp_ns_ = barrier_ns;
           episode_generation_ = request.episode_generation;
@@ -2338,18 +2418,26 @@ private:
       {
         reason = ControlResponse::REASON_PENDING_STEP_MISMATCH;
       }
-      else if (!gate_->SetExpectedPolicyStep(
-                   request.pending_step_index,
-                   request.pending_source_sequence,
-                   request.pending_transition_id,
-                   action_barrier_ns))
-      {
-        reason = ControlResponse::REASON_PENDING_STEP_MISMATCH;
-      }
       else
       {
-        applied = true;
-        ++control_binding_revision_;
+        AdmissionToken token{};
+        if (RAND_bytes(token.data(), token.size()) != 1 ||
+            std::all_of(token.begin(), token.end(), [](auto v) { return v == 0; }))
+          reason = ControlResponse::REASON_FAULT_LATCHED;
+        else if (!gate_->SetExpectedPolicyStep(
+                     request.pending_step_index, request.pending_source_sequence,
+                     request.pending_transition_id, action_barrier_ns,
+                     token, sim_stamp_ns, steady_now_ns))
+          reason = ControlResponse::REASON_PENDING_STEP_MISMATCH;
+        else
+        {
+          response.pending_admission_token = token;
+          applied = true;
+          ++control_binding_revision_;
+          gzmsg << "B23_PENDING_BOUND request=" << request.request_sequence
+                << " step=" << request.pending_step_index << " iteration=" << update_iteration
+                << " sim_ns=" << sim_stamp_ns << " steady_ns=" << steady_now_ns << std::endl;
+        }
       }
     }
     else if (request.operation == ControlRequest::OP_CONFIRM_OBSERVATION0)
@@ -2357,7 +2445,7 @@ private:
       const auto cutoff_ns = TimeNs(request.observation0_cutoff);
       const auto lifecycle_ns = TimeNs(request.lifecycle_header_stamp);
       const bool lifecycle_matches = control_session_bound_ &&
-          !request.motion_permitted && gate_ &&
+          gate_ &&
           request.primary_state == ControlRequest::PRIMARY_ACTIVE &&
           request.barrier_state == ControlRequest::BARRIER_READY &&
           request.lifecycle_sequence == lifecycle_sequence_ &&
@@ -2365,7 +2453,7 @@ private:
           request.reset_epoch == reset_epoch_ &&
           request.runtime_generation == runtime_generation_ &&
           request.lifecycle_frame_id == world_name_ &&
-          lifecycle_ns == lifecycle_header_stamp_ns_ &&
+          lifecycle_ns >= lifecycle_header_stamp_ns_ &&
           lifecycle_ns <= sim_stamp_ns &&
           sim_stamp_ns - lifecycle_ns <= 500'000'000 &&
           TimeNs(request.barrier_stamp) == barrier_stamp_ns_ &&
@@ -2414,7 +2502,6 @@ private:
       {
         const auto existing_fixture = FindProbeModels(ecm);
         const bool lifecycle_matches = control_session_bound_ && gate_ &&
-            !request.motion_permitted &&
             request.primary_state == ControlRequest::PRIMARY_ACTIVE &&
             request.barrier_state == ControlRequest::BARRIER_READY &&
             request.lifecycle_sequence == lifecycle_sequence_ &&
@@ -2422,7 +2509,7 @@ private:
             request.reset_epoch == reset_epoch_ &&
             request.runtime_generation == runtime_generation_ &&
             request.lifecycle_frame_id == world_name_ &&
-            lifecycle_ns == lifecycle_header_stamp_ns_ &&
+            lifecycle_ns >= lifecycle_header_stamp_ns_ &&
             lifecycle_ns <= sim_stamp_ns &&
             sim_stamp_ns - lifecycle_ns <= 500'000'000 &&
             TimeNs(request.barrier_stamp) == barrier_stamp_ns_;
@@ -2522,12 +2609,18 @@ private:
           [](const PendingControl &queued) {
             return queued.request.operation == ControlRequest::OP_INHIBIT;
           });
-      if (!control_session_bound_ || !gate_ || request.motion_permitted ||
+      if (!control_session_bound_ || !gate_ ||
+          (request.motion_permitted && request.barrier_state != ControlRequest::BARRIER_READY) ||
           policy_open_ || interrupted_by_inhibit || probe_running_ ||
           probe_machine_.Running() || probe_machine_.NeedsCleanup() ||
           request.primary_state == ControlRequest::PRIMARY_UNCONFIGURED ||
           request.primary_state > ControlRequest::PRIMARY_ACTIVE ||
-          request.barrier_state != ControlRequest::BARRIER_READY ||
+          (request.barrier_state != ControlRequest::BARRIER_READY &&
+           request.barrier_state != ControlRequest::BARRIER_NON_READY) ||
+          world_paused || reset_pause_failed_ ||
+          (reset_pause_hold_ && (request.barrier_state != ControlRequest::BARRIER_READY ||
+            request.runtime_generation <= runtime_generation_ ||
+            request.episode_generation != episode_generation_ || request.reset_epoch != reset_epoch_)) ||
           request.lifecycle_sequence <= lifecycle_sequence_ ||
           lifecycle_ns < 0 || lifecycle_ns <= lifecycle_header_stamp_ns_ ||
           lifecycle_ns > sim_stamp_ns || lifecycle_ns < barrier_ns ||
@@ -2559,9 +2652,12 @@ private:
         observation0_publisher_id_ = 0;
         observation0_publish_sequence_ = 0;
         safety_admission_candidate_ = false;
+        reset_pause_hold_ = false;
+        reset_resume_seen_ = false;
         selected_receipt_.reset();
         pending_applied_receipt_.reset();
         lifecycle_sequence_ = request.lifecycle_sequence;
+        bound_barrier_state_ = request.barrier_state;
         lifecycle_header_stamp_ns_ = lifecycle_ns;
         barrier_stamp_ns_ = barrier_ns;
         episode_generation_ = request.episode_generation;
@@ -2570,6 +2666,53 @@ private:
         local_zero_override_ = true;
         applied = true;
         ++control_binding_revision_;
+      }
+    }
+    else if (request.operation == ControlRequest::OP_PREPARE_RESET_PAUSE)
+    {
+      const bool identity = control_session_bound_ && gate_ && !contact_probe_only_ &&
+          request.primary_state == ControlRequest::PRIMARY_ACTIVE &&
+          request.barrier_state == ControlRequest::BARRIER_NON_READY &&
+          bound_barrier_state_ == ControlRequest::BARRIER_NON_READY && !request.motion_permitted &&
+          request.lifecycle_sequence == lifecycle_sequence_ &&
+          request.episode_generation == episode_generation_ && request.reset_epoch == reset_epoch_ &&
+          request.runtime_generation == runtime_generation_ &&
+          request.lifecycle_frame_id == world_name_ &&
+          TimeNs(request.lifecycle_header_stamp) >= lifecycle_header_stamp_ns_ &&
+          TimeNs(request.lifecycle_header_stamp) <= sim_stamp_ns &&
+          sim_stamp_ns - TimeNs(request.lifecycle_header_stamp) <= 500'000'000 &&
+          TimeNs(request.barrier_stamp) == barrier_stamp_ns_ &&
+          request.final_publisher_instance_id == bound_final_publisher_instance_id_;
+      const auto fence = request.pause_fence_final_publish_sequence;
+      const bool applied_zero = selected_receipt_ && IsZeroSafeStop(*selected_receipt_) &&
+          selected_receipt_->key.publish_sequence == fence && !application_history_.empty() &&
+          application_history_.back().publish_sequence == fence &&
+          application_history_.back().publisher_instance_id == bound_final_publisher_instance_id_ &&
+          application_history_.back().receipt_valid && !application_history_.back().local_zero_override;
+      if (!identity || world_paused || policy_open_ || fault_flags_ != 0 || pause_intent_ ||
+          reset_pause_hold_ || reset_pause_failed_ || !applied_zero || !reset_pause_ready_ ||
+          !reset_pause_ready_() || !reset_pause_dispatch_ || !gate_->QueueEmpty() ||
+          steady_now_ns < gate_->LastAcceptedSteadyNs() ||
+          steady_now_ns - gate_->LastAcceptedSteadyNs() > ReceiptGate::kWatchdogNs)
+        reason = ControlResponse::REASON_BARRIER_INVALID;
+      else
+      {
+        const auto enter_deadline = std::min(
+            pending.ingress_steady_ns + static_cast<std::int64_t>(request.pause_enter_budget_ms) * 1'000'000,
+            gate_->LastAcceptedSteadyNs() + ReceiptGate::kWatchdogNs);
+        if (enter_deadline <= steady_now_ns || !gate_->PinResetFence(fence))
+          reason = ControlResponse::REASON_CONTROL_EXPIRED;
+        else
+        {
+          pause_intent_ = PauseIntent{request.request_sequence, control_binding_revision_,
+              update_iteration, enter_deadline, pending.ingress_steady_ns + 1'000'000'000};
+          response.result = ControlResponse::RESULT_QUEUED;
+          response.reason_code = ControlResponse::REASON_NONE;
+          gzmsg << "B23_PAUSE_INTENT_ARMED request=" << request.request_sequence
+                << " fence=" << fence << " iteration=" << update_iteration
+                << " steady_ns=" << steady_now_ns << " enter_deadline_ns=" << enter_deadline << std::endl;
+          return;
+        }
       }
     }
     else
@@ -2611,6 +2754,146 @@ private:
          request.probe_action == ControlRequest::PROBE_ACTION_START))
       control_mutation_pending_ = false;
     (void)steady_now_ns;
+  }
+
+  // callback_mutex_ phải được giữ khi ghi terminal cache/mutation state.
+  void FailPauseLocked(std::uint16_t reason, const std::string &detail)
+  {
+    if (pause_intent_)
+    {
+      const auto found = control_cache_.find(pause_intent_->request_sequence);
+      if (found != control_cache_.end())
+      {
+        found->second.response.result = ControlResponse::RESULT_REJECTED;
+        found->second.response.reason_code = reason;
+      }
+    }
+    pause_intent_.reset();
+    reset_pause_failed_ = true;
+    control_mutation_pending_ = false;
+    if (gate_) gate_->Invalidate(detail);
+    SetFault(BackendState::FAULT_CONTEXT, detail);
+  }
+
+  void ProgressResetPause(const gz::sim::UpdateInfo &info, std::int64_t now_ns)
+  {
+    if (contact_probe_only_ || !control_session_bound_) return;
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (info.paused && ((!pause_intent_ && !reset_pause_hold_) ||
+        (pause_intent_ && pause_intent_->dispatched_ns == 0) || reset_resume_seen_))
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "UNEXPECTED_PAUSE");
+      return;
+    }
+    if (pause_intent_ && pause_intent_->edge_ns != 0 && !info.paused)
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "resume_before_pause_applied");
+      return;
+    }
+    if (reset_pause_hold_ && !info.paused)
+    {
+      reset_resume_seen_ = true;
+      if (TimeNs(info) > reset_hold_sim_ns_)
+      {
+        reset_hold_sim_ns_ = TimeNs(info);
+        reset_hold_advance_ns_ = now_ns;
+      }
+      else if (now_ns - reset_hold_advance_ns_ > 1'000'000'000)
+        FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "reset_resume_clock_stall");
+    }
+    std::deque<PauseAck> results;
+    bool overflow = false;
+    {
+      std::lock_guard<std::mutex> mailbox_lock(pause_mailbox_->mutex);
+      results.swap(pause_mailbox_->results);
+      overflow = pause_mailbox_->overflow;
+    }
+    if (!pause_intent_) return;
+    if (overflow || pause_intent_->revision != control_binding_revision_ || fault_flags_ != 0 ||
+        now_ns < pause_intent_->enter_deadline_ns - 100'000'000)
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_context_or_clock_changed");
+      return;
+    }
+    auto &intent = *pause_intent_;
+    for (const auto &ack : results)
+    {
+      if (ack.request_sequence != intent.request_sequence) continue;
+      if (intent.dispatched_ns == 0 || ack.received_ns < intent.dispatched_ns ||
+          ack.received_ns > now_ns || ack.received_ns > intent.mutation_deadline_ns ||
+          ack.received_ns > intent.dispatched_ns + 1'000'000'000 || !ack.success)
+      {
+        FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_ack_invalid_or_late");
+        return;
+      }
+      if (intent.ack && (intent.ack->success != ack.success || intent.ack->received_ns != ack.received_ns))
+      {
+        FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_ack_conflict");
+        return;
+      }
+      intent.ack = ack;
+      gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
+            << " received_ns=" << ack.received_ns << std::endl;
+    }
+    if (intent.dispatched_ns == 0)
+    {
+      if (now_ns >= intent.enter_deadline_ns)
+      {
+        FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_dispatch_budget_expired");
+        return;
+      }
+      // Đợi update kế tiếp: pause ngoài intent trước dispatch phải được thấy và từ chối.
+      if (info.iterations <= intent.arm_iteration) return;
+      intent.dispatched_ns = now_ns;
+      const auto mailbox = pause_mailbox_;
+      const auto sequence = intent.request_sequence;
+      gzmsg << "B23_PAUSE_REQUEST_DISPATCHED request=" << sequence
+            << " steady_ns=" << now_ns << " enter_deadline_ns=" << intent.enter_deadline_ns << std::endl;
+      try
+      {
+        reset_pause_dispatch_([mailbox, sequence](bool success, std::int64_t received_ns) {
+          std::lock_guard<std::mutex> mailbox_lock(mailbox->mutex);
+          if (mailbox->closed) return;
+          if (mailbox->results.size() >= 8) { mailbox->overflow = true; return; }
+          mailbox->results.push_back({sequence, success, received_ns});
+        });
+      }
+      catch (const std::exception &)
+      { FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_dispatch_failed"); }
+      return;
+    }
+    if (info.paused && intent.edge_ns == 0)
+    {
+      if (now_ns > intent.enter_deadline_ns)
+      { FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_edge_late"); return; }
+      intent.edge_ns = now_ns;
+      intent.edge_iteration = info.iterations;
+      intent.edge_sim_ns = TimeNs(info);
+      reset_pause_hold_ = true;
+      reset_hold_sim_ns_ = TimeNs(info);
+      reset_hold_advance_ns_ = now_ns;
+      gzmsg << "B23_PAUSE_EDGE request=" << intent.request_sequence
+            << " steady_ns=" << now_ns << " iteration=" << info.iterations << std::endl;
+    }
+    if ((intent.edge_ns == 0 && now_ns > intent.enter_deadline_ns) ||
+        (!intent.ack && now_ns > intent.mutation_deadline_ns))
+    { FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_edge_or_ack_missing"); return; }
+    if (intent.edge_ns == 0 || !intent.ack) return;
+    const auto found = control_cache_.find(intent.request_sequence);
+    if (found == control_cache_.end())
+    { FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_cache_missing"); return; }
+    auto &response = found->second.response;
+    response.result = ControlResponse::RESULT_APPLIED;
+    response.reason_code = ControlResponse::REASON_NONE;
+    response.binding_revision = ++control_binding_revision_;
+    response.applied_binding_revision = control_binding_revision_;
+    response.applied_physics_iteration = intent.edge_iteration;
+    response.applied_sim_stamp.sec = static_cast<std::int32_t>(intent.edge_sim_ns / 1'000'000'000);
+    response.applied_sim_stamp.nanosec = static_cast<std::uint32_t>(intent.edge_sim_ns % 1'000'000'000);
+    gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
+          << " steady_ns=" << now_ns << " revision=" << control_binding_revision_ << std::endl;
+    control_mutation_pending_ = false;
+    pause_intent_.reset();
   }
 
   void OnReceipt(const Receipt &msg)
@@ -2680,6 +2963,14 @@ private:
         policy_open_ = false;
         continue;
       }
+      // Quyền đóng được xử lý trước token mở, kể cả token sai/rỗng/đã thu hồi.
+      if (msg.admission_state != SafetyInput::ADMISSION_POLICY_OPEN)
+      {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (gate_) gate_->RevokePolicyAdmission();
+        safety_admission_candidate_ = false;
+        policy_open_ = false;
+      }
       if (msg.odometry_status == SafetyInput::ODOM_VALID)
       {
         if (msg.measured_twist.size() != 3 ||
@@ -2708,6 +2999,16 @@ private:
               observation0_publish_sequence_ &&
           contact_capability_verified_ && msg.odometry_status == SafetyInput::ODOM_VALID &&
           msg.measured_twist.size() == 3;
+      if (safety_admission_candidate_)
+      {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        safety_admission_candidate_ = gate_ && gate_->RecordPolicyAdmission(
+            msg.admission_token, safety_stamp_ns, received_ns);
+        if (safety_admission_candidate_)
+          gzmsg << "B23_ADMISSION_ACCEPTED sample=" << msg.sample_sequence
+                << " source_ns=" << safety_stamp_ns << " receive_ns=" << received_ns
+                << " iteration=" << physics_iteration_ << std::endl;
+      }
       if (!safety_admission_candidate_) policy_open_ = false;
     }
   }
@@ -2962,6 +3263,14 @@ private:
   rclcpp::Client<SetEntityPose>::SharedPtr probe_pose_client_;
   rclcpp::Client<DeleteEntity>::SharedPtr probe_delete_client_;
   ProbeServiceTransport probe_transport_;
+  rclcpp::Client<backend_detail::ControlWorld>::SharedPtr reset_pause_client_;
+  std::function<bool()> reset_pause_ready_;
+  std::function<void(std::function<void(bool, std::int64_t)>)> reset_pause_dispatch_;
+  std::shared_ptr<PauseMailbox> pause_mailbox_{std::make_shared<PauseMailbox>()};
+  std::optional<PauseIntent> pause_intent_;
+  bool reset_pause_hold_{}, reset_resume_seen_{}, reset_pause_failed_{};
+  std::int64_t reset_hold_sim_ns_{}, reset_hold_advance_ns_{};
+  std::uint8_t bound_barrier_state_{};
   std::unique_ptr<gz::transport::Node> gt_pub_;
   std::unique_ptr<gz::transport::Node::Publisher> gt_publisher_;
   hbtrace_writer *heartbeat_trace_writer_{};

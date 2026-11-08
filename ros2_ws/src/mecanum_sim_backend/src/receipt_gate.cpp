@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <iterator>
 #include <regex>
 #include <utility>
 
@@ -29,6 +30,11 @@ ReceiptGate::ReceiptGate(GateBinding binding)
 bool ReceiptGate::Enqueue(ReceiptFacts receipt, std::int64_t receive_steady_ns)
 {
   if (faulted_) return false;
+  if (reset_fence_ && receipt.key.publish_sequence > *reset_fence_)
+  {
+    Invalidate("receipt_beyond_reset_fence");
+    return false;
+  }
   if (receive_steady_ns < 0 || queue_.size() >= kQueueCapacity)
   {
     faulted_ = true;
@@ -95,9 +101,24 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
 {
   if (faulted_) return {GateDisposition::Faulted, fault_reason_, std::nullopt, false};
   if (queue_.empty()) return {GateDisposition::Inhibited, "no_receipt", std::nullopt, false};
-  auto item = std::move(queue_.front());
-  queue_.pop_front();
+  const auto &item = queue_.front();
   const auto &r = item.facts;
+  // Sau fence/reset, chỉ replay đúng bytes đã thấy mới vô hại; không làm mới TTL.
+  const bool old_context = r.episode_generation != binding_.episode_generation ||
+      r.reset_epoch != binding_.reset_epoch || r.runtime_generation != binding_.runtime_generation;
+  if (old_context || reset_fence_ || (last_receipt_ &&
+      r.key.publish_sequence == last_receipt_->key.publish_sequence))
+  {
+    const auto seen = std::find_if(replay_history_.begin(), replay_history_.end(),
+        [&r](const auto &old) { return old.key.publisher_instance_id == r.key.publisher_instance_id &&
+            old.key.publish_sequence == r.key.publish_sequence; });
+    if (seen != replay_history_.end())
+    {
+      if (!Equal(r, *seen)) return Fault("publication_key_content_conflict");
+      queue_.pop_front();
+      return {GateDisposition::Duplicate, "exact_duplicate", std::nullopt, false};
+    }
+  }
   std::string reason;
   if (!ValidPayload(r, reason)) return Fault(reason);
   if (now_ros_ns < r.stamp_ns || now_steady_ns < item.receive_steady_ns)
@@ -112,10 +133,14 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
       r.key.publish_sequence == last_receipt_->key.publish_sequence)
   {
     if (!Equal(r, *last_receipt_)) return Fault("publication_key_content_conflict");
+    queue_.pop_front();
     return {GateDisposition::Duplicate, "exact_duplicate", std::nullopt, false};
   }
   if (r.key.publish_sequence <= watermark_)
+  {
+    queue_.pop_front();
     return {GateDisposition::Rejected, "replay_or_old_sequence", std::nullopt, false};
+  }
 
   if (!anchored_)
   {
@@ -135,7 +160,11 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     last_receipt_ = r;
     last_source_stamp_ns_ = r.stamp_ns;
     last_accepted_steady_ns_ = item.receive_steady_ns;
-    return {GateDisposition::Anchored, "safe_stop_anchor", r, true};
+    const auto accepted = r;
+    replay_history_.push_back(accepted);
+    if (replay_history_.size() > kQueueCapacity) replay_history_.pop_front();
+    queue_.pop_front();
+    return {GateDisposition::Anchored, "safe_stop_anchor", accepted, true};
   }
   if (r.key.publish_sequence != watermark_ + 1)
     return Fault("final_publication_sequence_gap");
@@ -159,10 +188,49 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     const auto action_barrier_ns = matches_pending ?
         pending_policy_->action_barrier_ns : current_action_barrier_ns_;
     if (r.stamp_ns <= action_barrier_ns)
+    {
+      queue_.pop_front();
       return {GateDisposition::Rejected, "not_strictly_post_action_barrier",
               std::nullopt, false};
+    }
+    if (binding_.require_policy_admission)
+    {
+      // Một SAFE_STOP hợp lệ đã tới trước apply phải đóng motion, dù còn key POLICY ở đầu queue.
+      for (auto it = std::next(queue_.begin()); it != queue_.end(); ++it)
+      {
+        std::string stop_reason;
+        if (it->facts.source == 4 && IsZero(it->facts) &&
+            it->facts.source_instance_id == binding_.safe_stop_source_instance_id &&
+            it->facts.sequence == binding_.next_safe_stop_sequence &&
+            it->facts.step_index == 0 && it->facts.transition_id.empty() &&
+            ValidPayload(it->facts, stop_reason) &&
+            it->facts.stamp_ns <= now_ros_ns &&
+            now_ros_ns - it->facts.stamp_ns <= binding_.max_ros_age_ns &&
+            it->receive_steady_ns <= now_steady_ns &&
+            now_steady_ns - it->receive_steady_ns <= binding_.max_steady_age_ns)
+        {
+          RevokePolicyAdmission();
+          return Fault("safe_stop_cancelled_queued_policy_before_apply");
+        }
+      }
+      const auto &slot = matches_pending ? pending_policy_ : current_policy_;
+      if (!slot || std::all_of(slot->token.begin(), slot->token.end(), [](auto v) { return v == 0; }))
+        return Fault("policy_admission_revoked");
+      const bool ready = slot->admission &&
+          slot->admission->first <= now_ros_ns &&
+          now_ros_ns - slot->admission->first <= 250'000'000 &&
+          slot->admission->second <= now_steady_ns &&
+          now_steady_ns - slot->admission->second <= 250'000'000;
+      if (!ready)
+      {
+        if (now_steady_ns - item.receive_steady_ns >= 40'000'000 || WatchdogExpired(now_steady_ns))
+          return Fault("policy_admission_wait_expired");
+        return {GateDisposition::Inhibited, "waiting_for_matching_admission", std::nullopt, false};
+      }
+    }
     if (matches_pending)
     {
+      current_policy_ = pending_policy_;
       binding_.next_policy_sequence = pending_policy_->source_sequence;
       binding_.expected_step_index = pending_policy_->step_index;
       binding_.expected_transition_id = pending_policy_->transition_id;
@@ -180,6 +248,7 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
         std::numeric_limits<std::uint64_t>::max())
       return Fault("safe_stop_source_sequence_exhausted");
     ++binding_.next_safe_stop_sequence;
+    if (binding_.require_policy_admission) RevokePolicyAdmission();
   }
   else return Fault("unsupported_receipt_source");
 
@@ -187,7 +256,11 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   last_receipt_ = r;
   last_source_stamp_ns_ = r.stamp_ns;
   last_accepted_steady_ns_ = item.receive_steady_ns;
-  return {GateDisposition::Applied, "accepted_once", r, true};
+  const auto accepted = r;
+  replay_history_.push_back(accepted);
+  if (replay_history_.size() > kQueueCapacity) replay_history_.pop_front();
+  queue_.pop_front();
+  return {GateDisposition::Applied, "accepted_once", accepted, true};
 }
 
 bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
@@ -198,9 +271,15 @@ bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
 bool ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
                                        std::uint64_t source_sequence,
                                        std::string transition_id,
-                                       std::int64_t action_barrier_ns)
+                                       std::int64_t action_barrier_ns,
+                                       AdmissionToken token,
+                                       std::int64_t bound_ros_ns,
+                                       std::int64_t bound_steady_ns)
 {
   if (action_barrier_ns == 0) action_barrier_ns = current_action_barrier_ns_;
+  if (reset_fence_ || (binding_.require_policy_admission &&
+      (bound_ros_ns < binding_.barrier_stamp_ns || bound_steady_ns < 0 ||
+       std::all_of(token.begin(), token.end(), [](auto v) { return v == 0; })))) return false;
   if (faulted_ || pending_policy_ || step_index == 0 ||
       source_sequence != step_index || transition_id.empty() ||
       step_index <= binding_.expected_step_index ||
@@ -208,7 +287,8 @@ bool ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
       action_barrier_ns < binding_.barrier_stamp_ns)
     return false;
   pending_policy_ = PolicyIdentity{
-      step_index, source_sequence, std::move(transition_id), action_barrier_ns};
+      step_index, source_sequence, std::move(transition_id), action_barrier_ns,
+      token, bound_ros_ns, bound_steady_ns, std::nullopt};
   return true;
 }
 bool ReceiptGate::BindResetContext(
@@ -236,6 +316,8 @@ bool ReceiptGate::BindResetContext(
   binding_.next_policy_sequence = 0;
   binding_.expected_transition_id.clear();
   pending_policy_.reset();
+  current_policy_.reset();
+  reset_fence_.reset();
   queue_.clear();
   anchored_ = false;
   require_contiguous_anchor_ = true;
@@ -256,4 +338,41 @@ bool ReceiptGate::HasPendingPolicyStep() const
 }
 std::int64_t ReceiptGate::LastAcceptedSteadyNs() const { return last_accepted_steady_ns_; }
 std::string ReceiptGate::FaultReason() const { return fault_reason_; }
+
+bool ReceiptGate::RecordPolicyAdmission(const AdmissionToken &token,
+    std::int64_t source_ros_ns, std::int64_t receive_steady_ns)
+{
+  if (faulted_ || reset_fence_ || std::all_of(token.begin(), token.end(), [](auto v) { return v == 0; }))
+    return false;
+  for (auto *slot : {&pending_policy_, &current_policy_})
+  {
+    if (*slot && (*slot)->token == token && source_ros_ns > (*slot)->bound_ros_ns &&
+        receive_steady_ns >= (*slot)->bound_steady_ns)
+    {
+      (*slot)->admission = std::make_pair(source_ros_ns, receive_steady_ns);
+      return true;
+    }
+  }
+  return false;
+}
+void ReceiptGate::RevokePolicyAdmission()
+{
+  pending_policy_.reset();
+  if (current_policy_)
+  {
+    current_policy_->token.fill(0);
+    current_policy_->admission.reset();
+  }
+}
+bool ReceiptGate::PinResetFence(std::uint64_t sequence)
+{
+  if (faulted_ || reset_fence_ || !anchored_ || !queue_.empty() || pending_policy_ ||
+      sequence == 0 || sequence != watermark_ || !last_receipt_ ||
+      last_receipt_->source != 4 || !IsZero(*last_receipt_)) return false;
+  RevokePolicyAdmission();
+  reset_fence_ = sequence;
+  return true;
+}
+bool ReceiptGate::ResetFenceHeld() const { return reset_fence_.has_value(); }
+bool ReceiptGate::QueueEmpty() const { return queue_.empty(); }
 }  // namespace mecanum_sim_backend

@@ -1,4 +1,4 @@
-uint16 SCHEMA_VERSION=1
+uint16 SCHEMA_VERSION=2
 
 uint8 OP_BIND_SESSION=1
 uint8 OP_BIND_PENDING_STEP=2
@@ -6,6 +6,7 @@ uint8 OP_CONFIRM_OBSERVATION0=3
 uint8 OP_INHIBIT=4
 uint8 OP_VERIFY_CONTACT_CAPABILITY=5
 uint8 OP_BIND_RESET_CONTEXT=6
+uint8 OP_PREPARE_RESET_PAUSE=7
 
 uint8 PROBE_ACTION_NONE=0
 uint8 PROBE_ACTION_START=1
@@ -61,8 +62,10 @@ uint64 adjacent_boundary_final_publisher_instance_id
 uint64 adjacent_boundary_final_publish_sequence
 
 uint64 probe_start_request_sequence
+uint64 pause_fence_final_publish_sequence
+uint32 pause_enter_budget_ms
 ---
-uint16 RESPONSE_SCHEMA_VERSION=1
+uint16 RESPONSE_SCHEMA_VERSION=2
 
 uint8 RESULT_QUEUED=2
 uint8 RESULT_APPLIED=3
@@ -139,3 +142,4 @@ uint64 empty_first_iteration
 uint64 empty_last_iteration
 builtin_interfaces/Time empty_first_stamp
 builtin_interfaces/Time empty_last_stamp
+uint8[16] pending_admission_token
