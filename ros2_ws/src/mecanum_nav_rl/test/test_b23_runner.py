@@ -591,3 +591,28 @@ def test_graph_failure_preserves_observed_endpoint_identity_without_binding():
         asyncio.run(value.pin_graph(deadline_ns=clock.ns+10_000_000))
     assert not bound and [event for event,_ in events]==['GRAPH_OBSERVATION']
     assert events[0][1]['cmd_vel'][0]==dict(node='unexpected',namespace='/',type='actual/type',gid_hex=bytes(range(16)).hex())
+
+
+def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline():
+    value,clock=worker();events=[];bound=[]
+    def endpoint(name):return NS(node_name=name,node_namespace='/',topic_type='actual/type',endpoint_gid=bytes(range(16)))
+    cmd=endpoint('_NODE_NAME_UNKNOWN_');cmd.node_namespace='_NODE_NAMESPACE_UNKNOWN_'
+    groups={'/cmd_vel':[cmd],'/mecanum/safety_state':[endpoint('safety_supervisor')],
+        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')]}
+    value.node.get_publishers_info_by_topic=lambda topic:groups[topic]
+    value.emit=lambda event,facts:events.append((event,facts))
+    value.ingress.bind_safety_publisher_gid=lambda gid:bound.append(gid)
+    async def pause(seconds):
+        assert not bound
+        await clock.pause(seconds)
+        cmd.node_name='final_twist_publisher';cmd.node_namespace='/'
+    value.pause=pause
+    asyncio.run(value.pin_graph(deadline_ns=clock.ns+5_000_000))
+    assert bound==[bytes(range(16))] and clock.ns==1_002_000_000
+    assert [name for name,_ in events]==['GRAPH_OBSERVATION','GRAPH_OBSERVATION','GRAPH_BOUND']
+    cmd.node_name='_NODE_NAME_UNKNOWN_';cmd.node_namespace='_NODE_NAMESPACE_UNKNOWN_'
+    bound.clear();value.pause=clock.pause
+    deadline=clock.ns+5_000_000
+    with pytest.raises(TimeoutError,match='source graph binding'):
+        asyncio.run(value.pin_graph(deadline_ns=deadline))
+    assert not bound and clock.ns==deadline

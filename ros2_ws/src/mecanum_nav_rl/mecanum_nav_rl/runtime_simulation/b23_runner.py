@@ -276,6 +276,12 @@ class TrainingWorkerIO:
                 for name, values in [('cmd_vel',cmd),('safety',safety),('ingress',ingress)]})
             if not (len(cmd) == len(safety) == len(ingress) == 1):
                 return None
+            # RMW DDS 3.1.1 trả sentinel khi endpoint đã thấy nhưng node chưa discovery.
+            # Chưa đủ ownership: đợi trong cùng deadline, không bind hoặc đổi ngưỡng.
+            if any(item.node_name == '_NODE_NAME_UNKNOWN_' or
+                    item.node_namespace == '_NODE_NAMESPACE_UNKNOWN_'
+                    for item in (cmd[0],safety[0],ingress[0])):
+                return None
             if (cmd[0].node_name != 'final_twist_publisher' or safety[0].node_name != 'safety_supervisor'
                     or ingress[0].node_name != 'b23_coordinator_ingress'):
                 raise RuntimeError('unexpected graph publisher ownership')
