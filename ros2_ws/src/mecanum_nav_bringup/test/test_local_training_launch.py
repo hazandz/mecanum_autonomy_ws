@@ -123,3 +123,14 @@ def test_minimal_scene_is_docked_without_changing_render_engine():
     scene = root.find("plugin[@filename='MinimalScene']")
     assert scene.findtext("gz-gui/property[@key='state']") == 'docked'
     assert scene.findtext('engine') == 'ogre2'
+
+
+def test_scan_bridge_pins_asset_frame_without_changing_ground_truth_or_qos():
+    import json
+    root=Path(__file__).resolve().parents[4]
+    config=yaml.safe_load((root/'ros2_ws/src/mecanum_nav_bringup/config/bridge/local_training.runtime.yaml').read_text())
+    manifest=json.loads((root/'artifacts/simulation/roadmap_b_b2/asset_manifest.json').read_text())
+    topics={item['ros_topic_name']:item for item in config if 'ros_topic_name' in item}
+    assert topics['/scan']['frame_id']==manifest['sensor']['frame_id']=='lidar_frame'
+    assert topics['/scan']['qos_profile']=='SENSOR_DATA' and topics['/scan']['direction']=='GZ_TO_ROS'
+    assert all('frame_id' not in item for item in config if item.get('ros_topic_name')!='/scan')

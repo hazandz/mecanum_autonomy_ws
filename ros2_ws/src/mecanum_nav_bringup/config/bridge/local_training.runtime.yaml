@@ -6,6 +6,7 @@
   qos_profile: CLOCK
 - ros_topic_name: /scan
   gz_topic_name: /b2/scan
+  frame_id: lidar_frame
   ros_type_name: sensor_msgs/msg/LaserScan
   gz_type_name: gz.msgs.LaserScan
   direction: GZ_TO_ROS

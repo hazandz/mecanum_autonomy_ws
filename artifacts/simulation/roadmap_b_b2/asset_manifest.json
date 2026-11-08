@@ -39,8 +39,8 @@
     "wall_thickness_m": 0.2
   },
   "backend_contract": {
-    "fingerprint_sha256": "24d24cf267544df83c15faa5bbdb70724b6859c0e73951211b970af2b4813f8d",
-    "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "cc1a379939e06c7982d38fbb5e94c5f4975634ff1bce3a331faade7203375261",
+    "fingerprint_sha256": "c61f2694d9c87c535ed07cddbba8ff8bdad8bd4b75b08a32c2aad7e2c2cc0cdf",
+    "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "c734ba307ed8f017cfd562b541b335791d7893f269782bb364a008a863155b6a",
     "mecanum_nav_rl_interfaces/CMakeLists.txt": "34dd61114b01846adf78328e9c6b7b72c3c4b1273f08337e2809f5c074c06859",
     "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
     "mecanum_nav_rl_interfaces/msg/LocalTrainingSafetyInput.msg": "16ba2a8fe0dafa4e5647938fb2c5d633ab950eb6a0c97c0dd2e8b1ddd07afbc8",
