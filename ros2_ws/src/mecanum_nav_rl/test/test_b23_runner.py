@@ -83,12 +83,12 @@ def test_abort_native_fault_and_callback_error_remain_visible():
 def native_reader(tmp_path):
     value, clock = worker()
     path = tmp_path/'native-events.jsonl'
-    value.descriptor = dict(native_events_path=str(path), run_id='B23_TEST',
+    value.descriptor = dict(native_events_path=str(path), run_id='B23_TEST', session_id='own-session',
         backend_instance_id=22, coordinator_ingress_instance_id=11,
         server_leader_pid=777, invocation_id='inv-1')
     value._native_offset, value._native_partial, value._native_input_watermark = 0, b'', 0
     record = dict(kind='B23_SAFETY_INPUT_OBSERVED',
-        fields=dict(session='B23_TEST', backend='22', ingress='11', sample='9'),
+        fields=dict(session='own-session', backend='22', ingress='11', sample='9'),
         server_leader_pid=777, invocation_id='inv-1')
     return value, path, record
 
@@ -511,3 +511,53 @@ def test_packet_argv_is_stable_across_canonical_json_roundtrip():
     restored = json.loads(json.dumps(packet,sort_keys=True,separators=(',',':')))
     after = service_launch_command(restored,'/packet.json','{PACKET_SHA256}')
     assert before == after
+
+
+def test_prepared_session_identity_satisfies_real_readiness_contract():
+    import ast,uuid
+    from pathlib import Path
+    from mecanum_nav_rl.runtime_simulation import b23_runner as module
+    from mecanum_nav_bringup.local_training_process_supervisor import RclpyReadiness
+    tree=ast.parse(Path(module.__file__).read_bytes())
+    producer=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='prepare_packet')
+    call=next(node for node in ast.walk(producer) if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Name) and node.func.id=='build_launch_plan')
+    namespace={'args':NS(run_id='B23_R01A_TEST'),'uuid':uuid,'str':str}
+    for node in producer.body:
+        if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='session_id' for target in node.targets):
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),module.__file__,'exec'),namespace)
+    expression=next(keyword.value for keyword in call.keywords if keyword.arg=='session_id')
+    session=eval(compile(ast.fix_missing_locations(ast.Expression(expression)),module.__file__,'eval'),namespace)
+    plan=NS(session_id=session,coordinator_ingress_instance_id=11,config_hash='a'*64,
+        asset_manifest_sha256='b'*64,environment={'ROS_DOMAIN_ID':'84','GZ_PARTITION':'private'})
+    request=RclpyReadiness()._make_request(plan,'a'*64,1_000_000_000)
+    assert request['session_id']==session and session != namespace['args'].run_id
+    assert str(uuid.UUID(session))==session
+
+
+def test_failed_state_clear_only_targets_the_bound_completed_invocation(monkeypatch):
+    from mecanum_nav_rl.runtime_simulation import b23_runner as module
+    import subprocess
+    calls,events=[],[]
+    props=dict(Id='b23-test.service',InvocationID='inv-1',ExecMainPID='77',MainPID='0',
+        ActiveState='failed',ControlGroup='',ExecStart='pinned argv --packet-sha256 '+'a'*64)
+    def execute(argv,**kwargs):
+        calls.append(argv)
+        return NS(returncode=0,stdout=('\n'.join(k+'='+v for k,v in props.items())+'\n').encode()
+            if 'show' in argv else b'',stderr=b'')
+    monkeypatch.setattr(subprocess,'run',execute)
+    module.clear_owned_failed_state('b23-test.service','inv-1','77','a'*64,deadline_ns=2_000_000_000,
+        now_ns=lambda:1_000_000_000,emit=lambda n,r:events.append((n,r)))
+    assert calls[-1]==['systemctl','--user','reset-failed','b23-test.service']
+    for key,bad in [('InvocationID','inv-2'),('ExecMainPID','88'),('MainPID','88'),('ControlGroup','/foreign')]:
+        original=props[key];props[key]=bad;calls.clear()
+        with pytest.raises(RuntimeError,match='ownership changed'):
+            module.clear_owned_failed_state('b23-test.service','inv-1','77','a'*64,deadline_ns=2_000_000_000,
+                now_ns=lambda:1_000_000_000,emit=lambda n,r:events.append((n,r)))
+        assert not any('reset-failed' in a for a in calls)
+        props[key]=original
+    calls.clear()
+    with pytest.raises(TimeoutError):
+        module.clear_owned_failed_state('b23-test.service','inv-1','77','a'*64,deadline_ns=1_000_000_000,
+            now_ns=lambda:1_000_000_000,emit=lambda n,r:None)
+    assert not calls

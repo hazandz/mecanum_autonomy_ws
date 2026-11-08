@@ -92,7 +92,7 @@ class TrainingWorkerIO:
             self.final = FinalPublicationView(descriptor['final_publisher_instance_id'])
             self.life = SafetyLifecycleNode(context=self.context, parameter_overrides=mode_params)
             self.nodes.append(self.life)
-            identity = BackendSessionIdentity(descriptor['run_id'], descriptor['config_hash'],
+            identity = BackendSessionIdentity(descriptor['session_id'], descriptor['config_hash'],
                 descriptor['asset_manifest_sha256'], descriptor['coordinator_ingress_instance_id'], descriptor['backend_instance_id'])
             safety_context = dict(session_id=identity.session_id, config_hash=identity.config_hash,
                 ingress_instance_id=identity.coordinator_ingress_instance_id, backend_instance_id=identity.backend_instance_id,
@@ -307,7 +307,7 @@ class TrainingWorkerIO:
             if record['kind'] not in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
                 continue
             fields = record['fields']
-            if (fields['session'] != self.descriptor['run_id']
+            if (fields['session'] != self.descriptor['session_id']
                     or int(fields['backend']) != self.descriptor['backend_instance_id']
                     or int(fields['ingress']) != self.descriptor['coordinator_ingress_instance_id']
                     or record['server_leader_pid'] != self.descriptor['server_leader_pid']
@@ -360,7 +360,7 @@ class TrainingWorkerIO:
             return None
         pair, state = await self.until(applied, deadline_ns=deadline_ns, phase='native applied SAFE_STOP')
         identity = self.ingress.lifecycle
-        fact = AppliedZeroReceiptFact(self.descriptor['run_id'], self.descriptor['config_hash'],
+        fact = AppliedZeroReceiptFact(self.descriptor['session_id'], self.descriptor['config_hash'],
             self.descriptor['backend_instance_id'], receipt.episode_generation, receipt.reset_epoch,
             receipt.runtime_generation, receipt.final_publisher_instance_id, receipt.final_publish_sequence,
             receipt.source, receipt.source_instance_id, receipt.sequence, receipt.step_index, receipt.transition_id,
@@ -486,7 +486,7 @@ class TrainingWorkerIO:
                 if proof.contact_capability_state == proof.CAPABILITY_VERIFIED:
                     registry = ''.join(row['collision'] + ('|wheel\n' if row['wheel_floor_ignore'] else '|solid\n')
                         for row in sorted(self.asset['collision_registry']['tracked_collisions'], key=lambda row: row['collision']))
-                    expected = dict(proof_session_id=self.descriptor['run_id'],
+                    expected = dict(proof_session_id=self.descriptor['session_id'],
                         proof_backend_instance_id=self.descriptor['backend_instance_id'],
                         proof_config_hash=self.descriptor['config_hash'],
                         proof_asset_manifest_sha256=self.descriptor['asset_manifest_sha256'],
@@ -635,7 +635,7 @@ class TrainingWorkerIO:
         adapter = LocalTrainingResetAdapter(self, self.paused_state,
             lambda: self.measurements(deadline_ns=deadline, after_iteration=(
                 self.ingress.physics_pairs[-1].iteration if self.ingress.physics_pairs else 0)),
-            expected_session_id=self.descriptor['run_id'], expected_config_hash=self.descriptor['config_hash'],
+            expected_session_id=self.descriptor['session_id'], expected_config_hash=self.descriptor['config_hash'],
             expected_backend_instance_id=self.descriptor['backend_instance_id'],
             expected_reset_epoch=l1.reset_epoch, expected_episode_generation=l1.episode_generation,
             expected_runtime_generation=l1.runtime_generation, expected_final_publisher_instance_id=self.final.publisher_instance_id,
@@ -946,6 +946,8 @@ def load_child_descriptor(path, role):
     if hashlib.sha256(packet_raw).hexdigest() != document['packet_sha256']:
         raise RuntimeError('child packet bytes changed')
     packet = json.loads(packet_raw)
+    if document.get('session_id') != packet.get('session_id'):
+        raise RuntimeError('child session UUID does not match packet')
     consumed = json.loads(Path(packet['guard_path']).joinpath('consumed.json').read_bytes())
     if (consumed['run_id'] != document['run_id'] or consumed['packet_sha256'] != document['packet_sha256']
             or document['active_deadline_ns'] != consumed['active_deadline_ns']
@@ -980,7 +982,7 @@ def final_child(path):
         rclpy.init(context=context)
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
-            Parameter('session_id', value=descriptor['run_id'])], evidence_sink=sink.record)
+            Parameter('session_id', value=descriptor['session_id'])], evidence_sink=sink.record)
         executor = SingleThreadedExecutor(context=context); executor.add_node(node)
         write_record_once(descriptor['final_boot_path'], {'schema': 'b23_final_boot/v1',
             'run_id': descriptor['run_id'], 'invocation_id': descriptor['invocation_id'],
@@ -1004,7 +1006,7 @@ def final_child(path):
                 ack = BackendControlAck(bytes.fromhex(binding['request_cdr_hex']),
                     bytes.fromhex(binding['response_cdr_hex']), binding['ack_observed_ns'])
                 req = ack.request
-                identity = BackendSessionIdentity(descriptor['run_id'], packet['config_hash'],
+                identity = BackendSessionIdentity(descriptor['session_id'], packet['config_hash'],
                     packet['asset_manifest_sha256'], packet['coordinator_ingress_instance_id'], descriptor['backend_instance_id'])
                 # Chờ DDS lifecycle/clock đến đúng context; không sửa ACK hoặc deadline.
                 life = node._identity
@@ -1111,6 +1113,12 @@ def verify_packet(path, expected_sha256):
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise ValueError('packet digest mismatch')
     packet = json.loads(raw)
+    import uuid
+    try:
+        if str(uuid.UUID(packet['session_id'])) != packet['session_id'] or packet['launch_plan']['session_id'] != packet['session_id']:
+            raise ValueError('session mismatch')
+    except (KeyError,ValueError,TypeError,AttributeError) as error:
+        raise ValueError('packet requires matching canonical session UUID') from error
     prefix = Path(packet['install_prefix']).resolve(strict=True)
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] != 'R01a'
             or packet['fault_hooks'] != [] or packet['gui'] is not False
@@ -1225,7 +1233,7 @@ async def run_parent(packet_path, packet_sha256):
         owned_identities.append(observed)
         sink.record('OWNED_IDENTITY', {'role': role, 'identity': observed, 'command': list(command)})
         return record
-    descriptor_base = dict(schema='b23_owned_child/v1', run_id=packet['run_id'],
+    descriptor_base = dict(schema='b23_owned_child/v1', run_id=packet['run_id'], session_id=packet['session_id'],
         packet_path=str(Path(packet_path).resolve()), packet_sha256=packet_sha256,
         invocation_id=invocation, run_root=str(root), parent_identity=identity,
         active_deadline_ns=active_end, total_deadline_ns=total_end,
@@ -1370,6 +1378,7 @@ def prepare_packet(args):
     import os
     import sys
     import secrets
+    import uuid
     import xml.etree.ElementTree as ET
     from dataclasses import replace
     from mecanum_nav_bringup.local_training_launch_contract import build_launch_plan, write_bound_world, load_bound_config
@@ -1412,6 +1421,7 @@ def prepare_packet(args):
     guard = Path('/home/hazan/.local/state/ros2_nav2_drl/b23')/args.run_id
     guard.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     guard.mkdir(mode=0o700)
+    session_id = str(uuid.uuid4())
     ingress = secrets.randbelow(2**63-1)+1
     engine_dir = _physics_engine_plugin_path()
     engine_files = sorted({path.resolve(strict=True) for path in engine_dir.glob('*dartsim-plugin.so*') if path.is_file()})
@@ -1420,7 +1430,7 @@ def prepare_packet(args):
     engine_file = engine_files[0]
     plan = build_launch_plan(gui='false', resolved_config=rl/'config/v3/resolved/sim_train_local_training_soak.resolved.json',
         world_file=desc/'worlds/b2_training_arena.sdf', gui_config=bringup/'config/gui/local_training.config',
-        session_id=args.run_id, partition='mecanum_' + args.run_id.lower(),
+        session_id=session_id, partition='mecanum_' + args.run_id.lower(),
         bridge_config=bringup/'config/bridge/local_training.runtime.yaml',
         resource_paths=(desc.parent, desc/'models'), plugin_path=prefix/'lib', physics_engine_plugin_path=engine_dir,
         asset_manifest_file=desc/'manifests/b2/asset_manifest.json', scenario_directory=rl/'scenarios/local_training',
@@ -1459,7 +1469,7 @@ def prepare_packet(args):
     environment.update(ROS_DOMAIN_ID='84', ROS_HOME=str(root/'ros-home'), ROS_LOG_DIR=str(root/'ros-log'),
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)
-    packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
+    packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
         'case': 'R01a', 'gui': False, 'fault_hooks': [], 'world_seed':20261029,
         'episode_seeds':[2026102900,2026102901], 'authority': 'OWNER_B23_CAMPAIGN_APPROVED',
         'authority_reference': 'Owner approval B23_CAMPAIGN and standing authorization in task conversation',
@@ -1589,6 +1599,7 @@ def launch_packet(args):
     lock = Path('/home/hazan/.local/state/ros2_nav2_drl/b22-simulation-runtime.lock').open('a+')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     primary, cleanup_error, unit, invocation, pinned_cgroup = None, None, packet['unit'], None, None
+    metadata_cleanup_error = None
     identities, terminal, consumed, launch = {}, None, None, None
     try:
         for previous in state.iterdir():
@@ -1676,7 +1687,7 @@ def launch_packet(args):
         if consumed is not None:
             end = consumed['total_deadline_ns']
             try:
-                if invocation is not None and (terminal is None or terminal.get('ActiveState') == 'active') and time.monotonic_ns() < end:
+                if invocation is not None and (terminal is None or terminal.get('ActiveState') in ('active','failed')) and time.monotonic_ns() < end:
                     props, record = unit_properties(unit, timeout_s=min(1., (end-time.monotonic_ns())/1e9))
                     log.record('PRE_STOP_BINDING', record)
                     if (props.get('InvocationID') != invocation or props.get('Id') != unit
@@ -1717,13 +1728,20 @@ def launch_packet(args):
             journal = command_record(['journalctl','--user','-u',unit,'--no-pager','-o','json',
                 *(['_SYSTEMD_INVOCATION_ID='+invocation] if invocation else [])], timeout_s=3.)
             log.record('JOURNAL_SUPPORT', journal)
+            if terminal is not None and terminal.get('ActiveState') == 'failed' and cleanup_error is None:
+                try:
+                    clear_owned_failed_state(unit, invocation, terminal['ExecMainPID'], args.packet_sha256,
+                        deadline_ns=end, emit=log.record)
+                except BaseException as error:
+                    metadata_cleanup_error = repr(error)
+                    log.record('OWNED_FAILED_STATE_CLEAR_ERROR', {'error':metadata_cleanup_error})
         result = {'run_id':packet['run_id'], 'packet_sha256':args.packet_sha256,
-            'primary_error':primary,'cleanup_error':cleanup_error, 'launch_record':launch,
+            'primary_error':primary,'cleanup_error':cleanup_error, 'metadata_cleanup_error':metadata_cleanup_error, 'launch_record':launch,
             'terminal':terminal, 'completed_ns':time.monotonic_ns()}
         write_record_once(root/'controller-result.json', result)
         log.close(); fcntl.flock(lock, fcntl.LOCK_UN); lock.close()
     parent = json.loads((root/'parent-result.json').read_bytes()) if (root/'parent-result.json').exists() else None
-    success = (primary is None and cleanup_error is None and terminal is not None
+    success = (primary is None and cleanup_error is None and metadata_cleanup_error is None and terminal is not None
         and terminal.get('Result') == 'success' and terminal.get('ExecMainCode') == str(os.CLD_EXITED)
         and terminal.get('ExecMainStatus') == '0' and parent is not None
         and parent['primary_error'] is None and parent['cleanup_clean']
@@ -1735,7 +1753,8 @@ def launch_packet(args):
     success = success and not binding_errors
     assessment = {'run_id':packet['run_id'], 'technical_outcome':'R01a_COMPLETED' if success else 'INCOMPLETE',
         'evidence':str(root),'primary_error':primary,'cleanup_error':cleanup_error,
-        'terminal_binding_errors':binding_errors, 'assessed_ns':time.monotonic_ns()}
+        'terminal_binding_errors':binding_errors, 'metadata_cleanup_error':metadata_cleanup_error,
+        'parent_primary_error':None if parent is None else parent.get('primary_error'), 'assessed_ns':time.monotonic_ns()}
     write_record_once(root/'r01a-assessment.json', assessment)
     hashes = {str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest()
         for path in root.rglob('*') if path.is_file()}
@@ -1747,6 +1766,30 @@ def launch_packet(args):
     print(json.dumps(assessment))
     return 0 if success else 1
 
+
+
+
+def clear_owned_failed_state(unit, invocation, terminal_pid, packet_sha256, *, deadline_ns, emit,
+                             now_ns=time.monotonic_ns):
+    """Chỉ metadata unit đã thất bại, sau raw journal và proof không còn process.
+
+    Không reset guard, không đổi verdict và không chạm failed unit khác.
+    """
+    remaining = (deadline_ns-now_ns())/1e9
+    if remaining <= 0: raise TimeoutError('owned failed-state cleanup budget expired')
+    properties, record = unit_properties(unit, timeout_s=min(1., remaining))
+    emit('PRE_FAILED_STATE_CLEAR_BINDING', record)
+    if (properties.get('Id') != unit or properties.get('InvocationID') != invocation
+            or properties.get('ExecMainPID') != str(terminal_pid) or properties.get('MainPID') != '0'
+            or properties.get('ActiveState') not in ('failed','inactive')
+            or properties.get('ControlGroup') != '' or packet_sha256 not in properties.get('ExecStart','')):
+        raise RuntimeError('failed-state ownership changed/unverified; no reset dispatched')
+    remaining = (deadline_ns-now_ns())/1e9
+    if remaining <= 0: raise TimeoutError('owned failed-state cleanup budget expired before reset')
+    record = command_record(['systemctl','--user','reset-failed',unit], timeout_s=min(1.,remaining))
+    emit('OWNED_FAILED_STATE_CLEAR_RESULT', record)
+    if record['returncode'] != 0 or record['error'] is not None:
+        raise RuntimeError('own failed-state clear failed')
 
 
 def terminal_binding_errors(packet, terminal, parent_record, observed, invocation, packet_sha256):
