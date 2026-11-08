@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 import copy
+import json
 from dataclasses import dataclass
 import math
 import threading
@@ -66,6 +67,16 @@ def quaternion_rpy(q):
     return (math.atan2(2 * (q.w * q.x + q.y * q.z), 1 - 2 * (q.x * q.x + q.y * q.y)),
             math.asin(max(-1., min(1., 2 * (q.w * q.y - q.z * q.x)))),
             math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+
+
+def safety_payload_bytes(msg):
+    """Fingerprint đầy đủ giá trị SafetyState; CDR padding không thuộc payload."""
+    from mecanum_nav_rl_interfaces.msg import SafetyState
+    from rosidl_runtime_py.convert import message_to_ordereddict
+    if not isinstance(msg,SafetyState):
+        raise TypeError('SafetyState generated type required')
+    return json.dumps(message_to_ordereddict(msg),sort_keys=True,separators=(',',':'),
+        allow_nan=False).encode('utf-8')
 
 
 class LocalTrainingIngress:
@@ -473,13 +484,15 @@ class LocalTrainingIngress:
             if (not isinstance(msg, SafetyState) or self._safety_publisher_gid is None
                     or source_instance_id != self.safe_stop_source_id or msg.header.frame_id != 'base_link'):
                 self._fail('Safety publication producer identity/frame mismatch')
-            raw = serialize_message(msg)
-            digest = hashlib.sha256(raw).hexdigest()
+            raw, semantic = serialize_message(msg), safety_payload_bytes(msg)
+            digest = hashlib.sha256(semantic).hexdigest()
             if digest not in self._safety_publications:
-                self._safety_publications[digest] = (raw, self.now())
+                self._safety_publications[digest] = (semantic, self.now())
             if len(self._safety_publications) > 128:
                 self._safety_publications.popitem(last=False)
-            self.emit('SAFETY_PUBLICATION_BOUND', {'payload_sha256': digest,
+            self.emit('SAFETY_PUBLICATION_BOUND', {'semantic_payload_sha256': digest,
+                'payload_encoding':'SafetyState full fields canonical JSON/v1',
+                'payload_sha256':hashlib.sha256(raw).hexdigest(),'message_cdr_hex':raw.hex(),
                 'source_instance_id': source_instance_id, 'publisher_gid_hex': self._safety_publisher_gid.hex(),
                 'published_ns': self._safety_publications[digest][1]})
 
@@ -489,16 +502,18 @@ class LocalTrainingIngress:
         with self.lock:
             if not isinstance(msg, SafetyState):
                 self._fail('Safety state generated type mismatch')
-            raw = serialize_message(msg)
-            digest = hashlib.sha256(raw).hexdigest()
+            raw, semantic = serialize_message(msg), safety_payload_bytes(msg)
+            digest = hashlib.sha256(semantic).hexdigest()
             publication = self._safety_publications.get(digest)
-            if publication is None or publication[0] != raw:
+            if publication is None or publication[0] != semantic:
                 self._fail('Safety state has no matching actual producer publication')
             if digest == self._last_safety_payload:
                 return  # DDS replay không làm mới receive time.
             self.safety_state, self.safety_received_ns = copy.deepcopy(msg), self.now()
             self._last_safety_payload = digest
-            self.emit('SAFETY_STATE_RECEIVED', {'payload_sha256': digest,
+            self.emit('SAFETY_STATE_RECEIVED', {'semantic_payload_sha256': digest,
+                'payload_encoding':'SafetyState full fields canonical JSON/v1',
+                'payload_sha256':hashlib.sha256(raw).hexdigest(),'message_cdr_hex':raw.hex(),
                 'published_ns': publication[1], 'received_ns': self.safety_received_ns})
 
     def _record_application(self, status, raw, received):

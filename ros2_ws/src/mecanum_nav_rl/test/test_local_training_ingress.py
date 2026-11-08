@@ -466,3 +466,31 @@ def test_oracle_conflict_preserves_both_original_payloads_before_rejection(sourc
     assert deserialize_message(bytes.fromhex(events[0]['previous_cdr_hex']),Odometry)==original
     assert deserialize_message(bytes.fromhex(events[0]['current_cdr_hex']),Odometry)==modified
     assert events[0]['source_stamp_ns']==f.clock.ros and f.ingress.fault is not None
+
+
+def test_safety_provenance_ignores_only_cdr_padding_and_keeps_replay_age(source,monkeypatch):
+    from mecanum_nav_rl_interfaces.msg import SafetyState
+    from rclpy.serialization import serialize_message as actual_serialize,deserialize_message
+    from mecanum_nav_rl.runtime_simulation import local_training_ingress as module
+    f=source;f.ingress.bind_safety_publisher_gid(bytes(range(24)))
+    state=SafetyState();state.header.frame_id='base_link';state.header.stamp=stamp(f.clock.ros)
+    count=[0];records=[]
+    def serialization(msg):
+        raw=actual_serialize(msg)
+        if isinstance(msg,SafetyState):
+            changed=bytearray(raw);count[0]+=1
+            # Header kết thúc byte 26, state uint8 ở 26, padding trước uint32 ở 27.
+            assert int.from_bytes(raw[12:16],'little')==10
+            changed[27]=count[0]%256;raw=bytes(changed)
+            assert deserialize_message(raw,SafetyState)==msg
+            records.append(raw)
+        return raw
+    monkeypatch.setattr(module,'serialize_message',serialization)
+    f.ingress.register_safety_publication(state,source_instance_id=44)
+    f.ingress.on_safety_state(state)
+    received=f.ingress.safety_received_ns
+    f.advance();f.ingress.on_safety_state(state)
+    assert records[0]!=records[1] and f.ingress.safety_received_ns==received
+    changed=copy.deepcopy(state);changed.final_command.linear.y=.01
+    with pytest.raises(ValueError,match='matching actual producer'):
+        f.ingress.on_safety_state(changed)
