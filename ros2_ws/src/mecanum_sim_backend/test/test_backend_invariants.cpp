@@ -48,6 +48,7 @@ struct NativeResetChainIo
   std::uint32_t backend_state_calls{};
   std::uint32_t ground_truth_calls{};
   std::vector<BodyCommand3D> applied_commands;
+  std::vector<BackendState> statuses;
 };
 
 struct DeferredInitializationIo
@@ -504,8 +505,9 @@ public:
       return std::function<void()>([] {});
     };
     system.probe_model_sdf_path_ = probe_path.string();
-    system.backend_state_sink_ = [io](const BackendState &) {
+    system.backend_state_sink_ = [io](const BackendState &state) {
       ++io->backend_state_calls;
+      io->statuses.push_back(state);
     };
     system.ground_truth_sink_ = [io](const gz::msgs::Odometry &) {
       ++io->ground_truth_calls;
@@ -4586,4 +4588,24 @@ TEST(NativeClosingAuthority, ControlInhibitWithRevokedTokenClosesAndCannotReopen
 TEST(BackendLifecycleFacts, FreshHeartbeatOfSameEventCanStartAndConfirm)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 0, 0, true);
+}
+
+TEST(BackendLifecycleFacts, StatusReportsAppliedBindingBeforeFirstSafetyInput)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto io = std::make_shared<NativeResetChainIo>();
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'000);
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(system, ecm, io));
+  auto bind = BindSessionRequest();
+  BindTestRequestToConfiguredBackend(bind, system);
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, bind).result, ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 200'000'000);
+  ASSERT_EQ(BackendSystemTestPeer::Cached(system, 1).result, ControlResponse::RESULT_APPLIED);
+  ASSERT_EQ(io->statuses.size(), 1u);
+  EXPECT_EQ(io->statuses.back().episode_generation, bind.episode_generation);
+  EXPECT_EQ(io->statuses.back().reset_epoch, bind.reset_epoch);
+  EXPECT_EQ(io->statuses.back().runtime_generation, bind.runtime_generation);
+  EXPECT_TRUE(io->statuses.back().actuator_inhibited);
+  EXPECT_FALSE(io->statuses.back().applied_receipt_valid);
 }

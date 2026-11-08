@@ -2989,6 +2989,14 @@ private:
       safety_input_ = msg;
       safety_receive_steady_ns_ = received_ns;
       last_safety_sample_sequence_ = msg.sample_sequence;
+      if (msg.admission_state != SafetyInput::ADMISSION_POLICY_OPEN)
+        gzmsg << "B23_SAFETY_INPUT_OBSERVED session=" << session_id_
+              << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
+              << " sample=" << msg.sample_sequence << " admission=" << static_cast<unsigned>(msg.admission_state)
+              << " episode=" << msg.episode_generation << " reset=" << msg.reset_epoch
+              << " runtime=" << msg.runtime_generation << " source_ns=" << safety_stamp_ns
+              << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
+              << " iteration=" << physics_iteration_ << std::endl;
       const auto cutoff_ns = TimeNs(msg.observation0_cutoff);
       safety_admission_candidate_ =
           msg.admission_state == SafetyInput::ADMISSION_POLICY_OPEN &&
@@ -3005,7 +3013,9 @@ private:
         safety_admission_candidate_ = gate_ && gate_->RecordPolicyAdmission(
             msg.admission_token, safety_stamp_ns, received_ns);
         if (safety_admission_candidate_)
-          gzmsg << "B23_ADMISSION_ACCEPTED sample=" << msg.sample_sequence
+          gzmsg << "B23_ADMISSION_ACCEPTED session=" << session_id_
+                << " backend=" << backend_instance_id_
+                << " ingress=" << msg.ingress_instance_id << " sample=" << msg.sample_sequence
                 << " source_ns=" << safety_stamp_ns << " receive_ns=" << received_ns
                 << " iteration=" << physics_iteration_ << std::endl;
       }
@@ -3140,8 +3150,9 @@ private:
     msg.header.frame_id = world_name_; msg.schema_version = BackendState::SCHEMA_VERSION;
     msg.session_id = session_id_; msg.config_hash = config_hash_;
     msg.backend_instance_id = backend_instance_id_; msg.status_sequence = status_sequence_;
-    msg.episode_generation = safety_input_.episode_generation;
-    msg.reset_epoch = safety_input_.reset_epoch; msg.runtime_generation = safety_input_.runtime_generation;
+    msg.episode_generation = control_session_bound_ ? episode_generation_ : safety_input_.episode_generation;
+    msg.reset_epoch = control_session_bound_ ? reset_epoch_ : safety_input_.reset_epoch;
+    msg.runtime_generation = control_session_bound_ ? runtime_generation_ : safety_input_.runtime_generation;
     msg.physics_iteration = info.iterations;
     msg.required_collision_mask = contact_decision_.coverage_complete ? contact_decision_.observed_mask :
       (collision_bits_.size() == 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << collision_bits_.size()) - 1));

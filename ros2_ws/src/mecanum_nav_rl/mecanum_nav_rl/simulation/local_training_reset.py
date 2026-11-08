@@ -676,3 +676,153 @@ class LocalTrainingResetAdapter:
         return ResetFacts(
             True, pose_ack, True, True, measured, applied_zero_receipt,
         )
+
+    async def _await_bounded(self, invoke, *, deadline, cap_s, phase):
+        import asyncio
+        import inspect
+        phase_deadline = min(deadline, self._monotonic() + cap_s)
+        self._remaining(phase_deadline, cap_s, phase)
+        value = invoke()
+        try:
+            budget = self._remaining(phase_deadline, cap_s, phase)
+        except BaseException:
+            if inspect.iscoroutine(value):
+                value.close()
+            raise
+        if inspect.isawaitable(value):
+            value = await asyncio.wait_for(value, timeout=budget)
+        self._remaining(phase_deadline, cap_s, phase)
+        return value
+
+    @staticmethod
+    def _validate_async_measurement_fields(sample):
+        if (not isinstance(sample, ResetMeasurement)
+                or type(sample.iteration) is not int or sample.iteration < 0
+                or type(sample.stamp_ns) is not int or sample.stamp_ns < 0
+                or not isinstance(sample.linear_xyz_mps, tuple) or len(sample.linear_xyz_mps) != 3
+                or not isinstance(sample.angular_xyz_radps, tuple) or len(sample.angular_xyz_radps) != 3):
+            raise ValueError('reset measurement shape/iteration invalid')
+        values = (sample.x_m, sample.y_m, sample.z_m, sample.roll_rad,
+                  sample.pitch_rad, sample.yaw_rad, *sample.linear_xyz_mps, *sample.angular_xyz_radps)
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+            raise ValueError('reset measurement must be complete and finite')
+        if any(type(flag) is not bool for flag in
+               (sample.contact_healthy, sample.contact_active, sample.footprint_clear)):
+            raise ValueError('reset measurement health flags must be bool')
+
+    async def _collect_window_async(self, source, *, deadline, after_steady_s,
+                                    after_stamp_ns=None, braking_start_stamp_ns=None, enforce_braking=False):
+        """Kiểm từng cặp khi đến, chờ 21 mẫu đứng yên trong budget đã chốt.
+
+        Mẫu còn braking không được tính vào cửa sổ. Gap/invalid/freshness lỗi
+        vẫn fail; không xóa lỗi nguồn để tìm một tail xanh.
+        """
+        if not hasattr(source, '__aiter__'):
+            raise TypeError('B23 reset measurement source must be async iterable')
+        iterator, samples, previous = source.__aiter__(), [], None
+        braking_origin = braking_start_stamp_ns
+        while len(samples) < 21:
+            try:
+                sample = await self._await_bounded(lambda: anext(iterator), deadline=deadline,
+                    cap_s=self.TOTAL_DEADLINE_S, phase='measurement join')
+            except StopAsyncIteration as error:
+                raise ValueError('standstill requires at least 21 measured 100 Hz samples') from error
+            self._validate_async_measurement_fields(sample)
+            self._validate_identity_and_freshness((sample,), after_steady_s=after_steady_s,
+                                                  after_stamp_ns=after_stamp_ns)
+            if previous is not None:
+                if sample.iteration != previous.iteration + 1:
+                    raise ValueError('standstill measurement has a missing physics iteration')
+                if sample.stamp_ns - previous.stamp_ns != 10_000_000:
+                    raise ValueError('standstill samples must be consecutive 100 Hz ROS measurements')
+            previous = sample
+            if braking_origin is None:
+                braking_origin = sample.stamp_ns
+            if sample.stamp_ns < braking_origin:
+                raise ValueError('braking origin is future relative to measurement')
+            moving = (math.sqrt(sum(v * v for v in sample.linear_xyz_mps)) > 0.01
+                or math.sqrt(sum(v * v for v in sample.angular_xyz_radps)) > 0.02)
+            if moving:
+                samples.clear()
+            if enforce_braking and not samples and sample.stamp_ns - braking_origin > 2_000_000_000:
+                raise TimeoutError('braking exceeded 2 s ROS before continuous standstill')
+            if moving:
+                continue
+            samples.append(sample)
+        self.validate_standstill_window(samples)
+        self._validate_identity_and_freshness((samples[-1],), after_steady_s=after_steady_s,
+                                              after_stamp_ns=after_stamp_ns)
+        return tuple(samples)
+
+    async def execute_async(self, *, target, measured_standstill, applied_zero_receipt,
+                            reset_emulator_and_buffers, reset_deadline, paused_hold_s=0.,
+                            stop_deadline=None, braking_start_stamp_ns=None):
+        """Đường B2.3 async: native pause bắt buộc; không spin executor lồng/thread ẩn."""
+        if self._native_pause is None or self._oracle_max_age_ns is None:
+            raise ValueError('B23 async reset requires native pause and dual-clock profile')
+        start = self._monotonic()
+        if (type(reset_deadline) not in (int, float) or not math.isfinite(reset_deadline)
+                or type(paused_hold_s) not in (int, float) or not math.isfinite(paused_hold_s)
+                or paused_hold_s < 0):
+            raise ValueError('B23 reset deadline/hold invalid')
+        deadline = min(reset_deadline, start + self.TOTAL_DEADLINE_S)
+        self._remaining(deadline, self.TOTAL_DEADLINE_S, 'start')
+        if not callable(applied_zero_receipt):
+            self._validate_applied_zero_receipt(applied_zero_receipt)
+        if (stop_deadline is not None and (type(stop_deadline) not in (int,float) or not math.isfinite(stop_deadline))
+                or braking_start_stamp_ns is not None and (type(braking_start_stamp_ns) is not int or braking_start_stamp_ns < 0)):
+            raise ValueError('stop deadline/braking source stamp invalid')
+        stop_end = min(deadline, start+5., stop_deadline if stop_deadline is not None else start+5.)
+        measured = await self._collect_window_async(measured_standstill,
+            deadline=stop_end, after_steady_s=start - 5.,
+            braking_start_stamp_ns=braking_start_stamp_ns, enforce_braking=True)
+        if callable(applied_zero_receipt):
+            applied_zero_receipt = await self._await_bounded(applied_zero_receipt,
+                deadline=stop_end, cap_s=5., phase='W1 acquisition')
+        self._validate_applied_zero_receipt(applied_zero_receipt)
+        self._validate_identity_and_freshness((measured[-1],), after_steady_s=start - 5.)
+        self._remaining(stop_end, 5., 'standstill/W1 proof')
+        pre_reset_stamp = max(measured[-1].stamp_ns, applied_zero_receipt.applied_sim_stamp_ns)
+        pause_budget = self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'pause service')
+        pause_ack = await self._await_bounded(lambda: self._native_pause(applied_zero_receipt, pause_budget),
+            deadline=deadline, cap_s=pause_budget, phase='pause service')
+        if type(pause_ack) is not bool or not pause_ack:
+            raise TimeoutError('native pause did not acknowledge within shared 1 s deadline')
+        confirmation_budget = self._remaining(deadline, self.PAUSE_RESUME_TIMEOUT_S, 'pause confirmation')
+        paused = await self._await_bounded(lambda: self._confirmed_state(True, confirmation_budget),
+            deadline=deadline, cap_s=confirmation_budget, phase='pause confirmation')
+        if type(paused) is not bool or not paused:
+            raise TimeoutError('world pause was not confirmed within 2 s')
+        if paused_hold_s:
+            if self._remaining(deadline, self.TOTAL_DEADLINE_S, 'paused hold') < paused_hold_s:
+                raise TimeoutError('reset deadline cannot cover requested paused hold')
+            await self._await_bounded(lambda: self._sleep(paused_hold_s), deadline=deadline,
+                cap_s=self.TOTAL_DEADLINE_S, phase='paused hold')
+        pose_budget = self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'set pose service')
+        pose_ack = await self._await_bounded(lambda: self._services.set_entity_pose(world_name=self.WORLD,
+            entity_name=self.ENTITY, target=target, timeout_s=pose_budget),
+            deadline=deadline, cap_s=pose_budget, phase='set pose service')
+        if type(pose_ack) is not bool or not pose_ack:
+            raise TimeoutError('SetEntityPose did not acknowledge within shared 1 s deadline')
+        await self._await_bounded(reset_emulator_and_buffers, deadline=deadline,
+            cap_s=self.SERVICE_TIMEOUT_S, phase='emulator reset')
+        resume_budget = self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'resume service')
+        resume_ack = await self._await_bounded(lambda: self._services.control_world(world_name=self.WORLD,
+            pause=False, timeout_s=resume_budget), deadline=deadline, cap_s=resume_budget, phase='resume service')
+        if type(resume_ack) is not bool or not resume_ack:
+            raise TimeoutError('Gazebo resume service failed within shared 1 s deadline')
+        resumed_at = self._monotonic()
+        confirmation_budget = self._remaining(deadline, self.PAUSE_RESUME_TIMEOUT_S, 'resume confirmation')
+        resumed = await self._await_bounded(lambda: self._confirmed_state(False, confirmation_budget),
+            deadline=deadline, cap_s=confirmation_budget, phase='resume confirmation')
+        if type(resumed) is not bool or not resumed:
+            raise TimeoutError('world resume was not confirmed within 2 s')
+        settled = await self._collect_window_async(self._measurement(),
+            deadline=min(deadline, resumed_at + self.PAUSE_RESUME_TIMEOUT_S),
+            after_steady_s=resumed_at, after_stamp_ns=pre_reset_stamp)
+        for sample in settled:
+            self.validate_target(sample, target)
+        self._validate_identity_and_freshness((settled[-1],), after_steady_s=resumed_at,
+                                              after_stamp_ns=pre_reset_stamp)
+        self._remaining(deadline, self.TOTAL_DEADLINE_S, 'completion')
+        return ResetFacts(True, pose_ack, True, True, settled[-1], applied_zero_receipt)

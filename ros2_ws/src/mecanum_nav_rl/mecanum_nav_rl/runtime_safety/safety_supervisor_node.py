@@ -55,7 +55,7 @@ class SafetySupervisorNode(Node):
             self._state_pub = self.create_publisher(SafetyState, '/mecanum/safety_state', reliable)
             self.local_training = LocalTrainingSafetyAdapter(self, local_training_context, emit=evidence_sink)
             for message_type, topic, callback, qos in (
-                (CommandEnvelope, '/mecanum/policy_candidate_cmd', self.local_training.on_command, reliable),
+                (CommandEnvelope, '/mecanum/cmd_policy', self.local_training.on_command, reliable),
                 (LaserScan, '/scan', self.local_training.on_scan, sensor),
                 (SafetyLifecycleState, '/mecanum/safety_lifecycle_state', self.local_training.on_lifecycle, reliable),
                 (LocalTrainingSafetyInput, '/mecanum/local_training/safety_input', self.local_training.on_safety_input, reliable),
@@ -257,6 +257,8 @@ class LocalTrainingSafetyAdapter:
         self.stream_enabled = True
         self.policy_hold = True
         self.safe_stop_sequence = 0
+        self.state_observer = None
+        self.last_output = None
         self.expected_extrinsic = (tuple(self.context['sensor']['extrinsic_xyz_m']),
                                    tuple(self.context['sensor']['extrinsic_rpy_rad']))
         if self.expected_extrinsic[1] != (0., 0., 0.):
@@ -492,6 +494,7 @@ class LocalTrainingSafetyAdapter:
                     (envelope.episode_generation, envelope.reset_epoch,
                      envelope.runtime_generation) = self.identity(self.life)
             self.node._accepted_pub.publish(envelope)
+            self.last_output = copy.deepcopy(envelope)
             state = SafetyState()
             state.header.stamp = self.node.get_clock().now().to_msg()
             state.header.frame_id = 'base_link'
@@ -503,6 +506,8 @@ class LocalTrainingSafetyAdapter:
             state.raw_command = self.command.twist if self.command is not None else Twist()
             state.limited_command = state.final_command = envelope.twist
             self.node._state_pub.publish(state)
+            if self.state_observer is not None:
+                self.state_observer(copy.deepcopy(state))
             self.emit('SAFETY_ACCEPTED' if accepted else 'SAFETY_REJECTED', {
                 'steady_ns': now, 'ros_ns': ros_ns, 'sequence': envelope.sequence,
                 'source': envelope.source, 'reasons': list(reasons)})

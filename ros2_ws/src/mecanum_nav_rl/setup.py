@@ -125,6 +125,7 @@ setup(
 
     entry_points={
         'console_scripts': [
+            'b23_campaign=mecanum_nav_rl.runtime_simulation.b23_runner:main',
             'safety_lifecycle='
             'mecanum_nav_rl.runtime_safety.safety_lifecycle_node:main',
             'safety_supervisor='

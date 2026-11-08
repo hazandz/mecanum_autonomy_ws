@@ -690,3 +690,152 @@ def test_d03_future_application_fact_rejects_before_native_pause():
                         applied_zero_receipt=future_zero,
                         reset_emulator_and_buffers=lambda: None)
     assert not services.calls and not pauses
+
+
+def async_reset_fixture(clock, services, pauses, *, native_delay_s=0., mutation=None):
+    import asyncio
+    async def samples(first_iteration, first_stamp):
+        for sample in clock.stream(first_iteration, first_stamp, mutation):
+            await asyncio.sleep(0)
+            yield sample
+    async def native_pause(fact, timeout):
+        pauses.append((fact, timeout))
+        clock.ns += round(native_delay_s * 1e9)
+        await asyncio.sleep(0)
+        return True
+    async def sleep(seconds):
+        clock.sleep(seconds)
+        await asyncio.sleep(0)
+    adapter = LocalTrainingResetAdapter(services, lambda paused, timeout: True,
+        lambda: samples(50, clock.ros_ns + 10_000_000),
+        expected_session_id='run-1', expected_config_hash='a' * 64,
+        expected_backend_instance_id=7, expected_reset_epoch=2,
+        expected_episode_generation=3, expected_runtime_generation=4,
+        expected_final_publisher_instance_id=11, expected_safe_stop_source_instance_id=12,
+        expected_barrier_stamp_ns=100_000_000, monotonic=clock.now, sleep=sleep,
+        oracle_max_age_ns=100_000_000, now_ros_ns=lambda: clock.ros_ns, native_pause=native_pause)
+    return adapter, samples
+
+
+def test_async_reset_runs_same_d03_validators_and_only_native_pauses():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses)
+    result = asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+        measured_standstill=samples(1, 300_000_000), applied_zero_receipt=clock.zero,
+        reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15,
+        paused_hold_s=0.25))
+    assert len(pauses) == 1 and result.measurement.iteration == 70
+    assert result.measurement.oracle_stamp_ns == result.measurement.stamp_ns
+    assert clock.ns == 1_670_000_000
+    assert [name for name, _ in services.calls] == ['pose', 'control']
+    assert services.calls[-1][1]['pause'] is False
+
+
+def test_async_reset_late_true_ack_does_not_reopen_expired_phase():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses, native_delay_s=1.001)
+    with pytest.raises(TimeoutError, match='pause service'):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+            measured_standstill=samples(1, 300_000_000), applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15))
+    assert len(pauses) == 1 and not services.calls
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda sample, i: replace(sample, oracle_stamp_ns=sample.stamp_ns + 1),
+    lambda sample, i: replace(sample, oracle_receive_steady_ns=sample.oracle_receive_steady_ns - 100_000_001),
+    lambda sample, i: replace(sample, iteration=sample.iteration + int(i == 10)),
+])
+def test_async_reset_bad_source_data_never_reaches_native_pause(mutation):
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses, mutation=mutation)
+    with pytest.raises(ValueError):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+            measured_standstill=samples(1, 300_000_000), applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15))
+    assert not pauses and not services.calls
+
+
+def test_async_reset_shared_deadline_is_not_restarted():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses)
+    with pytest.raises(TimeoutError):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+            measured_standstill=samples(1, 300_000_000), applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 0.15))
+    assert not pauses and not services.calls
+
+
+def test_async_reset_cannot_use_coordinator_pause_fallback():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses)
+    adapter._native_pause = None  # Biên I/O chưa được nối phải fail trước action.
+    with pytest.raises(ValueError, match='native pause'):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+            measured_standstill=samples(1, 300_000_000), applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15))
+    assert not services.calls
+
+
+def test_async_reset_braking_samples_do_not_relabel_or_refresh_standstill_window():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, _ = async_reset_fixture(clock, services, pauses)
+    async def braking_then_still():
+        for sample in clock.stream(1, 300_000_000):
+            if sample.iteration <= 5:
+                sample = replace(sample, linear_xyz_mps=(0.02, 0., 0.))
+            yield sample
+        for sample in clock.stream(22, 510_000_000):
+            yield sample
+    result = asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+        measured_standstill=braking_then_still(), applied_zero_receipt=clock.zero,
+        reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15,
+        paused_hold_s=0.25))
+    assert len(pauses) == 1
+    assert pauses[0][0].receipt_stamp_ns == 550_000_000
+    assert result.measurement.iteration == 70 and clock.ns == 1_720_000_000
+
+
+def test_async_braking_cannot_use_five_steady_seconds_to_exceed_two_ros_seconds():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, _ = async_reset_fixture(clock, services, pauses)
+    async def late_still():
+        for block in range(11):
+            for sample in clock.stream(1+21*block, 300_000_000+210_000_000*block):
+                yield replace(sample, linear_xyz_mps=(.02,0.,0.)) if sample.iteration <= 210 else sample
+    with pytest.raises(TimeoutError, match='braking.*2 s ROS'):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0,0,.1,0),
+            measured_standstill=late_still(), applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda:None, reset_deadline=clock.now()+15))
+    assert not pauses and not services.calls
+
+
+def test_async_stop_window_is_not_renewed_after_w0_and_lifecycle_work():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses)
+    deadline = clock.now()+.15  # 4,85 s stop budget đã dùng trước khi vào adapter.
+    with pytest.raises(TimeoutError):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0,0,.1,0),
+            measured_standstill=samples(1,300_000_000),applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda:None,reset_deadline=clock.now()+15,stop_deadline=deadline))
+    assert not pauses and not services.calls and clock.now() <= deadline
+
+
+def test_async_braking_origin_uses_original_w0_source_time():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, samples = async_reset_fixture(clock, services, pauses)
+    with pytest.raises(TimeoutError, match='braking.*2 s ROS'):
+        asyncio.run(adapter.execute_async(target=ResetTarget(0,0,.1,0),
+            measured_standstill=samples(1,2_500_000_000),applied_zero_receipt=clock.zero,
+            reset_emulator_and_buffers=lambda:None,reset_deadline=clock.now()+15,
+            braking_start_stamp_ns=300_000_000))
+    assert not pauses and not services.calls

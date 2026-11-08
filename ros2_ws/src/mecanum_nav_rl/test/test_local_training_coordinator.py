@@ -215,3 +215,50 @@ def test_invalid_deadline_never_submits(deadline):
     with pytest.raises(TypeError, match='integer nanoseconds'):
         asyncio.run(session.transact(Control.Request.OP_INHIBIT, deadline_ns=deadline))
     assert not client.raw
+
+
+def test_completed_replay_preserves_sequence_and_allows_revoked_query_proof():
+    session, client, clock, events = setup()
+    async def exercise():
+        ack = await session.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+            deadline_ns=clock.ns + 1_000_000_000, probe_action=Control.Request.PROBE_ACTION_QUERY,
+            probe_start_request_sequence=1)
+        revision = session.revision
+        def revoked(req, n):
+            result = response(req)
+            result.contact_capability_state = result.CAPABILITY_INVALIDATED
+            return result
+        client.respond = revoked
+        repeated = await session.replay(ack, deadline_ns=clock.ns + 1_000_000_000)
+        assert repeated.response.contact_capability_state == Control.Response.CAPABILITY_INVALIDATED
+        assert session.revision == revision
+        assert client.raw == [ack.request_bytes, ack.request_bytes]
+        fresh = await session.transact(Control.Request.OP_INHIBIT, deadline_ns=clock.ns + 1_000_000_000)
+        assert fresh.request.request_sequence == 2
+    asyncio.run(exercise())
+
+
+def test_foreign_completed_ack_cannot_be_replayed():
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck
+    session, client, clock, _ = setup()
+    async def exercise():
+        ack = await session.transact(Control.Request.OP_INHIBIT, deadline_ns=clock.ns + 1_000_000_000)
+        req = ack.request; req.session_id = 'other'
+        foreign = BackendControlAck(serialize_message(req), ack.response_bytes, ack.observed_steady_ns)
+        with pytest.raises(BackendControlError, match='not a retained owned'):
+            await session.replay(foreign, deadline_ns=clock.ns + 1_000_000_000)
+        assert len(client.raw) == 1
+    asyncio.run(exercise())
+
+
+def test_waiting_for_control_lock_uses_original_absolute_budget():
+    session, client, clock, _ = setup()
+    async def exercise():
+        await session._lock.acquire()
+        try:
+            with pytest.raises(TimeoutError):
+                await session.transact(Control.Request.OP_INHIBIT, deadline_ns=clock.ns + 12_000_000)
+            assert clock.ns == 1_012_000_000 and not client.raw
+        finally:
+            session._lock.release()
+    asyncio.run(exercise())

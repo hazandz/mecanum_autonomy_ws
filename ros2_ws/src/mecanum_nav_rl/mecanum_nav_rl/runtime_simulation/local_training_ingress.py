@@ -100,17 +100,32 @@ class LocalTrainingIngress:
         self._last_status_bytes = None
         self._last_gt_stamp = -1
         self._last_gt_bytes = None
+        self._pose_mutation = None
+        self._paused_pose_raw = None
         self._last_join_iteration = 0
         self._sample_sequence = 0
+        self.last_published_admission_state = None
+        self.last_published_sample_sequence = 0
         self._last_receipt_sequence = 0
+        self._last_receipt_stamp_ns = -1
         self._receipt_bytes = OrderedDict()
+        self._application_bytes = OrderedDict()
+        self._unresolved_applications = OrderedDict()
+        self._receipt_views = OrderedDict()
+        self._last_applied_sequence = 0
         self.pending_ack = self.observation0_ack = None
         self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
         self.admission_publication_enabled = False
         self.fault = None
+        self.safety_state = None
+        self.safety_received_ns = -1
+        self._safety_publisher_gid = None
+        self._safety_publications = OrderedDict()
+        self._last_safety_payload = None
 
     def _fail(self, reason):
         self.fault = reason
+        self._pose_mutation = None
         self.pending_ack = None
         self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
         self.emit('INGRESS_FAULT', {'reason': reason, 'steady_ns': self.now()})
@@ -145,6 +160,8 @@ class LocalTrainingIngress:
                     self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
                     self.admission_publication_enabled = False
                     self._last_join_iteration = 0
+                    self._pose_mutation = None
+                    self._paused_pose_raw = None
             self.lifecycle, self.lifecycle_received_ns = raw, self.now()
 
     def reset_noise(self, seed: int):
@@ -235,7 +252,13 @@ class LocalTrainingIngress:
                 self._fail('oracle clock rollback')
             if stamp == self._last_gt_stamp:
                 if raw != self._last_gt_bytes:
-                    self._fail('oracle same stamp changed bytes')
+                    if self._pose_mutation is None:
+                        self._fail('oracle same stamp changed bytes')
+                    if raw != self._paused_pose_raw:
+                        self.emit('RESET_PAUSED_ORACLE', {'source_stamp_ns': stamp,
+                            'received_ns': received, 'native_pause_request_sequence': self._pose_mutation,
+                            'message_cdr_hex': raw.hex()})
+                        self._paused_pose_raw = raw
                 return None  # Paused replay không tiến emulator hoặc refresh receive age.
             pose, twist = msg.pose.pose, msg.twist.twist
             roll, pitch, yaw = quaternion_rpy(pose.orientation)
@@ -244,6 +267,8 @@ class LocalTrainingIngress:
                       twist.angular.x, twist.angular.y, twist.angular.z)
             if not all(math.isfinite(v) for v in values):
                 self._fail('oracle non-finite pose/twist')
+            self._pose_mutation = None
+            self._paused_pose_raw = None
             self._last_gt_stamp, self._last_gt_bytes = stamp, raw
             self._put(self._oracles, stamp, (raw, received), 'oracle')
             self._join_physics(stamp)
@@ -255,7 +280,10 @@ class LocalTrainingIngress:
             sample = ReceivedNoisySample(output, received, lifecycle_identity(self.lifecycle))
             self._put(self.noisy_samples, stamp, sample, 'noisy')
             self.emit('SAMPLE_RECEIVED', {'stamp_ns': stamp, 'steady_ns': received,
-                'sample_sequence': output.source_sequence, 'status': output.snapshot.status.value})
+                'sample_sequence': output.source_sequence, 'status': output.snapshot.status.value,
+                'measurement': (None if output.snapshot.measurement is None else {
+                    key: getattr(output.snapshot.measurement, key) for key in
+                    ('x_m', 'y_m', 'yaw_rad', 'vx_mps', 'vy_mps', 'wz_radps')})})
             if self.admission_publication_enabled:
                 self._publish_safety(sample)
             return sample
@@ -300,6 +328,8 @@ class LocalTrainingIngress:
             'ack_observed_ns': pending.observed_steady_ns if pending else None,
             'steady_ns': self.now(), 'message_cdr_hex': serialize_message(msg).hex()})
         self.publish(msg)
+        self.last_published_admission_state = msg.admission_state
+        self.last_published_sample_sequence = msg.sample_sequence
         self.emit('ADMISSION_PUBLISHED', {'sample_sequence': msg.sample_sequence, 'steady_ns': self.now()})
 
     def on_backend(self, msg):
@@ -317,6 +347,7 @@ class LocalTrainingIngress:
                     self._fail('backend status sequence conflict/replay')
                 return
             self.backend_state, self.backend_received_ns, self._last_status_bytes = copy.deepcopy(msg), received, raw
+            self._record_application(msg, raw, received)
             stamp = stamp_ns(msg.header.stamp)
             if msg.paused:
                 return
@@ -343,7 +374,8 @@ class LocalTrainingIngress:
                                   oracle_received, backend_received)
         self.physics_pairs.append(pair)
         self.emit('PHYSICS_PAIR', {'iteration': pair.iteration, 'stamp_ns': stamp,
-            'oracle_received_ns': oracle_received, 'backend_received_ns': backend_received})
+            'oracle_received_ns': oracle_received, 'backend_received_ns': backend_received,
+            'trusted_oracle_cdr_hex': oracle.hex(), 'backend_cdr_hex': backend.hex()})
 
     def on_scan(self, msg):
         from sensor_msgs.msg import LaserScan
@@ -379,6 +411,9 @@ class LocalTrainingIngress:
                     or msg.final_publish_sequence != self._last_receipt_sequence + 1
                     or self.lifecycle is None or lifecycle_identity(msg) != lifecycle_identity(self.lifecycle)):
                 self._fail('receipt publication source/gap/context mismatch')
+            published_ns = stamp_ns(msg.header.stamp)
+            if published_ns < self._last_receipt_stamp_ns or published_ns > self.ros_now():
+                self._fail('receipt source timestamp rollback or future')
             is_policy = msg.source == msg.SOURCE_POLICY
             if msg.source not in (msg.SOURCE_POLICY, msg.SOURCE_SAFE_STOP):
                 self._fail('receipt source not allowed in LOCAL_TRAINING')
@@ -399,10 +434,128 @@ class LocalTrainingIngress:
                 source, msg.sequence, msg.step_index, msg.transition_id, lifecycle_identity(self.lifecycle),
                 self.identity.session_id, self.identity.config_hash, values, self.now(), 'base_link', True)
             self._last_receipt_sequence = msg.final_publish_sequence
+            self._last_receipt_stamp_ns = published_ns
             self._receipt_bytes[msg.final_publish_sequence] = raw
             if len(self._receipt_bytes) > 128:
                 self._receipt_bytes.popitem(last=False)
             self.receipts.append(receipt)
+            self._receipt_views[msg.final_publish_sequence] = receipt
+            if len(self._receipt_views) > 128:
+                self._receipt_views.popitem(last=False)
+            if msg.final_publish_sequence in self._unresolved_applications:
+                pending = self._unresolved_applications.pop(msg.final_publish_sequence)
+                self._resolve_application(receipt, *pending)
             self.emit('RECEIPT_RECEIVED', {'receipt_key': receipt.receipt_key,
                 'received_ns': receipt.received_steady_ns, 'message_cdr_hex': raw.hex()})
             return receipt
+
+    def bind_safety_publisher_gid(self, gid):
+        """Pin endpoint DDS thực sau khi runner kiểm đúng một Safety publisher."""
+        raw = bytes(gid)
+        if not raw or not any(raw):
+            self._fail('Safety publisher GID missing')
+        with self.lock:
+            if self._safety_publisher_gid is not None and raw != self._safety_publisher_gid:
+                self._fail('Safety publisher endpoint changed')
+            self._safety_publisher_gid = raw
+            self.emit('SAFETY_ENDPOINT_BOUND', {'publisher_gid_hex': raw.hex(), 'steady_ns': self.now()})
+
+    def register_safety_publication(self, msg, *, source_instance_id):
+        """Biên producer nội bộ sau publish thật; không dùng metadata GID không có ở Jazzy."""
+        from mecanum_nav_rl_interfaces.msg import SafetyState
+        import hashlib
+        with self.lock:
+            if (not isinstance(msg, SafetyState) or self._safety_publisher_gid is None
+                    or source_instance_id != self.safe_stop_source_id or msg.header.frame_id != 'base_link'):
+                self._fail('Safety publication producer identity/frame mismatch')
+            raw = serialize_message(msg)
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest not in self._safety_publications:
+                self._safety_publications[digest] = (raw, self.now())
+            if len(self._safety_publications) > 128:
+                self._safety_publications.popitem(last=False)
+            self.emit('SAFETY_PUBLICATION_BOUND', {'payload_sha256': digest,
+                'source_instance_id': source_instance_id, 'publisher_gid_hex': self._safety_publisher_gid.hex(),
+                'published_ns': self._safety_publications[digest][1]})
+
+    def on_safety_state(self, msg):
+        from mecanum_nav_rl_interfaces.msg import SafetyState
+        import hashlib
+        with self.lock:
+            if not isinstance(msg, SafetyState):
+                self._fail('Safety state generated type mismatch')
+            raw = serialize_message(msg)
+            digest = hashlib.sha256(raw).hexdigest()
+            publication = self._safety_publications.get(digest)
+            if publication is None or publication[0] != raw:
+                self._fail('Safety state has no matching actual producer publication')
+            if digest == self._last_safety_payload:
+                return  # DDS replay không làm mới receive time.
+            self.safety_state, self.safety_received_ns = copy.deepcopy(msg), self.now()
+            self._last_safety_payload = digest
+            self.emit('SAFETY_STATE_RECEIVED', {'payload_sha256': digest,
+                'published_ns': publication[1], 'received_ns': self.safety_received_ns})
+
+    def _record_application(self, status, raw, received):
+        if not status.applied_receipt_valid:
+            if any((status.applied_final_publisher_instance_id, status.applied_final_publish_sequence,
+                    status.applied_physics_iteration, stamp_ns(status.applied_sim_stamp))):
+                self._fail('invalid native application carries nonzero proof fields')
+            return
+        key = status.applied_final_publish_sequence
+        if (status.local_zero_override or status.applied_final_publisher_instance_id != self.final_publisher_id
+                or key == 0 or status.applied_physics_iteration != status.physics_iteration
+                or stamp_ns(status.applied_sim_stamp) != stamp_ns(status.header.stamp)):
+            self._fail('native application identity/timestamp/override mismatch')
+        if key <= self._last_applied_sequence or key in self._application_bytes:
+            self._fail('same publication key applied more than once')
+        self._last_applied_sequence = key
+        self._application_bytes[key] = raw
+        if len(self._application_bytes) > 128:
+            self._application_bytes.popitem(last=False)
+        if key in self._receipt_views:
+            self._resolve_application(self._receipt_views[key], raw, received)
+        else:
+            if len(self._unresolved_applications) >= self.CAPACITY:
+                self._fail('native application waiting for receipt overflow')
+            self._unresolved_applications[key] = (raw, received)
+
+    def _resolve_application(self, receipt, raw, received):
+        from rclpy.serialization import deserialize_message
+        status = deserialize_message(raw, SimulationContactState)
+        if (lifecycle_identity(status) != receipt.lifecycle
+                or stamp_ns(status.applied_sim_stamp) < receipt.publish_stamp_ns):
+            self._fail('native application does not join actual receipt context/stamp')
+        data = {'source_instance_id': receipt.source_instance_id, 'source_sequence': receipt.source_sequence,
+            'step_index': receipt.step_index, 'transition_id': receipt.transition_id,
+            'publisher_instance_id': receipt.final_publisher_instance_id,
+            'publish_sequence': receipt.final_publish_sequence,
+            'identity': [receipt.lifecycle.episode_generation, receipt.lifecycle.reset_epoch, receipt.lifecycle.runtime_generation],
+            'iteration': status.applied_physics_iteration, 'stamp_ns': stamp_ns(status.applied_sim_stamp),
+            'status_received_ns': received, 'steady_ns': self.now(), 'status_cdr_hex': raw.hex()}
+        self.emit('NATIVE_APPLICATION_JOINED', data)
+        if receipt.source is ReceiptSource.POLICY:
+            self.emit('policy_backend_applied', data)
+
+    def begin_pose_mutation(self, ack):
+        """Chỉ cho raw oracle cùng paused stamp trong đúng reset native đã APPLIED.
+
+        Không tạo noisy sample, iteration hoặc stamp mới cho dữ liệu này. Sau
+        clock advance đầu tiên permit hết hiệu lực; rollback vẫn luôn fault.
+        """
+        with self.lock:
+            req, res = self._check_ack(ack, Control.Request.OP_PREPARE_RESET_PAUSE)
+            state = self.backend_state
+            if (self._pose_mutation is not None or self.lifecycle.barrier_state != self.lifecycle.BARRIER_NON_READY
+                    or self.lifecycle.motion_permitted or state is None or not state.paused
+                    or not state.actuator_inhibited or state.fault_flags
+                    or lifecycle_identity(state) != lifecycle_identity(self.lifecycle)
+                    or req.final_publisher_instance_id != self.final_publisher_id
+                    or req.pause_fence_final_publish_sequence == 0 or not 0 < req.pause_enter_budget_ms <= 100
+                    or req.lifecycle_sequence != self.lifecycle.sequence
+                    or req.barrier_stamp != self.lifecycle.barrier_stamp):
+                self._fail('pose mutation has no matching paused/inhibited native ownership')
+            self._pose_mutation = req.request_sequence
+            self._paused_pose_raw = None
+            self.emit('RESET_POSE_MUTATION_ARMED', {'native_pause_request_sequence': req.request_sequence,
+                'pause_ack_observed_ns': ack.observed_steady_ns, 'steady_ns': self.now()})

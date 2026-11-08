@@ -215,3 +215,240 @@ def test_context_change_revokes_pending_and_flushes_sensor_pair_buffers(source):
     assert f.ingress.pending_ack is f.ingress.observation0_ack is None
     assert not f.ingress.noisy_samples and not f.ingress.scans and not f.ingress.physics_pairs
     assert not f.ingress.admission_publication_enabled
+
+
+def b1_runtime_chain(f):
+    """Dữ liệu biên I/O xác định; gọi ingress, assembler và transaction B1 thật."""
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import LocalTrainingB1Adapter
+    from mecanum_nav_rl.tasks.scenario_artifact import ScenarioArtifactLoader
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyState
+    root = Path(__file__).resolve().parents[4]
+    asset = json.loads((root/'artifacts/simulation/roadmap_b_b2/asset_manifest.json').read_text())
+    artifact = ScenarioArtifactLoader(expected_gazebo_world_name=asset['world_id'],
+        expected_world_file_sha256=asset['world_file_sha256']).load(
+            (root/'ros2_ws/src/mecanum_nav_rl/scenarios/local_training/B2_SOAK_V1.json').read_text())
+    transform = NS(transform=NS(translation=NS(x=-0.031765, y=0., z=0.14),
+                                    rotation=NS(x=0., y=0., z=0., w=1.)))
+    b1 = LocalTrainingB1Adapter(f.ingress, artifact, asset, scan_transform=lambda: transform,
+                               emit=lambda name, data: f.events.append((name, data)))
+    b1.begin_reset()
+
+    def scan():
+        msg = LaserScan()
+        msg.header.frame_id, msg.header.stamp = 'lidar_frame', stamp(f.clock.ros)
+        msg.range_min, msg.range_max = 0.1, 8.
+        msg.angle_min, msg.angle_max = -math.pi, math.pi
+        msg.angle_increment = (msg.angle_max - msg.angle_min) / 499
+        msg.ranges = [float('inf')] * 500
+        return msg
+
+    def physics(iteration, applied=0):
+        f.ingress.on_ground_truth(f.gt())
+        msg = f.backend(iteration=iteration, sequence=iteration)
+        if applied:
+            msg.applied_receipt_valid = True
+            msg.applied_final_publisher_instance_id, msg.applied_final_publish_sequence = 55, applied
+            msg.applied_physics_iteration, msg.applied_sim_stamp = iteration, stamp(f.clock.ros)
+        f.ingress.on_backend(msg)
+        return msg
+
+    f.ingress.on_receipt(f.receipt(1))
+    f.advance(); physics(1, 1); f.ingress.on_scan(scan())
+    reset_cutoff = f.clock.ros
+    f.advance(); physics(2)
+    f.ingress.on_receipt(f.receipt(2))
+    observation0, selected_zero = b1.commit_observation0(reset_cutoff)
+    raw = f.ack(Control.Request.OP_CONFIRM_OBSERVATION0)
+    req = raw.request; req.observation0_cutoff = stamp(reset_cutoff)
+    req.selected_zero_final_publish_sequence = selected_zero.receipt.final_publish_sequence
+    req.adjacent_boundary_final_publish_sequence = selected_zero.adjacent_receipt.final_publish_sequence
+    confirmed = BackendControlAck(serialize_message(req), raw.response_bytes, raw.observed_steady_ns)
+    f.ingress.confirm_observation0(confirmed)
+    token = b1.begin_step()
+    f.advance(); physics(3)
+    pending = f.ack(Control.Request.OP_BIND_PENDING_STEP, 2)
+    req = pending.request; req.action_barrier_stamp = stamp(f.clock.ros)
+    pending = BackendControlAck(serialize_message(req), pending.response_bytes, pending.observed_steady_ns)
+    f.ingress.arm_pending(pending)
+    envelope = CommandEnvelope()
+    envelope.header.frame_id, envelope.header.stamp = 'base_link', stamp(f.clock.ros)
+    envelope.source, envelope.source_instance_id, envelope.sequence = envelope.SOURCE_POLICY, 33, 1
+    envelope.episode_generation, envelope.reset_epoch, envelope.runtime_generation = 1, 2, 3
+    envelope.twist.linear.x, envelope.twist.linear.y, envelope.twist.angular.z = 0.1, -0.1, 0.2
+    issued = []
+    issued.append(copy.deepcopy(envelope))  # Biên publisher giả trả về thành công.
+    b1.record_issuance(issued[-1], action_barrier_ns=f.clock.ros)
+    f.advance(); physics(4, 3)
+    receipt = f.receipt(3)
+    receipt.source, receipt.source_instance_id, receipt.sequence, receipt.step_index = receipt.SOURCE_POLICY, 33, 1, 1
+    receipt.transition_id = token.transition_id
+    receipt.final_command.linear.x, receipt.final_command.linear.y, receipt.final_command.angular.z = 0.05, -0.04, 0.08
+    f.ingress.on_receipt(receipt)
+    for iteration in range(5, 14):
+        f.advance(); physics(iteration)
+    cutoff = f.clock.ros
+    f.ingress.on_scan(scan())
+    f.advance()
+    adjacent = copy.deepcopy(receipt)
+    adjacent.header.stamp, adjacent.final_publish_sequence = stamp(f.clock.ros), 4
+    f.ingress.on_receipt(adjacent)
+    state = SafetyState()
+    state.header.frame_id, state.header.stamp = 'base_link', stamp(f.clock.ros)
+    state.state, state.reset_epoch, state.runtime_generation = state.STATE_NORMAL, 2, 3
+    state.command_valid = state.motion_permitted = True
+    state.active_command_source = state.COMMAND_SOURCE_POLICY
+    f.ingress.bind_safety_publisher_gid(bytes(range(24)))
+    f.ingress.register_safety_publication(state, source_instance_id=44)
+    f.ingress.on_safety_state(state)
+    return NS(b1=b1, cutoff=cutoff, observation0=observation0, zero_selection=selected_zero,
+              token=token, envelope=envelope, transform=transform, state=state)
+
+
+def test_real_ingress_b1_reset_then_policy_commit_retains_81d_and_true_dt(source):
+    import numpy as np
+    f = source; chain = b1_runtime_chain(f)
+    result = chain.b1.commit_step(chain.cutoff)
+    assert chain.observation0.shape == result.observation.shape == (81,)
+    assert chain.observation0.dtype == result.observation.dtype == np.float32
+    assert not result.observation.flags.writeable
+    assert result.transition_identity == chain.token
+    assert result.lifecycle_result.snapshot.step_index == 1
+    assert not result.termination.terminated and not result.termination.truncated
+    assert list(result.observation[-3:]) == list(np.asarray([0.2, -0.2, 0.1], dtype=np.float32))
+    assert result.command_history == tuple(float(v) for v in result.observation[-3:])
+    assert result.reward.terms.time == pytest.approx(-0.1 * 0.12)
+    names = [name for name, _ in f.events]
+    assert names.count('policy_adapter_issued') == names.count('policy_backend_applied') == names.count('b1_transition_committed') == 1
+    with pytest.raises(ValueError, match='no actual issuance'):
+        chain.b1.commit_step(chain.cutoff)
+    assert [name for name, _ in f.events].count('b1_transition_committed') == 1
+
+
+@pytest.mark.parametrize('missing', ['scan', 'noisy', 'physics', 'safety'])
+def test_b1_missing_real_input_never_creates_transition_or_reward(source, missing):
+    f = source; chain = b1_runtime_chain(f)
+    if missing == 'scan': f.ingress.scans.clear()
+    if missing == 'noisy': f.ingress.noisy_samples.clear()
+    if missing == 'physics': f.ingress.physics_pairs.clear()
+    if missing == 'safety': f.ingress.safety_state = None
+    with pytest.raises(ValueError): chain.b1.commit_step(chain.cutoff)
+    assert not chain.b1.committer.committed
+    assert 'b1_transition_committed' not in [name for name, _ in f.events]
+
+
+def test_b1_native_application_is_required_separately_from_publication(source):
+    from dataclasses import replace
+    from rclpy.serialization import deserialize_message
+    from collections import deque
+    f = source; chain = b1_runtime_chain(f)
+    changed = []
+    for pair in f.ingress.physics_pairs:
+        status = deserialize_message(pair.backend_bytes, SimulationContactState)
+        if status.applied_final_publish_sequence == 3:
+            status.applied_receipt_valid = False
+            status.applied_final_publisher_instance_id = status.applied_final_publish_sequence = 0
+            status.applied_physics_iteration = 0; status.applied_sim_stamp = Time()
+        changed.append(replace(pair, backend_bytes=serialize_message(status)))
+    f.ingress.physics_pairs = deque(changed, maxlen=64)
+    with pytest.raises(ValueError, match='native application'):
+        chain.b1.commit_step(chain.cutoff)
+    assert not chain.b1.committer.committed
+
+
+def test_b1_changed_transform_or_backend_fault_never_uses_fallback(source):
+    f = source; chain = b1_runtime_chain(f)
+    chain.transform.transform.translation.x = 0.5
+    with pytest.raises(ValueError, match='transform differs'):
+        chain.b1.commit_step(chain.cutoff)
+    assert not chain.b1.committer.committed
+
+
+def test_safety_endpoint_change_cannot_supply_health_for_b1(source):
+    from mecanum_nav_rl_interfaces.msg import SafetyState
+    f = source
+    f.ingress.bind_safety_publisher_gid(bytes(range(24)))
+    with pytest.raises(ValueError, match='matching actual producer'):
+        f.ingress.on_safety_state(SafetyState())
+    assert f.ingress.safety_state is None
+
+
+def test_application_ledger_joins_delayed_receipt_once_with_original_receive_time(source):
+    f = source; chain = b1_runtime_chain(f)
+    records = [data for name, data in f.events if name == 'policy_backend_applied']
+    assert len(records) == 1
+    assert records[0]['publish_sequence'] == 3
+    assert records[0]['transition_id'] == chain.token.transition_id
+    assert records[0]['iteration'] == 4
+    assert records[0]['status_received_ns'] < f.clock.steady
+    assert not f.ingress._unresolved_applications
+    chain.b1.commit_step(chain.cutoff)
+    assert len([name for name, _ in f.events if name == 'policy_backend_applied']) == 1
+
+
+def test_reapplication_of_same_final_key_is_not_a_second_application_fact(source):
+    f = source; b1_runtime_chain(f)
+    state = f.backend(iteration=14, sequence=14)
+    state.applied_receipt_valid = True
+    state.applied_final_publisher_instance_id, state.applied_final_publish_sequence = 55, 3
+    state.applied_physics_iteration, state.applied_sim_stamp = 14, stamp(f.clock.ros)
+    with pytest.raises(ValueError, match='applied more than once'):
+        f.ingress.on_backend(state)
+    assert len([name for name, _ in f.events if name == 'policy_backend_applied']) == 1
+
+
+def test_receipt_clock_rollback_cannot_be_hidden_by_phase_window(source):
+    f = source
+    f.ingress.on_receipt(f.receipt(1))
+    old = f.receipt(2); old.header.stamp = stamp(f.clock.ros - 1)
+    with pytest.raises(ValueError, match='timestamp rollback'):
+        f.ingress.on_receipt(old)
+    assert len(f.ingress.receipts) == 1
+
+
+def test_safety_receiver_uses_jazzy_message_only_and_keeps_replay_receive_age(source):
+    from mecanum_nav_rl_interfaces.msg import SafetyState
+    f = source
+    f.ingress.bind_safety_publisher_gid(bytes(range(24)))
+    state = SafetyState(); state.header.frame_id = 'base_link'; state.header.stamp = stamp(f.clock.ros)
+    f.ingress.register_safety_publication(state, source_instance_id=44)
+    f.ingress.on_safety_state(state)
+    received = f.ingress.safety_received_ns
+    f.advance(); f.ingress.on_safety_state(state)
+    assert f.ingress.safety_received_ns == received
+    changed = copy.deepcopy(state); changed.motion_permitted = True
+    with pytest.raises(ValueError, match='matching actual producer'):
+        f.ingress.on_safety_state(changed)
+
+
+def test_paused_pose_bytes_require_native_reset_ack_and_never_create_noisy_tick(source):
+    f = source
+    f.life.sequence += 1
+    f.life.barrier_state, f.life.motion_permitted = f.life.BARRIER_NON_READY, False
+    f.ingress.bind_lifecycle(f.life)
+    f.ingress.on_ground_truth(f.gt())
+    state = f.backend(); state.paused, state.actuator_inhibited = True, True
+    f.ingress.on_backend(state)
+    req, res = Control.Request(), Control.Response()
+    req.schema_version = res.schema_version = 2
+    req.operation, req.request_sequence, res.request_sequence = req.OP_PREPARE_RESET_PAUSE, 9, 9
+    req.session_id, req.config_hash, req.asset_manifest_sha256 = 'b23-test', 'a'*64, 'b'*64
+    req.coordinator_ingress_instance_id, req.expected_backend_instance_id = 11, 22
+    req.final_publisher_instance_id, req.pause_fence_final_publish_sequence = 55, 20
+    req.pause_enter_budget_ms = 100
+    for key, value in lifecycle_request_fields(f.life).items(): setattr(req,key,value)
+    req.expected_binding_revision = 4
+    res.backend_instance_id, res.binding_revision, res.applied_binding_revision = 22, 5, 5
+    res.result, res.applied_physics_iteration = res.RESULT_APPLIED, 10
+    res.applied_sim_stamp = stamp(f.clock.ros)
+    ack = BackendControlAck(serialize_message(req), serialize_message(res), f.clock.steady)
+    f.ingress.begin_pose_mutation(ack)
+    before = len(f.ingress.noisy_samples)
+    moved = f.gt(); moved.pose.pose.position.x = 0.
+    assert f.ingress.on_ground_truth(moved) is None
+    assert len(f.ingress.noisy_samples) == before
+    assert next(data for name,data in f.events if name == 'RESET_PAUSED_ORACLE')['message_cdr_hex'] == serialize_message(moved).hex()
+    f.advance(); f.ingress.on_ground_truth(f.gt())
+    assert f.ingress._pose_mutation is None
+    changed = f.gt(); changed.pose.pose.position.x = 5.
+    with pytest.raises(ValueError, match='same stamp changed bytes'):
+        f.ingress.on_ground_truth(changed)

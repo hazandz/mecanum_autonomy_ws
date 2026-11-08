@@ -31,18 +31,22 @@ class FinalTwistPublisherNode(Node):
         if self._local_training and (not isinstance(self._session_id, str)
                 or not self._session_id or self._session_id.strip() != self._session_id
                 or len(self._session_id) > 64
-                or any(type(v) is not int or not 0 < v < 2**63
+                or any(type(v) is not int or not 0 <= v < 2**63
                        for v in (self._policy_source, self._safe_stop_source))
-                or self._policy_source == self._safe_stop_source):
+                or (bool(self._policy_source) != bool(self._safe_stop_source))
+                or (self._policy_source != 0 and self._policy_source == self._safe_stop_source)):
             raise ValueError('LOCAL_TRAINING publisher requires bound session/source identities')
         if self._local_training:
             if not callable(evidence_sink):
                 raise ValueError('LOCAL_TRAINING publisher requires evidence sink')
             self._emit = evidence_sink
+        self._local_admitted = False
+        self._binding_sha256 = None
         self._identity_received_ns = 0
         self._identity: SafetyLifecycleState | None = None
         self._final_publish_sequence = 0
-        self._publisher_instance_id = (secrets.randbits(63) or 1) if self._local_training else os.getpid()
+        self._last_receipt_bytes = None
+        self._publisher_instance_id = (secrets.randbelow(2**63 - 1) + 1) if self._local_training else os.getpid()
         command_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST, depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -63,6 +67,68 @@ class FinalTwistPublisherNode(Node):
         self.create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd", self._on_accepted, reliable_volatile)
         self.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._on_lifecycle, reliable_volatile)
 
+    @property
+    def publisher_instance_id(self):
+        return self._publisher_instance_id
+
+    @property
+    def last_publication(self):
+        """Bản sao receipt đã publish thành công; không suy application native."""
+        if self._last_receipt_bytes is None:
+            return None
+        from rclpy.serialization import deserialize_message
+        return deserialize_message(self._last_receipt_bytes, FinalIssuedCommandReceipt)
+
+    def bind_backend_session(self, ack, expected_identity):
+        """Nối sources sau ACK native thật; child restart mặc định chưa được bind.
+
+        Đây là biên bootstrap riêng của runner, không tạo ROS interface thứ ba
+        hoặc đường actuator mới. Replay cùng bytes không làm mới binding.
+        """
+        import hashlib
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, BackendSessionIdentity
+        if not self._local_training or not isinstance(ack, BackendControlAck) or not isinstance(expected_identity, BackendSessionIdentity):
+            raise TypeError('actual B23 backend binding ACK/identity required')
+        digest = hashlib.sha256(ack.request_bytes + ack.response_bytes).hexdigest()
+        req, res = ack.request, ack.response
+        if (req.operation != req.OP_BIND_SESSION or req.schema_version != 2 or res.schema_version != 2
+                or req.session_id != self._session_id or req.session_id != expected_identity.session_id
+                or req.config_hash != expected_identity.config_hash
+                or req.asset_manifest_sha256 != expected_identity.asset_manifest_sha256
+                or req.coordinator_ingress_instance_id != expected_identity.coordinator_ingress_instance_id
+                or req.expected_backend_instance_id != expected_identity.backend_instance_id
+                or res.backend_instance_id != expected_identity.backend_instance_id
+                or res.request_sequence != req.request_sequence or res.result != res.RESULT_APPLIED
+                or res.reason_code != res.REASON_NONE or req.expected_binding_revision != 0
+                or res.binding_revision != 1 or res.applied_binding_revision != 1
+                or res.applied_physics_iteration == 0 or any(res.pending_admission_token)
+                or res.applied_sim_stamp.sec < 0 or not 0 <= res.applied_sim_stamp.nanosec < 10**9
+                or req.final_publisher_instance_id != self._publisher_instance_id
+                or req.policy_source_instance_id == 0 or req.safe_stop_source_instance_id == 0
+                or req.policy_source_instance_id == req.safe_stop_source_instance_id):
+            raise ValueError('final publisher ACK session/source/application mismatch')
+        if self._binding_sha256 is not None:
+            if digest != self._binding_sha256:
+                raise ValueError('final publisher binding cannot change within one boot')
+            return
+        now = self.get_clock().now().nanoseconds
+        steady_now = time.monotonic_ns()
+        applied = res.applied_sim_stamp.sec * 10**9 + res.applied_sim_stamp.nanosec
+        life = self._identity
+        if (type(ack.observed_steady_ns) is not int
+                or not 0 <= steady_now - ack.observed_steady_ns <= 1_000_000_000
+                or not 0 < applied <= now or life is None
+                or (life.episode_generation, life.reset_epoch, life.runtime_generation)
+                   != (req.episode_generation, req.reset_epoch, req.runtime_generation)
+                or life.sequence != req.lifecycle_sequence or life.barrier_stamp != req.barrier_stamp
+                or life.header.frame_id != req.lifecycle_frame_id):
+            raise ValueError('final publisher lifecycle/clock is not ready for actual binding')
+        self._policy_source, self._safe_stop_source = req.policy_source_instance_id, req.safe_stop_source_instance_id
+        self._binding_sha256, self._local_admitted = digest, True
+        self._emit('FINAL_SOURCE_BINDING_APPLIED', {'binding_sha256': digest,
+            'publisher_instance_id': self._publisher_instance_id,
+            'backend_instance_id': expected_identity.backend_instance_id, 'steady_ns': time.monotonic_ns()})
+
     def _on_lifecycle(self, msg: SafetyLifecycleState) -> None:
         self._identity = msg
         self._identity_received_ns = time.monotonic_ns()
@@ -75,6 +141,10 @@ class FinalTwistPublisherNode(Node):
         if not is_safe_stop and envelope.source != allowed:
             return
         if local:
+            if not self._policy_source or not self._safe_stop_source:
+                return
+            if not is_safe_stop and not getattr(self, '_local_admitted', False):
+                return
             expected = self._safe_stop_source if is_safe_stop else self._policy_source
             values = (envelope.twist.linear.x, envelope.twist.linear.y, envelope.twist.angular.z,
                       envelope.twist.linear.z, envelope.twist.angular.x, envelope.twist.angular.y)
@@ -162,8 +232,16 @@ class FinalTwistPublisherNode(Node):
             raise
         if local and hasattr(self, '_emit'):
             from rclpy.serialization import serialize_message
-            self._emit('FINAL_PUBLISHED', {'receipt_cdr_hex': serialize_message(receipt).hex(),
-                'steady_ns': time.monotonic_ns()})
+            self._last_receipt_bytes = serialize_message(receipt)
+            record = {'receipt_cdr_hex': self._last_receipt_bytes.hex(),
+                'steady_ns': time.monotonic_ns(), 'source_instance_id': receipt.source_instance_id,
+                'source_sequence': receipt.sequence, 'step_index': receipt.step_index,
+                'transition_id': receipt.transition_id, 'publisher_instance_id': self._publisher_instance_id,
+                'publish_sequence': self._final_publish_sequence,
+                'identity': [receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation]}
+            self._emit('FINAL_PUBLISHED', record)
+            if not is_safe_stop:
+                self._emit('policy_final_published', record)
 
 
 def main(args: list[str] | None = None) -> None:

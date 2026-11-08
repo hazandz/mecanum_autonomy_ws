@@ -157,7 +157,7 @@ def test_local_training_publisher_preserves_policy_key_and_safe_stop_counter(mon
     life.primary_state, life.barrier_state = life.PRIMARY_ACTIVE, life.BARRIER_READY
     life.motion_permitted = True
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
-    node = NS(_local_training=True, _session_id='b23-test', _policy_source=123,
+    node = NS(_local_training=True, _local_admitted=True, _session_id='b23-test', _policy_source=123,
               _safe_stop_source=456, _identity=life, _identity_received_ns=1_900_000_000,
               _final_publish_sequence=0, _publisher_instance_id=789,
               _cmd_pub=NS(publish=publish_cmd), _receipt_pub=NS(publish=publish_receipt),
@@ -181,6 +181,10 @@ def test_local_training_publisher_preserves_policy_key_and_safe_stop_counter(mon
     assert [r.sequence for r in receipts] == [1, 1]
     assert [r.final_publish_sequence for r in receipts] == [1, 2]
     assert receipts[-1].final_command.linear.y == 0.12
+    ledger = [record for name, record in evidence if name == 'policy_final_published']
+    assert len(ledger) == 2
+    assert [record['publish_sequence'] for record in ledger] == [1, 2]
+    assert len({record['transition_id'] for record in ledger}) == 1
     assert [r.step_index for r in receipts] == [1, 1]
     command.source, command.sequence, command.source_instance_id = command.SOURCE_SAFE_STOP, 7, 456
     command.twist = Twist()
@@ -211,7 +215,7 @@ def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):
     def fail(_):
         raise RuntimeError('receipt transport failure')
 
-    node = NS(_local_training=True, _identity=None, _safe_stop_source=456,
+    node = NS(_local_training=True, _local_admitted=True, _identity=None, _policy_source=123, _safe_stop_source=456,
               _final_publish_sequence=0, _publisher_instance_id=789,
               _cmd_pub=NS(publish=lambda m: events.append('cmd')), _receipt_pub=NS(publish=fail),
               _emit=lambda name, record: events.append((name, record)),
@@ -222,3 +226,63 @@ def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):
     assert events[0] == 'cmd'
     assert events[1][0] == 'FINAL_PUBLISHED_WITHOUT_RECEIPT'
     assert node._final_publish_sequence == 1
+
+
+def test_local_boot_binding_requires_actual_ack_and_is_immutable(monkeypatch):
+    from types import SimpleNamespace as NS
+    from builtin_interfaces.msg import Time
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, BackendSessionIdentity
+    import pytest
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: 2_000_000_000)
+    events = []
+    life = SafetyLifecycleState()
+    life.header.frame_id = 'b2_training_arena'
+    life.header.stamp = Time(sec=1)
+    life.barrier_stamp = Time(sec=1)
+    life.sequence = 3
+    life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
+    node = NS(_local_training=True, _local_admitted=False, _binding_sha256=None,
+        _session_id='session', _policy_source=0, _safe_stop_source=0,
+        _publisher_instance_id=789, _identity=life,
+        _emit=lambda name, record: events.append((name, record)),
+        get_clock=lambda: NS(now=lambda: NS(nanoseconds=1_100_000_000)))
+    msg = CommandEnvelope(); msg.source = msg.SOURCE_SAFE_STOP
+    module.FinalTwistPublisherNode._on_accepted(node, msg)
+    assert not events  # Chưa có nguồn: callback không chạm publisher.
+    identity = BackendSessionIdentity('session', 'a'*64, 'b'*64, 7, 8)
+    req, res = Control.Request(), Control.Response()
+    req.schema_version = res.schema_version = 2
+    req.operation = req.OP_BIND_SESSION
+    req.session_id, req.config_hash, req.asset_manifest_sha256 = 'session', 'a'*64, 'b'*64
+    req.coordinator_ingress_instance_id, req.expected_backend_instance_id = 7, 8
+    req.request_sequence = res.request_sequence = 1
+    req.final_publisher_instance_id, req.policy_source_instance_id, req.safe_stop_source_instance_id = 789, 123, 456
+    req.episode_generation, req.reset_epoch, req.runtime_generation = 1, 2, 3
+    req.lifecycle_sequence = life.sequence
+    req.lifecycle_frame_id, req.barrier_stamp = life.header.frame_id, life.barrier_stamp
+    res.result, res.backend_instance_id = res.RESULT_APPLIED, 8
+    res.binding_revision = res.applied_binding_revision = 1
+    res.applied_physics_iteration = 10
+    res.applied_sim_stamp = Time(sec=1, nanosec=10_000_000)
+    def ack(): return BackendControlAck(serialize_message(req), serialize_message(res), 1_990_000_000)
+    module.FinalTwistPublisherNode.bind_backend_session(node, ack(), identity)
+    assert node._local_admitted and (node._policy_source, node._safe_stop_source) == (123, 456)
+    module.FinalTwistPublisherNode.bind_backend_session(node, ack(), identity)
+    assert len(events) == 1
+    with pytest.raises(ValueError, match='session/source'):
+        module.FinalTwistPublisherNode.bind_backend_session(node, ack(),
+            BackendSessionIdentity('other', 'a'*64, 'b'*64, 7, 8))
+    req.policy_source_instance_id = 999
+    with pytest.raises(ValueError, match='cannot change'):
+        module.FinalTwistPublisherNode.bind_backend_session(node, ack(), identity)
+    assert node._policy_source == 123
+    req.policy_source_instance_id = 123
+    node._binding_sha256, node._local_admitted = None, False
+    with pytest.raises(ValueError, match='lifecycle/clock'):
+        module.FinalTwistPublisherNode.bind_backend_session(node,
+            BackendControlAck(serialize_message(req), serialize_message(res), 0), identity)
+    assert not node._local_admitted

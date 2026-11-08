@@ -230,7 +230,7 @@ ctx = dict(session_id='b23-test', config_hash='a'*64, ingress_instance_id=11,
            backend_instance_id=22, policy_source_instance_id=33, safe_stop_source_instance_id=44,
            profile=p, sensor=sensor, sim_estop_release_authorized=True)
 node = module.SafetySupervisorNode(local_training_context=ctx, evidence_sink=lambda *args: None)
-assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/policy_candidate_cmd',
+assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
 assert node.timers == [(0.02, node.local_training.tick)]
 assert node.local_training.policy_hold is True
