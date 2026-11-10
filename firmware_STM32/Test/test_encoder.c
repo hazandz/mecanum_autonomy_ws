@@ -1,4 +1,5 @@
 #include "encoder.h"
+#include "timer_irq_dispatch.h"
 #include "FreeRTOS.h"
 #include <assert.h>
 
@@ -6,6 +7,31 @@ TIM_TypeDef fake_tim[5];
 static uint32_t tick;
 static unsigned starts, stops, critical_enters, critical_exits;
 static bool fail_second_start;
+static unsigned timer_irq_dispatch_count;
+static void *last_timer_irq_handle;
+
+static void record_timer_irq_dispatch(void *handle)
+{
+    ++timer_irq_dispatch_count;
+    last_timer_irq_handle = handle;
+}
+
+static void test_timer_irq_dispatch_skips_uninitialized_timer(void)
+{
+    TIM_HandleTypeDef tim1 = {0};
+    TIM_HandleTypeDef tim10 = {TIM10};
+
+    timer_irq_dispatch_if_initialized(&tim1, tim1.Instance,
+                                      record_timer_irq_dispatch);
+    assert(timer_irq_dispatch_count == 0U);
+    assert(last_timer_irq_handle == 0);
+
+    timer_irq_dispatch_if_initialized(&tim10, tim10.Instance,
+                                      record_timer_irq_dispatch);
+    assert(timer_irq_dispatch_count == 1U);
+    assert(last_timer_irq_handle == &tim10);
+}
+
 uint32_t HAL_GetTick(void) { return tick; }
 uint32_t __get_IPSR(void) { return 0U; }
 HAL_StatusTypeDef HAL_TIM_Encoder_Start(TIM_HandleTypeDef *timer, uint32_t channel)
@@ -20,6 +46,7 @@ int main(int argc, char **argv)
     TIM_HandleTypeDef fl={TIM2}, fr={TIM5}, rl={TIM1}, rr={TIM4};
     encoder_snapshot_t s;
     (void)argv;
+    test_timer_irq_dispatch_skips_uninitialized_timer();
     if (argc > 1 && argv[1][0] == 'o') {
         assert(encoder_start(&fl,&fr,&rl,&rr));
         assert(encoder_test_set_cumulative(0U, INT64_MAX));
