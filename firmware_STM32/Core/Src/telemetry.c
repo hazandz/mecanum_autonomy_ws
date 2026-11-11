@@ -4,6 +4,7 @@
 #include "control_safety_runtime.h"
 #include "encoder.h"
 #include "safety_io.h"
+#include "slam_bench_motor_runtime.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -50,7 +51,9 @@ bool telemetry_runtime_service_once(void)
     if ((__get_IPSR() != 0U) || task_handle == NULL
         || xTaskGetCurrentTaskHandle() != task_handle) return false;
     if (!control_safety_runtime_copy_snapshot(&session) || !session.configured
-        || !session.telemetry_allowed || session.motor_enabled || !encoder_snapshot(&enc)
+        || !session.telemetry_allowed
+        || (session.motor_enabled && !slam_bench_motor_runtime_telemetry_allowed())
+        || !encoder_snapshot(&enc)
         || sequence_exhausted) return false;
     estop_valid = safety_io_read_estop_aux(&estop_active);
     if (!control_safety_runtime_copy_snapshot(&after)

@@ -1,6 +1,7 @@
 #include "control_safety_runtime.h"
 
 #include "command_watchdog.h"
+#include "slam_bench_motor_runtime.h"
 #include "communication_runtime.h"
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -51,12 +52,14 @@ static void watchdog_expiry_check(uint32_t now)
     if ((session.state != CONTROL_SAFETY_SESSION_SAFE_STOP)
         && command_watchdog_expired(&watchdog, now)) {
         (void)control_safety_session_handle_watchdog_expired(&session, &decision);
+        slam_bench_motor_runtime_stop();
         mcu_fault_bits |= MECANUM_FAULT_MCU_COMMAND_TIMEOUT;
     }
 }
 
 static void transport_failure(void)
 {
+    slam_bench_motor_runtime_stop();
     if ((mcu_fault_bits & MECANUM_FAULT_TRANSPORT) == 0U) {
         control_safety_session_decision_t decision;
         if (session.state != CONTROL_SAFETY_SESSION_SAFE_STOP) {
@@ -79,6 +82,7 @@ static void process_config(const communication_candidate_t *candidate)
     if (!accepted || !decision.config_status_available) return;
     if (decision.config_status.config_status == MECANUM_UART_V1_CONFIG_ACCEPTED) {
         command_watchdog_disarm(&watchdog);
+        slam_bench_motor_runtime_stop();
         telemetry_allowed = false;
     }
     if (!communication_runtime_enqueue_config_status(&decision.config_status)) {
@@ -102,6 +106,9 @@ static void process_command(const communication_candidate_t *candidate, uint32_t
     if (!control_safety_session_handle_command(&session, &candidate->value.command, &decision)) return;
     if (decision.command_accepted) {
         if (!command_watchdog_accept(&watchdog, candidate->rx_tick, now)) return;
+        (void)slam_bench_motor_runtime_set_body_command(
+            candidate->value.command.vx_mps,candidate->value.command.vy_mps,
+            candidate->value.command.wz_radps);
         mcu_fault_bits &= ~MECANUM_FAULT_MCU_COMMAND_INVALID;
     } else if (decision.internal_reject_reason != CONTROL_SAFETY_SESSION_REJECT_SAFE_STOP
                && decision.internal_reject_reason != CONTROL_SAFETY_SESSION_REJECT_NO_CONFIGURED_SESSION) {
@@ -124,6 +131,7 @@ void control_safety_runtime_service_once(void)
         return;
     }
     if (!communication_runtime_is_usable()) return; /* Startup prepare precedes RX arm. */
+    slam_bench_motor_runtime_step((float)CONTROL_SAFETY_RUNTIME_PERIOD_MS*0.001f);
     watchdog_expiry_check(HAL_GetTick());
     while ((budget-- > 0U) && communication_runtime_take_candidate(&candidate)) {
         uint32_t now = HAL_GetTick();
@@ -147,7 +155,7 @@ bool control_safety_runtime_copy_snapshot(control_safety_snapshot_t *out)
     out->state = session.state;
     out->configured = session.configured;
     out->telemetry_allowed = telemetry_allowed;
-    out->motor_enabled = false;
+    out->motor_enabled = slam_bench_motor_runtime_enabled();
     out->mcu_boot_id = session.mcu_boot_id;
     out->reset_epoch = session.configured_reset_epoch;
     out->last_accepted_command_sequence = session.last_accepted_command_sequence;

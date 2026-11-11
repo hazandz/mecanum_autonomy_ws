@@ -108,9 +108,11 @@ class _FaithfulNodeBase:
         self.timers = []
     def has_parameter(self, name):
         return name in self.parameters
-    def declare_parameter(self, name, value):
+    def declare_parameter(self, name, value, descriptor=None):
         if name in self.parameters:
             raise RuntimeError(f"parameter {name} already declared by Node")
+        if name == "slam_bench_speed_levels_mps":
+            assert descriptor.type == 8  # PARAMETER_DOUBLE_ARRAY
         self.parameters[name] = SimpleNamespace(value=self.overrides.get(name, value))
     def get_parameter(self, name):
         return self.parameters[name]
@@ -217,7 +219,9 @@ def test_constructor_initializes_with_existing_sim_time_and_no_serial_open(monke
     assert made["transports"][0].port == "/dev/fake-uart"
     assert made["transports"][0].open_calls == 0
     assert made["sessions"][0].monotonic is steady
-    assert [timer[0] for timer in node.timers] == [0.005, 0.1]
+    assert [timer[0] for timer in node.timers] == [0.005, 0.1, 0.05]
+    assert node.get_parameter("slam_bench_speed_levels_mps").value == []
+    assert node.get_parameter("slam_bench_yaw_scale_radps").value == 0.0
     assert all(timer[2] is node.get_clock() for timer in node.timers)
     node.destroy_node()
 

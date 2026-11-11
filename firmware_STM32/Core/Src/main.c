@@ -8,6 +8,7 @@
 /* USER CODE BEGIN Includes */
 #include "communication_runtime.h"
 #include "control_safety_runtime.h"
+#include "slam_bench_motor_runtime.h"
 #include "boot_id.h"
 #include "generated_hardware_config.h"
 #include "safety_io.h"
@@ -99,6 +100,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   safety_io_init_safe();
   if (!encoder_start(&htim2, &htim5, &htim1, &htim4)) Error_Handler();
+  if (!slam_bench_motor_runtime_init()) Error_Handler();
   /* USER CODE END 2 */
 
   /* Init scheduler */

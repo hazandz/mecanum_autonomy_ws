@@ -12,6 +12,16 @@ from mecanum_base_bridge.hardware_config import (
 
 ROOT = Path(__file__).resolve().parents[4]
 MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest.yaml'
+SLAM_BENCH_MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest_slam_manual_bench.yaml'
+
+
+def test_slam_bench_encoder_signs_are_resolved_without_motor_sign_changes():
+    canonical = load_manifest(MANIFEST)
+    bench = load_manifest(SLAM_BENCH_MANIFEST)
+    assert wheel_geometry(bench)['encoder_tick_signs'] == [1, 1, 1, 1]
+    for wheel in ('FL', 'FR', 'RL', 'RR'):
+        assert bench['wheel_sign_mapping'][wheel]['motor_command_sign'] == canonical['wheel_sign_mapping'][wheel]['motor_command_sign']
+    assert bench['wheel_order'] == canonical['wheel_order'] == ['FL', 'FR', 'RL', 'RR']
 
 
 def test_manifest_digest_uses_domain_nul_and_complete_mapping():
