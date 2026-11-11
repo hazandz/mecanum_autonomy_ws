@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Plan ID | `PEP-001` |
-| Revision | `0.10.17` Roadmap B B2.2 closure and exact-candidate integration |
+| Revision | `0.10.18` WP-07 U6 corrective UART telemetry closure |
 | Architecture status | `ARCHITECTURE_FROZEN`, `IMPLEMENTATION_READY`, `NOT_YET_REAL_ROBOT_VALIDATED` |
 | Immutable baseline | `baseline/architecture-frozen-20261002` at `86beff623dba3683f643c851a4a1374c635178b3` |
 | Integration line | `integration/implementation` |
@@ -1155,3 +1155,31 @@ disposition for the exact candidate below.
 | Ledger entry | `ROADMAP_B_B22_CLOSED_INTEGRATED`, appended to `PROJECT_PROGRESS_LEDGER.md`. |
 | Integration commit SHA | Resolved from canonical Git history after this record is committed; not self-embedded. |
 | Next action | Independent workspace may audit the integrated source and closure record; any B2.3 start remains a separate Owner decision. |
+
+## WP-07 U6 corrective UART telemetry closure — PEP-001 rev.0.10.18
+
+This status transition closes only the U6 corrective UART telemetry scope.
+It does not close PEP work package WP-07 or change its dependency state. It
+becomes canonical only after this PEP revision and its append-only Ledger
+record are committed on `integration/implementation` and the resulting live
+remote ref is verified.
+
+| Change-control field | Recorded value |
+|---|---|
+| Plan ID; old/new revision | `PEP-001`; `0.10.17` -> `0.10.18` |
+| Work package | `WP07_U6_CORRECTIVE_UART_TELEMETRY_CLOSURE` |
+| Work branch / candidate | `wp07-u6-telemetry-closure-c035d95`; status-record commit is resolved from canonical Git history and is not self-embedded |
+| Audited source corrective | `wp07-pi5-stm32-uart-parallel-fdc0e299` @ `e5aea0fef77c6f7d12d9569a2c06da52ef4c5b46`, parent `4ffb9cf49d3efb0309111f61e938c08d67ca1479` |
+| Audited firmware artifact | `wp07-u6-audit-artifacts-e5aea0f` @ `be2bea60fbd0e96390dfef01cfa87d6f1dd5c0fe`, parent `e5aea0fef77c6f7d12d9569a2c06da52ef4c5b46`; ELF SHA-256 `cc0c1425fcb348dc15a4436ff50cb6e77db0b0116c16bf5676245481f8c5dc7b`; map SHA-256 `0a2a8985d1ed28627c22ae6f3c7519c0ae8556a5a51e9b4e445bd61a9888f08c`; hardware-config JSON SHA-256 `ecc20f4a44c5bf716994549f4348c0a45169cf3d73c43b871494356070d278bf` |
+| Integration base and method | `c035d95be8631cba87daf788a36d47cc47b8fe07`; exact-parent fast-forward, no merge commit |
+| Audit and runtime evidence | Audit reviewed the exact source/artifact commits and the four Owner-provided CONFIG-only runtime JSON files listed in `WP07_U6_CORRECTIVE_UART_TELEMETRY_CLOSED` in the append-only Ledger. Each run records matching CONFIG acceptance/hash/epoch, A1 silence, 2,999 telemetry frames, UNKNOWN=2, zero COMMAND, increasing sequence/time, and consistent raw cumulative counters. Owner-provided CubeProgrammer transcript reports matching ELF SHA-256 and `Download verified successfully`; this is not a Codex-collected programmer log. |
+| Exact status transition | `U6 corrective UART telemetry: IN PROGRESS -> CLOSED` |
+| Activation condition | Effective only after this PEP/Ledger status record is committed on the integration line and the resulting live remote integration ref is directly read back. |
+| Preserved WP-07 status and dependencies | PEP WP-07 remains `BLOCKED_BY_DEPENDENCY`; dependencies 03 and 05 are unchanged. This sub-scope does not close the umbrella package. |
+| Scope and evidence limits | Corrective UART telemetry only. Wheel-sign/mapping was not independently measured because the robot moved during hand rotation; Owner's forward-positive/reverse-negative statement remains Owner confirmation. No `/wheel/odometry_raw` runtime, U7, PID/KIN, motor-control, HIL, independent physical E-stop, or `REAL_READY` result is established. Earlier failed epoch 2/3 runs remain failed history and are not relabeled. |
+| Architecture/ACR impact | None. The recorded diagnostics scope is consistent with Architecture §34; physical E-stop independence and HIL obligations remain open. |
+| Registry impact | None. Firmware source remains subject to the existing pending offline/HIL evidence classification; this scoped telemetry closure does not promote production integration. |
+| Ledger entry | `WP07_U6_CORRECTIVE_UART_TELEMETRY_CLOSED`, appended to `PROJECT_PROGRESS_LEDGER.md`. |
+| Integration commit SHA | Resolved from canonical Git history after this record is committed; not self-embedded. |
+| Owner authorization | This exact change-control and U6 telemetry-scope transition are authorized by the current Owner instruction. |
+| Next action | Any remaining WP-07/U7, wheel-sign, odometry, motor-control, HIL, or real-readiness work remains separately scoped and gated. |

@@ -1973,3 +1973,23 @@ The exact active Run003 scope test now includes the Owner-authorized Run002 hist
 | Architecture/ACR impact | None; no Architecture or ACR bytes changed. |
 | Runtime/build/test | No runtime, build, or test rerun for this integration/closure transaction; the independent audit and existing evidence were relied upon. |
 | Next action | Workspace audit of the integrated source and governance record; B2.3 remains a separate Owner decision. |
+
+
+### WP07_U6_CORRECTIVE_UART_TELEMETRY_CLOSED — 2026-11-11
+
+| Field | Record |
+|---|---|
+| Supersedes | None. This is a new, scope-limited U6 status record; prior failed runs and historical status entries remain unchanged. |
+| Owner authority | Current Owner instruction authorizes canonical change-control for `U6 corrective UART telemetry: IN PROGRESS -> CLOSED` only. |
+| Work package / plan | `WP07_U6_CORRECTIVE_UART_TELEMETRY_CLOSURE`; PEP-001 rev. `0.10.17` -> `0.10.18`. |
+| Status-record candidate | Branch `wp07-u6-telemetry-closure-c035d95`, based on exact live integration base `c035d95be8631cba87daf788a36d47cc47b8fe07`; commit SHA is resolved from canonical Git history and is not self-embedded. |
+| Audited source | Branch `wp07-pi5-stm32-uart-parallel-fdc0e299`; commit `e5aea0fef77c6f7d12d9569a2c06da52ef4c5b46`, parent `4ffb9cf49d3efb0309111f61e938c08d67ca1479`. |
+| Audited artifact | Branch `wp07-u6-audit-artifacts-e5aea0f`; commit `be2bea60fbd0e96390dfef01cfa87d6f1dd5c0fe`, parent `e5aea0fef77c6f7d12d9569a2c06da52ef4c5b46`; ELF SHA-256 `cc0c1425fcb348dc15a4436ff50cb6e77db0b0116c16bf5676245481f8c5dc7b`; map SHA-256 `0a2a8985d1ed28627c22ae6f3c7519c0ae8556a5a51e9b4e445bd61a9888f08c`; hardware-config JSON SHA-256 `ecc20f4a44c5bf716994549f4348c0a45169cf3d73c43b871494356070d278bf`. |
+| Runtime evidence | Four directly read Owner-provided files under `$HOME/u6-runtime-evidence/`: `wp07-u6-config-bench-e5aea0f-clean-20261111-155700.json` (SHA-256 `b431dcebb82ecf7754c5c3e30f515e40d448c2e781a3dc445590ed1419731763`); `wp07-u6-encoder-manual-20261111-160143.json` (`4eab10b155deb5853d6b77182dc5b8ac9edfca14e82ea25112aa8391d22d2891`); `wp07-u6-encoder-signs-20261111-161143.json` (`f4ec298ab2ed4087b304e637338ccd808a89c606e8f15633bc90503f05587045`); `wp07-u6-restart-20261111-161754.json` (`c1da5b31ad2b374989cab73812d543225ee0887c9d1bbbd3e81f861596e0e680`). |
+| Audit result | All four JSON files match the harness schema/fingerprint at harness commit `4ffb9cf49d3efb0309111f61e938c08d67ca1479` and hash `5c2441572cce93b6fabf9c25f3ffa71e0b640da2df66cbbb06543b9055698f58`. Each records A1 silence during the owner-confirmed just-booted/no-prior-CONFIG window; matching CONFIG_ACCEPTED/reject-none, sequence, epoch and hardware-config hash `efe7d25a2a26fa4a83000959cc3060826793b74dbedca7b1c2e2a881d3d1ed06`; 3,000 complete valid frames including 2,999 telemetry observations; `estop_aux_active=2`; fault bits and accepted-command ACK `0`; one CONFIG_REQUEST and zero COMMAND; strictly increasing telemetry sequence and MCU/observation timestamps; and internally consistent tick deltas. Epochs 4–7 use boot IDs 7–10; after restart all four counters remain zero throughout the restart run. |
+| Programming transcript | Owner reports `/tmp/stm32_uart_runtime-e5aea0f.elf` SHA-256 equals the audited ELF and CubeProgrammer returned `Download verified successfully`. This is Owner-provided transcript evidence, not a Codex-collected programming log. |
+| Status transition | `U6 corrective UART telemetry: IN PROGRESS -> CLOSED`, limited to diagnostics/telemetry behavior. |
+| Evidence boundary | Encoder counters changed during hand rotation, but the robot moved; wheel-specific sign/mapping was not independently measured. Owner confirms forward-positive/reverse-negative; that remains Owner confirmation. Epoch 2/3 failures remain failed historical runs. |
+| Preserved status | PEP WP-07 umbrella remains `BLOCKED_BY_DEPENDENCY` with dependencies 03 and 05 unchanged. U7, `/wheel/odometry_raw` runtime, PID/KIN, motor-control, HIL, independent physical E-stop, and `REAL_READY` are not established. |
+| Architecture/Registry impact | No Architecture, ACR, or Registry change. This record does not promote firmware to production integration or satisfy HIL evidence. |
+| Integration activation | Effective only when PEP-001 rev.0.10.18 and this append-only record are committed on `integration/implementation` and the live remote ref is verified. Integration base is `c035d95be8631cba87daf788a36d47cc47b8fe07`; intended method is exact-parent fast-forward without a merge commit. |
