@@ -213,8 +213,9 @@ class Node:
     def __init__(self, name, **kwargs):
         self.params = {'use_sim_time': True, 'navigation_mode': 'LOCAL_TRAINING'}
         self.subscriptions, self.timers = [], []
+        self.ros_now_ns = 0
     def get_parameter(self, name): return NS(value=self.params[name])
-    def get_clock(self): return NS(now=lambda: NS(nanoseconds=123456789))
+    def get_clock(self): return NS(now=lambda: NS(nanoseconds=self.ros_now_ns))
     def declare_parameter(self, name, value=None): self.params.setdefault(name, value)
     def create_publisher(self, *args): return NS(publish=lambda msg: None)
     def create_subscription(self, message_type, topic, callback, qos):
@@ -242,12 +243,22 @@ assert len(node.timers) == 1 and node.timers[0].period == 0.01
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 phase_timer = node.timers[0]
 phase_timer.callback()
+assert node.timers == [phase_timer]  # ROS clock zero: keep waiting, do not anchor phase.
+assert events[-1][0] == 'SAFETY_TIMER_PHASE_WAIT' and events[-1][1]['started_ros_ns'] == 0
+node.ros_now_ns = 60_000_000
+phase_timer.callback()
+assert node.timers == [phase_timer]  # Running ROS clock, wrong residue: still wait.
+assert events[-1][0] == 'SAFETY_TIMER_PHASE_WAIT' and events[-1][1]['phase_ns'] == 0
+node.ros_now_ns = 70_000_000
+phase_timer.callback()
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 assert node.timers[0].callback == node.local_training.tick
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
 assert events[-1][0] == 'SAFETY_TIMER_PHASE_STARTED'
 assert events[-1][1]['initial_offset_ns'] == 10_000_000
+assert events[-1][1]['started_ros_ns'] == 70_000_000
+assert events[-1][1]['started_ros_phase_ns'] == 10_000_000
 assert events[-1][1]['period_ns'] == 20_000_000
 assert events[-1][1]['clock'] == 'steady'
 assert node.local_training.policy_hold is True

@@ -80,9 +80,27 @@ class SafetySupervisorNode(Node):
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
 
             def start_local_training_periodic_timer():
+                # The startup phase timer is steady so it still runs while
+                # Gazebo is bringing up /clock. Do not anchor the periodic
+                # Safety loop to that zero-time interval: doing so can align
+                # every final receipt with the 10 Hz scan cutoffs. The native
+                # application proof is observed on the following physics
+                # update, which leaves B1 without an applied receipt at the
+                # exact cutoff. Wait until ROS time is running and start from
+                # the half-period phase; the loop itself remains steady-time.
+                started_ros_ns = self.get_clock().now().nanoseconds
+                phase_ns = started_ros_ns % period_ns
+                if started_ros_ns <= 0 or phase_ns != period_ns // 2:
+                    self.local_training.emit('SAFETY_TIMER_PHASE_WAIT', {
+                        'started_ros_ns': started_ros_ns,
+                        'phase_ns': phase_ns,
+                        'target_phase_ns': period_ns // 2,
+                        'period_ns': period_ns,
+                        'clock': 'steady',
+                    })
+                    return
                 self.destroy_timer(self._local_training_phase_timer)
                 self._local_training_phase_timer = None
-                started_ros_ns = self.get_clock().now().nanoseconds
                 self._local_training_timer = self.create_timer(
                     period_ns / 1_000_000_000, self.local_training.tick,
                     clock=steady_clock)
@@ -90,6 +108,7 @@ class SafetySupervisorNode(Node):
                     'initial_offset_ns': period_ns // 2,
                     'period_ns': period_ns,
                     'started_ros_ns': started_ros_ns,
+                    'started_ros_phase_ns': phase_ns,
                     'clock': 'steady',
                 })
 
