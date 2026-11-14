@@ -1880,7 +1880,8 @@ static void RunNativeResetObservation0Chain(
     bool positive_policy_admission = false,
     int safety_freshness_case = 0, int query_revocation_case = 0,
     int admission_case = 0, int pause_case = 0, int closing_case = 0,
-    bool lifecycle_heartbeat = false, bool inhibit_cache_revocation = false)
+    bool lifecycle_heartbeat = false, bool inhibit_cache_revocation = false,
+    bool pause_cache_revocation = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -1981,6 +1982,58 @@ static void RunNativeResetObservation0Chain(
   EXPECT_EQ(BackendSystemTestPeer::Cached(system, 3).contact_capability_state,
             ControlResponse::CAPABILITY_VERIFIED);
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+
+  if (pause_cache_revocation)
+  {
+    auto pause = BaseControlRequest(4);
+    BindTestRequestToConfiguredBackend(pause, system);
+    pause.operation = ControlRequest::OP_PREPARE_RESET_PAUSE;
+    pause.expected_binding_revision = 1;
+    pause.episode_generation = 2;
+    pause.reset_epoch = 3;
+    pause.runtime_generation = 4;
+    pause.lifecycle_sequence = 1;
+    pause.primary_state = ControlRequest::PRIMARY_ACTIVE;
+    pause.barrier_state = ControlRequest::BARRIER_NON_READY;
+    SetStamp(pause.lifecycle_header_stamp, 200'000'000);
+    pause.lifecycle_frame_id = "b2_training_arena";
+    SetStamp(pause.barrier_stamp, 90);
+    pause.final_publisher_instance_id = 11;
+    pause.pause_fence_final_publish_sequence = 5;
+    pause.pause_enter_budget_ms = 100;
+    ASSERT_EQ(BackendSystemTestPeer::Receive(system, pause).result,
+              ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 15, 350'000'000);
+    const auto terminal_pause = BackendSystemTestPeer::Cached(system, 4);
+    ASSERT_EQ(terminal_pause.result, ControlResponse::RESULT_REJECTED);
+    ASSERT_EQ(terminal_pause.reason_code,
+              ControlResponse::REASON_BARRIER_INVALID);
+    ASSERT_EQ(terminal_pause.contact_capability_state,
+              ControlResponse::CAPABILITY_VERIFIED);
+
+    ecm.SetComponentData<gz::sim::components::PhysicsEnginePlugin>(
+        BackendSystemTestPeer::WorldEntity(system), "missing-engine");
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 16, 360'000'000);
+    ASSERT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+    auto pause_after_fault = pause;
+    pause_after_fault.request_sequence = 5;
+    const auto rejected_after_fault = BackendSystemTestPeer::Receive(
+        system, pause_after_fault);
+    EXPECT_EQ(rejected_after_fault.result, ControlResponse::RESULT_REJECTED);
+    EXPECT_EQ(rejected_after_fault.reason_code,
+              ControlResponse::REASON_BARRIER_INVALID);
+    EXPECT_NE(rejected_after_fault.contact_capability_state,
+              ControlResponse::CAPABILITY_VERIFIED);
+    const auto replay = BackendSystemTestPeer::Receive(system, pause);
+    EXPECT_EQ(replay.result, terminal_pause.result);
+    EXPECT_EQ(replay.reason_code, terminal_pause.reason_code);
+    EXPECT_NE(replay.contact_capability_state,
+              ControlResponse::CAPABILITY_VERIFIED);
+    EXPECT_TRUE(replay.proof_session_id.empty());
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    EXPECT_EQ(io->spawn_calls, 1u);
+    return;
+  }
 
   if (inhibit_cache_revocation)
   {
@@ -4724,6 +4777,12 @@ TEST(BackendSystemControlReceiver, InhibitReplayPreservesAppliedAckAfterProofRev
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, false,
                                   0, 0, 0, 0, 0, false, true);
+}
+
+TEST(BackendSystemControlReceiver, PauseReplayPreservesTerminalRejectionAfterProofRevoked)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, false,
+                                  0, 0, 0, 0, 0, false, false, true);
 }
 
 TEST(BackendSystemControlReceiver, CallbackAfterTickSampleWaitsForNextTickWithoutExpiring)

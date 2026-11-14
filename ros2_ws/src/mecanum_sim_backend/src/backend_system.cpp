@@ -2259,6 +2259,45 @@ private:
           response.contact_capability_state = ControlResponse::CAPABILITY_FAILED;
           return;
         }
+        if (request.operation == ControlRequest::OP_PREPARE_RESET_PAUSE)
+        {
+          // Pause không được biến thành lỗi QUERY chỉ vì response QUEUED hoặc
+          // REJECTED mang capability snapshot cũ. Giữ kết quả giao dịch pause,
+          // nhưng loại proof đã hết generation khỏi ACK replay.
+          response = cached->second.response;
+          response.contact_capability_state = ControlResponse::CAPABILITY_FAILED;
+          response.capability_revision = capability_revision_;
+          response.proof_backend_instance_id = 0;
+          response.proof_session_id.clear();
+          response.proof_config_hash.clear();
+          response.proof_asset_manifest_sha256.clear();
+          response.proof_collision_registry_sha256.clear();
+          response.proof_world_name.clear();
+          response.proof_physics_engine_plugin.clear();
+          response.proof_gz_sim_version.clear();
+          response.proof_physics_engine_fingerprint_sha256.clear();
+          response.probe_model_scoped_name.clear();
+          response.probe_model_entity_id = 0;
+          response.probe_collision_scoped_name.clear();
+          response.probe_collision_entity_id = 0;
+          response.floor_collision_scoped_name.clear();
+          response.floor_collision_entity_id = 0;
+          response.contact_sample_count = 0;
+          response.contact_first_iteration = 0;
+          response.contact_last_iteration = 0;
+          response.contact_first_stamp.sec = 0;
+          response.contact_first_stamp.nanosec = 0;
+          response.contact_last_stamp.sec = 0;
+          response.contact_last_stamp.nanosec = 0;
+          response.covered_empty_sample_count = 0;
+          response.empty_first_iteration = 0;
+          response.empty_last_iteration = 0;
+          response.empty_first_stamp.sec = 0;
+          response.empty_first_stamp.nanosec = 0;
+          response.empty_last_stamp.sec = 0;
+          response.empty_last_stamp.nanosec = 0;
+          return;
+        }
         // Response mới khởi tạo phía trên có toàn bộ proof/counter/stamp zero.
         response.result = ControlResponse::RESULT_REJECTED;
         response.reason_code = ControlResponse::REASON_CONTACT_PROBE_FAILED;
@@ -2312,6 +2351,16 @@ private:
         request.expected_binding_revision != control_binding_revision_)
     {
       response.reason_code = ControlResponse::REASON_REVISION_MISMATCH;
+      CacheControlResponse(request.request_sequence, request_bytes, response);
+      return;
+    }
+    if (request.operation == ControlRequest::OP_PREPARE_RESET_PAUSE &&
+        (fault_flags_ != 0 || reset_pause_failed_ ||
+         (last_backend_state_ && last_backend_state_->paused)))
+    {
+      // Một pause ngoài intent đã đóng session. Trả barrier failure ngay ở
+      // service receiver thay vì xếp mutation vào hàng đợi khi world đứng.
+      response.reason_code = ControlResponse::REASON_BARRIER_INVALID;
       CacheControlResponse(request.request_sequence, request_bytes, response);
       return;
     }
