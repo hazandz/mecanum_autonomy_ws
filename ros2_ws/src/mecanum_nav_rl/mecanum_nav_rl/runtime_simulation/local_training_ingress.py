@@ -433,9 +433,9 @@ class LocalTrainingIngress:
                     self._fail('receipt same publication key changed bytes')
                 return
             if (msg.final_publisher_instance_id != self.final_publisher_id or msg.header.frame_id != 'base_link'
-                    or msg.final_publish_sequence != self._last_receipt_sequence + 1
+                    or msg.final_publish_sequence <= self._last_receipt_sequence
                     or self.lifecycle is None or lifecycle_identity(msg) != lifecycle_identity(self.lifecycle)):
-                self._fail('receipt publication source/gap/context mismatch')
+                self._fail('receipt publication source/order/context mismatch')
             published_ns = stamp_ns(msg.header.stamp)
             if published_ns < self._last_receipt_stamp_ns or published_ns > self.ros_now():
                 self._fail('receipt source timestamp rollback or future')
@@ -454,6 +454,14 @@ class LocalTrainingIngress:
             if (msg.transition_id != expected or msg.step_index != (msg.sequence if is_policy else 0)
                     or (not is_policy and any(values))):
                 self._fail('receipt B1 transition identity or SAFE_STOP values mismatch')
+            previous_sequence = self._last_receipt_sequence
+            if previous_sequence > 0 and msg.final_publish_sequence > previous_sequence + 1:
+                self.emit('RECEIPT_COALESCED_GAP', {
+                    'previous_sequence': previous_sequence,
+                    'accepted_sequence': msg.final_publish_sequence,
+                    'missing_count': msg.final_publish_sequence - previous_sequence - 1,
+                    'publisher_instance_id': msg.final_publisher_instance_id,
+                    'steady_ns': self.now()})
             receipt = IssuedCommandReceiptView(stamp_ns(msg.header.stamp), msg.final_publisher_instance_id,
                 msg.final_publish_sequence, ReceiptSource.POLICY if is_policy else ReceiptSource.SAFE_STOP,
                 source, msg.sequence, msg.step_index, msg.transition_id, lifecycle_identity(self.lifecycle),

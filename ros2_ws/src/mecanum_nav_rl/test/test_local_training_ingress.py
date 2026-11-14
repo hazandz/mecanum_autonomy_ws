@@ -185,11 +185,31 @@ def test_receipt_replay_keeps_original_bytes_receive_time_and_sequence(source):
         f.ingress.on_receipt(changed)
 
 
-def test_receipt_gap_never_creates_b1_view(source):
+def test_late_join_receipt_accepts_first_retained_sequence(source):
     f = source
-    with pytest.raises(ValueError, match='gap/context'):
-        f.ingress.on_receipt(f.receipt(2))
-    assert not f.ingress.receipts
+    accepted = f.ingress.on_receipt(f.receipt(2))
+    assert accepted.final_publish_sequence == 2
+    assert tuple(f.ingress.receipts) == (accepted,)
+    assert not [name for name, _ in f.events if name == 'RECEIPT_COALESCED_GAP']
+
+
+def test_receipt_coalesced_gap_is_recorded_and_latest_receipt_is_accepted(source):
+    f = source
+    first = f.ingress.on_receipt(f.receipt(1))
+    f.advance()
+    latest = f.ingress.on_receipt(f.receipt(3))
+    assert latest.final_publish_sequence == 3
+    assert tuple(f.ingress.receipts) == (first, latest)
+    gap = [data for name, data in f.events if name == 'RECEIPT_COALESCED_GAP']
+    assert gap == [{'previous_sequence': 1, 'accepted_sequence': 3, 'missing_count': 1,
+                    'publisher_instance_id': 55, 'steady_ns': f.clock.steady}]
+
+
+def test_receipt_non_monotonic_sequence_still_fails_closed(source):
+    f = source
+    f.ingress.on_receipt(f.receipt(2))
+    with pytest.raises(ValueError, match='source/order/context mismatch'):
+        f.ingress.on_receipt(f.receipt(1))
 
 
 def test_scan_replay_does_not_refresh_receive_age(source):
