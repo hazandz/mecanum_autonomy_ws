@@ -584,3 +584,69 @@ def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(so
     assert len(observed)==1 and chain.observation0.shape==(81,)
     assert source.ingress.observation0_ack is not None
     assert source.ingress.observation0_ack.request.operation==Control.Request.OP_CONFIRM_OBSERVATION0
+
+
+def _pause_transition_fixture(f):
+    f.life.sequence += 1
+    f.life.barrier_state, f.life.motion_permitted = f.life.BARRIER_NON_READY, False
+    f.ingress.bind_lifecycle(f.life)
+    first = f.gt()
+    f.ingress.on_ground_truth(first)
+    f.ingress.pause_admission_publication()
+    f.ingress.begin_pause_transition(final_sequence=20, deadline_ns=f.clock.steady + 1_000_000_000)
+    req, res = Control.Request(), Control.Response()
+    req.schema_version, res.schema_version = req.SCHEMA_VERSION, res.RESPONSE_SCHEMA_VERSION
+    req.operation, req.request_sequence, res.request_sequence = req.OP_PREPARE_RESET_PAUSE, 9, 9
+    req.session_id, req.config_hash, req.asset_manifest_sha256 = 'b23-test', 'a'*64, 'b'*64
+    req.coordinator_ingress_instance_id, req.expected_backend_instance_id = 11, 22
+    req.final_publisher_instance_id, req.pause_fence_final_publish_sequence = 55, 20
+    req.pause_enter_budget_ms = 100
+    for key, value in lifecycle_request_fields(f.life).items(): setattr(req, key, value)
+    req.expected_binding_revision = 4
+    res.backend_instance_id, res.binding_revision, res.applied_binding_revision = 22, 5, 5
+    res.result, res.applied_physics_iteration, res.applied_sim_stamp = res.RESULT_APPLIED, 10, stamp(f.clock.ros)
+    return first, req, res
+
+
+def test_pause_edge_zero_oracle_quarantined_until_matching_native_ack(source):
+    f = source
+    original, req, res = _pause_transition_fixture(f)
+    # Physics tiến thêm một tick giữa lúc gửi intent và cạnh pause.
+    f.advance(); original = f.gt(); f.ingress.on_ground_truth(original)
+    res.applied_sim_stamp = stamp(f.clock.ros)
+    prior_samples = tuple(f.ingress.noisy_samples.items())
+    changed = copy.deepcopy(original)
+    changed.twist.twist.linear.x = changed.twist.twist.linear.y = 0.
+    assert f.ingress.on_ground_truth(changed) is None
+    assert f.ingress.fault is None
+    assert tuple(f.ingress.noisy_samples.items()) == prior_samples
+    assert f.ingress._pause_transition['confirmed'] is False
+    ack = BackendControlAck(serialize_message(req), serialize_message(res), f.clock.steady)
+    f.ingress.confirm_pause_transition(ack)
+    assert f.ingress._pause_transition['confirmed'] is True
+    assert tuple(f.ingress.noisy_samples.items()) == prior_samples
+    assert [name for name, _ in f.events].count('PAUSE_ORACLE_QUARANTINED') == 1
+    assert [name for name, _ in f.events].count('PAUSE_ORACLE_CONFIRMED') == 1
+
+
+@pytest.mark.parametrize('change', ['pose', 'nonzero_twist', 'different_ack_stamp', 'different_fence', 'late_ack'])
+def test_pause_oracle_quarantine_fails_closed_on_conflicting_context(source, change):
+    f = source
+    original, req, res = _pause_transition_fixture(f)
+    changed = copy.deepcopy(original)
+    changed.twist.twist.linear.x = changed.twist.twist.linear.y = 0.
+    if change == 'pose': changed.pose.pose.position.x += 1.
+    if change == 'nonzero_twist': changed.twist.twist.linear.z = 0.01
+    if change in ('pose', 'nonzero_twist'):
+        with pytest.raises(ValueError, match='oracle same stamp changed bytes'):
+            f.ingress.on_ground_truth(changed)
+    else:
+        assert f.ingress.on_ground_truth(changed) is None
+        if change == 'different_ack_stamp': res.applied_sim_stamp = stamp(f.clock.ros - 10_000_000)
+        if change == 'different_fence': req.pause_fence_final_publish_sequence += 1
+        if change == 'late_ack': f.clock.steady += 1_000_000_000
+        ack = BackendControlAck(serialize_message(req), serialize_message(res), f.clock.steady)
+        with pytest.raises(ValueError, match='pause transition'):
+            f.ingress.confirm_pause_transition(ack)
+    assert f.ingress.fault is not None
+    assert f.ingress.pending_ack is None

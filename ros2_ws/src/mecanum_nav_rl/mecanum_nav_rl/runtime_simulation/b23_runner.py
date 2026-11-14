@@ -665,13 +665,16 @@ class TrainingWorkerIO:
             budget_ms = min(100, max(0, (deadline - self.now()) // 1_000_000))
             if budget_ms == 0:
                 raise TimeoutError('native pause enter has no remaining budget')
+            pause_deadline = min(deadline, self.now() + int(timeout * 1e9))
+            self.ingress.begin_pause_transition(final_sequence=fact.final_publish_sequence, deadline_ns=pause_deadline)
             self.expected_paused = True  # Chỉ sau khi bắt đầu giao dịch pause native.
             ack = await self.control.transact(Control.Request.OP_PREPARE_RESET_PAUSE,
-                deadline_ns=min(deadline, self.now() + int(timeout * 1e9)),
+                deadline_ns=pause_deadline,
                 **lifecycle_request_fields(self.ingress.lifecycle),
                 final_publisher_instance_id=self.final.publisher_instance_id,
                 pause_fence_final_publish_sequence=fact.final_publish_sequence,
                 pause_enter_budget_ms=int(budget_ms))
+            self.ingress.confirm_pause_transition(ack)
             self.pause_ack = ack
             self.emit('NATIVE_PAUSE_CONFIRMED', {'request_cdr_hex': ack.request_bytes.hex(),
                 'response_cdr_hex': ack.response_bytes.hex(), 'steady_ns': self.now()})

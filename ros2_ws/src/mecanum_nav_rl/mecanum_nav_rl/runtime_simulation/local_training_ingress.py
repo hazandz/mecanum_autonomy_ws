@@ -113,6 +113,7 @@ class LocalTrainingIngress:
         self._last_gt_stamp = -1
         self._last_gt_bytes = None
         self._pose_mutation = None
+        self._pause_transition = None
         self._paused_pose_raw = None
         self._last_join_iteration = 0
         self._sample_sequence = 0
@@ -138,6 +139,7 @@ class LocalTrainingIngress:
     def _fail(self, reason):
         self.fault = reason
         self._pose_mutation = None
+        self._pause_transition = None
         self.pending_ack = None
         self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
         self.emit('INGRESS_FAULT', {'reason': reason, 'steady_ns': self.now()})
@@ -173,6 +175,7 @@ class LocalTrainingIngress:
                     self.admission_publication_enabled = False
                     self._last_join_iteration = 0
                     self._pose_mutation = None
+                    self._pause_transition = None
                     self._paused_pose_raw = None
             self.lifecycle, self.lifecycle_received_ns = raw, self.now()
 
@@ -265,6 +268,8 @@ class LocalTrainingIngress:
                 self._fail('oracle clock rollback')
             if stamp == self._last_gt_stamp:
                 if raw != self._last_gt_bytes:
+                    if self._pose_mutation is None and self._quarantine_pause_oracle(msg, raw, received):
+                        return None
                     if self._pose_mutation is None:
                         self.emit('ORACLE_STAMP_CONFLICT', {'source_stamp_ns':stamp,
                             'received_ns':received, 'previous_cdr_hex':self._last_gt_bytes.hex(),
@@ -286,6 +291,8 @@ class LocalTrainingIngress:
             if not all(math.isfinite(v) for v in values):
                 self._fail('oracle non-finite pose/twist')
             self._pose_mutation = None
+            if self._pause_transition is not None and self._pause_transition['confirmed']:
+                self._pause_transition = None
             self._paused_pose_raw = None
             self._last_gt_stamp, self._last_gt_bytes = stamp, raw
             self._put(self._oracles, stamp, (raw, received), 'oracle')
@@ -558,6 +565,64 @@ class LocalTrainingIngress:
         self.emit('NATIVE_APPLICATION_JOINED', data)
         if receipt.source is ReceiptSource.POLICY:
             self.emit('policy_backend_applied', data)
+
+    def begin_pause_transition(self, *, final_sequence, deadline_ns):
+        """Khoanh vùng oracle cùng stamp, chỉ trong giao dịch pause đang chờ ACK."""
+        with self.lock:
+            life = self.lifecycle
+            if (self.fault or self._pause_transition is not None or life is None
+                    or life.barrier_state != life.BARRIER_NON_READY or life.motion_permitted
+                    or self.pending_ack is not None or self.admission_publication_enabled
+                    or type(final_sequence) is not int or final_sequence <= 0
+                    or type(deadline_ns) is not int or deadline_ns <= self.now()):
+                self._fail('pause transition lacks inhibited fence context')
+            self._pause_transition = {'fence': final_sequence, 'deadline_ns': deadline_ns,
+                'lifecycle': lifecycle_identity(life), 'quarantined': None, 'confirmed': False}
+
+    def _quarantine_pause_oracle(self, msg, raw, received):
+        from rclpy.serialization import deserialize_message
+        from nav_msgs.msg import Odometry
+        from rosidl_runtime_py.convert import message_to_ordereddict
+        pending = self._pause_transition
+        if pending is None or (not pending['confirmed'] and received >= pending['deadline_ns']):
+            return False
+        if self.lifecycle is None or lifecycle_identity(self.lifecycle) != pending['lifecycle']:
+            return False
+        previous = deserialize_message(self._last_gt_bytes, Odometry)
+        values = (msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z,
+                  msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z)
+        if (message_to_ordereddict(msg.pose) != message_to_ordereddict(previous.pose)
+                or list(msg.twist.covariance) != list(previous.twist.covariance)
+                or any(v != 0.0 for v in values)):
+            return False
+        old = pending['quarantined']
+        if old is not None and message_to_ordereddict(deserialize_message(old['raw'], Odometry)) != message_to_ordereddict(msg):
+            return False
+        pending['quarantined'] = {'stamp': stamp_ns(msg.header.stamp), 'raw': raw, 'received_ns': received}
+        self.emit('PAUSE_ORACLE_QUARANTINED', {'source_stamp_ns': stamp_ns(msg.header.stamp),
+            'received_ns': received, 'previous_cdr_hex': self._last_gt_bytes.hex(), 'current_cdr_hex': raw.hex()})
+        return True
+
+    def confirm_pause_transition(self, ack):
+        """Chỉ giải tỏa sau ACK APPLIED đã bind fence; không tạo mẫu hoặc refresh tuổi."""
+        with self.lock:
+            pending = self._pause_transition
+            req, res = self._check_ack(ack, Control.Request.OP_PREPARE_RESET_PAUSE)
+            if (pending is None or pending['confirmed'] or self.now() >= pending['deadline_ns']
+                    or lifecycle_identity(self.lifecycle) != pending['lifecycle']
+                    or req.final_publisher_instance_id != self.final_publisher_id
+                    or req.pause_fence_final_publish_sequence != pending['fence']
+                    or req.lifecycle_sequence != self.lifecycle.sequence
+                    or req.barrier_stamp != self.lifecycle.barrier_stamp
+                    or not 0 < req.pause_enter_budget_ms <= 100):
+                self._fail('pause transition ACK does not match pinned fence')
+            sample = pending['quarantined']
+            if sample is not None and stamp_ns(res.applied_sim_stamp) != sample['stamp']:
+                self._fail('pause transition oracle does not match applied stamp')
+            pending['confirmed'] = True
+            self.emit('PAUSE_ORACLE_CONFIRMED', {'request_sequence': req.request_sequence,
+                'applied_stamp_ns': stamp_ns(res.applied_sim_stamp), 'quarantined': sample is not None,
+                'steady_ns': self.now()})
 
     def begin_pose_mutation(self, ack):
         """Chỉ cho raw oracle cùng paused stamp trong đúng reset native đã APPLIED.

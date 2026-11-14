@@ -278,3 +278,35 @@ def test_inhibit_accepts_native_paused_initial_iteration_without_fabricated_proo
     with pytest.raises(BackendControlError,match='revision/application'):
         asyncio.run(session.transact(Control.Request.OP_BIND_SESSION,deadline_ns=clock.ns+1_000_000_000))
     assert session.revision==0
+
+
+def test_inhibit_accepts_pinned_native_applied_revision_after_unobserved_prior_mutation():
+    def respond(req):
+        out = response(req)
+        # Native có thể đã áp dụng giao dịch trước trong lúc client mất ACK.
+        out.binding_revision = req.expected_binding_revision + 2
+        out.applied_binding_revision = out.binding_revision
+        return out
+    session, client, clock, events = setup(respond)
+    async def run():
+        client.respond = lambda req, n: response(req, Control.Response.RESULT_QUEUED)
+        with pytest.raises(TimeoutError):
+            await session.transact(Control.Request.OP_PREPARE_RESET_PAUSE, deadline_ns=clock.ns + 12_000_000)
+        client.respond = lambda req, n: respond(req)
+        return await session.inhibit(deadline_ns=clock.ns + 1_000_000_000)
+    ack = asyncio.run(run())
+    assert ack.response.result == Control.Response.RESULT_APPLIED
+    assert ack.response.binding_revision == session.revision == 2
+    assert [name for name, _ in events][-1] == 'ACK_OBSERVED'
+    assert len(set(client.raw[:-1])) == 1
+
+
+@pytest.mark.parametrize('binding, applied', [(0, 0), (1, 2), (2, 1), (2, 2)])
+def test_inhibit_rejects_nonadvancing_or_inconsistent_native_revision(binding, applied):
+    def respond(req):
+        out = response(req); out.binding_revision = binding; out.applied_binding_revision = applied
+        return out
+    session, client, clock, events = setup(respond)
+    with pytest.raises(BackendControlError, match='revision/application'):
+        asyncio.run(session.inhibit(deadline_ns=clock.ns + 1_000_000_000))
+    assert session.revision == 0

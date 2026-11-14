@@ -104,6 +104,7 @@ class BackendControlSession:
         self._revision = 0
         self._last_clock_ns = -1
         self._faulted = False
+        self._uncertain_mutation = False
         self._lock = asyncio.Lock()
         self._futures = []
         self._active_task = None
@@ -209,8 +210,12 @@ class BackendControlSession:
                         raise BackendControlError('backend control rejected: ' + str(response.reason_code), ack)
                     mutates = operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
                     expected = request.expected_binding_revision + int(mutates)
-                    if (response.binding_revision != expected
-                            or response.applied_binding_revision != expected
+                    allowed_revisions = {expected}
+                    if operation == Control.Request.OP_INHIBIT and self._uncertain_mutation:
+                        # Một mutation đã gửi có thể APPLIED dù client chưa nhận ACK.
+                        allowed_revisions.add(expected + 1)
+                    if (response.binding_revision not in allowed_revisions
+                            or response.applied_binding_revision != response.binding_revision
                             or (response.applied_physics_iteration == 0 and operation != Control.Request.OP_INHIBIT)
                             or response.applied_sim_stamp.sec < 0
                             or not 0 <= response.applied_sim_stamp.nanosec < 1_000_000_000):
@@ -231,6 +236,8 @@ class BackendControlSession:
                 raise TimeoutError('backend control mutation did not apply within deadline')
             except BaseException as error:
                 self._faulted = True
+                if operation not in (Control.Request.OP_INHIBIT, Control.Request.OP_VERIFY_CONTACT_CAPABILITY):
+                    self._uncertain_mutation = True
                 try:
                     self._emit('CONTROL_UNCERTAIN', {'request_sequence': request.request_sequence,
                                'at_ns': self._now_ns(), 'error': type(error).__name__, 'detail': str(error)})
