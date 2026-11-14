@@ -214,11 +214,16 @@ class Node:
         self.params = {'use_sim_time': True, 'navigation_mode': 'LOCAL_TRAINING'}
         self.subscriptions, self.timers = [], []
     def get_parameter(self, name): return NS(value=self.params[name])
+    def get_clock(self): return NS(now=lambda: NS(nanoseconds=123456789))
     def declare_parameter(self, name, value=None): self.params.setdefault(name, value)
     def create_publisher(self, *args): return NS(publish=lambda msg: None)
     def create_subscription(self, message_type, topic, callback, qos):
         self.subscriptions.append((topic, callback, qos))
-    def create_timer(self, period, callback): self.timers.append((period, callback))
+    def create_timer(self, period, callback):
+        timer = NS(period=period, callback=callback)
+        self.timers.append(timer)
+        return timer
+    def destroy_timer(self, timer): self.timers.remove(timer)
 rclpy.node.Node = Node
 from mecanum_nav_rl.runtime_safety import safety_supervisor_node as module
 module.Buffer = lambda: NS()
@@ -229,10 +234,19 @@ sensor = json.loads((root/'artifacts/simulation/roadmap_b_b2/asset_manifest.json
 ctx = dict(session_id='b23-test', config_hash='a'*64, ingress_instance_id=11,
            backend_instance_id=22, policy_source_instance_id=33, safe_stop_source_instance_id=44,
            profile=p, sensor=sensor, sim_estop_release_authorized=True)
-node = module.SafetySupervisorNode(local_training_context=ctx, evidence_sink=lambda *args: None)
+events = []
+node = module.SafetySupervisorNode(local_training_context=ctx, evidence_sink=lambda *args: events.append(args))
 assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
-assert node.timers == [(0.02, node.local_training.tick)]
+assert len(node.timers) == 1 and node.timers[0].period == 0.01
+phase_timer = node.timers[0]
+phase_timer.callback()
+assert len(node.timers) == 1 and node.timers[0].period == 0.02
+assert node.timers[0].callback == node.local_training.tick
+assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
+assert events[-1][0] == 'SAFETY_TIMER_PHASE_STARTED'
+assert events[-1][1]['initial_offset_ns'] == 10_000_000
+assert events[-1][1]['period_ns'] == 20_000_000
 assert node.local_training.policy_hold is True
 assert not hasattr(node, '_core')
 '''
