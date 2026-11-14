@@ -584,10 +584,19 @@ class LocalTrainingIngress:
         from nav_msgs.msg import Odometry
         from rosidl_runtime_py.convert import message_to_ordereddict
         pending = self._pause_transition
-        if pending is None or (not pending['confirmed'] and received >= pending['deadline_ns']):
+        if pending is None:
             return False
         if self.lifecycle is None or lifecycle_identity(self.lifecycle) != pending['lifecycle']:
             return False
+        # A paused world can publish a final same-stamp zero-twist oracle after
+        # the pause ACK deadline. Quarantine that raw replay while the exact
+        # pause transaction is still pending; it must never refresh a sample
+        # or make the expired transaction successful. Confirmation remains
+        # deadline-bound in confirm_pause_transition().
+        if not pending['confirmed'] and received >= pending['deadline_ns']:
+            state = self.backend_state
+            if state is None or not state.paused:
+                return False
         previous = deserialize_message(self._last_gt_bytes, Odometry)
         values = (msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z,
                   msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z)

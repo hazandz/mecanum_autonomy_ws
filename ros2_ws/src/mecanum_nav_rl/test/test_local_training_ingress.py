@@ -629,6 +629,33 @@ def test_pause_edge_zero_oracle_quarantined_until_matching_native_ack(source):
     assert [name for name, _ in f.events].count('PAUSE_ORACLE_CONFIRMED') == 1
 
 
+def test_paused_zero_oracle_after_ack_deadline_is_quarantined_but_cannot_confirm(source):
+    f = source
+    original, req, res = _pause_transition_fixture(f)
+    f.advance(1_100_000_000)
+    state = f.backend(ns=f.clock.ros, iteration=10, sequence=2)
+    state.paused = True
+    state.local_zero_override = True
+    state.fault_flags = 1
+    f.ingress.on_backend(state)
+    prior_samples = tuple(f.ingress.noisy_samples.items())
+    changed = copy.deepcopy(original)
+    changed.twist.twist.linear.x = 0.0
+    changed.twist.twist.linear.y = 0.0
+    changed.twist.twist.linear.z = 0.0
+    changed.twist.twist.angular.x = 0.0
+    changed.twist.twist.angular.y = 0.0
+    changed.twist.twist.angular.z = 0.0
+
+    assert f.ingress.on_ground_truth(changed) is None
+    assert tuple(f.ingress.noisy_samples.items()) == prior_samples
+    assert [name for name, _ in f.events].count('PAUSE_ORACLE_QUARANTINED') == 1
+    late_ack = BackendControlAck(serialize_message(req), serialize_message(res), f.clock.steady)
+    with pytest.raises(ValueError, match='pause transition ACK'):
+        f.ingress.confirm_pause_transition(late_ack)
+    assert f.ingress.fault is not None
+
+
 @pytest.mark.parametrize('change', ['pose', 'nonzero_twist', 'different_ack_stamp', 'different_fence', 'late_ack'])
 def test_pause_oracle_quarantine_fails_closed_on_conflicting_context(source, change):
     f = source
