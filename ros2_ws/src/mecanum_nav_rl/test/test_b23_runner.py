@@ -85,7 +85,6 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
 ])
 def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
         tmp_path, case, mode, ingress_count):
-    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
 
     native = tmp_path/'native-events.jsonl'
@@ -99,13 +98,14 @@ def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
     io=NS(descriptor={'run_root':str(tmp_path)},
         events=[('FINAL_PUBLISHED', {'source':CommandEnvelope.SOURCE_POLICY,
             'source_sequence':1,'publish_sequence':77})],
-        ingress=NS(backend_state=NS(fault_flags=1,local_zero_override=True)),
+        ingress=NS(backend_state=NS(fault_flags=7,local_zero_override=True)),
         now=lambda:100, deadline_ns=200, pause=None)
-    error=B1SnapshotPending('B1 cutoff pending: receipt fault')
+    error=RuntimeError('native fault flags=7')
 
     result=asyncio.run(verify_r03_receipt_fault(io,case=case,step_index=1,error=error))
 
     assert result['expected_fault'] is True
+    assert result['stop_reason']=='native_fault_flags=7'
     assert result['published_policy_sequence']==77
     assert result['policy_step_committed'] is False
     assert result['local_zero_override'] is True

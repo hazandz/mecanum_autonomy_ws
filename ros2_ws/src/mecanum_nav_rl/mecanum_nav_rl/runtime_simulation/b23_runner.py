@@ -78,9 +78,13 @@ def case_environment(case, hooks):
 
 async def verify_r03_receipt_fault(io, *, case, step_index, error):
     """Bind injected native receipt disposition to the real published POLICY."""
+    import re
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
-    if not isinstance(error, (B1SnapshotPending, TimeoutError)):
+    native_fault_match = (re.fullmatch(r'native fault flags=([1-9][0-9]*)', str(error))
+        if isinstance(error, RuntimeError) else None)
+    expected_native_flags = int(native_fault_match.group(1)) if native_fault_match else None
+    if not isinstance(error, (B1SnapshotPending, TimeoutError)) and expected_native_flags is None:
         raise RuntimeError('R03 did not stop through the expected cutoff/receipt path')
     rows = [json.loads(line) for line in
         (Path(io.descriptor['run_root'])/'native-events.jsonl').read_text().splitlines() if line.strip()]
@@ -99,6 +103,8 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
     if (case == 'R03a' and receipt_ingress) or (case == 'R03b' and len(receipt_ingress) != 1):
         raise RuntimeError('R03 native receipt ingress does not match packet fault')
     state = io.ingress.backend_state
+    if expected_native_flags is not None and (state is None or state.fault_flags != expected_native_flags):
+        raise RuntimeError('R03 native fault stop reason does not match observed backend state')
     observe_deadline = min(io.deadline_ns, io.now() + 250_000_000)
     while ((state is None or state.fault_flags == 0 or not state.local_zero_override)
            and io.now() < observe_deadline):
@@ -117,6 +123,8 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
         if fields.get('original_transition_id') == fields.get('mutated_transition_id'):
             raise RuntimeError('R03b did not mutate only the native receipt copy')
     return {'expected_fault': True, 'case': case, 'step_index': step_index,
+        'stop_reason': ('native_fault_flags=' + str(expected_native_flags)
+            if expected_native_flags is not None else type(error).__name__),
         'published_policy_sequence': publications[0][1]['publish_sequence'],
         'native_fault_flags': state.fault_flags, 'local_zero_override': True,
         'policy_step_committed': False, 'native_receipt_hook': fields if case == 'R03b' else injected[0]['fields']}
