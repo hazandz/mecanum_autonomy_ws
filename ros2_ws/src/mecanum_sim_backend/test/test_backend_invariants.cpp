@@ -4680,3 +4680,20 @@ TEST(BackendSystemControlReceiver, InhibitReplayPreservesAppliedAckAfterProofRev
   RunNativeResetObservation0Chain(false, false, false, false, false, false,
                                   0, 0, 0, 0, 0, false, true);
 }
+
+TEST(BackendSystemControlReceiver, CallbackAfterTickSampleWaitsForNextTickWithoutExpiring)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  // PreUpdate đã lấy 2 s; callback đến trước khi tick lấy mutex.
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'001);
+  ASSERT_EQ(BackendSystemTestPeer::Receive(system, BindSessionRequest()).result,
+            ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'000'000'000);
+  EXPECT_EQ(BackendSystemTestPeer::Cached(system, 1).result,
+            ControlResponse::RESULT_QUEUED);
+  BackendSystemTestPeer::Tick(system, ecm, 210, 21, 2'000'000'002);
+  EXPECT_EQ(BackendSystemTestPeer::Cached(system, 1).result,
+            ControlResponse::RESULT_APPLIED);
+}

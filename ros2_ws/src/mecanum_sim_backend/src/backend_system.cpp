@@ -2331,7 +2331,8 @@ private:
       bool world_paused)
   {
     std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (control_queue_.empty()) return;
+    if (control_queue_.empty() ||
+        control_queue_.front().ingress_steady_ns > steady_now_ns) return;
     auto pending = std::move(control_queue_.front());
     control_queue_.pop_front();
     auto &request = pending.request;
@@ -2959,7 +2960,11 @@ private:
     std::deque<std::pair<SafetyInput, std::int64_t>> pending;
     {
       std::lock_guard<std::mutex> lock(callback_mutex_);
-      pending.swap(safety_queue_);
+      while (!safety_queue_.empty() && safety_queue_.front().second <= steady_now_ns)
+      {
+        pending.push_back(std::move(safety_queue_.front()));
+        safety_queue_.pop_front();
+      }
     }
     for (const auto &[msg, received_ns] : pending)
     {
