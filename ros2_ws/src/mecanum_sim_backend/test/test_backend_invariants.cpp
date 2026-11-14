@@ -2461,6 +2461,9 @@ static void RunNativeResetObservation0Chain(
         BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
         ASSERT_TRUE(BackendSystemTestPeer::PauseHeld(system));
         const auto applications_at_pause = BackendSystemTestPeer::ApplicationHistory(system).size();
+        ASSERT_FALSE(io->statuses.empty());
+        const auto statuses_at_pause = io->statuses.size();
+        const auto status_at_pause = io->statuses.back();
         BackendSystemTestPeer::SetSteadyClockNow(system, 3'051'000'001);
         // Mô phỏng world đã pause: chỉ wall watchdog chạy, không có Physics update.
         BackendSystemTestPeer::ExpireOrCompleteResetPause(system);
@@ -2469,6 +2472,15 @@ static void RunNativeResetObservation0Chain(
         EXPECT_EQ(expired.reason_code, ControlResponse::REASON_CONTROL_EXPIRED);
         EXPECT_NE(BackendSystemTestPeer::FaultFlags(system), 0u);
         EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+        ASSERT_GT(io->statuses.size(), statuses_at_pause);
+        const auto fault_status = io->statuses.back();
+        EXPECT_GT(fault_status.status_sequence, status_at_pause.status_sequence);
+        EXPECT_EQ(fault_status.physics_iteration, status_at_pause.physics_iteration);
+        EXPECT_TRUE(fault_status.paused);
+        EXPECT_NE(fault_status.fault_flags, 0u);
+        EXPECT_TRUE(fault_status.local_zero_override);
+        EXPECT_TRUE(fault_status.actuator_inhibited);
+        EXPECT_FALSE(fault_status.applied_receipt_valid);
         EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_at_pause);
         pause_io->completion(true, 3'060'000'000);
         BackendSystemTestPeer::SetSteadyClockNow(system, 3'070'000'000);

@@ -933,7 +933,10 @@ public:
     {
       return;
     }
-    ++status_sequence_;
+    {
+      std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
+      ++status_sequence_;
+    }
     physics_iteration_ = info.iterations;
     const auto sim_ns = TimeNs(info);
     const auto pose = base_link_.WorldPose(ecm);
@@ -2826,8 +2829,55 @@ private:
     pause_intent_.reset();
     reset_pause_failed_ = true;
     control_mutation_pending_ = false;
+    local_zero_override_ = true;
     if (gate_) gate_->Invalidate(detail);
     SetFault(BackendState::FAULT_CONTEXT, detail);
+    PublishPauseFaultStatusLocked();
+  }
+
+  // A wall-clock pause watchdog can expire while Gazebo is paused, when no
+  // PostUpdate will publish the newly latched fault. Publish the last measured
+  // status as a fault/inhibit update without inventing a physics iteration,
+  // timestamp, receipt application, or sensor measurement.
+  void PublishPauseFaultStatusLocked()
+  {
+    std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
+    if (!last_backend_state_) return;
+
+    auto msg = *last_backend_state_;
+    msg.status_sequence = ++status_sequence_;
+    msg.fault_flags = fault_flags_;
+    msg.local_zero_override = true;
+    msg.actuator_inhibited = true;
+    msg.applied_receipt_valid = false;
+    msg.applied_final_publisher_instance_id = 0;
+    msg.applied_final_publish_sequence = 0;
+    msg.applied_physics_iteration = 0;
+    msg.applied_sim_stamp.sec = 0;
+    msg.applied_sim_stamp.nanosec = 0;
+
+    if (backend_state_sink_)
+    {
+      backend_state_sink_(msg);
+      last_backend_state_ = msg;
+      return;
+    }
+    if (!state_pub_) return;
+    if (heartbeat_trace_writer_)
+      RecordHeartbeatTrace(1, msg.status_sequence);
+    try
+    {
+      state_pub_->publish(msg);
+    }
+    catch (...)
+    {
+      if (heartbeat_trace_writer_)
+        RecordHeartbeatTrace(3, msg.status_sequence);
+      throw;
+    }
+    if (heartbeat_trace_writer_)
+      RecordHeartbeatTrace(2, msg.status_sequence);
+    last_backend_state_ = msg;
   }
 
   bool ProcessPauseAcksLocked(std::int64_t now_ns)
@@ -3276,6 +3326,7 @@ private:
 
   void PublishBackendState(const gz::sim::UpdateInfo &info, std::int64_t stamp_ns)
   {
+    std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
     BackendState msg;
     msg.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     msg.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
@@ -3339,6 +3390,7 @@ private:
     if (pending_applied_receipt_)
       last_accepted_key_ = pending_applied_receipt_->key;
     pending_applied_receipt_.reset();
+    last_backend_state_ = msg;
   }
 
   void SetFault(std::uint32_t flag, std::string reason)
@@ -3386,6 +3438,8 @@ private:
   std::vector<std::pair<backend_detail::RuntimeResourceKind,
                         std::function<void()>>> runtime_resource_releases_;
   std::function<void(const BackendState &)> backend_state_sink_;
+  std::mutex status_publish_mutex_;
+  std::optional<BackendState> last_backend_state_;
   std::function<void(const gz::msgs::Odometry &)> ground_truth_sink_;
   std::function<void(gz::sim::EntityComponentManager &,
                      const BodyCommand3D &)> actuator_apply_;
