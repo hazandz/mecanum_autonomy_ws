@@ -85,20 +85,22 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
 ])
 def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
         tmp_path, case, mode, ingress_count):
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
 
     native = tmp_path/'native-events.jsonl'
     native.write_text(json.dumps({'kind':'B23_RECEIPT_FAULT','fields':{
-        'mode':mode,'sequence':'77','original_transition_id':'policy-1',
+        'mode':mode,'publisher':'42','sequence':'77','source_sequence':'1',
+        'original_transition_id':'policy-1',
         'mutated_transition_id':'policy-1.b23-injected-mismatch'}})+'\n')
     if ingress_count:
         with native.open('a') as stream:
             stream.write(json.dumps({'kind':'B23_POLICY_RECEIPT_INGRESS',
                 'fields':{'sequence':'77'}})+'\n')
     io=NS(descriptor={'run_root':str(tmp_path)},
-        events=[('FINAL_PUBLISHED', {'source':CommandEnvelope.SOURCE_POLICY,
-            'source_sequence':1,'publish_sequence':77})],
-        ingress=NS(backend_state=NS(fault_flags=7,local_zero_override=True)),
+        events=[], final=NS(publisher_instance_id=42),
+        ingress=NS(receipts=[NS(source=ReceiptSource.POLICY,source_sequence=1,
+            final_publisher_instance_id=42,final_publish_sequence=77)],
+            backend_state=NS(fault_flags=7,local_zero_override=True)),
         now=lambda:100, deadline_ns=200, pause=None)
     error=RuntimeError('native fault flags=7')
 

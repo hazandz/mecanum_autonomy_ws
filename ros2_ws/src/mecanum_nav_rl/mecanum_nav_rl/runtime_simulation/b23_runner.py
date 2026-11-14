@@ -79,8 +79,8 @@ def case_environment(case, hooks):
 async def verify_r03_receipt_fault(io, *, case, step_index, error):
     """Bind injected native receipt disposition to the real published POLICY."""
     import re
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     native_fault_match = (re.fullmatch(r'native fault flags=([1-9][0-9]*)', str(error))
         if isinstance(error, RuntimeError) else None)
     expected_native_flags = int(native_fault_match.group(1)) if native_fault_match else None
@@ -93,13 +93,22 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
         and row.get('fields', {}).get('mode') == mode]
     if len(injected) != 1:
         raise RuntimeError('R03 native receipt hook evidence is missing or repeated')
-    publications = [row for row in io.events if row[0] == 'FINAL_PUBLISHED'
-        and row[1].get('source') == CommandEnvelope.SOURCE_POLICY
-        and row[1].get('source_sequence') == step_index]
-    if len(publications) != 1:
-        raise RuntimeError('R03 requires exactly one real final POLICY publication')
+    fault_fields = injected[0].get('fields', {})
+    try:
+        fault_sequence = int(fault_fields['sequence'])
+        fault_publisher = int(fault_fields['publisher'])
+        fault_source_sequence = int(fault_fields['source_sequence'])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError('R03 native receipt hook identity is incomplete') from error
+    publications = [receipt for receipt in io.ingress.receipts
+        if receipt.source is ReceiptSource.POLICY
+        and receipt.source_sequence == step_index
+        and receipt.final_publisher_instance_id == io.final.publisher_instance_id]
+    if (fault_publisher != io.final.publisher_instance_id or fault_source_sequence != step_index
+            or fault_sequence not in {receipt.final_publish_sequence for receipt in publications}):
+        raise RuntimeError('R03 native hook does not bind to a retained final POLICY receipt')
     receipt_ingress = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
-        and row.get('fields', {}).get('sequence') == str(publications[0][1]['publish_sequence'])]
+        and row.get('fields', {}).get('sequence') == str(fault_sequence)]
     if (case == 'R03a' and receipt_ingress) or (case == 'R03b' and len(receipt_ingress) != 1):
         raise RuntimeError('R03 native receipt ingress does not match packet fault')
     state = io.ingress.backend_state
@@ -125,9 +134,9 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
     return {'expected_fault': True, 'case': case, 'step_index': step_index,
         'stop_reason': ('native_fault_flags=' + str(expected_native_flags)
             if expected_native_flags is not None else type(error).__name__),
-        'published_policy_sequence': publications[0][1]['publish_sequence'],
+        'published_policy_sequence': fault_sequence,
         'native_fault_flags': state.fault_flags, 'local_zero_override': True,
-        'policy_step_committed': False, 'native_receipt_hook': fields if case == 'R03b' else injected[0]['fields']}
+        'policy_step_committed': False, 'native_receipt_hook': fault_fields}
 
 
 async def verify_r01_pause_ack_failure(io, error):
