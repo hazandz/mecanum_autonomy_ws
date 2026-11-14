@@ -547,7 +547,7 @@ def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(so
             if not pauses:
                 f.ingress.on_scan(old)  # Callback trễ từ trước khi xóa buffer.
                 pauses.append('old')
-            else:
+            elif pauses == ['old']:
                 f.advance()
                 fresh=copy.deepcopy(old);fresh.header.stamp=stamp(f.clock.ros)
                 f.ingress.on_scan(fresh)
@@ -561,6 +561,17 @@ def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(so
                 status.applied_sim_stamp=stamp(f.clock.ros)
                 f.ingress.on_backend(status)
                 pauses.append('fresh')
+            else:
+                f.advance()
+                f.ingress.on_ground_truth(f.gt())
+                status=f.backend(iteration=4,sequence=4)
+                status.applied_receipt_valid=True
+                status.applied_final_publisher_instance_id=55
+                status.applied_final_publish_sequence=3
+                status.applied_physics_iteration=4
+                status.applied_sim_stamp=stamp(f.clock.ros)
+                f.ingress.on_backend(status)
+                pauses.append('native-applied')
             f.clock.steady+=round(seconds*1e9)
             await asyncio.sleep(0)
         value.pause=inject_scan
@@ -597,13 +608,32 @@ def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(so
         value.control=BackendControlSession(LocalTrainingBackendControlPort(Client()),f.ingress.identity,
             emit=lambda event,data:f.events.append((event,data)),now_ns=value.now,pause=value.pause)
         result,cutoff=asyncio.run(value.commit_and_confirm_observation0(b1,deadline_ns=value.deadline_ns))
-        assert cutoff==f.clock.ros-10_000_000
+        assert cutoff==observed[0].stamp_ns
         assert len(calls)==1 and calls[0].operation==Control.Request.OP_CONFIRM_OBSERVATION0
         return result
     chain=b1_runtime_chain(source,before_reset_commit=measure,stop_after_observation0=True,commit_runner=commit)
     assert len(observed)==1 and chain.observation0.shape==(81,)
     assert source.ingress.observation0_ack is not None
     assert source.ingress.observation0_ack.request.operation==Control.Request.OP_CONFIRM_OBSERVATION0
+
+
+def test_b1_rejects_reset_receipt_pair_changed_after_runner_preview(source):
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+
+    expected = []
+    def changed_pair(f, b1):
+        cutoff = f.clock.ros - 10_000_000
+        selection = b1.preview_observation0_selection(cutoff)
+        expected_pair = (selection.receipt.receipt_key, selection.adjacent_receipt.receipt_key)
+        assert selection.receipt.final_publish_sequence == 1
+        assert selection.adjacent_receipt.final_publish_sequence == 2
+        with pytest.raises(B1SnapshotPending, match='selection changed before B1 commit'):
+            b1.commit_observation0(cutoff, expected_selection_keys=(('stale',), ('stale',)))
+        expected.append(expected_pair)
+        return expected_pair
+
+    result = b1_runtime_chain(source, commit_runner=changed_pair)
+    assert result.observation0 == expected[0]
 
 
 def _pause_transition_fixture(f):

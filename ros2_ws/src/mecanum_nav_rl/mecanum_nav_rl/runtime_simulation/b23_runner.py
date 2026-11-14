@@ -889,7 +889,7 @@ class TrainingWorkerIO:
                 at_or_after_ns=None if zero_receipt is None else zero_receipt.applied_sim_stamp_ns)
             for cutoff in ([scan.stamp_ns] if scan is not None else []):
                 try:
-                    observation, selection = b1.commit_observation0(cutoff)
+                    selection = b1.preview_observation0_selection(cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
                     if last_pending == 'selected receipt lacks native application at/before cutoff':
@@ -903,6 +903,30 @@ class TrainingWorkerIO:
                                 'failed_cutoff_ns': cutoff, 'post_reset_scans': reset_scans,
                                 'steady_ns': self.now()})
                     continue
+                native_boundary = self.native_adjacent_boundary_application(selection, cutoff)
+                if native_boundary is None:
+                    last_pending = 'native has not applied the adjacent post-cutoff SAFE_STOP receipt'
+                    self.emit('RESET_ADJACENT_BOUNDARY_DEFERRED', {
+                        'cutoff_ns': cutoff,
+                        'adjacent_publisher_instance_id': selection.adjacent_receipt.final_publisher_instance_id,
+                        'adjacent_publish_sequence': selection.adjacent_receipt.final_publish_sequence,
+                        'steady_ns': self.now()})
+                    continue
+                expected_selection_keys = (selection.receipt.receipt_key,
+                    selection.adjacent_receipt.receipt_key)
+                try:
+                    observation, selection = b1.commit_observation0(
+                        cutoff, expected_selection_keys=expected_selection_keys)
+                except B1SnapshotPending as error:
+                    last_pending = str(error)
+                    continue
+                self.emit('RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED', {
+                    'cutoff_ns': cutoff,
+                    'adjacent_publisher_instance_id': selection.adjacent_receipt.final_publisher_instance_id,
+                    'adjacent_publish_sequence': selection.adjacent_receipt.final_publish_sequence,
+                    'application_iteration': native_boundary['iteration'],
+                    'application_stamp_ns': native_boundary['stamp_ns'],
+                    'steady_ns': self.now()})
                 ack = await self.control.transact(Control.Request.OP_CONFIRM_OBSERVATION0,
                     deadline_ns=min(deadline_ns, self.now() + 1_000_000_000),
                     **lifecycle_request_fields(self.ingress.lifecycle),
@@ -915,6 +939,28 @@ class TrainingWorkerIO:
                 return observation, cutoff
             await self.pause(min(0.002, max(0., (deadline_ns - self.now()) / 1e9)))
         raise TimeoutError('observation0 did not confirm within reset deadline: ' + str(last_pending))
+
+    def native_adjacent_boundary_application(self, selection, cutoff_ns):
+        """Return the exact native application of the adjacent receipt after cutoff."""
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        receipt = selection.adjacent_receipt
+        with self.ingress.lock:
+            raw = self.ingress._application_bytes.get(receipt.final_publish_sequence)
+        if raw is None:
+            return None
+        status = deserialize_message(raw, SimulationContactState)
+        applied_stamp_ns = stamp_ns(status.applied_sim_stamp)
+        if (not status.applied_receipt_valid or status.local_zero_override
+                or status.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                or status.applied_final_publish_sequence != receipt.final_publish_sequence
+                or status.applied_physics_iteration == 0
+                or status.applied_physics_iteration != status.physics_iteration
+                or applied_stamp_ns != stamp_ns(status.header.stamp)
+                or applied_stamp_ns <= cutoff_ns):
+            return None
+        return {'iteration': status.applied_physics_iteration, 'stamp_ns': applied_stamp_ns}
 
     async def align_reset_zero_receipt_boundary(self, *, failed_cutoff_ns, deadline_ns):
         """Skip one SAFE_STOP publication colliding with the next reset scan.

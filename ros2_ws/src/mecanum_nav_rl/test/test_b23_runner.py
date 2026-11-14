@@ -119,6 +119,7 @@ def worker():
     value.pump_error, value.expected_paused = None, True
     value.last_clock_ns, value.last_clock_advance_ns = 0, clock.ns
     value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=0)))
+    value.emit = lambda _name, _facts: None
     value.ingress = NS(fault=None, backend_state=None)
     return value, clock
 
@@ -891,10 +892,12 @@ def test_observation0_handoff_uses_fresh_scan_after_zero_anchor():
     value.ingress.admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED
     value.final=NS(publisher_instance_id=33)
     value.ingress.confirm_observation0=lambda result:calls.append(('confirmed',result))
-    receipt=NS(final_publish_sequence=27)
-    adjacent=NS(final_publish_sequence=28)
+    receipt=NS(final_publish_sequence=27,final_publisher_instance_id=33,receipt_key=('p',27))
+    adjacent=NS(final_publish_sequence=28,final_publisher_instance_id=33,receipt_key=('p',28))
     selection=NS(receipt=receipt,adjacent_receipt=adjacent)
-    b1=NS(commit_observation0=lambda cutoff:(calls.append(('committed',cutoff)) or ('observation0',selection)))
+    b1=NS(preview_observation0_selection=lambda cutoff:selection,
+        commit_observation0=lambda cutoff, **kwargs:(calls.append(('committed',cutoff,kwargs)) or ('observation0',selection)))
+    value.native_adjacent_boundary_application=lambda _selection, _cutoff:{'iteration':10,'stamp_ns':1_120_000_000}
     async def transact(operation,**kwargs):
         calls.append(('control',operation,kwargs['observation0_cutoff']))
         return ack
@@ -909,10 +912,92 @@ def test_observation0_handoff_uses_fresh_scan_after_zero_anchor():
         local_training_coordinator.lifecycle_request_fields=original
 
     assert result=='observation0' and cutoff==fresh.stamp_ns, calls
-    assert calls[0]==('committed',fresh.stamp_ns), calls
+    assert calls[0][0:2]==('committed',fresh.stamp_ns), calls
+    assert calls[0][2]['expected_selection_keys']==(receipt.receipt_key,adjacent.receipt_key)
     assert calls[1][0]=='control' and calls[1][1]==Control.Request.OP_CONFIRM_OBSERVATION0, calls
     assert calls[2]==('confirmed',ack), calls
     assert value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED
+
+
+def test_observation0_waits_for_native_adjacent_receipt_application_before_b1_commit():
+    import threading
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput, SimulationContactState
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation import local_training_coordinator
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    cutoff = 1_100_000_000
+    adjacent_stamp = 1_120_000_000
+    value.ros_now = lambda: 1_200_000_000
+    value.ingress.lifecycle = NS(barrier_stamp=Time(sec=0, nanosec=900_000_000))
+    value.ingress.scan_reset_stamp_ns = 900_000_000
+    value.ingress.profile = {'scan_max_age_ms': 500}
+    scan = NS(stamp_ns=cutoff, received_steady_ns=clock.ns)
+    value.ingress.scans = {cutoff: scan}
+    value.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.ingress.lock = threading.Lock()
+    value.ingress._application_bytes = {}
+    value.final = NS(publisher_instance_id=55)
+    receipt = NS(receipt_key=('session', 8), final_publish_sequence=8,
+        final_publisher_instance_id=55)
+    adjacent = NS(receipt_key=('session', 9), final_publish_sequence=9,
+        final_publisher_instance_id=55)
+    selection = NS(receipt=receipt, adjacent_receipt=adjacent)
+    commit_calls, control_calls, confirmations, events = [], [], [], []
+
+    def commit(selected_cutoff, *, expected_selection_keys=None):
+        assert 9 in value.ingress._application_bytes, 'B1 commit preceded native application'
+        commit_calls.append((selected_cutoff, expected_selection_keys))
+        return 'observation0', selection
+
+    b1 = NS(preview_observation0_selection=lambda selected_cutoff:selection,
+        commit_observation0=commit)
+    value.ingress.confirm_observation0 = lambda ack: confirmations.append(ack)
+    value.emit = lambda name, fields: events.append((name, fields))
+    async def transact(operation, **fields):
+        control_calls.append((operation, fields['selected_zero_final_publish_sequence'],
+            fields['adjacent_boundary_final_publish_sequence']))
+        return 'confirm-ack'
+    value.control = NS(transact=transact)
+
+    status = SimulationContactState()
+    status.applied_receipt_valid = True
+    status.local_zero_override = False
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 9
+    status.applied_physics_iteration = 12
+    status.physics_iteration = 12
+    status.applied_sim_stamp = Time(sec=1, nanosec=120_000_000)
+    status.header.stamp = Time(sec=1, nanosec=120_000_000)
+    raw_application = serialize_message(status)
+    pause_calls = []
+    async def pause(seconds):
+        pause_calls.append(seconds)
+        await clock.pause(seconds)
+        value.ingress._application_bytes[9] = raw_application
+    value.pause = pause
+    original = local_training_coordinator.lifecycle_request_fields
+    local_training_coordinator.lifecycle_request_fields = lambda _snapshot:{}
+    try:
+        result, selected_cutoff = asyncio.run(value.commit_and_confirm_observation0(
+            b1, deadline_ns=clock.ns + 20_000_000,
+            zero_receipt=NS(applied_sim_stamp_ns=1_000_000_000)))
+    finally:
+        local_training_coordinator.lifecycle_request_fields = original
+
+    assert result == 'observation0' and selected_cutoff == cutoff
+    assert len(pause_calls) == 1, 'caller must wait after receipt publication until native application'
+    assert commit_calls == [(cutoff, (receipt.receipt_key, adjacent.receipt_key))]
+    assert control_calls == [(Control.Request.OP_CONFIRM_OBSERVATION0, 8, 9)]
+    assert confirmations == ['confirm-ack']
+    deferred = [fields for name, fields in events if name == 'RESET_ADJACENT_BOUNDARY_DEFERRED']
+    applied = [fields for name, fields in events if name == 'RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED']
+    assert len(deferred) == len(applied) == 1
+    assert deferred[0]['adjacent_publish_sequence'] == applied[0]['adjacent_publish_sequence'] == 9
+    assert applied[0]['application_iteration'] == 12
+    assert applied[0]['application_stamp_ns'] == adjacent_stamp
 
 
 def test_observation0_handoff_rejects_scan_before_zero_anchor():
@@ -925,7 +1010,8 @@ def test_observation0_handoff_rejects_scan_before_zero_anchor():
     value.ingress.scans={980_000_000:NS(stamp_ns=980_000_000,received_steady_ns=clock.ns)}
     value.ingress.admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED
     value.ingress.confirm_observation0=lambda _ack:pytest.fail('pre-anchor scan cannot confirm')
-    b1=NS(commit_observation0=lambda _cutoff:pytest.fail('pre-anchor scan cannot commit'))
+    b1=NS(preview_observation0_selection=lambda _cutoff:pytest.fail('pre-anchor scan cannot preview'),
+        commit_observation0=lambda _cutoff, **_kwargs:pytest.fail('pre-anchor scan cannot commit'))
     with pytest.raises(TimeoutError,match='observation0 did not confirm'):
         asyncio.run(value.commit_and_confirm_observation0(
             b1,deadline_ns=clock.ns+5_000_000,
@@ -1018,13 +1104,21 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert selection.status is CutoffStatus.READY, selection.reason
     assert selection.receipt.final_publish_sequence == 8
     assert selection.adjacent_receipt.final_publish_sequence == 9
-    def commit(cutoff):
-        cutoffs.append(cutoff)
-        if len(cutoffs) == 1:
+    def preview(cutoff):
+        previewed.append(cutoff)
+        if len(previewed) == 1:
             raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return selection
+    previewed=[]
+    def commit(cutoff, *, expected_selection_keys=None):
+        cutoffs.append(cutoff)
+        assert expected_selection_keys == (selection.receipt.receipt_key,
+            selection.adjacent_receipt.receipt_key)
         return 'observation0', selection
     confirmations, control_calls = [], []
     value.ingress.confirm_observation0 = lambda ack: confirmations.append(ack)
+    value.native_adjacent_boundary_application=lambda _selection, cutoff:{
+        'iteration':10,'stamp_ns':cutoff+20_000_000}
     async def transact(operation, **fields):
         control_calls.append((operation, fields['observation0_cutoff'].nanosec))
         return 'actual-ack'
@@ -1033,20 +1127,17 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     local_training_coordinator.lifecycle_request_fields = lambda _snapshot: {}
     try:
         result, cutoff = asyncio.run(value.commit_and_confirm_observation0(
-            NS(commit_observation0=commit), deadline_ns=clock.ns + 500_000_000))
+            NS(preview_observation0_selection=preview, commit_observation0=commit),
+            deadline_ns=clock.ns + 500_000_000))
     finally:
         local_training_coordinator.lifecycle_request_fields = original
 
     assert result == 'observation0' and cutoff == 1_100_000_000
-    assert cutoffs == [1_000_000_000, 1_100_000_000]
+    assert previewed == [1_000_000_000, 1_100_000_000]
+    assert cutoffs == [1_100_000_000]
     assert stream_history[0][0] is False and stream_history[-1][0] is True
-    assert [name for name, _ in events] == [
-        'RESET_RECEIPT_ALIGNMENT_SUPPRESSED', 'RESET_RECEIPT_ALIGNMENT_RESUMED',
-        'RESET_RECEIPT_ALIGNMENT_BOUNDARY']
-    assert events[1][1]['scan_seen'] is True
-    assert events[1][1]['boundary_receipt_count'] == 0
-    assert events[2][1]['adjacent_receipt_sequence'] == 9
-    assert events[2][1]['receipt_receive_gap_ns'] <= 100_000_000
+    assert not [name for name, _ in events if name == 'RESET_RECEIPT_ALIGNMENT_DEFERRED']
+    assert 'RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED' in [name for name, _ in events]
     assert control_calls == [(Control.Request.OP_CONFIRM_OBSERVATION0, 100_000_000)]
     assert confirmations == ['actual-ack']
 
@@ -1071,15 +1162,27 @@ def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
     value.final = NS(publisher_instance_id=55)
     value.control = NS(transact=lambda *args, **kwargs: asyncio.sleep(0, result='ack'))
     confirmations, cutoffs, align_calls, events = [], [], [], []
-    selection = NS(receipt=NS(final_publish_sequence=8), adjacent_receipt=NS(final_publish_sequence=9))
+    receipt = NS(receipt_key=('session', 8), final_publish_sequence=8,
+        final_publisher_instance_id=55)
+    adjacent = NS(receipt_key=('session', 9), final_publish_sequence=9,
+        final_publisher_instance_id=55)
+    selection = NS(receipt=receipt, adjacent_receipt=adjacent)
+    previewed = []
 
-    def commit(cutoff):
-        cutoffs.append(cutoff)
-        if len(cutoffs) < 3:
+    def preview(cutoff):
+        previewed.append(cutoff)
+        if len(previewed) < 3:
             raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return selection
+
+    def commit(cutoff, *, expected_selection_keys=None):
+        cutoffs.append(cutoff)
+        assert expected_selection_keys == (receipt.receipt_key, adjacent.receipt_key)
         return 'observation0', selection
 
-    b1 = NS(commit_observation0=commit)
+    b1 = NS(preview_observation0_selection=preview, commit_observation0=commit)
+    value.native_adjacent_boundary_application = lambda _selection, cutoff:{
+        'iteration':12, 'stamp_ns':cutoff + 20_000_000}
 
     async def pause(duration):
         await clock.pause(duration)
@@ -1105,9 +1208,11 @@ def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
         local_training_coordinator.lifecycle_request_fields = original
 
     assert result == 'observation0' and cutoff == second.stamp_ns
-    assert cutoffs == [first.stamp_ns, second.stamp_ns, second.stamp_ns]
+    assert previewed == [first.stamp_ns, second.stamp_ns, second.stamp_ns]
+    assert cutoffs == [second.stamp_ns]
     assert align_calls == [(second.stamp_ns, [first.stamp_ns, second.stamp_ns])]
-    assert [name for name, _ in events] == ['RESET_RECEIPT_ALIGNMENT_DEFERRED']
+    assert [name for name, _ in events] == [
+        'RESET_RECEIPT_ALIGNMENT_DEFERRED', 'RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED']
     assert confirmations == ['ack']
 
 

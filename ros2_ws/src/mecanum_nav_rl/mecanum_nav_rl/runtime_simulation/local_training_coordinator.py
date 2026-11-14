@@ -447,6 +447,12 @@ class LocalTrainingB1Adapter:
             raise ValueError('B1 cutoff rejected: ' + str(selection.reason))
         return selection
 
+    def preview_observation0_selection(self, cutoff_ns):
+        """Select the reset receipt boundary without committing the B1 episode."""
+        with self.ingress.lock:
+            facts = self._joined(cutoff_ns)
+            return self._selection(facts, reset=True)
+
     def _prove_application(self, receipt, cutoff_ns):
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
@@ -549,13 +555,16 @@ class LocalTrainingB1Adapter:
             'evaluation_ros_ns': facts['ros_now'], 'evaluation_steady_ns': facts['steady_now']})
         return inputs, assembled.vector, reference, odom, twist, clearance
 
-    def commit_observation0(self, cutoff_ns):
+    def commit_observation0(self, cutoff_ns, *, expected_selection_keys=None):
         from mecanum_nav_rl.core.episode_lifecycle import ResetCommitCandidate, ResetZeroReceipt, EpisodeOperationStatus
         from mecanum_nav_rl.observations.previous_command import PreviousNormalizedCommand
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
         with self.ingress.lock:
             facts = self._joined(cutoff_ns)
             selection = self._selection(facts, reset=True)
+            actual_keys = (selection.receipt.receipt_key, selection.adjacent_receipt.receipt_key)
+            if expected_selection_keys is not None and actual_keys != expected_selection_keys:
+                raise B1SnapshotPending('reset receipt selection changed before B1 commit')
             self._prove_application(selection.receipt, cutoff_ns)
             self._observe_contact(cutoff_ns)
             if self.contact.state.contact_active:
