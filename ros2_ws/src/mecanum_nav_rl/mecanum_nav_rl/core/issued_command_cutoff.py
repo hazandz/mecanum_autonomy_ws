@@ -311,7 +311,9 @@ def select_final_issued_at_cutoff(
 
     Receipt config identity is supplied by ``binding``; receipt-v2 has no
     config-hash field.  Arrival order is ignored, but sequence/stamp rollback,
-    conflicting duplicates, and any incompatible item fail closed.
+    conflicting duplicates, and any incompatible item fail closed. Freshness
+    is enforced by the ready selection for the selected receipt and its
+    adjacent boundary receipt; older history does not define the cutoff.
     """
     try:
         _uint('cutoff_ros_ns', cutoff_ros_ns)
@@ -375,15 +377,6 @@ def select_final_issued_at_cutoff(
                 reset_barrier_ros_ns, action_barrier_ros_ns
             ):
                 raise ValueError('receipt does not clear reset/action barrier')
-            if evaluation_ros_now_ns < receipt.publish_stamp_ns or (
-                evaluation_ros_now_ns - receipt.publish_stamp_ns > 500000000
-            ):
-                raise ValueError('receipt ROS age exceeds 500 ms')
-            if evaluation_steady_now_ns < receipt.received_steady_ns or (
-                evaluation_steady_now_ns - receipt.received_steady_ns >
-                500000000
-            ):
-                raise ValueError('receipt steady receive age exceeds 500 ms')
             prior = by_sequence.get(receipt.final_publish_sequence)
             if prior is not None and prior != receipt:
                 raise ValueError(

@@ -347,3 +347,45 @@ def test_reset_zero_rejects_duplicate_rollback_and_latest_policy():
     assert select_zero(
         (nonzero_stop, next_receipt)
     ).status is CutoffStatus.REJECTED
+
+
+def test_reset_zero_ignores_stale_history_when_cutoff_pair_is_fresh():
+    """Chỉ receipt được chọn và receipt kề cutoff phải còn mới."""
+    old_history = replace(
+        receipt(1, 10, ReceiptSource.SAFE_STOP, 3),
+        received_steady_ns=0,
+    )
+    selected = replace(
+        receipt(2, 20, ReceiptSource.SAFE_STOP, 4),
+        received_steady_ns=600_000_001,
+    )
+    adjacent = replace(
+        receipt(3, 21, ReceiptSource.SAFE_STOP, 5),
+        received_steady_ns=600_000_001,
+    )
+
+    result = select_zero(
+        (old_history, selected, adjacent),
+        cutoff=20,
+        now=21,
+        steady_now=600_000_001,
+    )
+
+    assert result.status is CutoffStatus.READY, result.reason
+    assert result.receipt == selected
+    assert result.adjacent_receipt == adjacent
+
+    stale_selected = replace(selected, received_steady_ns=0)
+    assert select_zero(
+        (old_history, stale_selected, adjacent),
+        cutoff=20,
+        now=21,
+        steady_now=600_000_001,
+    ).status is CutoffStatus.REJECTED
+    stale_adjacent = replace(adjacent, received_steady_ns=0)
+    assert select_zero(
+        (old_history, selected, stale_adjacent),
+        cutoff=20,
+        now=21,
+        steady_now=600_000_001,
+    ).status is CutoffStatus.REJECTED
