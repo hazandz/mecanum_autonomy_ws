@@ -1092,7 +1092,10 @@ class TrainingWorkerIO:
                 'reason': 'scan boundary already passed before suppression was armed',
                 'steady_ns': self.now()})
             return False
-        max_gap_ns = self.ingress.profile['final_command_timeout_ms'] * 1_000_000
+        # Boundary alignment is governed by B1's receipt-age contract, not
+        # the shorter Safety command watchdog. Zero remains the selected
+        # output while this bounded sensor/receipt join is pending.
+        max_gap_ns = self.ingress.profile['b1_receipt_max_age_ms'] * 1_000_000
         armed_ns = self.now()
         adapter.arm_reset_scan_boundary(target_ns)
         self.emit('RESET_RECEIPT_ALIGNMENT_ARMED', {'target_scan_ns': target_ns,

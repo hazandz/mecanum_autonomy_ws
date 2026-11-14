@@ -1334,6 +1334,7 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
 
     value, clock = worker()
+    value.deadline_ns = clock.ns + 300_000_000
     ros_ns = [1_000_000_000]
     target = 1_100_000_000
     life = NS(episode_generation=1, reset_epoch=2, runtime_generation=3,
@@ -1369,7 +1370,7 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     value.ingress = NS(lifecycle=life, scan_reset_stamp_ns=800_000_000,
         scans={900_000_000: NS(stamp_ns=900_000_000), 1_000_000_000: NS(stamp_ns=1_000_000_000)},
         profile={'safety_period_ms': 20, 'scan_max_age_ms': 500,
-            'final_command_timeout_ms': 500}, receipts=[receipt],
+            'final_command_timeout_ms': 100, 'b1_receipt_max_age_ms': 500}, receipts=[receipt],
         physics_pairs=[NS(stamp_ns=1_080_000_000, iteration=108,
             backend_bytes=serialize_message(applied))], admission_state=0,
         last_published_admission_state=0, fault=None, backend_state=NS(fault_flags=0),
@@ -1391,10 +1392,11 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
             suppressed._reset_boundary_suppressed_stamp_ns = target
         elif ros_ns[0] > target:
             boundary_overrun_polls[0] += 1
-        if ros_ns[0] > target and boundary_overrun_polls[0] >= 2 and len(value.ingress.receipts) == 1:
+        if ros_ns[0] > target and boundary_overrun_polls[0] >= 60 and len(value.ingress.receipts) == 1:
             # Clock/suppression may advance before the scan callback is
             # delivered. The production wait must keep polling in the same
-            # 500 ms budget until that exact post-barrier sample is visible.
+            # 500 ms receipt-age budget, independent of the 100 ms command
+            # watchdog, until that exact post-barrier sample is visible.
             value.ingress.scans[target] = NS(stamp_ns=target)
             adjacent.received_steady_ns = clock.ns
             value.ingress.receipts.append(adjacent)
