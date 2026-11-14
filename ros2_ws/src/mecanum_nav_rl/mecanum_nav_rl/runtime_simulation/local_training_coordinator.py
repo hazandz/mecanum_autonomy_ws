@@ -399,14 +399,24 @@ class LocalTrainingB1Adapter:
             raise B1SnapshotPending('exact oracle/backend iteration pair is not available')
         pair = pairs[0]
         ros_now, steady_now = source.ros_now(), source.now()
-        for stamp, received, age_ms in (
-                (cutoff_ns, scan.received_steady_ns, source.profile['scan_max_age_ms']),
-                (cutoff_ns, noisy.received_steady_ns, source.profile['odometry_max_age_ms']),
-                (cutoff_ns, pair.oracle_received_steady_ns, source.profile['oracle_max_age_ms']),
-                (stamp_ns(source.lifecycle.header.stamp), source.lifecycle_received_ns,
+        for name, stamp, received, age_ms in (
+                ('scan', cutoff_ns, scan.received_steady_ns, source.profile['scan_max_age_ms']),
+                ('noisy odometry', cutoff_ns, noisy.received_steady_ns, source.profile['odometry_max_age_ms']),
+                ('oracle', cutoff_ns, pair.oracle_received_steady_ns, source.profile['oracle_max_age_ms']),
+                ('lifecycle', stamp_ns(source.lifecycle.header.stamp), source.lifecycle_received_ns,
                  source.profile['lifecycle_max_age_ms'])):
-            validate_dual_clock_freshness(source_ros_ns=stamp, now_ros_ns=ros_now,
-                receive_steady_ns=received, now_steady_ns=steady_now, max_age_ns=age_ms * 1_000_000)
+            try:
+                validate_dual_clock_freshness(source_ros_ns=stamp, now_ros_ns=ros_now,
+                    receive_steady_ns=received, now_steady_ns=steady_now, max_age_ns=age_ms * 1_000_000)
+            except ValueError as error:
+                if str(error) == 'input exceeds ROS or local steady receive age':
+                    # policy_step may inspect retained cutoffs in order while
+                    # newer sensor pairs arrive. An expired candidate is not
+                    # committable, but must not abort evaluation of the next
+                    # fresh cutoff. Future/malformed timestamps still fail
+                    # closed in the validator above.
+                    raise B1SnapshotPending(f'joined {name} freshness age expired') from error
+                raise
         if not 0 <= steady_now - pair.backend_received_steady_ns <= source.profile['backend_status_receive_age_ms'] * 1_000_000:
             # A cutoff candidate can age while policy_step scans older samples
             # before a newer applied receipt arrives. It is not a valid

@@ -1,5 +1,5 @@
 """Regression ingress/producer thật với generated interfaces và I/O fakes."""
-from dataclasses import fields
+from dataclasses import fields, replace
 import copy
 import json
 import math
@@ -352,12 +352,21 @@ def test_real_ingress_b1_reset_then_policy_commit_retains_81d_and_true_dt(source
     assert [name for name, _ in f.events].count('b1_transition_committed') == 1
 
 
-def test_b1_skips_expired_old_cutoff_then_commits_fresh_later_policy_cutoff(source):
+@pytest.mark.parametrize('stale_input', ['backend_state', 'noisy_odometry'])
+def test_b1_skips_expired_old_cutoff_then_commits_fresh_later_policy_cutoff(source, stale_input):
     """A stale pair is pending evidence; it cannot hide the next fresh applied cutoff."""
     from mecanum_nav_rl_interfaces.msg import SafetyState
     f = source; chain = b1_runtime_chain(f)
-    f.clock.steady += 210_000_000
-    with pytest.raises(B1SnapshotPending, match='receive age expired'):
+    if stale_input == 'backend_state':
+        f.clock.steady += 210_000_000
+        expected_pending = 'joined backend state receive age expired'
+    else:
+        sample = f.ingress.noisy_samples[chain.cutoff]
+        max_age_ns = f.ingress.profile['odometry_max_age_ms'] * 1_000_000
+        f.ingress.noisy_samples[chain.cutoff] = replace(
+            sample, received_steady_ns=f.clock.steady - max_age_ns - 1)
+        expected_pending = 'joined noisy odometry freshness age expired'
+    with pytest.raises(B1SnapshotPending, match=expected_pending):
         chain.b1.commit_step(chain.cutoff)
     assert not chain.b1.committer.committed
 
@@ -399,6 +408,26 @@ def test_b1_skips_expired_old_cutoff_then_commits_fresh_later_policy_cutoff(sour
     result = chain.b1.commit_step(cutoff)
     assert result.transition_identity == chain.token
     assert chain.b1.committer.committed
+
+
+def test_b1_treats_expired_noisy_odometry_cutoff_as_pending_not_transaction_fault(source):
+    """A retained cutoff whose odometry ages out must not abort newer cutoffs."""
+    f = source; chain = b1_runtime_chain(f)
+    sample = f.ingress.noisy_samples[chain.cutoff]
+    max_age_ns = f.ingress.profile['odometry_max_age_ms'] * 1_000_000
+    f.ingress.noisy_samples[chain.cutoff] = replace(
+        sample, received_steady_ns=f.clock.steady - max_age_ns - 1)
+
+    with pytest.raises(B1SnapshotPending, match='joined noisy odometry freshness age expired'):
+        chain.b1._joined(chain.cutoff)
+    assert not chain.b1.committer.committed
+
+    # Malformed future receive time remains a hard source fault, not pending.
+    f.ingress.noisy_samples[chain.cutoff] = replace(
+        sample, received_steady_ns=f.clock.steady + 1)
+    with pytest.raises(ValueError, match='future timestamps are invalid'):
+        chain.b1._joined(chain.cutoff)
+    assert not chain.b1.committer.committed
 
 
 @pytest.mark.parametrize('missing', ['scan', 'noisy', 'physics', 'safety'])
