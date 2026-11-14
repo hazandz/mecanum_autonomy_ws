@@ -18,7 +18,24 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'OOMPolicy=stop','RuntimeMaxSec=180s','TimeoutStartSec=5s','TimeoutStopSec=2s',
     'KillMode=control-group','KillSignal=SIGTERM','SendSIGKILL=yes',
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
-CASE_PHASES = {'R01a': 'smoke', 'R01e': 'fault_task'}
+CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01e': 'fault_task'}
+CASE_HOOKS = {
+    'R01a': (),
+    'R01b': ('external_pause_after_w1_before_native_dispatch',),
+    'R01e': ('pause_request_replay_after_terminal',),
+}
+
+
+def case_fault_hooks(case, requested=None):
+    """Return the exact hook set allowed for this campaign case."""
+    if case not in CASE_HOOKS:
+        raise ValueError('unsupported B2.3 campaign case: ' + str(case))
+    expected = CASE_HOOKS[case]
+    if requested is None:
+        return list(expected)
+    if requested not in expected:
+        raise ValueError('fault hook is not approved for campaign case: ' + str(requested))
+    return [requested]
 
 
 def campaign_phase(case):
@@ -27,6 +44,37 @@ def campaign_phase(case):
         return CASE_PHASES[case]
     except KeyError as error:
         raise ValueError('unsupported B2.3 campaign case: ' + str(case)) from error
+
+
+def technical_outcome(case, success):
+    """Keep each case assessment label bound to its actual packet case."""
+    if case not in CASE_PHASES:
+        raise ValueError('unsupported B2.3 campaign case: ' + str(case))
+    return case + '_COMPLETED' if success else 'INCOMPLETE'
+
+
+def verify_r01b_external_pause_rejection(io, error):
+    """Validate the expected production rejection and fail-closed reset stop."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    if not isinstance(error, BackendControlError):
+        raise RuntimeError('R01b did not fail through the backend control response')
+    ack = error.ack
+    state = io.ingress.backend_state
+    if (ack is None or ack.response.result != ack.response.RESULT_REJECTED
+            or ack.response.reason_code != Control.Response.REASON_BARRIER_INVALID):
+        raise RuntimeError('R01b rejection response does not match unexpected-pause contract')
+    if not any(name == 'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1' for name, _ in io.events):
+        raise RuntimeError('R01b external pause hook was not observed')
+    if state is None or state.fault_flags == 0 or not state.local_zero_override:
+        raise RuntimeError('R01b did not observe native fault with zero override')
+    if any(name in {'RESET_POSE_MUTATION_ARMED','B1_RESET_STARTED','B1_RESET_COMMITTED',
+                    'RESET_COMPLETE'} for name, _ in io.events):
+        raise RuntimeError('R01b continued reset after unexpected pause')
+    return {'reason_code':ack.response.reason_code,
+        'request_sequence':ack.request.request_sequence,
+        'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+        'no_pose_mutation':True, 'no_observation0_commit':True}
 
 
 def verify_guard_authority(packet, authority, packet_sha256):
@@ -85,7 +133,10 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
         import secrets
         self.descriptor, self.document, self.asset = copy.deepcopy(descriptor), document, asset_manifest
-        self.emit = emit
+        self.events = []
+        self._event_sink = emit
+        self.emit = self._emit
+        self.fault_hooks = set()
         self.now, self.pause = time.monotonic_ns, asyncio.sleep
         self.deadline_ns = descriptor['active_deadline_ns']
         self.context = Context()
@@ -168,6 +219,12 @@ class TrainingWorkerIO:
         except BaseException:
             self.close_context()
             raise
+
+    def _emit(self, name, facts):
+        if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
+                    'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE'}:
+            self.events.append((name, copy.deepcopy(facts)))
+        self._event_sink(name, facts)
 
     def observed_callback(self, message_type, topic, callback):
         """Giữ CDR do DDS trả trước decode/validator; không sửa payload nguồn."""
@@ -693,6 +750,12 @@ class TrainingWorkerIO:
                 raise TimeoutError('native pause enter has no remaining budget')
             pause_deadline = min(deadline, self.now() + int(timeout * 1e9))
             self.ingress.begin_pause_transition(final_sequence=fact.final_publish_sequence, deadline_ns=pause_deadline)
+            if 'external_pause_after_w1_before_native_dispatch' in self.fault_hooks:
+                await self.control_world(world_name='b2_training_arena', pause=True,
+                    timeout_s=min(1., max(0., (pause_deadline-self.now())/1e9)))
+                self.emit('FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1', {
+                    'w1_final_publish_sequence': fact.final_publish_sequence,
+                    'steady_ns': self.now(), 'native_intent_dispatched': False})
             self.expected_paused = True  # Chỉ sau khi bắt đầu giao dịch pause native.
             ack = await self.control.transact(Control.Request.OP_PREPARE_RESET_PAUSE,
                 deadline_ns=pause_deadline,
@@ -1325,6 +1388,7 @@ async def training_child(path):
         document = json.loads(Path(packet['resolved_config']).read_bytes())
         asset = json.loads(Path(packet['asset_manifest']).read_bytes())
         io = TrainingWorkerIO(descriptor, document, asset, sink.record)
+        io.fault_hooks = set(packet['fault_hooks'])
         loop = asyncio.get_running_loop()
         import signal
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -1351,6 +1415,17 @@ async def training_child(path):
             outcome = {'case': 'R01e', 'resets_confirmed': 1,
                 'pause_request_sequence': replay.request.request_sequence,
                 'exact_terminal_replay': True, 'completed_ns': time.monotonic_ns()}
+        elif packet['case'] == 'R01b':
+            target = ResetTarget(**packet['reset_target'])
+            try:
+                await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                    paused_hold_s=.250)
+            except Exception as exc:
+                checked = verify_r01b_external_pause_rejection(io, exc)
+                outcome = {'case':'R01b', 'expected_rejection':True, **checked,
+                    'completed_ns':time.monotonic_ns()}
+            if outcome is None:
+                raise RuntimeError('R01b expected unexpected-pause rejection was not observed')
         else:
             raise RuntimeError('case not implemented by this worker; cannot launch other hooks')
         if outcome['completed_ns'] >= descriptor['active_deadline_ns']:
@@ -1400,7 +1475,7 @@ def verify_packet(path, expected_sha256):
     except (KeyError,ValueError,TypeError,AttributeError) as error:
         raise ValueError('packet requires matching canonical session UUID') from error
     prefix = Path(packet['install_prefix']).resolve(strict=True)
-    expected_hooks = {'R01a': [], 'R01e': ['pause_request_replay_after_terminal']}
+    expected_hooks = {case: list(hooks) for case, hooks in CASE_HOOKS.items()}
     expected_phase = campaign_phase(packet.get('case'))
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
             or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
@@ -1752,9 +1827,10 @@ def prepare_packet(args):
     environment.update(ROS_DOMAIN_ID='84', ROS_HOME=str(root/'ros-home'), ROS_LOG_DIR=str(root/'ros-log'),
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)
+    fault_hooks = case_fault_hooks(args.case, args.fault_hook)
     packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
         'case': args.case, 'gui': False,
-        'fault_hooks': [] if args.case == 'R01a' else ['pause_request_replay_after_terminal'],
+        'fault_hooks': fault_hooks,
         'world_seed':20261029,
         'episode_seeds':[2026102900,2026102901], 'authority': 'OWNER_B23_CAMPAIGN_APPROVED',
         'authority_reference': 'Owner approval B23_CAMPAIGN and standing authorization in task conversation',
@@ -2036,7 +2112,8 @@ def launch_packet(args):
     parent_identity = json.loads((root/'parent-identity.json').read_bytes()) if (root/'parent-identity.json').exists() else None
     binding_errors = terminal_binding_errors(packet, terminal, parent_identity, identities, invocation, args.packet_sha256)
     success = success and not binding_errors
-    assessment = {'run_id':packet['run_id'], 'technical_outcome':'R01a_COMPLETED' if success else 'INCOMPLETE',
+    assessment = {'run_id':packet['run_id'],
+        'technical_outcome':technical_outcome(packet['case'], success),
         'evidence':str(root),'primary_error':primary,'cleanup_error':cleanup_error,
         'terminal_binding_errors':binding_errors, 'metadata_cleanup_error':metadata_cleanup_error,
         'parent_primary_error':None if parent is None else parent.get('primary_error'), 'assessed_ns':time.monotonic_ns()}
@@ -2105,7 +2182,8 @@ def main(argv=None):
     prepare = commands.add_parser('prepare')
     for key in ('repo','commit','install','build-binding','run-id'):
         prepare.add_argument('--'+key, required=True)
-    prepare.add_argument('--case', choices=('R01a','R01e'), default='R01a')
+    prepare.add_argument('--case', choices=tuple(CASE_HOOKS), default='R01a')
+    prepare.add_argument('--fault-hook', choices=tuple(sorted({hook for hooks in CASE_HOOKS.values() for hook in hooks})))
     prepare.add_argument('--junit', action='append', required=True)
     for role in ('launch','parent'):
         command = commands.add_parser(role)
