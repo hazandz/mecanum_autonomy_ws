@@ -293,6 +293,7 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
 
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     if case not in ('R02c', 'R02d'):
         raise ValueError('unsupported delayed receipt case')
     rows = [json.loads(line) for line in Path(io.descriptor['native_events_path'])
@@ -311,7 +312,10 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     if release_ns < held_ns:
         raise RuntimeError(f'{case} release predates native receipt hold')
     state = io.ingress.backend_state
-    if state is None or state.fault_flags == 0 or not state.local_zero_override:
+    expected_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    if (state is None or state.fault_flags != expected_fault_flags
+            or not state.local_zero_override):
         raise RuntimeError(f'{case} late POLICY receipt did not produce native fault and zero')
     if (state.applied_receipt_valid and
             state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id and
@@ -539,7 +543,7 @@ class TrainingWorkerIO:
             self.pump_error = error
             raise
 
-    def check(self):
+    def check(self, *, expected_native_fault_flags=None):
         if self.stop_requested or self.abort_requested is not None:
             raise RuntimeError('worker stop requested: ' + str(self.abort_requested))
         if self.pump_error is not None:
@@ -556,12 +560,16 @@ class TrainingWorkerIO:
         if self.ingress.fault:
             raise RuntimeError('ingress fault: ' + self.ingress.fault)
         if self.ingress.backend_state is not None and self.ingress.backend_state.fault_flags:
-            raise RuntimeError('native fault flags=' + str(self.ingress.backend_state.fault_flags))
+            state = self.ingress.backend_state
+            expected_zero_fault = (state.fault_flags == expected_native_fault_flags
+                and state.local_zero_override)
+            if not expected_zero_fault:
+                raise RuntimeError('native fault flags=' + str(state.fault_flags))
 
-    async def until(self, predicate, *, deadline_ns, phase):
+    async def until(self, predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
         deadline_ns = min(deadline_ns, self.deadline_ns)
         while self.now() < deadline_ns:
-            self.check()
+            self.check(expected_native_fault_flags=expected_native_fault_flags)
             value = predicate()
             if value:
                 if self.now() >= deadline_ns:
@@ -1530,11 +1538,15 @@ class TrainingWorkerIO:
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
             await self.until(released_row, deadline_ns=deadline,
                 phase='held POLICY receipt released only after closing condition')
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
+            expected_native_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)
             native_fault = await self.until(lambda: self.ingress.backend_state
                 if self.ingress.backend_state is not None
-                and self.ingress.backend_state.fault_flags != 0
+                and self.ingress.backend_state.fault_flags == expected_native_fault_flags
                 and self.ingress.backend_state.local_zero_override else None,
-                deadline_ns=deadline, phase='native rejection and local zero after late POLICY receipt')
+                deadline_ns=deadline, phase='native rejection and local zero after late POLICY receipt',
+                expected_native_fault_flags=expected_native_fault_flags)
             checked = verify_r02_late_receipt_rejected(self, case=(
                 'R02c' if close_after_held_receipt == 'safe_stop' else 'R02d'),
                 step_index=token.step_index, receipt=policy_receipt)

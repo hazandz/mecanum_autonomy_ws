@@ -320,6 +320,32 @@ def test_until_none_and_frozen_pause_fail_bounded():
         asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000, phase='frozen'))
 
 
+def test_until_can_observe_only_the_case_expected_native_zero_fault():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    expected = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected, local_zero_override=True)
+    assert asyncio.run(value.until(lambda: value.ingress.backend_state,
+        deadline_ns=clock.ns + 5_000_000, phase='expected close fault',
+        expected_native_fault_flags=expected)) is value.ingress.backend_state
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected | SimulationContactState.FAULT_CLOCK,
+        local_zero_override=True)
+    with pytest.raises(RuntimeError, match='native fault flags=70'):
+        asyncio.run(value.until(lambda: value.ingress.backend_state,
+            deadline_ns=clock.ns + 5_000_000, phase='unexpected fault',
+            expected_native_fault_flags=expected))
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected, local_zero_override=False)
+    with pytest.raises(RuntimeError, match='native fault flags=6'):
+        asyncio.run(value.until(lambda: value.ingress.backend_state,
+            deadline_ns=clock.ns + 5_000_000, phase='fault without zero',
+            expected_native_fault_flags=expected))
+
+
 def test_active_deadline_is_never_extended_by_predicate_budget():
     value, clock = worker()
     value.deadline_ns = clock.ns + 3_000_000
@@ -1685,7 +1711,7 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
         ('B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',{'reason':reason,'sequence':'52',
             'source_sequence':'1','receive_ns':'200'})])+'\n')
     receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
-    state=NS(fault_flags=4,local_zero_override=True,applied_receipt_valid=False,
+    state=NS(fault_flags=6,local_zero_override=True,applied_receipt_valid=False,
         applied_final_publisher_instance_id=0,applied_final_publish_sequence=0)
     io=NS(descriptor={'native_events_path':str(native)},ingress=NS(backend_state=state),events=[])
     checked=verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
@@ -1693,5 +1719,9 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
     assert checked['policy_backend_applied'] is False
     assert checked['b1_transition_committed'] is False
     state.local_zero_override=False
+    with pytest.raises(RuntimeError,match='native fault and zero'):
+        verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+    state.local_zero_override=True
+    state.fault_flags=4
     with pytest.raises(RuntimeError,match='native fault and zero'):
         verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
