@@ -1497,6 +1497,12 @@ class TrainingWorkerIO:
         if close_after_held_receipt is not None:
             if close_after_held_receipt not in ('safe_stop', 'admission_inhibited'):
                 raise ValueError('unsupported R02 close trigger')
+            # The pending slot is admitted, but Safety's timer was held off
+            # during bind/sample delivery so no SAFE_STOP can revoke it. Now
+            # allow the real timer to publish POLICY; native captures that
+            # receipt before the case-specific close condition is injected.
+            self.safety.local_training.set_stream_enabled(True)
+            self.safety.local_training.set_policy_hold(False)
             policy_receipt = await self.until(lambda: self.final.publication_for_source_sequence(
                 source=CommandEnvelope.SOURCE_POLICY, sequence=token.step_index),
                 deadline_ns=deadline, phase='actual held POLICY publication receipt')

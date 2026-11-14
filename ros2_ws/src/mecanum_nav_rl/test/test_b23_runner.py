@@ -494,6 +494,36 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert events[-1][1]['publish_sequence'] == 21
 
 
+def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_receipt():
+    import ast
+    import inspect
+    import textwrap
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(TrainingWorkerIO.policy_step)))
+    hook = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == 'close_after_held_receipt'
+        and any(isinstance(op, ast.IsNot) for op in node.test.ops))
+    body = hook.body
+    def call_index(method, value):
+        for index, statement in enumerate(body):
+            calls = [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
+            if any(isinstance(call.func, ast.Attribute) and call.func.attr == method
+                    and call.args and isinstance(call.args[0], ast.Constant)
+                    and call.args[0].value is value for call in calls):
+                return index
+        raise AssertionError(f'{method}({value}) is missing in held-receipt path')
+    stream_on = call_index('set_stream_enabled', True)
+    release_hold = call_index('set_policy_hold', False)
+    wait_receipt = next(index for index, statement in enumerate(body)
+        if any(isinstance(node, ast.Constant) and node.value == 'actual held POLICY publication receipt'
+            for node in ast.walk(statement)))
+    assert stream_on < wait_receipt
+    assert release_hold < wait_receipt
+
+
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
