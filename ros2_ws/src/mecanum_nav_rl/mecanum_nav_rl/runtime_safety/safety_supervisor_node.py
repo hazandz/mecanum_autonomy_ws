@@ -66,14 +66,14 @@ class SafetySupervisorNode(Node):
             if period_ns <= 0 or period_ns % 2:
                 raise ValueError('LOCAL_TRAINING Safety period must be a positive even nanosecond value')
 
-            # Gazebo scan samples and the native backend are both driven by
-            # physics time. Starting this timer on the same phase as the scan
-            # timer makes the newest receipt at each scan cutoff impossible to
-            # have been applied yet: the native application occurs on the next
-            # physics iteration. Start the unchanged periodic cadence half a
-            # period later so a receipt from the prior Safety tick can be
-            # applied on the scan boundary. Keep this phase change local to
-            # LOCAL_TRAINING; NAV2_BASELINE keeps its existing timer.
+            # The native actuator watchdog is measured on steady time, while
+            # ROS timers follow the simulated clock. Under headless/loaded
+            # Gazebo, simulation time can advance slower than wall time, so a
+            # ROS-time Safety timer can miss the 100 ms steady receipt window.
+            # Drive this LOCAL_TRAINING loop from steady time. Keep the half-
+            # period phase offset so a prior Safety receipt can be applied at
+            # a scan cutoff; receipt freshness and command limits still use
+            # their existing ROS/steady clocks in the adapter.
             self._local_training_phase_timer = None
             self._local_training_timer = None
 
@@ -81,15 +81,16 @@ class SafetySupervisorNode(Node):
                 self.destroy_timer(self._local_training_phase_timer)
                 self._local_training_phase_timer = None
                 started_ros_ns = self.get_clock().now().nanoseconds
-                self._local_training_timer = self.create_timer(
+                self._local_training_timer = self.create_wall_timer(
                     period_ns / 1_000_000_000, self.local_training.tick)
                 self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
                     'initial_offset_ns': period_ns // 2,
                     'period_ns': period_ns,
                     'started_ros_ns': started_ros_ns,
+                    'clock': 'steady',
                 })
 
-            self._local_training_phase_timer = self.create_timer(
+            self._local_training_phase_timer = self.create_wall_timer(
                 (period_ns // 2) / 1_000_000_000, start_local_training_periodic_timer)
             return
         for name in self._POLICY_NAMES:

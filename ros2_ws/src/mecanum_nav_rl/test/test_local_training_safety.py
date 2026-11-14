@@ -220,7 +220,11 @@ class Node:
     def create_subscription(self, message_type, topic, callback, qos):
         self.subscriptions.append((topic, callback, qos))
     def create_timer(self, period, callback):
-        timer = NS(period=period, callback=callback)
+        timer = NS(clock='ros', period=period, callback=callback)
+        self.timers.append(timer)
+        return timer
+    def create_wall_timer(self, period, callback):
+        timer = NS(clock='steady', period=period, callback=callback)
         self.timers.append(timer)
         return timer
     def destroy_timer(self, timer): self.timers.remove(timer)
@@ -239,14 +243,17 @@ node = module.SafetySupervisorNode(local_training_context=ctx, evidence_sink=lam
 assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
 assert len(node.timers) == 1 and node.timers[0].period == 0.01
+assert node.timers[0].clock == 'steady'
 phase_timer = node.timers[0]
 phase_timer.callback()
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
+assert node.timers[0].clock == 'steady'
 assert node.timers[0].callback == node.local_training.tick
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
 assert events[-1][0] == 'SAFETY_TIMER_PHASE_STARTED'
 assert events[-1][1]['initial_offset_ns'] == 10_000_000
 assert events[-1][1]['period_ns'] == 20_000_000
+assert events[-1][1]['clock'] == 'steady'
 assert node.local_training.policy_hold is True
 assert not hasattr(node, '_core')
 '''
