@@ -719,6 +719,9 @@ class TrainingWorkerIO:
         self.emit('OBSERVATION0_ZERO_ANCHOR', {'publish_sequence': observation0_zero.final_publish_sequence,
             'application_stamp_ns': observation0_zero.applied_sim_stamp_ns,
             'application_iteration': observation0_zero.applied_physics_iteration, 'steady_ns': self.now()})
+        # Giữ Safety stream chạy ở inhibit để refresh receipt SAFE_STOP trong
+        # lúc chờ exact sensor join và CONFIRM; POLICY vẫn chưa được bind.
+        self.safety.local_training.set_stream_enabled(True)
         observation, cutoff = await self.commit_and_confirm_observation0(
             b1, deadline_ns=deadline, zero_receipt=observation0_zero)
         self.emit('RESET_COMPLETE', {'seed': seed, 'observation0_cutoff_ns': cutoff,
