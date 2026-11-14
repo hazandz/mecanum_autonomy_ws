@@ -82,3 +82,5 @@ B2.2 đã đóng; nguyên nhân RUN008 vẫn `UNKNOWN`; Owner visual ACK `NOT_PE
 
 - `B23-RESET-SCAN-01`: scan phải sau cả lifecycle barrier và source-time ghi khi reset_noise xóa buffer; vẫn kiểm tuổi ROS/steady. 70 test runner/ingress đạt, còn thiếu test xuyên reset đến B1 commit và CONFIRM.
 - `B23-INHIBIT-CACHE-01`: RED receiver/cache thật tái hiện RESULT_REJECTED/16 thay ACK APPLIED sau proof generation đổi; sửa riêng replay INHIBIT APPLIED, giữ application fact, xóa proof cũ. GREEN focused và 96 native invariants; cần kiểm tiếp attempt POLICY/đường reset và nghiệm thu cùng candidate.
+
+- `B23-SAFETY-DRAIN-01`: lượt 20261114_001 phát admission 24 nhưng native evidence dừng ở 23; 21 mẫu đứng yên đã đủ, deadline W1 không được kéo dài. Thêm log callback enqueue và nhánh reject thời gian để phân biệt chưa nhận với bị loại; giữ nguyên validation/threshold. ACK INHIBIT APPLIED, worker và outer cleanup sạch. Đây là phép đo, chưa kết luận nguyên nhân.

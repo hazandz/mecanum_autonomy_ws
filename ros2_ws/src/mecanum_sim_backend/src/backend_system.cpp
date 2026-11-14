@@ -2937,7 +2937,12 @@ private:
     std::lock_guard<std::mutex> lock(callback_mutex_);
     if (safety_queue_.size() >= ReceiptGate::kQueueCapacity)
     { callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE); return; }
-    safety_queue_.push_back({msg, steady_clock_now_()});
+    const auto received_ns = steady_clock_now_();
+    safety_queue_.push_back({msg, received_ns});
+    gzmsg << "B23_SAFETY_INPUT_ENQUEUED session=" << msg.session_id
+          << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
+          << " sample=" << msg.sample_sequence << " source_ns=" << TimeNs(msg.header.stamp)
+          << " receive_ns=" << received_ns << std::endl;
   }
 
   void ProcessCallbackInputs(std::int64_t sim_now_ns,
@@ -2974,6 +2979,11 @@ private:
           steady_now_ns < received_ns ||
           steady_now_ns - received_ns > 250'000'000)
       {
+        gzmsg << "B23_SAFETY_INPUT_REJECTED_TIME session=" << msg.session_id
+              << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
+              << " sample=" << msg.sample_sequence << " source_ns=" << safety_stamp_ns
+              << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
+              << " sim_now_ns=" << sim_now_ns << " iteration=" << physics_iteration_ << std::endl;
         safety_admission_candidate_ = false;
         policy_open_ = false;
         continue;
