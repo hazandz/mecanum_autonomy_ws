@@ -472,6 +472,14 @@ public:
       initialization_state_ = InitializationState::FAILED;
       return;
     }
+    const char *policy_order_fault_env = std::getenv("B23_ADMISSION_ORDER_FAULT");
+    policy_order_fault_ = policy_order_fault_env ? policy_order_fault_env : "";
+    if (!policy_order_fault_.empty() && policy_order_fault_ != "receipt_before_admission")
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "unsupported_b23_admission_order_fault");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
     if (!sdf || entity == gz::sim::kNullEntity ||
         gz::sim::entityTypeId(entity, ecm) != gz::sim::components::Model::typeId)
     {
@@ -3129,7 +3137,16 @@ private:
                    msg.final_command.linear.z, msg.final_command.angular.x,
                    msg.final_command.angular.y, msg.final_command.angular.z};
     std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (!gate_ || !gate_->Enqueue(std::move(facts), steady_clock_now_()))
+    const auto receive_ns = steady_clock_now_();
+    if (msg.source == Receipt::SOURCE_POLICY)
+    {
+      gzmsg << "B23_POLICY_RECEIPT_INGRESS publisher="
+            << msg.final_publisher_instance_id << " sequence="
+            << msg.final_publish_sequence << " step=" << msg.step_index
+            << " receive_ns=" << receive_ns << std::endl;
+      std::fflush(stdout);
+    }
+    if (!gate_ || !gate_->Enqueue(std::move(facts), receive_ns))
       callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
   }
 
@@ -3143,7 +3160,8 @@ private:
     safety_queue_.push_back({msg, received_ns});
     gzmsg << "B23_SAFETY_INPUT_ENQUEUED session=" << msg.session_id
           << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
-          << " sample=" << msg.sample_sequence << " source_ns=" << TimeNs(msg.header.stamp)
+          << " sample=" << msg.sample_sequence << " admission=" << static_cast<unsigned>(msg.admission_state)
+          << " source_ns=" << TimeNs(msg.header.stamp)
           << " receive_ns=" << received_ns << std::endl;
     std::fflush(stdout);
   }
@@ -3156,6 +3174,25 @@ private:
       std::lock_guard<std::mutex> lock(callback_mutex_);
       while (!safety_queue_.empty() && safety_queue_.front().second <= steady_now_ns)
       {
+        const auto &front = safety_queue_.front();
+        if (policy_order_fault_ == "receipt_before_admission" && gate_ &&
+            front.first.admission_state == SafetyInput::ADMISSION_POLICY_OPEN &&
+            gate_->QueueEmpty())
+        {
+          const auto held_ns = steady_now_ns - front.second;
+          if (!policy_order_hold_reported_)
+          {
+            gzmsg << "B23_POLICY_ADMISSION_HELD sample=" << front.first.sample_sequence
+                  << " receive_ns=" << front.second << " held_ns=" << held_ns
+                  << " limit_ns=40000000" << std::endl;
+            std::fflush(stdout);
+            policy_order_hold_reported_ = true;
+          }
+          if (held_ns <= 40'000'000) break;
+          // The fault hook never turns an expired admission into a success.
+          callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+          break;
+        }
         pending.push_back(std::move(safety_queue_.front()));
         safety_queue_.pop_front();
       }
@@ -3254,6 +3291,7 @@ private:
                 << " backend=" << backend_instance_id_
                 << " ingress=" << msg.ingress_instance_id << " sample=" << msg.sample_sequence
                 << " source_ns=" << safety_stamp_ns << " receive_ns=" << received_ns
+                << " processed_ns=" << steady_now_ns
                 << " iteration=" << physics_iteration_ << std::endl;
           std::fflush(stdout);
         }
@@ -3533,6 +3571,8 @@ private:
   std::string heartbeat_trace_error_;
   std::mutex callback_mutex_;
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
+  std::string policy_order_fault_;
+  bool policy_order_hold_reported_{};
   std::deque<PendingControl> control_queue_;
   std::shared_ptr<ProbeServiceMailbox> probe_service_mailbox_{
       std::make_shared<ProbeServiceMailbox>()};

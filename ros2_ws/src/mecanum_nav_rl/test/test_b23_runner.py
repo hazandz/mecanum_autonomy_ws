@@ -6,6 +6,7 @@ import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
+    verify_r02_policy_order,
 )
 
 
@@ -13,6 +14,9 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     from mecanum_nav_rl.runtime_simulation.b23_runner import campaign_phase, verify_guard_authority
     assert campaign_phase('R01a') == 'smoke'
     assert campaign_phase('R01e') == 'fault_task'
+    assert campaign_phase('R02a') == 'fault_task'
+    assert campaign_phase('R02b') == 'fault_task'
+    assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
         'phase': 'fault_task', 'consumed': False}
@@ -25,7 +29,23 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R02a')
+        campaign_phase('R02c')
+
+
+def test_d04_soak_schedule_and_unit_budget_are_exact():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import soak_action, service_properties_for
+    assert soak_action(0, 1) == (0., 0., 0.)
+    assert soak_action(0, 5) == (0., 0., 0.)
+    assert soak_action(0, 6) == (0.40, 0., 0.)
+    assert soak_action(1, 25) == (-0.40, 0., 0.)
+    assert soak_action(5, 6) == (0.30, -0.25, 0.30)
+    assert soak_action(29, 26) == (0., 0., 0.)
+    assert len([soak_action(i, step) for i in range(30)
+        for step in range(1, (34 if i < 10 else 33)+1)]) == 1000
+    assert 'RuntimeMaxSec=180s' in service_properties_for(120)
+    assert 'RuntimeMaxSec=960s' in service_properties_for(900)
+    with pytest.raises(ValueError, match='active runtime budget'):
+        service_properties_for(180)
 
 
 def test_case_hook_and_assessment_are_bound_to_packet_case():
@@ -34,6 +54,10 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01c') == ['delay_native_pause_ack_1500ms_once']
     assert case_fault_hooks('R01d') == ['drop_native_pause_ack_once']
     assert case_fault_hooks('R01e') == ['pause_request_replay_after_terminal']
+    assert case_fault_hooks('R02a') == []
+    assert case_fault_hooks('R02b') == ['native_hold_admission_until_receipt']
+    assert case_environment('R02b',case_fault_hooks('R02b')) == {
+        'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R01c', case_fault_hooks('R01c')) == {
         'B23_PAUSE_ACK_FAULT':'delay_1500ms_once'}
     assert case_environment('R01d', case_fault_hooks('R01d')) == {
@@ -44,6 +68,26 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
+    import json
+    path=tmp_path/'native-events.jsonl'
+    rows=[
+        {'kind':'B23_POLICY_RECEIPT_INGRESS','fields':{'step':'1','receive_ns':'300'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{'receive_ns':'100','processed_ns':'200'}},
+    ]
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    assert verify_r02_policy_order(tmp_path,case='R02a',step_started_ns=50)['order']=='admission_before_receipt'
+    rows[0]['fields']['receive_ns']='150'
+    rows[1]['fields']['receive_ns']='100'; rows[1]['fields']['processed_ns']='200'
+    rows.append({'kind':'B23_POLICY_ADMISSION_HELD','fields':{'receive_ns':'100'}})
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    assert verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)['order']=='receipt_before_admission'
+    rows[0]['fields']['receive_ns']='300'
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    with pytest.raises(RuntimeError,match='order mismatch'):
+        verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)
 
 
 def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
@@ -613,6 +657,12 @@ def test_actual_unit_properties_are_checked_exactly_without_duration_rounding():
         with pytest.raises(ValueError, match=key): verify_unit_configuration(dict(properties, **{key:bad}))
     properties.pop('RemainAfterExit')
     with pytest.raises(ValueError, match='RemainAfterExit'): verify_unit_configuration(properties)
+    soak=dict(Type='exec',Restart='no',KillMode='control-group',RemainAfterExit='yes',
+        RuntimeMaxUSec='16min',RuntimeRandomizedExtraUSec='0',TimeoutStartUSec='5s',TimeoutStopUSec='2s',
+        MemoryMax='5368709120',OOMPolicy='stop',SendSIGKILL='yes',KillSignal='15',FinalKillSignal='9')
+    verify_unit_configuration(soak,active_s=900,cleanup_s=60)
+    with pytest.raises(ValueError,match='RuntimeMaxUSec'):
+        verify_unit_configuration(dict(soak,RuntimeMaxUSec='16min 1ms'),active_s=900,cleanup_s=60)
 
 
 def test_terminal_evidence_is_joined_to_actual_main_pid_invocation_and_argv(tmp_path):
@@ -662,7 +712,7 @@ def test_unit_wrapper_preserves_real_invocation_and_literal_environment_without_
 
 
 def test_launch_template_pins_properties_env_and_only_substitutes_self_hash():
-    from mecanum_nav_rl.runtime_simulation.b23_runner import service_launch_command, SERVICE_PROPERTIES
+    from mecanum_nav_rl.runtime_simulation.b23_runner import service_launch_command, service_properties_for
     packet = dict(unit='b23-test.service',environment={'ROS_DOMAIN_ID':'84'},python='/pinned/python')
     template = service_launch_command(packet,'/packet.json','{PACKET_SHA256}')
     actual = service_launch_command(packet,'/packet.json','a'*64)
@@ -670,7 +720,7 @@ def test_launch_template_pins_properties_env_and_only_substitutes_self_hash():
     assert actual[:3] == ['systemd-run','--user','--unit=b23-test.service']
     assert '--scope' not in actual and '--collect' not in actual
     assert '--expand-environment=no' in actual
-    assert set(value for value in actual if value.startswith('--property=')) == {'--property='+v for v in SERVICE_PROPERTIES}
+    assert set(value for value in actual if value.startswith('--property=')) == {'--property='+v for v in service_properties_for(120)}
     assert '--property=KillMode=control-group' in actual and '--property=RuntimeMaxSec=180s' in actual
 
 

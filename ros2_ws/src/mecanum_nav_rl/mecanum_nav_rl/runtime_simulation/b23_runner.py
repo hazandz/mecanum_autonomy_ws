@@ -15,22 +15,52 @@ import time
 
 MODULE = 'mecanum_nav_rl.runtime_simulation.b23_runner'
 SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=5G',
-    'OOMPolicy=stop','RuntimeMaxSec=180s','TimeoutStartSec=5s','TimeoutStopSec=2s',
+    'OOMPolicy=stop','TimeoutStartSec=5s','TimeoutStopSec=2s',
     'KillMode=control-group','KillSignal=SIGTERM','SendSIGKILL=yes',
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
-    'R01d': 'fault_task', 'R01e': 'fault_task'}
+    'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
+    'R02b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
     'R01c': ('delay_native_pause_ack_1500ms_once',),
     'R01d': ('drop_native_pause_ack_once',),
     'R01e': ('pause_request_replay_after_terminal',),
+    'R02a': (),
+    'R02b': ('native_hold_admission_until_receipt',),
+    'R08': (),
 }
+
+
+def service_properties_for(active_s):
+    """Unit cap exactly covers active and cleanup budgets for the packet."""
+    if type(active_s) is not int or active_s not in (120, 900):
+        raise ValueError('unsupported B2.3 active runtime budget')
+    return (*SERVICE_PROPERTIES, f'RuntimeMaxSec={active_s + 60}s')
+
+
+SOAK_ACTIONS = (
+    (0.40, 0.0, 0.0), (-0.40, 0.0, 0.0), (0.0, 0.40, 0.0),
+    (0.0, 0.0, 0.40), (0.30, 0.30, 0.0), (0.30, -0.25, 0.30),
+)
+
+
+def soak_action(episode_index, step_index):
+    """D04 slot schedule: five zero steps, then 20 case steps, then zero."""
+    if type(episode_index) is not int or not 0 <= episode_index < 30:
+        raise ValueError('soak episode index outside B2_SOAK_V1')
+    if type(step_index) is not int or not 1 <= step_index <= (34 if episode_index < 10 else 33):
+        raise ValueError('soak step index outside B2_SOAK_V1 slot')
+    if 6 <= step_index <= 25:
+        return SOAK_ACTIONS[episode_index % len(SOAK_ACTIONS)]
+    return (0.0, 0.0, 0.0)
 
 
 def case_environment(case, hooks):
     """Bind the single native ACK fault hook to its case-scoped child env."""
+    if case == 'R02b' and hooks == ['native_hold_admission_until_receipt']:
+        return {'B23_ADMISSION_ORDER_FAULT': 'receipt_before_admission'}
     if case == 'R01c' and hooks == ['delay_native_pause_ack_1500ms_once']:
         return {'B23_PAUSE_ACK_FAULT': 'delay_1500ms_once'}
     if case == 'R01d' and hooks == ['drop_native_pause_ack_once']:
@@ -122,6 +152,32 @@ def verify_r01b_external_pause_rejection(io, error):
         'request_sequence':ack.request.request_sequence,
         'native_fault_flags':state.fault_flags, 'local_zero_override':True,
         'no_pose_mutation':True, 'no_observation0_commit':True}
+
+
+def verify_r02_policy_order(root, *, case, step_started_ns):
+    """Prove order at the native gate from backend receipt/admission records."""
+    rows = [json.loads(line) for line in (Path(root)/'native-events.jsonl').read_text().splitlines() if line.strip()]
+    receipts = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
+        and int(row.get('fields',{}).get('step','0')) == 1
+        and int(row.get('fields',{}).get('receive_ns','0')) >= step_started_ns]
+    admissions = [row for row in rows if row.get('kind') == 'B23_ADMISSION_ACCEPTED'
+        and int(row.get('fields',{}).get('processed_ns','0')) >= step_started_ns]
+    if not receipts or not admissions:
+        raise RuntimeError('R02 native receipt/admission order evidence is incomplete')
+    receipt_ns = int(receipts[0]['fields']['receive_ns'])
+    admission_ns = int(admissions[0]['fields']['processed_ns'])
+    admission_receive_ns = int(admissions[0]['fields']['receive_ns'])
+    if not 0 <= admission_ns-admission_receive_ns <= 40_000_000:
+        raise RuntimeError('R02 admission processing exceeded the 40 ms bounded join window')
+    expected = admission_ns < receipt_ns if case == 'R02a' else receipt_ns < admission_ns
+    if case not in ('R02a','R02b') or not expected:
+        raise RuntimeError(f'{case} native gate order mismatch: receipt={receipt_ns} admission={admission_ns}')
+    if case == 'R02b' and not any(row.get('kind') == 'B23_POLICY_ADMISSION_HELD'
+            and int(row.get('fields',{}).get('receive_ns','0')) == admission_receive_ns for row in rows):
+        raise RuntimeError('R02b does not prove the packet-scoped admission hold')
+    return {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
+        'admission_gate_ns':admission_ns,'admission_minus_receipt_ns':admission_ns-receipt_ns,
+        'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
 
 
 def verify_guard_authority(packet, authority, packet_sha256):
@@ -1485,8 +1541,72 @@ def final_child(path):
     return 0 if error is None else 1
 
 
+def _ledger_rows(root, filename):
+    rows = []
+    for line in (Path(root)/filename).read_text().splitlines():
+        if line.strip(): rows.append(json.loads(line))
+    return rows
+
+
+def _soak_ledger_counts(root):
+    names = ('policy_adapter_issued.jsonl','policy_final_published.jsonl',
+        'policy_backend_applied.jsonl','b1_transition_committed.jsonl')
+    rows = [_ledger_rows(root, name) for name in names]
+    ids = [{entry.get('facts',{}).get('transition_id') for entry in book
+        if entry.get('facts',{}).get('transition_id')} for book in rows]
+    return {'policy_adapter_issued':len(rows[0]), 'policy_final_published':len(rows[1]),
+        'policy_backend_applied':len(ids[2]), 'policy_backend_applied_records':len(rows[2]),
+        'b1_transition_committed':len(rows[3]), 'unique_transition_ids':[len(items) for items in ids]}
+
+
+async def _run_b2_soak(io, b1, packet, sink):
+    """Run the immutable 30-episode D04 schedule through the production path."""
+    from mecanum_nav_rl.simulation.local_training_reset import ResetTarget
+    target = ResetTarget(**packet['reset_target'])
+    episode_steps = [34]*10 + [33]*20
+    resets = committed_steps = 0
+    terminal_records = []
+    terminal_seen = False
+    for episode_index, (seed, expected_steps) in enumerate(zip(packet['episode_seeds'], episode_steps)):
+        if time.monotonic_ns() >= io.deadline_ns:
+            raise TimeoutError('B2_SOAK_V1 active deadline reached before reset')
+        await io.reset_episode(b1, seed=seed, target=target, paused_hold_s=.250)
+        resets += 1
+        terminal_seen = False
+        for step_index in range(1, expected_steps + 1):
+            transition = await io.policy_step(b1, soak_action(episode_index, step_index))
+            committed_steps += 1
+            terminal = bool(transition.termination.terminated or transition.termination.truncated)
+            if terminal:
+                terminal_records.append({'episode_index':episode_index,'step_index':step_index,
+                    'terminated':transition.termination.terminated,'truncated':transition.termination.truncated,
+                    'seed':seed})
+                if step_index != expected_steps:
+                    raise RuntimeError('B2_SOAK_V1 terminal occurred before scheduled episode slot end')
+                if episode_index != 29:
+                    raise RuntimeError('B2_SOAK_V1 terminal before final episode invalidates fixed schedule')
+                terminal_seen = True
+                break
+        if episode_index < 29 and not terminal_seen:
+            raise RuntimeError('B2_SOAK_V1 scheduled episode ended without terminal')
+        if episode_index == 29 and not terminal_seen:
+            sink.record('COLLECTION_CUTOFF', {'episode_index':episode_index,
+                'step_count':expected_steps,'seed':seed,'reason':'final_slot_unfinished'})
+    counts = _soak_ledger_counts(packet['run_root'])
+    expected = 1000
+    if resets != 30 or committed_steps != expected:
+        raise RuntimeError('B2_SOAK_V1 reset/step schedule count mismatch')
+    if (counts['policy_adapter_issued'] != expected or counts['policy_backend_applied'] != expected
+            or counts['b1_transition_committed'] != expected
+            or counts['unique_transition_ids'] != [expected, expected, expected, expected]):
+        raise RuntimeError('B2_SOAK_V1 four-ledger counts do not reconcile: '+repr(counts))
+    return {'case':'R08','resets_confirmed':resets,'policy_steps_committed':committed_steps,
+        'ledger_counts':counts,'terminal_records':terminal_records,
+        'collection_cutoff':not terminal_seen,'completed_ns':time.monotonic_ns()}
+
+
 async def training_child(path):
-    """Worker normal R01a; quyết định dùng facts từ đường production."""
+    """Worker cases use only the bound LOCAL_TRAINING production path."""
     from rclpy.time import Time
     from mecanum_nav_rl.tasks.scenario_artifact import ScenarioArtifactLoader
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import LocalTrainingB1Adapter
@@ -1511,7 +1631,35 @@ async def training_child(path):
             expected_world_file_sha256=asset['world_file_sha256']).load(Path(packet['scenario']).read_text())
         b1 = LocalTrainingB1Adapter(io.ingress, artifact, asset,
             scan_transform=lambda: io.safety._tf_buffer.lookup_transform('base_link', 'lidar_frame', Time()), emit=sink.record)
-        if packet['case'] == 'R01a':
+        if packet['case'] == 'R08':
+            if len(packet['episode_seeds']) != 30:
+                raise RuntimeError('R08 requires the exact 30 B2_SOAK_V1 seeds')
+            outcome = await _run_b2_soak(io, b1, packet, sink)
+        elif packet['case'] in ('R02a','R02b'):
+            if packet['case'] == 'R02b':
+                expected_env = case_environment(packet['case'], packet['fault_hooks'])
+                if any(packet['environment'].get(key) != value for key, value in expected_env.items()):
+                    raise RuntimeError('R02b admission order hook environment does not match packet')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
+            step_started_ns = time.monotonic_ns()
+            transition = await io.policy_step(b1, (0.4, 0., 0.))
+            if transition.termination.terminated or transition.termination.truncated:
+                raise RuntimeError('R02 target POLICY step terminated before order proof')
+            evidence_end = min(io.deadline_ns, time.monotonic_ns()+500_000_000)
+            while time.monotonic_ns() < evidence_end:
+                io.read_native_input_watermark()
+                path = Path(descriptor['native_events_path'])
+                records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+                if (any(row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS' for row in records)
+                        and any(row.get('kind') == 'B23_ADMISSION_ACCEPTED' for row in records)):
+                    break
+                await io.pause(min(.005, max(0., (evidence_end-time.monotonic_ns())/1e9)))
+            order = verify_r02_policy_order(descriptor['run_root'], case=packet['case'],
+                step_started_ns=step_started_ns)
+            outcome = {'case':packet['case'],'resets_confirmed':1,'policy_steps_committed':1,
+                'native_order':order,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R01a':
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
             transition = await io.policy_step(b1, (0.4, 0., 0.))
@@ -1603,12 +1751,14 @@ def verify_packet(path, expected_sha256):
     prefix = Path(packet['install_prefix']).resolve(strict=True)
     expected_hooks = {case: list(hooks) for case, hooks in CASE_HOOKS.items()}
     expected_phase = campaign_phase(packet.get('case'))
+    expected_active_s = 900 if packet.get('case') == 'R08' else 120
+    expected_seeds = list(range(2026102900, 2026102930)) if packet.get('case') == 'R08' else [2026102900,2026102901]
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
             or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
-            or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != [2026102900,2026102901]
+            or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != expected_seeds
             or packet['authority'] != 'OWNER_B23_CAMPAIGN_APPROVED'
             or packet.get('owner_decisions', {}).get('phase') != expected_phase
-            or (packet['active_s'], packet['cleanup_s']) != (120, 60)
+            or (packet['active_s'], packet['cleanup_s']) != (expected_active_s, 60)
             or not re.fullmatch(r'B23_[A-Z0-9_]+', packet['run_id'])
             or len(packet['run_id']) > 64
             or not re.fullmatch(r'b23-[a-z0-9-]+\.service', packet['unit'])
@@ -1640,7 +1790,7 @@ def verify_packet(path, expected_sha256):
         raise ValueError('guard outside campaign state root')
     if packet['launch_plan']['commands'] != [list(b23_server_argv(packet['launch_plan']['world_file']))]:
         raise ValueError('Gazebo server argv/seed do not match pinned R01a profile')
-    if (packet.get('service_properties') != list(SERVICE_PROPERTIES)
+    if (packet.get('service_properties') != list(service_properties_for(packet.get('active_s')))
             or packet.get('launch_argv_template') != service_launch_command(packet, str(root/'packet.json'), '{PACKET_SHA256}')):
         raise ValueError('packet launch argv/properties do not match source-reviewed template')
     return packet
@@ -1955,15 +2105,18 @@ def prepare_packet(args):
     values = launch_plan_record(plan)
     fault_hooks = case_fault_hooks(args.case, args.fault_hook)
     environment.update(case_environment(args.case, fault_hooks))
+    active_s = 900 if args.case == 'R08' else 120
+    cleanup_s = 60
+    episode_seeds = list(range(2026102900, 2026102930)) if args.case == 'R08' else [2026102900,2026102901]
     packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
         'case': args.case, 'gui': False,
         'fault_hooks': fault_hooks,
         'world_seed':20261029,
-        'episode_seeds':[2026102900,2026102901], 'authority': 'OWNER_B23_CAMPAIGN_APPROVED',
+        'episode_seeds':episode_seeds, 'authority': 'OWNER_B23_CAMPAIGN_APPROVED',
         'authority_reference': 'Owner approval B23_CAMPAIGN and standing authorization in task conversation',
         'source_commit': args.commit, 'source_repo': str(repo), 'install_prefix': str(prefix),
         'build_binding_sha256': hashlib.sha256(build_binding_raw).hexdigest(), 'python': str(Path(sys.executable).absolute()),
-        'run_root': str(root), 'guard_path': str(guard), 'active_s':120, 'cleanup_s':60,
+        'run_root': str(root), 'guard_path': str(guard), 'active_s':active_s, 'cleanup_s':cleanup_s,
         'resolved_config': str(plan.resolved_config), 'config_hash':config_hash, 'asset_manifest_sha256':asset_hash,
         'asset_manifest':str(desc/'manifests/b2/asset_manifest.json'), 'scenario':str(rl/'scenarios/local_training/B2_SOAK_V1.json'),
         'coordinator_ingress_instance_id':ingress, 'physics_engine_sha256':inputs[str(engine_file)],
@@ -1978,7 +2131,7 @@ def prepare_packet(args):
             'excluded_actions':['B22 contact-only runtime','hardware/HIL','PPO training'],
             'quoted_approval':'B23_CAMPAIGN_APPROVED; case-scoped campaign hook.'},
         'source_preflight':[commit_record,branch,dirty]}
-    packet['service_properties'] = list(SERVICE_PROPERTIES)
+    packet['service_properties'] = list(service_properties_for(active_s))
     packet['launch_argv_template'] = service_launch_command(packet, str(root/'packet.json'), '{PACKET_SHA256}')
     digest = write_record_once(root/'packet.json', packet)
     write_record_once(guard/'authority.json', {'run_id':args.run_id, 'capacity':1, 'packet_sha256':digest,
@@ -2006,10 +2159,13 @@ def unit_properties(unit, *, timeout_s):
 
 
 
-def verify_unit_configuration(properties):
+def verify_unit_configuration(properties, *, active_s=120, cleanup_s=60):
     """Đối chiếu giá trị thực; định dạng ngoài tập chính xác phải dừng."""
+    runtime_s = active_s + cleanup_s
+    runtime_values = {f'{runtime_s}s', f'{runtime_s * 1_000_000}us'}
+    if runtime_s % 60 == 0: runtime_values.add(f'{runtime_s // 60}min')
     expected = {'Type':{'exec'}, 'Restart':{'no'}, 'KillMode':{'control-group'},
-        'RemainAfterExit':{'yes'}, 'MemoryMax':{'5368709120'}, 'OOMPolicy':{'stop'}, 'RuntimeMaxUSec':{'3min','180s','180000000us'},
+        'RemainAfterExit':{'yes'}, 'MemoryMax':{'5368709120'}, 'OOMPolicy':{'stop'}, 'RuntimeMaxUSec':runtime_values,
         'RuntimeRandomizedExtraUSec':{'0','0us','0s'}, 'TimeoutStartUSec':{'5s','5000000us'},
         'TimeoutStopUSec':{'2s','2000000us'}, 'SendSIGKILL':{'yes'},
         'KillSignal':{'15','SIGTERM','TERM'}, 'FinalKillSignal':{'9','SIGKILL','KILL'}}
@@ -2071,8 +2227,9 @@ def unit_parent_command(packet, packet_path, packet_sha256):
 
 def service_launch_command(packet, packet_path, packet_sha256):
     """Mẫu đã pin trong packet; chỉ thay self-hash sau khi xuất packet bất biến."""
+    properties = packet.get('service_properties', service_properties_for(packet.get('active_s', 120)))
     return ['systemd-run','--user','--unit='+packet['unit'],'--expand-environment=no',
-        *['--property='+value for value in SERVICE_PROPERTIES],
+        *['--property='+value for value in properties],
         *unit_parent_command(packet, packet_path, packet_sha256)]
 
 
@@ -2142,7 +2299,7 @@ def launch_packet(args):
             except OSError as error:
                 log.record('HOST_MEMORY_ERROR', {'error':repr(error)})
             if invocation is not None and props:
-                verify_unit_configuration(props)
+                verify_unit_configuration(props, active_s=packet['active_s'], cleanup_s=packet['cleanup_s'])
             if pinned_cgroup:
                 scan = scan_pinned_cgroup(pinned_cgroup)
                 log.record('CGROUP_OBSERVATION', scan)
