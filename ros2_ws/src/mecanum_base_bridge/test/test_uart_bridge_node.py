@@ -220,10 +220,64 @@ def test_constructor_initializes_with_existing_sim_time_and_no_serial_open(monke
     assert made["transports"][0].open_calls == 0
     assert made["sessions"][0].monotonic is steady
     assert [timer[0] for timer in node.timers] == [0.005, 0.1, 0.05]
-    assert node.get_parameter("slam_bench_speed_levels_mps").value == []
-    assert node.get_parameter("slam_bench_yaw_scale_radps").value == 0.0
+    assert node.get_parameter("slam_bench_motor_output_rpm").value == 172.0
+    assert node.get_parameter("slam_bench_wheel_rpm_per_output_rpm").value == 0.0
+    assert node.get_parameter("slam_bench_max_wheel_target_cps").value == 1400.0
+    assert node._teleop.level_percent == 20
+    assert node._teleop._motion_enabled is False
+    assert node._teleop._profile.valid is False
     assert all(timer[2] is node.get_clock() for timer in node.timers)
     node.destroy_node()
+
+
+def test_joy_is_disarmed_forwarded_as_zero_and_timeout_keeps_zero(monkeypatch):
+    made, module, steady = _patch_constructor_dependencies(monkeypatch)
+    node = module.UartBridgeNode()
+    session = made["sessions"][0]
+    joy = SimpleNamespace(axes=[0.0, -1.0], buttons=[0] * 6)
+
+    node._on_joy(joy)
+    assert session.received_commands[-1][:3] == (0.0, 0.0, 0.0)
+    assert session.received_commands[-1][3] == steady.value
+
+    steady.value += node._joy_timeout + 0.01
+    node._joy_watchdog_tick()
+    assert session.received_commands[-1][:3] == (0.0, 0.0, 0.0)
+    assert session.received_commands[-1][3] == steady.value
+    node.destroy_node()
+
+
+def test_joy_mapper_enters_existing_session_and_session_requires_ready_lifecycle():
+    from mecanum_base_bridge.bridge_session import (
+        BridgeSession, LifecycleIdentity, SessionState,
+    )
+    from mecanum_base_bridge.slam_manual_teleop import (
+        SlamBenchMotionProfile, SlamManualTeleop,
+    )
+
+    now = [10.0]
+    session = BridgeSession(object(), bytes(32), monotonic=lambda: now[0])
+    session.state = SessionState.ACTIVE
+    session._active_at = 9.0
+    session._identity = LifecycleIdentity(3, 4, False, 1, True)
+    session._identity_fresh = True
+    profile = SlamBenchMotionProfile(
+        wheel_diameter_m=0.097, wheelbase_m=0.216, track_m=0.190,
+        ticks_per_wheel_revolution=937.2, motor_output_rpm=172.0,
+        wheel_rpm_per_output_rpm=1.0, max_wheel_cps=100_000.0)
+    adapter = SimpleNamespace(
+        _teleop=SlamManualTeleop(profile, motion_enabled=True),
+        _steady_clock=lambda: now[0], _joy_received_at=None, _session=session)
+    message = SimpleNamespace(axes=[0.0, -1.0], buttons=[0] * 6)
+
+    UartBridgeNode._on_joy(adapter, message)
+    assert session._latest_cmd is None  # lifecycle says motion is not permitted
+
+    session._identity = LifecycleIdentity(3, 4, True, 2, True)
+    now[0] = 10.1
+    UartBridgeNode._on_joy(adapter, message)
+    assert session._latest_cmd == pytest.approx((profile.max_translation_mps * 0.2,
+                                                  0.0, 0.0, 10.1))
 
 
 def test_adapter_keeps_ros_clock_for_messages_and_steady_clock_for_freshness(monkeypatch):

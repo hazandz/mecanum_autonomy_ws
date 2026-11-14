@@ -11,7 +11,6 @@ from sensor_msgs.msg import Joy
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_srvs.srv import Trigger
 from mecanum_nav_rl_interfaces.msg import Heartbeat, SafetyLifecycleState
@@ -23,7 +22,7 @@ from .heartbeat import make_heartbeat
 from .telemetry_state import telemetry_health
 from .transport import SerialTransport
 from .wheel_odometry import WheelOdometry
-from .slam_manual_teleop import SlamManualTeleop
+from .slam_manual_teleop import SlamBenchMotionProfile, SlamManualTeleop
 
 
 LIFECYCLE_TOPIC = "/mecanum/safety_lifecycle_state"
@@ -62,11 +61,12 @@ class UartBridgeNode(Node):
             self.declare_parameter("hardware_manifest", "")
             self.declare_parameter("heartbeat_topic", HEARTBEAT_TOPIC)
             self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
-            self.declare_parameter(
-                "slam_bench_speed_levels_mps", [],
-                ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY,
-                                    description="Bench-only forward speed levels in m/s; empty disarms translation"))
-            self.declare_parameter("slam_bench_yaw_scale_radps", 0.0)
+            self.declare_parameter("slam_bench_motor_output_rpm", 172.0)
+            self.declare_parameter("slam_bench_wheel_rpm_per_output_rpm", 0.0)
+            self.declare_parameter("slam_bench_max_wheel_target_cps", 1400.0)
+            self.declare_parameter("slam_bench_joy_deadzone_radius", 0.12)
+            self.declare_parameter("slam_bench_joy_full_command_radius", 0.20)
+            self.declare_parameter("slam_bench_sideways_fade_start_deg", 75.0)
             self.declare_parameter("slam_bench_joy_timeout_s", 0.25)
             if bool(self.get_parameter("use_sim_time").value):
                 raise ValueError("UART hardware adapter requires use_sim_time=false")
@@ -84,15 +84,32 @@ class UartBridgeNode(Node):
             if not communication_config_valid(manifest):
                 raise HardwareConfigError("manifest communication profile is unsupported")
             digest = manifest_digest(manifest)
-            levels = tuple(float(v) for v in self.get_parameter("slam_bench_speed_levels_mps").value)
-            yaw_scale = float(self.get_parameter("slam_bench_yaw_scale_radps").value)
             joy_timeout = float(self.get_parameter("slam_bench_joy_timeout_s").value)
             if not math.isfinite(joy_timeout) or joy_timeout <= 0.0:
                 raise ValueError("slam_bench_joy_timeout_s must be finite and positive")
-            self._teleop = SlamManualTeleop(levels, yaw_scale)
+            geometry = wheel_geometry(manifest)
+            profile = SlamBenchMotionProfile(
+                wheel_diameter_m=geometry["wheel_diameter_m"],
+                wheelbase_m=geometry["wheelbase_m"],
+                track_m=geometry["track_m"],
+                ticks_per_wheel_revolution=geometry["ticks_per_wheel_revolution"],
+                motor_output_rpm=float(self.get_parameter("slam_bench_motor_output_rpm").value),
+                wheel_rpm_per_output_rpm=float(
+                    self.get_parameter("slam_bench_wheel_rpm_per_output_rpm").value),
+                max_wheel_cps=float(
+                    self.get_parameter("slam_bench_max_wheel_target_cps").value),
+                deadzone_radius=float(
+                    self.get_parameter("slam_bench_joy_deadzone_radius").value),
+                full_command_radius=float(
+                    self.get_parameter("slam_bench_joy_full_command_radius").value),
+                sideways_fade_start_deg=float(
+                    self.get_parameter("slam_bench_sideways_fade_start_deg").value),
+            )
+            # This source snapshot is offline-only. Joy remains disarmed until
+            # a measured wheel ratio and a separate approved enable decision exist.
+            self._teleop = SlamManualTeleop(profile, motion_enabled=False)
             self._joy_timeout = joy_timeout
             self._joy_received_at = None
-            geometry = wheel_geometry(manifest)
             self._wheel_odom = WheelOdometry(
                 geometry["wheel_diameter_m"], geometry["wheelbase_m"], geometry["track_m"],
                 geometry["ticks_per_wheel_revolution"], tuple(geometry["encoder_tick_signs"]))
