@@ -38,8 +38,8 @@ def case_environment(case, hooks):
     return {}
 
 
-def verify_r01_pause_ack_failure(io, error):
-    """Require an expired pause ACK, native fault/zero, and no reset commit."""
+async def verify_r01_pause_ack_failure(io, error):
+    """Require an expired pause ACK, observed native fault/zero, and no commit."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
     ack = error.ack if isinstance(error, BackendControlError) else None
@@ -49,7 +49,19 @@ def verify_r01_pause_ack_failure(io, error):
             raise RuntimeError('pause ACK fault did not produce CONTROL_EXPIRED rejection')
     elif not isinstance(error, TimeoutError):
         raise RuntimeError('pause ACK fault did not terminate by bounded timeout')
+    # The service rejection and the status topic use separate DDS paths. Let
+    # the already-running ingress pump collect the corresponding native status
+    # for a short bounded evidence window; this does not extend reset or ACK
+    # deadlines and never treats the ACK alone as proof of native zero.
+    observe_until = min(io.deadline_ns, io.now() + 250_000_000)
     state = io.ingress.backend_state
+    while ((state is None or state.fault_flags == 0 or not state.local_zero_override)
+           and io.now() < observe_until):
+        before = io.now()
+        await io.pause(min(0.005, max(0., (observe_until - before) / 1e9)))
+        if io.now() <= before:
+            raise RuntimeError('pause fault evidence wait did not advance monotonic time')
+        state = io.ingress.backend_state
     if state is None or state.fault_flags == 0 or not state.local_zero_override:
         raise RuntimeError('pause ACK fault did not retain native fault and zero override')
     if any(name in {'RESET_POSE_MUTATION_ARMED','B1_RESET_STARTED','B1_RESET_COMMITTED',
@@ -1470,7 +1482,7 @@ async def training_child(path):
                 await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                     paused_hold_s=.250)
             except Exception as exc:
-                checked = verify_r01_pause_ack_failure(io, exc)
+                checked = await verify_r01_pause_ack_failure(io, exc)
                 outcome = {'case':packet['case'], 'expected_pause_ack_failure':True, **checked,
                     'completed_ns':time.monotonic_ns()}
             if outcome is None:

@@ -69,21 +69,37 @@ def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
         verify_r01b_external_pause_rejection(io, error)
 
 
-def test_r01c_d_require_expired_pause_ack_native_fault_and_no_reset_commit():
+def test_r01c_d_wait_bounded_for_native_fault_status_after_expired_ack():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
     response = Control.Response()
     response.result = response.RESULT_REJECTED
     response.reason_code = response.REASON_CONTROL_EXPIRED
     error = BackendControlError('native pause ACK expired', NS(response=response))
-    io = NS(events=[], ingress=NS(backend_state=NS(fault_flags=1, local_zero_override=True)))
-    result = verify_r01_pause_ack_failure(io, error)
+    clock = NS(ns=10_000_000_000)
+    state = NS(fault_flags=0, local_zero_override=False)
+    async def pause(duration):
+        clock.ns += int(duration * 1e9)
+        if clock.ns >= 10_050_000_000:
+            state.fault_flags, state.local_zero_override = 1, True
+    io = NS(events=[], now=lambda:clock.ns, pause=pause, deadline_ns=11_000_000_000,
+        ingress=NS(backend_state=state))
+    result = asyncio.run(verify_r01_pause_ack_failure(io, error))
     assert result['reason_code'] == response.REASON_CONTROL_EXPIRED
     assert result['native_fault_flags'] == 1 and result['local_zero_override'] is True
     assert result['no_pose_mutation'] and result['no_observation0_commit']
     io.events.append(('B1_RESET_COMMITTED', {}))
     with pytest.raises(RuntimeError, match='continued reset'):
-        verify_r01_pause_ack_failure(io, TimeoutError('late ACK'))
+        asyncio.run(verify_r01_pause_ack_failure(io, TimeoutError('late ACK')))
+
+
+def test_r01c_d_fail_when_native_fault_status_never_arrives():
+    clock = NS(ns=20_000_000_000)
+    async def pause(duration): clock.ns += int(duration * 1e9)
+    io = NS(events=[], now=lambda:clock.ns, pause=pause, deadline_ns=21_000_000_000,
+        ingress=NS(backend_state=NS(fault_flags=0, local_zero_override=False)))
+    with pytest.raises(RuntimeError, match='did not retain native fault and zero override'):
+        asyncio.run(verify_r01_pause_ack_failure(io, TimeoutError('bounded fault timeout')))
 
 
 class Clock:
