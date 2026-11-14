@@ -1406,8 +1406,10 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
         scans={900_000_000: NS(stamp_ns=900_000_000), 1_000_000_000: NS(stamp_ns=1_000_000_000)},
         profile={'safety_period_ms': 20, 'scan_max_age_ms': 500,
             'final_command_timeout_ms': 100, 'b1_receipt_max_age_ms': 500}, receipts=[receipt],
-        physics_pairs=[NS(stamp_ns=1_080_000_000, iteration=108,
-            backend_bytes=serialize_message(applied))], admission_state=0,
+        # The native status/oracle join is delayed past the scan callback.
+        # Production must retain the same pinned receipt and wait inside its
+        # existing freshness window rather than fail on callback ordering.
+        physics_pairs=[], admission_state=0,
         last_published_admission_state=0, fault=None, backend_state=NS(fault_flags=0),
         lock=threading.RLock())
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
@@ -1419,6 +1421,8 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     value.emit = lambda name, fields: events.append((name, fields))
 
     boundary_overrun_polls = [0]
+    scan_delivered_ns = [None]
+    application_delivered_ns = [None]
     async def advance(seconds):
         before = ros_ns[0]
         await clock.pause(seconds)
@@ -1435,6 +1439,11 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
             value.ingress.scans[target] = NS(stamp_ns=target)
             adjacent.received_steady_ns = clock.ns
             value.ingress.receipts.append(adjacent)
+            scan_delivered_ns[0] = clock.ns
+        elif scan_delivered_ns[0] is not None and not value.ingress.physics_pairs:
+            value.ingress.physics_pairs.append(NS(stamp_ns=1_080_000_000, iteration=108,
+                backend_bytes=serialize_message(applied)))
+            application_delivered_ns[0] = clock.ns
 
     value.pause = advance
     result = asyncio.run(value.align_reset_zero_receipt_boundary(
@@ -1446,6 +1455,8 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     assert boundary['selected_receipt_sequence'] == 11
     assert boundary['adjacent_receipt_sequence'] == 12
     assert boundary['receipt_receive_gap_ns'] <= 500_000_000
+    assert scan_delivered_ns[0] < application_delivered_ns[0]
+    assert application_delivered_ns[0] <= boundary['steady_ns']
     pending = next(fields for name, fields in events
         if name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY_PENDING')
     assert pending['suppressed'] is True

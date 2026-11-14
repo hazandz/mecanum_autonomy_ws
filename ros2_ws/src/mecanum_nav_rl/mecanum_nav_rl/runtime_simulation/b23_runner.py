@@ -1153,7 +1153,6 @@ class TrainingWorkerIO:
             with self.ingress.lock:
                 scan_seen = target_ns in self.ingress.scans
                 receipts = tuple(self.ingress.receipts)
-                pairs = tuple(self.ingress.physics_pairs)
             if not suppressed or not scan_seen:
                 self.emit('RESET_RECEIPT_ALIGNMENT_MISSED', {'target_scan_ns': target_ns,
                     'scan_seen': scan_seen, 'suppressed': suppressed,
@@ -1167,20 +1166,30 @@ class TrainingWorkerIO:
             receipt = max(before, key=lambda item: item.final_publish_sequence)
             if any(receipt.final_command):
                 raise RuntimeError('pre-cutoff reset receipt is not zero')
-            state = None
-            for pair in reversed(pairs):
-                if pair.stamp_ns >= target_ns:
-                    continue
-                candidate = deserialize_message(pair.backend_bytes, SimulationContactState)
-                if (candidate.applied_receipt_valid and not candidate.local_zero_override
-                        and candidate.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
-                        and candidate.applied_final_publish_sequence == receipt.final_publish_sequence
-                        and candidate.applied_physics_iteration == pair.iteration
-                        and receipt.publish_stamp_ns <= stamp_ns(candidate.applied_sim_stamp) < target_ns):
-                    state = candidate
-                    break
-            if state is None:
-                raise RuntimeError('pre-cutoff SAFE_STOP lacks exact native application before scan boundary')
+            def pre_boundary_application():
+                # The scan callback can cross the boundary before the paired
+                # native status/oracle callbacks have joined in ingress. Keep
+                # observing the same pinned receipt within its original
+                # freshness budget; never treat a missing or post-cutoff
+                # application as proof.
+                with self.ingress.lock:
+                    current_pairs = tuple(self.ingress.physics_pairs)
+                for pair in reversed(current_pairs):
+                    if pair.stamp_ns >= target_ns:
+                        continue
+                    candidate = deserialize_message(pair.backend_bytes, SimulationContactState)
+                    if (candidate.applied_receipt_valid and not candidate.local_zero_override
+                            and candidate.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
+                            and candidate.applied_final_publish_sequence == receipt.final_publish_sequence
+                            and candidate.applied_physics_iteration == pair.iteration
+                            and receipt.publish_stamp_ns <= stamp_ns(candidate.applied_sim_stamp) < target_ns):
+                        return candidate
+                return None
+
+            state = await self.until(pre_boundary_application,
+                deadline_ns=min(deadline_ns, armed_ns + max_gap_ns,
+                    receipt.received_steady_ns + max_gap_ns),
+                phase='exact native SAFE_STOP application before reset scan boundary')
             if (self.now() < receipt.received_steady_ns
                     or self.now() - receipt.received_steady_ns > max_gap_ns
                     or target_ns - receipt.publish_stamp_ns > max_gap_ns):
