@@ -8,7 +8,8 @@ from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
 from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
 from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
-    BackendSessionIdentity, BackendControlSession, BackendControlError, lifecycle_request_fields,
+    BackendSessionIdentity, BackendControlSession, BackendControlError,
+    LocalTrainingB1Adapter, lifecycle_request_fields,
 )
 from mecanum_nav_rl.runtime_safety.safety_contract import SafetyLifecycleCore
 
@@ -163,6 +164,68 @@ def test_non_pending_response_cannot_leak_a_token():
     session, _, clock, _ = setup(respond)
     with pytest.raises(BackendControlError, match='non-pending'):
         asyncio.run(session.transact(Control.Request.OP_BIND_SESSION, deadline_ns=clock.ns + 1_000_000_000))
+
+
+def _b1_cutoff_fixture(receipts, *, cutoff_ns=1_000_000_000, steady_now_ns=10_000_000_000):
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    lifecycle = EpisodeLifecycleIdentity(1, 2, 3)
+    source = SimpleNamespace(
+        final_publisher_id=77,
+        identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
+        lifecycle=SimpleNamespace(barrier_stamp=Time(sec=0, nanosec=800_000_000)),
+        receipts=tuple(IssuedCommandReceiptView(
+            publish_stamp_ns=publish_ns,
+            final_publisher_instance_id=77,
+            final_publish_sequence=sequence,
+            source=ReceiptSource.SAFE_STOP,
+            source_instance_id=88,
+            source_sequence=sequence,
+            step_index=0,
+            transition_id='',
+            lifecycle=lifecycle,
+            session_id='session',
+            ingress_config_hash='a' * 64,
+            final_command=(0.0, 0.0, 0.0),
+            received_steady_ns=received_ns,
+            frame_id='base_link',
+            admission_valid=True,
+        ) for sequence, publish_ns, received_ns in receipts),
+    )
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    adapter.ingress = source
+    adapter.scales = (0.25, 0.2, 0.8)
+    adapter.action_barrier_ns = None
+    return adapter, {'identity': lifecycle, 'cutoff': cutoff_ns,
+        'ros_now': 1_030_000_000, 'steady_now': steady_now_ns}
+
+
+def test_b1_reset_cutoff_ignores_expired_history_when_fresh_boundary_exists():
+    """Lịch sử receipt hết hạn không được làm hỏng cặp mới đủ freshness."""
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    stale = (8, 950_000_000, 9_000_000_000)
+    selected = (9, 990_000_000, 9_800_000_000)
+    adjacent = (10, 1_020_000_000, 9_900_000_000)
+    adapter, facts = _b1_cutoff_fixture((stale, selected, adjacent))
+
+    selection = adapter._selection(facts, reset=True)
+
+    assert selection.status.value == 'ready'
+    assert selection.receipt.final_publish_sequence == selected[0]
+    assert selection.adjacent_receipt.final_publish_sequence == adjacent[0]
+    assert selection.receipt.lifecycle == EpisodeLifecycleIdentity(1, 2, 3)
+
+
+def test_b1_reset_cutoff_does_not_fallback_when_required_zero_receipt_is_stale():
+    stale_selected = (9, 990_000_000, 9_400_000_000)
+    fresh_adjacent = (10, 1_020_000_000, 9_900_000_000)
+    adapter, facts = _b1_cutoff_fixture((stale_selected, fresh_adjacent))
+
+    with pytest.raises(ValueError, match='ready selection receipt is stale or future'):
+        adapter._selection(facts, reset=True)
 
 
 def test_evidence_sink_failure_preserves_original_error_and_faults_sequence():

@@ -890,6 +890,13 @@ class TrainingWorkerIO:
             for cutoff in ([scan.stamp_ns] if scan is not None else []):
                 try:
                     selection = b1.preview_observation0_selection(cutoff)
+                    # B1's cutoff may contain a fresh SAFE_STOP receipt that
+                    # has not yet been applied by native at or before this
+                    # scan. Check that condition before waiting for the
+                    # adjacent receipt; otherwise a scan/SAFE_STOP timer phase
+                    # lock can make every new cutoff select the same invalid
+                    # boundary until its 500 ms freshness budget expires.
+                    b1._prove_application(selection.receipt, cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
                     if last_pending == 'selected receipt lacks native application at/before cutoff':

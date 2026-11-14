@@ -910,6 +910,7 @@ def test_observation0_handoff_uses_fresh_scan_after_zero_anchor():
     adjacent=NS(final_publish_sequence=28,final_publisher_instance_id=33,receipt_key=('p',28))
     selection=NS(receipt=receipt,adjacent_receipt=adjacent)
     b1=NS(preview_observation0_selection=lambda cutoff:selection,
+        _prove_application=lambda _receipt, _cutoff:{'iteration':9,'stamp_ns':1_090_000_000},
         commit_observation0=lambda cutoff, **kwargs:(calls.append(('committed',cutoff,kwargs)) or ('observation0',selection)))
     value.native_adjacent_boundary_application=lambda _selection, _cutoff:{'iteration':10,'stamp_ns':1_120_000_000}
     async def transact(operation,**kwargs):
@@ -967,6 +968,7 @@ def test_observation0_waits_for_native_adjacent_receipt_application_before_b1_co
         return 'observation0', selection
 
     b1 = NS(preview_observation0_selection=lambda selected_cutoff:selection,
+        _prove_application=lambda _receipt, _cutoff:{'iteration':11,'stamp_ns':1_090_000_000},
         commit_observation0=commit)
     value.ingress.confirm_observation0 = lambda ack: confirmations.append(ack)
     value.emit = lambda name, fields: events.append((name, fields))
@@ -1120,8 +1122,6 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert selection.adjacent_receipt.final_publish_sequence == 9
     def preview(cutoff):
         previewed.append(cutoff)
-        if len(previewed) == 1:
-            raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
         return selection
     previewed=[]
     def commit(cutoff, *, expected_selection_keys=None):
@@ -1129,6 +1129,13 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
         assert expected_selection_keys == (selection.receipt.receipt_key,
             selection.adjacent_receipt.receipt_key)
         return 'observation0', selection
+
+    application_checks = []
+    def prove_selected_application(_receipt, cutoff):
+        application_checks.append(cutoff)
+        if len(application_checks) == 1:
+            raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return {'iteration':11,'stamp_ns':cutoff}
     confirmations, control_calls = [], []
     value.ingress.confirm_observation0 = lambda ack: confirmations.append(ack)
     value.native_adjacent_boundary_application=lambda _selection, cutoff:{
@@ -1141,13 +1148,15 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     local_training_coordinator.lifecycle_request_fields = lambda _snapshot: {}
     try:
         result, cutoff = asyncio.run(value.commit_and_confirm_observation0(
-            NS(preview_observation0_selection=preview, commit_observation0=commit),
+            NS(preview_observation0_selection=preview,
+                _prove_application=prove_selected_application, commit_observation0=commit),
             deadline_ns=clock.ns + 500_000_000))
     finally:
         local_training_coordinator.lifecycle_request_fields = original
 
     assert result == 'observation0' and cutoff == 1_100_000_000
     assert previewed == [1_000_000_000, 1_100_000_000]
+    assert application_checks == [1_000_000_000, 1_100_000_000]
     assert cutoffs == [1_100_000_000]
     assert stream_history[0][0] is False and stream_history[-1][0] is True
     assert not [name for name, _ in events if name == 'RESET_RECEIPT_ALIGNMENT_DEFERRED']
@@ -1194,7 +1203,9 @@ def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
         assert expected_selection_keys == (receipt.receipt_key, adjacent.receipt_key)
         return 'observation0', selection
 
-    b1 = NS(preview_observation0_selection=preview, commit_observation0=commit)
+    b1 = NS(preview_observation0_selection=preview,
+        _prove_application=lambda _receipt, _cutoff:{'iteration':12,'stamp_ns':1_120_000_000},
+        commit_observation0=commit)
     value.native_adjacent_boundary_application = lambda _selection, cutoff:{
         'iteration':12, 'stamp_ns':cutoff + 20_000_000}
 
