@@ -1027,6 +1027,11 @@ class TrainingWorkerIO:
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
         await self.freeze_step_streams(deadline_ns=deadline)
+        # A SAFE_STOP arriving after OP_BIND_PENDING_STEP revokes the pending
+        # admission by contract. The last zero receipt above is already native
+        # applied, so stop emitting zero while this single slot is bound; native
+        # zero remains in force until Safety publishes the admitted POLICY.
+        self.safety.local_training.set_stream_enabled(False)
         token = b1.begin_step()
         barrier = self.ros_now()
         if barrier <= stamp_ns(self.ingress.lifecycle.barrier_stamp):
@@ -1058,8 +1063,8 @@ class TrainingWorkerIO:
             and self.safety.local_training.command.sequence == token.step_index
             and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
             deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
-        self.safety.local_training.set_policy_hold(False)
         self.safety.local_training.set_stream_enabled(True)
+        self.safety.local_training.set_policy_hold(False)
         target_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
         last_pending = None
         while self.now() < deadline:

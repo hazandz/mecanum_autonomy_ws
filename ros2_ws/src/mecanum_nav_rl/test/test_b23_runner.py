@@ -336,7 +336,14 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
     assert ('stream', True) in history
-    assert ('stream', False) not in history
+    stream_off = history.index(('stream', False))
+    bind = next(i for i, row in enumerate(history) if row[0] == 'bind')
+    issued = next(i for i, row in enumerate(history) if row[0] == 'issued')
+    stream_on_after_issue = next(i for i, row in enumerate(history)
+        if i > issued and row == ('stream', True))
+    hold_off_after_issue = next(i for i, row in enumerate(history)
+        if i > issued and row == ('hold', False))
+    assert stream_off < bind < issued < stream_on_after_issue < hold_off_after_issue
     envelope = next(row[1] for row in history if row[0] == 'publish')
     assert envelope.twist.linear.y == pytest.approx(.08)
     assert len([row for row in history if row[0] == 'publish']) == 1
@@ -1009,3 +1016,78 @@ def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():
     assert events[-1][0] == 'RESET_COMPLETE'
     assert events[-1][1]['W1'] == 24
     assert events[-1][1]['zero_anchor_sequence'] == 25
+
+
+def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
+    """Old W1 fails the real cutoff selector; the post-resume anchor is selected."""
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        CutoffStatus, IssuedCommandReceiptView, ReceiptSource, ReceiptStreamBinding,
+        select_reset_zero_at_cutoff,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    value, clock = worker()
+    clock.ns = 2_000_000_000
+    lifecycle = EpisodeLifecycleIdentity(1, 2, 3)
+    binding = ReceiptStreamBinding(90, 'session-1', 'a' * 64, lifecycle, 'base_link')
+    scales = (0.25, 0.2, 0.8)
+
+    def receipt(sequence, stamp_ns, received_ns):
+        return IssuedCommandReceiptView(
+            stamp_ns, 90, sequence, ReceiptSource.SAFE_STOP, 7, sequence,
+            0, '', lifecycle, 'session-1', 'a' * 64, (0.0, 0.0, 0.0),
+            received_ns, 'base_link', True)
+
+    # Reproduce _005: W1 #24 is the last zero at/before 890 ms. The next
+    # receipt is after the scan cutoff, while B1 evaluates #24 at +547.8 ms.
+    old_w1 = receipt(24, 630_000_000, 1_400_000_000)
+    after_old_cutoff = receipt(25, 900_000_000, 1_900_000_000)
+    stale = select_reset_zero_at_cutoff(
+        (old_w1, after_old_cutoff), binding=binding,
+        cutoff_ros_ns=890_000_000, evaluation_ros_now_ns=900_000_000,
+        evaluation_steady_now_ns=1_947_800_000,
+        reset_barrier_ros_ns=600_000_000, physical_scales=scales)
+    assert stale.status is CutoffStatus.REJECTED
+    assert 'stale or future' in stale.reason
+
+    refreshed = receipt(26, 910_000_000, 2_000_000_000)
+    adjacent = receipt(27, 920_000_000, 2_020_000_000)
+    calls, events = [], []
+    b1 = NS(begin_reset=lambda: calls.append(('begin_reset', clock.ns)))
+    value.ingress = NS(inhibit=lambda: calls.append(('inhibit', clock.ns)))
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
+        calls.append(('stream', enabled, clock.ns))))
+
+    async def freeze_zero(*, deadline_ns):
+        calls.append(('fresh_zero_applied', clock.ns, deadline_ns))
+        return NS(final_publish_sequence=26, received_steady_ns=2_000_000_000,
+            applied_sim_stamp_ns=910_000_000, applied_physics_iteration=91)
+
+    async def commit_with_real_selector(b1_arg, *, deadline_ns, zero_receipt):
+        assert b1_arg is b1
+        assert zero_receipt.final_publish_sequence == 26
+        selection = select_reset_zero_at_cutoff(
+            (refreshed, adjacent), binding=binding,
+            cutoff_ros_ns=910_000_000, evaluation_ros_now_ns=930_000_000,
+            evaluation_steady_now_ns=2_030_000_000,
+            reset_barrier_ros_ns=600_000_000, physical_scales=scales)
+        assert selection.status is CutoffStatus.READY, selection.reason
+        assert selection.receipt.final_publish_sequence == 26
+        calls.append(('b1_selected', selection.receipt.final_publish_sequence,
+            selection.evaluation_steady_now_ns - selection.receipt.received_steady_ns))
+        return 'confirmed-observation0', 910_000_000
+
+    value.freeze_zero = freeze_zero
+    value.commit_and_confirm_observation0 = commit_with_real_selector
+    value.now = clock.now
+    value.emit = lambda name, fields: events.append((name, fields))
+    result = asyncio.run(value.confirm_observation0_after_resume(
+        b1, deadline_ns=clock.ns + 15_000_000_000, seed=2026102900,
+        w0=NS(final_publish_sequence=11), w1=NS(final_publish_sequence=24),
+        l1=NS(sequence=3), l2=NS(sequence=4), started_ns=1_000_000_000))
+
+    assert result == 'confirmed-observation0'
+    assert ('b1_selected', 26, 30_000_000) in calls
+    assert events[0][0] == 'OBSERVATION0_ZERO_ANCHOR'
+    assert events[0][1]['publish_sequence'] == 26
+    assert events[-1][0] == 'RESET_COMPLETE'
