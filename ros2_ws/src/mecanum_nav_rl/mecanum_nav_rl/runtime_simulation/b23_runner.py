@@ -186,8 +186,9 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     rejected = next((facts for name, facts in io.events
-        if name == 'SAFETY_REJECTED' and facts.get('sequence') == step_index
-        and facts.get('source') == CommandEnvelope.SOURCE_POLICY
+        if name == 'SAFETY_REJECTED' and facts.get('candidate_sequence') == step_index
+        and facts.get('candidate_source') == CommandEnvelope.SOURCE_POLICY
+        and facts.get('candidate_source_instance_id') == io.policy_source_id
         and 'POLICY_HELD' in facts.get('reasons', ())), None)
     if rejected is None:
         raise RuntimeError('R02f missing production Safety rejection for issued POLICY')
@@ -304,7 +305,7 @@ class TrainingWorkerIO:
                 profile=document['training']['local_training'], sensor=asset_manifest['sensor'],
                 sim_estop_release_authorized=True)
             self.safety = SafetySupervisorNode(context=self.context, parameter_overrides=mode_params,
-                local_training_context=safety_context, evidence_sink=emit)
+                local_training_context=safety_context, evidence_sink=self._emit)
             self.nodes.append(self.safety)
             self.safety.local_training.set_stream_enabled(False)
             reliable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
@@ -354,7 +355,8 @@ class TrainingWorkerIO:
 
     def _emit(self, name, facts):
         if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
-                    'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE'}:
+                    'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
+                    'SAFETY_REJECTED'}:
             self.events.append((name, copy.deepcopy(facts)))
         self._event_sink(name, facts)
 
@@ -1353,7 +1355,10 @@ class TrainingWorkerIO:
                 'step_index': token.step_index, 'transition_id': token.transition_id,
                 'steady_ns': self.now()})
             await self.until(lambda: next((facts for name, facts in self.events
-                if name == 'SAFETY_REJECTED' and facts.get('sequence') == token.step_index
+                if name == 'SAFETY_REJECTED'
+                and facts.get('candidate_sequence') == token.step_index
+                and facts.get('candidate_source') == CommandEnvelope.SOURCE_POLICY
+                and facts.get('candidate_source_instance_id') == self.policy_source_id
                 and 'POLICY_HELD' in facts.get('reasons', ())), None),
                 deadline_ns=deadline, phase='Safety hold rejection after adapter issuance')
             stop = await self.until(lambda: self.safety.local_training.last_output

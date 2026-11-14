@@ -81,9 +81,11 @@ def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
     state=NS(fault_flags=0, local_zero_override=False, applied_receipt_valid=True,
         applied_final_publisher_instance_id=17, applied_final_publish_sequence=42,
         applied_physics_iteration=101)
-    io=NS(events=[('SAFETY_REJECTED', {'sequence':1,
-        'source':CommandEnvelope.SOURCE_POLICY,'reasons':['POLICY_HELD']})],
-        ingress=NS(receipts=[]))
+    io=NS(events=[('SAFETY_REJECTED', {'sequence':7,
+        'source':CommandEnvelope.SOURCE_SAFE_STOP,
+        'candidate_sequence':1,'candidate_source':CommandEnvelope.SOURCE_POLICY,
+        'candidate_source_instance_id':33,'reasons':['POLICY_HELD']})],
+        ingress=NS(receipts=[]), policy_source_id=33)
     result=verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
     assert result == {'safety_rejected':True,'reasons':['POLICY_HELD'],
         'safe_stop_applied':True,'final_publish_sequence':42,'backend_iteration':101,
@@ -91,8 +93,10 @@ def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
     io.events=[]
     with pytest.raises(RuntimeError,match='Safety rejection'):
         verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
-    io.events=[('SAFETY_REJECTED', {'sequence':1,
-        'source':CommandEnvelope.SOURCE_POLICY,'reasons':['POLICY_HELD']})]
+    io.events=[('SAFETY_REJECTED', {'sequence':7,
+        'source':CommandEnvelope.SOURCE_SAFE_STOP,
+        'candidate_sequence':1,'candidate_source':CommandEnvelope.SOURCE_POLICY,
+        'candidate_source_instance_id':33,'reasons':['POLICY_HELD']})]
     io.ingress.receipts=[NS(source=ReceiptSource.POLICY,sequence=1)]
     with pytest.raises(RuntimeError,match='reached the final receipt'):
         verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)

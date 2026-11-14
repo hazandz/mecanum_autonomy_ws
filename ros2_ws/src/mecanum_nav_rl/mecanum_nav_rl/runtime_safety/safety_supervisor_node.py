@@ -615,7 +615,12 @@ class LocalTrainingSafetyAdapter:
             self.node._state_pub.publish(state)
             if self.state_observer is not None:
                 self.state_observer(copy.deepcopy(state))
+            candidate = self.command
             self.emit('SAFETY_ACCEPTED' if accepted else 'SAFETY_REJECTED', {
                 'steady_ns': now, 'ros_ns': ros_ns, 'sequence': envelope.sequence,
-                'source': envelope.source, 'reasons': list(reasons)})
+                'source': envelope.source, 'reasons': list(reasons),
+                'candidate_sequence': candidate.sequence if candidate is not None else None,
+                'candidate_source': candidate.source if candidate is not None else None,
+                'candidate_source_instance_id': (
+                    candidate.source_instance_id if candidate is not None else None)})
             return envelope

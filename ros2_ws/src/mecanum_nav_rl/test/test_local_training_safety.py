@@ -256,6 +256,20 @@ def test_local_safety_invalid_noisy_or_admission_selects_real_safe_stop(local_ad
     assert reason in f.state[-1].intervention_reasons
 
 
+def test_local_safety_rejection_records_candidate_and_selected_zero_identity(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    adapter.set_policy_hold(True)
+    output = adapter.tick()
+    assert output.source == output.SOURCE_SAFE_STOP
+    event = next(data for name, data in reversed(f.evidence) if name == 'SAFETY_REJECTED')
+    assert event['source'] == output.SOURCE_SAFE_STOP
+    assert event['sequence'] == output.sequence
+    assert event['candidate_source'] == f.candidate.SOURCE_POLICY
+    assert event['candidate_sequence'] == f.candidate.sequence
+    assert event['candidate_source_instance_id'] == f.candidate.source_instance_id
+    assert 'POLICY_HELD' in event['reasons']
+
+
 @pytest.mark.parametrize('field,value', [('contact_active', True), ('fault_flags', 1),
     ('coverage_complete', False), ('contact_source_healthy', False),
     ('observed_collision_mask', 1), ('paused', True), ('backend_instance_id', 99)])
