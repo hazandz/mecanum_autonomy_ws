@@ -1051,6 +1051,66 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert confirmations == ['actual-ack']
 
 
+def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.runtime_simulation import local_training_coordinator
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+
+    value, clock = worker()
+    value.deadline_ns = clock.ns + 200_000_000
+    ros_ns = [1_020_000_000]
+    value.ros_now = lambda: ros_ns[0]
+    value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=ros_ns[0])))
+    life = NS(barrier_stamp=Time(sec=0, nanosec=900_000_000))
+    first = NS(stamp_ns=1_000_000_000, received_steady_ns=clock.ns)
+    second = NS(stamp_ns=1_100_000_000, received_steady_ns=clock.ns)
+    value.ingress = NS(lifecycle=life, scan_reset_stamp_ns=900_000_000,
+        scans={first.stamp_ns:first}, profile={'scan_max_age_ms':500}, fault=None,
+        backend_state=NS(fault_flags=0), admission_state=0,
+        confirm_observation0=lambda ack: confirmations.append(ack))
+    value.final = NS(publisher_instance_id=55)
+    value.control = NS(transact=lambda *args, **kwargs: asyncio.sleep(0, result='ack'))
+    confirmations, cutoffs, align_calls, events = [], [], [], []
+    selection = NS(receipt=NS(final_publish_sequence=8), adjacent_receipt=NS(final_publish_sequence=9))
+
+    def commit(cutoff):
+        cutoffs.append(cutoff)
+        if len(cutoffs) < 3:
+            raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return 'observation0', selection
+
+    b1 = NS(commit_observation0=commit)
+
+    async def pause(duration):
+        await clock.pause(duration)
+        ros_ns[0] = 1_120_000_000
+        value.ingress.scans[second.stamp_ns] = second
+
+    async def align(*, failed_cutoff_ns, deadline_ns):
+        stamps = sorted(stamp for stamp in value.ingress.scans
+            if value.ingress.scan_reset_stamp_ns < stamp <= failed_cutoff_ns)
+        align_calls.append((failed_cutoff_ns, stamps))
+        return True
+
+    value.pause = pause
+    value.align_reset_zero_receipt_boundary = align
+    value.emit = lambda name, fields: events.append((name, fields))
+    original = local_training_coordinator.lifecycle_request_fields
+    local_training_coordinator.lifecycle_request_fields = lambda _snapshot: {}
+    try:
+        result, cutoff = asyncio.run(value.commit_and_confirm_observation0(
+            b1, deadline_ns=clock.ns + 100_000_000,
+            zero_receipt=NS(applied_sim_stamp_ns=950_000_000)))
+    finally:
+        local_training_coordinator.lifecycle_request_fields = original
+
+    assert result == 'observation0' and cutoff == second.stamp_ns
+    assert cutoffs == [first.stamp_ns, second.stamp_ns, second.stamp_ns]
+    assert align_calls == [(second.stamp_ns, [first.stamp_ns, second.stamp_ns])]
+    assert [name for name, _ in events] == ['RESET_RECEIPT_ALIGNMENT_DEFERRED']
+    assert confirmations == ['ack']
+
+
 def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():
     """A >500 ms W1 is retained for pause, while B1 receives fresh L2 zero."""
     value, clock = worker()

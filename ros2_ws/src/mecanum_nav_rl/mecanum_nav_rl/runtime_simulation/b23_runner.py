@@ -893,8 +893,15 @@ class TrainingWorkerIO:
                 except B1SnapshotPending as error:
                     last_pending = str(error)
                     if last_pending == 'selected receipt lacks native application at/before cutoff':
-                        await self.align_reset_zero_receipt_boundary(
-                            failed_cutoff_ns=cutoff, deadline_ns=deadline_ns)
+                        reset_scans = sorted(stamp for stamp in self.ingress.scans
+                            if self.ingress.scan_reset_stamp_ns < stamp <= cutoff)
+                        if len(reset_scans) >= 2 and reset_scans[-1] == cutoff:
+                            await self.align_reset_zero_receipt_boundary(
+                                failed_cutoff_ns=cutoff, deadline_ns=deadline_ns)
+                        else:
+                            self.emit('RESET_RECEIPT_ALIGNMENT_DEFERRED', {
+                                'failed_cutoff_ns': cutoff, 'post_reset_scans': reset_scans,
+                                'steady_ns': self.now()})
                     continue
                 ack = await self.control.transact(Control.Request.OP_CONFIRM_OBSERVATION0,
                     deadline_ns=min(deadline_ns, self.now() + 1_000_000_000),
