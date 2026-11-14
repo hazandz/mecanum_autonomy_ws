@@ -20,7 +20,8 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
-    'R02b':'fault_task', 'R02f':'fault_task', 'R03a':'fault_task',
+    'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
+    'R02f':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
@@ -30,6 +31,8 @@ CASE_HOOKS = {
     'R01e': ('pause_request_replay_after_terminal',),
     'R02a': (),
     'R02b': ('native_hold_admission_until_receipt',),
+    'R02c': ('hold_policy_receipt_until_safe_stop',),
+    'R02d': ('hold_policy_receipt_until_admission_inhibited',),
     'R02f': ('safety_hold_after_adapter_issuance',),
     'R03a': ('drop_native_policy_receipt_once',),
     'R03b': ('mutate_native_policy_transition_id_once',),
@@ -73,6 +76,10 @@ def case_environment(case, hooks):
         return {'B23_RECEIPT_FAULT': 'drop_policy_once'}
     if case == 'R03b' and hooks == ['mutate_native_policy_transition_id_once']:
         return {'B23_RECEIPT_FAULT': 'mutate_policy_transition_id_once'}
+    if case == 'R02c' and hooks == ['hold_policy_receipt_until_safe_stop']:
+        return {'B23_RECEIPT_FAULT': 'hold_policy_until_safe_stop'}
+    if case == 'R02d' and hooks == ['hold_policy_receipt_until_admission_inhibited']:
+        return {'B23_RECEIPT_FAULT': 'hold_policy_until_inhibit'}
     return {}
 
 
@@ -282,6 +289,41 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
         'safe_stop_applied':True,'final_publish_sequence':receipt.final_publish_sequence,
         'backend_iteration':backend_state.applied_physics_iteration,
         'policy_receipt_absent':True}
+
+
+def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
+    """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
+    if case not in ('R02c', 'R02d'):
+        raise ValueError('unsupported delayed receipt case')
+    rows = [json.loads(line) for line in Path(io.descriptor['native_events_path'])
+        .read_text().splitlines() if line.strip()]
+    held = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
+        and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
+        and row.get('fields', {}).get('source_sequence') == str(step_index)]
+    reason = 'safe_stop' if case == 'R02c' else 'admission_inhibited'
+    released = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
+        and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
+        and row.get('fields', {}).get('reason') == reason]
+    if len(held) != 1 or len(released) != 1:
+        raise RuntimeError(f'{case} lacks exact native hold/release evidence')
+    held_ns = int(held[0]['fields']['receive_ns'])
+    release_ns = int(released[0]['fields']['receive_ns'])
+    if release_ns < held_ns:
+        raise RuntimeError(f'{case} release predates native receipt hold')
+    state = io.ingress.backend_state
+    if state is None or state.fault_flags == 0 or not state.local_zero_override:
+        raise RuntimeError(f'{case} late POLICY receipt did not produce native fault and zero')
+    if (state.applied_receipt_valid and
+            state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id and
+            state.applied_final_publish_sequence == receipt.final_publish_sequence):
+        raise RuntimeError(f'{case} late POLICY receipt was applied after close')
+    if any(name == 'POLICY_STEP_COMPLETE' and facts.get('step_index') == step_index
+           for name, facts in io.events):
+        raise RuntimeError(f'{case} created a B1 commit for the canceled POLICY step')
+    return {'case':case, 'held_final_publish_sequence':receipt.final_publish_sequence,
+        'held_receive_ns':held_ns, 'release_receive_ns':release_ns, 'release_reason':reason,
+        'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+        'policy_backend_applied':False, 'b1_transition_committed':False}
 
 
 def verify_guard_authority(packet, authority, packet_sha256):
@@ -1403,7 +1445,8 @@ class TrainingWorkerIO:
         })
         return replayed
 
-    async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False):
+    async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False,
+                          close_after_held_receipt=None):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -1451,6 +1494,50 @@ class TrainingWorkerIO:
             and self.safety.local_training.command.sequence == token.step_index
             and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
             deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
+        if close_after_held_receipt is not None:
+            if close_after_held_receipt not in ('safe_stop', 'admission_inhibited'):
+                raise ValueError('unsupported R02 close trigger')
+            policy_receipt = await self.until(lambda: self.final.publication_for_source_sequence(
+                source=CommandEnvelope.SOURCE_POLICY, sequence=token.step_index),
+                deadline_ns=deadline, phase='actual held POLICY publication receipt')
+            expected_mode = ('hold_policy_until_safe_stop' if close_after_held_receipt == 'safe_stop'
+                else 'hold_policy_until_inhibit')
+            def held_row():
+                rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
+                    .read_text().splitlines() if line.strip()]
+                return next((row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
+                    and row.get('fields', {}).get('mode') == expected_mode
+                    and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
+                    and row.get('fields', {}).get('source_sequence') == str(token.step_index)), None)
+            await self.until(held_row, deadline_ns=deadline,
+                phase='native held exact final POLICY receipt')
+            self.safety.local_training.set_policy_hold(True)
+            self.safety.local_training.set_stream_enabled(True)
+            self.ingress.inhibit()
+            expected_reason = close_after_held_receipt
+            def released_row():
+                rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
+                    .read_text().splitlines() if line.strip()]
+                return next((row for row in rows
+                    if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
+                    and row.get('fields', {}).get('reason') == expected_reason
+                    and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
+            await self.until(released_row, deadline_ns=deadline,
+                phase='held POLICY receipt released only after closing condition')
+            native_fault = await self.until(lambda: self.ingress.backend_state
+                if self.ingress.backend_state is not None
+                and self.ingress.backend_state.fault_flags != 0
+                and self.ingress.backend_state.local_zero_override else None,
+                deadline_ns=deadline, phase='native rejection and local zero after late POLICY receipt')
+            checked = verify_r02_late_receipt_rejected(self, case=(
+                'R02c' if close_after_held_receipt == 'safe_stop' else 'R02d'),
+                step_index=token.step_index, receipt=policy_receipt)
+            aborted = b1.lifecycle.abort_step('R02_late_policy_receipt_after_close')
+            self.emit('R02_LATE_POLICY_RECEIPT_REJECTED', {
+                **checked, 'native_fault_flags':native_fault.fault_flags,
+                'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
+            return {'expected_rejection':True, 'policy_issued':True, **checked,
+                'b1_step_aborted':True, 'transition_id':token.transition_id}
         if hold_after_adapter_issuance:
             # The packet hook is armed only after the production adapter has
             # issued POLICY and Safety has received that exact candidate. Keep
@@ -1870,6 +1957,19 @@ async def training_child(path):
                 step_started_ns=step_started_ns)
             outcome = {'case':packet['case'],'resets_confirmed':1,'policy_steps_committed':1,
                 'native_order':order,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] in ('R02c', 'R02d'):
+            expected_env = case_environment(packet['case'], packet['fault_hooks'])
+            if any(packet['environment'].get(key) != value for key, value in expected_env.items()):
+                raise RuntimeError(packet['case'] + ' delayed receipt hook environment does not match packet')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            close = 'safe_stop' if packet['case'] == 'R02c' else 'admission_inhibited'
+            checked = await io.policy_step(b1, (0.4, 0., 0.), close_after_held_receipt=close)
+            if checked.get('expected_rejection') is not True:
+                raise RuntimeError(packet['case'] + ' did not reject the late POLICY receipt')
+            outcome = {'case':packet['case'], 'resets_confirmed':1,
+                'policy_steps_committed':0, **checked, 'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R02f':
             if packet['fault_hooks'] != ['safety_hold_after_adapter_issuance']:
                 raise RuntimeError('R02f packet hook does not match the fixed Safety hold case')

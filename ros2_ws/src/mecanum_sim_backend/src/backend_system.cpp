@@ -483,7 +483,9 @@ public:
     const char *receipt_fault_env = std::getenv("B23_RECEIPT_FAULT");
     receipt_fault_mode_ = receipt_fault_env ? receipt_fault_env : "";
     if (!receipt_fault_mode_.empty() && receipt_fault_mode_ != "drop_policy_once" &&
-        receipt_fault_mode_ != "mutate_policy_transition_id_once")
+        receipt_fault_mode_ != "mutate_policy_transition_id_once" &&
+        receipt_fault_mode_ != "hold_policy_until_safe_stop" &&
+        receipt_fault_mode_ != "hold_policy_until_inhibit")
     {
       SetFault(BackendState::FAULT_CONTEXT, "unsupported_b23_receipt_fault");
       initialization_state_ = InitializationState::FAILED;
@@ -3172,6 +3174,18 @@ private:
               << facts.transition_id << " receive_ns=" << receive_ns << std::endl;
         std::fflush(stdout);
       }
+      if (receipt_fault_mode_ == "hold_policy_until_safe_stop" ||
+          receipt_fault_mode_ == "hold_policy_until_inhibit")
+      {
+        held_policy_receipt_ = std::make_pair(std::move(facts), receive_ns);
+        gzmsg << "B23_POLICY_RECEIPT_HELD mode=" << receipt_fault_mode_
+              << " publisher=" << msg.final_publisher_instance_id
+              << " sequence=" << msg.final_publish_sequence
+              << " source_sequence=" << msg.sequence
+              << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+        return;
+      }
     }
     if (msg.source == Receipt::SOURCE_POLICY)
     {
@@ -3183,6 +3197,20 @@ private:
     }
     if (!gate_ || !gate_->Enqueue(std::move(facts), receive_ns))
       callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+    if (msg.source == Receipt::SOURCE_SAFE_STOP &&
+        receipt_fault_mode_ == "hold_policy_until_safe_stop" && held_policy_receipt_)
+    {
+      const auto held = std::move(*held_policy_receipt_);
+      held_policy_receipt_.reset();
+      if (!gate_ || !gate_->Enqueue(held.first, held.second))
+        callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+      gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=safe_stop"
+            << " publisher=" << held.first.key.publisher_instance_id
+            << " sequence=" << held.first.key.publish_sequence
+            << " source_sequence=" << held.first.sequence
+            << " receive_ns=" << receive_ns << std::endl;
+      std::fflush(stdout);
+    }
   }
 
   void OnSafetyInput(const SafetyInput &msg)
@@ -3275,6 +3303,24 @@ private:
         if (gate_) gate_->RevokePolicyAdmission();
         safety_admission_candidate_ = false;
         policy_open_ = false;
+      }
+      if (msg.admission_state != SafetyInput::ADMISSION_POLICY_OPEN &&
+          receipt_fault_mode_ == "hold_policy_until_inhibit")
+      {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (held_policy_receipt_)
+        {
+          const auto held = std::move(*held_policy_receipt_);
+          held_policy_receipt_.reset();
+          if (!gate_ || !gate_->Enqueue(held.first, held.second))
+            callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+          gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=admission_inhibited"
+                << " publisher=" << held.first.key.publisher_instance_id
+                << " sequence=" << held.first.key.publish_sequence
+                << " source_sequence=" << held.first.sequence
+                << " receive_ns=" << received_ns << std::endl;
+          std::fflush(stdout);
+        }
       }
       if (msg.odometry_status == SafetyInput::ODOM_VALID)
       {
@@ -3609,6 +3655,7 @@ private:
   std::string policy_order_fault_;
   std::string receipt_fault_mode_;
   bool receipt_fault_used_{};
+  std::optional<std::pair<ReceiptFacts, std::int64_t>> held_policy_receipt_;
   bool policy_order_hold_reported_{};
   std::deque<PendingControl> control_queue_;
   std::shared_ptr<ProbeServiceMailbox> probe_service_mailbox_{

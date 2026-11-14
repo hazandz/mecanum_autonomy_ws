@@ -7,7 +7,8 @@ import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
-    verify_r02_policy_order, verify_r02f_safety_hold, verify_r03_receipt_fault,
+    verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
+    verify_r03_receipt_fault,
 )
 
 
@@ -31,7 +32,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R02c')
+        campaign_phase('R04a')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -58,11 +59,17 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01e') == ['pause_request_replay_after_terminal']
     assert case_fault_hooks('R02a') == []
     assert case_fault_hooks('R02b') == ['native_hold_admission_until_receipt']
+    assert case_fault_hooks('R02c') == ['hold_policy_receipt_until_safe_stop']
+    assert case_fault_hooks('R02d') == ['hold_policy_receipt_until_admission_inhibited']
     assert case_fault_hooks('R02f') == ['safety_hold_after_adapter_issuance']
     assert case_fault_hooks('R03a') == ['drop_native_policy_receipt_once']
     assert case_fault_hooks('R03b') == ['mutate_native_policy_transition_id_once']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
+    assert case_environment('R02c', case_fault_hooks('R02c')) == {
+        'B23_RECEIPT_FAULT':'hold_policy_until_safe_stop'}
+    assert case_environment('R02d', case_fault_hooks('R02d')) == {
+        'B23_RECEIPT_FAULT':'hold_policy_until_inhibit'}
     assert case_environment('R01c', case_fault_hooks('R01c')) == {
         'B23_PAUSE_ACK_FAULT':'delay_1500ms_once'}
     assert case_environment('R01d', case_fault_hooks('R01d')) == {
@@ -1635,3 +1642,26 @@ def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
     assert events[0][0] == 'OBSERVATION0_ZERO_ANCHOR'
     assert events[0][1]['publish_sequence'] == 26
     assert events[-1][0] == 'RESET_COMPLETE'
+
+
+@pytest.mark.parametrize('case,reason,mode', [
+    ('R02c','safe_stop','hold_policy_until_safe_stop'),
+    ('R02d','admission_inhibited','hold_policy_until_inhibit')])
+def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
+        tmp_path, case, reason, mode):
+    native=tmp_path/'native-events.jsonl'
+    native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields}) for kind,fields in [
+        ('B23_POLICY_RECEIPT_HELD',{'mode':mode,'sequence':'52','source_sequence':'1','receive_ns':'100'}),
+        ('B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',{'reason':reason,'sequence':'52',
+            'source_sequence':'1','receive_ns':'200'})])+'\n')
+    receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
+    state=NS(fault_flags=4,local_zero_override=True,applied_receipt_valid=False,
+        applied_final_publisher_instance_id=0,applied_final_publish_sequence=0)
+    io=NS(descriptor={'native_events_path':str(native)},ingress=NS(backend_state=state),events=[])
+    checked=verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+    assert checked['release_reason'] == reason
+    assert checked['policy_backend_applied'] is False
+    assert checked['b1_transition_committed'] is False
+    state.local_zero_override=False
+    with pytest.raises(RuntimeError,match='native fault and zero'):
+        verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
