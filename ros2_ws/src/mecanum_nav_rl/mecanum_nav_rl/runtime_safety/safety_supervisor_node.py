@@ -80,27 +80,9 @@ class SafetySupervisorNode(Node):
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
 
             def start_local_training_periodic_timer():
-                # The startup phase timer is steady so it still runs while
-                # Gazebo is bringing up /clock. Do not anchor the periodic
-                # Safety loop to that zero-time interval: doing so can align
-                # every final receipt with the 10 Hz scan cutoffs. The native
-                # application proof is observed on the following physics
-                # update, which leaves B1 without an applied receipt at the
-                # exact cutoff. Wait until ROS time is running and start from
-                # the half-period phase; the loop itself remains steady-time.
-                started_ros_ns = self.get_clock().now().nanoseconds
-                phase_ns = started_ros_ns % period_ns
-                if started_ros_ns <= 0 or phase_ns != period_ns // 2:
-                    self.local_training.emit('SAFETY_TIMER_PHASE_WAIT', {
-                        'started_ros_ns': started_ros_ns,
-                        'phase_ns': phase_ns,
-                        'target_phase_ns': period_ns // 2,
-                        'period_ns': period_ns,
-                        'clock': 'steady',
-                    })
-                    return
                 self.destroy_timer(self._local_training_phase_timer)
                 self._local_training_phase_timer = None
+                started_ros_ns = self.get_clock().now().nanoseconds
                 self._local_training_timer = self.create_timer(
                     period_ns / 1_000_000_000, self.local_training.tick,
                     clock=steady_clock)
@@ -108,7 +90,6 @@ class SafetySupervisorNode(Node):
                     'initial_offset_ns': period_ns // 2,
                     'period_ns': period_ns,
                     'started_ros_ns': started_ros_ns,
-                    'started_ros_phase_ns': phase_ns,
                     'clock': 'steady',
                 })
 
@@ -293,6 +274,14 @@ class LocalTrainingSafetyAdapter:
                 or context['policy_source_instance_id'] == context['safe_stop_source_instance_id']):
             raise ValueError('invalid LOCAL_TRAINING Safety context')
         p = self.context['profile']
+        scan_rate_hz = p['lidar_rate_hz']
+        if (type(scan_rate_hz) not in (int, float) or not math.isfinite(scan_rate_hz)
+                or scan_rate_hz <= 0):
+            raise ValueError('LOCAL_TRAINING requires a finite positive pinned lidar rate')
+        scan_period_ns = round(1_000_000_000 / scan_rate_hz)
+        if scan_period_ns <= 0 or abs(scan_period_ns * scan_rate_hz - 1_000_000_000) > 1e-6:
+            raise ValueError('LOCAL_TRAINING lidar rate must map to an integer nanosecond period')
+        self.scan_period_ns = scan_period_ns
         self.limits = MotionLimits(p['max_vx_mps'], p['max_vy_mps'], p['max_wz_radps'],
             p['max_accel_xy_mps2'], p['max_accel_xy_mps2'], p['max_accel_yaw_radps2'],
             p['max_jerk_xy_mps3'], p['max_jerk_xy_mps3'], p['max_jerk_yaw_radps3'])
@@ -513,11 +502,24 @@ class LocalTrainingSafetyAdapter:
             now = self.now()
             reasons = self._reasons(ros_ns, now)
             previous = self.last_tick_ns
-            self.last_tick_ns = now
             if previous is not None and now <= previous:
                 reasons += ('SAFETY_CLOCK_NOT_INCREASING',)
             if previous is None:
                 reasons += ('LIMITER_PRIMED',)
+            if not reasons and ros_ns > 0 and ros_ns % self.scan_period_ns == 0:
+                # A normal repeated command at the exact sensor cutoff can be
+                # visible to B1 before Gazebo's next physics update applies it.
+                # Defer this one normal publication so the already-applied
+                # prior receipt is the cutoff command and the next receipt is
+                # strictly after the scan. Fault/stop paths still publish
+                # immediately, and the steady loop resumes next period.
+                self.emit('SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF', {
+                    'ros_ns': ros_ns, 'steady_ns': now,
+                    'scan_period_ns': self.scan_period_ns,
+                    'prior_tick_ns': previous,
+                })
+                return None
+            self.last_tick_ns = now
             if not reasons:
                 try:
                     candidate = VelocityCommand(self.command.twist.linear.x,

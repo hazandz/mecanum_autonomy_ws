@@ -123,6 +123,48 @@ def test_local_safety_preserves_issuance_and_both_ttl_clocks(local_adapter):
     assert 'COMMAND_STALE_OR_FUTURE' in f.state[-1].intervention_reasons
 
 
+def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.advance()
+        assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert f.clock.ros == 1_080_000_000
+    previous_tick = adapter.last_tick_ns
+    published_count, state_count = len(f.published), len(f.state)
+    f.advance()
+    assert f.clock.ros == 1_100_000_000
+    assert adapter.tick() is None
+    assert adapter.last_tick_ns == previous_tick
+    assert len(f.published) == published_count and len(f.state) == state_count
+    deferred = [data for name, data in f.evidence
+        if name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF']
+    assert deferred[-1] == {'ros_ns':1_100_000_000,'steady_ns':2_100_000_000,
+        'scan_period_ns':100_000_000,'prior_tick_ns':2_080_000_000}
+    f.advance()
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert adapter.last_tick_ns == f.clock.steady
+    assert len(f.published) == published_count + 1
+
+
+def test_local_safety_still_publishes_fault_zero_at_scan_cutoff(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    f.advance()
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    f.advance()
+    f.backend.fault_flags = 1
+    f.backend.status_sequence += 1
+    adapter.on_backend(f.backend)
+    f.advance(60_000_000)
+    assert f.clock.ros == 1_100_000_000
+    message = adapter.tick()
+    assert message.source == message.SOURCE_SAFE_STOP
+    assert not any((message.twist.linear.x, message.twist.linear.y, message.twist.angular.z))
+    assert 'BACKEND_CONTACT_UNHEALTHY' in f.state[-1].intervention_reasons
+    assert not any(name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF' for name, _ in f.evidence)
+
+
 @pytest.mark.parametrize('clock_name', ['ros', 'steady'])
 def test_local_safety_single_clock_age_is_enforced(local_adapter, clock_name):
     f = local_adapter; f.adapter.tick(); f.advance()
@@ -243,22 +285,12 @@ assert len(node.timers) == 1 and node.timers[0].period == 0.01
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 phase_timer = node.timers[0]
 phase_timer.callback()
-assert node.timers == [phase_timer]  # ROS clock zero: keep waiting, do not anchor phase.
-assert events[-1][0] == 'SAFETY_TIMER_PHASE_WAIT' and events[-1][1]['started_ros_ns'] == 0
-node.ros_now_ns = 60_000_000
-phase_timer.callback()
-assert node.timers == [phase_timer]  # Running ROS clock, wrong residue: still wait.
-assert events[-1][0] == 'SAFETY_TIMER_PHASE_WAIT' and events[-1][1]['phase_ns'] == 0
-node.ros_now_ns = 70_000_000
-phase_timer.callback()
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 assert node.timers[0].callback == node.local_training.tick
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
 assert events[-1][0] == 'SAFETY_TIMER_PHASE_STARTED'
 assert events[-1][1]['initial_offset_ns'] == 10_000_000
-assert events[-1][1]['started_ros_ns'] == 70_000_000
-assert events[-1][1]['started_ros_phase_ns'] == 10_000_000
 assert events[-1][1]['period_ns'] == 20_000_000
 assert events[-1][1]['clock'] == 'steady'
 assert node.local_training.policy_hold is True
