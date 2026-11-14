@@ -203,6 +203,65 @@ TEST(ReceiptGate, StartupRemainsInhibitedUntilValidAnchorArrives)
             GateDisposition::Inhibited);
 }
 
+TEST(ReceiptGate, FutureDatedZeroSafeStopWaitsForCurrentSimClock)
+{
+  ReceiptGate gate(Binding());
+  auto anchor = Anchor();
+  anchor.stamp_ns = 1'010;
+  ASSERT_TRUE(gate.Enqueue(anchor, 2'000));
+  const auto waiting = gate.ConsumeNext(1'009, 2'001);
+  EXPECT_EQ(waiting.disposition, GateDisposition::Pending);
+  EXPECT_EQ(waiting.reason, "safe_stop_waiting_for_sim_clock");
+  EXPECT_FALSE(waiting.accepted);
+  EXPECT_FALSE(gate.Faulted());
+  EXPECT_EQ(gate.Watermark(), 0u);
+  const auto anchored = gate.ConsumeNext(1'010, 2'002);
+  EXPECT_EQ(anchored.disposition, GateDisposition::Anchored);
+  EXPECT_EQ(gate.Watermark(), 100u);
+}
+
+TEST(ReceiptGate, FutureDatedZeroSafeStopAfterAnchorWaitsWithoutAdvancingWatermark)
+{
+  ReceiptGate gate(Binding());
+  AcceptAnchor(gate);
+  auto stop = Anchor();
+  stop.key.publish_sequence = 101;
+  stop.sequence = 2;
+  stop.stamp_ns = 1'010;
+  ASSERT_TRUE(gate.Enqueue(stop, 2'100));
+  const auto waiting = gate.ConsumeNext(1'009, 2'101);
+  EXPECT_EQ(waiting.disposition, GateDisposition::Pending);
+  EXPECT_FALSE(waiting.accepted);
+  EXPECT_FALSE(gate.Faulted());
+  EXPECT_EQ(gate.Watermark(), 100u);
+  const auto applied = gate.ConsumeNext(1'010, 2'102);
+  EXPECT_EQ(applied.disposition, GateDisposition::Applied);
+  ASSERT_TRUE(applied.accepted);
+  EXPECT_EQ(applied.accepted->key.publish_sequence, 101u);
+  EXPECT_EQ(gate.Watermark(), 101u);
+}
+
+TEST(ReceiptGate, FutureDatedPolicyAndMalformedSafeStopStillFault)
+{
+  {
+    ReceiptGate gate(Binding());
+    AcceptAnchor(gate);
+    auto policy = Policy(); policy.stamp_ns = 1'003;
+    ASSERT_TRUE(gate.Enqueue(policy, 2'100));
+    const auto result = gate.ConsumeNext(1'002, 2'101);
+    EXPECT_EQ(result.disposition, GateDisposition::Faulted);
+    EXPECT_EQ(result.reason, "future_timestamp");
+  }
+  {
+    ReceiptGate gate(Binding());
+    auto stop = Anchor(); stop.stamp_ns = 1'003; stop.source_instance_id++;
+    ASSERT_TRUE(gate.Enqueue(stop, 2'000));
+    const auto result = gate.ConsumeNext(1'002, 2'001);
+    EXPECT_EQ(result.disposition, GateDisposition::Faulted);
+    EXPECT_EQ(result.reason, "future_timestamp");
+  }
+}
+
 TEST(ReceiptGate, QueueOverflowIsStickyFault)
 {
   ReceiptGate gate(Binding());

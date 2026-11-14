@@ -832,6 +832,16 @@ public:
         policy_open_ = false;
       }
     }
+    if (decision.disposition == GateDisposition::Pending)
+    {
+      // Keep motion closed while the clock catches the just-finished step;
+      // accept the SAFE_STOP receipt only when its timestamp is current.
+      policy_open_ = false;
+      safety_admission_candidate_ = false;
+      local_zero_override_ = true;
+      ApplyEmergencyZero(ecm);
+      return;
+    }
     if (decision.disposition == GateDisposition::Faulted)
       SetFault(BackendState::FAULT_COMMAND_SEQUENCE, decision.reason);
     if (decision.disposition == GateDisposition::Applied ||

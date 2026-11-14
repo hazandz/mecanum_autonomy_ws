@@ -121,12 +121,30 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   }
   std::string reason;
   if (!ValidPayload(r, reason)) return Fault(reason);
-  if (now_ros_ns < r.stamp_ns || now_steady_ns < item.receive_steady_ns)
+  if (now_steady_ns < item.receive_steady_ns)
     return Fault("future_timestamp");
+  if (now_steady_ns - item.receive_steady_ns > binding_.max_steady_age_ns)
+    return Fault("stale_receipt");
+  if (now_ros_ns < r.stamp_ns)
+  {
+    // The ROS clock bridge can publish the just-completed Gazebo step before
+    // the next PreUpdate observes that same sim stamp. A valid zero SAFE_STOP
+    // remains queued until its stamp is current; it is never applied early.
+    // Other future-dated receipts still fault closed.
+    const bool valid_future_safe_stop = r.source == 4 && IsZero(r) &&
+        r.source_instance_id == binding_.safe_stop_source_instance_id &&
+        r.sequence == binding_.next_safe_stop_sequence && r.step_index == 0 &&
+        r.transition_id.empty() && r.key.publish_sequence > watermark_ &&
+        (!anchored_ || r.key.publish_sequence == watermark_ + 1) &&
+        (!require_contiguous_anchor_ || anchored_ ||
+         r.key.publish_sequence == watermark_ + 1);
+    if (valid_future_safe_stop)
+      return {GateDisposition::Pending, "safe_stop_waiting_for_sim_clock", std::nullopt, false};
+    return Fault("future_timestamp");
+  }
   if (last_source_stamp_ns_ && r.stamp_ns < *last_source_stamp_ns_)
     return Fault("source_timestamp_rollback");
-  if (now_ros_ns - r.stamp_ns > binding_.max_ros_age_ns ||
-      now_steady_ns - item.receive_steady_ns > binding_.max_steady_age_ns)
+  if (now_ros_ns - r.stamp_ns > binding_.max_ros_age_ns)
     return Fault("stale_receipt");
 
   if (last_receipt_ && r.key.publisher_instance_id == last_receipt_->key.publisher_instance_id &&

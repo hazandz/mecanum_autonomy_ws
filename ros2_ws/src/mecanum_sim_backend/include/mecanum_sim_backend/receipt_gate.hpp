@@ -37,7 +37,7 @@ struct ReceiptFacts
 
 enum class GateDisposition
 {
-  Inhibited, Anchored, Applied, Duplicate, Rejected, Faulted
+  Inhibited, Pending, Anchored, Applied, Duplicate, Rejected, Faulted
 };
 
 struct GateResult
