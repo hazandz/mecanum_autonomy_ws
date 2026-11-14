@@ -102,6 +102,37 @@ def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
         verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
 
 
+def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequence():
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.b23_runner import FinalPublicationView
+    expected = FinalIssuedCommandReceipt()
+    expected.source = expected.SOURCE_SAFE_STOP
+    expected.sequence = 31
+    expected.source_instance_id = 44
+    expected.final_publisher_instance_id = 55
+    expected.final_publish_sequence = 20
+    expected.final_command.linear.x = expected.final_command.linear.y = 0.
+    expected.final_command.angular.z = 0.
+    view = FinalPublicationView(55)
+    view.ingress = NS(
+        receipts=[
+            NS(source=ReceiptSource.SAFE_STOP, source_sequence=31,
+                final_publisher_instance_id=55, final_publish_sequence=20),
+            NS(source=ReceiptSource.SAFE_STOP, source_sequence=32,
+                final_publisher_instance_id=55, final_publish_sequence=21),
+        ],
+        _receipt_bytes={20:serialize_message(expected)},
+    )
+    selected = view.publication_for_source_sequence(
+        source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, sequence=31)
+    assert selected is not None
+    assert selected.sequence == 31 and selected.final_publish_sequence == 20
+    assert view.publication_for_source_sequence(
+        source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, sequence=30) is None
+
+
 def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     import json
     path=tmp_path/'native-events.jsonl'

@@ -239,6 +239,31 @@ class FinalPublicationView:
         sequence = self.ingress.receipts[-1].final_publish_sequence
         return deserialize_message(self.ingress._receipt_bytes[sequence], FinalIssuedCommandReceipt)
 
+    def publication_for_source_sequence(self, *, source, sequence):
+        """Select the retained receipt for one exact Safety output identity."""
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        if self.ingress is None or type(sequence) is not int or sequence <= 0:
+            return None
+        expected = {FinalIssuedCommandReceipt.SOURCE_POLICY: ReceiptSource.POLICY,
+            FinalIssuedCommandReceipt.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP}.get(source)
+        if expected is None:
+            return None
+        for view in reversed(self.ingress.receipts):
+            if (view.source is expected and view.source_sequence == sequence
+                    and view.final_publisher_instance_id == self.publisher_instance_id):
+                raw = self.ingress._receipt_bytes.get(view.final_publish_sequence)
+                if raw is None:
+                    return None
+                receipt = deserialize_message(raw, FinalIssuedCommandReceipt)
+                if (receipt.final_publisher_instance_id != self.publisher_instance_id
+                        or receipt.source != source or receipt.sequence != sequence
+                        or receipt.final_publish_sequence != view.final_publish_sequence):
+                    raise RuntimeError('retained receipt bytes do not match the pinned view')
+                return receipt
+        return None
+
 
 class TrainingWorkerIO:
     """ROS I/O của một worker sở hữu riêng context, nodes, executor và RPC."""
@@ -1366,13 +1391,14 @@ class TrainingWorkerIO:
                 and self.safety.local_training.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
                 and self.safety.local_training.last_output.sequence > safe_stop_sequence_before else None,
                 deadline_ns=deadline, phase='Safety SAFE_STOP after held POLICY')
-            receipt = await self.until(lambda: self.final.last_publication
-                if self.final.last_publication is not None
-                and self.final.last_publication.source == CommandEnvelope.SOURCE_SAFE_STOP
-                and self.final.last_publication.sequence == stop.sequence
-                and not any((self.final.last_publication.final_command.linear.x,
-                             self.final.last_publication.final_command.linear.y,
-                             self.final.last_publication.final_command.angular.z)) else None,
+            def matching_zero_receipt():
+                candidate = self.final.publication_for_source_sequence(
+                    source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=stop.sequence)
+                if candidate is None or any((candidate.final_command.linear.x,
+                        candidate.final_command.linear.y, candidate.final_command.angular.z)):
+                    return None
+                return candidate
+            receipt = await self.until(matching_zero_receipt,
                 deadline_ns=deadline, phase='SAFE_STOP receipt after held POLICY')
             applied = await self.until(lambda: self.ingress.backend_state
                 if self.ingress.backend_state is not None
