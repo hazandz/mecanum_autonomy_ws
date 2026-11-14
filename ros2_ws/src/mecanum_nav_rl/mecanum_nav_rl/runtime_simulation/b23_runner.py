@@ -1151,6 +1151,95 @@ class TrainingWorkerIO:
             'publish_sequence': receipt.final_publish_sequence, 'watchdog_zero_stream_active': True,
             'steady_ns': self.now()})
 
+    async def align_policy_receipt_boundary(self, *, target_cutoff_ns, deadline_ns,
+                                            policy_sequence, transition_id):
+        """Avoid a scan/Safety timer tie so B1 selects an already-applied POLICY receipt.
+
+        The native application is recorded on a later physics iteration than a
+        receipt published on the same ROS timestamp as a scan. Suppress only
+        the one timer publication at the chosen scan boundary, bounded by the
+        existing final-command watchdog and step deadline. The prior POLICY
+        receipt must remain native-applied and fresh at that cutoff.
+        """
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        adapter = self.safety.local_training
+        scans = sorted(self.ingress.scans)
+        if len(scans) < 2:
+            raise RuntimeError('POLICY cutoff alignment requires two observed scans')
+        scan_period_ns = scans[-1] - scans[-2]
+        safety_period_ns = self.ingress.profile['safety_period_ms'] * 1_000_000
+        max_gap_ns = self.ingress.profile['final_command_timeout_ms'] * 1_000_000
+        if (scan_period_ns <= safety_period_ns or scan_period_ns > self.ingress.profile['scan_max_age_ms'] * 1_000_000
+                or max_gap_ns <= safety_period_ns):
+            raise RuntimeError('observed scan/Safety cadence cannot safely align POLICY cutoff')
+        target_scan_ns = scans[-1]
+        while target_scan_ns < target_cutoff_ns or target_scan_ns <= self.ros_now():
+            target_scan_ns += scan_period_ns
+        suppress_ns = target_scan_ns - safety_period_ns
+        if suppress_ns <= self.ros_now():
+            target_scan_ns += scan_period_ns
+            suppress_ns = target_scan_ns - safety_period_ns
+        if target_scan_ns - target_cutoff_ns > scan_period_ns:
+            raise RuntimeError('POLICY cutoff alignment exceeded one observed scan period')
+
+        await self.until(lambda: True if self.ros_now() >= suppress_ns else None,
+            deadline_ns=deadline_ns, phase='POLICY receipt boundary pre-suppression')
+        disabled_ns = self.now()
+        adapter.set_stream_enabled(False)
+        self.emit('POLICY_RECEIPT_BOUNDARY_SUPPRESSED', {'target_cutoff_ns': target_cutoff_ns,
+            'target_scan_ns': target_scan_ns, 'suppressed_at_ros_ns': self.ros_now(),
+            'disabled_steady_ns': disabled_ns})
+        try:
+            await self.until(lambda: target_scan_ns if target_scan_ns in self.ingress.scans
+                and self.ros_now() > target_scan_ns else None,
+                deadline_ns=deadline_ns, phase='POLICY receipt boundary scan passage')
+            boundary = [receipt for receipt in self.ingress.receipts
+                if receipt.publish_stamp_ns == target_scan_ns]
+            if boundary:
+                raise RuntimeError('POLICY boundary publication raced with selected scan')
+            previous = [receipt for receipt in self.ingress.receipts
+                if receipt.publish_stamp_ns < target_scan_ns]
+            if not previous:
+                raise RuntimeError('POLICY cutoff has no pre-boundary receipt')
+            receipt = max(previous, key=lambda item: (item.publish_stamp_ns, item.final_publish_sequence))
+            from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+            if (receipt.source is not ReceiptSource.POLICY
+                    or receipt.source_instance_id != self.policy_source_id
+                    or receipt.source_sequence != policy_sequence
+                    or receipt.transition_id != transition_id):
+                raise RuntimeError('latest pre-boundary receipt is not the pending POLICY step')
+            def applied_before_cutoff():
+                backend = self.ingress.backend_state
+                if (backend is None or backend.fault_flags != 0 or backend.local_zero_override
+                        or backend.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                        or backend.applied_final_publish_sequence != receipt.final_publish_sequence
+                        or backend.applied_physics_iteration <= 0):
+                    return None
+                applied_stamp = stamp_ns(backend.applied_sim_stamp)
+                if receipt.publish_stamp_ns <= applied_stamp < target_scan_ns:
+                    return backend, applied_stamp
+                if applied_stamp >= target_scan_ns:
+                    raise RuntimeError('pre-boundary POLICY application occurred after selected cutoff')
+                return None
+
+            backend, applied_stamp_ns = await self.until(applied_before_cutoff,
+                deadline_ns=min(deadline_ns, self.now() + max_gap_ns),
+                phase='pre-boundary POLICY native application')
+            if (self.now() < receipt.received_steady_ns
+                    or self.now() - receipt.received_steady_ns > max_gap_ns):
+                raise RuntimeError('POLICY boundary pause exceeded final-command freshness')
+            self.emit('POLICY_RECEIPT_BOUNDARY_READY', {'target_cutoff_ns': target_cutoff_ns,
+                'target_scan_ns': target_scan_ns, 'receipt_sequence': receipt.final_publish_sequence,
+                'receipt_stamp_ns': receipt.publish_stamp_ns, 'application_stamp_ns': applied_stamp_ns,
+                'application_iteration': backend.applied_physics_iteration,
+                'receipt_age_ns': self.now() - receipt.received_steady_ns,
+                'disabled_steady_ns': disabled_ns, 'steady_ns': self.now()})
+            return target_scan_ns
+        finally:
+            adapter.set_stream_enabled(True)
+            self.emit('POLICY_RECEIPT_BOUNDARY_RESUMED', {'target_scan_ns': target_scan_ns,
+                'disabled_steady_ns': disabled_ns, 'resumed_steady_ns': self.now()})
+
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -1229,12 +1318,14 @@ class TrainingWorkerIO:
         self.safety.local_training.set_stream_enabled(True)
         self.safety.local_training.set_policy_hold(False)
         target_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
+        target_cutoff = await self.align_policy_receipt_boundary(
+            target_cutoff_ns=target_cutoff, deadline_ns=deadline,
+            policy_sequence=token.step_index, transition_id=token.transition_id)
         last_pending = None
         while self.now() < deadline:
             self.check()
-            candidates = [stamp for stamp in self.ingress.scans if stamp >= target_cutoff]
-            if candidates:
-                cutoff = max(candidates)
+            if target_cutoff in self.ingress.scans:
+                cutoff = target_cutoff
                 try:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:

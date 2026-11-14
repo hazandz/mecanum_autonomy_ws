@@ -354,6 +354,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.ingress.last_published_sample_sequence = 1
     value.ingress.pause_admission_publication = lambda: history.append(('freeze_admission',))
     value.ingress.scans = {}
+    value.ingress.profile = {'safety_period_ms':20, 'final_command_timeout_ms':100,
+        'scan_max_age_ms':500}
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=2,
         applied_final_publisher_instance_id=55, local_zero_override=False)
     value.read_native_input_watermark = lambda: 1
@@ -392,6 +394,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if adapter.command:
             value.ingress.scans[clock.ns] = True
     value.pause = pause
+    async def align_policy_receipt_boundary(*, target_cutoff_ns, deadline_ns,
+                                            policy_sequence, transition_id):
+        history.append(('align_policy_boundary', target_cutoff_ns, deadline_ns,
+            policy_sequence, transition_id))
+        value.ingress.scans[target_cutoff_ns] = True
+        return target_cutoff_ns
+    value.align_policy_receipt_boundary = align_policy_receipt_boundary
     pending = NS(step_index=1, transition_id='actual-b1-token')
     commit_calls = []
     def record(envelope, *, action_barrier_ns):
@@ -425,8 +434,90 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     envelope = next(row[1] for row in history if row[0] == 'publish')
     assert envelope.twist.linear.y == pytest.approx(.08)
     assert len([row for row in history if row[0] == 'publish']) == 1
-    assert len(commit_calls) == 2 and min(commit_calls) >= 1_102_000_000
+    assert len(commit_calls) == 2
+    assert min(commit_calls) == envelope.header.stamp.sec*10**9 + envelope.header.stamp.nanosec + 100_000_000
     assert clock.ns < 3_000_000_000 if timing == 'ready' else clock.ns == 3_000_000_000
+    assert any(row[0] == 'align_policy_boundary' and row[3:] == (1, 'actual-b1-token')
+        for row in history)
+
+
+def test_policy_receipt_boundary_suppression_keeps_applied_receipt_fresh():
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    value, clock = worker()
+    value.deadline_ns = 1_500_000_000
+    ros_ns = [1_000_000_000]
+    value.ros_now = lambda: ros_ns[0]
+    value.policy_source_id = 33
+    value.ingress.profile = {'safety_period_ms':20, 'final_command_timeout_ms':100,
+        'scan_max_age_ms':500}
+    value.ingress.scans = {900_000_000:object(), 1_000_000_000:object()}
+    value.ingress.receipts = []
+    value.final = NS(publisher_instance_id=55)
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled: streams.append((enabled, ros_ns[0]))))
+    streams, events = [], []
+    backend = NS(fault_flags=0, local_zero_override=False,
+        applied_final_publisher_instance_id=55, applied_final_publish_sequence=8,
+        applied_physics_iteration=10, applied_sim_stamp=Time(sec=1,nanosec=80_000_000))
+    value.ingress.backend_state = backend
+    def pause(seconds):
+        async def advance():
+            await clock.pause(seconds)
+            ros_ns[0] += round(seconds * 1e9)
+            if ros_ns[0] == 1_080_000_000 and not value.ingress.receipts:
+                value.ingress.receipts.append(NS(source=ReceiptSource.POLICY,
+                    source_instance_id=33, source_sequence=1, transition_id='step-1',
+                    publish_stamp_ns=ros_ns[0], final_publish_sequence=8,
+                    received_steady_ns=clock.ns))
+            if ros_ns[0] == 1_100_000_000:
+                value.ingress.scans[ros_ns[0]] = object()
+        return advance()
+    value.pause = pause
+    value.emit = lambda name, facts: events.append((name, facts))
+    result = asyncio.run(value.align_policy_receipt_boundary(target_cutoff_ns=1_100_000_000,
+        deadline_ns=1_300_000_000, policy_sequence=1, transition_id='step-1'))
+    assert result == 1_100_000_000
+    assert streams == [(False, 1_080_000_000), (True, 1_102_000_000)]
+    assert [name for name,_ in events] == [
+        'POLICY_RECEIPT_BOUNDARY_SUPPRESSED','POLICY_RECEIPT_BOUNDARY_READY',
+        'POLICY_RECEIPT_BOUNDARY_RESUMED']
+    assert events[1][1]['receipt_sequence'] == 8
+    assert events[1][1]['application_stamp_ns'] == 1_080_000_000
+    assert events[1][1]['receipt_age_ns'] == 22_000_000
+
+
+def test_policy_receipt_boundary_rejects_non_policy_or_stale_native_binding():
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    value, clock = worker()
+    value.deadline_ns = 1_500_000_000
+    ros_ns = [1_000_000_000]
+    value.ros_now = lambda: ros_ns[0]
+    value.policy_source_id = 33
+    value.ingress.profile = {'safety_period_ms':20, 'final_command_timeout_ms':100,
+        'scan_max_age_ms':500}
+    value.ingress.scans = {900_000_000:object(), 1_000_000_000:object()}
+    value.ingress.receipts = []
+    value.final = NS(publisher_instance_id=55)
+    streams=[]
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled: streams.append(enabled)))
+    value.ingress.backend_state = NS(fault_flags=0, local_zero_override=False,
+        applied_final_publisher_instance_id=55, applied_final_publish_sequence=7,
+        applied_physics_iteration=10, applied_sim_stamp=Time(sec=1,nanosec=80_000_000))
+    async def pause(seconds):
+        await clock.pause(seconds); ros_ns[0] += round(seconds*1e9)
+        if ros_ns[0] == 1_080_000_000:
+            value.ingress.receipts.append(NS(source=ReceiptSource.POLICY,
+                source_instance_id=33, source_sequence=1, transition_id='step-1',
+                publish_stamp_ns=ros_ns[0], final_publish_sequence=8,
+                received_steady_ns=clock.ns))
+        if ros_ns[0] == 1_100_000_000: value.ingress.scans[ros_ns[0]]=object()
+    value.pause=pause
+    value.emit=lambda *_args:None
+    with pytest.raises(TimeoutError, match='pre-boundary POLICY native application: deadline expired'):
+        asyncio.run(value.align_policy_receipt_boundary(target_cutoff_ns=1_100_000_000,
+            deadline_ns=1_300_000_000, policy_sequence=1, transition_id='step-1'))
+    assert streams == [False, True]
 
 
 def test_evidence_sink_routes_actual_server_output_and_keeps_books_distinct(tmp_path):
