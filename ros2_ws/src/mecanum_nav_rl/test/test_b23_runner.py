@@ -75,9 +75,12 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
 
 def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
-    receipt=NS(source=ReceiptSource.SAFE_STOP, final_command=(0.,0.,0.),
-        final_publisher_instance_id=17, final_publish_sequence=42)
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    receipt=FinalIssuedCommandReceipt()
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.final_command.linear.x=receipt.final_command.linear.y=receipt.final_command.angular.z=0.
+    receipt.final_publisher_instance_id=17
+    receipt.final_publish_sequence=42
     state=NS(fault_flags=0, local_zero_override=False, applied_receipt_valid=True,
         applied_final_publisher_instance_id=17, applied_final_publish_sequence=42,
         applied_physics_iteration=101)
@@ -99,6 +102,14 @@ def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
         'candidate_source_instance_id':33,'reasons':['POLICY_HELD']})]
     io.ingress.receipts=[NS(source=ReceiptSource.POLICY,sequence=1)]
     with pytest.raises(RuntimeError,match='reached the final receipt'):
+        verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
+    io.ingress.receipts=[]
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_POLICY
+    with pytest.raises(RuntimeError,match='held POLICY as zero SAFE_STOP'):
+        verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.final_command.linear.x=0.01
+    with pytest.raises(RuntimeError,match='held POLICY as zero SAFE_STOP'):
         verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
 
 

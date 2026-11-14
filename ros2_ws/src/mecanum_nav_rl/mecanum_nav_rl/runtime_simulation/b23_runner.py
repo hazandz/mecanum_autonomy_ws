@@ -183,7 +183,7 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
 
 def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
     """Verify a real Safety rejection and matching native SAFE_STOP application."""
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     rejected = next((facts for name, facts in io.events
         if name == 'SAFETY_REJECTED' and facts.get('candidate_sequence') == step_index
@@ -192,8 +192,12 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
         and 'POLICY_HELD' in facts.get('reasons', ())), None)
     if rejected is None:
         raise RuntimeError('R02f missing production Safety rejection for issued POLICY')
-    if (receipt is None or receipt.source is not ReceiptSource.SAFE_STOP
-            or any(receipt.final_command)):
+    if not isinstance(receipt, FinalIssuedCommandReceipt):
+        raise RuntimeError('R02f final publisher receipt has the wrong generated message type')
+    final_command = (receipt.final_command.linear.x, receipt.final_command.linear.y,
+        receipt.final_command.angular.z)
+    if (receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+            or any(final_command)):
         raise RuntimeError('R02f final publisher did not publish the held POLICY as zero SAFE_STOP')
     if (backend_state is None or backend_state.fault_flags != 0
             or backend_state.local_zero_override
