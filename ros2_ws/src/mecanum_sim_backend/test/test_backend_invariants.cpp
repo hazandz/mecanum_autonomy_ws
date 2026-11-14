@@ -1875,7 +1875,7 @@ static void RunNativeResetObservation0Chain(
     bool positive_policy_admission = false,
     int safety_freshness_case = 0, int query_revocation_case = 0,
     int admission_case = 0, int pause_case = 0, int closing_case = 0,
-    bool lifecycle_heartbeat = false)
+    bool lifecycle_heartbeat = false, bool inhibit_cache_revocation = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -1976,6 +1976,71 @@ static void RunNativeResetObservation0Chain(
   EXPECT_EQ(BackendSystemTestPeer::Cached(system, 3).contact_capability_state,
             ControlResponse::CAPABILITY_VERIFIED);
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+
+  if (inhibit_cache_revocation)
+  {
+    auto inhibit = BaseControlRequest(4);
+    BindTestRequestToConfiguredBackend(inhibit, system);
+    inhibit.operation = ControlRequest::OP_INHIBIT;
+    inhibit.expected_binding_revision = 1;
+    ASSERT_EQ(BackendSystemTestPeer::Receive(system, inhibit).result, ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 15, 350'000'000);
+    const auto applied = BackendSystemTestPeer::Cached(system, 4);
+    ASSERT_EQ(applied.result, ControlResponse::RESULT_APPLIED);
+    ASSERT_EQ(applied.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+    ecm.SetComponentData<gz::sim::components::PhysicsEnginePlugin>(
+        BackendSystemTestPeer::WorldEntity(system), "missing-engine");
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 16, 360'000'000);
+    ASSERT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+    const auto replay = BackendSystemTestPeer::Receive(system, inhibit);
+    EXPECT_EQ(replay.result, ControlResponse::RESULT_APPLIED) << replay.reason_code;
+    EXPECT_EQ(replay.applied_binding_revision, applied.applied_binding_revision);
+    EXPECT_EQ(replay.applied_physics_iteration, applied.applied_physics_iteration);
+    EXPECT_NE(replay.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+    EXPECT_TRUE(replay.proof_session_id.empty());
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    EXPECT_EQ(io->spawn_calls, 1u);
+    const auto stale_query = BackendSystemTestPeer::Receive(system, query);
+    EXPECT_NE(stale_query.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+    EXPECT_TRUE(stale_query.proof_session_id.empty());
+    EXPECT_EQ(BackendSystemTestPeer::Revision(system), 2u);
+    auto next = inhibit;
+    next.request_sequence = 5;
+    next.expected_binding_revision = 2;
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, next).result, ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 17, 370'000'000);
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, next).result, ControlResponse::RESULT_APPLIED);
+    EXPECT_EQ(BackendSystemTestPeer::Revision(system), 3u);
+    auto pending = BaseControlRequest(6);
+    BindTestRequestToConfiguredBackend(pending, system);
+    pending.operation = ControlRequest::OP_BIND_PENDING_STEP;
+    pending.expected_binding_revision = 3;
+    pending.pending_step_index = 1;
+    pending.pending_source_sequence = 1;
+    pending.pending_transition_id = "policy-uuid-after-revocation";
+    SetStamp(pending.action_barrier_stamp, 380'000'000);
+    auto attempt = BackendSystemTestPeer::Receive(system, pending);
+    if (attempt.result == ControlResponse::RESULT_QUEUED)
+    {
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 18, 380'000'000);
+      attempt = BackendSystemTestPeer::Receive(system, pending);
+    }
+    EXPECT_NE(attempt.result, ControlResponse::RESULT_APPLIED);
+    EXPECT_TRUE(std::all_of(attempt.pending_admission_token.begin(),
+                            attempt.pending_admission_token.end(), [](auto value) { return value == 0; }));
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    auto foreign = inhibit;
+    foreign.session_id = "foreign";
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, foreign).reason_code,
+              ControlResponse::REASON_IDENTITY_MISMATCH);
+    auto conflict = inhibit;
+    conflict.expected_binding_revision = 99;
+    EXPECT_EQ(BackendSystemTestPeer::Receive(system, conflict).reason_code,
+              ControlResponse::REASON_DUPLICATE_CONTENT_CONFLICT);
+    EXPECT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    return;
+  }
 
   if (query_revocation_case != 0)
   {
@@ -4608,4 +4673,10 @@ TEST(BackendLifecycleFacts, StatusReportsAppliedBindingBeforeFirstSafetyInput)
   EXPECT_EQ(io->statuses.back().runtime_generation, bind.runtime_generation);
   EXPECT_TRUE(io->statuses.back().actuator_inhibited);
   EXPECT_FALSE(io->statuses.back().applied_receipt_valid);
+}
+
+TEST(BackendSystemControlReceiver, InhibitReplayPreservesAppliedAckAfterProofRevoked)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, false,
+                                  0, 0, 0, 0, 0, false, true);
 }

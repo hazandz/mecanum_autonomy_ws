@@ -639,3 +639,51 @@ def test_subscription_keeps_actual_wire_before_decode_and_callback_failure():
     with pytest.raises(ValueError,match='actual rejected sample'):receive(wire,info)
     assert [x[0] for x in events][-2:]==['INGRESS_WIRE_RECEIVED','INGRESS_CALLBACK_ERROR']
     assert events[-1][1]['wire_sha256']==hashlib.sha256(wire).hexdigest()
+
+
+def test_reset_measurements_wait_for_scan_with_original_deadline():
+    value, clock=worker()
+    value.ingress.scans={}
+    value.ingress.lifecycle=NS(barrier_stamp=NS(sec=0,nanosec=90))
+    value.ingress.profile={"scan_max_age_ms":500}
+    value.ingress.scan_reset_stamp_ns=90
+    value.ingress.physics_pairs=[]
+    value.ros_now=lambda:100
+    async def consume():
+        async for _ in value.measurements(deadline_ns=clock.ns+5_000_000,after_iteration=0):
+            pytest.fail('measurement requires actual physics pair')
+    with pytest.raises(TimeoutError,match='fresh reset scan'):
+        asyncio.run(consume())
+    assert clock.ns==1_005_000_000
+
+
+def test_reset_scan_rejects_old_delayed_and_stale_samples():
+    value,clock=worker()
+    value.ingress.lifecycle=NS(barrier_stamp=NS(sec=1,nanosec=0))
+    value.ingress.profile={'scan_max_age_ms':100}
+    value.ingress.scan_reset_stamp_ns=1_001_000_000
+    value.ingress.scans={999_999_999:NS(received_steady_ns=clock.ns)}
+    assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns) is None
+    value.ingress.scans[1_001_000_000]=NS(received_steady_ns=clock.ns)
+    assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns) is None
+    value.ingress.scans[1_001_000_001]=NS(received_steady_ns=clock.ns-200_000_000)
+    assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns) is None
+    fresh=NS(received_steady_ns=clock.ns)
+    value.ingress.scans[1_002_000_000]=fresh
+    assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns) is fresh
+
+
+def test_observation0_handoff_rejects_pre_reset_scan_until_deadline():
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    value,clock=worker();calls=[]
+    value.ros_now=lambda:100
+    value.ingress.lifecycle=NS(barrier_stamp=NS(sec=0,nanosec=90))
+    value.ingress.scan_reset_stamp_ns=95
+    value.ingress.profile={'scan_max_age_ms':500}
+    value.ingress.scans={95:NS(stamp_ns=95,received_steady_ns=clock.ns)}
+    value.ingress.admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.ingress.confirm_observation0=lambda ack:calls.append('confirmed')
+    b1=NS(commit_observation0=lambda cutoff:calls.append('committed'))
+    with pytest.raises(TimeoutError,match='observation0 did not confirm'):
+        asyncio.run(value.commit_and_confirm_observation0(b1,deadline_ns=clock.ns+5_000_000))
+    assert calls==[] and value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED

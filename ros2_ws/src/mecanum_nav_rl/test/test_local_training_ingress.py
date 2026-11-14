@@ -217,7 +217,7 @@ def test_context_change_revokes_pending_and_flushes_sensor_pair_buffers(source):
     assert not f.ingress.admission_publication_enabled
 
 
-def b1_runtime_chain(f):
+def b1_runtime_chain(f, before_reset_commit=None, stop_after_observation0=False, commit_runner=None):
     """Dữ liệu biên I/O xác định; gọi ingress, assembler và transaction B1 thật."""
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import LocalTrainingB1Adapter
     from mecanum_nav_rl.tasks.scenario_artifact import ScenarioArtifactLoader
@@ -254,9 +254,13 @@ def b1_runtime_chain(f):
 
     f.ingress.on_receipt(f.receipt(1))
     f.advance(); physics(1, 1); f.ingress.on_scan(scan())
+    if before_reset_commit is not None:
+        before_reset_commit(f)
     reset_cutoff = f.clock.ros
-    f.advance(); physics(2)
-    f.ingress.on_receipt(f.receipt(2))
+    f.advance(); physics(3 if stop_after_observation0 else 2)
+    f.ingress.on_receipt(f.receipt(3 if stop_after_observation0 else 2))
+    if commit_runner is not None:
+        return NS(b1=b1, observation0=commit_runner(f,b1))
     observation0, selected_zero = b1.commit_observation0(reset_cutoff)
     raw = f.ack(Control.Request.OP_CONFIRM_OBSERVATION0)
     req = raw.request; req.observation0_cutoff = stamp(reset_cutoff)
@@ -264,6 +268,8 @@ def b1_runtime_chain(f):
     req.adjacent_boundary_final_publish_sequence = selected_zero.adjacent_receipt.final_publish_sequence
     confirmed = BackendControlAck(serialize_message(req), raw.response_bytes, raw.observed_steady_ns)
     f.ingress.confirm_observation0(confirmed)
+    if stop_after_observation0:
+        return NS(b1=b1, observation0=observation0)
     token = b1.begin_step()
     f.advance(); physics(3)
     pending = f.ack(Control.Request.OP_BIND_PENDING_STEP, 2)
@@ -494,3 +500,87 @@ def test_safety_provenance_ignores_only_cdr_padding_and_keeps_replay_age(source,
     changed=copy.deepcopy(state);changed.final_command.linear.y=.01
     with pytest.raises(ValueError,match='matching actual producer'):
         f.ingress.on_safety_state(changed)
+
+
+def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(source):
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    observed=[];workers=[]
+    def measure(f):
+        value=TrainingWorkerIO.__new__(TrainingWorkerIO)
+        value.ingress=f.ingress
+        value.now=lambda:f.clock.steady
+        value.ros_now=lambda:f.clock.ros
+        value.deadline_ns=f.clock.steady+1_000_000_000
+        value.stop_requested=False;value.abort_requested=None;value.pump_error=None
+        value.expected_paused=True;value.last_clock_ns=0;value.last_clock_advance_ns=f.clock.steady
+        transform=NS(transform=NS(translation=NS(x=-0.031765,y=0.,z=.14),
+                                   rotation=NS(x=0.,y=0.,z=0.,w=1.)))
+        value.safety=NS(_tf_buffer=NS(lookup_transform=lambda *args:transform))
+        value.asset={'sensor':{'extrinsic_xyz_m':[-0.031765,0.,.14]}}
+        value.emit=lambda event,data:f.events.append((event,data))
+        from rclpy.serialization import deserialize_message
+        old = deserialize_message(next(iter(f.ingress.scans.values())).message_bytes,LaserScan)
+        f.ingress.reset_noise(2026102900)
+        pauses=[]
+        async def inject_scan(seconds):
+            if not pauses:
+                f.ingress.on_scan(old)  # Callback trễ từ trước khi xóa buffer.
+                pauses.append('old')
+            else:
+                f.advance()
+                fresh=copy.deepcopy(old);fresh.header.stamp=stamp(f.clock.ros)
+                f.ingress.on_scan(fresh)
+                f.ingress.on_receipt(f.receipt(2))
+                f.ingress.on_ground_truth(f.gt())
+                status=f.backend(iteration=2,sequence=2)
+                status.applied_receipt_valid=True
+                status.applied_final_publisher_instance_id=55
+                status.applied_final_publish_sequence=2
+                status.applied_physics_iteration=2
+                status.applied_sim_stamp=stamp(f.clock.ros)
+                f.ingress.on_backend(status)
+                pauses.append('fresh')
+            f.clock.steady+=round(seconds*1e9)
+            await asyncio.sleep(0)
+        value.pause=inject_scan
+        async def take():
+            stream=value.measurements(deadline_ns=value.deadline_ns,after_iteration=0)
+            item=await anext(stream)
+            await stream.aclose()
+            return item
+        actual=asyncio.run(take())
+        observed.append(actual)
+        assert actual.stamp_ns==f.clock.ros and actual.footprint_clear
+        assert pauses==['old','fresh']
+        workers.append(value)
+    def commit(f,b1):
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlSession
+        from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
+        calls=[]
+        class Client:
+            def call_async(self,request):
+                calls.append(copy.deepcopy(request))
+                response=Control.Response()
+                response.schema_version=response.RESPONSE_SCHEMA_VERSION
+                response.backend_instance_id=22
+                response.request_sequence=request.request_sequence
+                response.binding_revision=request.expected_binding_revision+1
+                response.applied_binding_revision=response.binding_revision
+                response.applied_physics_iteration=3
+                response.applied_sim_stamp=stamp(f.clock.ros)
+                response.result=response.RESULT_APPLIED
+                response.reason_code=response.REASON_NONE
+                return NS(done=lambda:True,result=lambda:response)
+        value=workers[0]
+        value.final=NS(publisher_instance_id=55)
+        value.control=BackendControlSession(LocalTrainingBackendControlPort(Client()),f.ingress.identity,
+            emit=lambda event,data:f.events.append((event,data)),now_ns=value.now,pause=value.pause)
+        result,cutoff=asyncio.run(value.commit_and_confirm_observation0(b1,deadline_ns=value.deadline_ns))
+        assert cutoff==f.clock.ros-10_000_000
+        assert len(calls)==1 and calls[0].operation==Control.Request.OP_CONFIRM_OBSERVATION0
+        return result
+    chain=b1_runtime_chain(source,before_reset_commit=measure,stop_after_observation0=True,commit_runner=commit)
+    assert len(observed)==1 and chain.observation0.shape==(81,)
+    assert source.ingress.observation0_ack is not None
+    assert source.ingress.observation0_ack.request.operation==Control.Request.OP_CONFIRM_OBSERVATION0

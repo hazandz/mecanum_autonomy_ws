@@ -560,15 +560,32 @@ class TrainingWorkerIO:
                 except BaseException as error:
                     self.emit('CONTACT_ABORT_ERROR', {'error': repr(error), 'steady_ns': self.now()})
 
+    def fresh_reset_scan(self, *, now_ros_ns, now_steady_ns):
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
+        if self.ingress.lifecycle is None:
+            return None
+        barrier = max(stamp_ns(self.ingress.lifecycle.barrier_stamp), self.ingress.scan_reset_stamp_ns)
+        for stamp, sample in reversed(list(self.ingress.scans.items())):
+            if stamp <= barrier:
+                continue
+            try:
+                validate_dual_clock_freshness(source_ros_ns=stamp, now_ros_ns=now_ros_ns,
+                    receive_steady_ns=sample.received_steady_ns, now_steady_ns=now_steady_ns,
+                    max_age_ns=self.ingress.profile['scan_max_age_ms'] * 1_000_000)
+            except ValueError:
+                continue
+            return sample
+        return None
+
     def scan_clearance(self, *, now_ros_ns, now_steady_ns):
         from sensor_msgs.msg import LaserScan
         from rclpy.serialization import deserialize_message
         from rclpy.time import Time
         from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
-        candidates = [sample for stamp, sample in self.ingress.scans.items() if stamp <= now_ros_ns]
-        if not candidates:
-            raise RuntimeError('reset has no actual scan for clearance')
-        saved = candidates[-1]
+        saved = self.fresh_reset_scan(now_ros_ns=now_ros_ns, now_steady_ns=now_steady_ns)
+        if saved is None:
+            raise RuntimeError('reset has no fresh post-barrier scan for clearance')
         validate_dual_clock_freshness(source_ros_ns=saved.stamp_ns, now_ros_ns=now_ros_ns,
             receive_steady_ns=saved.received_steady_ns, now_steady_ns=now_steady_ns,
             max_age_ns=self.ingress.profile['scan_max_age_ms'] * 1_000_000)
@@ -591,6 +608,9 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.simulation.local_training_reset import ResetMeasurement
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import quaternion_rpy
         last = after_iteration
+        # Sau reset_noise, buffer scan rỗng; đợi mẫu thật trong deadline gốc.
+        await self.until(lambda: self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now()),
+            deadline_ns=deadline_ns, phase='fresh reset scan')
         while self.now() < deadline_ns:
             pair = await self.until(lambda: next((value for value in self.ingress.physics_pairs
                 if value.iteration > last), None), deadline_ns=deadline_ns, phase='fresh reset physics pair')
@@ -620,7 +640,7 @@ class TrainingWorkerIO:
 
     async def reset_episode(self, b1, *, seed, target, paused_hold_s=0.):
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields, B1SnapshotPending
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
         from mecanum_nav_rl.simulation.local_training_reset import LocalTrainingResetAdapter
         started = self.now()
@@ -688,17 +708,28 @@ class TrainingWorkerIO:
         b1.begin_reset()
         self.ingress.inhibit()
         self.safety.local_training.set_stream_enabled(True)
+        observation, cutoff = await self.commit_and_confirm_observation0(b1, deadline_ns=deadline)
+        self.emit('RESET_COMPLETE', {'seed': seed, 'observation0_cutoff_ns': cutoff,
+            'W0': w0.final_publish_sequence, 'W1': facts.applied_zero_receipt.final_publish_sequence,
+            'l1_sequence': l1.sequence, 'l2_sequence': l2.sequence,
+            'started_ns': started, 'completed_ns': self.now(), 'deadline_ns': deadline})
+        return observation
+
+    async def commit_and_confirm_observation0(self, b1, *, deadline_ns):
+        """Commit B1, xác nhận backend và chỉ giao observation khi ACK hợp lệ."""
+        from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields, B1SnapshotPending
         last_pending = None
-        while self.now() < deadline:
+        while self.now() < deadline_ns:
             self.check()
-            candidates = [stamp for stamp in self.ingress.scans if stamp > stamp_ns(l2.barrier_stamp)]
-            for cutoff in ([max(candidates)] if candidates else []):
+            scan = self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now())
+            for cutoff in ([scan.stamp_ns] if scan is not None else []):
                 try:
                     observation, selection = b1.commit_observation0(cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error); continue
                 ack = await self.control.transact(Control.Request.OP_CONFIRM_OBSERVATION0,
-                    deadline_ns=min(deadline, self.now() + 1_000_000_000),
+                    deadline_ns=min(deadline_ns, self.now() + 1_000_000_000),
                     **lifecycle_request_fields(self.ingress.lifecycle),
                     observation0_cutoff=self._time_msg(cutoff),
                     selected_zero_final_publisher_instance_id=self.final.publisher_instance_id,
@@ -706,12 +737,8 @@ class TrainingWorkerIO:
                     adjacent_boundary_final_publisher_instance_id=self.final.publisher_instance_id,
                     adjacent_boundary_final_publish_sequence=selection.adjacent_receipt.final_publish_sequence)
                 self.ingress.confirm_observation0(ack)
-                self.emit('RESET_COMPLETE', {'seed': seed, 'observation0_cutoff_ns': cutoff,
-                    'W0': w0.final_publish_sequence, 'W1': facts.applied_zero_receipt.final_publish_sequence,
-                    'l1_sequence': l1.sequence, 'l2_sequence': l2.sequence,
-                    'started_ns': started, 'completed_ns': self.now(), 'deadline_ns': deadline})
-                return observation
-            await self.pause(min(0.002, max(0., (deadline - self.now()) / 1e9)))
+                return observation, cutoff
+            await self.pause(min(0.002, max(0., (deadline_ns - self.now()) / 1e9)))
         raise TimeoutError('observation0 did not confirm within reset deadline: ' + str(last_pending))
 
     @staticmethod

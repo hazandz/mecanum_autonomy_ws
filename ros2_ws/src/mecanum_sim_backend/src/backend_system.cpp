@@ -2204,6 +2204,21 @@ private:
           cached->second.contact_proof_generation !=
               contact_proof_generation_.load(std::memory_order_acquire))
       {
+        // INHIBIT đã được áp dụng vẫn phải có ACK replay; không xuất proof cũ.
+        // Không áp dụng ngoại lệ này cho QUERY hoặc lệnh mở POLICY.
+        if (request.operation == ControlRequest::OP_INHIBIT &&
+            cached->second.response.result == ControlResponse::RESULT_APPLIED)
+        {
+          const auto &applied = cached->second.response;
+          response.result = applied.result;
+          response.reason_code = applied.reason_code;
+          response.binding_revision = applied.binding_revision;
+          response.applied_binding_revision = applied.applied_binding_revision;
+          response.applied_physics_iteration = applied.applied_physics_iteration;
+          response.applied_sim_stamp = applied.applied_sim_stamp;
+          response.contact_capability_state = ControlResponse::CAPABILITY_FAILED;
+          return;
+        }
         // Response mới khởi tạo phía trên có toàn bộ proof/counter/stamp zero.
         response.result = ControlResponse::RESULT_REJECTED;
         response.reason_code = ControlResponse::REASON_CONTACT_PROBE_FAILED;

@@ -101,6 +101,7 @@ class LocalTrainingIngress:
         self.lifecycle_received_ns = -1
         self.noise_port = SimulatedOdometryPort()
         self._noise_ready = False
+        self.scan_reset_stamp_ns = -1
         self.noisy_samples = OrderedDict()
         self.scans = OrderedDict()
         self._oracles, self._states = OrderedDict(), OrderedDict()
@@ -183,6 +184,7 @@ class LocalTrainingIngress:
             p['linear_velocity_noise_sigma_mps'], p['yaw_rate_noise_sigma_radps'],
             p['noise_delay_samples'], p['noise_dropout_probability'])
         with self.lock:
+            self.scan_reset_stamp_ns = self.ros_now()
             self.noise_port.reset(seed, noise)
             self._noise_ready = True
             self.noisy_samples.clear(); self.scans.clear()
