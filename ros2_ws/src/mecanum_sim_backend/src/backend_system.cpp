@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <cmath>
@@ -2452,6 +2453,7 @@ private:
           gzmsg << "B23_PENDING_BOUND request=" << request.request_sequence
                 << " step=" << request.pending_step_index << " iteration=" << update_iteration
                 << " sim_ns=" << sim_stamp_ns << " steady_ns=" << steady_now_ns << std::endl;
+          std::fflush(stdout);
         }
       }
     }
@@ -2726,6 +2728,7 @@ private:
           gzmsg << "B23_PAUSE_INTENT_ARMED request=" << request.request_sequence
                 << " fence=" << fence << " iteration=" << update_iteration
                 << " steady_ns=" << steady_now_ns << " enter_deadline_ns=" << enter_deadline << std::endl;
+          std::fflush(stdout);
           return;
         }
       }
@@ -2849,6 +2852,7 @@ private:
       intent.ack = ack;
       gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
             << " received_ns=" << ack.received_ns << std::endl;
+      std::fflush(stdout);
     }
     if (intent.dispatched_ns == 0)
     {
@@ -2864,6 +2868,7 @@ private:
       const auto sequence = intent.request_sequence;
       gzmsg << "B23_PAUSE_REQUEST_DISPATCHED request=" << sequence
             << " steady_ns=" << now_ns << " enter_deadline_ns=" << intent.enter_deadline_ns << std::endl;
+      std::fflush(stdout);
       try
       {
         reset_pause_dispatch_([mailbox, sequence](bool success, std::int64_t received_ns) {
@@ -2889,6 +2894,7 @@ private:
       reset_hold_advance_ns_ = now_ns;
       gzmsg << "B23_PAUSE_EDGE request=" << intent.request_sequence
             << " steady_ns=" << now_ns << " iteration=" << info.iterations << std::endl;
+      std::fflush(stdout);
     }
     if ((intent.edge_ns == 0 && now_ns > intent.enter_deadline_ns) ||
         (!intent.ack && now_ns > intent.mutation_deadline_ns))
@@ -2907,6 +2913,7 @@ private:
     response.applied_sim_stamp.nanosec = static_cast<std::uint32_t>(intent.edge_sim_ns % 1'000'000'000);
     gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
           << " steady_ns=" << now_ns << " revision=" << control_binding_revision_ << std::endl;
+    std::fflush(stdout);
     control_mutation_pending_ = false;
     pause_intent_.reset();
   }
@@ -2943,6 +2950,7 @@ private:
           << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
           << " sample=" << msg.sample_sequence << " source_ns=" << TimeNs(msg.header.stamp)
           << " receive_ns=" << received_ns << std::endl;
+    std::fflush(stdout);
   }
 
   void ProcessCallbackInputs(std::int64_t sim_now_ns,
@@ -2984,6 +2992,7 @@ private:
               << " sample=" << msg.sample_sequence << " source_ns=" << safety_stamp_ns
               << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
               << " sim_now_ns=" << sim_now_ns << " iteration=" << physics_iteration_ << std::endl;
+        std::fflush(stdout);
         safety_admission_candidate_ = false;
         policy_open_ = false;
         continue;
@@ -3015,6 +3024,7 @@ private:
       safety_receive_steady_ns_ = received_ns;
       last_safety_sample_sequence_ = msg.sample_sequence;
       if (msg.admission_state != SafetyInput::ADMISSION_POLICY_OPEN)
+      {
         gzmsg << "B23_SAFETY_INPUT_OBSERVED session=" << session_id_
               << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
               << " sample=" << msg.sample_sequence << " admission=" << static_cast<unsigned>(msg.admission_state)
@@ -3022,6 +3032,8 @@ private:
               << " runtime=" << msg.runtime_generation << " source_ns=" << safety_stamp_ns
               << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
               << " iteration=" << physics_iteration_ << std::endl;
+        std::fflush(stdout);
+      }
       const auto cutoff_ns = TimeNs(msg.observation0_cutoff);
       safety_admission_candidate_ =
           msg.admission_state == SafetyInput::ADMISSION_POLICY_OPEN &&
@@ -3038,11 +3050,14 @@ private:
         safety_admission_candidate_ = gate_ && gate_->RecordPolicyAdmission(
             msg.admission_token, safety_stamp_ns, received_ns);
         if (safety_admission_candidate_)
+        {
           gzmsg << "B23_ADMISSION_ACCEPTED session=" << session_id_
                 << " backend=" << backend_instance_id_
                 << " ingress=" << msg.ingress_instance_id << " sample=" << msg.sample_sequence
                 << " source_ns=" << safety_stamp_ns << " receive_ns=" << received_ns
                 << " iteration=" << physics_iteration_ << std::endl;
+          std::fflush(stdout);
+        }
       }
       if (!safety_admission_candidate_) policy_open_ = false;
     }
