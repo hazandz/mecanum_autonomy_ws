@@ -12,12 +12,64 @@ class BodyCommand:
     wz: float = 0.0
 
 
+def map_joystick(axes, buttons, speed_scale: float, yaw_scale: float) -> BodyCommand:
+    """Pure mapping for Xbox Joy axes/buttons to a body-frame command.
+
+    Stick convention: axis 0 is positive to the right and axis 1 is negative
+    forward. Translation follows the stick direction on the forward/reverse
+    half-planes, fades to zero at a pure sideways stick, and yaw remains so a
+    horizontal stick turns in place instead of commanding lateral slip.
+    """
+    if len(axes) < 2 or len(buttons) < 6:
+        return BodyCommand()
+    try:
+        x, y = float(axes[0]), float(axes[1])
+        pressed = tuple(1 if int(buttons[i]) else 0 for i in range(6))
+        speed_scale, yaw_scale = float(speed_scale), float(yaw_scale)
+    except (TypeError, ValueError, OverflowError):
+        return BodyCommand()
+    if (not all(math.isfinite(value) for value in (x, y, speed_scale, yaw_scale))
+            or not -1.0 <= x <= 1.0 or not -1.0 <= y <= 1.0
+            or speed_scale <= 0.0 or yaw_scale < 0.0):
+        return BodyCommand()
+
+    # A missing approved speed profile keeps every motion axis disarmed,
+    # including yaw, even if a nonzero yaw scale was supplied separately.
+    radius = math.hypot(x, y)
+    if radius == 0.0:
+        stick_vx = stick_vy = wz = 0.0
+    else:
+        # Normalize diagonal input to the unit circle while preserving angle.
+        if radius > 1.0:
+            x, y = x / radius, y / radius
+            radius = 1.0
+        forward = -y
+        left = -x
+        # Scale the travel vector by its forward component. This keeps its
+        # direction at 1/2 o'clock, while a 3/9 o'clock stick has no vy/vx.
+        travel_gain = abs(forward) / max(math.hypot(forward, left), 1e-12)
+        stick_vx = speed_scale * forward * travel_gain
+        stick_vy = speed_scale * left * travel_gain
+        wz = -x * yaw_scale
+
+    # Existing face-button convention: A/Y select reverse/forward, X/B
+    # select left/right; pairing one from each axis makes a diagonal.
+    longitudinal = int(bool(pressed[3])) - int(bool(pressed[0]))
+    lateral = int(bool(pressed[2])) - int(bool(pressed[1]))
+    vx = speed_scale * longitudinal if longitudinal else stick_vx
+    vy = speed_scale * lateral if lateral else stick_vy
+    norm = math.hypot(vx, vy)
+    if norm > speed_scale:
+        vx, vy = vx * speed_scale / norm, vy * speed_scale / norm
+    return BodyCommand(vx, vy, wz)
+
+
 class SlamManualTeleop:
     """Map Joy arrays to a bounded body command. Speed levels are explicit."""
 
     def __init__(self, speed_levels: tuple[float, ...] = (), yaw_scale: float = 0.0):
         # Levels are bench vx/vy limits in m/s; yaw_scale is rad/s at full stick.
-        # Empty levels deliberately disarm translation pending approved limits.
+        # Empty levels deliberately disarm all motion pending approved limits.
         if any(not math.isfinite(v) or v <= 0.0 for v in speed_levels):
             raise ValueError("speed levels must be finite and positive")
         if tuple(sorted(speed_levels)) != speed_levels:
@@ -59,18 +111,4 @@ class SlamManualTeleop:
             if rising[5]:
                 self._level = max(self._level - 1, 0)
         scale = self._levels[self._level] if self._levels else 0.0
-        x, y = values[0], values[1]
-        # Stick always supplies forward/reverse; horizontal stick only steers.
-        stick_vx = y * scale
-        wz = -x * self._yaw_scale
-        # Direction buttons replace stick longitudinal intent, while lateral
-        # buttons combine with it to form the four requested diagonal pairs.
-        vx = (scale * (int(bool(pressed[3])) - int(bool(pressed[0])))
-              if pressed[3] or pressed[0] else stick_vx)
-        right = int(bool(pressed[1]))
-        left = int(bool(pressed[2]))
-        vy = scale * (left - right)
-        norm = math.hypot(vx, vy)
-        if scale and norm > scale:
-            vx, vy = vx * scale / norm, vy * scale / norm
-        return BodyCommand(vx, vy, wz)
+        return map_joystick(values, pressed, scale, self._yaw_scale)

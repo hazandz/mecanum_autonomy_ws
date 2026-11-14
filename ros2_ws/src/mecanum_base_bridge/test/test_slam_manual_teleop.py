@@ -2,7 +2,9 @@ import math
 
 import pytest
 
-from mecanum_base_bridge.slam_manual_teleop import BodyCommand, SlamManualTeleop
+from mecanum_base_bridge.slam_manual_teleop import (
+    BodyCommand, SlamManualTeleop, map_joystick,
+)
 
 
 @pytest.fixture
@@ -34,10 +36,64 @@ def test_diagonal_combinations_keep_both_components(teleop, buttons, expected):
 
 
 def test_stick_drives_longitudinal_and_yaw_only(teleop):
-    command = teleop.update([0.5, 0.75], [0] * 6)
-    assert command.vx == pytest.approx(0.15)
+    command = teleop.update([0.0, -1.0], [0] * 6)
+    assert command.vx == pytest.approx(0.2)
     assert command.vy == 0.0
-    assert command.wz == pytest.approx(-0.5)
+    assert command.wz == 0.0
+
+
+@pytest.mark.parametrize("angle_deg", (30.0, 60.0))
+def test_stick_right_diagonals_translate_and_turn_toward_stick(teleop, angle_deg):
+    angle = math.radians(angle_deg)
+    command = teleop.update([math.sin(angle), -math.cos(angle)], [0] * 6)
+    assert command.vx == pytest.approx(0.2 * math.cos(angle) ** 2)
+    assert command.vy == pytest.approx(-0.2 * math.cos(angle) * math.sin(angle))
+    assert command.wz == pytest.approx(-math.sin(angle))
+
+
+@pytest.mark.parametrize("angle_deg", (30.0, 60.0))
+def test_stick_left_diagonals_are_symmetric(teleop, angle_deg):
+    angle = math.radians(angle_deg)
+    command = teleop.update([-math.sin(angle), -math.cos(angle)], [0] * 6)
+    assert command.vx == pytest.approx(0.2 * math.cos(angle) ** 2)
+    assert command.vy == pytest.approx(0.2 * math.cos(angle) * math.sin(angle))
+    assert command.wz == pytest.approx(math.sin(angle))
+
+
+@pytest.mark.parametrize(("axis_x", "expected_wz"), ((1.0, -1.0), (-1.0, 1.0)))
+def test_horizontal_stick_turns_in_place_without_lateral_slip(teleop, axis_x, expected_wz):
+    command = teleop.update([axis_x, 0.0], [0] * 6)
+    assert command.vx == 0.0
+    assert command.vy == 0.0
+    assert command.wz == pytest.approx(expected_wz)
+
+
+@pytest.mark.parametrize(("button", "expected"), [
+    (3, (1, 0)),  # Y: forward
+    (0, (-1, 0)), # A: reverse
+    (2, (0, 1)),  # X: strafe left
+    (1, (0, -1)), # B: strafe right
+])
+def test_face_buttons_cardinal_directions(teleop, button, expected):
+    axes, keys = joy(button)
+    command = teleop.update(axes, keys)
+    assert command.vx == pytest.approx(expected[0] * 0.2)
+    assert command.vy == pytest.approx(expected[1] * 0.2)
+    assert command.wz == 0.0
+
+
+def test_pure_mapper_is_independent_of_teleop_state():
+    axes, keys = joy(2, 3)
+    assert map_joystick(axes, keys, 0.2, 1.0) == map_joystick(axes, keys, 0.2, 1.0)
+
+
+def test_r1_keeps_existing_speed_decrease_behavior(teleop):
+    axes, keys = joy(4)
+    teleop.update(axes, keys)
+    teleop.update(axes, [0] * 6)
+    axes, keys = joy(5)
+    assert teleop.update(axes, keys).vx == 0.0
+    assert teleop.level == 0
 
 
 def test_speed_changes_once_on_rising_edge_and_holds(teleop):
@@ -69,3 +125,4 @@ def test_release_returns_command_to_zero(teleop):
 
 def test_empty_speed_profile_is_disarmed():
     assert SlamManualTeleop().update([1.0, 1.0], [0, 0, 0, 1, 0, 0]) == BodyCommand()
+    assert SlamManualTeleop(yaw_scale=1.0).update([1.0, 0.0], [0] * 6) == BodyCommand()
