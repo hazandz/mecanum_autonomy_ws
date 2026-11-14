@@ -148,6 +148,11 @@ public:
     system.steady_clock_now_ = [now_ns] { return now_ns; };
   }
 
+  static void ExpireOrCompleteResetPause(BackendSystem &system)
+  {
+    system.ExpireOrCompleteResetPause(system.steady_clock_now_());
+  }
+
   static void SeedObservationHistory(
       BackendSystem &system, bool local_override = false,
       std::uint64_t adjacent_sequence = 42,
@@ -2450,6 +2455,29 @@ static void RunNativeResetObservation0Chain(
       ASSERT_EQ(pause_io->dispatches, 1u);
       ASSERT_TRUE(pause_io->completion);
       EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_QUEUED);
+      if (pause_case == 8)
+      {
+        BackendSystemTestPeer::SetSteadyClockNow(system, 2'060'000'000);
+        BackendSystemTestPeer::RunProductionTick(system, ecm, 28, 550'000'000, true);
+        ASSERT_TRUE(BackendSystemTestPeer::PauseHeld(system));
+        const auto applications_at_pause = BackendSystemTestPeer::ApplicationHistory(system).size();
+        BackendSystemTestPeer::SetSteadyClockNow(system, 3'051'000'001);
+        // Mô phỏng world đã pause: chỉ wall watchdog chạy, không có Physics update.
+        BackendSystemTestPeer::ExpireOrCompleteResetPause(system);
+        const auto expired = BackendSystemTestPeer::Receive(system, pause);
+        EXPECT_EQ(expired.result, ControlResponse::RESULT_REJECTED);
+        EXPECT_EQ(expired.reason_code, ControlResponse::REASON_CONTROL_EXPIRED);
+        EXPECT_NE(BackendSystemTestPeer::FaultFlags(system), 0u);
+        EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+        EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_at_pause);
+        pause_io->completion(true, 3'060'000'000);
+        BackendSystemTestPeer::SetSteadyClockNow(system, 3'070'000'000);
+        BackendSystemTestPeer::ExpireOrCompleteResetPause(system);
+        EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause), expired);
+        EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), applications_at_pause);
+        EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        return;
+      }
       if (pause_case == 7)
       {
         BackendSystemTestPeer::SetSteadyClockNow(system, 2'130'000'001);
@@ -4553,6 +4581,11 @@ TEST(NativeResetPause, PausedBeforeIntentProcessingNeverDispatches)
 TEST(NativeResetPause, MissingEdgeExpiresOriginalBudget)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 7);
+}
+
+TEST(NativeResetPause, WallWatchdogExpiresMissingAckWhileWorldPaused)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 0, 8);
 }
 
 TEST(BackendSchema2, PauseOperationQueuesForSimulationThreadValidation)

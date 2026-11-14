@@ -2153,6 +2153,12 @@ private:
                 completion(success, clock());
               });
         };
+        pause_ack_watchdog_timer_ = node_->create_wall_timer(
+            std::chrono::milliseconds(10), [this]() {
+              ExpireOrCompleteResetPause(steady_clock_now_());
+            });
+        if (!pause_ack_watchdog_timer_)
+          throw std::runtime_error("pause_ack_watchdog_timer_missing");
         return;
       }
       case backend_detail::RuntimeResourceKind::Executor:
@@ -2824,6 +2830,97 @@ private:
     SetFault(BackendState::FAULT_CONTEXT, detail);
   }
 
+  bool ProcessPauseAcksLocked(std::int64_t now_ns)
+  {
+    std::deque<PauseAck> results;
+    bool overflow = false;
+    {
+      std::lock_guard<std::mutex> mailbox_lock(pause_mailbox_->mutex);
+      results.swap(pause_mailbox_->results);
+      overflow = pause_mailbox_->overflow;
+    }
+    if (!pause_intent_) return true;
+    if (overflow)
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_ack_mailbox_overflow");
+      return false;
+    }
+    auto &intent = *pause_intent_;
+    for (const auto &ack : results)
+    {
+      if (ack.request_sequence != intent.request_sequence) continue;
+      if (intent.dispatched_ns == 0 || ack.received_ns < intent.dispatched_ns ||
+          ack.received_ns > now_ns || ack.received_ns > intent.mutation_deadline_ns ||
+          ack.received_ns > intent.dispatched_ns + 1'000'000'000 || !ack.success)
+      {
+        FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_ack_invalid_or_late");
+        return false;
+      }
+      if (intent.ack &&
+          (intent.ack->success != ack.success || intent.ack->received_ns != ack.received_ns))
+      {
+        FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_ack_conflict");
+        return false;
+      }
+      intent.ack = ack;
+      gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
+            << " received_ns=" << ack.received_ns << std::endl;
+      std::fflush(stdout);
+    }
+    return true;
+  }
+
+  void CompleteResetPauseLocked(std::int64_t now_ns)
+  {
+    if (!pause_intent_ || pause_intent_->edge_ns == 0 || !pause_intent_->ack) return;
+    const auto intent = *pause_intent_;
+    const auto found = control_cache_.find(intent.request_sequence);
+    if (found == control_cache_.end())
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_cache_missing");
+      return;
+    }
+    auto &response = found->second.response;
+    response.result = ControlResponse::RESULT_APPLIED;
+    response.reason_code = ControlResponse::REASON_NONE;
+    response.binding_revision = ++control_binding_revision_;
+    response.applied_binding_revision = control_binding_revision_;
+    response.applied_physics_iteration = intent.edge_iteration;
+    response.applied_sim_stamp.sec = static_cast<std::int32_t>(intent.edge_sim_ns / 1'000'000'000);
+    response.applied_sim_stamp.nanosec = static_cast<std::uint32_t>(intent.edge_sim_ns % 1'000'000'000);
+    gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
+          << " steady_ns=" << now_ns << " revision=" << control_binding_revision_ << std::endl;
+    std::fflush(stdout);
+    control_mutation_pending_ = false;
+    pause_intent_.reset();
+  }
+
+  void ExpireOrCompleteResetPause(std::int64_t now_ns)
+  {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (contact_probe_only_ || !control_session_bound_ || !pause_intent_ ||
+        pause_intent_->dispatched_ns == 0)
+      return;
+    if (pause_intent_->revision != control_binding_revision_ || fault_flags_ != 0)
+    {
+      FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_context_or_clock_changed");
+      return;
+    }
+    if (!ProcessPauseAcksLocked(now_ns)) return;
+    if (!pause_intent_) return;
+    if (pause_intent_->edge_ns == 0 && now_ns > pause_intent_->enter_deadline_ns)
+    {
+      FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_edge_missing_steady_watchdog");
+      return;
+    }
+    if (!pause_intent_->ack && now_ns > pause_intent_->mutation_deadline_ns)
+    {
+      FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_ack_missing_steady_watchdog");
+      return;
+    }
+    CompleteResetPauseLocked(now_ns);
+  }
+
   void ProgressResetPause(const gz::sim::UpdateInfo &info, std::int64_t now_ns)
   {
     if (contact_probe_only_ || !control_session_bound_) return;
@@ -2850,53 +2947,29 @@ private:
       else if (now_ns - reset_hold_advance_ns_ > 1'000'000'000)
         FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "reset_resume_clock_stall");
     }
-    std::deque<PauseAck> results;
-    bool overflow = false;
-    {
-      std::lock_guard<std::mutex> mailbox_lock(pause_mailbox_->mutex);
-      results.swap(pause_mailbox_->results);
-      overflow = pause_mailbox_->overflow;
-    }
     if (!pause_intent_) return;
-    if (overflow || pause_intent_->revision != control_binding_revision_ || fault_flags_ != 0 ||
+    if (pause_intent_->revision != control_binding_revision_ || fault_flags_ != 0 ||
         now_ns < pause_intent_->enter_deadline_ns - 100'000'000)
     {
       FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_context_or_clock_changed");
       return;
     }
     auto &intent = *pause_intent_;
-    for (const auto &ack : results)
+    if (!ProcessPauseAcksLocked(now_ns)) return;
+    if (!pause_intent_) return;
+    auto &current_intent = *pause_intent_;
+    if (current_intent.dispatched_ns == 0)
     {
-      if (ack.request_sequence != intent.request_sequence) continue;
-      if (intent.dispatched_ns == 0 || ack.received_ns < intent.dispatched_ns ||
-          ack.received_ns > now_ns || ack.received_ns > intent.mutation_deadline_ns ||
-          ack.received_ns > intent.dispatched_ns + 1'000'000'000 || !ack.success)
-      {
-        FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_ack_invalid_or_late");
-        return;
-      }
-      if (intent.ack && (intent.ack->success != ack.success || intent.ack->received_ns != ack.received_ns))
-      {
-        FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_ack_conflict");
-        return;
-      }
-      intent.ack = ack;
-      gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
-            << " received_ns=" << ack.received_ns << std::endl;
-      std::fflush(stdout);
-    }
-    if (intent.dispatched_ns == 0)
-    {
-      if (now_ns >= intent.enter_deadline_ns)
+      if (now_ns >= current_intent.enter_deadline_ns)
       {
         FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_dispatch_budget_expired");
         return;
       }
       // Đợi update kế tiếp: pause ngoài intent trước dispatch phải được thấy và từ chối.
-      if (info.iterations <= intent.arm_iteration) return;
-      intent.dispatched_ns = now_ns;
+      if (info.iterations <= current_intent.arm_iteration) return;
+      current_intent.dispatched_ns = now_ns;
       const auto mailbox = pause_mailbox_;
-      const auto sequence = intent.request_sequence;
+      const auto sequence = current_intent.request_sequence;
       gzmsg << "B23_PAUSE_REQUEST_DISPATCHED request=" << sequence
             << " steady_ns=" << now_ns << " enter_deadline_ns=" << intent.enter_deadline_ns << std::endl;
       std::fflush(stdout);
@@ -2913,40 +2986,24 @@ private:
       { FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_dispatch_failed"); }
       return;
     }
-    if (info.paused && intent.edge_ns == 0)
+    if (info.paused && current_intent.edge_ns == 0)
     {
-      if (now_ns > intent.enter_deadline_ns)
+      if (now_ns > current_intent.enter_deadline_ns)
       { FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_edge_late"); return; }
-      intent.edge_ns = now_ns;
-      intent.edge_iteration = info.iterations;
-      intent.edge_sim_ns = TimeNs(info);
+      current_intent.edge_ns = now_ns;
+      current_intent.edge_iteration = info.iterations;
+      current_intent.edge_sim_ns = TimeNs(info);
       reset_pause_hold_ = true;
       reset_hold_sim_ns_ = TimeNs(info);
       reset_hold_advance_ns_ = now_ns;
-      gzmsg << "B23_PAUSE_EDGE request=" << intent.request_sequence
+      gzmsg << "B23_PAUSE_EDGE request=" << current_intent.request_sequence
             << " steady_ns=" << now_ns << " iteration=" << info.iterations << std::endl;
       std::fflush(stdout);
     }
-    if ((intent.edge_ns == 0 && now_ns > intent.enter_deadline_ns) ||
-        (!intent.ack && now_ns > intent.mutation_deadline_ns))
+    if ((current_intent.edge_ns == 0 && now_ns > current_intent.enter_deadline_ns) ||
+        (!current_intent.ack && now_ns > current_intent.mutation_deadline_ns))
     { FailPauseLocked(ControlResponse::REASON_CONTROL_EXPIRED, "pause_edge_or_ack_missing"); return; }
-    if (intent.edge_ns == 0 || !intent.ack) return;
-    const auto found = control_cache_.find(intent.request_sequence);
-    if (found == control_cache_.end())
-    { FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "pause_cache_missing"); return; }
-    auto &response = found->second.response;
-    response.result = ControlResponse::RESULT_APPLIED;
-    response.reason_code = ControlResponse::REASON_NONE;
-    response.binding_revision = ++control_binding_revision_;
-    response.applied_binding_revision = control_binding_revision_;
-    response.applied_physics_iteration = intent.edge_iteration;
-    response.applied_sim_stamp.sec = static_cast<std::int32_t>(intent.edge_sim_ns / 1'000'000'000);
-    response.applied_sim_stamp.nanosec = static_cast<std::uint32_t>(intent.edge_sim_ns % 1'000'000'000);
-    gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
-          << " steady_ns=" << now_ns << " revision=" << control_binding_revision_ << std::endl;
-    std::fflush(stdout);
-    control_mutation_pending_ = false;
-    pause_intent_.reset();
+    CompleteResetPauseLocked(now_ns);
   }
 
   void OnReceipt(const Receipt &msg)
@@ -3351,6 +3408,7 @@ private:
   ProbeServiceTransport probe_transport_;
   rclcpp::Client<backend_detail::ControlWorld>::SharedPtr reset_pause_client_;
   rclcpp::TimerBase::SharedPtr pause_ack_fault_timer_;
+  rclcpp::TimerBase::SharedPtr pause_ack_watchdog_timer_;
   std::function<bool()> reset_pause_ready_;
   std::function<void(std::function<void(bool, std::int64_t)>)> reset_pause_dispatch_;
   std::shared_ptr<PauseMailbox> pause_mailbox_{std::make_shared<PauseMailbox>()};
