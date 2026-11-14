@@ -496,22 +496,13 @@ class TrainingWorkerIO:
         previous = adapter.safe_stop_sequence
         await self.until(lambda: adapter.safe_stop_sequence > previous, deadline_ns=deadline_ns, phase='SAFE_STOP tick')
         await self.freeze_admission(deadline_ns=deadline_ns)
-        # Keep SAFE_STOP ticks flowing until a final receipt is actually
-        # published and applied. Disabling the safety stream first can leave
-        # the last source sequence waiting in the publisher path; that gap is
-        # long enough to expire the native receipt watchdog before W0 exists.
-        def applied_safe_stop(expected_sequence=None):
-            receipt = self.final.last_publication
-            if (receipt is None or receipt.source != receipt.SOURCE_SAFE_STOP
-                    or (expected_sequence is not None and receipt.sequence != expected_sequence)
-                    or any(value != 0.0 for value in (
-                        receipt.final_command.linear.x,
-                        receipt.final_command.linear.y,
-                        receipt.final_command.linear.z,
-                        receipt.final_command.angular.x,
-                        receipt.final_command.angular.y,
-                        receipt.final_command.angular.z))):
-                return None
+        adapter.set_stream_enabled(False)
+        target = adapter.safe_stop_sequence
+        receipt = await self.until(lambda: self.final.last_publication if self.final.last_publication is not None
+            and self.final.last_publication.source == self.final.last_publication.SOURCE_SAFE_STOP
+            and self.final.last_publication.sequence == target else None,
+            deadline_ns=deadline_ns, phase='final SAFE_STOP drain')
+        def applied():
             for pair in reversed(self.ingress.physics_pairs):
                 from rclpy.serialization import deserialize_message
                 from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -519,20 +510,9 @@ class TrainingWorkerIO:
                 if (state.applied_receipt_valid and not state.local_zero_override
                         and state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
                         and state.applied_final_publish_sequence == receipt.final_publish_sequence):
-                    return receipt, pair, state
+                    return pair, state
             return None
-        await self.until(applied_safe_stop, deadline_ns=deadline_ns,
-            phase='published and natively applied SAFE_STOP while stream is live')
-        adapter.set_stream_enabled(False)
-        frozen_output = adapter.last_output
-        if frozen_output is None or frozen_output.source != frozen_output.SOURCE_SAFE_STOP:
-            raise RuntimeError('frozen safety stream did not retain SAFE_STOP output')
-        # Drain a receipt already in flight at the freeze edge. The same
-        # predicate is evaluated against the exact output protected by the
-        # adapter lock at stream-off, so W0 cannot bind an older cached key.
-        receipt, pair, state = await self.until(
-            lambda: applied_safe_stop(frozen_output.sequence),
-            deadline_ns=deadline_ns, phase='native applied frozen SAFE_STOP')
+        pair, state = await self.until(applied, deadline_ns=deadline_ns, phase='native applied SAFE_STOP')
         identity = self.ingress.lifecycle
         fact = AppliedZeroReceiptFact(self.descriptor['session_id'], self.descriptor['config_hash'],
             self.descriptor['backend_instance_id'], receipt.episode_generation, receipt.reset_epoch,
