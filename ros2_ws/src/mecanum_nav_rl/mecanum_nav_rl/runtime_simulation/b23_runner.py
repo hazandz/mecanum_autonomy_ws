@@ -20,7 +20,7 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
-    'R02b':'fault_task', 'R08': 'soak'}
+    'R02b':'fault_task', 'R02f':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -29,6 +29,7 @@ CASE_HOOKS = {
     'R01e': ('pause_request_replay_after_terminal',),
     'R02a': (),
     'R02b': ('native_hold_admission_until_receipt',),
+    'R02f': ('safety_hold_after_adapter_issuance',),
     'R08': (),
 }
 
@@ -178,6 +179,34 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
     return {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
         'admission_gate_ns':admission_ns,'admission_minus_receipt_ns':admission_ns-receipt_ns,
         'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
+
+
+def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
+    """Verify a real Safety rejection and matching native SAFE_STOP application."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    rejected = next((facts for name, facts in io.events
+        if name == 'SAFETY_REJECTED' and facts.get('sequence') == step_index
+        and facts.get('source') == CommandEnvelope.SOURCE_POLICY
+        and 'POLICY_HELD' in facts.get('reasons', ())), None)
+    if rejected is None:
+        raise RuntimeError('R02f missing production Safety rejection for issued POLICY')
+    if (receipt is None or receipt.source is not ReceiptSource.SAFE_STOP
+            or any(receipt.final_command)):
+        raise RuntimeError('R02f final publisher did not publish the held POLICY as zero SAFE_STOP')
+    if (backend_state is None or backend_state.fault_flags != 0
+            or backend_state.local_zero_override
+            or not backend_state.applied_receipt_valid
+            or backend_state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+            or backend_state.applied_final_publish_sequence != receipt.final_publish_sequence):
+        raise RuntimeError('R02f native backend did not apply the exact SAFE_STOP receipt')
+    if any(item.source is ReceiptSource.POLICY and item.sequence == step_index
+            for item in io.ingress.receipts):
+        raise RuntimeError('R02f issued POLICY reached the final receipt/backend path')
+    return {'safety_rejected':True,'reasons':list(rejected.get('reasons', ())),
+        'safe_stop_applied':True,'final_publish_sequence':receipt.final_publish_sequence,
+        'backend_iteration':backend_state.applied_physics_iteration,
+        'policy_receipt_absent':True}
 
 
 def verify_guard_authority(packet, authority, packet_sha256):
@@ -1261,7 +1290,7 @@ class TrainingWorkerIO:
         })
         return replayed
 
-    async def policy_step(self, b1, action):
+    async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -1309,6 +1338,51 @@ class TrainingWorkerIO:
             and self.safety.local_training.command.sequence == token.step_index
             and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
             deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
+        if hold_after_adapter_issuance:
+            # The packet hook is armed only after the production adapter has
+            # issued POLICY and Safety has received that exact candidate. Keep
+            # POLICY held while the real timer evaluates it; do not publish a
+            # fabricated rejection or count a backend/B1 step.
+            safe_stop_sequence_before = self.safety.local_training.safe_stop_sequence
+            self.safety.local_training.set_policy_hold(True)
+            self.safety.local_training.set_stream_enabled(True)
+            self.emit('FAULT_HOOK_SAFETY_HOLD_AFTER_ADAPTER_ISSUED', {
+                'step_index': token.step_index, 'transition_id': token.transition_id,
+                'steady_ns': self.now()})
+            await self.until(lambda: next((facts for name, facts in self.events
+                if name == 'SAFETY_REJECTED' and facts.get('sequence') == token.step_index
+                and 'POLICY_HELD' in facts.get('reasons', ())), None),
+                deadline_ns=deadline, phase='Safety hold rejection after adapter issuance')
+            stop = await self.until(lambda: self.safety.local_training.last_output
+                if self.safety.local_training.last_output is not None
+                and self.safety.local_training.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
+                and self.safety.local_training.last_output.sequence > safe_stop_sequence_before else None,
+                deadline_ns=deadline, phase='Safety SAFE_STOP after held POLICY')
+            receipt = await self.until(lambda: self.final.last_publication
+                if self.final.last_publication is not None
+                and self.final.last_publication.source == CommandEnvelope.SOURCE_SAFE_STOP
+                and self.final.last_publication.sequence == stop.sequence
+                and not any((self.final.last_publication.final_command.linear.x,
+                             self.final.last_publication.final_command.linear.y,
+                             self.final.last_publication.final_command.angular.z)) else None,
+                deadline_ns=deadline, phase='SAFE_STOP receipt after held POLICY')
+            applied = await self.until(lambda: self.ingress.backend_state
+                if self.ingress.backend_state is not None
+                and self.ingress.backend_state.fault_flags == 0
+                and not self.ingress.backend_state.local_zero_override
+                and self.ingress.backend_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
+                and self.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence
+                and self.ingress.backend_state.applied_receipt_valid else None,
+                deadline_ns=deadline, phase='native zero application after held POLICY')
+            checked = verify_r02f_safety_hold(self, step_index=token.step_index,
+                receipt=receipt, backend_state=applied)
+            aborted = b1.lifecycle.abort_step('R02f_safety_hold_before_policy_tick')
+            self.emit('R02F_POLICY_REJECTED_ZERO_APPLIED', {
+                'step_index': token.step_index, 'transition_id': token.transition_id,
+                **checked, 'safe_stop_sequence': stop.sequence,
+                'b1_abort_status': str(aborted.status), 'steady_ns': self.now()})
+            return {'expected_rejection': True, 'policy_issued': True, **checked,
+                'b1_step_aborted': True, 'transition_id': token.transition_id}
         self.safety.local_training.set_stream_enabled(True)
         self.safety.local_training.set_policy_hold(False)
         minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
@@ -1679,6 +1753,17 @@ async def training_child(path):
                 step_started_ns=step_started_ns)
             outcome = {'case':packet['case'],'resets_confirmed':1,'policy_steps_committed':1,
                 'native_order':order,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R02f':
+            if packet['fault_hooks'] != ['safety_hold_after_adapter_issuance']:
+                raise RuntimeError('R02f packet hook does not match the fixed Safety hold case')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            checked = await io.policy_step(b1, (0.4, 0., 0.), hold_after_adapter_issuance=True)
+            if checked.get('expected_rejection') is not True:
+                raise RuntimeError('R02f Safety hold did not produce the expected fail-closed path')
+            outcome = {'case':'R02f','resets_confirmed':1,'policy_steps_committed':0,
+                **checked,'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R01a':
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)

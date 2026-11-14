@@ -7,7 +7,7 @@ import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
-    verify_r02_policy_order,
+    verify_r02_policy_order, verify_r02f_safety_hold,
 )
 
 
@@ -17,6 +17,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R01e') == 'fault_task'
     assert campaign_phase('R02a') == 'fault_task'
     assert campaign_phase('R02b') == 'fault_task'
+    assert campaign_phase('R02f') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -57,6 +58,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01e') == ['pause_request_replay_after_terminal']
     assert case_fault_hooks('R02a') == []
     assert case_fault_hooks('R02b') == ['native_hold_admission_until_receipt']
+    assert case_fault_hooks('R02f') == ['safety_hold_after_adapter_issuance']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R01c', case_fault_hooks('R01c')) == {
@@ -69,6 +71,31 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    receipt=NS(source=ReceiptSource.SAFE_STOP, final_command=(0.,0.,0.),
+        final_publisher_instance_id=17, final_publish_sequence=42)
+    state=NS(fault_flags=0, local_zero_override=False, applied_receipt_valid=True,
+        applied_final_publisher_instance_id=17, applied_final_publish_sequence=42,
+        applied_physics_iteration=101)
+    io=NS(events=[('SAFETY_REJECTED', {'sequence':1,
+        'source':CommandEnvelope.SOURCE_POLICY,'reasons':['POLICY_HELD']})],
+        ingress=NS(receipts=[]))
+    result=verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
+    assert result == {'safety_rejected':True,'reasons':['POLICY_HELD'],
+        'safe_stop_applied':True,'final_publish_sequence':42,'backend_iteration':101,
+        'policy_receipt_absent':True}
+    io.events=[]
+    with pytest.raises(RuntimeError,match='Safety rejection'):
+        verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
+    io.events=[('SAFETY_REJECTED', {'sequence':1,
+        'source':CommandEnvelope.SOURCE_POLICY,'reasons':['POLICY_HELD']})]
+    io.ingress.receipts=[NS(source=ReceiptSource.POLICY,sequence=1)]
+    with pytest.raises(RuntimeError,match='reached the final receipt'):
+        verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
 
 
 def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
