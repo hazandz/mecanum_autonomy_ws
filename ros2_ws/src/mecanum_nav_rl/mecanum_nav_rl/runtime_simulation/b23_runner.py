@@ -18,6 +18,27 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'OOMPolicy=stop','RuntimeMaxSec=180s','TimeoutStartSec=5s','TimeoutStopSec=2s',
     'KillMode=control-group','KillSignal=SIGTERM','SendSIGKILL=yes',
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
+CASE_PHASES = {'R01a': 'smoke', 'R01e': 'fault_task'}
+
+
+def campaign_phase(case):
+    """Return the fixed campaign phase for a supported case."""
+    try:
+        return CASE_PHASES[case]
+    except KeyError as error:
+        raise ValueError('unsupported B2.3 campaign case: ' + str(case)) from error
+
+
+def verify_guard_authority(packet, authority, packet_sha256):
+    """Bind a capacity-one guard to the packet's case, phase, and run."""
+    expected_phase = campaign_phase(packet['case'])
+    if (authority.get('packet_sha256') != packet_sha256
+            or authority.get('run_id') != packet.get('run_id')
+            or authority.get('capacity') != 1
+            or authority.get('phase') != expected_phase
+            or authority.get('consumed') is not False):
+        raise RuntimeError('capacity-one authority does not match packet case/phase')
+    return expected_phase
 
 
 class FinalPublicationView:
@@ -1364,10 +1385,12 @@ def verify_packet(path, expected_sha256):
         raise ValueError('packet requires matching canonical session UUID') from error
     prefix = Path(packet['install_prefix']).resolve(strict=True)
     expected_hooks = {'R01a': [], 'R01e': ['pause_request_replay_after_terminal']}
+    expected_phase = campaign_phase(packet.get('case'))
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
             or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
             or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != [2026102900,2026102901]
             or packet['authority'] != 'OWNER_B23_CAMPAIGN_APPROVED'
+            or packet.get('owner_decisions', {}).get('phase') != expected_phase
             or (packet['active_s'], packet['cleanup_s']) != (120, 60)
             or not re.fullmatch(r'B23_[A-Z0-9_]+', packet['run_id'])
             or len(packet['run_id']) > 64
@@ -1732,7 +1755,7 @@ def prepare_packet(args):
         'offline_evidence':evidence, 'dependency_origins':dependency_origins,
         'owner_decisions':{'L2-PAUSE':'APPROVED','L2-ADMISSION':'APPROVED','D03':'APPROVED','D04':'APPROVED',
             'D05':'APPROVED','offline_and_git':'APPROVED','runtime':'B23_CAMPAIGN_APPROVED',
-            'phase':'smoke' if args.case == 'R01a' else 'fault_task',
+            'phase':campaign_phase(args.case),
             'excluded_actions':['R07b time_only rollback','R09b active fixture SetEntityPose','B22 contact-only runtime'],
             'quoted_approval':'B23_CAMPAIGN_APPROVED; case-scoped campaign hook.'},
         'source_preflight':[commit_record,branch,dirty]}
@@ -1740,7 +1763,7 @@ def prepare_packet(args):
     packet['launch_argv_template'] = service_launch_command(packet, str(root/'packet.json'), '{PACKET_SHA256}')
     digest = write_record_once(root/'packet.json', packet)
     write_record_once(guard/'authority.json', {'run_id':args.run_id, 'capacity':1, 'packet_sha256':digest,
-        'authority':packet['authority'], 'phase':'smoke', 'consumed':False})
+        'authority':packet['authority'], 'phase':campaign_phase(args.case), 'consumed':False})
     print(json.dumps({'packet':str(root/'packet.json'), 'packet_sha256':digest, 'guard':str(guard)}))
     return 0
 
@@ -1863,8 +1886,7 @@ def launch_packet(args):
         if properties.get('LoadState') != 'not-found':
             raise RuntimeError('unit name already exists or collision query incomplete')
         authority = json.loads((guard/'authority.json').read_bytes())
-        if authority['packet_sha256'] != args.packet_sha256 or authority['capacity'] != 1:
-            raise RuntimeError('capacity-one authority does not match packet')
+        verify_guard_authority(packet, authority, args.packet_sha256)
         started = time.monotonic_ns()
         consumed = {'run_id':packet['run_id'], 'packet_sha256':args.packet_sha256, 'consumed_ns':started,
             'active_deadline_ns':started+packet['active_s']*10**9,

@@ -6,6 +6,25 @@ import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
 
 
+def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import campaign_phase, verify_guard_authority
+    assert campaign_phase('R01a') == 'smoke'
+    assert campaign_phase('R01e') == 'fault_task'
+    packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
+    authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
+        'phase': 'fault_task', 'consumed': False}
+    assert verify_guard_authority(packet, authority, 'a'*64) == 'fault_task'
+    for key, bad in [('phase', 'smoke'), ('run_id', 'B23_R01A_TEST'),
+                     ('capacity', 2), ('packet_sha256', 'b'*64), ('consumed', True)]:
+        original = authority[key]
+        authority[key] = bad
+        with pytest.raises(RuntimeError, match='authority does not match packet case/phase'):
+            verify_guard_authority(packet, authority, 'a'*64)
+        authority[key] = original
+    with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
+        campaign_phase('R02a')
+
+
 class Clock:
     def __init__(self): self.ns = 1_000_000_000
     def now(self): return self.ns
