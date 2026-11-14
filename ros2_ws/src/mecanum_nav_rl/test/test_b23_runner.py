@@ -748,3 +748,121 @@ def test_observation0_handoff_rejects_scan_before_zero_anchor():
             b1,deadline_ns=clock.ns+5_000_000,
             zero_receipt=NS(applied_sim_stamp_ns=990_000_000)))
     assert value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED
+
+
+def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
+    from collections import deque
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource, ReceiptStreamBinding,
+        CutoffStatus, select_reset_zero_at_cutoff,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import (
+        CommandEnvelope, LocalTrainingSafetyInput, SimulationContactState,
+    )
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation import local_training_coordinator
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    value.deadline_ns = clock.ns + 1_000_000_000
+    ros_ns = [1_090_000_000]
+    value.ros_now = lambda: ros_ns[0]
+    lifecycle = NS(episode_generation=1, reset_epoch=2, runtime_generation=3,
+        barrier_stamp=Time(sec=0, nanosec=800_000_000))
+    value.ingress.lifecycle = lifecycle
+    value.ingress.scan_reset_stamp_ns = 800_000_000
+    value.ingress.profile = {'scan_max_age_ms': 500, 'safety_period_ms': 20,
+        'final_command_timeout_ms': 100}
+    value.ingress.scans = {
+        900_000_000: NS(stamp_ns=900_000_000, received_steady_ns=clock.ns),
+        1_000_000_000: NS(stamp_ns=1_000_000_000, received_steady_ns=clock.ns),
+    }
+    value.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.ingress.fault = None
+    value.ingress.backend_state = NS(fault_flags=0)
+    value.ingress.receipts = deque()
+    identity = EpisodeLifecycleIdentity(1, 2, 3)
+    receipt = NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
+        publish_stamp_ns=1_080_000_000, final_publisher_instance_id=55,
+        final_publish_sequence=8, final_command=(0.0, 0.0, 0.0),
+        received_steady_ns=clock.ns)
+    value.ingress.receipts.append(receipt)
+    status = SimulationContactState()
+    status.applied_receipt_valid = True
+    status.local_zero_override = False
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 8
+    status.applied_physics_iteration = 9
+    status.applied_sim_stamp = Time(sec=1, nanosec=90_000_000)
+    value.ingress.physics_pairs = [NS(stamp_ns=1_090_000_000, iteration=9,
+        backend_bytes=serialize_message(status))]
+
+    stream_history, events = [], []
+    adapter = NS(policy_hold=True,
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP),
+        set_stream_enabled=lambda enabled: stream_history.append((enabled, clock.ns)))
+    value.safety = NS(local_training=adapter)
+    value.final = NS(publisher_instance_id=55)
+    value.emit = lambda name, fields: events.append((name, fields))
+    async def pause(seconds):
+        await clock.pause(seconds)
+        ros_ns[0] += 10_000_000
+        if ros_ns[0] == 1_100_000_000:
+            value.ingress.scans[ros_ns[0]] = NS(stamp_ns=ros_ns[0], received_steady_ns=clock.ns)
+        if ros_ns[0] == 1_120_000_000:
+            value.ingress.receipts.append(NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
+                publish_stamp_ns=ros_ns[0], final_publisher_instance_id=55,
+                final_publish_sequence=9, final_command=(0.0, 0.0, 0.0),
+                received_steady_ns=clock.ns))
+    value.pause = pause
+
+    cutoffs = []
+    binding = ReceiptStreamBinding(55, 'session', 'a' * 64, identity, 'base_link')
+    def receipt_view(sequence, stamp, received):
+        return IssuedCommandReceiptView(stamp, 55, sequence, ReceiptSource.SAFE_STOP,
+            66, sequence, 0, '', identity, 'session', 'a' * 64, (0.0, 0.0, 0.0),
+            received, 'base_link', True)
+    selected_view = receipt_view(8, 1_080_000_000, clock.ns)
+    adjacent_view = receipt_view(9, 1_120_000_000, clock.ns + 40_000_000)
+    selection = select_reset_zero_at_cutoff((selected_view, adjacent_view), binding=binding,
+        cutoff_ros_ns=1_100_000_000, evaluation_ros_now_ns=1_120_000_000,
+        evaluation_steady_now_ns=clock.ns + 50_000_000, reset_barrier_ros_ns=800_000_000,
+        physical_scales=(0.25, 0.2, 0.8))
+    assert selection.status is CutoffStatus.READY, selection.reason
+    assert selection.receipt.final_publish_sequence == 8
+    assert selection.adjacent_receipt.final_publish_sequence == 9
+    def commit(cutoff):
+        cutoffs.append(cutoff)
+        if len(cutoffs) == 1:
+            raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return 'observation0', selection
+    confirmations, control_calls = [], []
+    value.ingress.confirm_observation0 = lambda ack: confirmations.append(ack)
+    async def transact(operation, **fields):
+        control_calls.append((operation, fields['observation0_cutoff'].nanosec))
+        return 'actual-ack'
+    value.control = NS(transact=transact)
+    original = local_training_coordinator.lifecycle_request_fields
+    local_training_coordinator.lifecycle_request_fields = lambda _snapshot: {}
+    try:
+        result, cutoff = asyncio.run(value.commit_and_confirm_observation0(
+            NS(commit_observation0=commit), deadline_ns=clock.ns + 500_000_000))
+    finally:
+        local_training_coordinator.lifecycle_request_fields = original
+
+    assert result == 'observation0' and cutoff == 1_100_000_000
+    assert cutoffs == [1_000_000_000, 1_100_000_000]
+    assert stream_history[0][0] is False and stream_history[-1][0] is True
+    assert [name for name, _ in events] == [
+        'RESET_RECEIPT_ALIGNMENT_SUPPRESSED', 'RESET_RECEIPT_ALIGNMENT_RESUMED',
+        'RESET_RECEIPT_ALIGNMENT_BOUNDARY']
+    assert events[1][1]['scan_seen'] is True
+    assert events[1][1]['boundary_receipt_count'] == 0
+    assert events[2][1]['adjacent_receipt_sequence'] == 9
+    assert events[2][1]['receipt_receive_gap_ns'] <= 100_000_000
+    assert control_calls == [(Control.Request.OP_CONFIRM_OBSERVATION0, 100_000_000)]
+    assert confirmations == ['actual-ack']
