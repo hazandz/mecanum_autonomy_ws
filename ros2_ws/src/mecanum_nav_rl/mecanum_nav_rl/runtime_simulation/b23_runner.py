@@ -942,6 +942,26 @@ class TrainingWorkerIO:
         self.emit('STEP_STREAMS_FROZEN', {'source': last.source, 'source_sequence': last.sequence,
             'publish_sequence': receipt.final_publish_sequence, 'steady_ns': self.now()})
 
+    async def replay_pause_intent_after_terminal(self):
+        """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
+        if self.pause_ack is None:
+            raise RuntimeError('pause replay requires the exact retained APPLIED request')
+        original = self.pause_ack
+        replayed = await self.control.replay(original, deadline_ns=min(
+            self.deadline_ns, self.now() + 1_000_000_000))
+        if (replayed.request_bytes != original.request_bytes
+                or replayed.response_bytes != original.response_bytes):
+            raise RuntimeError('terminal pause replay differs from retained exact transaction')
+        self.emit('PAUSE_INTENT_EXACT_REPLAY_AFTER_TERMINAL', {
+            'request_sequence': original.request.request_sequence,
+            'request_cdr_hex': original.request_bytes.hex(),
+            'response_cdr_hex': replayed.response_bytes.hex(),
+            'original_applied_ns': original.observed_steady_ns,
+            'replay_observed_ns': replayed.observed_steady_ns,
+            'exact_request_and_response_bytes': True,
+        })
+        return replayed
+
     async def policy_step(self, b1, action):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
@@ -1257,16 +1277,24 @@ async def training_child(path):
             expected_world_file_sha256=asset['world_file_sha256']).load(Path(packet['scenario']).read_text())
         b1 = LocalTrainingB1Adapter(io.ingress, artifact, asset,
             scan_transform=lambda: io.safety._tf_buffer.lookup_transform('base_link', 'lidar_frame', Time()), emit=sink.record)
-        if packet['case'] != 'R01a':
+        if packet['case'] == 'R01a':
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
+            transition = await io.policy_step(b1, (0.4, 0., 0.))
+            if transition.termination.terminated or transition.termination.truncated:
+                raise RuntimeError('R01a first POLICY terminated before active reset')
+            await io.reset_episode(b1, seed=packet['episode_seeds'][1], target=target, paused_hold_s=.250)
+            outcome = {'case': 'R01a', 'resets_confirmed': 2, 'policy_steps_committed': 1,
+                'completed_ns': time.monotonic_ns()}
+        elif packet['case'] == 'R01e':
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
+            replay = await io.replay_pause_intent_after_terminal()
+            outcome = {'case': 'R01e', 'resets_confirmed': 1,
+                'pause_request_sequence': replay.request.request_sequence,
+                'exact_terminal_replay': True, 'completed_ns': time.monotonic_ns()}
+        else:
             raise RuntimeError('case not implemented by this worker; cannot launch other hooks')
-        target = ResetTarget(**packet['reset_target'])
-        await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
-        transition = await io.policy_step(b1, (0.4, 0., 0.))
-        if transition.termination.terminated or transition.termination.truncated:
-            raise RuntimeError('R01a first POLICY terminated before active reset')
-        await io.reset_episode(b1, seed=packet['episode_seeds'][1], target=target, paused_hold_s=.250)
-        outcome = {'case': 'R01a', 'resets_confirmed': 2, 'policy_steps_committed': 1,
-            'completed_ns': time.monotonic_ns()}
         if outcome['completed_ns'] >= descriptor['active_deadline_ns']:
             raise TimeoutError('smoke completed after active deadline')
     except BaseException as exc:
@@ -1314,8 +1342,9 @@ def verify_packet(path, expected_sha256):
     except (KeyError,ValueError,TypeError,AttributeError) as error:
         raise ValueError('packet requires matching canonical session UUID') from error
     prefix = Path(packet['install_prefix']).resolve(strict=True)
-    if (packet['schema'] != 'b23_packet/v1' or packet['case'] != 'R01a'
-            or packet['fault_hooks'] != [] or packet['gui'] is not False
+    expected_hooks = {'R01a': [], 'R01e': ['pause_request_replay_after_terminal']}
+    if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
+            or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
             or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != [2026102900,2026102901]
             or packet['authority'] != 'OWNER_B23_CAMPAIGN_APPROVED'
             or (packet['active_s'], packet['cleanup_s']) != (120, 60)
@@ -1664,7 +1693,9 @@ def prepare_packet(args):
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)
     packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
-        'case': 'R01a', 'gui': False, 'fault_hooks': [], 'world_seed':20261029,
+        'case': args.case, 'gui': False,
+        'fault_hooks': [] if args.case == 'R01a' else ['pause_request_replay_after_terminal'],
+        'world_seed':20261029,
         'episode_seeds':[2026102900,2026102901], 'authority': 'OWNER_B23_CAMPAIGN_APPROVED',
         'authority_reference': 'Owner approval B23_CAMPAIGN and standing authorization in task conversation',
         'source_commit': args.commit, 'source_repo': str(repo), 'install_prefix': str(prefix),
@@ -1680,8 +1711,9 @@ def prepare_packet(args):
         'offline_evidence':evidence, 'dependency_origins':dependency_origins,
         'owner_decisions':{'L2-PAUSE':'APPROVED','L2-ADMISSION':'APPROVED','D03':'APPROVED','D04':'APPROVED',
             'D05':'APPROVED','offline_and_git':'APPROVED','runtime':'B23_CAMPAIGN_APPROVED',
-            'phase':'smoke','excluded_actions':['R07b time_only rollback','R09b active fixture SetEntityPose','B22 contact-only runtime'],
-            'quoted_approval':'Smoke: R01a, dùng profile headless và tắt fault hook.'},
+            'phase':'smoke' if args.case == 'R01a' else 'fault_task',
+            'excluded_actions':['R07b time_only rollback','R09b active fixture SetEntityPose','B22 contact-only runtime'],
+            'quoted_approval':'B23_CAMPAIGN_APPROVED; case-scoped campaign hook.'},
         'source_preflight':[commit_record,branch,dirty]}
     packet['service_properties'] = list(SERVICE_PROPERTIES)
     packet['launch_argv_template'] = service_launch_command(packet, str(root/'packet.json'), '{PACKET_SHA256}')
@@ -2014,6 +2046,7 @@ def main(argv=None):
     prepare = commands.add_parser('prepare')
     for key in ('repo','commit','install','build-binding','run-id'):
         prepare.add_argument('--'+key, required=True)
+    prepare.add_argument('--case', choices=('R01a','R01e'), default='R01a')
     prepare.add_argument('--junit', action='append', required=True)
     for role in ('launch','parent'):
         command = commands.add_parser(role)

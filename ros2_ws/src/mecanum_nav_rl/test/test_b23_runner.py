@@ -64,6 +64,41 @@ def test_active_deadline_is_never_extended_by_predicate_budget():
     assert clock.ns == value.deadline_ns == 1_003_000_000
 
 
+def test_terminal_pause_replay_resubmits_exact_owned_bytes_and_records_evidence():
+    value, clock = worker()
+    request = NS(request_sequence=17)
+    original = NS(request=request, request_bytes=b'request-cdr', response_bytes=b'applied-cdr',
+                  observed_steady_ns=clock.ns)
+    replayed = NS(request=request, request_bytes=b'request-cdr', response_bytes=b'applied-cdr',
+                  observed_steady_ns=clock.ns + 1)
+    calls, events = [], []
+    async def replay(ack, *, deadline_ns):
+        calls.append((ack, deadline_ns))
+        return replayed
+    value.pause_ack = original
+    value.control = NS(replay=replay)
+    value.emit = lambda name, fields: events.append((name, fields))
+    assert asyncio.run(value.replay_pause_intent_after_terminal()) is replayed
+    assert calls == [(original, value.deadline_ns)]
+    assert events[0][0] == 'PAUSE_INTENT_EXACT_REPLAY_AFTER_TERMINAL'
+    assert events[0][1]['request_sequence'] == 17
+    assert events[0][1]['exact_request_and_response_bytes'] is True
+
+
+def test_terminal_pause_replay_rejects_different_response_bytes():
+    value, clock = worker()
+    original = NS(request=NS(request_sequence=4), request_bytes=b'request',
+                  response_bytes=b'applied', observed_steady_ns=clock.ns)
+    value.pause_ack = original
+    async def replay(ack, *, deadline_ns):
+        return NS(request=ack.request, request_bytes=ack.request_bytes,
+                  response_bytes=b'different', observed_steady_ns=clock.ns)
+    value.control = NS(replay=replay)
+    value.emit = lambda *_: None
+    with pytest.raises(RuntimeError, match='differs from retained exact transaction'):
+        asyncio.run(value.replay_pause_intent_after_terminal())
+
+
 def test_abort_native_fault_and_callback_error_remain_visible():
     value, clock = worker()
     value.abort_requested = 'SIGTERM'
