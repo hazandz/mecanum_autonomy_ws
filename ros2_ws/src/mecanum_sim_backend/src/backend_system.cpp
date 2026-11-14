@@ -2586,6 +2586,14 @@ private:
             cutoff_ns, sim_stamp_ns);
         if (!proof.valid)
         {
+          gzerr << "B23_OBSERVATION0_PROOF_REJECT reason=" << proof.reason
+                << " selected_sequence=" << request.selected_zero_final_publish_sequence
+                << " adjacent_sequence=" << request.adjacent_boundary_final_publish_sequence
+                << " cutoff_ns=" << cutoff_ns << " now_ns=" << sim_stamp_ns
+                << " barrier_ns=" << barrier_stamp_ns_
+                << " publications=" << accepted_receipt_history_.size()
+                << " applications=" << application_history_.size()
+                << " contacts=" << contact_history_.size() << std::endl;
           reason = ControlResponse::REASON_OBSERVATION0_PROOF_MISMATCH;
         }
         else
