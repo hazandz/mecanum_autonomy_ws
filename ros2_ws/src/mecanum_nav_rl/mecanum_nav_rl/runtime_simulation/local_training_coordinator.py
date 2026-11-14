@@ -408,7 +408,10 @@ class LocalTrainingB1Adapter:
             validate_dual_clock_freshness(source_ros_ns=stamp, now_ros_ns=ros_now,
                 receive_steady_ns=received, now_steady_ns=steady_now, max_age_ns=age_ms * 1_000_000)
         if not 0 <= steady_now - pair.backend_received_steady_ns <= source.profile['backend_status_receive_age_ms'] * 1_000_000:
-            raise ValueError('joined backend state receive age expired')
+            # A cutoff candidate can age while policy_step scans older samples
+            # before a newer applied receipt arrives. It is not a valid
+            # transaction, but it must not abort evaluation of later cutoffs.
+            raise B1SnapshotPending('joined backend state receive age expired')
         oracle = deserialize_message(pair.oracle_bytes, Odometry)
         status = deserialize_message(pair.backend_bytes, SimulationContactState)
         if (stamp_ns(oracle.header.stamp) != cutoff_ns or stamp_ns(status.header.stamp) != cutoff_ns

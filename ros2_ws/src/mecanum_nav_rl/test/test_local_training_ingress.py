@@ -13,7 +13,9 @@ from rclpy.serialization import serialize_message
 from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState, SimulationContactState, FinalIssuedCommandReceipt
 from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 from mecanum_nav_rl.core.lifecycle_types import policy_transition_identity, EpisodeLifecycleIdentity
-from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, BackendSessionIdentity, lifecycle_request_fields
+from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+    B1SnapshotPending, BackendControlAck, BackendSessionIdentity, lifecycle_request_fields,
+)
 from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress, ReceivedNoisySample
 
 
@@ -348,6 +350,55 @@ def test_real_ingress_b1_reset_then_policy_commit_retains_81d_and_true_dt(source
     with pytest.raises(ValueError, match='no actual issuance'):
         chain.b1.commit_step(chain.cutoff)
     assert [name for name, _ in f.events].count('b1_transition_committed') == 1
+
+
+def test_b1_skips_expired_old_cutoff_then_commits_fresh_later_policy_cutoff(source):
+    """A stale pair is pending evidence; it cannot hide the next fresh applied cutoff."""
+    from mecanum_nav_rl_interfaces.msg import SafetyState
+    f = source; chain = b1_runtime_chain(f)
+    f.clock.steady += 210_000_000
+    with pytest.raises(B1SnapshotPending, match='receive age expired'):
+        chain.b1.commit_step(chain.cutoff)
+    assert not chain.b1.committer.committed
+
+    # Publish a fresh backend/oracle/scan pair where the native application
+    # selects the already-issued policy receipt. Then supply its adjacent
+    # post-cutoff receipt and let the same production B1 path commit.
+    f.clock.ros += 10_000_000
+    f.ingress.on_ground_truth(f.gt())
+    status = f.backend(iteration=14, sequence=14)
+    status.applied_receipt_valid = True
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 4
+    status.applied_physics_iteration = 14
+    status.applied_sim_stamp = stamp(f.clock.ros)
+    f.ingress.on_backend(status)
+    scan = LaserScan()
+    scan.header.frame_id, scan.header.stamp = 'lidar_frame', stamp(f.clock.ros)
+    scan.range_min, scan.range_max = 0.1, 8.
+    scan.angle_min, scan.angle_max = -math.pi, math.pi
+    scan.angle_increment = 2 * math.pi / 499
+    scan.ranges = [float('inf')] * 500
+    f.ingress.on_scan(scan)
+    cutoff = f.clock.ros
+    safety = SafetyState()
+    safety.header.frame_id, safety.header.stamp = 'base_link', stamp(cutoff)
+    safety.state, safety.reset_epoch, safety.runtime_generation = safety.STATE_NORMAL, 2, 3
+    safety.command_valid = safety.motion_permitted = True
+    safety.active_command_source = safety.COMMAND_SOURCE_POLICY
+    f.ingress.register_safety_publication(safety, source_instance_id=44)
+    f.ingress.on_safety_state(safety)
+    f.advance()
+    adjacent = f.receipt(5)
+    adjacent.source = adjacent.SOURCE_POLICY
+    adjacent.source_instance_id, adjacent.sequence, adjacent.step_index = 33, 1, 1
+    adjacent.transition_id = chain.token.transition_id
+    adjacent.final_command.linear.x, adjacent.final_command.linear.y = 0.05, -0.04
+    adjacent.final_command.angular.z = 0.08
+    f.ingress.on_receipt(adjacent)
+    result = chain.b1.commit_step(cutoff)
+    assert result.transition_identity == chain.token
+    assert chain.b1.committer.committed
 
 
 @pytest.mark.parametrize('missing', ['scan', 'noisy', 'physics', 'safety'])
