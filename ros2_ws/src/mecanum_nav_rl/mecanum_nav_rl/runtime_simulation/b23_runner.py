@@ -2054,7 +2054,7 @@ def prepare_packet(args):
         'owner_decisions':{'L2-PAUSE':'APPROVED','L2-ADMISSION':'APPROVED','D03':'APPROVED','D04':'APPROVED',
             'D05':'APPROVED','offline_and_git':'APPROVED','runtime':'B23_CAMPAIGN_APPROVED',
             'phase':campaign_phase(args.case),
-            'excluded_actions':['R07b time_only rollback','R09b active fixture SetEntityPose','B22 contact-only runtime'],
+            'excluded_actions':['B22 contact-only runtime','hardware/HIL','PPO training'],
             'quoted_approval':'B23_CAMPAIGN_APPROVED; case-scoped campaign hook.'},
         'source_preflight':[commit_record,branch,dirty]}
     packet['service_properties'] = list(SERVICE_PROPERTIES)
