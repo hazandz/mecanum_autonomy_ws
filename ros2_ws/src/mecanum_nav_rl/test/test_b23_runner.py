@@ -4,8 +4,8 @@ import json
 from types import SimpleNamespace as NS
 import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
-    TrainingWorkerIO, case_fault_hooks, technical_outcome,
-    verify_r01b_external_pause_rejection,
+    TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
+    verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
 )
 
 
@@ -31,7 +31,14 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
 def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01a') == []
     assert case_fault_hooks('R01b') == ['external_pause_after_w1_before_native_dispatch']
+    assert case_fault_hooks('R01c') == ['delay_native_pause_ack_1500ms_once']
+    assert case_fault_hooks('R01d') == ['drop_native_pause_ack_once']
     assert case_fault_hooks('R01e') == ['pause_request_replay_after_terminal']
+    assert case_environment('R01c', case_fault_hooks('R01c')) == {
+        'B23_PAUSE_ACK_FAULT':'delay_1500ms_once'}
+    assert case_environment('R01d', case_fault_hooks('R01d')) == {
+        'B23_PAUSE_ACK_FAULT':'drop_once'}
+    assert case_environment('R01a', []) == {}
     with pytest.raises(ValueError, match='not approved for campaign case'):
         case_fault_hooks('R01a', 'pause_request_replay_after_terminal')
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
@@ -60,6 +67,23 @@ def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
     io.ingress.backend_state.local_zero_override = False
     with pytest.raises(RuntimeError, match='zero override'):
         verify_r01b_external_pause_rejection(io, error)
+
+
+def test_r01c_d_require_expired_pause_ack_native_fault_and_no_reset_commit():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    response = Control.Response()
+    response.result = response.RESULT_REJECTED
+    response.reason_code = response.REASON_CONTROL_EXPIRED
+    error = BackendControlError('native pause ACK expired', NS(response=response))
+    io = NS(events=[], ingress=NS(backend_state=NS(fault_flags=1, local_zero_override=True)))
+    result = verify_r01_pause_ack_failure(io, error)
+    assert result['reason_code'] == response.REASON_CONTROL_EXPIRED
+    assert result['native_fault_flags'] == 1 and result['local_zero_override'] is True
+    assert result['no_pose_mutation'] and result['no_observation0_commit']
+    io.events.append(('B1_RESET_COMMITTED', {}))
+    with pytest.raises(RuntimeError, match='continued reset'):
+        verify_r01_pause_ack_failure(io, TimeoutError('late ACK'))
 
 
 class Clock:

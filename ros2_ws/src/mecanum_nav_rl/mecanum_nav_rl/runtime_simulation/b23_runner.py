@@ -18,12 +18,47 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'OOMPolicy=stop','RuntimeMaxSec=180s','TimeoutStartSec=5s','TimeoutStopSec=2s',
     'KillMode=control-group','KillSignal=SIGTERM','SendSIGKILL=yes',
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
-CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01e': 'fault_task'}
+CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
+    'R01d': 'fault_task', 'R01e': 'fault_task'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
+    'R01c': ('delay_native_pause_ack_1500ms_once',),
+    'R01d': ('drop_native_pause_ack_once',),
     'R01e': ('pause_request_replay_after_terminal',),
 }
+
+
+def case_environment(case, hooks):
+    """Bind the single native ACK fault hook to its case-scoped child env."""
+    if case == 'R01c' and hooks == ['delay_native_pause_ack_1500ms_once']:
+        return {'B23_PAUSE_ACK_FAULT': 'delay_1500ms_once'}
+    if case == 'R01d' and hooks == ['drop_native_pause_ack_once']:
+        return {'B23_PAUSE_ACK_FAULT': 'drop_once'}
+    return {}
+
+
+def verify_r01_pause_ack_failure(io, error):
+    """Require an expired pause ACK, native fault/zero, and no reset commit."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    ack = error.ack if isinstance(error, BackendControlError) else None
+    if ack is not None:
+        if (ack.response.result != ack.response.RESULT_REJECTED
+                or ack.response.reason_code != Control.Response.REASON_CONTROL_EXPIRED):
+            raise RuntimeError('pause ACK fault did not produce CONTROL_EXPIRED rejection')
+    elif not isinstance(error, TimeoutError):
+        raise RuntimeError('pause ACK fault did not terminate by bounded timeout')
+    state = io.ingress.backend_state
+    if state is None or state.fault_flags == 0 or not state.local_zero_override:
+        raise RuntimeError('pause ACK fault did not retain native fault and zero override')
+    if any(name in {'RESET_POSE_MUTATION_ARMED','B1_RESET_STARTED','B1_RESET_COMMITTED',
+                    'RESET_COMPLETE'} for name, _ in io.events):
+        raise RuntimeError('pause ACK fault continued reset or committed observation0')
+    return {'error_type':type(error).__name__,
+        'reason_code':ack.response.reason_code if ack is not None else None,
+        'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+        'no_pose_mutation':True, 'no_observation0_commit':True}
 
 
 def case_fault_hooks(case, requested=None):
@@ -1426,6 +1461,20 @@ async def training_child(path):
                     'completed_ns':time.monotonic_ns()}
             if outcome is None:
                 raise RuntimeError('R01b expected unexpected-pause rejection was not observed')
+        elif packet['case'] in ('R01c', 'R01d'):
+            expected_env = case_environment(packet['case'], packet['fault_hooks'])
+            if any(packet['environment'].get(key) != value for key, value in expected_env.items()):
+                raise RuntimeError('native pause ACK fault environment does not match packet case')
+            target = ResetTarget(**packet['reset_target'])
+            try:
+                await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                    paused_hold_s=.250)
+            except Exception as exc:
+                checked = verify_r01_pause_ack_failure(io, exc)
+                outcome = {'case':packet['case'], 'expected_pause_ack_failure':True, **checked,
+                    'completed_ns':time.monotonic_ns()}
+            if outcome is None:
+                raise RuntimeError(packet['case'] + ' expected pause ACK failure was not observed')
         else:
             raise RuntimeError('case not implemented by this worker; cannot launch other hooks')
         if outcome['completed_ns'] >= descriptor['active_deadline_ns']:
@@ -1828,6 +1877,7 @@ def prepare_packet(args):
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)
     fault_hooks = case_fault_hooks(args.case, args.fault_hook)
+    environment.update(case_environment(args.case, fault_hooks))
     packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
         'case': args.case, 'gui': False,
         'fault_hooks': fault_hooks,

@@ -2106,20 +2106,44 @@ private:
         return;
       case backend_detail::RuntimeResourceKind::ResetPauseClient:
       {
+        const char *pause_ack_fault_env = std::getenv("B23_PAUSE_ACK_FAULT");
+        const std::string pause_ack_fault = pause_ack_fault_env ? pause_ack_fault_env : "";
+        if (!pause_ack_fault.empty() && pause_ack_fault != "delay_1500ms_once" &&
+            pause_ack_fault != "drop_once")
+          throw std::runtime_error("unsupported_b23_pause_ack_fault");
+        auto pause_ack_fault_used = std::make_shared<std::atomic_bool>(false);
         reset_pause_client_ = node_->create_client<backend_detail::ControlWorld>(
             "/world/" + world_name_ + "/control");
         if (!reset_pause_client_) throw std::runtime_error("reset_pause_client_missing");
         reset_pause_ready_ = [this] { return reset_pause_client_ && reset_pause_client_->service_is_ready(); };
-        reset_pause_dispatch_ = [this](std::function<void(bool, std::int64_t)> completion) {
+        reset_pause_dispatch_ = [this, pause_ack_fault, pause_ack_fault_used](
+            std::function<void(bool, std::int64_t)> completion) {
           auto request = std::make_shared<backend_detail::ControlWorld::Request>();
           request->world_control.pause = true;
           const auto clock = steady_clock_now_;
           reset_pause_client_->async_send_request(request,
-              [completion = std::move(completion), clock](
+              [completion = std::move(completion), clock, pause_ack_fault,
+               pause_ack_fault_used](
                   rclcpp::Client<backend_detail::ControlWorld>::SharedFuture future) {
                 bool success = false;
                 try { auto response = future.get(); success = response && response->success; }
                 catch (const std::exception &) { success = false; }
+                const bool inject = !pause_ack_fault.empty() &&
+                    !pause_ack_fault_used->exchange(true, std::memory_order_acq_rel);
+                if (inject && pause_ack_fault == "delay_1500ms_once")
+                {
+                  gzmsg << "B23_PAUSE_ACK_FAULT mode=delay_1500ms_once delay_ms=1500"
+                        << std::endl;
+                  std::fflush(stdout);
+                  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+                }
+                else if (inject && pause_ack_fault == "drop_once")
+                {
+                  gzmsg << "B23_PAUSE_ACK_FAULT mode=drop_once completion=omitted"
+                        << std::endl;
+                  std::fflush(stdout);
+                  return;
+                }
                 completion(success, clock());
               });
         };
