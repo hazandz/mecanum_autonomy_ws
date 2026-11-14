@@ -560,13 +560,15 @@ class TrainingWorkerIO:
                 except BaseException as error:
                     self.emit('CONTACT_ABORT_ERROR', {'error': repr(error), 'steady_ns': self.now()})
 
-    def fresh_reset_scan(self, *, now_ros_ns, now_steady_ns):
+    def fresh_reset_scan(self, *, now_ros_ns, now_steady_ns, at_or_before_ns=None):
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
         from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
         if self.ingress.lifecycle is None:
             return None
         barrier = max(stamp_ns(self.ingress.lifecycle.barrier_stamp), self.ingress.scan_reset_stamp_ns)
         for stamp, sample in reversed(list(self.ingress.scans.items())):
+            if at_or_before_ns is not None and stamp > at_or_before_ns:
+                continue
             if stamp <= barrier:
                 continue
             try:
@@ -708,24 +710,32 @@ class TrainingWorkerIO:
             final_publisher_instance_id=self.final.publisher_instance_id, policy_source_instance_id=self.policy_source_id,
             safe_stop_source_instance_id=self.safe_stop_source_id,
             next_safe_stop_sequence=self.safety.local_training.safe_stop_sequence + 1)
+        # Sau L2, phát và xác minh một zero SAFE_STOP mới để B1 dùng
+        # receipt còn mới tại cutoff, thay vì W1 đã cũ qua pause/resume.
         b1.begin_reset()
         self.ingress.inhibit()
         self.safety.local_training.set_stream_enabled(True)
-        observation, cutoff = await self.commit_and_confirm_observation0(b1, deadline_ns=deadline)
+        observation0_zero = await self.freeze_zero(deadline_ns=deadline)
+        self.emit('OBSERVATION0_ZERO_ANCHOR', {'publish_sequence': observation0_zero.final_publish_sequence,
+            'application_stamp_ns': observation0_zero.applied_sim_stamp_ns,
+            'application_iteration': observation0_zero.applied_physics_iteration, 'steady_ns': self.now()})
+        observation, cutoff = await self.commit_and_confirm_observation0(
+            b1, deadline_ns=deadline, zero_receipt=observation0_zero)
         self.emit('RESET_COMPLETE', {'seed': seed, 'observation0_cutoff_ns': cutoff,
             'W0': w0.final_publish_sequence, 'W1': facts.applied_zero_receipt.final_publish_sequence,
             'l1_sequence': l1.sequence, 'l2_sequence': l2.sequence,
             'started_ns': started, 'completed_ns': self.now(), 'deadline_ns': deadline})
         return observation
 
-    async def commit_and_confirm_observation0(self, b1, *, deadline_ns):
+    async def commit_and_confirm_observation0(self, b1, *, deadline_ns, zero_receipt=None):
         """Commit B1, xác nhận backend và chỉ giao observation khi ACK hợp lệ."""
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields, B1SnapshotPending
         last_pending = None
         while self.now() < deadline_ns:
             self.check()
-            scan = self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now())
+            scan = self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now(),
+                at_or_before_ns=None if zero_receipt is None else zero_receipt.applied_sim_stamp_ns)
             for cutoff in ([scan.stamp_ns] if scan is not None else []):
                 try:
                     observation, selection = b1.commit_observation0(cutoff)

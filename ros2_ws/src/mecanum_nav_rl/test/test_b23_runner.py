@@ -671,6 +671,10 @@ def test_reset_scan_rejects_old_delayed_and_stale_samples():
     fresh=NS(received_steady_ns=clock.ns)
     value.ingress.scans[1_002_000_000]=fresh
     assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns) is fresh
+    later=NS(received_steady_ns=clock.ns)
+    value.ingress.scans[1_009_000_000]=later
+    assert value.fresh_reset_scan(now_ros_ns=1_010_000_000,now_steady_ns=clock.ns,
+        at_or_before_ns=1_005_000_000) is fresh
 
 
 def test_observation0_handoff_rejects_pre_reset_scan_until_deadline():
