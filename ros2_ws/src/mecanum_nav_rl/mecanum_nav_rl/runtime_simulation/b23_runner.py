@@ -560,7 +560,8 @@ class TrainingWorkerIO:
                 except BaseException as error:
                     self.emit('CONTACT_ABORT_ERROR', {'error': repr(error), 'steady_ns': self.now()})
 
-    def fresh_reset_scan(self, *, now_ros_ns, now_steady_ns, at_or_before_ns=None):
+    def fresh_reset_scan(self, *, now_ros_ns, now_steady_ns, at_or_before_ns=None,
+                         at_or_after_ns=None):
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
         from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
         if self.ingress.lifecycle is None:
@@ -568,6 +569,8 @@ class TrainingWorkerIO:
         barrier = max(stamp_ns(self.ingress.lifecycle.barrier_stamp), self.ingress.scan_reset_stamp_ns)
         for stamp, sample in reversed(list(self.ingress.scans.items())):
             if at_or_before_ns is not None and stamp > at_or_before_ns:
+                continue
+            if at_or_after_ns is not None and stamp < at_or_after_ns:
                 continue
             if stamp <= barrier:
                 continue
@@ -738,7 +741,7 @@ class TrainingWorkerIO:
         while self.now() < deadline_ns:
             self.check()
             scan = self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now(),
-                at_or_before_ns=None if zero_receipt is None else zero_receipt.applied_sim_stamp_ns)
+                at_or_after_ns=None if zero_receipt is None else zero_receipt.applied_sim_stamp_ns)
             for cutoff in ([scan.stamp_ns] if scan is not None else []):
                 try:
                     observation, selection = b1.commit_observation0(cutoff)

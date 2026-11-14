@@ -691,3 +691,60 @@ def test_observation0_handoff_rejects_pre_reset_scan_until_deadline():
     with pytest.raises(TimeoutError,match='observation0 did not confirm'):
         asyncio.run(value.commit_and_confirm_observation0(b1,deadline_ns=clock.ns+5_000_000))
     assert calls==[] and value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED
+
+
+def test_observation0_handoff_uses_fresh_scan_after_zero_anchor():
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation import local_training_coordinator
+
+    value,clock=worker(); calls=[]; ack=NS(request_bytes=b'confirm-request',response_bytes=b'confirm-response')
+    value.ros_now=lambda:1_010_000_000
+    value.ingress.lifecycle=NS(barrier_stamp=NS(sec=0,nanosec=90))
+    value.ingress.scan_reset_stamp_ns=95
+    value.ingress.profile={'scan_max_age_ms':500}
+    fresh=NS(stamp_ns=1_000_000_000,received_steady_ns=clock.ns)
+    value.ingress.scans={fresh.stamp_ns:fresh}
+    value.ingress.admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.final=NS(publisher_instance_id=33)
+    value.ingress.confirm_observation0=lambda result:calls.append(('confirmed',result))
+    receipt=NS(final_publish_sequence=27)
+    adjacent=NS(final_publish_sequence=28)
+    selection=NS(receipt=receipt,adjacent_receipt=adjacent)
+    b1=NS(commit_observation0=lambda cutoff:(calls.append(('committed',cutoff)) or ('observation0',selection)))
+    async def transact(operation,**kwargs):
+        calls.append(('control',operation,kwargs['observation0_cutoff']))
+        return ack
+    value.control=NS(transact=transact)
+    original=local_training_coordinator.lifecycle_request_fields
+    local_training_coordinator.lifecycle_request_fields=lambda _snapshot:{}
+    try:
+        result,cutoff=asyncio.run(value.commit_and_confirm_observation0(
+            b1,deadline_ns=clock.ns+5_000_000,
+            zero_receipt=NS(applied_sim_stamp_ns=990_000_000)))
+    finally:
+        local_training_coordinator.lifecycle_request_fields=original
+
+    assert result=='observation0' and cutoff==fresh.stamp_ns, calls
+    assert calls[0]==('committed',fresh.stamp_ns), calls
+    assert calls[1][0]=='control' and calls[1][1]==Control.Request.OP_CONFIRM_OBSERVATION0, calls
+    assert calls[2]==('confirmed',ack), calls
+    assert value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED
+
+
+def test_observation0_handoff_rejects_scan_before_zero_anchor():
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    value,clock=worker()
+    value.ros_now=lambda:1_010_000_000
+    value.ingress.lifecycle=NS(barrier_stamp=NS(sec=0,nanosec=90))
+    value.ingress.scan_reset_stamp_ns=95
+    value.ingress.profile={'scan_max_age_ms':500}
+    value.ingress.scans={980_000_000:NS(stamp_ns=980_000_000,received_steady_ns=clock.ns)}
+    value.ingress.admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    value.ingress.confirm_observation0=lambda _ack:pytest.fail('pre-anchor scan cannot confirm')
+    b1=NS(commit_observation0=lambda _cutoff:pytest.fail('pre-anchor scan cannot commit'))
+    with pytest.raises(TimeoutError,match='observation0 did not confirm'):
+        asyncio.run(value.commit_and_confirm_observation0(
+            b1,deadline_ns=clock.ns+5_000_000,
+            zero_receipt=NS(applied_sim_stamp_ns=990_000_000)))
+    assert value.ingress.admission_state==LocalTrainingSafetyInput.ADMISSION_INHIBITED
