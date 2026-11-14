@@ -186,6 +186,34 @@ def test_local_safety_suppresses_only_armed_reset_zero_at_exact_scan_boundary(lo
     assert len(f.published) == published + 1
 
 
+def test_local_safety_suppresses_one_zero_when_timer_tick_lands_within_scan_period(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    adapter.set_policy_hold(True)
+    first = adapter.tick()
+    assert first.source == first.SOURCE_SAFE_STOP
+    target = 1_100_000_000
+    adapter.arm_reset_scan_boundary(target)
+    f.clock.ros = target - 10_000_000
+    f.clock.steady += 20_000_000
+    assert adapter.tick().source == first.SOURCE_SAFE_STOP
+    assert adapter._reset_scan_boundary_stamp_ns == target
+    assert adapter._reset_boundary_suppressed_stamp_ns is None
+    published, states = len(f.published), len(f.state)
+    f.clock.ros = target + 10_000_000
+    f.clock.steady += 20_000_000
+    assert adapter.tick() is None
+    assert len(f.published) == published and len(f.state) == states
+    assert adapter._reset_boundary_suppressed_stamp_ns == target
+    suppressed = next(data for name, data in f.evidence
+        if name == 'RESET_SAFE_STOP_BOUNDARY_SUPPRESSED')
+    assert suppressed == {'target_scan_ns': target, 'observed_ros_ns': target + 10_000_000,
+        'steady_ns': f.clock.steady}
+    f.clock.ros += 20_000_000; f.clock.steady += 20_000_000
+    resumed = adapter.tick()
+    assert resumed.source == resumed.SOURCE_SAFE_STOP
+    assert len(f.published) == published + 1
+
+
 def test_local_safety_does_not_suppress_boundary_without_prior_zero_stop(local_adapter):
     f = local_adapter; adapter = f.adapter
     adapter.set_policy_hold(True)

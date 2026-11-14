@@ -521,6 +521,22 @@ class LocalTrainingSafetyAdapter:
             if boundary_ns is not None:
                 if ros_ns > boundary_ns:
                     self._reset_scan_boundary_stamp_ns = None
+                    # A steady timer can skip the exact ROS scan stamp under
+                    # scheduler jitter. Permit one bounded late tick only
+                    # within the pinned scan period; the runner separately
+                    # requires the exact target scan before it can continue.
+                    if ros_ns - boundary_ns <= self.scan_period_ns:
+                        last = self.last_output
+                        still_zero_stop = (self.policy_hold and last is not None
+                            and last.source == last.SOURCE_SAFE_STOP
+                            and not any((last.twist.linear.x, last.twist.linear.y,
+                                         last.twist.angular.z)))
+                        if still_zero_stop:
+                            self._reset_boundary_suppressed_stamp_ns = boundary_ns
+                            self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSED', {
+                                'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
+                                'steady_ns': now})
+                            return None
                     self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSION_MISSED', {
                         'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
                         'steady_ns': now})
