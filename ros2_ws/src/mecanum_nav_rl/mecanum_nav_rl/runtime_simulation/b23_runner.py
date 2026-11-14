@@ -949,33 +949,44 @@ class TrainingWorkerIO:
 
 
     async def freeze_step_streams(self, *, deadline_ns):
-        """Không xen SAFE_STOP giữa các step; chờ publication cũ rời hàng đợi.
+        """Giữ native watchdog sống bằng zero SAFE_STOP trước pending step.
 
-        Timer bị khóa trước khi chờ. Receipt cũ cùng slot vẫn hợp lệ; một
-        SAFE_STOP đã phát phải tới native trước khi mở pending slot mới.
+        Đóng POLICY trước, nhưng giữ timer/receipt SAFE_STOP chạy khi đang chờ
+        bind slot mới. Tắt stream ở đây làm receipt gần nhất quá hạn watchdog.
         """
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope
-        self.safety.local_training.set_stream_enabled(False)
-        last = copy.deepcopy(self.safety.local_training.last_output)
+        adapter = self.safety.local_training
+        previous_safe_stop = adapter.safe_stop_sequence
+        adapter.set_policy_hold(True)
+        adapter.set_stream_enabled(True)
+        self.ingress.pause_admission_publication()
+        await self.until(lambda: adapter.last_output
+            if adapter.safe_stop_sequence > previous_safe_stop
+            and adapter.last_output is not None
+            and adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
+            and adapter.last_output.sequence == adapter.safe_stop_sequence else None,
+            deadline_ns=deadline_ns, phase='fresh SAFE_STOP before pending policy step')
+        last = copy.deepcopy(adapter.last_output)
         await self.freeze_admission(deadline_ns=deadline_ns)
         if last is None:
             raise RuntimeError('step has no actual Safety publication anchor')
         def drained():
             receipt = self.final.last_publication
-            if (receipt is None or receipt.source != last.source
+            if (receipt is None or receipt.source != CommandEnvelope.SOURCE_SAFE_STOP
                     or receipt.source_instance_id != last.source_instance_id
-                    or receipt.sequence < last.sequence):
+                    or receipt.sequence != last.sequence):
                 return None
             return receipt
-        receipt = await self.until(drained, deadline_ns=deadline_ns, phase='Final publication drain')
-        if last.source == CommandEnvelope.SOURCE_SAFE_STOP:
-            await self.until(lambda: self.ingress.backend_state if self.ingress.backend_state is not None
-                and self.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence
-                and self.ingress.backend_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
-                and not self.ingress.backend_state.local_zero_override else None,
-                deadline_ns=deadline_ns, phase='SAFE_STOP application before pending step')
+        receipt = await self.until(drained, deadline_ns=deadline_ns, phase='Final SAFE_STOP publication drain')
+        await self.until(lambda: self.ingress.backend_state if self.ingress.backend_state is not None
+            and self.ingress.backend_state.fault_flags == 0
+            and self.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence
+            and self.ingress.backend_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
+            and not self.ingress.backend_state.local_zero_override else None,
+            deadline_ns=deadline_ns, phase='SAFE_STOP application before pending step')
         self.emit('STEP_STREAMS_FROZEN', {'source': last.source, 'source_sequence': last.sequence,
-            'publish_sequence': receipt.final_publish_sequence, 'steady_ns': self.now()})
+            'publish_sequence': receipt.final_publish_sequence, 'watchdog_zero_stream_active': True,
+            'steady_ns': self.now()})
 
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""

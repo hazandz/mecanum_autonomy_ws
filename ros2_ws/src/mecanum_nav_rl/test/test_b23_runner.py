@@ -211,26 +211,42 @@ def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader
 
 
 @pytest.mark.parametrize('last_source', ['safe_stop', 'policy'])
-def test_freeze_step_streams_keeps_closing_order_without_issuing_stop(last_source):
+def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(last_source):
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     value, clock = worker()
-    calls = []
+    calls, events = [], []
     source = CommandEnvelope.SOURCE_SAFE_STOP if last_source == 'safe_stop' else CommandEnvelope.SOURCE_POLICY
-    value.safety = NS(local_training=NS(last_output=NS(source=source, source_instance_id=44, sequence=7),
-        set_stream_enabled=lambda enabled: calls.append(('stream', enabled))))
+    adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7),
+        set_policy_hold=lambda hold: calls.append(('hold', hold)),
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+    value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.pause_admission_publication = lambda: calls.append(('pause_admission',))
     value.read_native_input_watermark = lambda: 9
+    stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=source,
         source_instance_id=44, sequence=7, final_publish_sequence=20))
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=20,
         applied_final_publisher_instance_id=55, local_zero_override=False)
-    value.emit = lambda name, record: calls.append((name, record))
+    value.last_safe_stop_publish_sequence = 20
+    async def pause(seconds):
+        await clock.pause(seconds)
+        adapter.safe_stop_sequence = 8
+        adapter.last_output = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=8)
+        value.final.last_publication = NS(source=stop.SOURCE_SAFE_STOP,
+            source_instance_id=44, sequence=8, final_publish_sequence=21)
+        value.ingress.backend_state.applied_final_publish_sequence = 21
+    value.pause = pause
+    value.emit = lambda name, record: (calls.append((name, record)), events.append((name, record)))
     asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+20_000_000))
-    assert calls[0:2] == [('stream', False), ('pause_admission',)]
-    assert calls[-1][0] == 'STEP_STREAMS_FROZEN'
-    assert calls[-1][1]['source'] == source
-    assert not any(name == 'hold' for name, *rest in calls)
+    assert ('hold', True) in calls
+    assert ('stream', True) in calls
+    assert ('stream', False) not in calls
+    assert adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
+    assert calls.index(('hold', True)) < calls.index(('stream', True))
+    assert events[-1][0] == 'STEP_STREAMS_FROZEN'
+    assert events[-1][1]['source'] == CommandEnvelope.SOURCE_SAFE_STOP
+    assert events[-1][1]['publish_sequence'] == 21
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish'])
@@ -249,7 +265,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     history = []
     life = SafetyLifecycleState(); life.barrier_stamp = Time(nanosec=900_000_000)
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
-    adapter = NS(last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
+    adapter = NS(safe_stop_sequence=1,
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=lambda state: history.append(('stream', state)),
         set_policy_hold=lambda state: history.append(('hold', state)))
     value.safety = NS(local_training=adapter)
@@ -287,6 +304,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.last_published_sample_sequence = 2
             adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
                 admission_token=[7]*16, sample_sequence=2)
+        else:
+            adapter.safe_stop_sequence = 2
+            adapter.last_output = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
+                source_instance_id=44, sequence=2)
+            value.final.last_publication = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
+                source_instance_id=44, sequence=2, final_publish_sequence=3)
+            value.ingress.backend_state.applied_final_publish_sequence = 3
         if adapter.command:
             value.ingress.scans[clock.ns] = True
     value.pause = pause
@@ -309,7 +333,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         with pytest.raises(TimeoutError, match='step deadline'):
             asyncio.run(value.policy_step(b1, (0., .4, 0.)))
     tags = [row[0] for row in history]
-    assert tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued') < tags.index('hold')
+    assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
+    assert ('hold', True) in history
+    assert ('stream', True) in history
+    assert ('stream', False) not in history
     envelope = next(row[1] for row in history if row[0] == 'publish')
     assert envelope.twist.linear.y == pytest.approx(.08)
     assert len([row for row in history if row[0] == 'publish']) == 1
