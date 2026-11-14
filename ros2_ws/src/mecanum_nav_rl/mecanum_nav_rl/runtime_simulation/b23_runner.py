@@ -1070,10 +1070,27 @@ class TrainingWorkerIO:
             'failed_cutoff_ns': failed_cutoff_ns, 'armed_steady_ns': armed_ns,
             'freshness_limit_ns': max_gap_ns})
         try:
-            crossed = await self.until(lambda: self.ros_now() > target_ns,
+            scan_pending_logged = False
+            def boundary_observed():
+                nonlocal scan_pending_logged
+                observed_ros = self.ros_now()
+                suppressed = adapter._reset_boundary_suppressed_stamp_ns == target_ns
+                with self.ingress.lock:
+                    scan_seen = target_ns in self.ingress.scans
+                if observed_ros > target_ns and suppressed and not scan_seen and not scan_pending_logged:
+                    scan_pending_logged = True
+                    self.emit('RESET_RECEIPT_ALIGNMENT_BOUNDARY_PENDING', {
+                        'target_scan_ns': target_ns, 'suppressed': True,
+                        'observed_ros_ns': observed_ros, 'steady_ns': self.now()})
+                if observed_ros > target_ns and suppressed and scan_seen:
+                    return {'observed_ros_ns': observed_ros, 'scan_seen': True,
+                        'suppressed': True, 'steady_ns': self.now()}
+                return None
+
+            observed = await self.until(boundary_observed,
                 deadline_ns=min(deadline_ns, armed_ns + max_gap_ns),
-                phase='reset scan boundary passage within final-command timeout')
-            suppressed = adapter._reset_boundary_suppressed_stamp_ns == target_ns
+                phase='reset scan boundary and suppression within final-command timeout')
+            suppressed = observed['suppressed']
             with self.ingress.lock:
                 scan_seen = target_ns in self.ingress.scans
                 receipts = tuple(self.ingress.receipts)
@@ -1081,7 +1098,7 @@ class TrainingWorkerIO:
             if not suppressed or not scan_seen:
                 self.emit('RESET_RECEIPT_ALIGNMENT_MISSED', {'target_scan_ns': target_ns,
                     'scan_seen': scan_seen, 'suppressed': suppressed,
-                    'observed_ros_ns': crossed, 'steady_ns': self.now()})
+                    'observed_ros_ns': observed['observed_ros_ns'], 'steady_ns': self.now()})
                 return False
 
             before = [item for item in receipts if item.lifecycle == identity

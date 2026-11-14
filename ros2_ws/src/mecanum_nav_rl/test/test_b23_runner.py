@@ -1355,14 +1355,20 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     events = []
     value.emit = lambda name, fields: events.append((name, fields))
 
+    boundary_overrun_polls = [0]
     async def advance(seconds):
         before = ros_ns[0]
         await clock.pause(seconds)
         ros_ns[0] = min(target + 10_000_000, before + 10_000_000)
         if ros_ns[0] == target:
             suppressed._reset_boundary_suppressed_stamp_ns = target
+        elif ros_ns[0] > target:
+            boundary_overrun_polls[0] += 1
+        if ros_ns[0] > target and boundary_overrun_polls[0] >= 2 and len(value.ingress.receipts) == 1:
+            # Clock/suppression may advance before the scan callback is
+            # delivered. The production wait must keep polling in the same
+            # 500 ms budget until that exact post-barrier sample is visible.
             value.ingress.scans[target] = NS(stamp_ns=target)
-        elif ros_ns[0] > target and len(value.ingress.receipts) == 1:
             adjacent.received_steady_ns = clock.ns
             value.ingress.receipts.append(adjacent)
 
@@ -1376,6 +1382,12 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     assert boundary['selected_receipt_sequence'] == 11
     assert boundary['adjacent_receipt_sequence'] == 12
     assert boundary['receipt_receive_gap_ns'] <= 500_000_000
+    pending = next(fields for name, fields in events
+        if name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY_PENDING')
+    assert pending['suppressed'] is True
+    assert pending['target_scan_ns'] == target
+    assert events.index(('RESET_RECEIPT_ALIGNMENT_BOUNDARY_PENDING', pending)) < events.index(
+        ('RESET_RECEIPT_ALIGNMENT_BOUNDARY', boundary))
 
 
 def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():
