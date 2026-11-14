@@ -195,19 +195,22 @@ def test_local_safety_suppresses_one_zero_when_timer_tick_lands_within_scan_peri
     adapter.arm_reset_scan_boundary(target)
     f.clock.ros = target - 10_000_000
     f.clock.steady += 20_000_000
-    assert adapter.tick().source == first.SOURCE_SAFE_STOP
+    published, states, sequence = len(f.published), len(f.state), adapter.safe_stop_sequence
+    assert adapter.tick() is None
+    assert len(f.published) == published and len(f.state) == states
     assert adapter._reset_scan_boundary_stamp_ns == target
-    assert adapter._reset_boundary_suppressed_stamp_ns is None
-    published, states = len(f.published), len(f.state)
+    assert adapter._reset_boundary_suppressed_stamp_ns == target
     f.clock.ros = target + 10_000_000
     f.clock.steady += 20_000_000
     assert adapter.tick() is None
     assert len(f.published) == published and len(f.state) == states
     assert adapter._reset_boundary_suppressed_stamp_ns == target
+    assert adapter.safe_stop_sequence == sequence
     suppressed = next(data for name, data in f.evidence
         if name == 'RESET_SAFE_STOP_BOUNDARY_SUPPRESSED')
-    assert suppressed == {'target_scan_ns': target, 'observed_ros_ns': target + 10_000_000,
-        'steady_ns': f.clock.steady}
+    assert suppressed == {'target_scan_ns': target, 'observed_ros_ns': target - 10_000_000,
+        'suppression_window_start_ns': target - adapter.safety_period_ns,
+        'steady_ns': f.clock.steady - 20_000_000}
     f.clock.ros += 20_000_000; f.clock.steady += 20_000_000
     resumed = adapter.tick()
     assert resumed.source == resumed.SOURCE_SAFE_STOP

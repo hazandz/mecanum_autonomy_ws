@@ -274,6 +274,10 @@ class LocalTrainingSafetyAdapter:
                 or context['policy_source_instance_id'] == context['safe_stop_source_instance_id']):
             raise ValueError('invalid LOCAL_TRAINING Safety context')
         p = self.context['profile']
+        safety_period_ms = p['safety_period_ms']
+        if type(safety_period_ms) is not int or safety_period_ms <= 0:
+            raise ValueError('LOCAL_TRAINING requires a positive pinned Safety period')
+        self.safety_period_ns = safety_period_ms * 1_000_000
         scan_rate_hz = p['lidar_rate_hz']
         if (type(scan_rate_hz) not in (int, float) or not math.isfinite(scan_rate_hz)
                 or scan_rate_hz <= 0):
@@ -518,6 +522,22 @@ class LocalTrainingSafetyAdapter:
             ros_ns = self.node.get_clock().now().nanoseconds
             now = self.now()
             boundary_ns = self._reset_scan_boundary_stamp_ns
+            if boundary_ns is not None and boundary_ns - self.safety_period_ns <= ros_ns <= boundary_ns:
+                last = self.last_output
+                still_zero_stop = (self.policy_hold and last is not None
+                    and last.source == last.SOURCE_SAFE_STOP
+                    and not any((last.twist.linear.x, last.twist.linear.y,
+                                 last.twist.angular.z)))
+                if still_zero_stop:
+                    if self._reset_boundary_suppressed_stamp_ns != boundary_ns:
+                        self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSED', {
+                            'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
+                            'suppression_window_start_ns': boundary_ns - self.safety_period_ns,
+                            'steady_ns': now})
+                    self._reset_boundary_suppressed_stamp_ns = boundary_ns
+                    if ros_ns == boundary_ns:
+                        self._reset_scan_boundary_stamp_ns = None
+                    return None
             if boundary_ns is not None:
                 if ros_ns > boundary_ns:
                     self._reset_scan_boundary_stamp_ns = None
@@ -532,10 +552,13 @@ class LocalTrainingSafetyAdapter:
                             and not any((last.twist.linear.x, last.twist.linear.y,
                                          last.twist.angular.z)))
                         if still_zero_stop:
+                            already_suppressed = self._reset_boundary_suppressed_stamp_ns == boundary_ns
                             self._reset_boundary_suppressed_stamp_ns = boundary_ns
-                            self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSED', {
-                                'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
-                                'steady_ns': now})
+                            if not already_suppressed:
+                                self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSED', {
+                                    'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
+                                    'suppression_window_start_ns': boundary_ns - self.safety_period_ns,
+                                    'steady_ns': now})
                             return None
                     self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSION_MISSED', {
                         'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
