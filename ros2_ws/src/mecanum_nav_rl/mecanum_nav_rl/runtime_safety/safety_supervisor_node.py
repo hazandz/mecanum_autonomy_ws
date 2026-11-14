@@ -297,6 +297,8 @@ class LocalTrainingSafetyAdapter:
         self.stream_enabled = True
         self.policy_hold = True
         self.safe_stop_sequence = 0
+        self._reset_scan_boundary_stamp_ns = None
+        self._reset_boundary_suppressed_stamp_ns = None
         self.state_observer = None
         self.last_output = None
         self.expected_extrinsic = (tuple(self.context['sensor']['extrinsic_xyz_m']),
@@ -415,6 +417,21 @@ class LocalTrainingSafetyAdapter:
             if not enabled:
                 self.policy_hold = True
 
+    def arm_reset_scan_boundary(self, stamp_ns):
+        """Skip one repeated SAFE_STOP at a proven reset scan cutoff."""
+        if type(stamp_ns) is not int or stamp_ns <= 0:
+            raise ValueError('reset scan boundary must be a positive ROS timestamp')
+        with self.lock:
+            if not self.policy_hold or self._reset_scan_boundary_stamp_ns is not None:
+                raise RuntimeError('reset scan boundary suppression is not admissible')
+            self._reset_scan_boundary_stamp_ns = stamp_ns
+            self._reset_boundary_suppressed_stamp_ns = None
+
+    def cancel_reset_scan_boundary(self, stamp_ns):
+        with self.lock:
+            if self._reset_scan_boundary_stamp_ns == stamp_ns:
+                self._reset_scan_boundary_stamp_ns = None
+
     def set_policy_hold(self, hold):
         if type(hold) is not bool:
             raise TypeError('policy hold must be boolean')
@@ -500,6 +517,27 @@ class LocalTrainingSafetyAdapter:
                 return
             ros_ns = self.node.get_clock().now().nanoseconds
             now = self.now()
+            boundary_ns = self._reset_scan_boundary_stamp_ns
+            if boundary_ns is not None:
+                if ros_ns > boundary_ns:
+                    self._reset_scan_boundary_stamp_ns = None
+                    self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSION_MISSED', {
+                        'target_scan_ns': boundary_ns, 'observed_ros_ns': ros_ns,
+                        'steady_ns': now})
+                elif ros_ns == boundary_ns:
+                    self._reset_scan_boundary_stamp_ns = None
+                    last = self.last_output
+                    still_zero_stop = (self.policy_hold and last is not None
+                        and last.source == last.SOURCE_SAFE_STOP
+                        and not any((last.twist.linear.x, last.twist.linear.y,
+                                     last.twist.angular.z)))
+                    if still_zero_stop:
+                        self._reset_boundary_suppressed_stamp_ns = ros_ns
+                        self.emit('RESET_SAFE_STOP_BOUNDARY_SUPPRESSED', {
+                            'target_scan_ns': ros_ns, 'steady_ns': now})
+                        return None
+                    self.emit('RESET_SAFE_STOP_BOUNDARY_NOT_SUPPRESSED', {
+                        'target_scan_ns': ros_ns, 'steady_ns': now})
             reasons = self._reasons(ros_ns, now)
             previous = self.last_tick_ns
             if previous is not None and now <= previous:

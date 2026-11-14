@@ -165,6 +165,43 @@ def test_local_safety_still_publishes_fault_zero_at_scan_cutoff(local_adapter):
     assert not any(name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF' for name, _ in f.evidence)
 
 
+def test_local_safety_suppresses_only_armed_reset_zero_at_exact_scan_boundary(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    adapter.set_policy_hold(True)
+    first = adapter.tick()
+    assert first.source == first.SOURCE_SAFE_STOP
+    target = 1_100_000_000
+    adapter.arm_reset_scan_boundary(target)
+    published, states = len(f.published), len(f.state)
+    f.clock.ros = target
+    f.clock.steady += 20_000_000
+    assert adapter.tick() is None
+    assert len(f.published) == published and len(f.state) == states
+    assert adapter._reset_boundary_suppressed_stamp_ns == target
+    assert any(name == 'RESET_SAFE_STOP_BOUNDARY_SUPPRESSED' and
+        data['target_scan_ns'] == target for name, data in f.evidence)
+    f.clock.ros += 20_000_000; f.clock.steady += 20_000_000
+    resumed = adapter.tick()
+    assert resumed.source == resumed.SOURCE_SAFE_STOP
+    assert len(f.published) == published + 1
+
+
+def test_local_safety_does_not_suppress_boundary_without_prior_zero_stop(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    adapter.set_policy_hold(True)
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    adapter.set_policy_hold(False)
+    f.advance()
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    adapter.set_policy_hold(True)
+    adapter.arm_reset_scan_boundary(1_100_000_000)
+    f.clock.ros = 1_100_000_000; f.clock.steady += 20_000_000
+    output = adapter.tick()
+    assert output is not None and output.source == output.SOURCE_SAFE_STOP
+    assert adapter._reset_boundary_suppressed_stamp_ns is None
+    assert any(name == 'RESET_SAFE_STOP_BOUNDARY_NOT_SUPPRESSED' for name, _ in f.evidence)
+
+
 @pytest.mark.parametrize('clock_name', ['ros', 'steady'])
 def test_local_safety_single_clock_age_is_enforced(local_adapter, clock_name):
     f = local_adapter; f.adapter.tick(); f.advance()

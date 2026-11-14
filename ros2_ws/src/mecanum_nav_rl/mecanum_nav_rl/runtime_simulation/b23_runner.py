@@ -1026,15 +1026,13 @@ class TrainingWorkerIO:
         return {'iteration': status.applied_physics_iteration, 'stamp_ns': applied_stamp_ns}
 
     async def align_reset_zero_receipt_boundary(self, *, failed_cutoff_ns, deadline_ns):
-        """Skip one SAFE_STOP publication colliding with the next reset scan.
+        """Skip one colliding reset SAFE_STOP using observed receipt evidence.
 
-        B1 requires the selected zero to be natively applied by the scan
-        cutoff and an adjacent receipt strictly after it. If the 20 ms Safety
-        timer and 10 Hz scan timer share a phase, the receipt published on the
-        scan stamp cannot satisfy that contract: native applies it on a later
-        physics iteration. Keep the already-applied pre-cutoff zero, inhibit
-        admission, omit only the colliding timer output, and resume after that
-        scan stamp has passed. No freshness or watchdog limit is changed.
+        The timer's observed ROS stamps need not equal target minus its nominal
+        period. Pin the latest actually published/applied zero before the next
+        scan, suppress only the repeated zero at that exact scan stamp, then
+        require its adjacent receipt after the cutoff. B1 still enforces the
+        unchanged 500 ms freshness rule for both receipts.
         """
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
@@ -1046,99 +1044,104 @@ class TrainingWorkerIO:
         if len(scans) < 2 or scans[-1] != failed_cutoff_ns:
             raise RuntimeError('cannot align reset receipt without two ordered post-reset scans')
         scan_period_ns = scans[-1] - scans[-2]
-        safety_period_ns = self.ingress.profile['safety_period_ms'] * 1_000_000
-        if scan_period_ns <= safety_period_ns or scan_period_ns > self.ingress.profile['scan_max_age_ms'] * 1_000_000:
+        if scan_period_ns <= 0 or scan_period_ns > self.ingress.profile['scan_max_age_ms'] * 1_000_000:
             raise RuntimeError('observed scan cadence cannot safely align SAFE_STOP publication')
         target_ns = failed_cutoff_ns + scan_period_ns
-        selected_stamp_ns = target_ns - safety_period_ns
         life = self.ingress.lifecycle
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
-        last_output = self.safety.local_training.last_output
+        adapter = self.safety.local_training
+        last_output = adapter.last_output
         if (life is None
                 or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_INHIBITED
                 or self.ingress.last_published_admission_state != LocalTrainingSafetyInput.ADMISSION_INHIBITED
-                or not self.safety.local_training.policy_hold
+                or not adapter.policy_hold
                 or last_output is None or last_output.source != CommandEnvelope.SOURCE_SAFE_STOP):
             raise RuntimeError('reset receipt alignment requires admission to remain inhibited')
         identity = lifecycle_identity(life)
-
-        def applied_pre_cutoff():
-            receipts = [receipt for receipt in self.ingress.receipts
-                if receipt.source is ReceiptSource.SAFE_STOP
-                and receipt.publish_stamp_ns == selected_stamp_ns
-                and receipt.lifecycle == identity]
-            if len(receipts) != 1:
-                return None
-            receipt = receipts[0]
-            if any(receipt.final_command):
-                raise RuntimeError('pre-cutoff reset receipt is not zero')
-            for pair in reversed(self.ingress.physics_pairs):
-                if pair.stamp_ns >= target_ns:
-                    continue
-                state = deserialize_message(pair.backend_bytes, SimulationContactState)
-                if (state.applied_receipt_valid and not state.local_zero_override
-                        and state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
-                        and state.applied_final_publish_sequence == receipt.final_publish_sequence
-                        and state.applied_physics_iteration == pair.iteration
-                        and receipt.publish_stamp_ns <= stamp_ns(state.applied_sim_stamp) < target_ns):
-                    return receipt, state
-            return None
-
-        receipt, state = await self.until(applied_pre_cutoff, deadline_ns=deadline_ns,
-            phase='pre-cutoff reset SAFE_STOP application for scan alignment')
         if self.ros_now() >= target_ns:
             self.emit('RESET_RECEIPT_ALIGNMENT_MISSED', {'target_scan_ns': target_ns,
-                'receipt_sequence': receipt.final_publish_sequence,
-                'application_stamp_ns': stamp_ns(state.applied_sim_stamp), 'steady_ns': self.now()})
+                'reason': 'scan boundary already passed before suppression was armed',
+                'steady_ns': self.now()})
             return False
-
-        adapter = self.safety.local_training
-        disabled_ns = self.now()
         max_gap_ns = self.ingress.profile['final_command_timeout_ms'] * 1_000_000
-        adapter.set_stream_enabled(False)
-        self.emit('RESET_RECEIPT_ALIGNMENT_SUPPRESSED', {'target_scan_ns': target_ns,
-            'selected_receipt_sequence': receipt.final_publish_sequence,
-            'selected_receipt_stamp_ns': receipt.publish_stamp_ns,
-            'selected_application_iteration': state.applied_physics_iteration,
-            'selected_application_stamp_ns': stamp_ns(state.applied_sim_stamp),
-            'disabled_steady_ns': disabled_ns})
-        scan_seen = False
-        boundary_receipts = []
+        armed_ns = self.now()
+        adapter.arm_reset_scan_boundary(target_ns)
+        self.emit('RESET_RECEIPT_ALIGNMENT_ARMED', {'target_scan_ns': target_ns,
+            'failed_cutoff_ns': failed_cutoff_ns, 'armed_steady_ns': armed_ns,
+            'freshness_limit_ns': max_gap_ns})
         try:
-            await self.until(lambda: self.ros_now() > target_ns,
-                deadline_ns=min(deadline_ns, disabled_ns + max_gap_ns),
+            crossed = await self.until(lambda: self.ros_now() > target_ns,
+                deadline_ns=min(deadline_ns, armed_ns + max_gap_ns),
                 phase='reset scan boundary passage within final-command timeout')
-            scan_seen = target_ns in self.ingress.scans
-            boundary_receipts = [item for item in self.ingress.receipts
-                if item.publish_stamp_ns == target_ns]
-        finally:
-            adapter.set_stream_enabled(True)
-            resumed_ns = self.now()
-            self.emit('RESET_RECEIPT_ALIGNMENT_RESUMED', {'target_scan_ns': target_ns,
-                'scan_seen': scan_seen, 'boundary_receipt_count': len(boundary_receipts),
-                'disabled_steady_ns': disabled_ns, 'resumed_steady_ns': resumed_ns})
-        adjacent = None
-        receive_gap_ns = None
-        if scan_seen and not boundary_receipts:
+            suppressed = adapter._reset_boundary_suppressed_stamp_ns == target_ns
+            with self.ingress.lock:
+                scan_seen = target_ns in self.ingress.scans
+                receipts = tuple(self.ingress.receipts)
+                pairs = tuple(self.ingress.physics_pairs)
+            if not suppressed or not scan_seen:
+                self.emit('RESET_RECEIPT_ALIGNMENT_MISSED', {'target_scan_ns': target_ns,
+                    'scan_seen': scan_seen, 'suppressed': suppressed,
+                    'observed_ros_ns': crossed, 'steady_ns': self.now()})
+                return False
+
+            before = [item for item in receipts if item.lifecycle == identity
+                and item.source is ReceiptSource.SAFE_STOP and item.publish_stamp_ns < target_ns]
+            if not before:
+                raise RuntimeError('reset cutoff has no pre-boundary SAFE_STOP receipt')
+            receipt = max(before, key=lambda item: item.final_publish_sequence)
+            if any(receipt.final_command):
+                raise RuntimeError('pre-cutoff reset receipt is not zero')
+            state = None
+            for pair in reversed(pairs):
+                if pair.stamp_ns >= target_ns:
+                    continue
+                candidate = deserialize_message(pair.backend_bytes, SimulationContactState)
+                if (candidate.applied_receipt_valid and not candidate.local_zero_override
+                        and candidate.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
+                        and candidate.applied_final_publish_sequence == receipt.final_publish_sequence
+                        and candidate.applied_physics_iteration == pair.iteration
+                        and receipt.publish_stamp_ns <= stamp_ns(candidate.applied_sim_stamp) < target_ns):
+                    state = candidate
+                    break
+            if state is None:
+                raise RuntimeError('pre-cutoff SAFE_STOP lacks exact native application before scan boundary')
+            if (self.now() < receipt.received_steady_ns
+                    or self.now() - receipt.received_steady_ns > max_gap_ns
+                    or target_ns - receipt.publish_stamp_ns > max_gap_ns):
+                raise RuntimeError('pre-cutoff reset receipt exceeds 500 ms freshness at scan boundary')
+
             def next_boundary_receipt():
                 matches = [item for item in self.ingress.receipts
                     if item.final_publisher_instance_id == receipt.final_publisher_instance_id
                     and item.final_publish_sequence == receipt.final_publish_sequence + 1]
                 if not matches:
                     return None
-                if (len(matches) != 1 or matches[0].source is not ReceiptSource.SAFE_STOP
-                        or matches[0].publish_stamp_ns <= target_ns):
+                if (len(matches) != 1 or matches[0].lifecycle != identity
+                        or matches[0].source is not ReceiptSource.SAFE_STOP
+                        or matches[0].publish_stamp_ns <= target_ns
+                        or any(matches[0].final_command)):
                     raise RuntimeError('post-cutoff SAFE_STOP receipt does not prove the adjacent boundary')
                 return matches[0]
-            adjacent = await self.until(next_boundary_receipt, deadline_ns=deadline_ns,
+
+            adjacent_deadline = min(deadline_ns, receipt.received_steady_ns + max_gap_ns)
+            adjacent = await self.until(next_boundary_receipt, deadline_ns=adjacent_deadline,
                 phase='post-cutoff reset SAFE_STOP boundary receipt')
             receive_gap_ns = adjacent.received_steady_ns - receipt.received_steady_ns
-            if not 0 <= receive_gap_ns <= max_gap_ns:
-                raise RuntimeError('reset SAFE_STOP publication gap exceeded final-command timeout')
-        self.emit('RESET_RECEIPT_ALIGNMENT_BOUNDARY', {'target_scan_ns': target_ns,
-            'adjacent_receipt_sequence': None if adjacent is None else adjacent.final_publish_sequence,
-            'receipt_receive_gap_ns': receive_gap_ns})
-        return scan_seen and not boundary_receipts
+            if (not 0 <= receive_gap_ns <= max_gap_ns
+                    or self.now() - adjacent.received_steady_ns > max_gap_ns):
+                raise RuntimeError('reset SAFE_STOP publication gap exceeded 500 ms freshness')
+            self.emit('RESET_RECEIPT_ALIGNMENT_BOUNDARY', {'target_scan_ns': target_ns,
+                'selected_receipt_sequence': receipt.final_publish_sequence,
+                'selected_receipt_stamp_ns': receipt.publish_stamp_ns,
+                'selected_application_iteration': state.applied_physics_iteration,
+                'selected_application_stamp_ns': stamp_ns(state.applied_sim_stamp),
+                'adjacent_receipt_sequence': adjacent.final_publish_sequence,
+                'adjacent_receipt_stamp_ns': adjacent.publish_stamp_ns,
+                'receipt_receive_gap_ns': receive_gap_ns, 'steady_ns': self.now()})
+            return True
+        finally:
+            if adapter._reset_scan_boundary_stamp_ns == target_ns:
+                adapter.cancel_reset_scan_boundary(target_ns)
 
     @staticmethod
     def _time_msg(ns):

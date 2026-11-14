@@ -1,6 +1,7 @@
 """Biên deadline/ownership worker bằng I/O fakes, không tạo ROS context."""
 import asyncio
 import json
+import threading
 from types import SimpleNamespace as NS
 import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
@@ -1137,10 +1138,15 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
         backend_bytes=serialize_message(status))]
 
     stream_history, events = [], []
+    alignment_calls = []
     adapter = NS(policy_hold=True,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP),
         set_stream_enabled=lambda enabled: stream_history.append((enabled, clock.ns)))
     value.safety = NS(local_training=adapter)
+    async def align(*, failed_cutoff_ns, deadline_ns):
+        alignment_calls.append((failed_cutoff_ns, deadline_ns))
+        return True
+    value.align_reset_zero_receipt_boundary = align
     value.final = NS(publisher_instance_id=55)
     value.emit = lambda name, fields: events.append((name, fields))
     async def pause(seconds):
@@ -1208,7 +1214,8 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert previewed == [1_000_000_000, 1_100_000_000]
     assert application_checks == [1_000_000_000, 1_100_000_000]
     assert cutoffs == [1_100_000_000]
-    assert stream_history[0][0] is False and stream_history[-1][0] is True
+    assert alignment_calls and alignment_calls[0][0] == 1_000_000_000
+    assert not stream_history
     assert not [name for name, _ in events if name == 'RESET_RECEIPT_ALIGNMENT_DEFERRED']
     assert 'RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED' in [name for name, _ in events]
     assert control_calls == [(Control.Request.OP_CONFIRM_OBSERVATION0, 100_000_000)]
@@ -1289,6 +1296,86 @@ def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
     assert [name for name, _ in events] == [
         'RESET_RECEIPT_ALIGNMENT_DEFERRED', 'RESET_ADJACENT_BOUNDARY_NATIVE_APPLIED']
     assert confirmations == ['ack']
+
+
+def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp():
+    """Timer phase may skip target-safety_period; pin the real applied zero."""
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+    value, clock = worker()
+    ros_ns = [1_000_000_000]
+    target = 1_100_000_000
+    life = NS(episode_generation=1, reset_epoch=2, runtime_generation=3,
+        barrier_stamp=Time(sec=0, nanosec=800_000_000))
+    identity = lifecycle_identity(life)
+    applied = SimulationContactState()
+    applied.applied_receipt_valid = True
+    applied.local_zero_override = False
+    applied.applied_final_publisher_instance_id = 55
+    applied.applied_final_publish_sequence = 11
+    applied.applied_physics_iteration = 108
+    applied.applied_sim_stamp = Time(sec=1, nanosec=80_000_000)
+    receipt = NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
+        publish_stamp_ns=1_060_000_000, received_steady_ns=clock.ns,
+        final_publisher_instance_id=55, final_publish_sequence=11,
+        final_command=(0., 0., 0.))
+    adjacent = NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
+        publish_stamp_ns=1_120_000_000, received_steady_ns=0,
+        final_publisher_instance_id=55, final_publish_sequence=12,
+        final_command=(0., 0., 0.))
+    suppressed = NS(_reset_boundary_suppressed_stamp_ns=None,
+        _reset_scan_boundary_stamp_ns=None, policy_hold=True,
+        last_output=NS(source=1))
+    armed = []
+    def arm(stamp):
+        armed.append(stamp)
+        suppressed._reset_scan_boundary_stamp_ns = stamp
+    suppressed.arm_reset_scan_boundary = arm
+    suppressed.cancel_reset_scan_boundary = lambda stamp: setattr(
+        suppressed, '_reset_scan_boundary_stamp_ns', None)
+    value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=ros_ns[0])))
+    value.ros_now = lambda: ros_ns[0]
+    value.ingress = NS(lifecycle=life, scan_reset_stamp_ns=800_000_000,
+        scans={900_000_000: NS(stamp_ns=900_000_000), 1_000_000_000: NS(stamp_ns=1_000_000_000)},
+        profile={'safety_period_ms': 20, 'scan_max_age_ms': 500,
+            'final_command_timeout_ms': 500}, receipts=[receipt],
+        physics_pairs=[NS(stamp_ns=1_080_000_000, iteration=108,
+            backend_bytes=serialize_message(applied))], admission_state=0,
+        last_published_admission_state=0, fault=None, backend_state=NS(fault_flags=0),
+        lock=threading.RLock())
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    suppressed.last_output.source = CommandEnvelope.SOURCE_SAFE_STOP
+    value.safety = NS(local_training=suppressed)
+    value.final = NS(publisher_instance_id=55)
+    value.pause = None
+    events = []
+    value.emit = lambda name, fields: events.append((name, fields))
+
+    async def advance(seconds):
+        before = ros_ns[0]
+        await clock.pause(seconds)
+        ros_ns[0] = min(target + 10_000_000, before + 10_000_000)
+        if ros_ns[0] == target:
+            suppressed._reset_boundary_suppressed_stamp_ns = target
+            value.ingress.scans[target] = NS(stamp_ns=target)
+        elif ros_ns[0] > target and len(value.ingress.receipts) == 1:
+            adjacent.received_steady_ns = clock.ns
+            value.ingress.receipts.append(adjacent)
+
+    value.pause = advance
+    result = asyncio.run(value.align_reset_zero_receipt_boundary(
+        failed_cutoff_ns=1_000_000_000, deadline_ns=clock.ns + 300_000_000))
+    assert result is True
+    assert armed == [target]
+    boundary = next(fields for name, fields in events if name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY')
+    assert boundary['target_scan_ns'] == target
+    assert boundary['selected_receipt_sequence'] == 11
+    assert boundary['adjacent_receipt_sequence'] == 12
+    assert boundary['receipt_receive_gap_ns'] <= 500_000_000
 
 
 def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():
