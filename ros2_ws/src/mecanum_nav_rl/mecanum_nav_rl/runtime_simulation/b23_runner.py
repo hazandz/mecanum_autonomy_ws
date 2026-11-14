@@ -20,7 +20,8 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
     'FinalKillSignal=SIGKILL','RuntimeRandomizedExtraSec=0')
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
-    'R02b':'fault_task', 'R02f':'fault_task', 'R08': 'soak'}
+    'R02b':'fault_task', 'R02f':'fault_task', 'R03a':'fault_task',
+    'R03b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -30,6 +31,8 @@ CASE_HOOKS = {
     'R02a': (),
     'R02b': ('native_hold_admission_until_receipt',),
     'R02f': ('safety_hold_after_adapter_issuance',),
+    'R03a': ('drop_native_policy_receipt_once',),
+    'R03b': ('mutate_native_policy_transition_id_once',),
     'R08': (),
 }
 
@@ -66,7 +69,57 @@ def case_environment(case, hooks):
         return {'B23_PAUSE_ACK_FAULT': 'delay_1500ms_once'}
     if case == 'R01d' and hooks == ['drop_native_pause_ack_once']:
         return {'B23_PAUSE_ACK_FAULT': 'drop_once'}
+    if case == 'R03a' and hooks == ['drop_native_policy_receipt_once']:
+        return {'B23_RECEIPT_FAULT': 'drop_policy_once'}
+    if case == 'R03b' and hooks == ['mutate_native_policy_transition_id_once']:
+        return {'B23_RECEIPT_FAULT': 'mutate_policy_transition_id_once'}
     return {}
+
+
+async def verify_r03_receipt_fault(io, *, case, step_index, error):
+    """Bind injected native receipt disposition to the real published POLICY."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+    if not isinstance(error, (B1SnapshotPending, TimeoutError)):
+        raise RuntimeError('R03 did not stop through the expected cutoff/receipt path')
+    rows = [json.loads(line) for line in
+        (Path(io.descriptor['run_root'])/'native-events.jsonl').read_text().splitlines() if line.strip()]
+    mode = 'drop_policy_once' if case == 'R03a' else 'mutate_policy_transition_id_once'
+    injected = [row for row in rows if row.get('kind') == 'B23_RECEIPT_FAULT'
+        and row.get('fields', {}).get('mode') == mode]
+    if len(injected) != 1:
+        raise RuntimeError('R03 native receipt hook evidence is missing or repeated')
+    publications = [row for row in io.events if row[0] == 'FINAL_PUBLISHED'
+        and row[1].get('source') == CommandEnvelope.SOURCE_POLICY
+        and row[1].get('source_sequence') == step_index]
+    if len(publications) != 1:
+        raise RuntimeError('R03 requires exactly one real final POLICY publication')
+    receipt_ingress = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
+        and row.get('fields', {}).get('sequence') == str(publications[0][1]['publish_sequence'])]
+    if (case == 'R03a' and receipt_ingress) or (case == 'R03b' and len(receipt_ingress) != 1):
+        raise RuntimeError('R03 native receipt ingress does not match packet fault')
+    state = io.ingress.backend_state
+    observe_deadline = min(io.deadline_ns, io.now() + 250_000_000)
+    while ((state is None or state.fault_flags == 0 or not state.local_zero_override)
+           and io.now() < observe_deadline):
+        before = io.now()
+        await io.pause(min(.005, max(0., (observe_deadline-before)/1e9)))
+        if io.now() <= before:
+            raise RuntimeError('R03 fault evidence wait did not advance monotonic time')
+        state = io.ingress.backend_state
+    if state is None or state.fault_flags == 0 or not state.local_zero_override:
+        raise RuntimeError('R03 did not observe native fault with zero override')
+    if any(row[0] == 'POLICY_STEP_COMPLETE' and row[1].get('step_index') == step_index
+           for row in io.events):
+        raise RuntimeError('R03 unexpectedly completed a POLICY step')
+    if case == 'R03b':
+        fields = injected[0]['fields']
+        if fields.get('original_transition_id') == fields.get('mutated_transition_id'):
+            raise RuntimeError('R03b did not mutate only the native receipt copy')
+    return {'expected_fault': True, 'case': case, 'step_index': step_index,
+        'published_policy_sequence': publications[0][1]['publish_sequence'],
+        'native_fault_flags': state.fault_flags, 'local_zero_override': True,
+        'policy_step_committed': False, 'native_receipt_hook': fields if case == 'R03b' else injected[0]['fields']}
 
 
 async def verify_r01_pause_ack_failure(io, error):
@@ -1811,6 +1864,27 @@ async def training_child(path):
                 raise RuntimeError('R02f Safety hold did not produce the expected fail-closed path')
             outcome = {'case':'R02f','resets_confirmed':1,'policy_steps_committed':0,
                 **checked,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] in ('R03a', 'R03b'):
+            expected_env = case_environment(packet['case'], packet['fault_hooks'])
+            if any(packet['environment'].get(key) != value for key, value in expected_env.items()):
+                raise RuntimeError(packet['case'] + ' native receipt fault environment does not match packet')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            try:
+                await io.policy_step(b1, (0.4, 0., 0.))
+            except Exception as exc:
+                active_identity = b1.lifecycle.snapshot.active_transition_identity
+                if active_identity is None:
+                    raise RuntimeError('R03 failure lost the owned B1 pending-step identity') from exc
+                checked = await verify_r03_receipt_fault(io, case=packet['case'],
+                    step_index=active_identity.step_index, error=exc)
+                aborted = b1.lifecycle.abort_step(packet['case'] + '_native_receipt_fault')
+                outcome = {'case':packet['case'], 'resets_confirmed':1,
+                    'policy_steps_committed':0, 'b1_abort_status':str(aborted.status),
+                    **checked, 'completed_ns':time.monotonic_ns()}
+            if outcome is None:
+                raise RuntimeError(packet['case'] + ' expected native receipt fault was not observed')
         elif packet['case'] == 'R01a':
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)

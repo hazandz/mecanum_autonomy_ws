@@ -68,6 +68,20 @@ TEST(ReceiptGate, SameKeyChangedPayloadFaults)
   EXPECT_EQ(gate.ConsumeNext(2'200, 2'200).reason, "publication_key_content_conflict");
 }
 
+TEST(ReceiptGate, NativeMutatedTransitionIdentityFailsClosed)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  auto received = Policy();
+  const auto published_transition_id = received.transition_id;
+  received.transition_id += ".b23-injected-mismatch";
+  ASSERT_TRUE(gate.Enqueue(received, 2'100));
+  const auto result = gate.ConsumeNext(2'100, 2'100);
+  EXPECT_EQ(result.disposition, GateDisposition::Faulted);
+  EXPECT_EQ(result.reason, "policy_issuance_binding_mismatch");
+  EXPECT_EQ(gate.Watermark(), 100U);
+  EXPECT_NE(published_transition_id, received.transition_id);
+}
+
 TEST(ReceiptGate, RejectsReplayAndFaultsSequenceGap)
 {
   ReceiptGate gate(Binding()); AcceptAnchor(gate); auto r = Policy();

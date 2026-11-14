@@ -480,6 +480,15 @@ public:
       initialization_state_ = InitializationState::FAILED;
       return;
     }
+    const char *receipt_fault_env = std::getenv("B23_RECEIPT_FAULT");
+    receipt_fault_mode_ = receipt_fault_env ? receipt_fault_env : "";
+    if (!receipt_fault_mode_.empty() && receipt_fault_mode_ != "drop_policy_once" &&
+        receipt_fault_mode_ != "mutate_policy_transition_id_once")
+    {
+      SetFault(BackendState::FAULT_CONTEXT, "unsupported_b23_receipt_fault");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
     if (!sdf || entity == gz::sim::kNullEntity ||
         gz::sim::entityTypeId(entity, ecm) != gz::sim::components::Model::typeId)
     {
@@ -3138,6 +3147,32 @@ private:
                    msg.final_command.angular.y, msg.final_command.angular.z};
     std::lock_guard<std::mutex> lock(callback_mutex_);
     const auto receive_ns = steady_clock_now_();
+    if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
+        !receipt_fault_mode_.empty())
+    {
+      receipt_fault_used_ = true;
+      if (receipt_fault_mode_ == "drop_policy_once")
+      {
+        gzmsg << "B23_RECEIPT_FAULT mode=drop_policy_once publisher="
+              << msg.final_publisher_instance_id << " sequence="
+              << msg.final_publish_sequence << " source_sequence="
+              << msg.sequence << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+        return;
+      }
+      if (receipt_fault_mode_ == "mutate_policy_transition_id_once")
+      {
+        const auto original_transition_id = facts.transition_id;
+        facts.transition_id += ".b23-injected-mismatch";
+        gzmsg << "B23_RECEIPT_FAULT mode=mutate_policy_transition_id_once publisher="
+              << msg.final_publisher_instance_id << " sequence="
+              << msg.final_publish_sequence << " source_sequence="
+              << msg.sequence << " original_transition_id="
+              << original_transition_id << " mutated_transition_id="
+              << facts.transition_id << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+      }
+    }
     if (msg.source == Receipt::SOURCE_POLICY)
     {
       gzmsg << "B23_POLICY_RECEIPT_INGRESS publisher="
@@ -3572,6 +3607,8 @@ private:
   std::mutex callback_mutex_;
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
   std::string policy_order_fault_;
+  std::string receipt_fault_mode_;
+  bool receipt_fault_used_{};
   bool policy_order_hold_reported_{};
   std::deque<PendingControl> control_queue_;
   std::shared_ptr<ProbeServiceMailbox> probe_service_mailbox_{

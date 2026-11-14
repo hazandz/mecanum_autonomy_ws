@@ -7,7 +7,7 @@ import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
-    verify_r02_policy_order, verify_r02f_safety_hold,
+    verify_r02_policy_order, verify_r02f_safety_hold, verify_r03_receipt_fault,
 )
 
 
@@ -59,18 +59,58 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R02a') == []
     assert case_fault_hooks('R02b') == ['native_hold_admission_until_receipt']
     assert case_fault_hooks('R02f') == ['safety_hold_after_adapter_issuance']
+    assert case_fault_hooks('R03a') == ['drop_native_policy_receipt_once']
+    assert case_fault_hooks('R03b') == ['mutate_native_policy_transition_id_once']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R01c', case_fault_hooks('R01c')) == {
         'B23_PAUSE_ACK_FAULT':'delay_1500ms_once'}
     assert case_environment('R01d', case_fault_hooks('R01d')) == {
         'B23_PAUSE_ACK_FAULT':'drop_once'}
+    assert case_environment('R03a', case_fault_hooks('R03a')) == {
+        'B23_RECEIPT_FAULT':'drop_policy_once'}
+    assert case_environment('R03b', case_fault_hooks('R03b')) == {
+        'B23_RECEIPT_FAULT':'mutate_policy_transition_id_once'}
     assert case_environment('R01a', []) == {}
     with pytest.raises(ValueError, match='not approved for campaign case'):
         case_fault_hooks('R01a', 'pause_request_replay_after_terminal')
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+@pytest.mark.parametrize('case,mode,ingress_count', [
+    ('R03a','drop_policy_once',0),
+    ('R03b','mutate_policy_transition_id_once',1),
+])
+def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
+        tmp_path, case, mode, ingress_count):
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+
+    native = tmp_path/'native-events.jsonl'
+    native.write_text(json.dumps({'kind':'B23_RECEIPT_FAULT','fields':{
+        'mode':mode,'sequence':'77','original_transition_id':'policy-1',
+        'mutated_transition_id':'policy-1.b23-injected-mismatch'}})+'\n')
+    if ingress_count:
+        with native.open('a') as stream:
+            stream.write(json.dumps({'kind':'B23_POLICY_RECEIPT_INGRESS',
+                'fields':{'sequence':'77'}})+'\n')
+    io=NS(descriptor={'run_root':str(tmp_path)},
+        events=[('FINAL_PUBLISHED', {'source':CommandEnvelope.SOURCE_POLICY,
+            'source_sequence':1,'publish_sequence':77})],
+        ingress=NS(backend_state=NS(fault_flags=1,local_zero_override=True)),
+        now=lambda:100, deadline_ns=200, pause=None)
+    error=B1SnapshotPending('B1 cutoff pending: receipt fault')
+
+    result=asyncio.run(verify_r03_receipt_fault(io,case=case,step_index=1,error=error))
+
+    assert result['expected_fault'] is True
+    assert result['published_policy_sequence']==77
+    assert result['policy_step_committed'] is False
+    assert result['local_zero_override'] is True
+    with pytest.raises(RuntimeError,match='expected cutoff/receipt path'):
+        asyncio.run(verify_r03_receipt_fault(io,case=case,step_index=1,error=RuntimeError('unexpected')))
 
 
 def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
