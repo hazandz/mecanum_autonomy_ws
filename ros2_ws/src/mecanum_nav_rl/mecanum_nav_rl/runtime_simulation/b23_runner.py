@@ -949,16 +949,23 @@ class TrainingWorkerIO:
         original = self.pause_ack
         replayed = await self.control.replay(original, deadline_ns=min(
             self.deadline_ns, self.now() + 1_000_000_000))
-        if (replayed.request_bytes != original.request_bytes
-                or replayed.response_bytes != original.response_bytes):
-            raise RuntimeError('terminal pause replay differs from retained exact transaction')
+        from rosidl_runtime_py.convert import message_to_ordereddict
+        original_response, replayed_response = original.response, replayed.response
+        semantic_response_match = (
+            message_to_ordereddict(original_response) == message_to_ordereddict(replayed_response))
+        if replayed.request_bytes != original.request_bytes or not semantic_response_match:
+            raise RuntimeError('terminal pause replay request or semantic response differs from retained transaction')
         self.emit('PAUSE_INTENT_EXACT_REPLAY_AFTER_TERMINAL', {
             'request_sequence': original.request.request_sequence,
             'request_cdr_hex': original.request_bytes.hex(),
+            'original_response_cdr_hex': original.response_bytes.hex(),
             'response_cdr_hex': replayed.response_bytes.hex(),
+            'original_response_semantic': message_to_ordereddict(original_response),
+            'replay_response_semantic': message_to_ordereddict(replayed_response),
             'original_applied_ns': original.observed_steady_ns,
             'replay_observed_ns': replayed.observed_steady_ns,
-            'exact_request_and_response_bytes': True,
+            'exact_request_bytes': True,
+            'semantic_response_match': True,
         })
         return replayed
 

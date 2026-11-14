@@ -66,11 +66,20 @@ def test_active_deadline_is_never_extended_by_predicate_budget():
 
 def test_terminal_pause_replay_resubmits_exact_owned_bytes_and_records_evidence():
     value, clock = worker()
-    request = NS(request_sequence=17)
-    original = NS(request=request, request_bytes=b'request-cdr', response_bytes=b'applied-cdr',
-                  observed_steady_ns=clock.ns)
-    replayed = NS(request=request, request_bytes=b'request-cdr', response_bytes=b'applied-cdr',
-                  observed_steady_ns=clock.ns + 1)
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    request = Control.Request(); request.request_sequence = 17
+    response = Control.Response(); response.schema_version = response.RESPONSE_SCHEMA_VERSION
+    response.result = response.RESULT_APPLIED; response.reason_code = response.REASON_NONE
+    response.request_sequence = 17; response.backend_instance_id = 22
+    response.binding_revision = response.applied_binding_revision = 4
+    response.applied_physics_iteration = 90
+    original = BackendControlAck(serialize_message(request), serialize_message(response), clock.ns)
+    # Response CDR bytes can differ in padding after ROSIDL serialization;
+    # the replay contract is exact request plus the same decoded response fields.
+    replayed = NS(request_bytes=original.request_bytes, response_bytes=b'raw-replay-cdr-differs',
+                  response=response, observed_steady_ns=clock.ns + 1)
     calls, events = [], []
     async def replay(ack, *, deadline_ns):
         calls.append((ack, deadline_ns))
@@ -82,20 +91,29 @@ def test_terminal_pause_replay_resubmits_exact_owned_bytes_and_records_evidence(
     assert calls == [(original, value.deadline_ns)]
     assert events[0][0] == 'PAUSE_INTENT_EXACT_REPLAY_AFTER_TERMINAL'
     assert events[0][1]['request_sequence'] == 17
-    assert events[0][1]['exact_request_and_response_bytes'] is True
+    assert events[0][1]['exact_request_bytes'] is True
+    assert events[0][1]['semantic_response_match'] is True
+    assert events[0][1]['original_response_cdr_hex'] != events[0][1]['response_cdr_hex']
 
 
 def test_terminal_pause_replay_rejects_different_response_bytes():
     value, clock = worker()
-    original = NS(request=NS(request_sequence=4), request_bytes=b'request',
-                  response_bytes=b'applied', observed_steady_ns=clock.ns)
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    request = Control.Request(); request.request_sequence = 4
+    response = Control.Response(); response.schema_version = response.RESPONSE_SCHEMA_VERSION
+    response.result = response.RESULT_APPLIED; response.request_sequence = 4
+    original = BackendControlAck(serialize_message(request), serialize_message(response), clock.ns)
+    rejected = Control.Response(); rejected.schema_version = rejected.RESPONSE_SCHEMA_VERSION
+    rejected.result = rejected.RESULT_REJECTED; rejected.request_sequence = 4
     value.pause_ack = original
     async def replay(ack, *, deadline_ns):
-        return NS(request=ack.request, request_bytes=ack.request_bytes,
-                  response_bytes=b'different', observed_steady_ns=clock.ns)
+        return NS(request_bytes=ack.request_bytes, response_bytes=b'different',
+                  response=rejected, observed_steady_ns=clock.ns)
     value.control = NS(replay=replay)
     value.emit = lambda *_: None
-    with pytest.raises(RuntimeError, match='differs from retained exact transaction'):
+    with pytest.raises(RuntimeError, match='semantic response differs'):
         asyncio.run(value.replay_pause_intent_after_terminal())
 
 
