@@ -919,3 +919,47 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert events[2][1]['receipt_receive_gap_ns'] <= 100_000_000
     assert control_calls == [(Control.Request.OP_CONFIRM_OBSERVATION0, 100_000_000)]
     assert confirmations == ['actual-ack']
+
+
+def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():
+    """A >500 ms W1 is retained for pause, while B1 receives fresh L2 zero."""
+    value, clock = worker()
+    clock.ns = 2_000_000_000
+    w1 = NS(final_publish_sequence=24, received_steady_ns=1_400_000_000,
+        applied_sim_stamp_ns=630_000_000)
+    fresh = NS(final_publish_sequence=25, received_steady_ns=clock.ns,
+        applied_sim_stamp_ns=900_000_000, applied_physics_iteration=90)
+    order, events = [], []
+    b1 = NS(begin_reset=lambda: order.append(('begin_reset', clock.ns)))
+    value.ingress = NS(inhibit=lambda: order.append(('inhibit', clock.ns)))
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
+        order.append(('stream', enabled, clock.ns))))
+    async def freeze_zero(*, deadline_ns):
+        order.append(('fresh_zero_applied', clock.ns, deadline_ns))
+        return fresh
+    async def confirm(b1_arg, *, deadline_ns, zero_receipt):
+        order.append(('b1_cutoff', clock.ns, deadline_ns, zero_receipt))
+        assert b1_arg is b1
+        assert zero_receipt is fresh
+        assert clock.ns - zero_receipt.received_steady_ns <= 500_000_000
+        assert clock.ns - w1.received_steady_ns > 500_000_000
+        return 'confirmed-observation0', 910_000_000
+    value.freeze_zero = freeze_zero
+    value.commit_and_confirm_observation0 = confirm
+    value.now = clock.now
+    value.emit = lambda name, fields: events.append((name, fields))
+
+    result = asyncio.run(value.confirm_observation0_after_resume(
+        b1, deadline_ns=clock.ns + 15_000_000_000,
+        seed=2026102900, w0=NS(final_publish_sequence=11), w1=w1,
+        l1=NS(sequence=3), l2=NS(sequence=4), started_ns=1_000_000_000))
+
+    assert result == 'confirmed-observation0'
+    assert [item[0] for item in order] == [
+        'begin_reset', 'inhibit', 'stream', 'fresh_zero_applied', 'stream', 'b1_cutoff']
+    assert order[-1][3] is fresh
+    assert events[0][0] == 'OBSERVATION0_ZERO_ANCHOR'
+    assert events[0][1]['publish_sequence'] == 25
+    assert events[-1][0] == 'RESET_COMPLETE'
+    assert events[-1][1]['W1'] == 24
+    assert events[-1][1]['zero_anchor_sequence'] == 25

@@ -713,12 +713,25 @@ class TrainingWorkerIO:
             final_publisher_instance_id=self.final.publisher_instance_id, policy_source_instance_id=self.policy_source_id,
             safe_stop_source_instance_id=self.safe_stop_source_id,
             next_safe_stop_sequence=self.safety.local_training.safe_stop_sequence + 1)
+        return await self.confirm_observation0_after_resume(b1, deadline_ns=deadline,
+            seed=seed, w0=w0, w1=facts.applied_zero_receipt, l1=l1, l2=l2,
+            started_ns=started)
+
+    async def confirm_observation0_after_resume(self, b1, *, deadline_ns,
+            seed, w0, w1, l1, l2, started_ns):
+        """Re-anchor reset confirmation with a fresh applied zero after L2.
+
+        W1 proves the zero used to enter pause. The paused hold and resume may
+        consume its 500 ms receipt freshness budget, so observation0 must use a
+        newly published and natively applied SAFE_STOP receipt in the rebound
+        L2 context.
+        """
         # Sau L2, phát và xác minh một zero SAFE_STOP mới để B1 dùng
         # receipt còn mới tại cutoff, thay vì W1 đã cũ qua pause/resume.
         b1.begin_reset()
         self.ingress.inhibit()
         self.safety.local_training.set_stream_enabled(True)
-        observation0_zero = await self.freeze_zero(deadline_ns=deadline)
+        observation0_zero = await self.freeze_zero(deadline_ns=deadline_ns)
         self.emit('OBSERVATION0_ZERO_ANCHOR', {'publish_sequence': observation0_zero.final_publish_sequence,
             'application_stamp_ns': observation0_zero.applied_sim_stamp_ns,
             'application_iteration': observation0_zero.applied_physics_iteration, 'steady_ns': self.now()})
@@ -726,11 +739,12 @@ class TrainingWorkerIO:
         # lúc chờ exact sensor join và CONFIRM; POLICY vẫn chưa được bind.
         self.safety.local_training.set_stream_enabled(True)
         observation, cutoff = await self.commit_and_confirm_observation0(
-            b1, deadline_ns=deadline, zero_receipt=observation0_zero)
+            b1, deadline_ns=deadline_ns, zero_receipt=observation0_zero)
         self.emit('RESET_COMPLETE', {'seed': seed, 'observation0_cutoff_ns': cutoff,
-            'W0': w0.final_publish_sequence, 'W1': facts.applied_zero_receipt.final_publish_sequence,
+            'W0': w0.final_publish_sequence, 'W1': w1.final_publish_sequence,
+            'zero_anchor_sequence': observation0_zero.final_publish_sequence,
             'l1_sequence': l1.sequence, 'l2_sequence': l2.sequence,
-            'started_ns': started, 'completed_ns': self.now(), 'deadline_ns': deadline})
+            'started_ns': started_ns, 'completed_ns': self.now(), 'deadline_ns': deadline_ns})
         return observation
 
     async def commit_and_confirm_observation0(self, b1, *, deadline_ns, zero_receipt=None):
