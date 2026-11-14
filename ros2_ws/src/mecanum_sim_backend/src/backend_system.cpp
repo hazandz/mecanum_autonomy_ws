@@ -2122,7 +2122,7 @@ private:
           request->world_control.pause = true;
           const auto clock = steady_clock_now_;
           reset_pause_client_->async_send_request(request,
-              [completion = std::move(completion), clock, pause_ack_fault,
+              [this, completion = std::move(completion), clock, pause_ack_fault,
                pause_ack_fault_used](
                   rclcpp::Client<backend_detail::ControlWorld>::SharedFuture future) {
                 bool success = false;
@@ -2135,7 +2135,13 @@ private:
                   gzmsg << "B23_PAUSE_ACK_FAULT mode=delay_1500ms_once delay_ms=1500"
                         << std::endl;
                   std::fflush(stdout);
-                  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+                  pause_ack_fault_timer_ = node_->create_wall_timer(
+                      std::chrono::milliseconds(1500),
+                      [this, completion = std::move(completion), clock, success]() {
+                        completion(success, clock());
+                        if (pause_ack_fault_timer_) pause_ack_fault_timer_->cancel();
+                      });
+                  return;
                 }
                 else if (inject && pause_ack_fault == "drop_once")
                 {
@@ -3344,6 +3350,7 @@ private:
   rclcpp::Client<DeleteEntity>::SharedPtr probe_delete_client_;
   ProbeServiceTransport probe_transport_;
   rclcpp::Client<backend_detail::ControlWorld>::SharedPtr reset_pause_client_;
+  rclcpp::TimerBase::SharedPtr pause_ack_fault_timer_;
   std::function<bool()> reset_pause_ready_;
   std::function<void(std::function<void(bool, std::int64_t)>)> reset_pause_dispatch_;
   std::shared_ptr<PauseMailbox> pause_mailbox_{std::make_shared<PauseMailbox>()};
