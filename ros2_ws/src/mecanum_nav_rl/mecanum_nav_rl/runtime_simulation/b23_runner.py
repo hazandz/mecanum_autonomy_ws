@@ -219,6 +219,27 @@ async def query_replacement_backend_then_inhibit(control, *, query_deadline_ns,
     return fresh_ack, inhibit_ack
 
 
+def r07b_stale_rollback_input_reason(topic, message, wire, ingress):
+    """Nhận diện đúng sample cũ cần quarantine trước khi ingress latch lỗi."""
+    stamp = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
+    with ingress.lock:
+        if topic == '/mecanum/final_issued_command':
+            watermark = ingress._last_receipt_stamp_ns
+            if stamp < watermark:
+                return 'receipt_source_stamp_below_pinned_high_watermark', stamp, watermark
+        elif topic == '/mecanum/internal/ground_truth/odom':
+            watermark = ingress._last_gt_stamp
+            if stamp < watermark:
+                return 'oracle_source_stamp_below_pinned_high_watermark', stamp, watermark
+            if stamp == watermark and wire != ingress._last_gt_bytes:
+                return 'oracle_same_stamp_bytes_conflict_with_pinned_sample', stamp, watermark
+        elif topic == '/scan':
+            existing = ingress.scans.get(stamp)
+            if existing is not None and wire != existing.message_bytes:
+                return 'scan_same_stamp_bytes_conflict_with_pinned_sample', stamp, stamp
+    return None
+
+
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  pre_pause_policy_step_identities,
                                  post_pause_policy_step_identities, reset_count_before,
@@ -1552,6 +1573,26 @@ class TrainingWorkerIO:
                 'message_info':{key:value for key,value in info.items() if type(value) is int}})
             try:
                 message = deserialize_message(wire,message_type)
+                rollback_active = (
+                    'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                    and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
+                         or getattr(self, '_r07b_rollback_observed', None) is not None))
+                if rollback_active and getattr(self, 'ingress', None) is not None:
+                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress)
+                    if stale is not None:
+                        reason, source_stamp_ns, watermark_ns = stale
+                        event = {
+                            '/mecanum/final_issued_command':'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED',
+                            '/mecanum/internal/ground_truth/odom':'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED',
+                            '/scan':'B23_R07B_POST_ROLLBACK_SCAN_REJECTED',
+                        }[topic]
+                        self.emit(event, {
+                            'reason':reason,'source_stamp_ns':source_stamp_ns,
+                            'pinned_high_watermark_ns':watermark_ns,
+                            'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                            'quarantined_before_ingress_validation':True,
+                            'detected_ns':self.now()})
+                        return None
                 if (topic == '/mecanum/local_training/backend_state'
                         and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                         and self._r07b_rollback_observed is not None
@@ -1642,44 +1683,6 @@ class TrainingWorkerIO:
             except BaseException as error:
                 self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
-                if (topic == '/mecanum/final_issued_command'
-                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
-                        and self._r07b_rollback_observed is not None
-                        and repr(error) == "ValueError('receipt source timestamp rollback or future')"):
-                    self.emit('B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED', {
-                        'reason':'receipt source timestamp rollback or future',
-                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                        'detected_ns':self.now()})
-                    return None
-                if (topic == '/mecanum/internal/ground_truth/odom'
-                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
-                        and self._r07b_rollback_observed is not None
-                        and repr(error) in ("ValueError('oracle clock rollback')",
-                                            "ValueError('oracle same stamp changed bytes')")):
-                    # Ingress vẫn pin high-watermark cũ và cố ý từ chối mọi
-                    # mẫu oracle thấp hơn sau time_only reset. Chỉ ghi nhận
-                    # rồi bỏ các callback rollback để pump tiếp tục quan sát
-                    # backend replacement; không hạ watermark hay dùng dữ
-                    # liệu cũ để tạo physics pair.
-                    reason = str(error)
-                    self.emit('B23_R07B_POST_ROLLBACK_ORACLE_REJECTED', {
-                        'reason':reason,
-                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                        'detected_ns':self.now()})
-                    return None
-                if (topic == '/scan'
-                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
-                        and self._r07b_rollback_observed is not None
-                        and repr(error) == "ValueError('scan same stamp changed bytes')"):
-                    # time_only reset có thể tái sử dụng ROS stamp đang có
-                    # trong cache của session cũ. Không thay cache hoặc nhận
-                    # mẫu mới vào reset/policy; ghi raw hash và giữ pump sống
-                    # để quan sát identity backend mới.
-                    self.emit('B23_R07B_POST_ROLLBACK_SCAN_REJECTED', {
-                        'reason':'scan same stamp changed bytes',
-                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                        'detected_ns':self.now()})
-                    return None
                 raise
         return receive
 

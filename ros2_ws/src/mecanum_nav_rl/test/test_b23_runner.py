@@ -722,6 +722,8 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
     worker._r07b_rollback_observed = {'delta_ns':-1}
     worker._r07b_replacement_backend_statuses = []
+    worker.ingress = NS(lock=threading.RLock(), _last_receipt_stamp_ns=100,
+        _last_gt_stamp=100, _last_gt_bytes=b'old-oracle', scans={}, fault=None)
     worker.now = lambda: 777
     events = []
     worker.emit = lambda name, facts: events.append((name, facts))
@@ -743,10 +745,14 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     receipt = FinalIssuedCommandReceipt()
     returned = worker.observed_callback(FinalIssuedCommandReceipt,
         '/mecanum/final_issued_command',
-        lambda _: (_ for _ in ()).throw(ValueError('receipt source timestamp rollback or future')))(
+        lambda _: pytest.fail('stale receipt must be quarantined before ingress validation'))(
             serialize_message(receipt), {})
     assert returned is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED'
+    assert events[-1][1]['quarantined_before_ingress_validation'] is True
+    assert worker.ingress.fault is None
+
+    receipt.header.stamp.nanosec = 200
 
     with pytest.raises(ValueError, match='unrelated receipt failure'):
         worker.observed_callback(FinalIssuedCommandReceipt,
@@ -761,24 +767,34 @@ def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
     worker = object.__new__(TrainingWorkerIO)
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
     worker._r07b_rollback_observed = {'delta_ns':-360_000_000}
+    worker.ingress = NS(lock=threading.RLock(), _last_receipt_stamp_ns=-1,
+        _last_gt_stamp=100, _last_gt_bytes=b'old-oracle', scans={}, fault=None)
     worker.now = lambda: 888
     events = []
     worker.emit = lambda name, facts: events.append((name, facts))
     oracle = Odometry()
+    oracle.header.stamp.nanosec = 90
     result = worker.observed_callback(Odometry,
         '/mecanum/internal/ground_truth/odom',
-        lambda _: (_ for _ in ()).throw(ValueError('oracle clock rollback')))(
+        lambda _: pytest.fail('stale oracle must be quarantined before ingress validation'))(
             serialize_message(oracle), {})
     assert result is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED'
-    assert events[-1][1]['reason'] == 'oracle clock rollback'
+    assert events[-1][1]['reason'] == 'oracle_source_stamp_below_pinned_high_watermark'
+    assert events[-1][1]['quarantined_before_ingress_validation'] is True
+    assert worker.ingress.fault is None
+
+    oracle.header.stamp.nanosec = 100
     result = worker.observed_callback(Odometry,
         '/mecanum/internal/ground_truth/odom',
-        lambda _: (_ for _ in ()).throw(ValueError('oracle same stamp changed bytes')))(
+        lambda _: pytest.fail('same-stamp conflict must be quarantined before ingress validation'))(
             serialize_message(oracle), {})
     assert result is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED'
-    assert events[-1][1]['reason'] == 'oracle same stamp changed bytes'
+    assert events[-1][1]['reason'] == 'oracle_same_stamp_bytes_conflict_with_pinned_sample'
+    assert worker.ingress.fault is None
+
+    oracle.header.stamp.nanosec = 101
     with pytest.raises(ValueError, match='unrelated oracle failure'):
         worker.observed_callback(Odometry,
             '/mecanum/internal/ground_truth/odom',
@@ -786,22 +802,30 @@ def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
                 serialize_message(oracle), {})
 
 
-def test_r07b_callback_records_and_drops_only_same_stamp_scan_conflict_after_rollback():
+def test_r07b_same_stamp_conflicting_scan_is_quarantined_before_ingress_fault():
     from sensor_msgs.msg import LaserScan
     from rclpy.serialization import serialize_message
     worker = object.__new__(TrainingWorkerIO)
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
-    worker._r07b_rollback_observed = {'delta_ns':-310_000_000}
+    worker._r07b_rollback_pending_before_ns = 1_000_000_000
+    worker._r07b_rollback_observed = None
+    worker.ingress = NS(lock=threading.RLock(), _last_receipt_stamp_ns=-1,
+        _last_gt_stamp=-1, _last_gt_bytes=None,
+        scans={250_000_000:NS(message_bytes=b'previous-scan')}, fault=None)
     worker.now = lambda: 999
     events = []
     worker.emit = lambda name, facts: events.append((name, facts))
     scan = LaserScan()
+    scan.header.stamp.nanosec = 250_000_000
     result = worker.observed_callback(LaserScan, '/scan',
-        lambda _: (_ for _ in ()).throw(ValueError('scan same stamp changed bytes')))(
+        lambda _: pytest.fail('conflicting scan must be quarantined before ingress validation'))(
             serialize_message(scan), {})
     assert result is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_SCAN_REJECTED'
-    assert events[-1][1]['reason'] == 'scan same stamp changed bytes'
+    assert events[-1][1]['reason'] == 'scan_same_stamp_bytes_conflict_with_pinned_sample'
+    assert events[-1][1]['quarantined_before_ingress_validation'] is True
+    assert worker.ingress.fault is None
+    scan.header.stamp.nanosec = 250_000_001
     with pytest.raises(ValueError, match='unrelated scan failure'):
         worker.observed_callback(LaserScan, '/scan',
             lambda _: (_ for _ in ()).throw(ValueError('unrelated scan failure')))(
