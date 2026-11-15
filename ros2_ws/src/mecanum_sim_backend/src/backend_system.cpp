@@ -1037,18 +1037,24 @@ private:
     const auto query_ack_ns =
         contact_coverage_fault_query_ack_ns_.load(std::memory_order_acquire);
     if (query_ack_ns <= 0) return;
+    // The 500 ms delay is part of the R05 trigger. Do not pin a physics
+    // iteration before that delay: the old value could pass while waiting,
+    // making the later "masked" event leave every coverage sample intact.
+    const auto steady_now_ns = steady_clock_now_();
+    if (steady_now_ns < query_ack_ns + 500'000'000)
+      return;
     if (contact_coverage_fault_target_iteration_ == 0)
     {
-      contact_coverage_fault_target_iteration_ = info.iterations + 1;
+      contact_coverage_fault_target_iteration_ = info.iterations;
       gzmsg << "B23_CONTACT_COVERAGE_FAULT_ARMED mode="
             << contact_coverage_fault_mode_
             << " iteration=" << contact_coverage_fault_target_iteration_
             << " capability_revision=" << capability_revision_
-            << " query_ack_ns=" << query_ack_ns << std::endl;
+            << " query_ack_ns=" << query_ack_ns
+            << " trigger_steady_ns=" << steady_now_ns << std::endl;
       std::fflush(stdout);
     }
-    if (info.iterations < contact_coverage_fault_target_iteration_ ||
-        steady_clock_now_() < query_ack_ns + 500'000'000)
+    if (info.iterations < contact_coverage_fault_target_iteration_)
       return;
 
     gz::sim::Entity selected = gz::sim::kNullEntity;

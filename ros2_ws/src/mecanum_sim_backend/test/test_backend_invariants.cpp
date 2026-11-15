@@ -1206,6 +1206,10 @@ public:
   static bool CoverageFaultWasApplied(const BackendSystem &system)
   { return system.contact_coverage_fault_fired_; }
 
+  static std::uint64_t CoverageFaultTargetIteration(
+      const BackendSystem &system)
+  { return system.contact_coverage_fault_target_iteration_; }
+
   static std::uint64_t ProbeSensor(const BackendSystem &system)
   {
     return system.probe_sensor_entity_;
@@ -4539,16 +4543,26 @@ TEST(BackendSystemContactBinding,
       gz::sim::components::ContactSensorData(gz::msgs::Contacts()));
   BackendSystemTestPeer::PreparePinnedCoverageMask(system, collision);
 
-  const auto before_deadline = BackendSystemTestPeer::RunCoverageMaskSample(
-      system, ecm, 14, 2'499'999'999);
-  EXPECT_FALSE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
-  EXPECT_TRUE(before_deadline.healthy);
-  EXPECT_TRUE(before_deadline.coverage_complete);
-  EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr);
+  // Physics keeps advancing during the 500 ms steady-time delay. The mask
+  // must target the iteration at the trigger, not an iteration from before
+  // the delay that has already passed by the time masking begins.
+  for (std::uint64_t iteration = 14; iteration < 64; ++iteration)
+  {
+    const auto steady_ns = 2'000'000'000 +
+        static_cast<std::int64_t>(iteration - 14) * 10'000'000;
+    const auto sample = BackendSystemTestPeer::RunCoverageMaskSample(
+        system, ecm, iteration, steady_ns);
+    EXPECT_TRUE(sample.healthy) << "iteration=" << iteration;
+    EXPECT_TRUE(sample.coverage_complete) << "iteration=" << iteration;
+    EXPECT_FALSE(BackendSystemTestPeer::CoverageFaultWasApplied(system))
+        << "iteration=" << iteration;
+    ASSERT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr);
+  }
 
   const auto after_deadline = BackendSystemTestPeer::RunCoverageMaskSample(
-      system, ecm, 15, 2'500'000'000);
+      system, ecm, 64, 2'500'000'000);
   EXPECT_TRUE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
+  EXPECT_EQ(BackendSystemTestPeer::CoverageFaultTargetIteration(system), 64u);
   EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr)
       << "R05 must not remove an ECS component read by Gazebo's Contact system";
   EXPECT_FALSE(after_deadline.healthy);
