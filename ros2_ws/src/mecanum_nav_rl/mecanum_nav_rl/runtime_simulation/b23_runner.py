@@ -526,16 +526,20 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
     receipt_ns = int(receipts[0]['fields']['receive_ns'])
     admission_ns = int(admissions[0]['fields']['processed_ns'])
     admission_receive_ns = int(admissions[0]['fields']['receive_ns'])
-    if not 0 <= admission_ns-admission_receive_ns <= 40_000_000:
-        raise RuntimeError('R02 admission processing exceeded the 40 ms bounded join window')
     expected = admission_ns < receipt_ns if case == 'R02a' else receipt_ns < admission_ns
     if case not in ('R02a','R02b') or not expected:
         raise RuntimeError(f'{case} native gate order mismatch: receipt={receipt_ns} admission={admission_ns}')
-    if case == 'R02b' and not any(row.get('kind') == 'B23_POLICY_ADMISSION_HELD'
-            and int(row.get('fields',{}).get('receive_ns','0')) == admission_receive_ns for row in rows):
-        raise RuntimeError('R02b does not prove the packet-scoped admission hold')
+    admission_to_receipt_ns = receipt_ns - admission_receive_ns
+    if case == 'R02b':
+        if not 0 <= admission_to_receipt_ns <= 40_000_000:
+            raise RuntimeError('R02b receipt did not arrive within the 40 ms bounded admission hold')
+        held = [row for row in rows if row.get('kind') == 'B23_POLICY_ADMISSION_HELD'
+            and int(row.get('fields',{}).get('receive_ns','0')) == admission_receive_ns]
+        if not held or int(held[0].get('fields',{}).get('limit_ns','0')) != 40_000_000:
+            raise RuntimeError('R02b does not prove the packet-scoped 40 ms admission hold')
     return {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
         'admission_gate_ns':admission_ns,'admission_minus_receipt_ns':admission_ns-receipt_ns,
+        'admission_to_receipt_ns':admission_to_receipt_ns,
         'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
 
 

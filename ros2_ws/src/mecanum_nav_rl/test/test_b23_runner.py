@@ -837,13 +837,41 @@ def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     assert verify_r02_policy_order(tmp_path,case='R02a',step_started_ns=50)['order']=='admission_before_receipt'
     rows[0]['fields']['receive_ns']='150'
     rows[1]['fields']['receive_ns']='100'; rows[1]['fields']['processed_ns']='200'
-    rows.append({'kind':'B23_POLICY_ADMISSION_HELD','fields':{'receive_ns':'100'}})
+    rows.append({'kind':'B23_POLICY_ADMISSION_HELD','fields':{
+        'receive_ns':'100','limit_ns':'40000000'}})
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     assert verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)['order']=='receipt_before_admission'
     rows[0]['fields']['receive_ns']='300'
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     with pytest.raises(RuntimeError,match='order mismatch'):
         verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)
+
+
+def test_r02b_measures_receipt_arrival_not_later_physics_tick(tmp_path):
+    import json
+    path=tmp_path/'native-events.jsonl'
+    admission_ns=1_000_000_000
+    receipt_ns=admission_ns+39_500_000
+    # Gazebo may not run the next physics update until after 40 ms. The
+    # protocol bound concerns when the second input arrived, not when that
+    # later update drained the already-ready callback queue.
+    rows=[
+        {'kind':'B23_POLICY_ADMISSION_HELD','fields':{
+            'receive_ns':str(admission_ns),'held_ns':'8_000_000','limit_ns':'40000000'}},
+        {'kind':'B23_POLICY_RECEIPT_INGRESS','fields':{
+            'step':'1','receive_ns':str(receipt_ns)}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{
+            'receive_ns':str(admission_ns),'processed_ns':str(admission_ns+48_000_000)}},
+    ]
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    result=verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
+    assert result['order']=='receipt_before_admission', result
+    assert result['admission_to_receipt_ns']==39_500_000, result
+
+    rows[1]['fields']['receive_ns']=str(admission_ns+40_000_001)
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    with pytest.raises(RuntimeError,match='within the 40 ms bounded admission hold'):
+        verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
 
 
 def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
