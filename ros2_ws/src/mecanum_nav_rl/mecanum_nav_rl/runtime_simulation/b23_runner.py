@@ -1320,15 +1320,30 @@ class TrainingWorkerIO:
                         and self._r06c_hold_after_sequence is not None
                         and int(message.source) == message.SOURCE_SAFE_STOP
                         and int(message.final_publish_sequence) > self._r06c_hold_after_sequence):
+                    # Keep the actual ingress/application join alive, but hide
+                    # post-anchor receipts from B1's reset-cutoff selector.
+                    # Returning before ingress.on_receipt() also withholds the
+                    # join key from native application observations and fills
+                    # its bounded unresolved-application queue long before the
+                    # reset deadline; that tests observer overflow, not the
+                    # missing B1 cutoff receipt.
+                    receipt_view = callback(message)
+                    sequence = int(message.final_publish_sequence)
+                    with self.ingress.lock:
+                        if (not self.ingress.receipts
+                                or self.ingress.receipts[-1] is not receipt_view
+                                or receipt_view.final_publish_sequence != sequence):
+                            raise RuntimeError('R06c could not isolate the actual receipt from B1 cutoff selection')
+                        self.ingress.receipts.pop()
                     record = {'case':'R06c',
                         'final_publish_sequence':int(message.final_publish_sequence),
                         'header_stamp_ns':int(message.header.stamp.sec)*1_000_000_000 + int(message.header.stamp.nanosec),
                         'wire_cdr_hex':wire.hex(), 'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                        'held_ns':self.now(), 'hold_after_sequence':self._r06c_hold_after_sequence,
+                        'withheld_from_b1_ns':self.now(), 'hold_after_sequence':self._r06c_hold_after_sequence,
                         'reset_deadline_ns':self._r06c_reset_deadline_ns}
                     self._r06c_held_receipts.append(record)
-                    self.emit('B23_R06C_OBSERVATION0_RECEIPT_HELD', record)
-                    return None
+                    self.emit('B23_R06C_OBSERVATION0_RECEIPT_WITHHELD_FROM_B1', record)
+                    return receipt_view
                 # R04d delays lifecycle delivery to both consumers. Delaying
                 # Safety alone lets ingress advance first and rejects the old
                 # SAFE_STOP identity before the stale lifecycle is measured.

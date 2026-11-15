@@ -1975,6 +1975,51 @@ def test_subscription_keeps_actual_wire_before_decode_and_callback_failure():
     assert events[-1][1]['wire_sha256']==hashlib.sha256(wire).hexdigest()
 
 
+def test_r06c_withholds_receipt_only_from_b1_after_real_ingress_callback():
+    from collections import deque
+    from threading import Lock
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+
+    value, _clock = worker()
+    events=[]
+    value.emit=lambda event,facts:events.append((event,facts))
+    value.fault_hooks={'hold_observation0_adjacent_receipt_until_reset_deadline'}
+    value._r06c_hold_after_sequence=25
+    value._r06c_reset_deadline_ns=15_000_000_000
+    value._r06c_held_receipts=[]
+    receipts=deque()
+    receipt_views={}
+    value.ingress=NS(lock=Lock(),receipts=receipts,_receipt_views=receipt_views)
+    delivered=[]
+    def production_receipt_consumer(message):
+        view=NS(final_publish_sequence=message.final_publish_sequence)
+        with value.ingress.lock:
+            receipts.append(view)
+            receipt_views[view.final_publish_sequence]=view
+        delivered.append(message.final_publish_sequence)
+        return view
+
+    message=FinalIssuedCommandReceipt()
+    message.header.frame_id='base_link'
+    message.header.stamp.sec=1
+    message.source=message.SOURCE_SAFE_STOP
+    message.final_publisher_instance_id=9
+    message.final_publish_sequence=26
+    wire=serialize_message(message)
+    receive=value.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command',production_receipt_consumer)
+    returned=receive(wire,{})
+
+    assert delivered==[26]
+    assert returned is receipt_views[26]
+    assert not receipts  # B1 selection cannot consume the withheld receipt.
+    assert receipt_views[26] is returned  # Native application join remains live.
+    assert events[-1][0]=='B23_R06C_OBSERVATION0_RECEIPT_WITHHELD_FROM_B1'
+    assert events[-1][1]['wire_cdr_hex']==wire.hex()
+    assert value._r06c_held_receipts[0]['final_publish_sequence']==26
+
+
 def test_reset_measurements_wait_for_scan_with_original_deadline():
     value, clock=worker()
     value.ingress.scans={}
