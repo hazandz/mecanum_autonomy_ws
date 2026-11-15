@@ -21,7 +21,7 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
     'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
-    'R02e':'fault_task', 'R02f':'fault_task', 'R03a':'fault_task',
+    'R02e':'fault_task', 'R02f':'fault_task', 'R02g':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
@@ -35,6 +35,7 @@ CASE_HOOKS = {
     'R02d': ('hold_policy_receipt_until_admission_inhibited',),
     'R02e': ('pre_bind_admission_sample',),
     'R02f': ('safety_hold_after_adapter_issuance',),
+    'R02g': ('closing_paths_after_policy_nonzero',),
     'R03a': ('drop_native_policy_receipt_once',),
     'R03b': ('mutate_native_policy_transition_id_once',),
     'R08': (),
@@ -324,6 +325,46 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
         'safe_stop_applied':True,'final_publish_sequence':receipt.final_publish_sequence,
         'backend_iteration':backend_state.applied_physics_iteration,
         'policy_receipt_absent':True}
+
+
+def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
+                      backend_state=None, control_ack=None):
+    """Verify a real LOCAL_TRAINING closing path after nonzero POLICY.
+
+    SAFE_STOP and Safety admission closures require the exact native-applied
+    zero receipt. OP_INHIBIT uses its applied service ACK and native zero
+    override. Token-state coverage at the native gate is tested separately by
+    NativeClosingAuthority's twelve production-tick regressions.
+    """
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    if route not in ('safe_stop', 'admission_inhibited', 'zero_only', 'op_inhibit'):
+        raise ValueError('R02g closing route is unsupported')
+    if type(policy_receipt_count) is not int or policy_receipt_count < 0:
+        raise ValueError('R02g requires the pre-close POLICY receipt count')
+    if route == 'op_inhibit':
+        if (control_ack is None or control_ack.request.operation != Control.Request.OP_INHIBIT
+                or control_ack.response.result != Control.Response.RESULT_APPLIED
+                or control_ack.response.reason_code != Control.Response.REASON_NONE
+                or backend_state is None or not backend_state.local_zero_override):
+            raise RuntimeError('R02g OP_INHIBIT lacks APPLIED ACK/native zero override')
+    else:
+        if not isinstance(zero_receipt, FinalIssuedCommandReceipt):
+            raise RuntimeError('R02g closing route lacks generated SAFE_STOP receipt')
+        command = (zero_receipt.final_command.linear.x, zero_receipt.final_command.linear.y,
+            zero_receipt.final_command.angular.z)
+        if (zero_receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP or any(command)
+                or backend_state is None or backend_state.fault_flags != 0
+                or backend_state.local_zero_override or not backend_state.applied_receipt_valid
+                or backend_state.applied_final_publisher_instance_id != zero_receipt.final_publisher_instance_id
+                or backend_state.applied_final_publish_sequence != zero_receipt.final_publish_sequence):
+            raise RuntimeError('R02g closing route lacks exact native-applied zero receipt')
+    if any(item.source is ReceiptSource.POLICY for item in io.ingress.receipts[policy_receipt_count:]):
+        raise RuntimeError('R02g observed POLICY receipt after the close trigger')
+    return {'route':route, 'closing_ack_applied':route == 'op_inhibit',
+        'safe_stop_receipt_applied':route != 'op_inhibit',
+        'native_local_zero_override':bool(backend_state.local_zero_override)}
 
 
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
@@ -2135,6 +2176,82 @@ async def training_child(path):
                 raise RuntimeError('R02f Safety hold did not produce the expected fail-closed path')
             outcome = {'case':'R02f','resets_confirmed':1,'policy_steps_committed':0,
                 **checked,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R02g':
+            if packet['fault_hooks'] != ['closing_paths_after_policy_nonzero']:
+                raise RuntimeError('R02g packet hook does not match the fixed closing-path case')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            checked_routes = []
+            for route in ('safe_stop', 'admission_inhibited', 'zero_only', 'op_inhibit'):
+                transition = await io.policy_step(b1, (0.25, 0., 0.))
+                if transition.termination.terminated or transition.termination.truncated:
+                    raise RuntimeError('R02g POLICY step terminated before closing-path check: ' + route)
+                adapter = io.safety.local_training
+                safe_stop_before = adapter.safe_stop_sequence
+                if route == 'safe_stop':
+                    adapter.set_policy_hold(True)
+                    adapter.set_stream_enabled(True)
+                elif route in ('admission_inhibited', 'zero_only'):
+                    io.ingress.inhibit(zero_only=(route == 'zero_only'))
+                    adapter.set_stream_enabled(True)
+                else:
+                    adapter.set_policy_hold(True)
+                    adapter.set_stream_enabled(True)
+                    control_ack = await io.control.transact(Control.Request.OP_INHIBIT,
+                        deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
+                    state = await io.until(lambda: io.ingress.backend_state
+                        if io.ingress.backend_state is not None
+                        and io.ingress.backend_state.local_zero_override
+                        and io.ingress.backend_state.status_sequence > 0 else None,
+                        deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                        phase='R02g native OP_INHIBIT zero state')
+                    result = verify_r02g_close(io, route=route,
+                        policy_receipt_count=len(io.ingress.receipts), backend_state=state,
+                        control_ack=control_ack)
+                    io.emit('R02G_CLOSING_PATH_VERIFIED', {**result,
+                        'policy_transition_id':b1.lifecycle.snapshot.committed_transition_ids[-1],
+                        'control_request_cdr_hex':control_ack.request_bytes.hex(),
+                        'control_response_cdr_hex':control_ack.response_bytes.hex(),
+                        'steady_ns':io.now()})
+                    checked_routes.append(result)
+                    io.ingress.inhibit()
+                    adapter.set_stream_enabled(True)
+                    continue
+                stop = await io.until(lambda: adapter.last_output
+                    if adapter.last_output is not None
+                    and adapter.last_output.source == adapter.last_output.SOURCE_SAFE_STOP
+                    and adapter.last_output.sequence > safe_stop_before else None,
+                    deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                    phase='R02g closing SAFE_STOP output: ' + route)
+                receipt = await io.until(lambda: io.final.publication_for_source_sequence(
+                    source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence),
+                    deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                    phase='R02g closing SAFE_STOP receipt: ' + route)
+                state = await io.until(lambda: io.ingress.backend_state
+                    if io.ingress.backend_state is not None
+                    and io.ingress.backend_state.applied_receipt_valid
+                    and not io.ingress.backend_state.local_zero_override
+                    and io.ingress.backend_state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
+                    and io.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence else None,
+                    deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                    phase='R02g native SAFE_STOP application: ' + route)
+                result = verify_r02g_close(io, route=route,
+                    policy_receipt_count=len(io.ingress.receipts), zero_receipt=receipt,
+                    backend_state=state)
+                io.emit('R02G_CLOSING_PATH_VERIFIED', {**result,
+                    'safe_stop_sequence':stop.sequence,
+                    'policy_transition_id':b1.lifecycle.snapshot.committed_transition_ids[-1],
+                    'steady_ns':io.now()})
+                checked_routes.append(result)
+                if route == 'safe_stop':
+                    io.ingress.inhibit()
+                adapter.set_stream_enabled(True)
+            expected_routes = {'safe_stop','admission_inhibited','zero_only','op_inhibit'}
+            if {item['route'] for item in checked_routes} != expected_routes:
+                raise RuntimeError('R02g did not verify every production closing route')
+            outcome = {'case':'R02g','resets_confirmed':1,'policy_steps_committed':4,
+                'closing_paths':checked_routes,'completed_ns':time.monotonic_ns()}
         elif packet['case'] in ('R03a', 'R03b'):
             expected_env = case_environment(packet['case'], packet['fault_hooks'])
             if any(packet['environment'].get(key) != value for key, value in expected_env.items()):

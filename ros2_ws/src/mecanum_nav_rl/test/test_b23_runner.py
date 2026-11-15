@@ -8,7 +8,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
-    verify_r02e_prebind_admission_rejected, verify_r03_receipt_fault,
+    verify_r02e_prebind_admission_rejected, verify_r02g_close, verify_r03_receipt_fault,
 )
 
 
@@ -20,6 +20,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R02b') == 'fault_task'
     assert campaign_phase('R02e') == 'fault_task'
     assert campaign_phase('R02f') == 'fault_task'
+    assert campaign_phase('R02g') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -64,6 +65,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R02d') == ['hold_policy_receipt_until_admission_inhibited']
     assert case_fault_hooks('R02e') == ['pre_bind_admission_sample']
     assert case_fault_hooks('R02f') == ['safety_hold_after_adapter_issuance']
+    assert case_fault_hooks('R02g') == ['closing_paths_after_policy_nonzero']
     assert case_fault_hooks('R03a') == ['drop_native_policy_receipt_once']
     assert case_fault_hooks('R03b') == ['mutate_native_policy_transition_id_once']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
@@ -164,6 +166,38 @@ def test_r02f_requires_policy_hold_rejection_and_exact_zero_native_receipt():
         verify_r02f_safety_hold(io,step_index=1,receipt=receipt,backend_state=state)
 
 
+def test_r02g_close_routes_require_exact_native_evidence():
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    receipt=FinalIssuedCommandReceipt()
+    receipt.source=receipt.SOURCE_SAFE_STOP
+    receipt.final_publisher_instance_id=17
+    receipt.final_publish_sequence=42
+    state=NS(fault_flags=0,local_zero_override=False,applied_receipt_valid=True,
+        applied_final_publisher_instance_id=17,applied_final_publish_sequence=42)
+    io=NS(ingress=NS(receipts=[NS(source=ReceiptSource.POLICY)]))
+    result=verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
+        zero_receipt=receipt,backend_state=state)
+    assert result['safe_stop_receipt_applied'] is True
+    for route in ('admission_inhibited','zero_only'):
+        assert verify_r02g_close(io,route=route,policy_receipt_count=1,
+            zero_receipt=receipt,backend_state=state)['route']==route
+    ack=NS(request=NS(operation=Control.Request.OP_INHIBIT),response=NS(
+        result=Control.Response.RESULT_APPLIED,reason_code=Control.Response.REASON_NONE))
+    inhibited=NS(fault_flags=0,local_zero_override=True)
+    assert verify_r02g_close(io,route='op_inhibit',policy_receipt_count=1,
+        backend_state=inhibited,control_ack=ack)['closing_ack_applied'] is True
+    io.ingress.receipts.append(NS(source=ReceiptSource.POLICY))
+    with pytest.raises(RuntimeError,match='POLICY receipt after the close trigger'):
+        verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
+            zero_receipt=receipt,backend_state=state)
+    with pytest.raises(RuntimeError,match='OP_INHIBIT lacks APPLIED'):
+        verify_r02g_close(io,route='op_inhibit',policy_receipt_count=1,
+            backend_state=inhibited,control_ack=NS(request=NS(operation=0),response=NS(result=0,reason_code=0)))
+    with pytest.raises(RuntimeError,match='exact native-applied zero receipt'):
+        verify_r02g_close(io,route='zero_only',policy_receipt_count=1,
+            zero_receipt=receipt,backend_state=NS(**{**vars(state),'applied_final_publish_sequence':41}))
 def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequence():
     from rclpy.serialization import serialize_message
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
