@@ -2433,7 +2433,9 @@ def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
     assert confirmations == ['ack']
 
 
-def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp():
+@pytest.mark.parametrize('application_delta_ns, accepted', [(0, True), (1, False)])
+def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
+        application_delta_ns, accepted):
     """Timer phase may skip target-safety_period; pin the real applied zero."""
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -2453,8 +2455,9 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     applied.local_zero_override = False
     applied.applied_final_publisher_instance_id = 55
     applied.applied_final_publish_sequence = 11
-    applied.applied_physics_iteration = 108
-    applied.applied_sim_stamp = Time(sec=1, nanosec=80_000_000)
+    applied.applied_physics_iteration = 110
+    # The reset contract accepts native application exactly at the scan cutoff.
+    applied.applied_sim_stamp = Time(sec=1, nanosec=100_000_000 + application_delta_ns)
     receipt = NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
         publish_stamp_ns=1_060_000_000, received_steady_ns=clock.ns,
         final_publisher_instance_id=55, final_publish_sequence=11,
@@ -2514,11 +2517,17 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
             value.ingress.receipts.append(adjacent)
             scan_delivered_ns[0] = clock.ns
         elif scan_delivered_ns[0] is not None and not value.ingress.physics_pairs:
-            value.ingress.physics_pairs.append(NS(stamp_ns=1_080_000_000, iteration=108,
+            value.ingress.physics_pairs.append(NS(stamp_ns=target + application_delta_ns, iteration=110,
                 backend_bytes=serialize_message(applied)))
             application_delivered_ns[0] = clock.ns
 
     value.pause = advance
+    if not accepted:
+        with pytest.raises(TimeoutError, match='exact native SAFE_STOP application before reset scan boundary'):
+            asyncio.run(value.align_reset_zero_receipt_boundary(
+                failed_cutoff_ns=1_000_000_000, deadline_ns=clock.ns + 300_000_000))
+        assert not any(name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY' for name, _ in events)
+        return
     result = asyncio.run(value.align_reset_zero_receipt_boundary(
         failed_cutoff_ns=1_000_000_000, deadline_ns=clock.ns + 300_000_000))
     assert result is True

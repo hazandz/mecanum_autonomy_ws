@@ -2071,14 +2071,14 @@ class TrainingWorkerIO:
                 with self.ingress.lock:
                     current_pairs = tuple(self.ingress.physics_pairs)
                 for pair in reversed(current_pairs):
-                    if pair.stamp_ns >= target_ns:
+                    if pair.stamp_ns > target_ns:
                         continue
                     candidate = deserialize_message(pair.backend_bytes, SimulationContactState)
                     if (candidate.applied_receipt_valid and not candidate.local_zero_override
                             and candidate.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
                             and candidate.applied_final_publish_sequence == receipt.final_publish_sequence
                             and candidate.applied_physics_iteration == pair.iteration
-                            and receipt.publish_stamp_ns <= stamp_ns(candidate.applied_sim_stamp) < target_ns):
+                            and receipt.publish_stamp_ns <= stamp_ns(candidate.applied_sim_stamp) <= target_ns):
                         return candidate
                 return None
 
