@@ -1333,7 +1333,7 @@ private:
       results.swap(probe_service_mailbox_->results);
       if (probe_service_mailbox_->queue_overflow)
       {
-        callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+        RecordQueueFault(0, "probe_service_results", "capacity=8");
         probe_service_mailbox_->queue_overflow = false;
       }
     }
@@ -2488,7 +2488,7 @@ private:
     }
     if (control_queue_.size() >= 8)
     {
-      callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+      RecordQueueFault(1, "backend_control_requests", "capacity=8");
       response.result = ControlResponse::RESULT_FAULTED;
       response.reason_code = ControlResponse::REASON_QUEUE_OVERFLOW;
       CacheControlResponse(request.request_sequence, request_bytes, response);
@@ -3299,14 +3299,14 @@ private:
       std::fflush(stdout);
     }
     if (!gate_ || !gate_->Enqueue(std::move(facts), receive_ns))
-      callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+      RecordQueueFault(2, "receipt_gate_enqueue", "receipt=received");
     if (msg.source == Receipt::SOURCE_SAFE_STOP &&
         receipt_fault_mode_ == "hold_policy_until_safe_stop" && held_policy_receipt_)
     {
       const auto held = std::move(*held_policy_receipt_);
       held_policy_receipt_.reset();
       if (!gate_ || !gate_->Enqueue(held.first, held.second))
-        callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+        RecordQueueFault(3, "receipt_gate_release_after_safe_stop", "receipt=held_policy");
       gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=safe_stop"
             << " publisher=" << held.first.key.publisher_instance_id
             << " sequence=" << held.first.key.publish_sequence
@@ -3321,7 +3321,7 @@ private:
     if (shutdown_started_.load()) return;
     std::lock_guard<std::mutex> lock(callback_mutex_);
     if (safety_queue_.size() >= ReceiptGate::kQueueCapacity)
-    { callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE); return; }
+    { RecordQueueFault(4, "safety_input_queue", "capacity=receipt_gate"); return; }
     const auto received_ns = steady_clock_now_();
     safety_queue_.push_back({msg, received_ns});
     gzmsg << "B23_SAFETY_INPUT_ENQUEUED session=" << msg.session_id
@@ -3356,7 +3356,7 @@ private:
           }
           if (held_ns <= 40'000'000) break;
           // The fault hook never turns an expired admission into a success.
-          callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+          RecordQueueFault(5, "policy_order_admission_hold_expired", "limit_ns=40000000");
           break;
         }
         pending.push_back(std::move(safety_queue_.front()));
@@ -3416,7 +3416,7 @@ private:
           const auto held = std::move(*held_policy_receipt_);
           held_policy_receipt_.reset();
           if (!gate_ || !gate_->Enqueue(held.first, held.second))
-            callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+            RecordQueueFault(6, "receipt_gate_release_after_inhibit", "receipt=held_policy");
           gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=admission_inhibited"
                 << " publisher=" << held.first.key.publisher_instance_id
                 << " sequence=" << held.first.key.publish_sequence
@@ -3680,6 +3680,16 @@ private:
     last_backend_state_ = msg;
   }
 
+  void RecordQueueFault(std::uint32_t cause_id, const char *cause,
+                       const char *details)
+  {
+    const auto mask = std::uint32_t{1} << cause_id;
+    const auto reported = queue_fault_reported_mask_.fetch_or(mask);
+    if ((reported & mask) == 0)
+      gzerr << "B23_QUEUE_FAULT cause=" << cause << " " << details << std::endl;
+    callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
+  }
+
   void SetFault(std::uint32_t flag, std::string reason)
   {
     fault_flags_ |= flag;
@@ -3779,6 +3789,7 @@ private:
       std::make_shared<ProbeServiceMailbox>()};
   std::map<std::uint64_t, CachedControl> control_cache_;
   std::atomic<std::uint32_t> callback_fault_flags_{};
+  std::atomic<std::uint32_t> queue_fault_reported_mask_{};
   SafetyInput safety_input_;
   geometry_msgs::msg::Twist captured_twist_;
   std::int64_t captured_twist_received_steady_ns_{};
