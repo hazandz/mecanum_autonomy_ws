@@ -2157,6 +2157,247 @@ def verify_packet(path, expected_sha256):
     return packet
 
 
+def _proc_start_ticks(proc_root, pid):
+    """Return the start-time identity from a supplied /proc-compatible tree."""
+    raw = (Path(proc_root) / str(pid) / 'stat').read_text()
+    fields = raw[raw.rfind(')') + 2:].split()
+    if len(fields) < 20:
+        raise ValueError('proc stat identity is truncated')
+    return int(fields[19])
+
+
+def verify_postmortem_residue_attestation(attestation_path, *, run_id, packet_sha256,
+        evidence_root='/home/hazan/mecanum_runtime_evidence',
+        cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
+    """Đọc bằng chứng thu hồi sau lượt controller mất khả năng ghi terminal record.
+
+    Chỉ thay thế phần xác nhận residue khi guard cũ thiếu terminal-verified.json;
+    không sửa guard, verdict hoặc history của lượt cũ.
+    """
+    import os
+    root = Path(evidence_root).resolve(strict=True)
+    path = Path(attestation_path).resolve(strict=True)
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise ValueError('postmortem attestation is outside canonical evidence root') from error
+    record = json.loads(path.read_bytes())
+    expected_unit = run_id.lower().replace('_', '-') + '.service'
+    if (record.get('schema') != 'b23_postmortem_residue/v1'
+            or record.get('run_id') != run_id
+            or record.get('packet_sha256') != packet_sha256
+            or record.get('unit') != expected_unit):
+        raise ValueError('postmortem residue binding does not match consumed packet')
+    source_packet = root / run_id / 'packet.json'
+    packet_raw = source_packet.read_bytes()
+    if hashlib.sha256(packet_raw).hexdigest() != packet_sha256:
+        raise ValueError('postmortem packet bytes do not match consumed packet hash')
+    original_packet = json.loads(packet_raw)
+    if (original_packet.get('run_id') != run_id or original_packet.get('unit') != expected_unit
+            or original_packet.get('source_commit') != record.get('source_commit')):
+        raise ValueError('postmortem source packet identity mismatch')
+    evidence_files = record.get('evidence_files')
+    if not isinstance(evidence_files, dict) or not evidence_files:
+        raise ValueError('postmortem raw evidence hash inventory missing')
+    for filename, digest in evidence_files.items():
+        evidence_path = Path(filename).resolve(strict=True)
+        try:
+            evidence_path.relative_to(root)
+        except ValueError as error:
+            raise ValueError('postmortem raw evidence is outside canonical evidence root') from error
+        raw = evidence_path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError('postmortem raw evidence changed: ' + filename)
+    roles = record.get('evidence_roles')
+    required_roles = {'unit_properties', 'postmortem_summary', 'controller_events',
+        'parent_identity', 'parent_events'}
+    if not isinstance(roles, dict) or not required_roles.issubset(roles):
+        raise ValueError('postmortem semantic evidence roles are incomplete')
+    if any(roles[name] not in evidence_files for name in required_roles):
+        raise ValueError('postmortem semantic evidence is not hash-bound')
+    cgroup = record.get('pinned_cgroup')
+    expected_cgroup = ('/user.slice/user-1000.slice/user@1000.service/app.slice/' + expected_unit)
+    if cgroup != expected_cgroup:
+        raise ValueError('postmortem cgroup path is not the exact owned unit path')
+    unit_evidence = json.loads(Path(roles['unit_properties']).read_bytes())
+    raw_properties = {}
+    for line in unit_evidence.get('stdout', '').splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            if key in raw_properties:
+                raise ValueError('duplicate unit property in postmortem evidence: ' + key)
+            raw_properties[key] = value
+    if (unit_evidence.get('returncode') != 0
+            or raw_properties.get('Id') != expected_unit
+            or raw_properties.get('InvocationID') != record.get('invocation_id')
+            or raw_properties.get('ActiveState') not in ('inactive', 'failed')
+            or raw_properties.get('MainPID') != '0'
+            or raw_properties.get('ControlGroup') != ''):
+        raise ValueError('raw postmortem unit properties do not prove the pinned terminal unit')
+    summary = json.loads(Path(roles['postmortem_summary']).read_bytes())
+    scan = summary.get('pinned_cgroup_scan', {})
+    if (summary.get('run_id') != run_id or summary.get('unit') != expected_unit
+            or summary.get('expected_invocation_id') != record.get('invocation_id')
+            or scan.get('path') != str(Path(cgroup_root) / cgroup.lstrip('/'))
+            or scan.get('status') != 'path_removed_confirmed'
+            or scan.get('path_exists') is not False or scan.get('errors') != []
+            or scan.get('members') != []):
+        raise ValueError('raw postmortem summary does not prove the pinned cgroup absent')
+    declared_tails = record.get('unparsed_jsonl_tails', [])
+    if not isinstance(declared_tails, list):
+        raise ValueError('postmortem JSONL tail disposition is invalid')
+    tail_by_path = {}
+    for tail in declared_tails:
+        if not isinstance(tail, dict) or tail.get('path') in tail_by_path:
+            raise ValueError('postmortem JSONL tail disposition is malformed')
+        tail_by_path[tail['path']] = tail
+    event_identities = set()
+    cgroup_member_snapshots = []
+    seen_tail_paths = set()
+    jsonl_paths = {str(Path(roles[name])) for name in ('controller_events', 'parent_events')}
+    if not set(tail_by_path).issubset(jsonl_paths):
+        raise ValueError('declared JSONL tail is not a bound controller or parent log')
+    for role in ('controller_events', 'parent_events'):
+        event_path = Path(roles[role])
+        event_lines = event_path.read_bytes().splitlines()
+        for line_number, line in enumerate(event_lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as error:
+                declared = tail_by_path.get(str(event_path))
+                if (line_number != len(event_lines) or declared is None
+                        or declared.get('line_number') != line_number
+                        or declared.get('line_sha256') != hashlib.sha256(line).hexdigest()):
+                    raise ValueError('JSONL corruption is not a declared final partial record: ' + role) from error
+                seen_tail_paths.add(str(event_path))
+                continue
+            if role != 'controller_events':
+                continue
+            if event.get('event') == 'PID_OBSERVATION':
+                facts = event.get('facts', {})
+                if type(facts.get('pid')) is int and type(facts.get('start_ticks')) is int:
+                    event_identities.add((facts['pid'], facts['start_ticks']))
+            elif event.get('event') == 'CGROUP_OBSERVATION':
+                facts = event.get('facts', {})
+                if facts.get('status') == 'complete_members' and isinstance(facts.get('members'), list):
+                    cgroup_member_snapshots.append(set(facts['members']))
+    if seen_tail_paths != set(tail_by_path):
+        raise ValueError('declared JSONL tail was not present')
+    if not event_identities or not cgroup_member_snapshots:
+        raise ValueError('raw controller observations do not bind process identities to cgroup membership')
+    parent_record = json.loads(Path(roles['parent_identity']).read_bytes())
+    parent_identity = parent_record.get('identity', {})
+    if parent_record.get('run_id') != run_id or parent_record.get('packet_sha256') != packet_sha256:
+        raise ValueError('raw parent identity does not bind to the consumed packet')
+    if (parent_identity.get('pid'), parent_identity.get('start_ticks')) not in event_identities:
+        raise ValueError('raw parent identity is not present in controller PID observations')
+    saved_identities = record.get('process_identities')
+    if {(item.get('pid'), item.get('start_ticks')) for item in saved_identities
+            if isinstance(item, dict)} != event_identities:
+        raise ValueError('postmortem PID identities differ from raw controller observations')
+    if not any(members == {pid for pid, _ticks in event_identities}
+            for members in cgroup_member_snapshots):
+        raise ValueError('raw cgroup observations do not contain the pinned process identities')
+    absent_pids = summary.get('recorded_pid_checks')
+    if (not isinstance(absent_pids, list)
+            or {(item.get('pid'), item.get('present')) for item in absent_pids
+                if isinstance(item, dict)} != {(pid, False) for pid, _ticks in event_identities}):
+        raise ValueError('raw postmortem PID checks do not cover the pinned identities')
+    terminal = record.get('terminal_unit')
+    if (not isinstance(terminal, dict) or terminal.get('invocation_id') != record.get('invocation_id')
+            or terminal.get('active_state') not in ('inactive', 'failed')
+            or terminal.get('main_pid') != 0 or terminal.get('control_group') != ''):
+        raise ValueError('postmortem unit terminal identity/residue fields incomplete')
+    cgroup_path = Path(cgroup_root) / cgroup.lstrip('/')
+    try:
+        os.stat(cgroup_path)
+        cgroup_exists = True
+    except FileNotFoundError:
+        cgroup_exists = False
+    except OSError as error:
+        raise ValueError(f'postmortem pinned cgroup path cannot be inspected: {error!r}') from error
+    if cgroup_exists:
+        errors = []
+        members = []
+        for base, _dirs, _files in os.walk(cgroup_path,
+                onerror=lambda error: errors.append(repr(error))):
+            procs = Path(base) / 'cgroup.procs'
+            try:
+                members.extend(int(value) for value in procs.read_text().split())
+            except OSError as error:
+                errors.append(f'{procs}: {error!r}')
+            except ValueError as error:
+                errors.append(f'{procs}: {error!r}')
+        if errors or members:
+            raise ValueError('postmortem cgroup is present, unreadable, or populated')
+        cgroup_status = 'complete_empty'
+    else:
+        cgroup_status = 'path_removed_confirmed'
+    identities = record.get('process_identities')
+    if not isinstance(identities, list) or not identities:
+        raise ValueError('postmortem process identity inventory missing')
+    observed = []
+    seen = set()
+    for saved in identities:
+        pid, start_ticks = saved.get('pid'), saved.get('start_ticks')
+        if type(pid) is not int or pid <= 0 or type(start_ticks) is not int or start_ticks <= 0 or pid in seen:
+            raise ValueError('postmortem process identity tuple invalid')
+        seen.add(pid)
+        try:
+            current_start_ticks = _proc_start_ticks(proc_root, pid)
+        except FileNotFoundError:
+            observed.append({'pid': pid, 'state': 'absent'})
+            continue
+        except OSError as error:
+            raise ValueError(f'postmortem PID identity unreadable: {pid}: {error!r}') from error
+        except ValueError as error:
+            raise ValueError(f'postmortem PID identity invalid: {pid}: {error!r}') from error
+        if current_start_ticks == start_ticks:
+            raise ValueError('postmortem process identity still exists: ' + str(pid))
+        observed.append({'pid': pid, 'state': 'pid_reused',
+            'saved_start_ticks': start_ticks, 'current_start_ticks': current_start_ticks})
+    return {'run_id': run_id, 'packet_sha256': packet_sha256,
+        'invocation_id': record['invocation_id'], 'unit': expected_unit,
+        'pinned_cgroup': cgroup, 'cgroup_status': cgroup_status,
+        'process_observations': observed, 'source_attestation': str(path),
+        'source_attestation_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'residue_absent': True, 'cleanup_ack_present': bool(record.get('cleanup_ack_present'))}
+
+
+def verify_previous_run_residue(state_dir, previous, *, evidence_root,
+        cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
+    """Require a packet-bound residue proof for every previously consumed run."""
+    authority_path = previous / 'authority.json'
+    consumed_path = previous / 'consumed.json'
+    authority = json.loads(authority_path.read_bytes())
+    consumed = json.loads(consumed_path.read_bytes())
+    run_id = previous.name
+    if (authority.get('run_id') != run_id or consumed.get('run_id') != run_id
+            or authority.get('packet_sha256') != consumed.get('packet_sha256')):
+        raise RuntimeError('previous consumed run guard identity mismatch: ' + str(previous))
+    terminal_path = previous / 'terminal-verified.json'
+    if terminal_path.exists():
+        terminal = json.loads(terminal_path.read_bytes())
+        if (terminal.get('run_id') != run_id
+                or terminal.get('packet_sha256') != consumed.get('packet_sha256')
+                or terminal.get('residue_absent') is not True):
+            raise RuntimeError('previous consumed run has unverified residue: ' + str(previous))
+        return {'run_id': run_id, 'source': str(terminal_path),
+            'packet_sha256': consumed['packet_sha256'], 'residue_absent': True}
+    attestation_path = (Path(evidence_root) / 'B23_POSTMORTEM' / run_id / 'terminal-residue.json')
+    try:
+        result = verify_postmortem_residue_attestation(attestation_path,
+            run_id=run_id, packet_sha256=consumed['packet_sha256'],
+            evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
+        raise RuntimeError('previous consumed run has unverified residue: ' + str(previous)) from error
+    return {'run_id': run_id, 'source': str(attestation_path),
+        'packet_sha256': consumed['packet_sha256'], 'residue_absent': True,
+        'postmortem': result}
+
+
 async def run_parent(packet_path, packet_sha256):
     """Sở hữu tất cả launch qua supervisor đã audit; không override start()."""
     import os
@@ -2609,11 +2850,11 @@ def launch_packet(args):
     metadata_cleanup_error = None
     identities, terminal, consumed, launch = {}, None, None, None
     try:
-        for previous in state.iterdir():
+        for previous in sorted(state.iterdir()):
             if previous.is_dir() and (previous/'consumed.json').exists():
-                verified = previous/'terminal-verified.json'
-                if not verified.exists() or json.loads(verified.read_bytes()).get('residue_absent') is not True:
-                    raise RuntimeError('previous consumed run has unverified residue: ' + str(previous))
+                predecessor = verify_previous_run_residue(state, previous,
+                    evidence_root='/home/hazan/mecanum_runtime_evidence')
+                log.record('PREVIOUS_RUN_RESIDUE_VERIFIED', predecessor)
         preflight = command_record(['systemctl','--user','show','--property=SystemState','--value'], timeout_s=5.)
         log.record('USER_MANAGER', preflight)
         if preflight['returncode'] != 0 or preflight['stdout'].strip() != 'running':

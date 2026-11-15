@@ -1725,3 +1725,131 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
     state.fault_flags=4
     with pytest.raises(RuntimeError,match='native fault and zero'):
         verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+
+
+def _postmortem_residue_fixture(tmp_path):
+    import hashlib
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_postmortem_residue_attestation
+
+    evidence_root = tmp_path / 'evidence'
+    run_id = 'B23_R02B_TEST_001'
+    unit = 'b23-r02b-test-001.service'
+    run_root = evidence_root / run_id
+    run_root.mkdir(parents=True)
+    source_commit = 'a' * 40
+    packet_raw = json.dumps({'run_id': run_id, 'unit': unit,
+        'source_commit': source_commit}, sort_keys=True).encode()
+    packet_hash = hashlib.sha256(packet_raw).hexdigest()
+    (run_root / 'packet.json').write_bytes(packet_raw)
+    raw_paths = {
+        'unit_properties': run_root / 'unit_properties.json',
+        'postmortem_summary': run_root / 'summary.json',
+        'controller_events': run_root / 'controller-events.jsonl',
+        'parent_identity': run_root / 'parent-identity.json',
+        'parent_events': run_root / 'parent-events.jsonl',
+    }
+    cgroup_root = tmp_path / 'cgroup'
+    cgroup_path = str(cgroup_root / 'user.slice/user-1000.slice/user@1000.service/app.slice' / unit)
+    raw_values = {
+        'unit_properties': json.dumps({'returncode': 0, 'stdout':
+            'Id=' + unit + '\nInvocationID=' + '1' * 32 + '\nActiveState=failed\n'
+            'MainPID=0\nControlGroup=\n'}).encode(),
+        'postmortem_summary': json.dumps({'run_id': run_id, 'unit': unit,
+            'expected_invocation_id': '1' * 32, 'pinned_cgroup_scan': {
+                'path': cgroup_path, 'path_exists': False,
+                'status': 'path_removed_confirmed', 'errors': [], 'members': []},
+            'recorded_pid_checks': [{'pid': 989897, 'present': False}]}).encode(),
+        'controller_events': (json.dumps({'event': 'PID_OBSERVATION', 'facts': {
+            'pid': 989897, 'start_ticks': 123456}}) + '\n'
+            + json.dumps({'event': 'CGROUP_OBSERVATION', 'facts': {
+                'status': 'complete_members', 'members': [989897]}}) + '\n').encode(),
+        'parent_identity': json.dumps({'run_id': run_id, 'packet_sha256': packet_hash,
+            'identity': {'pid': 989897, 'start_ticks': 123456}}).encode(),
+        'parent_events': (json.dumps({'event': 'owned_process_output',
+            'facts': {'output': 'captured'}}) + '\n').encode(),
+    }
+    for key, path in raw_paths.items():
+        path.write_bytes(raw_values[key])
+    evidence_files = {str(raw_paths[key]): hashlib.sha256(raw_values[key]).hexdigest()
+        for key in raw_paths}
+    attestation_dir = evidence_root / 'B23_POSTMORTEM' / run_id
+    attestation_dir.mkdir(parents=True)
+    attestation_path = attestation_dir / 'terminal-residue.json'
+    record = {
+        'schema': 'b23_postmortem_residue/v1', 'run_id': run_id,
+        'packet_sha256': packet_hash, 'source_commit': source_commit,
+        'unit': unit, 'invocation_id': '1' * 32,
+        'terminal_unit': {'invocation_id': '1' * 32, 'active_state': 'failed',
+            'main_pid': 0, 'control_group': '', 'result': 'exit-code'},
+        'pinned_cgroup': '/user.slice/user-1000.slice/user@1000.service/app.slice/' + unit,
+        'process_identities': [{'pid': 989897, 'start_ticks': 123456}],
+        'cleanup_ack_present': False,
+        'evidence_files': evidence_files,
+        'evidence_roles': {key: str(path) for key, path in raw_paths.items()},
+        'unparsed_jsonl_tails': [],
+    }
+    attestation_path.write_text(json.dumps(record, sort_keys=True))
+    return (evidence_root, run_id, unit, packet_hash, attestation_path,
+        raw_paths['unit_properties'], cgroup_root)
+
+
+def test_postmortem_residue_requires_packet_bound_raw_evidence_and_absent_cgroup(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        verify_postmortem_residue_attestation, verify_previous_run_residue)
+
+    evidence_root, run_id, unit, packet_hash, attestation_path, _raw, cgroup_root = \
+        _postmortem_residue_fixture(tmp_path)
+    proc_root = tmp_path / 'proc'
+    proc_root.mkdir()
+    result = verify_postmortem_residue_attestation(attestation_path,
+        run_id=run_id, packet_sha256=packet_hash, evidence_root=evidence_root,
+        cgroup_root=cgroup_root, proc_root=proc_root)
+    assert result['residue_absent'] is True, result
+    assert result['cleanup_ack_present'] is False, result
+    assert result['cgroup_status'] == 'path_removed_confirmed', result
+
+    guard = tmp_path / 'guards' / run_id
+    guard.mkdir(parents=True)
+    authority = {'run_id': run_id, 'packet_sha256': packet_hash}
+    consumed = {'run_id': run_id, 'packet_sha256': packet_hash}
+    (guard / 'authority.json').write_text(json.dumps(authority))
+    (guard / 'consumed.json').write_text(json.dumps(consumed))
+    verified = verify_previous_run_residue(guard.parent, guard,
+        evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
+    assert verified['residue_absent'] is True, verified
+    assert verified['postmortem']['cleanup_ack_present'] is False, verified
+
+
+def test_postmortem_residue_rejects_tampered_or_outside_evidence_and_live_identity(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_postmortem_residue_attestation
+
+    evidence_root, run_id, _unit, packet_hash, attestation_path, raw_evidence, cgroup_root = \
+        _postmortem_residue_fixture(tmp_path)
+    proc_root = tmp_path / 'proc'
+    proc_root.mkdir()
+    raw_evidence.write_bytes(b'changed')
+    with pytest.raises(ValueError, match='raw evidence changed'):
+        verify_postmortem_residue_attestation(attestation_path,
+            run_id=run_id, packet_sha256=packet_hash, evidence_root=evidence_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)
+
+    evidence_root, run_id, _unit, packet_hash, attestation_path, _raw, cgroup_root = \
+        _postmortem_residue_fixture(tmp_path / 'second')
+    external = tmp_path / 'outside.json'
+    external.write_text(attestation_path.read_text())
+    with pytest.raises(ValueError, match='outside canonical evidence root'):
+        verify_postmortem_residue_attestation(external,
+            run_id=run_id, packet_sha256=packet_hash, evidence_root=evidence_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)
+
+    evidence_root, run_id, _unit, packet_hash, attestation_path, _raw, cgroup_root = \
+        _postmortem_residue_fixture(tmp_path / 'third')
+    live_proc = tmp_path / 'live-proc'
+    pid_dir = live_proc / '989897'
+    pid_dir.mkdir(parents=True)
+    fields = ['S'] + ['1'] * 18 + ['123456']
+    (pid_dir / 'stat').write_text('989897 (helper) ' + ' '.join(fields))
+    with pytest.raises(ValueError, match='process identity still exists'):
+        verify_postmortem_residue_attestation(attestation_path,
+            run_id=run_id, packet_sha256=packet_hash, evidence_root=evidence_root,
+            cgroup_root=cgroup_root, proc_root=live_proc)
