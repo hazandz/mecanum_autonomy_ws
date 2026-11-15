@@ -721,6 +721,28 @@ def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
                 serialize_message(oracle), {})
 
 
+def test_r07b_callback_records_and_drops_only_same_stamp_scan_conflict_after_rollback():
+    from sensor_msgs.msg import LaserScan
+    from rclpy.serialization import serialize_message
+    worker = object.__new__(TrainingWorkerIO)
+    worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    worker._r07b_rollback_observed = {'delta_ns':-310_000_000}
+    worker.now = lambda: 999
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    scan = LaserScan()
+    result = worker.observed_callback(LaserScan, '/scan',
+        lambda _: (_ for _ in ()).throw(ValueError('scan same stamp changed bytes')))(
+            serialize_message(scan), {})
+    assert result is None
+    assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_SCAN_REJECTED'
+    assert events[-1][1]['reason'] == 'scan same stamp changed bytes'
+    with pytest.raises(ValueError, match='unrelated scan failure'):
+        worker.observed_callback(LaserScan, '/scan',
+            lambda _: (_ for _ in ()).throw(ValueError('unrelated scan failure')))(
+                serialize_message(scan), {})
+
+
 def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 

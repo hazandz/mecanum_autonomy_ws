@@ -1641,6 +1641,19 @@ class TrainingWorkerIO:
                         'wire_sha256':hashlib.sha256(wire).hexdigest(),
                         'detected_ns':self.now()})
                     return None
+                if (topic == '/scan'
+                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                        and self._r07b_rollback_observed is not None
+                        and repr(error) == "ValueError('scan same stamp changed bytes')"):
+                    # time_only reset có thể tái sử dụng ROS stamp đang có
+                    # trong cache của session cũ. Không thay cache hoặc nhận
+                    # mẫu mới vào reset/policy; ghi raw hash và giữ pump sống
+                    # để quan sát identity backend mới.
+                    self.emit('B23_R07B_POST_ROLLBACK_SCAN_REJECTED', {
+                        'reason':'scan same stamp changed bytes',
+                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'detected_ns':self.now()})
+                    return None
                 raise
         return receive
 
