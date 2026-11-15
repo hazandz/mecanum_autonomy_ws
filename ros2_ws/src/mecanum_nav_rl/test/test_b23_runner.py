@@ -13,7 +13,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
-    verify_r04a_zero_baseline,
+    verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
 )
 
 
@@ -416,6 +416,26 @@ def test_r04a_accepts_exact_applied_zero_when_latest_safety_tick_is_ahead():
     io.ingress.backend_state.applied_final_publish_sequence = 98
     with pytest.raises(RuntimeError, match='lost its healthy applied-zero baseline'):
         verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
+
+
+def test_r04a_blocked_slot_distinguishes_prebegin_timeout_from_pending_abort():
+    lifecycle = NS(snapshot=NS(active_transition_identity=None, step_index=1))
+    result = abort_r04a_pending_step_if_active(lifecycle, expected_step_index=2)
+    assert result == {'disposition':'NOT_STARTED','step_index':2,
+        'last_committed_step_index':1}
+    lifecycle.abort_step = lambda _reason: pytest.fail('must not abort a nonexistent B1 step')
+
+    active = NS(step_index=2)
+    lifecycle.snapshot = NS(active_transition_identity=active, step_index=1)
+    lifecycle.abort_step = lambda reason: (setattr(lifecycle, 'abort_reason', reason)
+        or NS(status='aborted'))
+    result = abort_r04a_pending_step_if_active(lifecycle, expected_step_index=2)
+    assert result == {'disposition':'ABORTED','step_index':2,'abort_status':'aborted'}
+    assert lifecycle.abort_reason == 'R04a_delayed_input_blocked_next_slot'
+
+    lifecycle.snapshot = NS(active_transition_identity=NS(step_index=3), step_index=1)
+    with pytest.raises(RuntimeError, match='pending B1 identity differs'):
+        abort_r04a_pending_step_if_active(lifecycle, expected_step_index=2)
 
 
 @pytest.mark.parametrize('case,reason', [('R04c','SCAN_STALE_OR_FUTURE')])

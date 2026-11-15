@@ -574,6 +574,22 @@ def verify_r04a_next_step_blocked(io, *, step_index):
         'b1_transition_absent':True,'native_zero_application':applied_zero}
 
 
+def abort_r04a_pending_step_if_active(lifecycle, *, expected_step_index):
+    """Abort only a pending R04a step; a pre-bind timeout has no step to abort."""
+    snapshot = lifecycle.snapshot
+    active = snapshot.active_transition_identity
+    if active is None:
+        if snapshot.step_index != expected_step_index - 1:
+            raise RuntimeError('R04a no-active-step state does not follow the last committed step')
+        return {'disposition':'NOT_STARTED','step_index':expected_step_index,
+            'last_committed_step_index':snapshot.step_index}
+    if active.step_index != expected_step_index:
+        raise RuntimeError('R04a pending B1 identity differs from blocked slot')
+    result = lifecycle.abort_step('R04a_delayed_input_blocked_next_slot')
+    return {'disposition':'ABORTED','step_index':active.step_index,
+        'abort_status':str(result.status)}
+
+
 def verify_r04a_zero_baseline(io, *, checked):
     """Accept a proven applied zero even when Safety has emitted its next tick.
 
@@ -2743,13 +2759,15 @@ async def training_child(path):
                             await io.policy_step(b1, (0.25, 0., 0.))
                         except TimeoutError as error:
                             blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
-                            aborted = b1.lifecycle.abort_step('R04a_delayed_input_blocked_next_slot')
+                            disposition = abort_r04a_pending_step_if_active(
+                                b1.lifecycle, expected_step_index=blocked_step)
                         else:
                             raise RuntimeError('R04a next POLICY slot completed after delayed-input invalidation')
                         outcome = {'case':'R04a','resets_confirmed':1,
                             'policy_steps_committed':1, **checked, **blocked,
                             'safe_stop_applied':True,
-                            'b1_abort_status':str(aborted.status),
+                            'b1_step_disposition':disposition,
+                            'blocked_step_timeout':repr(error),
                             'completed_ns':time.monotonic_ns()}
                     else:
                         checked = verify_r04_stale_delivery(io, case=packet['case'],
