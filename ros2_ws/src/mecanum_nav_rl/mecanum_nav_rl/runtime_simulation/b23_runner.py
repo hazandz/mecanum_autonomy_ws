@@ -111,6 +111,7 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
     được INHIBIT và QUERY mới không có proof.
     """
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
     if type(sim_time_jump_delta_ns) is not int or sim_time_jump_delta_ns >= 0:
         raise RuntimeError('R07b did not observe simulation time rollback')
@@ -171,15 +172,17 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
             or fresh_ack.response.proof_asset_manifest_sha256):
         raise RuntimeError('R07b replacement QUERY returned stale or unverifiable proof')
     status = replacement_status
+    expected_restart_faults = (SimulationContactState.FAULT_CONTACT_COVERAGE
+                               | SimulationContactState.FAULT_QUEUE)
     if (status['backend_instance_id'] != new_id
             or status['session_id'] != original_proof.request.session_id
             or status['config_hash'] != stale.request.config_hash
             or type(status['status_sequence']) is not int or status['status_sequence'] <= 0
             or type(status['physics_iteration']) is not int or status['physics_iteration'] <= 0
             or status['received_ns'] <= inhibit_ack.observed_steady_ns
-            or status['fault_flags'] != 0
+            or status['fault_flags'] != expected_restart_faults
             or not status['local_zero_override'] or not status['actuator_inhibited']):
-        raise RuntimeError('R07b replacement backend status did not prove inhibited zero after ACK')
+        raise RuntimeError('R07b replacement backend status did not prove expected fail-closed zero after ACK')
     return {'clock_rollback_observed':True, 'backend_restarted':True,
         'old_backend_instance_id':old_backend_instance_id,
         'new_backend_instance_id':new_id,
@@ -187,6 +190,8 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
         'old_query_replay_identity_ack_observed':replay_identity_ack is not None,
         'old_session_rejected':True, 'replacement_backend_inhibit_applied':True,
         'replacement_backend_zero_status_confirmed':True,
+        'replacement_backend_fault_flags':status['fault_flags'],
+        'replacement_backend_fault_flags_expected':expected_restart_faults,
         'fresh_query_has_no_contact_proof':True,
         'simulation_time_jump_delta_ns':sim_time_jump_delta_ns,
         'inhibit_request_sequence':inhibit_ack.request.request_sequence,

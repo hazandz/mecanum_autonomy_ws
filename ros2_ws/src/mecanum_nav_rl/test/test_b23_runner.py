@@ -584,7 +584,7 @@ def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_pr
             proof_config_hash='', proof_asset_manifest_sha256=''))
     status = {'backend_instance_id':new_id,'session_id':session,'config_hash':config,
         'status_sequence':12,'physics_iteration':34,'stamp_ns':340_000_000,
-        'fault_flags':0,'local_zero_override':True,'actuator_inhibited':True,
+        'fault_flags':272,'local_zero_override':True,'actuator_inhibited':True,
         'received_ns':401,'wire_sha256':'c'*64}
     result = verify_r07b_backend_restart(original_proof=original,
         sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
@@ -595,6 +595,8 @@ def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_pr
     assert result['old_query_replay_unavailable_due_backend_replacement'] is True
     assert result['replacement_backend_zero_status_confirmed'] is True
     assert result['new_backend_instance_id'] == new_id
+    assert result['replacement_backend_fault_flags'] == 272
+    assert result['replacement_backend_fault_flags_expected'] == 272
 
     stale_query = NS(**{**fresh_query.__dict__, 'response':NS(
         **{**fresh_query.response.__dict__,
@@ -612,12 +614,20 @@ def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_pr
             old_backend_instance_id=old_id)
 
     unconfirmed_zero = dict(status, local_zero_override=False)
-    with pytest.raises(RuntimeError, match='did not prove inhibited zero'):
+    with pytest.raises(RuntimeError, match='expected fail-closed zero'):
         verify_r07b_backend_restart(original_proof=original,
             sim_time_jump_delta_ns=-350_000_000,
             replay_error=TimeoutError('service vanished'), replay_identity_ack=None,
             replacement_ack=old_rejection,
             inhibit_ack=inhibit, fresh_ack=fresh_query, replacement_status=unconfirmed_zero,
+            old_backend_instance_id=old_id)
+
+    unexpected_fault = dict(status, fault_flags=272 | 64)
+    with pytest.raises(RuntimeError, match='expected fail-closed zero'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
+            replay_identity_ack=None, replacement_ack=old_rejection, inhibit_ack=inhibit,
+            fresh_ack=fresh_query, replacement_status=unexpected_fault,
             old_backend_instance_id=old_id)
 
 
