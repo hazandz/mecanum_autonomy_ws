@@ -437,6 +437,17 @@ def complete_jsonl_rows(path):
     return rows
 
 
+def r05_contact_coverage_mask_event(path):
+    """Poll the delayed native event without treating its not-yet-created file as fatal."""
+    try:
+        rows = complete_jsonl_rows(path)
+    except FileNotFoundError:
+        return None
+    return next((row for row in rows
+        if row.get('kind') == 'B23_CONTACT_COVERAGE_MASKED'
+        and row.get('fields', {}).get('masked') == '1'), None)
+
+
 async def verify_r03_receipt_fault(io, *, case, step_index, error):
     """Bind injected native receipt disposition to the real published POLICY."""
     import re
@@ -2901,10 +2912,8 @@ async def training_child(path):
                     or io.contact_ack is None or io.contact_start_request_sequence is None):
                 raise RuntimeError('R05 packet/hook/original QUERY binding is incomplete')
             def coverage_masked():
-                rows = complete_jsonl_rows(descriptor['native_events_path'])
-                return next((row for row in rows
-                    if row.get('kind') == 'B23_CONTACT_COVERAGE_MASKED'
-                    and row.get('fields',{}).get('masked') == '1'), None)
+                return r05_contact_coverage_mask_event(
+                    descriptor['native_events_path'])
             masked = await io.until(coverage_masked,
                 deadline_ns=min(io.deadline_ns, time.monotonic_ns()+5_000_000_000),
                 phase='R05 pinned contact coverage mask',

@@ -65,6 +65,21 @@ def test_d04_soak_schedule_and_unit_budget_are_exact():
         service_properties_for(180)
 
 
+def test_r05_native_mask_poll_waits_for_event_file_and_complete_record(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r05_contact_coverage_mask_event
+
+    path = tmp_path / 'native-events.jsonl'
+    assert r05_contact_coverage_mask_event(path) is None
+    path.write_bytes(b'{"kind":"B23_CONTACT_COVERAGE_MASKED","fields":')
+    assert r05_contact_coverage_mask_event(path) is None
+    path.write_bytes(path.read_bytes() + b'{"masked":"1"}}\n')
+    assert r05_contact_coverage_mask_event(path) == {
+        'kind': 'B23_CONTACT_COVERAGE_MASKED', 'fields': {'masked': '1'}}
+    path.write_bytes(b'{broken}\n')
+    with pytest.raises(json.JSONDecodeError):
+        r05_contact_coverage_mask_event(path)
+
+
 @pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
     (891_000_000, 100_000_000, 900_000_000),
     (905_000_000, 100_000_000, 1_000_000_000),
