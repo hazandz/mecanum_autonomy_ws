@@ -468,18 +468,31 @@ class LocalTrainingB1Adapter:
 
     def _prove_application(self, receipt, cutoff_ns):
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
-        for pair in self.ingress.physics_pairs:
-            if pair.stamp_ns > cutoff_ns:
-                continue
-            status = deserialize_message(pair.backend_bytes, SimulationContactState)
-            if (status.applied_receipt_valid and not status.local_zero_override
-                    and status.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
-                    and status.applied_final_publish_sequence == receipt.final_publish_sequence
-                    and status.applied_physics_iteration == pair.iteration
-                    and receipt.publish_stamp_ns <= stamp_ns(status.applied_sim_stamp) <= cutoff_ns):
-                return status
-        raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns, lifecycle_identity
+        # `physics_pairs` is the rolling oracle/status join window used by
+        # observation cutoffs. A POLICY step can wait for its adjacent receipt
+        # while newer physics pairs arrive, so a valid application may age out
+        # of that 64-sample window before B1 retries the same cutoff. The ingress
+        # application ledger is recorded from the native status callback and
+        # joined to the exact accepted receipt; use that pinned fact here.
+        with self.ingress.lock:
+            key = receipt.final_publish_sequence
+            accepted_receipt = self.ingress._receipt_views.get(key)
+            raw = self.ingress._application_bytes.get(key)
+            if accepted_receipt != receipt or raw is None:
+                raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+            raw = bytes(raw)
+        status = deserialize_message(raw, SimulationContactState)
+        applied_stamp = stamp_ns(status.applied_sim_stamp)
+        if (not status.applied_receipt_valid or status.local_zero_override
+                or lifecycle_identity(status) != receipt.lifecycle
+                or status.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                or status.applied_final_publish_sequence != receipt.final_publish_sequence
+                or status.applied_physics_iteration != status.physics_iteration
+                or applied_stamp != stamp_ns(status.header.stamp)
+                or not receipt.publish_stamp_ns <= applied_stamp <= cutoff_ns):
+            raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
+        return status
 
     def _goal_fact(self, facts, transition=None):
         from mecanum_nav_rl.core.goal_facts import GoalFactProvenance, GoalFactJoinMode

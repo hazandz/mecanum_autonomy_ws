@@ -456,9 +456,45 @@ def test_b1_native_application_is_required_separately_from_publication(source):
             status.applied_physics_iteration = 0; status.applied_sim_stamp = Time()
         changed.append(replace(pair, backend_bytes=serialize_message(status)))
     f.ingress.physics_pairs = deque(changed, maxlen=64)
+    # The ingress ledger is the authoritative native-application record too;
+    # remove it to model an actually missing application, rather than only
+    # corrupting the separate rolling physics-pair view.
+    f.ingress._application_bytes.pop(3)
     with pytest.raises(ValueError, match='native application'):
         chain.b1.commit_step(chain.cutoff)
     assert not chain.b1.committer.committed
+
+
+def test_b1_application_proof_survives_physics_pair_window_eviction(source):
+    """A real application remains provable after its oracle join ages out."""
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    f = source; chain = b1_runtime_chain(f)
+    receipt = next(item for item in f.ingress.receipts
+        if item.source is ReceiptSource.POLICY and item.final_publish_sequence == 3)
+    assert receipt.final_publish_sequence in f.ingress._application_bytes
+    application_pair = next(pair for pair in f.ingress.physics_pairs
+        if pair.iteration == 4)
+    assert application_pair.stamp_ns <= chain.cutoff
+
+    # Advance only the production ingress with non-applying native pairs until
+    # the bounded 64-pair oracle/status window evicts the applied POLICY pair.
+    for iteration in range(14, 80):
+        f.advance()
+        f.ingress.on_ground_truth(f.gt())
+        f.ingress.on_backend(f.backend(iteration=iteration, sequence=iteration))
+    assert len(f.ingress.physics_pairs) == f.ingress.CAPACITY
+    assert all(pair.iteration != application_pair.iteration for pair in f.ingress.physics_pairs)
+    assert receipt.final_publish_sequence in f.ingress._application_bytes
+
+    status = chain.b1._prove_application(receipt, chain.cutoff)
+    assert status.applied_receipt_valid and not status.local_zero_override
+    assert status.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
+    assert status.applied_final_publish_sequence == receipt.final_publish_sequence
+    assert status.applied_physics_iteration == application_pair.iteration
+    assert status.applied_sim_stamp == status.header.stamp
+    applied_stamp_ns = status.applied_sim_stamp.sec * 1_000_000_000 + status.applied_sim_stamp.nanosec
+    with pytest.raises(B1SnapshotPending, match='native application'):
+        chain.b1._prove_application(receipt, applied_stamp_ns - 1)
 
 
 def test_b1_changed_transform_or_backend_fault_never_uses_fallback(source):
