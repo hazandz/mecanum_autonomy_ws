@@ -1556,11 +1556,14 @@ class TrainingWorkerIO:
                 allow_pending=True),
             deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
 
-    async def call(self, client, request, *, timeout_s, phase):
+    async def call(self, client, request, *, timeout_s, phase,
+            expected_native_fault_flags=None):
         from rclpy.serialization import serialize_message
         started = self.now()
         deadline = min(self.deadline_ns, started + int(timeout_s * 1e9))
-        await self.until(client.service_is_ready, deadline_ns=deadline, phase=phase + ' service ready')
+        await self.until(client.service_is_ready, deadline_ns=deadline,
+            phase=phase + ' service ready',
+            expected_native_fault_flags=expected_native_fault_flags)
         if self.now() >= deadline:
             raise TimeoutError(phase + ': no remaining submit budget')
         self.emit('RPC_REQUEST', {'phase': phase, 'request_cdr_hex': serialize_message(request).hex(),
@@ -1568,7 +1571,8 @@ class TrainingWorkerIO:
         future = client.call_async(request)
         self.calls.append(future)
         try:
-            await self.until(future.done, deadline_ns=deadline, phase=phase + ' ACK')
+            await self.until(future.done, deadline_ns=deadline, phase=phase + ' ACK',
+                expected_native_fault_flags=expected_native_fault_flags)
             response = future.result()
             self.emit('RPC_RESPONSE', {'phase': phase, 'response_cdr_hex': serialize_message(response).hex(),
                 'received_ns': self.now(), 'deadline_ns': deadline})
@@ -1581,14 +1585,18 @@ class TrainingWorkerIO:
             if future.done():
                 self.calls.remove(future)
 
-    async def control_world(self, *, world_name, pause, timeout_s):
+    async def control_world(self, *, world_name, pause, timeout_s,
+            expected_native_fault_flags=None):
         from rclpy.serialization import serialize_message
         if world_name != 'b2_training_arena' or type(pause) is not bool:
             raise ValueError('world control target invalid')
         request = self.control_world_type.Request()
         request.world_control.pause = pause
-        response = await self.call(self.world_client, request, timeout_s=timeout_s,
-            phase='world_pause' if pause else 'world_resume')
+        call_args = {'timeout_s':timeout_s,
+            'phase':'world_pause' if pause else 'world_resume'}
+        if expected_native_fault_flags is not None:
+            call_args['expected_native_fault_flags'] = expected_native_fault_flags
+        response = await self.call(self.world_client, request, **call_args)
         self.emit('WORLD_PAUSE_CONTROL', {'world':world_name,'requested_pause':pause,
             'request_cdr_hex':serialize_message(request).hex(),
             'response_success':response.success,
@@ -3292,7 +3300,8 @@ async def training_child(path):
             if io.now() >= io.deadline_ns:
                 raise TimeoutError('R07a pause hold reached active deadline')
             resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
-                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)),
+                expected_native_fault_flags=1)
             resume_state = await io.paused_state(False, min(1.0,
                 max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
             io.expected_paused = False

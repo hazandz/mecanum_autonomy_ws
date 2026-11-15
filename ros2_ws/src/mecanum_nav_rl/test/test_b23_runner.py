@@ -273,6 +273,73 @@ def test_control_world_records_success_without_nonexistent_response_pause_field(
     assert 'response_pause' not in events[0][1]
 
 
+def test_r07a_resume_control_rpc_tolerates_only_the_pinned_native_fault():
+    from ros_gz_interfaces.srv import ControlWorld
+
+    class Future:
+        def __init__(self, response):
+            self.response = response
+        def done(self):
+            return True
+        def result(self):
+            return self.response
+        def cancel(self):
+            raise AssertionError('completed service future must not be cancelled')
+
+    class Client:
+        def __init__(self):
+            self.requests = []
+        def service_is_ready(self):
+            return True
+        def call_async(self, request):
+            self.requests.append(request)
+            return Future(ControlWorld.Response(success=True))
+
+    def worker_with_expected_fault():
+        worker = object.__new__(TrainingWorkerIO)
+        worker.control_world_type = ControlWorld
+        worker.world_client = Client()
+        worker.deadline_ns = 500
+        worker.now = lambda: 100
+        worker.ros_now = lambda: 50
+        worker.last_clock_ns = 50
+        worker.last_clock_advance_ns = 99
+        worker.expected_paused = False
+        worker.stop_requested = False
+        worker.abort_requested = None
+        worker.pump_error = None
+        worker.calls = []
+        worker.ingress = NS(fault=None,
+            backend_state=NS(fault_flags=1, local_zero_override=True))
+        worker.emit = lambda *_: None
+        return worker
+
+    # Các RPC thông thường vẫn fail-closed khi native đã báo fault.
+    ordinary = worker_with_expected_fault()
+    with pytest.raises(RuntimeError, match='native fault flags=1'):
+        asyncio.run(ordinary.control_world(world_name='b2_training_arena',
+            pause=False, timeout_s=0.25))
+    assert ordinary.world_client.requests == []
+
+    # R07a đã xác minh đúng FAULT_CONTEXT=1; đường resume chịu được cờ đó
+    # trong cả service-ready và ACK polling của chính RPC này.
+    r07a = worker_with_expected_fault()
+    assert asyncio.run(r07a.control_world(world_name='b2_training_arena',
+        pause=False, timeout_s=0.25,
+        expected_native_fault_flags=1)) is True
+    assert len(r07a.world_client.requests) == 1
+    assert r07a.world_client.requests[0].world_control.pause is False
+
+    # Không mở rộng sự khoan dung sang cờ khác.
+    r07a.ingress.backend_state.fault_flags = 65
+    r07a.world_client.requests.clear()
+    with pytest.raises(RuntimeError, match='native fault flags=65'):
+        asyncio.run(r07a.control_world(world_name='b2_training_arena',
+            pause=False, timeout_s=0.25,
+            expected_native_fault_flags=1))
+    assert r07a.world_client.requests == []
+
+
 def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
     from ros_gz_interfaces.srv import ControlWorld
     worker = object.__new__(TrainingWorkerIO)
