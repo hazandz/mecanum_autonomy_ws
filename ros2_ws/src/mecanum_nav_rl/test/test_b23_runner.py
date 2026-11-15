@@ -2892,6 +2892,59 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
 
 
+def test_r02e_holds_old_token_sample_before_freeze_closes_previous_slot():
+    import asyncio
+    import threading
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+
+    class FreezeReached(Exception):
+        pass
+
+    io, _clock = worker()
+    held_events = []
+    message = LocalTrainingSafetyInput()
+    message.admission_state = message.ADMISSION_POLICY_OPEN
+    message.admission_token = [0x31] * 16
+    message.sample_sequence = 17
+    io._hold_next_safety_input = False
+    io._held_safety_input = None
+    io._publish_safety_input = TrainingWorkerIO._publish_safety_input.__get__(io)
+    io.emit = lambda name, facts: held_events.append((name, facts))
+    io.ingress.lock = threading.RLock()
+    io.ingress.noisy_samples = {1: object()}
+    io.ingress.pending_ack = object()
+    io.ingress.admission_state = message.ADMISSION_POLICY_OPEN
+    io.ingress.admission_publication_enabled = True
+    io.ingress._publish_safety = lambda _sample: io._publish_safety_input(message)
+    io.ingress.pause_admission_publication = lambda: held_events.append(('admission_paused', {}))
+
+    async def freeze_after_closing_old_slot(*, deadline_ns):
+        assert deadline_ns > io.now()
+        assert io._held_safety_input is message or (
+            io._held_safety_input is not None
+            and io._held_safety_input.sample_sequence == message.sample_sequence
+            and bytes(io._held_safety_input.admission_token) == bytes(message.admission_token))
+        held_events.append(('freeze_step_streams', {}))
+        io.ingress.pending_ack = None
+        io.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
+        raise FreezeReached
+
+    io.freeze_step_streams = freeze_after_closing_old_slot
+    with pytest.raises(FreezeReached):
+        asyncio.run(io.policy_step(object(), (0.2, 0.0, 0.0), prebind_admission=True))
+
+    tags = [name for name, _ in held_events]
+    held_index = tags.index('R02E_PREBIND_SAFETY_INPUT_HELD')
+    freeze_index = tags.index('freeze_step_streams')
+    assert held_index < freeze_index, f'old-token sample must be retained before the old slot closes: {held_events!r}'
+    record = held_events[held_index][1]
+    assert record['sample_sequence'] == message.sample_sequence
+    assert record['admission_token_hex'] == bytes(message.admission_token).hex()
+    assert io.ingress.pending_ack is None
+    assert io._held_safety_input.sample_sequence == message.sample_sequence
+
+
 def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():
     from builtin_interfaces.msg import Time
 

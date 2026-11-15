@@ -3379,6 +3379,26 @@ class TrainingWorkerIO:
             raise ValueError('action requires three finite normalized values in [-1, 1]')
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
+        held_prebind = None
+        if prebind_admission:
+            if self.ingress.pending_ack is None or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN:
+                raise RuntimeError('R02e needs a live previous pending token before rebinding')
+            with self.ingress.lock:
+                candidates = tuple(self.ingress.noisy_samples.values())
+            if not candidates:
+                raise RuntimeError('R02e has no actual noisy sample to carry across the bind')
+            sample = candidates[-1]
+            self.ingress.admission_publication_enabled = True
+            self._hold_next_safety_input = True
+            self.ingress._publish_safety(sample)
+            held_prebind = self._held_safety_input
+            if held_prebind is None:
+                raise RuntimeError('R02e producer did not create a held pre-bind input')
+            if (held_prebind.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                    or not any(held_prebind.admission_token)
+                    or held_prebind.sample_sequence == 0):
+                raise RuntimeError('R02e held sample is not a valid prior-token POLICY admission')
+            self.ingress.pause_admission_publication()
         await self.freeze_step_streams(deadline_ns=deadline)
         r02b_cutoff_evidence = None
         if align_admission_after_scan_boundary:
@@ -3404,26 +3424,6 @@ class TrainingWorkerIO:
                 self.safety.local_training, measurement_fault_case, self.emit)
             self.emit('B23_R04_FAULT_ARMED', {'case':measurement_fault_case,
                 'step_deadline_ns':deadline, 'steady_ns':self.now()})
-        held_prebind = None
-        if prebind_admission:
-            if self.ingress.pending_ack is None or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN:
-                raise RuntimeError('R02e needs a live previous pending token before rebinding')
-            with self.ingress.lock:
-                candidates = tuple(self.ingress.noisy_samples.values())
-            if not candidates:
-                raise RuntimeError('R02e has no actual noisy sample to carry across the bind')
-            sample = candidates[-1]
-            self.ingress.admission_publication_enabled = True
-            self._hold_next_safety_input = True
-            self.ingress._publish_safety(sample)
-            held_prebind = self._held_safety_input
-            if held_prebind is None:
-                raise RuntimeError('R02e producer did not create a held pre-bind input')
-            if (held_prebind.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
-                    or not any(held_prebind.admission_token)
-                    or held_prebind.sample_sequence == 0):
-                raise RuntimeError('R02e held sample is not a valid prior-token POLICY admission')
-            self.ingress.pause_admission_publication()
         # Align while the applied SAFE_STOP stream is still running. Waiting
         # after binding would consume the unchanged native command watchdog
         # budget while the pending slot correctly forbids a closing SAFE_STOP.
