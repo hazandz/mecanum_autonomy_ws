@@ -71,31 +71,23 @@ class SafetySupervisorNode(Node):
             # ROS timers follow the simulated clock. Under headless/loaded
             # Gazebo, simulation time can advance slower than wall time, so a
             # ROS-time Safety timer can miss the 100 ms steady receipt window.
-            # Drive this LOCAL_TRAINING loop from steady time. Keep the half-
-            # period phase offset so a prior Safety receipt can be applied at
-            # a scan cutoff; receipt freshness and command limits still use
-            # their existing ROS/steady clocks in the adapter.
+            # Drive this LOCAL_TRAINING loop from steady time. Start the
+            # periodic timer immediately: delaying its first phase by half a
+            # period can align a final receipt with the scan cutoff, while
+            # the publisher/backend path still needs one physics update to
+            # apply it. Receipt freshness and command limits keep their
+            # existing ROS/steady clocks in the adapter.
             self._local_training_phase_timer = None
-            self._local_training_timer = None
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
-
-            def start_local_training_periodic_timer():
-                self.destroy_timer(self._local_training_phase_timer)
-                self._local_training_phase_timer = None
-                started_ros_ns = self.get_clock().now().nanoseconds
-                self._local_training_timer = self.create_timer(
-                    period_ns / 1_000_000_000, self.local_training.tick,
-                    clock=steady_clock)
-                self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
-                    'initial_offset_ns': period_ns // 2,
-                    'period_ns': period_ns,
-                    'started_ros_ns': started_ros_ns,
-                    'clock': 'steady',
-                })
-
-            self._local_training_phase_timer = self.create_timer(
-                (period_ns // 2) / 1_000_000_000, start_local_training_periodic_timer,
+            self._local_training_timer = self.create_timer(
+                period_ns / 1_000_000_000, self.local_training.tick,
                 clock=steady_clock)
+            self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
+                'initial_offset_ns': 0,
+                'period_ns': period_ns,
+                'started_ros_ns': self.get_clock().now().nanoseconds,
+                'clock': 'steady',
+            })
             return
         for name in self._POLICY_NAMES:
             self.declare_parameter(name)
