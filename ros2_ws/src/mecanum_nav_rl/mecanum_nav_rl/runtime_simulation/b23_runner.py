@@ -574,6 +574,37 @@ def verify_r04a_next_step_blocked(io, *, step_index):
         'b1_transition_absent':True,'native_zero_application':applied_zero}
 
 
+def verify_r04a_zero_baseline(io, *, checked):
+    """Accept a proven applied zero even when Safety has emitted its next tick.
+
+    SAFE_STOP publication and native status callbacks are asynchronous. The
+    latest Safety output can therefore be one sequence ahead of the latest
+    native status without invalidating an earlier, exactly joined zero after
+    the delayed-input rejection.
+    """
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    state = io.ingress.backend_state
+    stop = io.safety.local_training.last_output
+    proof = checked.get('native_zero_application') if isinstance(checked, dict) else None
+    if (not isinstance(proof, dict) or type(proof.get('publisher_instance_id')) is not int
+            or type(proof.get('final_publish_sequence')) is not int
+            or proof['publisher_instance_id'] != io.final.publisher_instance_id):
+        raise RuntimeError('R04a native zero proof is not bound to the FinalTwistPublisher')
+    if (state is None or not state.applied_receipt_valid or state.local_zero_override
+            or state.fault_flags != 0
+            or state.applied_final_publisher_instance_id != io.final.publisher_instance_id
+            or state.applied_final_publish_sequence < proof['final_publish_sequence']):
+        raise RuntimeError('R04a native backend lost its healthy applied-zero baseline')
+    if (stop is None or stop.source != CommandEnvelope.SOURCE_SAFE_STOP
+            or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
+        raise RuntimeError('R04a current Safety output is not zero SAFE_STOP')
+    return {'current_native_publisher_instance_id':state.applied_final_publisher_instance_id,
+        'current_native_publish_sequence':state.applied_final_publish_sequence,
+        'proven_post_rejection_zero':proof,
+        'current_safety_source':stop.source, 'current_safety_sequence':stop.sequence,
+        'current_safety_zero':True}
+
+
 def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
                       backend_state=None, control_ack=None):
     """Verify a real LOCAL_TRAINING closing path after nonzero POLICY.
@@ -2647,26 +2678,13 @@ async def training_child(path):
                         checked = verify_r04_stale_delivery(io, case='R04a')
                         if not isinstance(error, TimeoutError):
                             raise RuntimeError('R04a expected the blocked POLICY step to reach its deadline') from error
-                        native_state = io.ingress.backend_state
-                        stop = io.safety.local_training.last_output
-                        if (native_state is None or native_state.local_zero_override
-                                or native_state.fault_flags != 0 or stop is None
-                                or stop.source != stop.SOURCE_SAFE_STOP
-                                or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
-                            raise RuntimeError('R04a delayed-input rejection lacks a healthy SAFE_STOP baseline') from error
-                        receipt = io.final.publication_for_source_sequence(
-                            source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence)
-                        if (receipt is None
-                                or native_state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
-                                or native_state.applied_final_publish_sequence != receipt.final_publish_sequence
-                                or not native_state.applied_receipt_valid):
-                            raise RuntimeError('R04a delayed-input rejection lacks exact native zero application') from error
+                        zero_baseline = verify_r04a_zero_baseline(io, checked=checked)
                         if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
                             raise RuntimeError('R04a POLICY receipt reached native ingress after delay fault')
                         aborted = b1.lifecycle.abort_step('R04a_delayed_noisy_input_rejected')
                         outcome = {'case':'R04a','resets_confirmed':1,'policy_steps_committed':0,
                             'expected_rejection':True, **checked,
-                            'safe_stop_applied':True,
+                            'safe_stop_applied':True, 'safe_stop_baseline':zero_baseline,
                             'b1_abort_status':str(aborted.status),
                             'exception':repr(error),'completed_ns':time.monotonic_ns()}
                     else:

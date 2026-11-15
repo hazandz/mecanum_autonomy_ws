@@ -12,6 +12,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
+    verify_r04a_zero_baseline,
 )
 
 
@@ -376,6 +377,30 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'candidate_sequence':2}))
     with pytest.raises(RuntimeError, match='accepted the POLICY slot'):
         verify_r04a_next_step_blocked(io, step_index=2)
+
+
+def test_r04a_accepts_exact_applied_zero_when_latest_safety_tick_is_ahead():
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    proof = {'publisher_instance_id':80, 'final_publish_sequence':99,
+        'source_sequence':42, 'native_iteration':151, 'native_stamp_ns':1_510_000_000,
+        'native_application_steady_ns':500}
+    io = NS(final=NS(publisher_instance_id=80),
+        ingress=NS(backend_state=NS(applied_receipt_valid=True,
+            local_zero_override=False, fault_flags=0,
+            applied_final_publisher_instance_id=80, applied_final_publish_sequence=99)),
+        safety=NS(local_training=NS(last_output=NS(
+            source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=43,
+            twist=NS(linear=NS(x=0., y=0., z=0.),
+                angular=NS(x=0., y=0., z=0.))))))
+
+    result = verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
+
+    assert result['current_native_publish_sequence'] == 99
+    assert result['current_safety_sequence'] == 43
+    assert result['proven_post_rejection_zero'] == proof
+    io.ingress.backend_state.applied_final_publish_sequence = 98
+    with pytest.raises(RuntimeError, match='lost its healthy applied-zero baseline'):
+        verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
 
 
 @pytest.mark.parametrize('case,reason', [('R04c','SCAN_STALE_OR_FUTURE')])
