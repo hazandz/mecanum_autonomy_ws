@@ -795,8 +795,9 @@ public:
       std::lock_guard<std::mutex> lock(callback_mutex_);
       if (gate_ && !gate_->QueueEmpty())
       {
-        const auto replay = gate_->ConsumeNext(TimeNs(info), steady_now_ns);
-        if (replay.disposition != GateDisposition::Duplicate)
+        const auto replay = gate_->ConsumeNextAtCurrentTime(
+            TimeNs(info), [this]() { return steady_clock_now_(); });
+        if (replay.result.disposition != GateDisposition::Duplicate)
           SetFault(BackendState::FAULT_CONTEXT, "non_replay_receipt_during_reset_hold");
       }
       if (gate_ && gate_->Faulted()) SetFault(BackendState::FAULT_CONTEXT, gate_->FaultReason());
@@ -821,11 +822,14 @@ public:
     else if (stalled_ns > 200'000'000)
       fault_flags_ |= BackendState::FAULT_CLOCK;
 
+    TimedGateResult timed_decision;
     GateResult decision;
     {
       std::lock_guard<std::mutex> lock(callback_mutex_);
-      decision = gate_->ConsumeNext(now_sim, now_steady);
-      if (gate_->WatchdogExpired(now_steady))
+      timed_decision = gate_->ConsumeNextAtCurrentTime(
+          now_sim, [this]() { return steady_clock_now_(); });
+      decision = timed_decision.result;
+      if (gate_->WatchdogExpired(timed_decision.steady_now_ns))
       {
         fault_flags_ |= BackendState::FAULT_COMMAND_STALE;
         gate_->Invalidate("actuator_watchdog_expired");
@@ -848,7 +852,7 @@ public:
         decision.disposition == GateDisposition::Anchored)
     {
       selected_receipt_ = decision.accepted;
-      selected_steady_ns_ = now_steady;
+      selected_steady_ns_ = timed_decision.steady_now_ns;
       if (decision.accepted)
       {
         accepted_receipt_history_.push_back(*decision.accepted);

@@ -46,6 +46,13 @@ bool ReceiptGate::Enqueue(ReceiptFacts receipt, std::int64_t receive_steady_ns)
   return true;
 }
 
+TimedGateResult ReceiptGate::ConsumeNextAtCurrentTime(
+    std::int64_t now_ros_ns, const std::function<std::int64_t()> &steady_now)
+{
+  const auto now_steady_ns = steady_now();
+  return {ConsumeNext(now_ros_ns, now_steady_ns), now_steady_ns};
+}
+
 bool ReceiptGate::ValidPayload(const ReceiptFacts &r, std::string &reason) const
 {
   if (r.session_id != binding_.session_id || r.config_hash != binding_.config_hash)

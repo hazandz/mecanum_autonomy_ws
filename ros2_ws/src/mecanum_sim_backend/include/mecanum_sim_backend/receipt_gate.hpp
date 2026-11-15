@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -48,6 +49,12 @@ struct GateResult
   bool refresh_watchdog{};
 };
 
+struct TimedGateResult
+{
+  GateResult result;
+  std::int64_t steady_now_ns{};
+};
+
 struct GateBinding
 {
   std::string session_id;
@@ -80,6 +87,8 @@ public:
   explicit ReceiptGate(GateBinding binding);
   bool Enqueue(ReceiptFacts receipt, std::int64_t receive_steady_ns);
   GateResult ConsumeNext(std::int64_t now_ros_ns, std::int64_t now_steady_ns);
+  TimedGateResult ConsumeNextAtCurrentTime(
+      std::int64_t now_ros_ns, const std::function<std::int64_t()> &steady_now);
   bool WatchdogExpired(std::int64_t now_steady_ns) const;
   bool SetExpectedPolicyStep(std::uint64_t step_index,
                              std::uint64_t source_sequence,

@@ -49,6 +49,23 @@ TEST(ReceiptGate, RequiresBoundPostBarrierSafeStopAnchorAndNextPolicy)
   EXPECT_EQ(gate.Watermark(), 101U);
 }
 
+TEST(ReceiptGate, SamplesSteadyClockAtConsumptionBoundary)
+{
+  ReceiptGate gate(Binding());
+  ASSERT_TRUE(gate.Enqueue(Anchor(), 2'100));
+  std::int64_t observed_steady_ns = 2'000;  // Snapshot predates the queued receipt.
+  bool clock_read = false;
+  const auto consumed = gate.ConsumeNextAtCurrentTime(2'000, [&]() {
+    clock_read = true;
+    observed_steady_ns = 2'200;  // Fresh sample at the consumption boundary.
+    return observed_steady_ns;
+  });
+  EXPECT_TRUE(clock_read);
+  EXPECT_EQ(consumed.steady_now_ns, 2'200);
+  EXPECT_EQ(consumed.result.disposition, GateDisposition::Anchored);
+  EXPECT_EQ(gate.LastAcceptedSteadyNs(), 2'100);
+}
+
 TEST(ReceiptGate, ExactDuplicateDoesNotRefreshWatchdog)
 {
   ReceiptGate gate(Binding()); AcceptAnchor(gate); auto r = Policy();
