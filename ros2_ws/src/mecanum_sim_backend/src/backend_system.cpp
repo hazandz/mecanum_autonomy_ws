@@ -163,6 +163,23 @@ void EnqueueProbeServiceResult(
           << "fixture_residue_possible kind=" << static_cast<int>(kind)
           << " success=" << success << "\n";
 }
+
+bool MayApplySafeStopDuringContact(
+    bool receipt_accepted, std::uint8_t source,
+    const std::array<double, 6> &twist, const ContactDecision &contact,
+    std::uint32_t fault_flags, bool measurement_healthy)
+{
+  if (!receipt_accepted || source !=
+          mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt::SOURCE_SAFE_STOP ||
+      !contact.healthy ||
+      !contact.coverage_complete || !contact.contact_active ||
+      fault_flags != 0 || !measurement_healthy)
+    return false;
+  return std::all_of(twist.begin(), twist.end(), [](double value) {
+    return value == 0.0;
+  });
+}
+
 struct ProbeServiceTransport
 {
   std::function<bool()> spawn_ready;
@@ -921,7 +938,12 @@ public:
       return;
     }
     const bool selected_safe_stop = decision.accepted && decision.accepted->source == Receipt::SOURCE_SAFE_STOP;
-    if (fault_flags_ != 0 || (!policy_open_ && !selected_safe_stop) || contact_decision_.contact_active ||
+    const bool safe_stop_during_contact = decision.accepted &&
+        backend_detail::MayApplySafeStopDuringContact(
+            true, decision.accepted->source, decision.accepted->twist,
+            contact_decision_, fault_flags_, measurement_healthy_);
+    if (fault_flags_ != 0 || (!policy_open_ && !selected_safe_stop) ||
+        (contact_decision_.contact_active && !safe_stop_during_contact) ||
         !contact_decision_.healthy || !measurement_healthy_)
     {
       local_zero_override_ = true;

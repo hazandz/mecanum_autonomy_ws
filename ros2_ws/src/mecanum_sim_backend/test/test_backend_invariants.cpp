@@ -1510,6 +1510,44 @@ TEST(BackendInvariants, BodyFrameConversionPreservesVyAndMeasuredVerticalCompone
   EXPECT_NEAR(body->angular[1],-0.1,1e-12); EXPECT_NEAR(body->angular[2],0.4,1e-12);
 }
 
+TEST(BackendInvariants, SafeStopDuringContactRequiresHealthyCoveredExactZero)
+{
+  ContactDecision contact;
+  contact.healthy = true;
+  contact.coverage_complete = true;
+  contact.contact_active = true;
+  const std::array<double, 6> zero{};
+
+  EXPECT_TRUE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, contact, 0, true));
+
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      false, Receipt::SOURCE_SAFE_STOP, zero, contact, 0, true));
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_POLICY, zero, contact, 0, true));
+  auto moving = zero;
+  moving[0] = 0.001;
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, moving, contact, 0, true));
+  auto incomplete = contact;
+  incomplete.coverage_complete = false;
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, incomplete, 0, true));
+  auto unhealthy = contact;
+  unhealthy.healthy = false;
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, unhealthy, 0, true));
+  auto no_contact = contact;
+  no_contact.contact_active = false;
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, no_contact, 0, true));
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, contact,
+      BackendState::FAULT_COMMAND_SEQUENCE, true));
+  EXPECT_FALSE(backend_detail::MayApplySafeStopDuringContact(
+      true, Receipt::SOURCE_SAFE_STOP, zero, contact, 0, false));
+}
+
 TEST(BackendInvariants, PhysicsEngineFingerprintResolvesSelectedBinary)
 {
   const char *ament_prefixes = std::getenv("AMENT_PREFIX_PATH");
