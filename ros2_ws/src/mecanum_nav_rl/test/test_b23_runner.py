@@ -446,26 +446,38 @@ def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
     worker._r07b_rollback_pending_before_ns = None
     worker._r07b_rollback_observed = None
-    worker.ros_now = iter((200, 100)).__next__
+    worker._r07b_request_started_ns = None
+    worker.ros_now = iter((200, 330)).__next__
     worker.now = lambda: 321
+    worker.deadline_ns = 2_000_000_000
     events = []
     worker.emit = lambda name, facts: events.append((name, facts))
     response = ControlWorld.Response(success=True)
-    async def fake_call(client, request, *, timeout_s, phase):
+    async def fake_call(client, request, *, timeout_s, phase, before_submit=None):
         assert client is worker.world_client
         assert phase == 'R07b_world_time_only_rollback'
         assert request.world_control.pause is False
         assert request.world_control.reset.time_only is True
         assert request.world_control.reset.all is False
         assert request.world_control.reset.model_only is False
-        worker._r07b_rollback_observed = {'before_ns':200,'after_ns':100}
+        assert before_submit is not None
+        before_submit(321)
+        worker._r07b_rollback_observed = {
+            'request_baseline_ns':200,'request_started_ns':321,
+            'delta_ns':-200,'observed_steady_ns':322}
         return response
     worker.call = fake_call
-    before, after = asyncio.run(worker.reset_world_time_only(timeout_s=1.0))
-    assert (before, after) == (200, 100)
-    assert events[0][0] == 'B23_R07B_TIME_ONLY_RESET'
-    assert events[0][1]['response_success'] is True
-    assert 'response_pause' not in events[0][1]
+    async def fake_until(predicate, **kwargs):
+        assert kwargs['phase'] == 'R07b ROS clock rollback event'
+        return predicate()
+    worker.until = fake_until
+    before, after, jump = asyncio.run(worker.reset_world_time_only(timeout_s=1.0))
+    assert (before, after) == (200, 330)
+    assert jump['delta_ns'] == -200
+    assert [event[0] for event in events] == [
+        'B23_R07B_CLOCK_ROLLBACK_OBSERVED','B23_R07B_TIME_ONLY_RESET']
+    assert events[1][1]['response_success'] is True
+    assert 'response_pause' not in events[1][1]
 
 
 def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
@@ -486,7 +498,8 @@ def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
         response=NS(result=Control.Response.RESULT_APPLIED,
             reason_code=Control.Response.REASON_NONE, applied_binding_revision=3))
     result = verify_r07b_revocation(response=revoked().response,
-        original_proof=original, sim_before_ns=900, sim_after_ns=1,
+        original_proof=original, sim_before_ns=900, sim_after_ns=930,
+        sim_time_jump_delta_ns=-900,
         replay_ack=revoked(), fresh_ack=revoked(b'new-query'), inhibit_ack=inhibit)
     assert result['query_replay_revoked'] and result['fresh_query_revoked']
     with pytest.raises(RuntimeError, match='replayed QUERY exposed proof'):
@@ -496,7 +509,7 @@ def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
             proof_backend_instance_id=8, proof_session_id='session',
             proof_config_hash='a'*64, proof_asset_manifest_sha256='b'*64)
         verify_r07b_revocation(response=original.response, original_proof=original,
-            sim_before_ns=900, sim_after_ns=1,
+            sim_before_ns=900, sim_after_ns=930, sim_time_jump_delta_ns=-900,
             replay_ack=NS(**{**revoked().__dict__, 'response_bytes':b'verified-query',
                 'response':stale_response}), fresh_ack=revoked(), inhibit_ack=inhibit)
 
@@ -513,12 +526,16 @@ def test_r07b_worker_clock_monitor_accepts_only_one_packet_armed_rollback():
     worker.last_clock_advance_ns = 10
     worker.expected_paused = False
     worker._r07b_rollback_pending_before_ns = 15
+    worker._r07b_request_started_ns = 15
     worker._r07b_rollback_observed = None
     worker.emit = lambda kind, facts: None
     worker.ingress = NS(fault=None, backend_state=None)
+    worker._on_r07b_clock_jump(NS(delta=NS(nanoseconds=-5)))
     worker.check()
     assert worker._r07b_rollback_observed == {
-        'before_ns':15,'after_ns':5,'observed_steady_ns':20}
+        'request_baseline_ns':15,'request_started_ns':15,
+        'delta_ns':-5,'observed_steady_ns':20}
+    assert worker._r07b_rollback_pending_before_ns is None
     worker.ros_now = lambda: 4
     with pytest.raises(RuntimeError, match='ROS clock rolled backward'):
         worker.check()

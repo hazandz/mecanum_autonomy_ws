@@ -63,10 +63,11 @@ def service_properties_for(active_s):
 
 
 def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
-                           sim_after_ns, replay_ack, fresh_ack, inhibit_ack):
+                           sim_after_ns, sim_time_jump_delta_ns, replay_ack,
+                           fresh_ack, inhibit_ack):
     """Require rollback, revoked QUERY replay/fresh response, and INHIBIT ACK."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-    if sim_after_ns >= sim_before_ns:
+    if type(sim_time_jump_delta_ns) is not int or sim_time_jump_delta_ns >= 0:
         raise RuntimeError('R07b did not observe simulation time rollback')
     if original_proof.response.contact_capability_state != Control.Response.CAPABILITY_VERIFIED:
         raise RuntimeError('R07b original contact proof was not verified')
@@ -92,6 +93,7 @@ def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
     return {'clock_rollback_observed':True, 'contact_proof_invalidated':True,
         'native_inhibit_applied':True, 'simulation_time_before_ns':sim_before_ns,
         'simulation_time_after_ns':sim_after_ns,
+        'simulation_time_jump_delta_ns':sim_time_jump_delta_ns,
         'contact_state':response.contact_capability_state,
         'query_replay_revoked':True,'fresh_query_revoked':True,
         'inhibit_request_sequence':inhibit_ack.request.request_sequence,
@@ -1248,6 +1250,9 @@ class TrainingWorkerIO:
         from rclpy.node import Node
         from rclpy.parameter import Parameter
         from rclpy.executors import SingleThreadedExecutor
+        from rclpy.clock import JumpThreshold
+        from rclpy.clock_type import ClockType
+        from rclpy.duration import Duration
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
         from nav_msgs.msg import Odometry
         from sensor_msgs.msg import LaserScan
@@ -1296,6 +1301,7 @@ class TrainingWorkerIO:
         self.contact_start_request_sequence = None
         self._r07b_rollback_pending_before_ns = None
         self._r07b_rollback_observed = None
+        self._r07b_request_started_ns = None
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
@@ -1303,6 +1309,12 @@ class TrainingWorkerIO:
             mode_params = base_params + [Parameter('navigation_mode', value='LOCAL_TRAINING')]
             self.node = Node('b23_coordinator_ingress', context=self.context, parameter_overrides=base_params)
             self.nodes.append(self.node)
+            ros_clock = self.node.get_clock()
+            if ros_clock.clock_type != ClockType.ROS_TIME:
+                raise RuntimeError('R07b requires the worker node ROS clock')
+            self._r07b_jump_handle = ros_clock.create_jump_callback(
+                JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=1),
+                    on_clock_change=False), post_callback=self._on_r07b_clock_jump)
             self.policy_source_id, self.safe_stop_source_id = secrets.randbelow(2**63 - 1) + 1, secrets.randbelow(2**63 - 1) + 1
             if self.policy_source_id == self.safe_stop_source_id:
                 raise RuntimeError('source nonce collision')
@@ -1491,6 +1503,19 @@ class TrainingWorkerIO:
     def ros_now(self):
         return self.node.get_clock().now().nanoseconds
 
+    def _on_r07b_clock_jump(self, jump):
+        """Capture the actual ROS clock jump even if time advances past its baseline."""
+        delta_ns = int(jump.delta.nanoseconds)
+        if (delta_ns >= 0 or self._r07b_rollback_pending_before_ns is None
+                or self._r07b_rollback_observed is not None):
+            return
+        self._r07b_rollback_observed = {
+            'request_baseline_ns': self._r07b_rollback_pending_before_ns,
+            'request_started_ns': self._r07b_request_started_ns,
+            'delta_ns': delta_ns,
+            'observed_steady_ns': self.now(),
+        }
+
     def start_pump(self):
         if self.pump_task is not None:
             raise RuntimeError('executor pump already started')
@@ -1530,15 +1555,14 @@ class TrainingWorkerIO:
         if now >= self.deadline_ns:
             raise TimeoutError('B23 active deadline reached')
         if ros < self.last_clock_ns:
-            rollback_before = self._r07b_rollback_pending_before_ns
-            if (rollback_before is None or ros >= rollback_before
-                    or self._r07b_rollback_observed is not None):
+            rollback = self._r07b_rollback_observed
+            if (self._r07b_rollback_pending_before_ns is None or rollback is None
+                    or rollback.get('delta_ns', 0) >= 0
+                    or rollback.get('request_started_ns') is None
+                    or rollback.get('observed_steady_ns', 0) < rollback['request_started_ns']):
                 raise RuntimeError('ROS clock rolled backward')
-            self._r07b_rollback_observed = {
-                'before_ns': rollback_before, 'after_ns': ros, 'observed_steady_ns': now}
             self._r07b_rollback_pending_before_ns = None
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
-            self.emit('B23_R07B_CLOCK_ROLLBACK_OBSERVED', self._r07b_rollback_observed)
         if ros > self.last_clock_ns:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
         if not self.expected_paused and now - self.last_clock_advance_ns > 1_000_000_000:
@@ -1585,7 +1609,7 @@ class TrainingWorkerIO:
             deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
 
     async def call(self, client, request, *, timeout_s, phase,
-            expected_native_fault_flags=None):
+            expected_native_fault_flags=None, before_submit=None):
         from rclpy.serialization import serialize_message
         started = self.now()
         deadline = min(self.deadline_ns, started + int(timeout_s * 1e9))
@@ -1596,6 +1620,8 @@ class TrainingWorkerIO:
             raise TimeoutError(phase + ': no remaining submit budget')
         self.emit('RPC_REQUEST', {'phase': phase, 'request_cdr_hex': serialize_message(request).hex(),
             'started_ns': started, 'deadline_ns': deadline})
+        if before_submit is not None:
+            before_submit(self.now())
         future = client.call_async(request)
         self.calls.append(future)
         try:
@@ -1638,6 +1664,8 @@ class TrainingWorkerIO:
         """Apply the packet-pinned Gazebo time_only rollback through ControlWorld."""
         from rclpy.serialization import serialize_message
         before = self.ros_now()
+        if before <= 0:
+            raise RuntimeError('R07b requires positive simulation time before rollback')
         request = self.control_world_type.Request()
         request.world_control.reset.time_only = True
         request.world_control.reset.all = False
@@ -1645,23 +1673,34 @@ class TrainingWorkerIO:
         request.world_control.pause = False
         if 'time_only_rollback_after_contact_proof' not in self.fault_hooks:
             raise RuntimeError('R07b time_only reset is not authorized by this packet hook')
-        self._r07b_rollback_pending_before_ns = before
+        def arm_rollback_observer(request_started_ns):
+            self._r07b_request_started_ns = request_started_ns
+            self._r07b_rollback_pending_before_ns = before
         self._r07b_rollback_observed = None
         response = await self.call(self.world_client, request, timeout_s=timeout_s,
-            phase='R07b_world_time_only_rollback')
+            phase='R07b_world_time_only_rollback', before_submit=arm_rollback_observer)
         after = self.ros_now()
+        rollback = await self.until(lambda: self._r07b_rollback_observed,
+            deadline_ns=min(self.deadline_ns, self.now() + 1_000_000_000),
+            phase='R07b ROS clock rollback event')
+        self.emit('B23_R07B_CLOCK_ROLLBACK_OBSERVED', rollback)
         self.emit('B23_R07B_TIME_ONLY_RESET', {
             'world':'b2_training_arena','pause':False,'reset_all':False,
             'reset_time_only':True,'reset_model_only':False,
             'request_cdr_hex':serialize_message(request).hex(),
             'response_success':response.success,
-            'sim_before_ns':before,'sim_after_ns':after,'steady_ns':self.now()})
+            'sim_before_ns':before,'sim_after_ack_ns':after,
+            'clock_jump':rollback,'steady_ns':self.now()})
         if not response.success:
             raise RuntimeError('R07b world time_only API returned unsuccessful ACK')
-        if after >= before or self._r07b_rollback_observed is None:
-            raise RuntimeError('R07b clock rollback was not observed through the worker clock monitor')
+        if (type(rollback.get('request_started_ns')) is not int
+                or rollback['observed_steady_ns'] < rollback['request_started_ns']
+                or rollback['delta_ns'] >= 0):
+            raise RuntimeError('R07b clock rollback was not observed during the requested reset')
+        self._r07b_rollback_pending_before_ns = None
+        self._r07b_request_started_ns = None
         self.last_clock_ns, self.last_clock_advance_ns = after, self.now()
-        return before, after
+        return before, after, rollback
 
     async def set_entity_pose(self, *, world_name, entity_name, target, timeout_s):
         from ros_gz_interfaces.msg import Entity
