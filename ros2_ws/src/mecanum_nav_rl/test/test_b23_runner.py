@@ -22,7 +22,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
-    verify_r09b_task_contact,
+    verify_r09b_task_contact, require_r09_scenario,
 )
 
 
@@ -224,6 +224,28 @@ def test_r09_task_verifiers_require_b1_goal_and_contact_facts():
     with pytest.raises(RuntimeError, match='B1-committed task contact terminal'):
         verify_r09b_task_contact(contact, NS(source_healthy=True,
             contact_active=False,collision_pulse_pending=False))
+
+
+def test_r09_scenario_identity_reads_ready_loader_artifact():
+    import json
+    from mecanum_nav_rl.tasks.scenario_artifact import (
+        ScenarioArtifactLoader, ScenarioArtifactLoadStatus,
+    )
+    root = Path(__file__).parents[1] / 'scenarios' / 'local_training'
+    for filename, expected in (
+        ('B2_GOAL_SETTLE_V1.json', 'B2_GOAL_SETTLE_V1'),
+        ('B2_CONTACT_V1.json', 'B2_CONTACT_V1'),
+    ):
+        raw = json.loads((root / filename).read_text())
+        source_identity = raw['identity']
+        result = ScenarioArtifactLoader(
+            expected_gazebo_world_name=source_identity['gazebo_world_name'],
+            expected_world_file_sha256=source_identity['world_file_sha256'],
+        ).load(json.dumps(raw))
+        assert result.status is ScenarioArtifactLoadStatus.READY
+        assert require_r09_scenario(result, expected).scenario_id == expected
+        with pytest.raises(RuntimeError, match='scenario identity mismatch'):
+            require_r09_scenario(result, 'wrong-scenario')
 
 
 def test_r07a_allows_timer_republication_but_rejects_new_policy_step_identity():

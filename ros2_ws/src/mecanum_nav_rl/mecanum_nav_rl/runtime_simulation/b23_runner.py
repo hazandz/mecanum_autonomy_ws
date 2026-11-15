@@ -91,6 +91,19 @@ def verify_r09b_task_contact(transition, contact_state):
         'transition_id':transition.transition_identity.transition_id}
 
 
+def require_r09_scenario(artifact_result, expected_scenario_id):
+    """Validate the scenario identity carried by the production loader result."""
+    from mecanum_nav_rl.tasks.scenario_artifact import ScenarioArtifactLoadResult
+    if not isinstance(artifact_result, ScenarioArtifactLoadResult):
+        raise TypeError('R09 requires a ScenarioArtifactLoadResult')
+    if not artifact_result.ready or artifact_result.artifact is None:
+        raise RuntimeError('R09 scenario artifact is not ready')
+    identity = artifact_result.artifact.identity
+    if identity.scenario_id != expected_scenario_id:
+        raise RuntimeError('R09 packet scenario identity mismatch')
+    return identity
+
+
 def service_properties_for(active_s):
     """Unit cap exactly covers active and cleanup budgets for the packet."""
     if type(active_s) is not int or active_s not in (120, 900):
@@ -3525,9 +3538,9 @@ async def training_child(path):
                 raise RuntimeError('R08 requires the exact 30 B2_SOAK_V1 seeds')
             outcome = await _run_b2_soak(io, b1, packet, sink)
         elif packet['case'] == 'R09a':
-            if (packet['fault_hooks'] or len(packet['episode_seeds']) != 1
-                    or artifact.identity.scenario_id != 'B2_GOAL_SETTLE_V1'):
+            if packet['fault_hooks'] or len(packet['episode_seeds']) != 1:
                 raise RuntimeError('R09a packet must pin the clean goal-settle scenario')
+            require_r09_scenario(artifact, 'B2_GOAL_SETTLE_V1')
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                 paused_hold_s=.250)
@@ -3550,9 +3563,9 @@ async def training_child(path):
             from rclpy.serialization import deserialize_message
             from nav_msgs.msg import Odometry
             from mecanum_nav_rl_interfaces.msg import SimulationContactState
-            if (packet['fault_hooks'] or len(packet['episode_seeds']) != 1
-                    or artifact.identity.scenario_id != 'B2_CONTACT_V1'):
+            if packet['fault_hooks'] or len(packet['episode_seeds']) != 1:
                 raise RuntimeError('R09b packet must pin the clean contact-task scenario')
+            require_r09_scenario(artifact, 'B2_CONTACT_V1')
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                 paused_hold_s=.250)
