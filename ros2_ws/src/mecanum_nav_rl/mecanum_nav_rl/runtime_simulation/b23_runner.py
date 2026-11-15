@@ -3413,8 +3413,7 @@ class TrainingWorkerIO:
             expected_mode = ('hold_policy_until_safe_stop' if close_after_held_receipt == 'safe_stop'
                 else 'hold_policy_until_inhibit')
             def held_row():
-                rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
-                    .read_text().splitlines() if line.strip()]
+                rows = complete_jsonl_rows(self.descriptor['native_events_path'])
                 return next((row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
                     and row.get('fields', {}).get('mode') == expected_mode
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
@@ -3429,8 +3428,7 @@ class TrainingWorkerIO:
             expected_native_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
                 | SimulationContactState.FAULT_COMMAND_STALE)
             def released_row():
-                rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
-                    .read_text().splitlines() if line.strip()]
+                rows = complete_jsonl_rows(self.descriptor['native_events_path'])
                 return next((row for row in rows
                     if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
                     and row.get('fields', {}).get('reason') == expected_reason
