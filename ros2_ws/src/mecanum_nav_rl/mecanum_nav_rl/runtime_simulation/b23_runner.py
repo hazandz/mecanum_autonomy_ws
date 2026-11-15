@@ -125,6 +125,58 @@ def verify_r09b_task_contact(transition, contact_state):
         'transition_id':transition_id}
 
 
+async def restore_r09b_fixture_after_contact_pulse(io, *, deadline_ns,
+                                                  after_status_sequence,
+                                                  after_physics_iteration):
+    """Capture a healthy fixture contact pulse, then clear contact before B1 cutoff."""
+    def matching_status(*, active, after_sequence=0, after_iteration=0):
+        status = io.ingress.backend_state
+        if status is None:
+            return None
+        if (status.backend_instance_id != io.descriptor['backend_instance_id']
+                or status.session_id != io.descriptor['session_id']
+                or status.config_hash != io.descriptor['config_hash']
+                or not status.coverage_complete or not status.contact_source_healthy
+                or status.required_collision_mask == 0
+                or status.required_collision_mask != status.observed_collision_mask
+                or status.fault_flags or status.paused
+                or status.status_sequence <= after_sequence
+                or status.physics_iteration <= after_iteration
+                or bool(status.contact_active) is not active):
+            return None
+        return status
+
+    contact = await io.until(lambda: matching_status(active=True,
+        after_sequence=after_status_sequence,
+        after_iteration=after_physics_iteration),
+        deadline_ns=deadline_ns, phase='R09b healthy fixture contact pulse')
+    contact_facts = {'entity_name':io.descriptor['task_fixture']['entity_name'],
+        'backend_instance_id':int(contact.backend_instance_id),
+        'session_id':contact.session_id, 'config_hash':contact.config_hash,
+        'status_sequence':int(contact.status_sequence),
+        'physics_iteration':int(contact.physics_iteration),
+        'sim_stamp_ns':int(contact.header.stamp.sec)*1_000_000_000
+            +int(contact.header.stamp.nanosec), 'steady_ns':io.now()}
+    io.emit('R09B_FIXTURE_CONTACT_PULSE_OBSERVED', contact_facts)
+    await io.set_r09b_task_fixture_pose(pose_name='initial_pose',
+        deadline_ns=deadline_ns)
+    empty = await io.until(lambda: matching_status(active=False,
+        after_sequence=contact.status_sequence,
+        after_iteration=contact.physics_iteration), deadline_ns=deadline_ns,
+        phase='R09b fixture restored covered-empty before B1 cutoff')
+    empty_facts = {'entity_name':io.descriptor['task_fixture']['entity_name'],
+        'backend_instance_id':int(empty.backend_instance_id),
+        'session_id':empty.session_id, 'config_hash':empty.config_hash,
+        'coverage_complete':bool(empty.coverage_complete),
+        'contact_active':bool(empty.contact_active),
+        'status_sequence':int(empty.status_sequence),
+        'physics_iteration':int(empty.physics_iteration),
+        'sim_stamp_ns':int(empty.header.stamp.sec)*1_000_000_000
+            +int(empty.header.stamp.nanosec), 'steady_ns':io.now()}
+    io.emit('R09B_FIXTURE_RESTORED_COVERED_EMPTY', empty_facts)
+    return {'contact':contact_facts, 'restored_empty':empty_facts}
+
+
 def require_r09_scenario(artifact_result, expected_scenario_id):
     """Validate the scenario identity carried by the production loader result."""
     from mecanum_nav_rl.tasks.scenario_artifact import ScenarioArtifactLoadResult
@@ -3703,6 +3755,11 @@ async def training_child(path):
                     fixture_moved = True
                     await io.set_r09b_task_fixture_pose(pose_name='contact_pose',
                         deadline_ns=deadline_ns, policy_receipt=receipt)
+                    await restore_r09b_fixture_after_contact_pulse(io,
+                        deadline_ns=deadline_ns,
+                        after_status_sequence=applied_state.status_sequence,
+                        after_physics_iteration=applied_state.physics_iteration)
+                    fixture_moved = False
                 transition = await io.policy_step(b1, (0., 0., 0.),
                     after_policy_applied=move_fixture_after_zero_policy)
                 committed_steps = 1

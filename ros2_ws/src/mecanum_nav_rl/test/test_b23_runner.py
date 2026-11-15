@@ -302,6 +302,51 @@ def test_r09b_fixture_set_pose_uses_zero_bound_robot_and_exact_entity():
     assert len(calls)==1
 
 
+def test_r09b_contact_pulse_is_captured_and_fixture_cleared_before_cutoff():
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        R09B_TASK_FIXTURE, restore_r09b_fixture_after_contact_pulse,
+    )
+    def status(sequence, iteration, active, *, backend=12):
+        return NS(backend_instance_id=backend, session_id='session-1', config_hash='c'*64,
+            coverage_complete=True, contact_source_healthy=True, required_collision_mask=3,
+            observed_collision_mask=3, fault_flags=0, paused=False,
+            status_sequence=sequence, physics_iteration=iteration, contact_active=active,
+            header=NS(stamp=NS(sec=1, nanosec=iteration*10_000_000)))
+    wrong = status(9, 90, True, backend=99)
+    contact = status(10, 100, True)
+    stale_empty = status(10, 100, False)
+    empty = status(13, 103, False)
+    batches = [[wrong, contact], [stale_empty, empty]]
+    timeline = []
+    io = NS(descriptor={'backend_instance_id':12, 'session_id':'session-1',
+            'config_hash':'c'*64, 'task_fixture':dict(R09B_TASK_FIXTURE)},
+        ingress=NS(backend_state=None), now=lambda: 500)
+    async def until(predicate, *, deadline_ns, phase):
+        assert deadline_ns == 1000
+        timeline.append(('wait', phase))
+        for candidate in batches.pop(0):
+            io.ingress.backend_state = candidate
+            value = predicate()
+            if value is not None:
+                return value
+        raise AssertionError('finite fake observations exhausted: '+phase)
+    async def set_pose(*, pose_name, deadline_ns):
+        timeline.append(('set_pose', pose_name, deadline_ns))
+    def emit(event, facts):
+        timeline.append((event, facts))
+    io.until, io.set_r09b_task_fixture_pose, io.emit = until, set_pose, emit
+    result = asyncio.run(restore_r09b_fixture_after_contact_pulse(io, deadline_ns=1000,
+        after_status_sequence=8, after_physics_iteration=80))
+    assert result['contact']['status_sequence'] == 10
+    assert result['restored_empty']['status_sequence'] == 13
+    tags = [row[0] for row in timeline]
+    assert tags.index('R09B_FIXTURE_CONTACT_PULSE_OBSERVED') < tags.index('set_pose')
+    assert timeline[tags.index('set_pose')][1] == 'initial_pose'
+    assert tags.index('set_pose') < tags.index('R09B_FIXTURE_RESTORED_COVERED_EMPTY')
+    assert len(batches) == 0
+
+
 def test_r09_scenario_identity_reads_ready_loader_artifact():
     import json
     from mecanum_nav_rl.tasks.scenario_artifact import (
