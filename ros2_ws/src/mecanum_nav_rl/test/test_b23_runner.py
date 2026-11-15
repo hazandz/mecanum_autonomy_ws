@@ -2625,6 +2625,7 @@ def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():
 
 def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
     from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     from mecanum_nav_rl.core.issued_command_cutoff import (
         CutoffStatus, IssuedCommandReceiptView, PolicyActionIssuance,
         ReceiptSource, ReceiptStreamBinding, select_final_issued_at_cutoff,
@@ -2641,6 +2642,15 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
     boundary = IssuedCommandReceiptView(1_400_000_000, 90, 41,
         ReceiptSource.SAFE_STOP, 8, 2, 0, '', identity,
         'session-a', 'c'*64, (0., 0., 0.), 103, 'base_link', True)
+    policy_raw = FinalIssuedCommandReceipt()
+    policy_raw.header.stamp = Time(sec=1, nanosec=250_000_000)
+    policy_raw.final_publisher_instance_id = 90
+    policy_raw.final_publish_sequence = 39
+    policy_raw.source = FinalIssuedCommandReceipt.SOURCE_POLICY
+    policy_raw.source_instance_id = 7
+    policy_raw.sequence = 1
+    policy_raw.step_index = 1
+    policy_raw.transition_id = 'transition-1'
     status = NS(applied_receipt_valid=True, local_zero_override=False,
         fault_flags=0, episode_generation=1, reset_epoch=1, runtime_generation=2,
         applied_final_publisher_instance_id=90, applied_final_publish_sequence=40,
@@ -2654,7 +2664,7 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
             self.safety = NS(local_training=NS(set_stream_enabled=lambda value:
                 self.stream.append(value)))
             self.ingress = NS(lock=threading.RLock(), receipts=[policy, applied_stop],
-                _receipt_views={40:applied_stop}, backend_state=status,
+                _receipt_views={39:policy, 40:applied_stop}, backend_state=status,
                 scans={1_390_000_000:object()})
             self.calls = []
             self.boundary_added = False
@@ -2690,7 +2700,7 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
     io, b1 = FakeIO(), FakeB1()
     cutoff = asyncio.run(TrainingWorkerIO.align_r09b_application_cutoff(io, b1,
-        policy_receipt=policy, minimum_cutoff_ns=1_350_000_000,
+        policy_receipt=policy_raw, minimum_cutoff_ns=1_350_000_000,
         deadline_ns=1_000))
 
     assert cutoff == 1_390_000_000

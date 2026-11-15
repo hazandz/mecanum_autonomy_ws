@@ -2248,6 +2248,19 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
 
         self.safety.local_training.set_stream_enabled(False)
+        with self.ingress.lock:
+            policy_view = self.ingress._receipt_views.get(
+                policy_receipt.final_publish_sequence)
+        if (policy_view is None or policy_view.source is not ReceiptSource.POLICY
+                or policy_view.final_publisher_instance_id
+                    != policy_receipt.final_publisher_instance_id
+                or policy_view.source_instance_id != policy_receipt.source_instance_id
+                or policy_view.source_sequence != policy_receipt.sequence
+                or policy_view.step_index != policy_receipt.step_index
+                or policy_view.transition_id != policy_receipt.transition_id
+                or policy_view.publish_stamp_ns
+                    != stamp_ns(policy_receipt.header.stamp)):
+            raise RuntimeError('R09b cutoff alignment lacks the exact accepted POLICY receipt view')
         while self.now() < deadline_ns:
             self.check()
             with self.ingress.lock:
@@ -2256,9 +2269,9 @@ class TrainingWorkerIO:
                 raise RuntimeError('R09b cutoff alignment has no final receipt')
             applied_receipt = receipts[-1]
             if (applied_receipt.source is not ReceiptSource.SAFE_STOP
-                    or applied_receipt.lifecycle != policy_receipt.lifecycle
-                    or applied_receipt.session_id != policy_receipt.session_id
-                    or applied_receipt.publish_stamp_ns < policy_receipt.publish_stamp_ns
+                    or applied_receipt.lifecycle != policy_view.lifecycle
+                    or applied_receipt.session_id != policy_view.session_id
+                    or applied_receipt.publish_stamp_ns < policy_view.publish_stamp_ns
                     or any(applied_receipt.final_command)):
                 raise RuntimeError('R09b cutoff alignment lacks the pinned zero SAFE_STOP receipt')
 
