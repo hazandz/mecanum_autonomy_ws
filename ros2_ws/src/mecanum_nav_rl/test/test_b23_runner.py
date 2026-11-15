@@ -9,7 +9,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
     verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
-    r02g_close_admission, verify_r03_receipt_fault,
+    r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
+    enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
 )
 
 
@@ -22,6 +23,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R02e') == 'fault_task'
     assert campaign_phase('R02f') == 'fault_task'
     assert campaign_phase('R02g') == 'fault_task'
+    assert campaign_phase('R04a') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -35,7 +37,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R04a')
+        campaign_phase('R05')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -69,6 +71,10 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R02g') == ['closing_paths_after_policy_nonzero']
     assert case_fault_hooks('R03a') == ['drop_native_policy_receipt_once']
     assert case_fault_hooks('R03b') == ['mutate_native_policy_transition_id_once']
+    assert case_fault_hooks('R04a') == ['delay_noisy_odometry_delivery_300ms_once']
+    assert case_fault_hooks('R04b') == ['drop_policy_noisy_odometry_delivery']
+    assert case_fault_hooks('R04c') == ['delay_scan_delivery_650ms_once']
+    assert case_fault_hooks('R04d') == ['delay_lifecycle_delivery_650ms_once']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -233,6 +239,70 @@ def test_r02g_admission_close_holds_policy_before_revoking_gate(zero_only):
     r02g_close_admission(io, adapter, zero_only=zero_only)
 
     assert calls == [('hold', True), ('admission', zero_only), ('stream', True)]
+
+
+@pytest.mark.parametrize('case,method_name,message', [
+    ('R04a','on_safety_input',NS(admission_state=1,ADMISSION_POLICY_OPEN=1,
+        sample_sequence=7,header=NS(stamp=NS(sec=3,nanosec=4)))),
+    ('R04b','on_safety_input',NS(admission_state=1,ADMISSION_POLICY_OPEN=1,
+        sample_sequence=8,header=NS(stamp=NS(sec=3,nanosec=5)))),
+    ('R04c','on_scan',NS(header=NS(stamp=NS(sec=4,nanosec=5)))),
+    ('R04d','on_lifecycle',NS(header=NS(stamp=NS(sec=5,nanosec=6)))),
+])
+def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, message):
+    class FakeAdapter:
+        def __init__(self): self.calls = []
+        def on_safety_input(self, value): self.calls.append(('on_safety_input', value))
+        def on_scan(self, value): self.calls.append(('on_scan', value))
+        def on_lifecycle(self, value): self.calls.append(('on_lifecycle', value))
+
+    enable_r04_adapter_fault_dispatch(FakeAdapter)
+    adapter, events = FakeAdapter(), []
+    state = install_r04_delivery_fault(adapter, case,
+        lambda name, facts: events.append((name, facts)), delay_s=0.01)
+
+    async def exercise():
+        getattr(adapter, method_name)(message)
+        await asyncio.sleep(0.03)
+    asyncio.run(exercise())
+
+    if case == 'R04b':
+        assert state['triggered'] == 1
+        assert adapter.calls == []
+        closed = NS(admission_state=0, ADMISSION_POLICY_OPEN=1,
+            sample_sequence=9, header=message.header)
+        adapter.on_safety_input(closed)
+        assert adapter.calls == [('on_safety_input', closed)]
+        assert [name for name, _ in events] == ['B23_R04_NOISY_ODOMETRY_DROPPED']
+    else:
+        assert state == {'triggered': 1, 'scheduled': 1}
+        assert len(adapter.calls) == 1 and adapter.calls[0][0] == method_name
+        assert [name for name, _ in events] == [
+            'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK']
+        assert events[0][1]['source_stamp_ns'] == (
+            message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec)
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('R04a','NOISY_STALE_OR_FUTURE'), ('R04c','SCAN_STALE_OR_FUTURE')])
+def test_r04_assessment_requires_delayed_source_and_real_safety_rejection(case, reason):
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    delayed = 1_000_000_000
+    io = NS(policy_source_id=9, events=[
+        ('B23_R04_DELIVERY_DELAY_SCHEDULED', {'case':case,'delay_s':.3,
+            'callback_received_ns':0,'source_stamp_ns':77}),
+        ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':case,'delay_s':.3,
+            'delivery_ns':delayed,'source_stamp_ns':77}),
+        ('SAFETY_REJECTED', {'reasons':[reason],'steady_ns':delayed+1,
+            'ros_ns':1_000_000_000}),
+        ('SAFETY_ACCEPTED', {'candidate_sequence':1,
+            'candidate_source':CommandEnvelope.SOURCE_POLICY,
+            'candidate_source_instance_id':9,'steady_ns':delayed+2}),
+    ])
+    assert verify_r04_stale_delivery(io, case=case, policy_step_index=1)['fresh_policy_recovery'] is True
+    io.events = [row for row in io.events if row[0] != 'SAFETY_REJECTED']
+    with pytest.raises(RuntimeError, match='actual Safety stale rejection'):
+        verify_r04_stale_delivery(io, case=case, policy_step_index=1)
 
 
 def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequence():

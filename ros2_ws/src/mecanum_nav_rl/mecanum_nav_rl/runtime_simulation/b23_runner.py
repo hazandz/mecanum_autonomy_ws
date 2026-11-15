@@ -22,7 +22,8 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
     'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
     'R02e':'fault_task', 'R02f':'fault_task', 'R02g':'fault_task', 'R03a':'fault_task',
-    'R03b':'fault_task', 'R08': 'soak'}
+    'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
+    'R04c':'fault_task', 'R04d':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -38,6 +39,10 @@ CASE_HOOKS = {
     'R02g': ('closing_paths_after_policy_nonzero',),
     'R03a': ('drop_native_policy_receipt_once',),
     'R03b': ('mutate_native_policy_transition_id_once',),
+    'R04a': ('delay_noisy_odometry_delivery_300ms_once',),
+    'R04b': ('drop_policy_noisy_odometry_delivery',),
+    'R04c': ('delay_scan_delivery_650ms_once',),
+    'R04d': ('delay_lifecycle_delivery_650ms_once',),
     'R08': (),
 }
 
@@ -85,6 +90,79 @@ def case_environment(case, hooks):
     if case == 'R02e':
         return {}
     return {}
+
+
+def enable_r04_adapter_fault_dispatch(adapter_class):
+    """Install a no-op-by-default dispatch seam before Safety subscriptions bind callbacks."""
+    for method_name in ('on_safety_input', 'on_scan', 'on_lifecycle'):
+        original = getattr(adapter_class, method_name)
+        if getattr(original, '_b23_r04_dispatch', False):
+            continue
+        def dispatch(adapter, message, _original=original, _method=method_name):
+            injector = getattr(adapter, '_b23_r04_injector', None)
+            if injector is None:
+                return _original(adapter, message)
+            return injector(_method, message, _original)
+        dispatch._b23_r04_dispatch = True
+        setattr(adapter_class, method_name, dispatch)
+
+
+def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
+    """Inject only at the actual Safety callback boundary; preserve message bytes."""
+    import asyncio
+    expected = {
+        'R04a': ('on_safety_input', 'delay_noisy_odometry_delivery_300ms_once', 0.300),
+        'R04b': ('on_safety_input', 'drop_policy_noisy_odometry_delivery', None),
+        'R04c': ('on_scan', 'delay_scan_delivery_650ms_once', 0.650),
+        'R04d': ('on_lifecycle', 'delay_lifecycle_delivery_650ms_once', 0.650),
+    }
+    try:
+        method_name, hook_name, production_delay = expected[case]
+    except KeyError as error:
+        raise ValueError('unsupported R04 delivery fault') from error
+    state = {'triggered': 0, 'scheduled': 0}
+    def eligible(message):
+        if case == 'R04a':
+            return message.admission_state == message.ADMISSION_POLICY_OPEN
+        if case == 'R04b':
+            return message.admission_state == message.ADMISSION_POLICY_OPEN
+        return True
+    def callback(actual_method, message, original):
+        if actual_method != method_name:
+            return original(adapter, message)
+        if not eligible(message):
+            return original(adapter, message)
+        if case == 'R04b':
+            state['triggered'] += 1
+            emit('B23_R04_NOISY_ODOMETRY_DROPPED', {
+                'case': case, 'sample_sequence': message.sample_sequence,
+                'header_stamp_ns': message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec,
+                'steady_ns': time.monotonic_ns()})
+            return None
+        if state['triggered']:
+            return original(adapter, message)
+        state['triggered'] += 1
+        delay = production_delay if delay_s is None else delay_s
+        received_ns = time.monotonic_ns()
+        header = getattr(message, 'header', None)
+        stamp = getattr(header, 'stamp', None)
+        stamp_ns_value = (stamp.sec * 1_000_000_000 + stamp.nanosec
+                          if stamp is not None else None)
+        emit('B23_R04_DELIVERY_DELAY_SCHEDULED', {
+            'case': case, 'hook': hook_name, 'delay_s': delay,
+            'source_stamp_ns': stamp_ns_value, 'callback_received_ns': received_ns})
+        loop = asyncio.get_running_loop()
+        delivered_message = copy.deepcopy(message)
+        def deliver():
+            state['scheduled'] += 1
+            emit('B23_R04_DELIVERY_DELAYED_CALLBACK', {
+                'case': case, 'hook': hook_name, 'delay_s': delay,
+                'source_stamp_ns': stamp_ns_value, 'delivery_ns': time.monotonic_ns()})
+            original(adapter, delivered_message)
+        loop.call_later(delay, deliver)
+        return None
+    adapter._b23_r04_injector = callback
+    return state
 
 
 def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
@@ -327,6 +405,47 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
         'policy_receipt_absent':True}
 
 
+def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
+    """Bind delayed source input to real Safety stale rejection and recovery."""
+    expected_reason = {'R04a':'NOISY_STALE_OR_FUTURE',
+        'R04c':'SCAN_STALE_OR_FUTURE'}.get(case)
+    if expected_reason is None:
+        raise ValueError('R04 stale-delivery verifier supports R04a/R04c only')
+    scheduled = next((facts for name, facts in io.events
+        if name == 'B23_R04_DELIVERY_DELAY_SCHEDULED' and facts.get('case') == case), None)
+    delayed = next((facts for name, facts in io.events
+        if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == case), None)
+    rejected = next((facts for name, facts in io.events
+        if name == 'SAFETY_REJECTED' and expected_reason in facts.get('reasons', ())), None)
+    if scheduled is None or delayed is None or rejected is None:
+        raise RuntimeError(case + ' lacks delayed callback and actual Safety stale rejection')
+    if delayed['delivery_ns'] - scheduled['callback_received_ns'] < int(scheduled['delay_s'] * 1e9):
+        raise RuntimeError(case + ' callback delay was shorter than the pinned injection')
+    if scheduled.get('source_stamp_ns') is None:
+        raise RuntimeError(case + ' delayed message has no original source timestamp')
+    max_age_ns = 250_000_000 if case == 'R04a' else 500_000_000
+    if (rejected['steady_ns'] < delayed['delivery_ns']
+            or type(rejected.get('ros_ns')) is not int
+            or rejected['ros_ns'] - scheduled['source_stamp_ns'] <= max_age_ns):
+        raise RuntimeError(case + ' Safety rejection is not bound to the delayed stale source sample')
+    accepted = None
+    if policy_step_index is not None:
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+        accepted = next((facts for name, facts in io.events
+            if name == 'SAFETY_ACCEPTED'
+            and facts.get('candidate_sequence') == policy_step_index
+            and facts.get('candidate_source') == CommandEnvelope.SOURCE_POLICY
+            and facts.get('candidate_source_instance_id') == io.policy_source_id), None)
+        if accepted is None:
+            raise RuntimeError(case + ' did not recover using a fresh Safety input for the POLICY slot')
+        if accepted['steady_ns'] <= rejected['steady_ns']:
+            raise RuntimeError(case + ' POLICY acceptance preceded stale-input rejection')
+    return {'case':case, 'delay_s':scheduled['delay_s'],
+        'stale_rejection_reason':expected_reason, 'rejected_steady_ns':rejected['steady_ns'],
+        'source_stamp_ns':scheduled['source_stamp_ns'],
+        'fresh_policy_recovery':accepted is not None}
+
+
 def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
                       backend_state=None, control_ack=None):
     """Verify a real LOCAL_TRAINING closing path after nonzero POLICY.
@@ -499,13 +618,15 @@ class TrainingWorkerIO:
         from ros_gz_interfaces.srv import ControlWorld, SetEntityPose
         from std_srvs.srv import Trigger
         from mecanum_nav_rl.runtime_safety.safety_lifecycle_node import SafetyLifecycleNode
-        from mecanum_nav_rl.runtime_safety.safety_supervisor_node import SafetySupervisorNode
+        from mecanum_nav_rl.runtime_safety.safety_supervisor_node import (
+            SafetySupervisorNode, LocalTrainingSafetyAdapter)
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendSessionIdentity, BackendControlSession
         from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
         import secrets
         self.descriptor, self.document, self.asset = copy.deepcopy(descriptor), document, asset_manifest
         self.events = []
+        self._accepted_policy_event_keys = set()
         self._event_sink = emit
         self.emit = self._emit
         self.fault_hooks = set()
@@ -545,6 +666,7 @@ class TrainingWorkerIO:
                 policy_source_instance_id=self.policy_source_id, safe_stop_source_instance_id=self.safe_stop_source_id,
                 profile=document['training']['local_training'], sensor=asset_manifest['sensor'],
                 sim_estop_release_authorized=True)
+            enable_r04_adapter_fault_dispatch(LocalTrainingSafetyAdapter)
             self.safety = SafetySupervisorNode(context=self.context, parameter_overrides=mode_params,
                 local_training_context=safety_context, evidence_sink=self._emit)
             self.nodes.append(self.safety)
@@ -597,8 +719,16 @@ class TrainingWorkerIO:
     def _emit(self, name, facts):
         if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
                     'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
-                    'SAFETY_REJECTED'}:
+                    'SAFETY_REJECTED','B23_R04_NOISY_ODOMETRY_DROPPED',
+                    'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
+                    'B23_R04_FAULT_ARMED'}:
             self.events.append((name, copy.deepcopy(facts)))
+        elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
+                and type(facts.get('candidate_sequence')) is int):
+            key = (facts['candidate_source_instance_id'], facts['candidate_sequence'])
+            if key not in self._accepted_policy_event_keys:
+                self._accepted_policy_event_keys.add(key)
+                self.events.append((name, copy.deepcopy(facts)))
         self._event_sink(name, facts)
 
     def _publish_safety_input(self, message):
@@ -1605,7 +1735,8 @@ class TrainingWorkerIO:
         return replayed
 
     async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False,
-                          close_after_held_receipt=None, prebind_admission=False):
+                          close_after_held_receipt=None, prebind_admission=False,
+                          measurement_fault_case=None):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -1617,6 +1748,11 @@ class TrainingWorkerIO:
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
         await self.freeze_step_streams(deadline_ns=deadline)
+        if measurement_fault_case is not None:
+            self._r04_fault_state = install_r04_delivery_fault(
+                self.safety.local_training, measurement_fault_case, self.emit)
+            self.emit('B23_R04_FAULT_ARMED', {'case':measurement_fault_case,
+                'step_deadline_ns':deadline, 'steady_ns':self.now()})
         held_prebind = None
         if prebind_admission:
             if self.ingress.pending_ack is None or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN:
@@ -2321,6 +2457,103 @@ async def training_child(path):
                     **checked, 'completed_ns':time.monotonic_ns()}
             if outcome is None:
                 raise RuntimeError(packet['case'] + ' expected native receipt fault was not observed')
+        elif packet['case'] in ('R04a', 'R04b', 'R04c', 'R04d'):
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            if packet['case'] == 'R04d':
+                prior_commits = len([row for row in Path(packet['run_root'],
+                    'b1_transition_committed.jsonl').read_text().splitlines() if row.strip()]) \
+                    if Path(packet['run_root'], 'b1_transition_committed.jsonl').exists() else 0
+                state = install_r04_delivery_fault(io.safety.local_training,
+                    packet['case'], io.emit)
+                io.emit('B23_R04_FAULT_ARMED', {'case':'R04d',
+                    'next_operation':'lifecycle reset event', 'steady_ns':io.now()})
+                await io.lifecycle_event(rearm=False,
+                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
+                rejected = await io.until(lambda: next((facts for name, facts in io.events
+                    if name == 'SAFETY_REJECTED'
+                    and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())), None),
+                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
+                    phase='R04d delayed lifecycle rejected by actual Safety')
+                if state['scheduled'] != 1:
+                    raise RuntimeError('R04d delayed lifecycle callback did not complete exactly once')
+                scheduled = next((facts for name, facts in io.events
+                    if name == 'B23_R04_DELIVERY_DELAY_SCHEDULED' and facts.get('case') == 'R04d'), None)
+                delayed = next((facts for name, facts in io.events
+                    if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04d'), None)
+                if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
+                        or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
+                        or rejected['steady_ns'] < delayed['delivery_ns']
+                        or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000):
+                    raise RuntimeError('R04d Safety rejection is not bound to delayed stale lifecycle source')
+                issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
+                commit_path = Path(packet['run_root'])/'b1_transition_committed.jsonl'
+                issued_count = len([row for row in issued_path.read_text().splitlines() if row.strip()]) \
+                    if issued_path.exists() else 0
+                commit_count = len([row for row in commit_path.read_text().splitlines() if row.strip()]) \
+                    if commit_path.exists() else 0
+                if issued_count != 0 or commit_count != prior_commits:
+                    raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
+                outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
+                    'stale_rejection_reason':'LIFECYCLE_STALE_OR_FUTURE',
+                    'rejected_steady_ns':rejected['steady_ns'], 'delayed_callbacks':state['scheduled'],
+                    'source_stamp_ns':scheduled['source_stamp_ns'],
+                    'source_ros_age_ns':rejected['ros_ns']-scheduled['source_stamp_ns'],
+                    'no_policy_issued':True,'b1_commits_before_fault':prior_commits,
+                    'completed_ns':time.monotonic_ns()}
+            else:
+                try:
+                    transition = await io.policy_step(b1, (0.25, 0., 0.),
+                        measurement_fault_case=packet['case'])
+                except (TimeoutError, RuntimeError) as error:
+                    if packet['case'] != 'R04b':
+                        raise
+                    if isinstance(error, RuntimeError) and not str(error).startswith('native fault flags='):
+                        raise
+                    state = io._r04_fault_state
+                    rejection = next((facts for name, facts in io.events
+                        if name == 'SAFETY_REJECTED'
+                        and 'NOISY_OR_ADMISSION_NOT_VALID' in facts.get('reasons', ())), None)
+                    if state['triggered'] == 0 or rejection is None:
+                        raise RuntimeError('R04b timeout lacked dropped noisy inputs and Safety rejection') from error
+                    aborted = b1.lifecycle.abort_step('R04b_noisy_odometry_dropped')
+                    native_state = io.ingress.backend_state
+                    if isinstance(error, RuntimeError) and (native_state is None
+                            or not native_state.local_zero_override or native_state.fault_flags == 0):
+                        raise RuntimeError('R04b native fault did not prove local zero override') from error
+                    if isinstance(error, TimeoutError):
+                        stop = io.safety.local_training.last_output
+                        if (native_state is None or native_state.local_zero_override
+                                or native_state.fault_flags != 0 or stop is None
+                                or stop.source != stop.SOURCE_SAFE_STOP
+                                or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
+                            raise RuntimeError('R04b timeout lacks a healthy applied-zero baseline') from error
+                        receipt = io.final.publication_for_source_sequence(
+                            source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence)
+                        if (receipt is None or native_state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                                or native_state.applied_final_publish_sequence != receipt.final_publish_sequence
+                                or not native_state.applied_receipt_valid):
+                            raise RuntimeError('R04b timeout lacks exact native SAFE_STOP application') from error
+                    if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
+                        raise RuntimeError('R04b POLICY receipt reached the native ingress')
+                    issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
+                    if issued_path.exists() and any(row.strip() for row in issued_path.read_text().splitlines()):
+                        raise RuntimeError('R04b issued POLICY despite missing noisy admission')
+                    outcome = {'case':'R04b','resets_confirmed':1,'policy_steps_committed':0,
+                        'expected_rejection':True,'safety_reason':'NOISY_OR_ADMISSION_NOT_VALID',
+                        'dropped_policy_inputs':state['triggered'],
+                        'native_fault_flags':0 if native_state is None else native_state.fault_flags,
+                        'local_zero_override':False if native_state is None else native_state.local_zero_override,
+                        'baseline_zero_application_sequence':(native_state.applied_final_publish_sequence
+                            if isinstance(error, TimeoutError) else None),
+                        'exception':repr(error),
+                        'b1_abort_status':str(aborted.status),'completed_ns':time.monotonic_ns()}
+                else:
+                    checked = verify_r04_stale_delivery(io, case=packet['case'],
+                        policy_step_index=transition.step_index)
+                    outcome = {'case':packet['case'],'resets_confirmed':1,
+                        'policy_steps_committed':1, **checked, 'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R01a':
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
