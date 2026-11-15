@@ -493,6 +493,32 @@ def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
         'fresh_policy_recovery':accepted is not None}
 
 
+def verify_r04a_next_step_blocked(io, *, step_index):
+    """Prove delayed out-of-order Safety input cannot authorize the next slot."""
+    rejected = next((facts for name, facts in reversed(io.events)
+        if name == 'SAFETY_REJECTED'
+        and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())), None)
+    if rejected is None:
+        raise RuntimeError('R04a lacks production Safety rejection after delayed-input invalidation')
+    if any(name == 'SAFETY_ACCEPTED'
+            and facts.get('candidate_source') == 1
+            and facts.get('candidate_sequence') == step_index
+            for name, facts in io.events):
+        raise RuntimeError('R04a Safety accepted the POLICY slot after delayed-input invalidation')
+    if any(name == 'b1_transition_committed'
+            and facts.get('step_index') == step_index
+            for name, facts in io.events):
+        raise RuntimeError('R04a B1 committed the POLICY slot after delayed-input invalidation')
+    if any(getattr(receipt, 'source_sequence', None) == step_index
+            and getattr(receipt, 'source', None) == 1 for receipt in io.ingress.receipts):
+        raise RuntimeError('R04a POLICY receipt for the blocked slot reached native ingress')
+    return {'blocked_step_index':step_index,
+        'safety_rejection_reasons':list(rejected.get('reasons', ())),
+        'rejected_steady_ns':rejected['steady_ns'],
+        'policy_not_accepted':True,'native_policy_receipt_absent':True,
+        'b1_transition_absent':True}
+
+
 def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
                       backend_state=None, control_ack=None):
     """Verify a real LOCAL_TRAINING closing path after nonzero POLICY.
@@ -2628,10 +2654,44 @@ async def training_child(path):
                             'exception':repr(error),
                             'b1_abort_status':str(aborted.status),'completed_ns':time.monotonic_ns()}
                 else:
-                    checked = verify_r04_stale_delivery(io, case=packet['case'],
-                        policy_step_index=transition.transition_identity.step_index)
-                    outcome = {'case':packet['case'],'resets_confirmed':1,
-                        'policy_steps_committed':1, **checked, 'completed_ns':time.monotonic_ns()}
+                    if packet['case'] == 'R04a':
+                        state = io._r04_fault_state
+                        await io.until(lambda: state if state['delivered'] == 1 else None,
+                            deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                            phase='R04a bounded delayed callback completion')
+                        checked = verify_r04_stale_delivery(io, case='R04a')
+                        blocked_step = transition.transition_identity.step_index + 1
+                        try:
+                            await io.policy_step(b1, (0.25, 0., 0.))
+                        except TimeoutError as error:
+                            blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
+                            native_state = io.ingress.backend_state
+                            stop = io.safety.local_training.last_output
+                            if (native_state is None or native_state.local_zero_override
+                                    or native_state.fault_flags != 0 or stop is None
+                                    or stop.source != stop.SOURCE_SAFE_STOP
+                                    or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
+                                raise RuntimeError('R04a blocked next POLICY slot lacks healthy zero output') from error
+                            receipt = io.final.publication_for_source_sequence(
+                                source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence)
+                            if (receipt is None
+                                    or native_state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                                    or native_state.applied_final_publish_sequence != receipt.final_publish_sequence
+                                    or not native_state.applied_receipt_valid):
+                                raise RuntimeError('R04a blocked next slot lacks exact native SAFE_STOP application') from error
+                            aborted = b1.lifecycle.abort_step('R04a_delayed_input_blocked_next_slot')
+                        else:
+                            raise RuntimeError('R04a next POLICY slot completed after delayed-input invalidation')
+                        outcome = {'case':'R04a','resets_confirmed':1,
+                            'policy_steps_committed':1, **checked, **blocked,
+                            'safe_stop_applied':True,
+                            'b1_abort_status':str(aborted.status),
+                            'completed_ns':time.monotonic_ns()}
+                    else:
+                        checked = verify_r04_stale_delivery(io, case=packet['case'],
+                            policy_step_index=transition.transition_identity.step_index)
+                        outcome = {'case':packet['case'],'resets_confirmed':1,
+                            'policy_steps_committed':1, **checked, 'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R01a':
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)

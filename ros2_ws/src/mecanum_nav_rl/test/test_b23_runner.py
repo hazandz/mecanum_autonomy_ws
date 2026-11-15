@@ -11,6 +11,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
+    verify_r04a_next_step_blocked,
 )
 
 
@@ -309,6 +310,19 @@ def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
     io.events[1][1]['sample_sequence'] = 23
     with pytest.raises(RuntimeError, match='identity does not match'):
         verify_r04_stale_delivery(io, case='R04a')
+
+
+def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receipt():
+    io = NS(events=[('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+        'steady_ns':900})], ingress=NS(receipts=[NS(source=1,source_sequence=1)]))
+    result = verify_r04a_next_step_blocked(io, step_index=2)
+    assert result['blocked_step_index'] == 2
+    assert result['policy_not_accepted'] is True
+    assert result['native_policy_receipt_absent'] is True
+    assert result['b1_transition_absent'] is True
+    io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'candidate_sequence':2}))
+    with pytest.raises(RuntimeError, match='accepted the POLICY slot'):
+        verify_r04a_next_step_blocked(io, step_index=2)
 
 
 @pytest.mark.parametrize('case,reason', [('R04c','SCAN_STALE_OR_FUTURE')])
