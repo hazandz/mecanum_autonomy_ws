@@ -321,6 +321,28 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
     assert io._r04d_pending_ingress_lifecycle is None
 
 
+def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_ingress_lifecycle_delay_s
+
+    safety_lifecycle_delay_s = 0.650
+    final_lifecycle_delay_s = 0.700
+    ingress_delay_s = r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s)
+    # Safety delivery remains at 650 ms; final publisher switches at 700 ms;
+    # ingress switches after it, so a receipt cannot cross an identity gap.
+    safety_delivery_delay_s = 0.650
+    assert safety_delivery_delay_s < final_lifecycle_delay_s < ingress_delay_s
+    assert ingress_delay_s == 0.725
+
+
+def test_r04d_ingress_binding_delay_rejects_invalid_final_delay():
+    import pytest
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_ingress_lifecycle_delay_s
+
+    for value in (0, -0.1, None, '0.7', True):
+        with pytest.raises(ValueError, match='Safety lifecycle delay must be positive'):
+            r04d_ingress_lifecycle_delay_s(value)
+
+
 def test_r04d_ingress_holds_repeated_new_identity_until_first_delivery():
     from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
     from rclpy.serialization import serialize_message

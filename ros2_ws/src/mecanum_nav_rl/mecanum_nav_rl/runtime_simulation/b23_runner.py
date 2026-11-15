@@ -269,6 +269,19 @@ def r04d_stale_safety_rejection_after_delivery(events, *, delivery_ns, source_st
     return None
 
 
+def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
+    """Keep ingress bound until after both lifecycle consumers can switch."""
+    if (type(safety_lifecycle_delay_s) not in (int, float)
+            or safety_lifecycle_delay_s <= 0):
+        raise ValueError('R04d Safety lifecycle delay must be positive')
+    # The held new-context SAFE_STOP receipt is released after the same delay
+    # from the final-publisher callback. Let ingress switch just after that
+    # callback, so old-context receipts cannot straddle the ingress binding.
+    final_publisher_delay_s = 0.700
+    return max(float(safety_lifecycle_delay_s) + 0.075,
+        final_publisher_delay_s + 0.025)
+
+
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
     """Keep a new-context zero receipt out of the native gate until R04d observes stale Safety."""
     marker_path = Path(marker_path)
@@ -1157,7 +1170,7 @@ class TrainingWorkerIO:
                         and not self._r04d_fault_state.get('ingress_scheduled')):
                     state = self._r04d_fault_state
                     state['ingress_scheduled'] = True
-                    delay_s = max(0., state['delay_s'] - 0.025)
+                    delay_s = r04d_ingress_lifecycle_delay_s(state['delay_s'])
                     due_ns = self.now() + int(delay_s * 1_000_000_000)
                     source_stamp_ns = (message.header.stamp.sec * 1_000_000_000
                         + message.header.stamp.nanosec)
