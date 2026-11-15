@@ -2551,6 +2551,24 @@ static void RunNativeResetObservation0Chain(
         EXPECT_EQ(BackendSystemTestPeer::Receive(system, pause).result, ControlResponse::RESULT_REJECTED);
         EXPECT_EQ(pause_io->dispatches, 0u);
         EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+        EXPECT_EQ(BackendSystemTestPeer::FaultFlags(system),
+                  BackendState::FAULT_CONTEXT)
+            << BackendSystemTestPeer::FaultReason(system);
+        Receipt late_policy;
+        late_policy.source = Receipt::SOURCE_POLICY;
+        late_policy.final_publisher_instance_id = 11;
+        late_policy.final_publish_sequence = 6;
+        late_policy.source_instance_id = 22;
+        late_policy.sequence = 2;
+        late_policy.step_index = 2;
+        late_policy.transition_id = "late-after-unexpected-pause";
+        SetStamp(late_policy.header.stamp, 560'000'000);
+        BackendSystemTestPeer::EarlyReceipt(system, late_policy);
+        EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
+            << "receipt rejected by already-invalidated gate must not be reclassified as queue fault";
+        EXPECT_EQ(BackendSystemTestPeer::FaultFlags(system),
+                  BackendState::FAULT_CONTEXT)
+            << BackendSystemTestPeer::FaultReason(system);
         return;
       }
       ASSERT_EQ(pause_io->dispatches, 1u);

@@ -3298,8 +3298,20 @@ private:
             << " receive_ns=" << receive_ns << std::endl;
       std::fflush(stdout);
     }
-    if (!gate_ || !gate_->Enqueue(std::move(facts), receive_ns))
-      RecordQueueFault(2, "receipt_gate_enqueue", "receipt=received");
+    if (!gate_)
+    {
+      RecordQueueFault(2, "receipt_gate_enqueue", "gate=missing");
+    }
+    else if (!gate_->Enqueue(std::move(facts), receive_ns))
+    {
+      // A callback can race a deliberate fail-closed invalidation (for
+      // example UNEXPECTED_PAUSE). That rejection is already represented by
+      // the gate/context fault; only Enqueue's own queue/clock failures are
+      // callback queue faults.
+      const auto gate_reason = gate_->FaultReason();
+      if (gate_reason == "invalid_receive_clock" || gate_reason == "queue_overflow")
+        RecordQueueFault(2, "receipt_gate_enqueue", gate_reason.c_str());
+    }
     if (msg.source == Receipt::SOURCE_SAFE_STOP &&
         receipt_fault_mode_ == "hold_policy_until_safe_stop" && held_policy_receipt_)
     {
