@@ -126,6 +126,7 @@ class LocalTrainingIngress:
         self._last_receipt_stamp_ns = -1
         self._receipt_bytes = OrderedDict()
         self._application_bytes = OrderedDict()
+        self._application_received_ns = OrderedDict()
         self._unresolved_applications = OrderedDict()
         self._receipt_views = OrderedDict()
         self._last_applied_sequence = 0
@@ -551,8 +552,10 @@ class LocalTrainingIngress:
             self._fail('same publication key applied more than once')
         self._last_applied_sequence = key
         self._application_bytes[key] = raw
+        self._application_received_ns[key] = received
         if len(self._application_bytes) > 128:
-            self._application_bytes.popitem(last=False)
+            expired, _ = self._application_bytes.popitem(last=False)
+            self._application_received_ns.pop(expired, None)
         if key in self._receipt_views:
             self._resolve_application(self._receipt_views[key], raw, received)
         else:
@@ -576,6 +579,57 @@ class LocalTrainingIngress:
         self.emit('NATIVE_APPLICATION_JOINED', data)
         if receipt.source is ReceiptSource.POLICY:
             self.emit('policy_backend_applied', data)
+
+    def application_for_receipt(self, receipt):
+        """Return retained exact native application evidence for one receipt key.
+
+        ``backend_state`` is a latest-value view and can advance past a valid
+        SAFE_STOP application before an asyncio waiter runs. This lookup uses
+        the immutable receipt-keyed CDR captured by ``_record_application``;
+        it does not infer application from a later watermark.
+        """
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+
+        if not isinstance(receipt, IssuedCommandReceiptView):
+            return None
+        with self.lock:
+            raw = self._application_bytes.get(receipt.final_publish_sequence)
+            received = self._application_received_ns.get(receipt.final_publish_sequence)
+            lifecycle = self.lifecycle
+        if raw is None or type(received) is not int or lifecycle is None:
+            return None
+        state = deserialize_message(raw, SimulationContactState)
+        receipt_stamp = receipt.publish_stamp_ns
+        state_stamp = stamp_ns(state.header.stamp)
+        applied_stamp = stamp_ns(state.applied_sim_stamp)
+        if (receipt.source is not ReceiptSource.SAFE_STOP
+                or receipt.final_publisher_instance_id != self.final_publisher_id
+                or receipt.source_instance_id != self.safe_stop_source_id
+                or receipt.step_index != 0 or receipt.transition_id != ''
+                or any(receipt.final_command)
+                or receipt.lifecycle != lifecycle_identity(lifecycle)
+                or receipt.session_id != self.identity.session_id
+                or receipt.ingress_config_hash != self.identity.config_hash
+                or state.session_id != self.identity.session_id
+                or state.config_hash != self.identity.config_hash
+                or state.backend_instance_id != self.identity.backend_instance_id
+                or lifecycle_identity(state) != receipt.lifecycle
+                or not state.applied_receipt_valid or state.local_zero_override
+                or state.fault_flags != 0 or state.paused
+                or state.applied_final_publisher_instance_id != self.final_publisher_id
+                or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                or state.applied_physics_iteration == 0
+                or state.applied_physics_iteration != state.physics_iteration
+                or applied_stamp != state_stamp or applied_stamp < receipt_stamp):
+            return None
+        return {'state': state, 'received_ns': received}
+
+    def receipt_for_publication_sequence(self, sequence):
+        """Return the exact immutable ingress receipt view for a publication key."""
+        with self.lock:
+            return self._receipt_views.get(sequence)
 
     def begin_pause_transition(self, *, final_sequence, deadline_ns):
         """Khoanh vùng oracle cùng stamp, chỉ trong giao dịch pause đang chờ ACK."""

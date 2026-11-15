@@ -2471,7 +2471,15 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=source,
         source_instance_id=44, sequence=7, final_publish_sequence=20))
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=20,
-        applied_final_publisher_instance_id=55, local_zero_override=False)
+        applied_final_publisher_instance_id=55, local_zero_override=False,
+        applied_receipt_valid=True, paused=False)
+    value.ingress.application_for_receipt = lambda receipt: (
+        {'state':value.ingress.backend_state, 'received_ns':clock.ns}
+        if receipt.final_publish_sequence == 21 else None)
+    value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
+        source=__import__('mecanum_nav_rl.core.issued_command_cutoff',
+            fromlist=['ReceiptSource']).ReceiptSource.SAFE_STOP,
+        final_publisher_instance_id=55, final_command=(0.0, 0.0, 0.0))
     value.last_safe_stop_publish_sequence = 20
     async def pause(seconds):
         await clock.pause(seconds)
@@ -2483,6 +2491,12 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         value.final.last_publication = NS(source=stop.SOURCE_SAFE_STOP,
             source_instance_id=44, sequence=8, final_publish_sequence=21)
         value.ingress.backend_state.applied_final_publish_sequence = 21
+        value.ingress.backend_state.applied_physics_iteration = 305
+        value.ingress.backend_state.physics_iteration = 305
+        value.ingress.backend_state.applied_sim_stamp = NS(sec=3, nanosec=50_000_000)
+        value.ingress.backend_state.header = NS(stamp=NS(sec=3, nanosec=50_000_000))
+        value.ingress.backend_state.applied_receipt_valid = True
+        value.ingress.backend_state.paused = False
     value.pause = pause
     value.emit = lambda name, record: (calls.append((name, record)), events.append((name, record)))
     asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+20_000_000))
@@ -2502,6 +2516,136 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert events[-1][0] == 'STEP_STREAMS_FROZEN'
     assert events[-1][1]['source'] == CommandEnvelope.SOURCE_SAFE_STOP
     assert events[-1][1]['publish_sequence'] == 21
+
+
+def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
+    import threading
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendSessionIdentity
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState, SimulationContactState
+
+    ingress = LocalTrainingIngress.__new__(LocalTrainingIngress)
+    identity = EpisodeLifecycleIdentity(1, 2, 3)
+    lifecycle = SafetyLifecycleState()
+    lifecycle.episode_generation, lifecycle.reset_epoch, lifecycle.runtime_generation = 1, 2, 3
+    ingress.lock = threading.RLock()
+    ingress.identity = BackendSessionIdentity('session-1', 'a'*64, 'b'*64, 12, 13)
+    ingress.final_publisher_id = 55
+    ingress.safe_stop_source_id = 66
+    ingress.lifecycle = lifecycle
+    ingress._last_applied_sequence = 20
+    ingress._application_bytes = __import__('collections').OrderedDict()
+    ingress._application_received_ns = __import__('collections').OrderedDict()
+    ingress._receipt_views = __import__('collections').OrderedDict()
+    ingress._unresolved_applications = __import__('collections').OrderedDict()
+    ingress.emit = lambda *_args: None
+    ingress.now = lambda: 130
+
+    receipt = IssuedCommandReceiptView(1_050_000_000, 55, 21, ReceiptSource.SAFE_STOP,
+        66, 8, 0, '', identity, 'session-1', 'a'*64, (0.0, 0.0, 0.0),
+        110, 'base_link', True)
+    ingress._receipt_views[21] = receipt
+    status = SimulationContactState()
+    status.session_id, status.config_hash, status.backend_instance_id = 'session-1', 'a'*64, 13
+    status.episode_generation, status.reset_epoch, status.runtime_generation = 1, 2, 3
+    status.header.frame_id = 'b2_training_arena'
+    status.header.stamp.sec, status.header.stamp.nanosec = 1, 60_000_000
+    status.status_sequence = 44
+    status.physics_iteration = 305
+    status.paused = False
+    status.fault_flags = 0
+    status.local_zero_override = False
+    status.applied_receipt_valid = True
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 21
+    status.applied_physics_iteration = 305
+    status.applied_sim_stamp.sec, status.applied_sim_stamp.nanosec = 1, 60_000_000
+
+    raw = serialize_message(status)
+    ingress._record_application(status, raw, 120)
+    proof = ingress.application_for_receipt(receipt)
+
+    assert proof is not None
+    assert proof['state'].applied_final_publish_sequence == 21
+    assert proof['state'].applied_physics_iteration == 305
+    assert proof['received_ns'] == 120
+    wrong = IssuedCommandReceiptView(1_050_000_000, 55, 22, ReceiptSource.SAFE_STOP,
+        66, 9, 0, '', identity, 'session-1', 'a'*64, (0.0, 0.0, 0.0),
+        110, 'base_link', True)
+    assert ingress.application_for_receipt(wrong) is None
+
+
+def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_advances():
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
+    value, clock = worker()
+    calls, events = [], []
+    adapter = NS(safe_stop_sequence=7,
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
+        set_policy_hold=lambda hold: calls.append(('hold', hold)),
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+    value.safety = NS(local_training=adapter)
+    value.ingress.last_published_sample_sequence = 9
+    value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    def inhibit(*, zero_only=False):
+        calls.append(('inhibit', zero_only))
+        value.ingress.last_published_admission_state = (
+            LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY if zero_only
+            else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+    value.ingress.inhibit = inhibit
+    value.ingress.pause_admission_publication = lambda: calls.append(('pause_admission',))
+    watermark = [9]
+    value._native_input_watermark = 9
+    value.read_native_input_watermark = lambda: watermark[0]
+    value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=20,
+        applied_final_publisher_instance_id=55, local_zero_override=False,
+        applied_receipt_valid=True, paused=False)
+    value.ingress.application_for_receipt = lambda receipt: (
+        {'state':NS(applied_receipt_valid=True, local_zero_override=False, fault_flags=0,
+            applied_final_publisher_instance_id=55,
+            applied_final_publish_sequence=receipt.final_publish_sequence,
+            applied_physics_iteration=305, physics_iteration=305,
+            applied_sim_stamp=NS(sec=3, nanosec=50_000_000),
+            header=NS(stamp=NS(sec=3, nanosec=50_000_000))),
+         'received_ns':clock.ns}
+        if receipt.final_publish_sequence == 21 else None)
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
+        source=ReceiptSource.SAFE_STOP, final_publisher_instance_id=55,
+        final_command=(0.0, 0.0, 0.0)) if sequence == 22 else None
+    value.ingress.lifecycle = object()
+    stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
+    value.final = NS(publisher_instance_id=55, last_publication=NS(
+        source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
+        final_publish_sequence=20))
+    value.last_safe_stop_publish_sequence = 20
+
+    async def pause(seconds):
+        await clock.pause(seconds)
+        if value.ingress.last_published_sample_sequence == 9:
+            value.ingress.last_published_sample_sequence = 10
+            watermark[0] = 10
+        adapter.safe_stop_sequence = 8
+        adapter.last_output = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=8)
+        value.final.last_publication = NS(source=stop.SOURCE_SAFE_STOP,
+            source_instance_id=44, sequence=8, final_publish_sequence=21)
+        # The exact target receipt was applied, then a later native status
+        # replaced backend_state before the coroutine could inspect it.
+        value.ingress.backend_state.applied_final_publish_sequence = 22
+        value.ingress.backend_state.applied_receipt_valid = True
+        value.ingress.backend_state.applied_physics_iteration = 306
+        value.ingress.backend_state.physics_iteration = 306
+        value.ingress.backend_state.applied_final_publisher_instance_id = 55
+    value.pause = pause
+    value.emit = lambda name, record: (calls.append((name, record)), events.append((name, record)))
+
+    asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns + 20_000_000))
+
+    assert events[-1][0] == 'STEP_STREAMS_FROZEN'
+    assert events[-1][1]['publish_sequence'] == 21
+    assert events[-1][1]['application_iteration'] == 305
 
 
 def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_receipt():
@@ -2552,7 +2696,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=2,
         applied_final_publisher_instance_id=55, applied_receipt_valid=False,
-        local_zero_override=False, paused=False)
+        local_zero_override=False, paused=False,
+        applied_physics_iteration=0, physics_iteration=0,
+        applied_sim_stamp=NS(sec=0, nanosec=0), header=NS(stamp=NS(sec=0, nanosec=0)))
     def set_stream_enabled(enabled):
         history.append(('stream', enabled))
         if enabled and timing == 'r09b_callback' and adapter.command is not None:
@@ -2628,9 +2774,23 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.final.last_publication = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
                 source_instance_id=44, sequence=2, final_publish_sequence=3)
             value.ingress.backend_state.applied_final_publish_sequence = 3
+            value.ingress.backend_state.applied_receipt_valid = True
+            value.ingress.backend_state.applied_physics_iteration = 12
+            value.ingress.backend_state.physics_iteration = 12
+            value.ingress.backend_state.applied_sim_stamp = NS(sec=1, nanosec=200_000_000)
+            value.ingress.backend_state.header.stamp = NS(sec=1, nanosec=200_000_000)
         if adapter.command:
             value.ingress.scans[clock.ns] = True
     value.pause = pause
+    value.ingress.application_for_receipt = lambda receipt: (
+        {'state':value.ingress.backend_state, 'received_ns':clock.ns}
+        if (receipt.final_publish_sequence == 3
+            and value.ingress.backend_state.applied_final_publish_sequence == 3
+            and value.ingress.backend_state.applied_receipt_valid) else None)
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
+        source=ReceiptSource.SAFE_STOP, final_publish_sequence=sequence,
+        final_publisher_instance_id=55, final_command=(0.,0.,0.)) if sequence == 3 else None
     pending = NS(step_index=1, transition_id='actual-b1-token')
     commit_calls = []
     def record(envelope, *, action_barrier_ns):

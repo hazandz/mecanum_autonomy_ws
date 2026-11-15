@@ -3275,14 +3275,39 @@ class TrainingWorkerIO:
                 return None
             return receipt
         receipt = await self.until(drained, deadline_ns=deadline_ns, phase='Final SAFE_STOP publication drain')
-        await self.until(lambda: self.ingress.backend_state if self.ingress.backend_state is not None
-            and self.ingress.backend_state.fault_flags == 0
-            and self.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence
-            and self.ingress.backend_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
-            and not self.ingress.backend_state.local_zero_override else None,
+        def applied_and_closed():
+            application = self.ingress.application_for_receipt(receipt)
+            state = self.ingress.backend_state
+            if (application is None or state is None or state.fault_flags != 0 or state.paused):
+                return None
+            # The selected exact receipt may be followed by other zero samples
+            # before this coroutine wakes. Accept retained application for the
+            # selected key only while the current backend status still proves
+            # motion is closed: emergency zero, or a later SAFE_STOP zero.
+            if state.local_zero_override:
+                return application
+            if (not state.applied_receipt_valid
+                    or state.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                    or state.applied_final_publish_sequence < receipt.final_publish_sequence):
+                return None
+            current_receipt = self.ingress.receipt_for_publication_sequence(
+                state.applied_final_publish_sequence)
+            from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+            if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
+                    or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or any(current_receipt.final_command)):
+                return None
+            return application
+
+        application = await self.until(applied_and_closed,
             deadline_ns=deadline_ns, phase='SAFE_STOP application before pending step')
+        applied_state = application['state']
         self.emit('STEP_STREAMS_FROZEN', {'source': last.source, 'source_sequence': last.sequence,
             'publish_sequence': receipt.final_publish_sequence, 'watchdog_zero_stream_active': True,
+            'application_iteration': applied_state.applied_physics_iteration,
+            'application_stamp_ns': (applied_state.applied_sim_stamp.sec * 1_000_000_000
+                + applied_state.applied_sim_stamp.nanosec),
+            'application_received_ns': application['received_ns'],
             'steady_ns': self.now()})
 
     async def replay_pause_intent_after_terminal(self):
