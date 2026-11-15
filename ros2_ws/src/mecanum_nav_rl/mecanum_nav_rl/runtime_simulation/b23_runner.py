@@ -378,6 +378,13 @@ def r02g_inhibit_operation():
     return Control.Request.OP_INHIBIT
 
 
+def r02g_close_admission(io, adapter, *, zero_only):
+    """Close Safety issuance before revoking native admission, then publish zero."""
+    adapter.set_policy_hold(True)
+    io.ingress.inhibit(zero_only=zero_only)
+    adapter.set_stream_enabled(True)
+
+
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -2228,8 +2235,7 @@ async def training_child(path):
                     adapter.set_policy_hold(True)
                     adapter.set_stream_enabled(True)
                 elif route in ('admission_inhibited', 'zero_only'):
-                    io.ingress.inhibit(zero_only=(route == 'zero_only'))
-                    adapter.set_stream_enabled(True)
+                    r02g_close_admission(io, adapter, zero_only=(route == 'zero_only'))
                 else:
                     from mecanum_nav_rl_interfaces.msg import SimulationContactState
                     # OP_INHIBIT is the final route in this matrix. Stop the
