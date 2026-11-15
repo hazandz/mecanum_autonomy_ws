@@ -383,6 +383,26 @@ def test_r04d_safety_lifecycle_repeats_stay_held_until_original_delivers():
     assert adapter.calls == [6,6]
 
 
+def test_r04d_stale_safety_observation_must_follow_delayed_lifecycle_delivery():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_stale_safety_rejection_after_delivery
+
+    before_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+        'steady_ns':500, 'ros_ns':1_600_000_001})
+    delivered = ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'delivery_ns':650})
+    after_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+        'steady_ns':700, 'ros_ns':1_650_000_001})
+    assert r04d_stale_safety_rejection_after_delivery(
+        [before_delivery, delivered, after_delivery], delivery_ns=650,
+        source_stamp_ns=1_050_000_000) is after_delivery[1]
+    assert r04d_stale_safety_rejection_after_delivery(
+        [before_delivery, delivered], delivery_ns=650,
+        source_stamp_ns=1_050_000_000) is None
+    not_stale_enough = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+        'steady_ns':700, 'ros_ns':1_550_000_000})
+    assert r04d_stale_safety_rejection_after_delivery(
+        [not_stale_enough], delivery_ns=650, source_stamp_ns=1_050_000_000) is None
+
+
 def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
     import json
     from pathlib import Path

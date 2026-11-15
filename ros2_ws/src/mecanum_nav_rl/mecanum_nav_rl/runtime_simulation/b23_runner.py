@@ -256,6 +256,19 @@ def r04d_final_lifecycle_dispatch(original, marker_path, emit, schedule):
     return dispatch
 
 
+def r04d_stale_safety_rejection_after_delivery(events, *, delivery_ns, source_stamp_ns):
+    """Select only the stale-Safety fact observed after the injected callback ran."""
+    for name, facts in events:
+        if (name == 'SAFETY_REJECTED'
+                and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())
+                and type(facts.get('steady_ns')) is int
+                and facts['steady_ns'] >= delivery_ns
+                and type(facts.get('ros_ns')) is int
+                and facts['ros_ns'] - source_stamp_ns > 500_000_000):
+            return facts
+    return None
+
+
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
     """Keep a new-context zero receipt out of the native gate until R04d observes stale Safety."""
     marker_path = Path(marker_path)
@@ -2942,17 +2955,23 @@ async def training_child(path):
                     'final_lifecycle_baseline_sequence':int(baseline_lifecycle.sequence)})
                 fault_lifecycle = await io.lifecycle_event(rearm=False,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
-                rejected = await io.until(lambda: next((facts for name, facts in io.events
-                    if name == 'SAFETY_REJECTED'
-                    and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())), None),
+                await io.until(lambda: state if state['scheduled'] >= 1 and state['delivered'] >= 1 else None,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
-                    phase='R04d delayed lifecycle rejected by actual Safety')
+                    phase='R04d delayed lifecycle callback completion')
                 if state['scheduled'] != 1 or state['delivered'] != 1:
                     raise RuntimeError('R04d delayed lifecycle callback did not complete exactly once')
                 scheduled = next((facts for name, facts in io.events
                     if name == 'B23_R04_DELIVERY_DELAY_SCHEDULED' and facts.get('case') == 'R04d'), None)
                 delayed = next((facts for name, facts in io.events
                     if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04d'), None)
+                if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
+                        or type(delayed.get('delivery_ns')) is not int):
+                    raise RuntimeError('R04d delayed lifecycle callback evidence is incomplete')
+                rejected = await io.until(lambda: r04d_stale_safety_rejection_after_delivery(
+                    io.events, delivery_ns=delayed['delivery_ns'],
+                    source_stamp_ns=scheduled['source_stamp_ns']),
+                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
+                    phase='R04d delivered stale lifecycle rejected by actual Safety')
                 ingress_scheduled = next((facts for name, facts in io.events
                     if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
                 ingress_delivered = next((facts for name, facts in io.events
