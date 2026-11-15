@@ -338,7 +338,7 @@ def test_control_world_records_success_without_nonexistent_response_pause_field(
     assert 'response_pause' not in events[0][1]
 
 
-def test_r07a_resume_control_rpc_tolerates_only_the_pinned_native_fault():
+def test_r07a_pause_and_resume_control_rpc_tolerate_only_the_pinned_native_fault():
     from ros_gz_interfaces.srv import ControlWorld
 
     class Future:
@@ -385,6 +385,15 @@ def test_r07a_resume_control_rpc_tolerates_only_the_pinned_native_fault():
         asyncio.run(ordinary.control_world(world_name='b2_training_arena',
             pause=False, timeout_s=0.25))
     assert ordinary.world_client.requests == []
+
+    # The R07a external pause can produce FAULT_CONTEXT before ControlWorld's
+    # success ACK arrives. Only this packet-pinned pause RPC accepts that bit.
+    r07a_pause = worker_with_expected_fault()
+    assert asyncio.run(r07a_pause.control_world(world_name='b2_training_arena',
+        pause=True, timeout_s=0.25,
+        expected_native_fault_flags=1)) is True
+    assert len(r07a_pause.world_client.requests) == 1
+    assert r07a_pause.world_client.requests[0].world_control.pause is True
 
     # R07a đã xác minh đúng FAULT_CONTEXT=1; đường resume chịu được cờ đó
     # trong cả service-ready và ACK polling của chính RPC này.

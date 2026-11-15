@@ -3294,7 +3294,8 @@ async def training_child(path):
             previous_ros = io.ros_now()
             io.expected_paused = True
             world_ack = await io.control_world(world_name='b2_training_arena', pause=True,
-                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)),
+                expected_native_fault_flags=1)
             pause_state = await io.paused_state(True, min(1.0,
                 max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
             io.emit('B23_R07A_UNEXPECTED_PAUSE_ARMED', {
