@@ -195,6 +195,30 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
         'replacement_status_iteration':status['physics_iteration']}
 
 
+async def query_replacement_backend_then_inhibit(control, *, query_deadline_ns,
+                                                  inhibit_deadline_ns,
+                                                  probe_start_request_sequence):
+    """Đọc proof trên backend mới trước INHIBIT kết thúc session client.
+
+    BackendControlSession.inhibit() cố ý khóa mọi mutation/query tiếp theo.
+    Vì vậy QUERY mới phải được gửi trước; sau đó chỉ ACK INHIBIT mới chứng
+    minh backend đã đóng quyền chuyển động.
+    """
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    try:
+        fresh_ack = await control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+            deadline_ns=query_deadline_ns,
+            probe_action=Control.Request.PROBE_ACTION_QUERY,
+            probe_start_request_sequence=probe_start_request_sequence)
+    except BackendControlError as error:
+        if error.ack is None:
+            raise
+        fresh_ack = error.ack
+    inhibit_ack = await control.inhibit(deadline_ns=inhibit_deadline_ns)
+    return fresh_ack, inhibit_ack
+
+
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  pre_pause_policy_step_identities,
                                  post_pause_policy_step_identities, reset_count_before,
@@ -3665,18 +3689,11 @@ async def training_child(path):
                     LocalTrainingBackendControlPort.from_node(io.node), identity,
                     emit=io.emit, now_ns=io.now, pause=io.pause)
                 io._r07b_cleanup_control = replacement_control
-                inhibit_ack = await replacement_control.inhibit(
-                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
-                try:
-                    await replacement_control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
-                        deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                        probe_action=Control.Request.PROBE_ACTION_QUERY,
-                        probe_start_request_sequence=io.contact_start_request_sequence)
-                    raise RuntimeError('R07b replacement backend unexpectedly retained contact proof')
-                except BackendControlError as error:
-                    fresh_ack = error.ack
-                    if fresh_ack is None:
-                        raise
+                fresh_ack, inhibit_ack = await query_replacement_backend_then_inhibit(
+                    replacement_control,
+                    query_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                    inhibit_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                    probe_start_request_sequence=io.contact_start_request_sequence)
                 status_deadline = min(io.deadline_ns, io.now()+1_000_000_000)
                 replacement_status = None
                 while io.now() < status_deadline:

@@ -21,6 +21,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
+    query_replacement_backend_then_inhibit,
 )
 
 
@@ -654,6 +655,63 @@ def test_r07b_backend_restart_accepts_only_exact_replay_identity_mismatch_ack():
             sim_time_jump_delta_ns=-1, replay_error=error,
             replay_identity_ack=altered, replacement_ack=NS(), inhibit_ack=NS(),
             fresh_ack=NS(), replacement_status={}, old_backend_instance_id=old_id)
+
+
+def test_r07b_replacement_query_uses_real_control_session_before_terminal_inhibit():
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+        BackendSessionIdentity, BackendControlSession, BackendControlError,
+    )
+    from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
+
+    class PortClient:
+        def __init__(self):
+            self.requests = []
+
+        def call_async(self, request):
+            self.requests.append(serialize_message(request))
+            response = Control.Response()
+            response.schema_version = response.RESPONSE_SCHEMA_VERSION
+            response.backend_instance_id = 202
+            response.request_sequence = request.request_sequence
+            response.binding_revision = request.expected_binding_revision
+            if request.operation == Control.Request.OP_VERIFY_CONTACT_CAPABILITY:
+                response.result = response.RESULT_REJECTED
+                response.reason_code = response.REASON_CONTACT_PROBE_NOT_READY
+            else:
+                assert request.operation == Control.Request.OP_INHIBIT
+                response.result = response.RESULT_APPLIED
+                response.reason_code = response.REASON_NONE
+                response.binding_revision += 1
+                response.applied_binding_revision = response.binding_revision
+                response.applied_physics_iteration = 9
+                response.applied_sim_stamp.sec = 1
+            return NS(done=lambda: True, result=lambda: response)
+
+    client = PortClient()
+    session = BackendControlSession(LocalTrainingBackendControlPort(client),
+        BackendSessionIdentity('r07b-session', 'a'*64, 'b'*64, 17, 202),
+        emit=lambda _name, _facts: None, now_ns=lambda: 1_000_000_000,
+        pause=lambda _seconds: None)
+    fresh, inhibit = asyncio.run(query_replacement_backend_then_inhibit(
+        session, query_deadline_ns=2_000_000_000, inhibit_deadline_ns=3_000_000_000,
+        probe_start_request_sequence=4))
+
+    from rclpy.serialization import deserialize_message
+    query = deserialize_message(client.requests[0], Control.Request)
+    stop = deserialize_message(client.requests[1], Control.Request)
+    assert [query.operation, stop.operation] == [
+        Control.Request.OP_VERIFY_CONTACT_CAPABILITY, Control.Request.OP_INHIBIT]
+    assert fresh.response.reason_code == Control.Response.REASON_CONTACT_PROBE_NOT_READY
+    assert inhibit.response.result == Control.Response.RESULT_APPLIED
+    assert len(client.requests) == 2
+    with pytest.raises(BackendControlError, match='already uncertain/faulted'):
+        asyncio.run(session.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+            deadline_ns=4_000_000_000,
+            probe_action=Control.Request.PROBE_ACTION_QUERY,
+            probe_start_request_sequence=4))
+    assert len(client.requests) == 2
 
 
 def test_r07b_callback_records_replacement_status_and_expected_future_receipt_without_killing_pump():
