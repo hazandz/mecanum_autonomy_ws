@@ -346,6 +346,35 @@ def test_until_can_observe_only_the_case_expected_native_zero_fault():
             expected_native_fault_flags=expected))
 
 
+def test_r02_close_marker_remains_observable_when_expected_fault_arrives_first():
+    """R02d must observe release marker despite the fail-closed fault racing it."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    expected = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected, local_zero_override=True)
+    release_marker = {'kind': 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',
+        'reason': 'admission_inhibited', 'sequence': 35}
+
+    observed = asyncio.run(value.until(lambda: release_marker,
+        deadline_ns=clock.ns + 5_000_000,
+        phase='held POLICY receipt released only after closing condition',
+        expected_native_fault_flags=expected))
+
+    assert observed == release_marker
+    assert value.ingress.backend_state.fault_flags == expected
+    assert value.ingress.backend_state.local_zero_override is True
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected | SimulationContactState.FAULT_CLOCK,
+        local_zero_override=True)
+    with pytest.raises(RuntimeError, match='native fault flags=70'):
+        asyncio.run(value.until(lambda: release_marker,
+            deadline_ns=clock.ns + 5_000_000,
+            phase='held POLICY receipt released only after closing condition',
+            expected_native_fault_flags=expected))
+
+
 def test_active_deadline_is_never_extended_by_predicate_budget():
     value, clock = worker()
     value.deadline_ns = clock.ns + 3_000_000

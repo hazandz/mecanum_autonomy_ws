@@ -1529,6 +1529,9 @@ class TrainingWorkerIO:
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()
             expected_reason = close_after_held_receipt
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
+            expected_native_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)
             def released_row():
                 rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
                     .read_text().splitlines() if line.strip()]
@@ -1537,10 +1540,8 @@ class TrainingWorkerIO:
                     and row.get('fields', {}).get('reason') == expected_reason
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
             await self.until(released_row, deadline_ns=deadline,
-                phase='held POLICY receipt released only after closing condition')
-            from mecanum_nav_rl_interfaces.msg import SimulationContactState
-            expected_native_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE)
+                phase='held POLICY receipt released only after closing condition',
+                expected_native_fault_flags=expected_native_fault_flags)
             native_fault = await self.until(lambda: self.ingress.backend_state
                 if self.ingress.backend_state is not None
                 and self.ingress.backend_state.fault_flags == expected_native_fault_flags
