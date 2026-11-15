@@ -30,9 +30,14 @@ if(NOT STM32_ARM_BUILD)
   add_executable(test_watchdog Test/test_watchdog.c Core/Src/command_watchdog.c)
   add_test(NAME watchdog COMMAND test_watchdog)
   add_executable(test_slam_manual_profile Test/test_slam_manual_profile.c
-    Core/Src/slam_manual_slam_profile.c Core/Src/pid_controller.c)
+    Core/Src/slam_manual_slam_profile.c Core/Src/pid_controller.c
+    Core/Src/slam_pid4_guard.c)
   target_link_libraries(test_slam_manual_profile PRIVATE m)
-  add_test(NAME slam_manual_profile_disarmed COMMAND test_slam_manual_profile)
+  add_test(NAME slam_manual_profile_enabled COMMAND test_slam_manual_profile)
+  add_executable(test_slam_pid4_guard Test/test_slam_pid4_guard.c
+    Core/Src/slam_pid4_guard.c)
+  target_link_libraries(test_slam_pid4_guard PRIVATE m)
+  add_test(NAME slam_pid4_guard COMMAND test_slam_pid4_guard)
   add_executable(test_boot_id Test/test_boot_id.c Core/Src/boot_id.c)
   add_test(NAME boot_id COMMAND test_boot_id)
   add_executable(test_encoder Test/test_encoder.c Core/Src/encoder.c)
@@ -53,6 +58,8 @@ if(NOT STM32_ARM_BUILD)
   target_compile_options(test_communication_runtime PRIVATE -Wno-missing-field-initializers)
   add_test(NAME communication_runtime COMMAND test_communication_runtime)
   add_test(NAME control_safety_runtime COMMAND test_communication_runtime u4-session-runtime)
+  add_test(NAME control_safety_runtime_pid4_fault
+    COMMAND test_communication_runtime pid4-guard-fault)
   foreach(case revision config-ticks recovery invalid-input)
     add_test(NAME telemetry_runtime_${case} COMMAND test_communication_runtime u5-telemetry-${case})
   endforeach()
@@ -102,6 +109,7 @@ add_executable(stm32_uart_runtime
   ${FW}/Core/Src/safety_io.c
   ${FW}/Core/Src/motor_logic.c
   ${FW}/Core/Src/mecanum_kinematics.c
+  ${FW}/Core/Src/slam_pid4_guard.c
   ${FW}/Core/Src/pid_controller.c
   ${FW}/Core/Src/slam_bench_motor_runtime.c
   ${FW}/Core/Src/slam_manual_slam_profile.c
@@ -140,7 +148,8 @@ target_include_directories(stm32_uart_runtime PRIVATE
   ${CMSIS}/Device/ST/STM32F4xx/Include ${CMSIS}/Include
   ${FREERTOS}/include ${FREERTOS}/CMSIS_RTOS_V2
   ${FREERTOS}/portable/GCC/ARM_CM4F)
-target_compile_definitions(stm32_uart_runtime PRIVATE STM32F411xE USE_HAL_DRIVER)
+target_compile_definitions(stm32_uart_runtime PRIVATE STM32F411xE USE_HAL_DRIVER
+  MECANUM_USE_GENERATED_HARDWARE_CONFIG=1)
 add_dependencies(stm32_uart_runtime generate_hardware_config)
 target_compile_options(stm32_uart_runtime PRIVATE
   -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard

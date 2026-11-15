@@ -18,7 +18,11 @@ int main(void)
     assert(fabsf(slam_bench_motor_config.kp - 0.084f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.ki - 1.05f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.integral_limit - 80.0f) < 1e-6f);
-    assert(!slam_bench_motor_config.experimental_profile_enabled);
+    assert(slam_bench_motor_config.experimental_profile_enabled);
+    assert(slam_bench_motor_config.encoder_tick_sign[0] == 1);
+    assert(slam_bench_motor_config.encoder_tick_sign[1] == 1);
+    assert(slam_bench_motor_config.encoder_tick_sign[2] == 1);
+    assert(slam_bench_motor_config.encoder_tick_sign[3] == 1);
     for (unsigned wheel = 0U; wheel < 4U; ++wheel) {
         PidControllerConfig config;
         PidControllerState state = {0.0f};
@@ -37,6 +41,12 @@ int main(void)
         assert(fabsf(effort - (ff_u0_forward[wheel] + ff_kv_forward[wheel] * 1000.0f)) < 1e-4f);
         assert(pid_controller_step(&config, &state, -1000.0f, -1000.0f, 0.02f, &effort));
         assert(fabsf(effort + (ff_u0_reverse[wheel] + ff_kv_reverse[wheel] * 1000.0f)) < 1e-4f);
+        assert(pid_controller_step(&config, &state, 0.0f, 1000.0f, 0.02f, &effort));
+        assert(effort == 0.0f && state.integral == 0.0f);
+        assert(!pid_controller_step(&config, &state, 1400.01f, 0.0f, 0.02f, &effort));
+        assert(effort == 0.0f);
+        assert(pid_controller_step(&config, &state, 1400.0f, -10000.0f, 0.02f, &effort));
+        assert(fabsf(effort) <= 400.0f);
         pid_controller_reset(&state);
         assert(pid_controller_step(&config, &state, 100.0f, 90.0f, 0.02f, &effort));
         assert(fabsf(state.integral - 0.21f) < 1e-6f);

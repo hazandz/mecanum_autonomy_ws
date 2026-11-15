@@ -175,12 +175,34 @@ def manifest_digest(manifest: dict[str, Any]) -> bytes:
         raise HardwareConfigError(f"RFC8785 cannot represent the manifest: {exc}") from exc
 
 
-def render_header(digest: bytes, valid: bool) -> str:
+def render_header(digest: bytes, valid: bool, geometry: dict[str, Any],
+                  manual_profile_valid: bool) -> str:
     values = ", ".join(f"0x{byte:02X}U" for byte in digest)
+    encoder_signs = geometry["encoder_tick_signs"]
+    signs_valid = encoder_signs is not None
+    signs = encoder_signs if signs_valid else [0, 0, 0, 0]
+    wheel_geometry_macros = (
+        ("MECANUM_WHEEL_DIAMETER_M", geometry["wheel_diameter_m"]),
+        ("MECANUM_WHEELBASE_M", geometry["wheelbase_m"]),
+        ("MECANUM_TRACK_M", geometry["track_m"]),
+        ("MECANUM_COUNTS_PER_WHEEL_REV", geometry["ticks_per_wheel_revolution"]),
+    )
+    geometry_lines = "".join(
+        f"#define {name} {float(value):.9g}f\n"
+        for name, value in wheel_geometry_macros
+    )
     return (
         "#ifndef GENERATED_HARDWARE_CONFIG_H\n#define GENERATED_HARDWARE_CONFIG_H\n"
         "#include <stdint.h>\n"
         f"#define MECANUM_COMMUNICATION_CONFIG_VALID {1 if valid else 0}U\n"
+        f"#define MECANUM_MANIFEST_GEOMETRY_VALID 1U\n"
+        f"#define MECANUM_MANUAL_SLAM_PROFILE_VALID {1 if manual_profile_valid else 0}U\n"
+        f"#define MECANUM_ENCODER_SIGNS_VALID {1 if signs_valid else 0}U\n"
+        f"#define MECANUM_ENCODER_SIGN_FL ({signs[0]})\n"
+        f"#define MECANUM_ENCODER_SIGN_FR ({signs[1]})\n"
+        f"#define MECANUM_ENCODER_SIGN_RL ({signs[2]})\n"
+        f"#define MECANUM_ENCODER_SIGN_RR ({signs[3]})\n"
+        f"{geometry_lines}"
         "static const uint8_t mecanum_hardware_config_hash[32] = { "
         f"{values} }};\n"
         "#endif\n"
@@ -193,6 +215,26 @@ def generate(manifest_path: str | Path, header_path: str | Path, json_path: str 
     if not valid:
         raise HardwareConfigError("manifest communication identity is unsupported")
     digest = manifest_digest(manifest)
+    geometry = wheel_geometry(manifest, require_signs=False)
+    manual_profile_valid = False
+    try:
+        ratios = manual_slam_drive_ratios(manifest)
+        manual_profile_valid = bool(
+            geometry["encoder_tick_signs"] == [1, 1, 1, 1]
+            and manifest["wheel_order"] == EXPECTED_WHEEL_ORDER
+            and math.isclose(geometry["wheel_diameter_m"], 0.097, rel_tol=0.0, abs_tol=1e-12)
+            and math.isclose(geometry["wheel_radius_m"], 0.0485, rel_tol=0.0, abs_tol=1e-12)
+            and math.isclose(geometry["wheelbase_m"], 0.216, rel_tol=0.0, abs_tol=1e-12)
+            and math.isclose(geometry["track_m"], 0.190, rel_tol=0.0, abs_tol=1e-12)
+            and math.isclose(geometry["ticks_per_wheel_revolution"], 937.2,
+                             rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(ratios["motor_to_gearbox_output_ratio"], 21.3,
+                             rel_tol=0.0, abs_tol=1e-12)
+            and math.isclose(ratios["wheel_rpm_per_gearbox_output_rpm"], 1.0,
+                             rel_tol=0.0, abs_tol=1e-12)
+        )
+    except HardwareConfigError:
+        manual_profile_valid = False
     profile = {
         "hardware_profile_id": manifest["hardware_profile_id"],
         "firmware_hardware_configuration_version": manifest.get("firmware_hardware_configuration_version"),
@@ -201,13 +243,14 @@ def generate(manifest_path: str | Path, header_path: str | Path, json_path: str 
         "wheel_order": manifest["wheel_order"],
         "protocol_version": manifest["uart"]["protocol_version"],
         "hash_contract": manifest["hash_contract"],
-        "wheel_geometry": wheel_geometry(manifest, require_signs=False),
+        "wheel_geometry": geometry,
     }
     header = Path(header_path)
     metadata = Path(json_path)
     header.parent.mkdir(parents=True, exist_ok=True)
     metadata.parent.mkdir(parents=True, exist_ok=True)
-    header.write_text(render_header(digest, valid), encoding="utf-8")
+    header.write_text(render_header(digest, valid, geometry, manual_profile_valid),
+                      encoding="utf-8")
     metadata.write_bytes(rfc8785.dumps(profile) + b"\n")
     return digest.hex()
 

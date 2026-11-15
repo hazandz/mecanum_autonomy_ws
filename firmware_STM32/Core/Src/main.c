@@ -520,7 +520,8 @@ void StartDefaultTask(void *argument)
   if (!boot_id_allocate_hal(&boot_id)) Error_Handler();
   if (!communication_runtime_prepare(&huart6)) Error_Handler();
   if (!control_safety_runtime_start(mecanum_hardware_config_hash,
-      MECANUM_COMMUNICATION_CONFIG_VALID != 0U, boot_id)) Error_Handler();
+      (MECANUM_COMMUNICATION_CONFIG_VALID != 0U) &&
+      (MECANUM_MANUAL_SLAM_PROFILE_VALID != 0U), boot_id)) Error_Handler();
   if (!telemetry_runtime_start()) Error_Handler();
   if (!communication_runtime_arm_rx()) Error_Handler();
   osThreadExit();

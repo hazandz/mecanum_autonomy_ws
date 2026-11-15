@@ -86,11 +86,35 @@ def test_generator_outputs_same_raw_digest_to_header_and_pi_json(tmp_path):
     assert metadata['wheel_geometry']['encoder_tick_signs'] is None
     assert ', '.join(f'0x{b:02X}U' for b in bytes.fromhex(digest)) in header_text
     assert 'MECANUM_COMMUNICATION_CONFIG_VALID 1U' in header_text
+    assert 'MECANUM_MANUAL_SLAM_PROFILE_VALID 0U' in header_text
+    assert 'MECANUM_ENCODER_SIGNS_VALID 0U' in header_text
+    assert 'MECANUM_COUNTS_PER_WHEEL_REV 937.2f' in header_text
     # Owner geometry is present; unresolved signs still fail motion startup.
     manifest = load_manifest(MANIFEST)
     assert manifest['kinematics']['wheel_diameter_m']['value'] == 0.097
     with pytest.raises(HardwareConfigError, match='signs are unresolved'):
         wheel_geometry(manifest)
+
+
+def test_bench_generator_binds_owner_reported_signs_and_geometry_into_firmware_header(tmp_path):
+    header = tmp_path / 'bench_generated.h'
+    profile = tmp_path / 'bench_hardware.json'
+    digest = generate(SLAM_BENCH_MANIFEST, header, profile)
+    header_text = header.read_text()
+    metadata = json.loads(profile.read_text())
+    assert metadata['hardware_config_hash_hex'] == digest
+    assert metadata['wheel_order'] == ['FL', 'FR', 'RL', 'RR']
+    assert metadata['wheel_geometry']['encoder_tick_signs'] == [1, 1, 1, 1]
+    assert 'MECANUM_ENCODER_SIGNS_VALID 1U' in header_text
+    assert 'MECANUM_MANUAL_SLAM_PROFILE_VALID 1U' in header_text
+    assert 'MECANUM_ENCODER_SIGN_FL (1)' in header_text
+    assert 'MECANUM_ENCODER_SIGN_FR (1)' in header_text
+    assert 'MECANUM_ENCODER_SIGN_RL (1)' in header_text
+    assert 'MECANUM_ENCODER_SIGN_RR (1)' in header_text
+    assert 'MECANUM_WHEEL_DIAMETER_M 0.097f' in header_text
+    assert 'MECANUM_WHEELBASE_M 0.216f' in header_text
+    assert 'MECANUM_TRACK_M 0.19f' in header_text
+    assert 'MECANUM_COUNTS_PER_WHEEL_REV 937.2f' in header_text
 
 
 @pytest.mark.parametrize('text', [

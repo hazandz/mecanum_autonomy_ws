@@ -33,7 +33,8 @@ bool control_safety_runtime_start(const uint8_t local_hash[32], bool config_vali
                                   uint64_t boot_id)
 {
     if ((__get_IPSR() != 0U) || started || (local_hash == NULL) || (boot_id == 0U)) return false;
-    if (!control_safety_session_init(&session, local_hash, config_valid, boot_id)) return false;
+    if (!control_safety_session_init(&session, local_hash,
+            config_valid && slam_bench_motor_runtime_profile_valid(), boot_id)) return false;
     command_watchdog_init(&watchdog, CONTROL_SAFETY_RUNTIME_WATCHDOG_MS);
     telemetry_allowed = false;
     mcu_fault_bits = 0U;
@@ -55,6 +56,38 @@ static void watchdog_expiry_check(uint32_t now)
         slam_bench_motor_runtime_stop();
         mcu_fault_bits |= MECANUM_FAULT_MCU_COMMAND_TIMEOUT;
     }
+}
+
+static uint32_t motor_fault_bit(slam_motor_runtime_fault_t fault)
+{
+    switch (fault) {
+    case SLAM_MOTOR_RUNTIME_FAULT_PROFILE:
+        return MECANUM_FAULT_MCU_COMMAND_INVALID;
+    case SLAM_MOTOR_RUNTIME_FAULT_ENCODER:
+        return MECANUM_FAULT_ENCODER;
+    case SLAM_MOTOR_RUNTIME_FAULT_CONTROL:
+        return MECANUM_FAULT_MCU_CONTROL_LOOP;
+    case SLAM_MOTOR_RUNTIME_FAULT_DRIVER:
+        return MECANUM_FAULT_MOTOR_DRIVER;
+    case SLAM_MOTOR_RUNTIME_FAULT_NONE:
+    default:
+        return 0U;
+    }
+}
+
+static bool motor_fault_enter_safe_stop(void)
+{
+    slam_motor_runtime_fault_t fault = slam_bench_motor_runtime_fault();
+    uint32_t bit = motor_fault_bit(fault);
+    if (bit == 0U) return false;
+    if (session.state != CONTROL_SAFETY_SESSION_SAFE_STOP) {
+        control_safety_session_decision_t decision;
+        (void)control_safety_session_handle_watchdog_expired(&session, &decision);
+    }
+    command_watchdog_disarm(&watchdog);
+    slam_bench_motor_runtime_stop();
+    mcu_fault_bits |= bit;
+    return true;
 }
 
 static void transport_failure(void)
@@ -84,6 +117,15 @@ static void process_config(const communication_candidate_t *candidate)
         command_watchdog_disarm(&watchdog);
         slam_bench_motor_runtime_stop();
         telemetry_allowed = false;
+        if (!slam_bench_motor_runtime_new_session()) {
+            (void)motor_fault_enter_safe_stop();
+            decision.config_status.config_status = MECANUM_UART_V1_CONFIG_REJECTED;
+            decision.config_status.reject_reason =
+                MECANUM_UART_V1_REJECT_LOCAL_CONFIG_INVALID;
+            if (!communication_runtime_enqueue_config_status(&decision.config_status))
+                transport_failure();
+            return;
+        }
     }
     if (!communication_runtime_enqueue_config_status(&decision.config_status)) {
         transport_failure();
@@ -109,6 +151,8 @@ static void process_command(const communication_candidate_t *candidate, uint32_t
         (void)slam_bench_motor_runtime_set_body_command(
             candidate->value.command.vx_mps,candidate->value.command.vy_mps,
             candidate->value.command.wz_radps);
+        if (motor_fault_enter_safe_stop()) return;
+        if (slam_bench_motor_runtime_fault() != SLAM_MOTOR_RUNTIME_FAULT_NONE) return;
         mcu_fault_bits &= ~MECANUM_FAULT_MCU_COMMAND_INVALID;
     } else if (decision.internal_reject_reason != CONTROL_SAFETY_SESSION_REJECT_SAFE_STOP
                && decision.internal_reject_reason != CONTROL_SAFETY_SESSION_REJECT_NO_CONFIGURED_SESSION) {
@@ -132,6 +176,7 @@ void control_safety_runtime_service_once(void)
     }
     if (!communication_runtime_is_usable()) return; /* Startup prepare precedes RX arm. */
     slam_bench_motor_runtime_step((float)CONTROL_SAFETY_RUNTIME_PERIOD_MS*0.001f);
+    (void)motor_fault_enter_safe_stop();
     watchdog_expiry_check(HAL_GetTick());
     while ((budget-- > 0U) && communication_runtime_take_candidate(&candidate)) {
         uint32_t now = HAL_GetTick();

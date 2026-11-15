@@ -4,6 +4,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "safety_io.h"
+#include "slam_bench_motor_runtime.h"
 #include "task.h"
 #include "telemetry.h"
 
@@ -491,6 +492,56 @@ static int run_control_safety_case(void)
     return 0;
 }
 
+static int run_pid4_guard_fault_case(void)
+{
+    uint8_t hash[32], wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
+    size_t size;
+    control_safety_snapshot_t snapshot;
+    memset(hash, 0xA5, sizeof(hash));
+    uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
+    assert(communication_runtime_prepare(&uart));
+    assert(control_safety_runtime_start(hash, true, UINT64_C(321)));
+    assert(communication_runtime_arm_rx());
+
+    size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, 100U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 101U;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
+    assert(snapshot.configured && !snapshot.motor_enabled);
+
+    /* A hardware-runtime guard fault routes through session SAFE_STOP. */
+    slam_bench_motor_runtime_test_set_fault(SLAM_MOTOR_RUNTIME_FAULT_DRIVER);
+    fake_tick = 102U;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
+    assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MOTOR_DRIVER) != 0U);
+    assert(!snapshot.motor_enabled);
+
+    /* Commands cannot clear the fault; only a new accepted CONFIG resets it. */
+    size = make_command_frame(1U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 103U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 104U;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
+    assert(snapshot.last_accepted_command_sequence == 0U);
+
+    size = make_config_frame(wire);
+    receive_chunk(wire, (uint16_t)size, 105U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 106U;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
+    assert(snapshot.mcu_fault_bits == 0U && !snapshot.motor_enabled);
+    return 0;
+}
+
 static int run_interop_peer(const char *hash_hex, const char *boot_text)
 {
     char line[256];
@@ -767,6 +818,8 @@ int main(int argc, char **argv)
         return run_u5_telemetry_case(argv[1]);
     if ((argc == 2) && (strcmp(argv[1], "u4-session-runtime") == 0))
         return run_control_safety_case();
+    if ((argc == 2) && (strcmp(argv[1], "pid4-guard-fault") == 0))
+        return run_pid4_guard_fault_case();
     if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
         in_isr = true;
         assert(!communication_runtime_start(&uart));

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "pid_controller.h"
+#include "slam_pid4_guard.h"
 
 typedef struct {
     float wheel_diameter_m, wheelbase_m, track_m, counts_per_revolution;
@@ -13,8 +14,17 @@ typedef struct {
     /* PID4 coefficients, in wheel order FL/FR/RL/RR and per direction. */
     float forward_ff_u0[4], forward_ff_kv[4];
     float reverse_ff_u0[4], reverse_ff_kv[4];
+    int8_t encoder_tick_sign[4];
     bool experimental_profile_enabled;
 } slam_bench_motor_config_t;
+
+typedef enum {
+    SLAM_MOTOR_RUNTIME_FAULT_NONE = 0,
+    SLAM_MOTOR_RUNTIME_FAULT_PROFILE,
+    SLAM_MOTOR_RUNTIME_FAULT_ENCODER,
+    SLAM_MOTOR_RUNTIME_FAULT_CONTROL,
+    SLAM_MOTOR_RUNTIME_FAULT_DRIVER,
+} slam_motor_runtime_fault_t;
 
 /* Zero/invalid defaults are intentional; Owner must provide an approved bench profile. */
 extern const slam_bench_motor_config_t slam_bench_motor_config;
@@ -24,10 +34,18 @@ bool slam_bench_motor_profile_pid_config_for_wheel(
     unsigned wheel_index, PidControllerConfig *config);
 
 bool slam_bench_motor_runtime_init(void);
+bool slam_bench_motor_runtime_profile_valid(void);
 bool slam_bench_motor_runtime_set_body_command(float vx_mps, float vy_mps, float wz_radps);
 void slam_bench_motor_runtime_stop(void);
+/* Clear a latched controller fault only after an accepted new session CONFIG. */
+bool slam_bench_motor_runtime_new_session(void);
+slam_motor_runtime_fault_t slam_bench_motor_runtime_fault(void);
 bool slam_bench_motor_runtime_enabled(void);
 bool slam_bench_motor_runtime_telemetry_allowed(void);
 void slam_bench_motor_runtime_step(float dt_seconds);
+
+#ifdef MECANUM_HOST_TEST
+void slam_bench_motor_runtime_test_set_fault(slam_motor_runtime_fault_t fault);
+#endif
 
 #endif

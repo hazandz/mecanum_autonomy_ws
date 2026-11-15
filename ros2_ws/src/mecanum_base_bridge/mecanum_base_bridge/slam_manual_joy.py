@@ -34,7 +34,12 @@ class SlamManualJoyNode(Node):
 
     def __init__(self) -> None:
         super().__init__("slam_manual_joy")
-        self.declare_parameter("use_sim_time", False)
+        # Jazzy's Node/TimeSource declares use_sim_time during Node setup.
+        # Only declare it on distributions/builds where it is not present.
+        if not self.has_parameter("use_sim_time"):
+            self.declare_parameter("use_sim_time", False)
+        if self.get_parameter("use_sim_time").value is not False:
+            raise ValueError("MANUAL_SLAM Joy node requires use_sim_time=false")
         self.declare_parameter("control_mode", "")
         self.declare_parameter("manual_slam_selected", False)
         self.declare_parameter("hardware_manifest", "")

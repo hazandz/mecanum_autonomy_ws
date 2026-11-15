@@ -30,7 +30,7 @@ mode change requires a separate review.
 
 - Gearbox output target profile: experimental ceiling `1400 tick/s`.
 - Five mapper levels: `280, 560, 840, 1120, 1400 tick/s`.
-- Encoder scale for mapper, wheel odometry, and the disabled firmware profile:
+- Encoder scale for mapper, wheel odometry, and the MANUAL_SLAM firmware profile:
   `937.2 tick/wheel revolution`. The approximately `906` count observation is
   retained as a separate unresolved observation and does not replace it.
 - Motor-shaft/gearbox-output reduction: `21.3:1`.
@@ -60,11 +60,23 @@ mode change requires a separate review.
 - E-stop auxiliary remains `UNKNOWN` when firmware cannot read a validated
   input. The Owner's main switch has not been verified to disconnect both motor
   drivers and is not treated as an E-stop.
-- Firmware motor runtime remains disarmed. PID4 numerical values and per-wheel,
-  per-direction feedforward are represented from the pinned experimental
-  source; this candidate does not reproduce PID4 timing and fault guards, and
-  no exact ELF/flash image is pinned. Matching manifest hash and hardware
-  profile review are also pending. No motor is enabled by this ACR or launch.
+- The MANUAL_SLAM firmware candidate enables the PID4 experimental numerical
+  profile only when built from a manifest whose geometry, 937.2 encoder scale,
+  wheel order and Owner-reported signs validate. MCU output is disabled at boot;
+  movement requires a matching session CONFIG and an accepted nonzero command.
+  Zero command, watchdog, transport/session failure or PID4 guard fault disables
+  output. A guard fault moves the session to SAFE_STOP and requires a new
+  accepted CONFIG before another command can be accepted. Launch does not
+  configure or rearm the MCU.
+- PID4's 20 ms control cadence, 1 s ramp, per-wheel/direction feedforward,
+  integral/effort caps, maximum dt, wrong-direction, stall and comparable-wheel
+  synchronization fault thresholds are carried into this manual runtime. The
+  one-shot 10 s arm delay, fixed 5 s autorun, 6 s test-run timeout and 1 s
+  stop-hold are omitted for continuous session-owned manual commands; the 1 s
+  full-scale ramp becomes a slew limit of the larger current/requested
+  magnitude per second. The 150 tick/s synchronization warning is kept
+  internally but is not published as telemetry. No exact ELF/flash image or
+  hardware behavior is verified by this candidate.
 
 ## Verification boundary
 

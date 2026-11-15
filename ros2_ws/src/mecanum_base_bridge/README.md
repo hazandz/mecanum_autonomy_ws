@@ -142,10 +142,30 @@ permille and `kv` in permille per count/second:
 These values are sourced from PID4 commit
 `231010db7de8a3f49f49a715da4339e129a48755` and evidence record
 `476d114697f5f3fb034dddd48c82d9297c3888b7`. Runtime converts permille through
-the TIM3 auto-reload value. The profile remains disabled: the evidence source
-worktree was dirty and no exact ELF/flash image is pinned; PID4's 10 s arm
-delay, 1 s ramp, 5 s run, 1 s stop hold, and wrong-direction/stall/sync guards
-are not reproduced by this runtime. No motor output is permitted.
+the TIM3 auto-reload value using `(ARR+1) × rounded_permille / 1000`; the
+checked-in TIM3 ARR is 65535, so 400 permille maps to CCR 26214. The profile is
+enabled in this MANUAL_SLAM firmware candidate, but output remains off at boot
+and until the existing session accepts a matching CONFIG and a nonzero command.
+The ARM build must pass the same explicit bench manifest used by mapper and
+bridge; generated firmware constants include its geometry, encoder signs and
+hash. Canonical manifests with unresolved encoder signs make the MANUAL_SLAM
+profile invalid and prevent session configuration.
+
+The runtime preserves PID4's 20 ms control period, one-second full-scale ramp
+(a slew limit equal to the larger current/requested target magnitude per
+second; an equal-magnitude direction reversal therefore takes about two
+seconds through zero), maximum 100 ms
+control dt, wrong-direction 100 tick/s for 200 ms guard, stall guard after
+400 ms grace plus 500 ms at >=120 permille and <100 tick/s, and synchronization
+guard for comparable four-wheel targets after its 500 ms grace plus 500 ms
+above 300 tick/s spread. The 150 tick/s sync warning is internal and not
+published. The PID4 one-shot 10 s arm delay, fixed 5 s autorun, 6 s test-run
+timeout and 1 s stop hold are omitted because MANUAL_SLAM uses continuous
+session commands; zero, watchdog and session faults stop immediately. A runtime
+guard fault latches the MCU session into SAFE_STOP until a new accepted CONFIG.
+The evidence source
+worktree was dirty and has no exact ELF/flash image pinned, so this remains an
+offline implementation candidate, not evidence of motor behavior.
 
 Example form (driver launch names and measurement values are supplied by the
 Owner for the exact Pi installation; this is not an executed command):
@@ -179,9 +199,9 @@ independent review. The canonical manifest is unchanged by this sign update.
 Verify the Owner's main power switch disconnects power to both motor drivers;
 that behavior has not been tested or assumed. The firmware
 reports auxiliary E-stop `UNKNOWN`; it is not converted to inactive. No
-physical E-stop is present, no Joy stop button is assigned, and the controller
-candidate remains disarmed pending a compatible PID/FF/effort profile and
-independent audit.
+physical E-stop is present, no Joy stop button is assigned, and this candidate
+does not validate output gating, stopping distance, or the Owner's main switch
+on hardware. The profile requires independent audit before any hardware trial.
 
 Unit/host tests có thể dùng ticks, lifecycle và E-stop synthetic có nhãn; đó không phải ROS runtime hay hardware evidence. E-stop mapping, encoder signs, U6 physical UART/HIL và U7 clean production consolidation/audit/integration vẫn còn. Motor permission luôn false; chưa có Gate 3/4, deploy_real hoặc robot validation.
 

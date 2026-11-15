@@ -152,3 +152,31 @@ def test_cmd_vel_qos_is_reliable_volatile_and_depth_one():
 
 def test_valid_joy_accepts_common_controllers_with_additional_buttons():
     assert SlamManualJoyNode._valid_joy(_joy([0.0, 0.0], [0] * 11))
+
+
+def test_slam_manual_joy_node_constructs_with_real_jazzy_rclpy_and_builtin_clock_parameter():
+    import rclpy
+    from pathlib import Path
+
+    manifest = Path(__file__).resolve().parents[4] / (
+        "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/"
+        "hardware_manifest_slam_manual_bench.yaml"
+    )
+    rclpy.init(args=[
+        "slam-manual-joy-test", "--ros-args",
+        "-p", "control_mode:=MANUAL_SLAM",
+        "-p", "manual_slam_selected:=true",
+        "-p", f"hardware_manifest:={manifest}",
+    ])
+    node = None
+    try:
+        node = SlamManualJoyNode()
+        assert node.get_name() == "slam_manual_joy"
+        assert node.has_parameter("use_sim_time")
+        assert node.get_parameter("use_sim_time").value is False
+        assert node._manual_slam_selected
+        assert node._profile_valid and node._manual_valid
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
