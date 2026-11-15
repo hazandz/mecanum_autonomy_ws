@@ -2206,6 +2206,30 @@ class TrainingWorkerIO:
             'completed_ns':self.now()})
         return response
 
+    async def run_r09b_contact_task_pulse(self, *, policy_receipt,
+                                         policy_applied_state, deadline_ns,
+                                         applied_received_ns):
+        """Hold POLICY immediately after moving the pinned contact fixture.
+
+        The zero POLICY receipt has already been applied and remains the B1
+        action witness. Holding the Safety policy stream before waiting for the
+        contact pulse prevents a later publication of that same admission from
+        racing the native SAFE_STOP that closes the slot during contact.
+        """
+        await self.set_r09b_task_fixture_pose(pose_name='contact_pose',
+            deadline_ns=deadline_ns, policy_receipt=policy_receipt)
+        self.safety.local_training.set_policy_hold(True)
+        self.emit('R09B_POLICY_HELD_AFTER_CONTACT_FIXTURE_POSE', {
+            'policy_publish_sequence':int(policy_receipt.final_publish_sequence),
+            'applied_publish_sequence':int(policy_applied_state.applied_final_publish_sequence),
+            'steady_ns':self.now()})
+        return await restore_r09b_fixture_after_contact_pulse(self,
+            deadline_ns=deadline_ns,
+            after_status_sequence=policy_applied_state.status_sequence,
+            after_physics_iteration=policy_applied_state.physics_iteration,
+            zero_receipt=policy_receipt, zero_applied_state=policy_applied_state,
+            zero_applied_received_ns=applied_received_ns)
+
     async def lifecycle_event(self, *, rearm, deadline_ns):
         old = self.ingress.lifecycle
         previous = old.sequence if old is not None else 0
@@ -3814,14 +3838,9 @@ async def training_child(path):
                     # Once the RPC is submitted, its result can be uncertain on
                     # timeout. Always attempt the exact restore in finalization.
                     fixture_moved = True
-                    await io.set_r09b_task_fixture_pose(pose_name='contact_pose',
-                        deadline_ns=deadline_ns, policy_receipt=receipt)
-                    await restore_r09b_fixture_after_contact_pulse(io,
-                        deadline_ns=deadline_ns,
-                        after_status_sequence=applied_state.status_sequence,
-                        after_physics_iteration=applied_state.physics_iteration,
-                        zero_receipt=receipt, zero_applied_state=applied_state,
-                        zero_applied_received_ns=applied_received_ns)
+                    await io.run_r09b_contact_task_pulse(policy_receipt=receipt,
+                        policy_applied_state=applied_state, deadline_ns=deadline_ns,
+                        applied_received_ns=applied_received_ns)
                     fixture_moved = False
                 transition = await io.policy_step(b1, (0., 0., 0.),
                     after_policy_applied=move_fixture_after_zero_policy)

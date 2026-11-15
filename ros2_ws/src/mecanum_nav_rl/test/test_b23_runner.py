@@ -2569,6 +2569,53 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
 
 
+def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():
+    from builtin_interfaces.msg import Time
+
+    order = []
+    class FakeIO:
+        descriptor = {'task_fixture': {'entity_name':'obstacle_0'},
+            'backend_instance_id':22, 'session_id':'session-a', 'config_hash':'c'*64}
+        def __init__(self):
+            self.safety = NS(local_training=NS(set_policy_hold=lambda value:
+                order.append(('policy_hold', value))))
+            self.ingress = NS(backend_state=None)
+        def now(self): return 1000
+        def emit(self, event, facts): order.append((event, facts))
+        async def set_r09b_task_fixture_pose(self, *, pose_name, **kwargs):
+            order.append(('fixture_pose', pose_name))
+        async def until(self, predicate, *, deadline_ns, phase):
+            active = phase == 'R09b healthy fixture contact pulse'
+            status = NS(backend_instance_id=22, session_id='session-a', config_hash='c'*64,
+                coverage_complete=True, contact_source_healthy=True,
+                required_collision_mask=3, observed_collision_mask=3, fault_flags=0,
+                paused=False, status_sequence=11 if active else 12,
+                physics_iteration=101 if active else 102, contact_active=active,
+                header=NS(stamp=Time(sec=1, nanosec=101 if active else 102)))
+            self.ingress.backend_state = status
+            assert predicate() is not None
+            order.append(('observation', phase))
+            return status
+
+    io = FakeIO()
+    receipt = NS(final_publish_sequence=40)
+    applied = NS(applied_final_publish_sequence=40, status_sequence=10,
+        physics_iteration=100)
+    result = asyncio.run(TrainingWorkerIO.run_r09b_contact_task_pulse(io,
+        policy_receipt=receipt, policy_applied_state=applied,
+        deadline_ns=5000, applied_received_ns=900))
+    tags = [row[0] for row in order]
+    pose_contact = order.index(('fixture_pose', 'contact_pose'))
+    held = order.index(('policy_hold', True))
+    contact_wait = order.index(('observation', 'R09b healthy fixture contact pulse'))
+    pose_restore = order.index(('fixture_pose', 'initial_pose'))
+    empty_wait = order.index(('observation', 'R09b fixture restored covered-empty before B1 cutoff'))
+    assert pose_contact < held < contact_wait < pose_restore < empty_wait
+    assert tags.count('policy_hold') == 1
+    assert result['contact']['physics_iteration'] == 101
+    assert result['restored_empty']['physics_iteration'] == 102
+
+
 def test_evidence_sink_routes_actual_server_output_and_keeps_books_distinct(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
     sink = RunEvidence(tmp_path, 'parent', run_id='run', invocation_id='inv-1')
