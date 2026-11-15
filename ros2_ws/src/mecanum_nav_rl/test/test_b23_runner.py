@@ -314,6 +314,30 @@ def test_paused_state_poll_accepts_only_packet_expected_native_fault_code():
     assert events[-1][1]['paused'] is True
 
 
+def test_r07a_resumed_state_poll_accepts_only_exact_gate_invalidation_transition():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.now = lambda: 100
+    worker.last_clock_advance_ns = 0
+    worker.expected_paused = True
+    status = NS(paused=False, status_sequence=10, physics_iteration=45,
+        fault_flags=7, local_zero_override=True)
+    worker.ingress = NS(backend_state=status)
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    observed = {}
+    async def fake_until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
+        observed.update(deadline_ns=deadline_ns, phase=phase,
+            expected_native_fault_flags=expected_native_fault_flags)
+        return predicate()
+    worker.until = fake_until
+    assert asyncio.run(worker.paused_state(False, 1.0,
+        expected_native_fault_flags=(1, 7))) is True
+    assert observed == {'deadline_ns':1_000_000_100,'phase':'resumed',
+        'expected_native_fault_flags':(1, 7)}
+    assert worker.last_clock_advance_ns == 100
+    assert events[-1][1]['paused'] is False
+
+
 def test_control_world_records_success_without_nonexistent_response_pause_field():
     from ros_gz_interfaces.srv import ControlWorld
     worker = object.__new__(TrainingWorkerIO)

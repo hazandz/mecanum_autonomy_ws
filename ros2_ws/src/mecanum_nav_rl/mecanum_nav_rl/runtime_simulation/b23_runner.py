@@ -3328,17 +3328,18 @@ async def training_child(path):
             await asyncio.sleep(min(.250, max(0.0, (io.deadline_ns-io.now())/1e9)))
             if io.now() >= io.deadline_ns:
                 raise TimeoutError('R07a pause hold reached active deadline')
-            resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
-                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)),
-                expected_native_fault_flags=1)
-            resume_state = await io.paused_state(False, min(1.0,
-                max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
-            io.expected_paused = False
-            io.last_clock_advance_ns = io.now()
             from mecanum_nav_rl_interfaces.msg import SimulationContactState
             resumed_fault_flags = (SimulationContactState.FAULT_CONTEXT |
                 SimulationContactState.FAULT_COMMAND_SEQUENCE |
                 SimulationContactState.FAULT_COMMAND_STALE)
+            resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
+                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)),
+                expected_native_fault_flags=1)
+            resume_state = await io.paused_state(False, min(1.0,
+                max(0.0, (io.deadline_ns-io.now())/1e9)),
+                expected_native_fault_flags=(1, resumed_fault_flags))
+            io.expected_paused = False
+            io.last_clock_advance_ns = io.now()
             resumed_gate_state = await io.until(lambda: io.ingress.backend_state
                 if (io.ingress.backend_state is not None
                     and not io.ingress.backend_state.paused
