@@ -19,7 +19,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
-    policy_step_identities,
+    verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation,
 )
 
@@ -109,6 +109,27 @@ def test_r05_wait_tolerates_exact_fault_status_until_zero_override_is_published(
     worker.ingress.backend_state.fault_flags = 8
     with pytest.raises(RuntimeError, match='native fault flags=8'):
         worker.check(expected_native_fault_flags=16)
+
+
+def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: 100
+    worker.ros_now = lambda: 50
+    worker.deadline_ns = 200
+    worker.last_clock_ns = 50
+    worker.last_clock_advance_ns = 99
+    worker.expected_paused = False
+    worker.ingress = NS(fault=None, backend_state=NS(fault_flags=1))
+
+    worker.check(expected_native_fault_flags=(1, 7))
+    worker.ingress.backend_state.fault_flags = 7
+    worker.check(expected_native_fault_flags=(1, 7))
+    worker.ingress.backend_state.fault_flags = 3
+    with pytest.raises(RuntimeError, match='native fault flags=3'):
+        worker.check(expected_native_fault_flags=(1, 7))
 
 
 @pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
@@ -215,6 +236,50 @@ def test_r07a_allows_timer_republication_but_rejects_new_policy_step_identity():
             backend_state=state, pre_pause_policy_step_identities=pre_keys,
             post_pause_policy_step_identities=post_keys, reset_count_before='reset-0',
             reset_count_after='reset-0')
+
+
+def test_r07a_resume_requires_exact_invalidated_gate_fault_and_zero_inhibit():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    expected_faults = (SimulationContactState.FAULT_CONTEXT |
+        SimulationContactState.FAULT_COMMAND_SEQUENCE |
+        SimulationContactState.FAULT_COMMAND_STALE)
+    identity = frozenset({('session-1', 'step-1')})
+    state = NS(paused=False, fault_flags=expected_faults,
+        local_zero_override=True, actuator_inhibited=True,
+        status_sequence=81, physics_iteration=126)
+    result = verify_r07a_resumed_inhibition(backend_state=state,
+        pre_pause_policy_step_identities=identity,
+        post_resume_policy_step_identities=identity,
+        reset_count_before='reset-1', reset_count_after='reset-1')
+    assert result['resumed_fault_flags'] == expected_faults
+    assert result['gate_invalidation_and_zero_inhibit_verified']
+
+    for bad_state in (
+        NS(paused=False, fault_flags=SimulationContactState.FAULT_CONTEXT,
+            local_zero_override=True, actuator_inhibited=True,
+            status_sequence=81, physics_iteration=126),
+        NS(paused=False, fault_flags=expected_faults | SimulationContactState.FAULT_CLOCK,
+            local_zero_override=True, actuator_inhibited=True,
+            status_sequence=81, physics_iteration=126),
+        NS(paused=False, fault_flags=expected_faults,
+            local_zero_override=False, actuator_inhibited=True,
+            status_sequence=81, physics_iteration=126),
+    ):
+        with pytest.raises(RuntimeError, match='resumed backend'):
+            verify_r07a_resumed_inhibition(backend_state=bad_state,
+                pre_pause_policy_step_identities=identity,
+                post_resume_policy_step_identities=identity,
+                reset_count_before='reset-1', reset_count_after='reset-1')
+    with pytest.raises(RuntimeError, match='new POLICY step identity'):
+        verify_r07a_resumed_inhibition(backend_state=state,
+            pre_pause_policy_step_identities=identity,
+            post_resume_policy_step_identities=identity | {('session-1','step-2')},
+            reset_count_before='reset-1', reset_count_after='reset-1')
+    with pytest.raises(RuntimeError, match='reset/observation0 advanced'):
+        verify_r07a_resumed_inhibition(backend_state=state,
+            pre_pause_policy_step_identities=identity,
+            post_resume_policy_step_identities=identity,
+            reset_count_before='reset-1', reset_count_after='reset-2')
 
 
 def test_policy_receipt_counter_uses_copied_receipt_source_enum():

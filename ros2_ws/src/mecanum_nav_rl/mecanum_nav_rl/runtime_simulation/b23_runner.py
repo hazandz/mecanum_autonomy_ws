@@ -120,6 +120,31 @@ def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
         'reset_count_unchanged':True}
 
 
+def verify_r07a_resumed_inhibition(*, backend_state,
+        pre_pause_policy_step_identities, post_resume_policy_step_identities,
+        reset_count_before, reset_count_after):
+    """Verify the invalidated gate stays faulted and motion remains inhibited after resume."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    expected_faults = (SimulationContactState.FAULT_CONTEXT |
+        SimulationContactState.FAULT_COMMAND_SEQUENCE |
+        SimulationContactState.FAULT_COMMAND_STALE)
+    if (backend_state is None or backend_state.paused
+            or backend_state.fault_flags != expected_faults
+            or not backend_state.local_zero_override
+            or not backend_state.actuator_inhibited):
+        raise RuntimeError('R07a resumed backend did not retain the exact invalidated-gate zero/inhibit state')
+    if post_resume_policy_step_identities != pre_pause_policy_step_identities:
+        raise RuntimeError('R07a observed a new POLICY step identity after resume')
+    if reset_count_after != reset_count_before:
+        raise RuntimeError('R07a reset/observation0 advanced after resume')
+    return {'resumed_fault_flags':backend_state.fault_flags,
+        'gate_invalidation_and_zero_inhibit_verified':True,
+        'policy_step_identities_unchanged':True,
+        'reset_count_unchanged':True,
+        'status_sequence':backend_state.status_sequence,
+        'physics_iteration':backend_state.physics_iteration}
+
+
 def policy_receipt_count(receipts):
     """Count copied receipt-v2 views using the pure-core source enum."""
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
@@ -1526,7 +1551,10 @@ class TrainingWorkerIO:
             # adjacent status publications. While polling for the closed
             # state, tolerate only the exact packet-pinned fault code; the
             # caller's terminal predicate still requires local_zero_override.
-            if state.fault_flags != expected_native_fault_flags:
+            expected_flags = (expected_native_fault_flags
+                if isinstance(expected_native_fault_flags, (tuple, list, set, frozenset))
+                else (expected_native_fault_flags,))
+            if state.fault_flags not in expected_flags:
                 raise RuntimeError('native fault flags=' + str(state.fault_flags))
 
     async def until(self, predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
@@ -3306,10 +3334,32 @@ async def training_child(path):
                 max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
             io.expected_paused = False
             io.last_clock_advance_ns = io.now()
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
+            resumed_fault_flags = (SimulationContactState.FAULT_CONTEXT |
+                SimulationContactState.FAULT_COMMAND_SEQUENCE |
+                SimulationContactState.FAULT_COMMAND_STALE)
+            resumed_gate_state = await io.until(lambda: io.ingress.backend_state
+                if (io.ingress.backend_state is not None
+                    and not io.ingress.backend_state.paused
+                    and io.ingress.backend_state.fault_flags == resumed_fault_flags
+                    and io.ingress.backend_state.local_zero_override
+                    and io.ingress.backend_state.actuator_inhibited) else None,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07a resumed gate invalidation remains zero/inhibited',
+                expected_native_fault_flags=(1, resumed_fault_flags))
+            post_resume_policy_identities = policy_step_identities(io.ingress.receipts)
+            resumed_checked = verify_r07a_resumed_inhibition(
+                backend_state=resumed_gate_state,
+                pre_pause_policy_step_identities=before_policy_identities,
+                post_resume_policy_step_identities=post_resume_policy_identities,
+                reset_count_before=reset_fact_before,
+                reset_count_after=b1.lifecycle.snapshot.reset_commit_facts)
+            io.emit('B23_R07A_RESUMED_INHIBITION_VERIFIED', {
+                **resumed_checked, 'steady_ns':io.now()})
             await io.until(lambda: io.ros_now() if io.ros_now() > previous_ros else None,
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07a simulation clock resumes after external pause',
-                expected_native_fault_flags=1)
+                expected_native_fault_flags=resumed_fault_flags)
             inhibit_ack = await io.control.inhibit(
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
             if resume_ack is not True or resume_state is not True:
@@ -3317,6 +3367,7 @@ async def training_child(path):
             io.emit('B23_R07A_VERIFIED', {'checked':checked,
                 'world_pause_success':world_ack,'world_pause_state':pause_state,
                 'world_resume_success':resume_ack,'world_resume_state':not resume_state,
+                **resumed_checked,
                 'native_status_sequence':state.status_sequence,
                 'native_inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
                 'native_inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
