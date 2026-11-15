@@ -1901,6 +1901,11 @@ class TrainingWorkerIO:
                     b1._prove_application(selection.receipt, cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
+                    if 'selected SAFE_STOP receipt exceeds the unchanged 500 ms freshness limit' in last_pending:
+                        self.emit('RESET_ZERO_RECEIPT_FRESHNESS_DEFERRED', {
+                            'cutoff_ns': cutoff,
+                            'reason': last_pending,
+                            'steady_ns': self.now()})
                     if last_pending == 'selected receipt lacks native application at/before cutoff':
                         reset_scans = sorted(stamp for stamp in self.ingress.scans
                             if self.ingress.scan_reset_stamp_ns < stamp <= cutoff)

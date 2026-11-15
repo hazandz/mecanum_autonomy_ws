@@ -220,11 +220,13 @@ def test_b1_reset_cutoff_ignores_expired_history_when_fresh_boundary_exists():
 
 
 def test_b1_reset_cutoff_does_not_fallback_when_required_zero_receipt_is_stale():
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+
     stale_selected = (9, 990_000_000, 9_400_000_000)
     fresh_adjacent = (10, 1_020_000_000, 9_900_000_000)
     adapter, facts = _b1_cutoff_fixture((stale_selected, fresh_adjacent))
 
-    with pytest.raises(ValueError, match='ready selection receipt is stale or future'):
+    with pytest.raises(B1SnapshotPending, match='unchanged 500 ms freshness limit'):
         adapter._selection(facts, reset=True)
 
 

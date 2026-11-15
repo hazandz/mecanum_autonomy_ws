@@ -2214,6 +2214,138 @@ def test_observation0_aligns_safe_stop_receipt_away_from_scan_cutoff():
     assert confirmations == ['actual-ack']
 
 
+def test_observation0_waits_for_fresh_zero_when_b1_cutoff_receipt_is_stale():
+    from collections import OrderedDict
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+        LocalTrainingB1Adapter,
+    )
+    from mecanum_nav_rl.runtime_simulation import local_training_coordinator
+
+    value, clock = worker()
+    identity = EpisodeLifecycleIdentity(1, 2, 3)
+    ros_ns = [1_100_000_000]
+    lifecycle = NS(barrier_stamp=Time(sec=0, nanosec=200_000_000))
+    source = NS(
+        final_publisher_id=55,
+        identity=NS(session_id='session', config_hash='a' * 64),
+        lifecycle=lifecycle,
+        receipts=[],
+    )
+    selector = NS(ingress=source, scales=(0.25, 0.2, 0.8))
+
+    def receipt(sequence, stamp, received):
+        return IssuedCommandReceiptView(
+            stamp, 55, sequence, ReceiptSource.SAFE_STOP, 66, sequence, 0, '',
+            identity, 'session', 'a' * 64, (0.0, 0.0, 0.0), received,
+            'base_link', True)
+
+    # Lượt đầu: B1 chọn zero mới nhất trước cutoff, nhưng dữ liệu đó đã quá
+    # tuổi 500 ms. Receipt kế tiếp nằm sau cutoff và chỉ làm bằng chứng biên.
+    source.receipts.extend((
+        receipt(7, 300_000_000, 800_000_000),
+        receipt(8, 1_020_000_000, 950_000_000),
+    ))
+    value.ingress = NS(
+        fault=None,
+        backend_state=None,
+        lifecycle=lifecycle,
+        scan_reset_stamp_ns=200_000_000,
+        profile={'scan_max_age_ms': 500},
+        scans=OrderedDict(((1_000_000_000,
+            NS(stamp_ns=1_000_000_000, received_steady_ns=clock.ns)),)),
+        confirm_observation0=lambda _ack: confirmations.append('ack'),
+    )
+    value.ros_now = lambda: ros_ns[0]
+    events, previews, commits, confirmations, control_calls = [], [], [], [], []
+    value.final = NS(publisher_instance_id=55)
+    value.emit = lambda name, facts: events.append((name, facts))
+    value.native_adjacent_boundary_application = lambda _selection, cutoff: {
+        'iteration': 10, 'stamp_ns': cutoff + 20_000_000}
+    async def pause(seconds):
+        await clock.pause(seconds)
+        ros_ns[0] = 1_120_000_000
+        value.ingress.scans[1_100_000_000] = NS(
+            stamp_ns=1_100_000_000, received_steady_ns=clock.ns)
+        source.receipts.extend((
+            receipt(9, 1_050_000_000, clock.ns),
+            receipt(10, 1_120_000_000, clock.ns),
+        ))
+    value.pause = pause
+    def preview(cutoff):
+        previews.append(cutoff)
+        facts = {'identity': identity, 'cutoff': cutoff,
+            'ros_now': ros_ns[0], 'steady_now': clock.ns}
+        return LocalTrainingB1Adapter._selection(selector, facts, reset=True)
+    def prove(_receipt, cutoff):
+        return NS(stamp_ns=cutoff)
+    preview_selection = []
+    def commit(cutoff, *, expected_selection_keys):
+        commits.append((cutoff, expected_selection_keys))
+        selected = preview_selection[0]
+        assert expected_selection_keys == (
+            selected.receipt.receipt_key,
+            selected.adjacent_receipt.receipt_key)
+        return 'observation0', selected
+    b1 = NS(preview_observation0_selection=preview,
+        _prove_application=prove,
+        commit_observation0=commit)
+    # Capture the ready selection only after the production selector returns it.
+    def capture_preview(cutoff):
+        selected = preview(cutoff)
+        preview_selection[:] = [selected]
+        return selected
+    b1.preview_observation0_selection = capture_preview
+    async def transact(operation, **fields):
+        control_calls.append((operation, fields['observation0_cutoff']))
+        return 'actual-confirm-ack'
+    value.control = NS(transact=transact)
+    original = local_training_coordinator.lifecycle_request_fields
+    local_training_coordinator.lifecycle_request_fields = lambda _snapshot: {}
+    try:
+        result, cutoff = asyncio.run(value.commit_and_confirm_observation0(
+            b1, deadline_ns=clock.ns + 300_000_000))
+    finally:
+        local_training_coordinator.lifecycle_request_fields = original
+
+    assert result == 'observation0' and cutoff == 1_100_000_000, (result, cutoff, events)
+    assert previews == [1_000_000_000, 1_100_000_000], (previews, events)
+    assert len(commits) == 1 and commits[0][0] == 1_100_000_000, (commits, events)
+    deferred = [facts for name, facts in events
+        if name == 'RESET_ZERO_RECEIPT_FRESHNESS_DEFERRED']
+    assert len(deferred) == 1 and '500 ms' in deferred[0]['reason'], events
+    assert confirmations == ['ack'] and control_calls
+
+
+def test_reset_cutoff_future_receipt_remains_rejected_not_pending():
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource, ReceiptStreamBinding,
+        select_reset_zero_at_cutoff,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    identity = EpisodeLifecycleIdentity(1, 2, 3)
+    binding = ReceiptStreamBinding(55, 'session', 'a' * 64, identity, 'base_link')
+    def receipt(sequence, stamp, received):
+        return IssuedCommandReceiptView(stamp, 55, sequence, ReceiptSource.SAFE_STOP,
+            66, sequence, 0, '', identity, 'session', 'a' * 64,
+            (0.0, 0.0, 0.0), received, 'base_link', True)
+    selection = select_reset_zero_at_cutoff(
+        (receipt(1, 900_000_000, 1_000_000_001),
+         receipt(2, 1_010_000_000, 1_000_000_001)),
+        binding=binding, cutoff_ros_ns=1_000_000_000,
+        evaluation_ros_now_ns=1_010_000_000,
+        evaluation_steady_now_ns=1_000_000_000,
+        reset_barrier_ros_ns=800_000_000,
+        physical_scales=(0.25, 0.2, 0.8))
+    assert selection.status.value == 'rejected'
+    assert selection.reason == 'ready selection receipt has a future timestamp'
+
+
 def test_observation0_defers_scan_alignment_until_two_post_reset_scans():
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl.runtime_simulation import local_training_coordinator

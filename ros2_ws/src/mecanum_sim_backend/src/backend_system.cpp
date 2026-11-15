@@ -1034,16 +1034,22 @@ private:
     if (contact_coverage_fault_mode_ != "mask_coverage_after_verified" ||
         contact_coverage_fault_fired_ || !contact_capability_verified_)
       return;
+    const auto query_ack_ns =
+        contact_coverage_fault_query_ack_ns_.load(std::memory_order_acquire);
+    if (query_ack_ns <= 0) return;
     if (contact_coverage_fault_target_iteration_ == 0)
     {
-      contact_coverage_fault_target_iteration_ = info.iterations;
+      contact_coverage_fault_target_iteration_ = info.iterations + 1;
       gzmsg << "B23_CONTACT_COVERAGE_FAULT_ARMED mode="
             << contact_coverage_fault_mode_
             << " iteration=" << contact_coverage_fault_target_iteration_
-            << " capability_revision=" << capability_revision_ << std::endl;
+            << " capability_revision=" << capability_revision_
+            << " query_ack_ns=" << query_ack_ns << std::endl;
       std::fflush(stdout);
     }
-    if (info.iterations < contact_coverage_fault_target_iteration_) return;
+    if (info.iterations < contact_coverage_fault_target_iteration_ ||
+        steady_clock_now_() < query_ack_ns + 500'000'000)
+      return;
 
     gz::sim::Entity selected = gz::sim::kNullEntity;
     std::string selected_name;
@@ -1072,7 +1078,6 @@ private:
     }
     contact_coverage_fault_target_entity_ = selected;
     contact_coverage_fault_target_bit_ = bit->second;
-    contact_coverage_fault_target_iteration_ = info.iterations;
     contact_coverage_fault_fired_ = true;
     gzmsg << "B23_CONTACT_COVERAGE_MASKED mode="
           << contact_coverage_fault_mode_ << " entity=" << selected_name
@@ -2404,6 +2409,18 @@ private:
         return;
       }
       response = cached->second.response;
+      // R05 only arms after the client polls the cached, exact QUERY result
+      // while the capability generation is still current. Defer masking so
+      // the worker can observe the VERIFIED ACK before the next physics fault.
+      if (contact_coverage_fault_mode_ == "mask_coverage_after_verified" &&
+          request.operation == ControlRequest::OP_VERIFY_CONTACT_CAPABILITY &&
+          request.probe_action == ControlRequest::PROBE_ACTION_QUERY &&
+          response.result == ControlResponse::RESULT_APPLIED &&
+          response.contact_capability_state == ControlResponse::CAPABILITY_VERIFIED)
+      {
+        contact_coverage_fault_query_ack_ns_.store(
+            ingress_steady_ns, std::memory_order_release);
+      }
       return;
     }
     if (request.request_sequence < next_control_request_sequence_)
@@ -3744,6 +3761,7 @@ private:
   std::string receipt_fault_mode_;
   std::string contact_coverage_fault_mode_;
   std::uint64_t contact_coverage_fault_target_iteration_{};
+  std::atomic<std::int64_t> contact_coverage_fault_query_ack_ns_{};
   gz::sim::Entity contact_coverage_fault_target_entity_{};
   std::uint64_t contact_coverage_fault_target_bit_{};
   bool contact_coverage_fault_fired_{};

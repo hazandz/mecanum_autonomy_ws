@@ -457,6 +457,11 @@ class LocalTrainingB1Adapter:
         if selection.status is CutoffStatus.PENDING:
             raise B1SnapshotPending('B1 cutoff pending: ' + str(selection.reason))
         if selection.status is not CutoffStatus.READY:
+            if reset and selection.reason == 'ready selection receipt is stale or future':
+                raise B1SnapshotPending(
+                    'B1 reset cutoff pending: selected SAFE_STOP receipt '
+                    'exceeds the unchanged 500 ms freshness limit'
+                )
             raise ValueError('B1 cutoff rejected: ' + str(selection.reason))
         return selection
 

@@ -248,10 +248,11 @@ class CutoffSelection:
                 steady_age_ns = (
                     self.evaluation_steady_now_ns - receipt.received_steady_ns
                 )
-                if (
-                    ros_age_ns < 0 or ros_age_ns > 500000000 or
-                    steady_age_ns < 0 or steady_age_ns > 500000000
-                ):
+                if ros_age_ns < 0 or steady_age_ns < 0:
+                    raise ValueError(
+                        'ready selection receipt has a future timestamp'
+                    )
+                if ros_age_ns > 500000000 or steady_age_ns > 500000000:
                     raise ValueError(
                         'ready selection receipt is stale or future'
                     )

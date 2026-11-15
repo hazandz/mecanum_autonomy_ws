@@ -1162,18 +1162,38 @@ public:
     return system.BuildContactSample(info, ecm);
   }
 
-  static ContactDecision RunPinnedCoverageMaskFault(
-      BackendSystem &system, gz::sim::EntityComponentManager &ecm,
-      std::uint64_t collision, std::uint64_t iteration)
+  static void SetContactCoverageFaultMode(
+      BackendSystem &system, const std::string &mode)
+  {
+    system.contact_coverage_fault_mode_ = mode;
+  }
+
+  static std::int64_t ContactCoverageFaultQueryAckNs(
+      const BackendSystem &system)
+  {
+    return system.contact_coverage_fault_query_ack_ns_.load(
+        std::memory_order_acquire);
+  }
+
+  static void PreparePinnedCoverageMask(
+      BackendSystem &system, std::uint64_t collision)
   {
     constexpr std::uint64_t kPinnedBit = 1;
     const std::string name = "b2_training_arena::robot::collision";
-    system.contact_coverage_fault_mode_ = "mask_coverage_after_verified";
-    system.contact_capability_verified_ = true;
+    system.collision_bits_.clear();
+    system.collision_entity_names_.clear();
+    system.collision_contact_bits_.clear();
     system.collision_bits_[name] = kPinnedBit;
     system.collision_entity_names_[collision] = name;
     system.collision_contact_bits_[collision] = kPinnedBit;
     system.contact_coverage_ = std::make_unique<ContactCoverage>(1);
+  }
+
+  static ContactDecision RunCoverageMaskSample(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm,
+      std::uint64_t iteration, std::int64_t steady_ns)
+  {
+    SetSteadyClockNow(system, steady_ns);
     gz::sim::UpdateInfo info;
     info.iterations = iteration;
     info.simTime = std::chrono::milliseconds(iteration * 10);
@@ -4148,27 +4168,6 @@ TEST(BackendSystemContactBinding, RegisteredCoverageReadsCollisionEntity)
   EXPECT_EQ(covered_empty.observed_mask, 1u);
 }
 
-TEST(BackendSystemContactBinding, R05MasksPinnedCoverageWithoutMutatingGazeboComponent)
-{
-  BackendSystem system;
-  gz::sim::EntityComponentManager ecm;
-  const auto collision = ecm.CreateEntity();
-  ecm.CreateComponent(collision,
-      gz::sim::components::ContactSensorData(gz::msgs::Contacts()));
-
-  const auto decision = BackendSystemTestPeer::RunPinnedCoverageMaskFault(
-      system, ecm, collision, 22);
-
-  EXPECT_TRUE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
-  EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr)
-      << "R05 must not remove an ECS component read by Gazebo's Contact system";
-  EXPECT_FALSE(decision.healthy);
-  EXPECT_FALSE(decision.coverage_complete);
-  EXPECT_EQ(decision.observed_mask, 0u);
-  EXPECT_EQ(decision.fault_flags, 16u);
-  EXPECT_EQ(decision.reason, "missing_contact_component");
-}
-
 TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCannotReviveAbort)
 {
   BackendSystem system;
@@ -4467,10 +4466,14 @@ namespace
 void PrepareCachedContactOnlyQuery(
     BackendSystem &system, gz::sim::EntityComponentManager &ecm,
     const std::shared_ptr<NativeResetChainIo> &io,
-    ControlRequest &start, ControlRequest &query, ControlResponse &verified)
+    ControlRequest &start, ControlRequest &query, ControlResponse &verified,
+    bool expect_ack_gated_fault = false)
 {
   BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'000);
   ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(system, ecm, io, true));
+  if (expect_ack_gated_fault)
+    BackendSystemTestPeer::SetContactCoverageFaultMode(
+        system, "mask_coverage_after_verified");
   start = BaseControlRequest(1);
   BindTestRequestToConfiguredBackend(start, system);
   start.operation = ControlRequest::OP_VERIFY_CONTACT_CAPABILITY;
@@ -4506,14 +4509,53 @@ void PrepareCachedContactOnlyQuery(
   query.probe_start_request_sequence = 1;
   ASSERT_EQ(BackendSystemTestPeer::Receive(system, query).result, ControlResponse::RESULT_QUEUED);
   BackendSystemTestPeer::RunProductionTick(system, ecm, 13, 320'000'000);
+  if (expect_ack_gated_fault)
+    EXPECT_EQ(BackendSystemTestPeer::ContactCoverageFaultQueryAckNs(system), 0);
   verified = BackendSystemTestPeer::Receive(system, query);
   ASSERT_EQ(verified.result, ControlResponse::RESULT_APPLIED);
   ASSERT_EQ(verified.contact_capability_state, ControlResponse::CAPABILITY_VERIFIED);
+  if (expect_ack_gated_fault)
+    EXPECT_EQ(BackendSystemTestPeer::ContactCoverageFaultQueryAckNs(system), 2'000'000'000);
   ASSERT_FALSE(verified.proof_session_id.empty());
   ASSERT_GT(verified.probe_model_entity_id, 0u);
   EXPECT_EQ(BackendSystemTestPeer::Receive(system, query), verified);
   EXPECT_EQ(io->spawn_calls, 1u);
   EXPECT_FALSE(BackendSystemTestPeer::HasActuatorGate(system));
+}
+
+TEST(BackendSystemContactBinding,
+     R05CoverageMaskWaitsForVerifiedQueryAckAndPreservesGazeboComponent)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  auto io = std::make_shared<NativeResetChainIo>();
+  ControlRequest start, query;
+  ControlResponse verified;
+  ASSERT_NO_FATAL_FAILURE(PrepareCachedContactOnlyQuery(
+      system, ecm, io, start, query, verified, true));
+
+  const auto collision = ecm.CreateEntity();
+  ecm.CreateComponent(collision,
+      gz::sim::components::ContactSensorData(gz::msgs::Contacts()));
+  BackendSystemTestPeer::PreparePinnedCoverageMask(system, collision);
+
+  const auto before_deadline = BackendSystemTestPeer::RunCoverageMaskSample(
+      system, ecm, 14, 2'499'999'999);
+  EXPECT_FALSE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
+  EXPECT_TRUE(before_deadline.healthy);
+  EXPECT_TRUE(before_deadline.coverage_complete);
+  EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr);
+
+  const auto after_deadline = BackendSystemTestPeer::RunCoverageMaskSample(
+      system, ecm, 15, 2'500'000'000);
+  EXPECT_TRUE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
+  EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr)
+      << "R05 must not remove an ECS component read by Gazebo's Contact system";
+  EXPECT_FALSE(after_deadline.healthy);
+  EXPECT_FALSE(after_deadline.coverage_complete);
+  EXPECT_EQ(after_deadline.observed_mask, 0u);
+  EXPECT_EQ(after_deadline.fault_flags, 16u);
+  EXPECT_EQ(after_deadline.reason, "missing_contact_component");
 }
 
 void ExpectNoContactProof(const ControlResponse &response)
