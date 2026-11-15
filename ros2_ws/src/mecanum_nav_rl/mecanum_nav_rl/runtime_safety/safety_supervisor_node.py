@@ -586,20 +586,22 @@ class LocalTrainingSafetyAdapter:
                 exact_boundary = ros_ns if ros_ns % period == 0 else None
                 boundary = exact_boundary or crossed_boundary
                 if (boundary is not None and boundary > prior_boundary
-                        and self._last_deferred_scan_cutoff_ns != boundary):
+                        and (exact_boundary is not None
+                             or self._last_deferred_scan_cutoff_ns != boundary)):
                     # A normal publication stamped on or just after a scan
                     # cutoff may precede native application by one physics
-                    # iteration. Defer once per crossed cutoff so B1 can use
-                    # the previously applied receipt, followed by an adjacent
-                    # receipt strictly after the cutoff. Fault/stop output is
-                    # still immediate; no clock or freshness allowance changes.
-                    self._last_deferred_scan_cutoff_ns = boundary
-                    evidence = {'ros_ns': ros_ns, 'steady_ns': now,
-                        'scan_period_ns': period, 'prior_tick_ns': previous}
-                    if exact_boundary is None:
-                        evidence.update(crossed_boundary_ns=boundary,
-                            reason='steady_tick_crossed_scan_cutoff')
-                    self.emit('SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF', evidence)
+                    # iteration. If steady ticks repeat while ROS time is
+                    # still exactly on the cutoff, defer every such normal
+                    # tick until ROS advances. Fault/stop output remains
+                    # immediate; no clock or freshness allowance changes.
+                    if self._last_deferred_scan_cutoff_ns != boundary:
+                        self._last_deferred_scan_cutoff_ns = boundary
+                        evidence = {'ros_ns': ros_ns, 'steady_ns': now,
+                            'scan_period_ns': period, 'prior_tick_ns': previous}
+                        if exact_boundary is None:
+                            evidence.update(crossed_boundary_ns=boundary,
+                                reason='steady_tick_crossed_scan_cutoff')
+                        self.emit('SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF', evidence)
                     return None
             self.last_tick_ns = now
             self.last_tick_ros_ns = ros_ns

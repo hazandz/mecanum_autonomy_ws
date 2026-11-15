@@ -147,6 +147,35 @@ def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapt
     assert len(f.published) == published_count + 1
 
 
+def test_local_safety_keeps_deferring_repeated_steady_ticks_at_exact_ros_cutoff(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.advance()
+        assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    f.advance()
+    assert f.clock.ros == 1_100_000_000
+    published_count, state_count = len(f.published), len(f.state)
+    assert adapter.tick() is None
+
+    # A steady timer can fire again before the simulation clock advances.
+    # It must not publish another receipt stamped at the same scan cutoff.
+    f.advance(ns=0)
+    assert adapter.tick() is None
+    assert len(f.published) == published_count and len(f.state) == state_count
+    deferred = [data for name, data in f.evidence
+        if name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF']
+    assert len(deferred) == 1
+
+    f.advance()
+    output = adapter.tick()
+    assert output is not None and output.source == output.SOURCE_POLICY
+    assert f.clock.ros == 1_120_000_000
+    assert len(f.published) == published_count + 1
+    assert len([data for name, data in f.evidence
+        if name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF']) == 1
+
+
 def test_local_safety_defers_normal_output_when_steady_tick_crosses_scan_cutoff(local_adapter):
     f = local_adapter; adapter = f.adapter
     assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
