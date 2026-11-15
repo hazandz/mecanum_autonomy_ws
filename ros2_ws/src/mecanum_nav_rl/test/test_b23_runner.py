@@ -275,7 +275,10 @@ def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, messa
         assert adapter.calls == [('on_safety_input', closed)]
         assert [name for name, _ in events] == ['B23_R04_NOISY_ODOMETRY_DROPPED']
     else:
-        assert state == {'triggered': 1, 'scheduled': 1}
+        assert state['triggered'] == 1 and state['scheduled'] == 1
+        for timer in state['timers']:
+            timer.join(timeout=0.2)
+        assert state['delivered'] == 1
         assert len(adapter.calls) == 1 and adapter.calls[0][0] == method_name
         assert [name for name, _ in events] == [
             'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK']
@@ -283,8 +286,32 @@ def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, messa
             message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec)
 
 
-@pytest.mark.parametrize('case,reason', [
-    ('R04a','NOISY_STALE_OR_FUTURE'), ('R04c','SCAN_STALE_OR_FUTURE')])
+def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
+    # Use the exact event names and ordering emitted by the production worker.
+    io = NS(policy_source_id=9, events=[
+        ('B23_R04_DELIVERY_DELAY_SCHEDULED', {'case':'R04a','delay_s':.3,
+            'callback_received_ns':100,'source_stamp_ns':77,'sample_sequence':22}),
+        ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04a','delay_s':.3,
+            'delivery_ns':300_000_101,'source_stamp_ns':77,'sample_sequence':22}),
+        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT',
+            'steady_ns':300_000_102}),
+        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+            'steady_ns':300_000_103,'ros_ns':1_000_000_000}),
+    ])
+    result = verify_r04_stale_delivery(io, case='R04a')
+    assert result['delayed_input_rejected'] is True
+    assert result['safety_blocked'] is True
+    assert result['fresh_policy_recovery'] is False
+    io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'steady_ns':300_000_104}))
+    with pytest.raises(RuntimeError, match='accepted POLICY after delayed-input invalidation'):
+        verify_r04_stale_delivery(io, case='R04a')
+    io.events.pop()
+    io.events[1][1]['sample_sequence'] = 23
+    with pytest.raises(RuntimeError, match='identity does not match'):
+        verify_r04_stale_delivery(io, case='R04a')
+
+
+@pytest.mark.parametrize('case,reason', [('R04c','SCAN_STALE_OR_FUTURE')])
 def test_r04_assessment_requires_delayed_source_and_real_safety_rejection(case, reason):
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     delayed = 1_000_000_000
