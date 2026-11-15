@@ -21,7 +21,7 @@ SERVICE_PROPERTIES = ('Type=exec','Restart=no','RemainAfterExit=yes','MemoryMax=
 CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R01d': 'fault_task', 'R01e': 'fault_task', 'R02a':'fault_task',
     'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
-    'R02f':'fault_task', 'R03a':'fault_task',
+    'R02e':'fault_task', 'R02f':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
@@ -33,6 +33,7 @@ CASE_HOOKS = {
     'R02b': ('native_hold_admission_until_receipt',),
     'R02c': ('hold_policy_receipt_until_safe_stop',),
     'R02d': ('hold_policy_receipt_until_admission_inhibited',),
+    'R02e': ('pre_bind_admission_sample',),
     'R02f': ('safety_hold_after_adapter_issuance',),
     'R03a': ('drop_native_policy_receipt_once',),
     'R03b': ('mutate_native_policy_transition_id_once',),
@@ -80,7 +81,26 @@ def case_environment(case, hooks):
         return {'B23_RECEIPT_FAULT': 'hold_policy_until_safe_stop'}
     if case == 'R02d' and hooks == ['hold_policy_receipt_until_admission_inhibited']:
         return {'B23_RECEIPT_FAULT': 'hold_policy_until_inhibit'}
+    if case == 'R02e':
+        return {}
     return {}
+
+
+def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
+                                           fresh_sample_sequence, pending_token):
+    """Require the pre-bind sample to stay out of the new native admission slot."""
+    accepted = [row for row in rows if row.get('kind') == 'B23_ADMISSION_ACCEPTED']
+    if any(int(row.get('fields', {}).get('sample', '0')) == held_sample_sequence for row in accepted):
+        raise RuntimeError('R02e pre-bind sample was accepted by the new native slot')
+    fresh = [row for row in accepted
+        if int(row.get('fields', {}).get('sample', '0')) == fresh_sample_sequence]
+    if len(fresh) != 1 or not any(pending_token):
+        raise RuntimeError('R02e fresh post-bind admission was not accepted exactly once')
+    return {'prebind_sample_sequence': held_sample_sequence,
+        'prebind_native_accept_count': 0,
+        'postbind_sample_sequence': fresh_sample_sequence,
+        'postbind_native_accept_count': 1,
+        'pending_token_nonzero': True}
 
 
 async def verify_r03_receipt_fault(io, *, case, step_index, error):
@@ -425,6 +445,8 @@ class TrainingWorkerIO:
         self.stop_requested = False
         self.abort_requested = None
         self.subscriptions = []
+        self._hold_next_safety_input = False
+        self._held_safety_input = None
         self.expected_paused = True
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
@@ -466,7 +488,7 @@ class TrainingWorkerIO:
             self.policy_publisher = self.node.create_publisher(CommandEnvelope, '/mecanum/cmd_policy', reliable)
             self.ingress = LocalTrainingIngress(identity, document['training']['local_training'],
                 final_publisher_id=self.final.publisher_instance_id, policy_source_id=self.policy_source_id,
-                safe_stop_source_id=self.safe_stop_source_id, safety_publish=self.safety_publisher.publish,
+                safe_stop_source_id=self.safe_stop_source_id, safety_publish=self._publish_safety_input,
                 emit=emit, now_ros_ns=self.ros_now)
             self.final.ingress = self.ingress
             for message, topic, callback, qos in (
@@ -504,6 +526,27 @@ class TrainingWorkerIO:
                     'SAFETY_REJECTED'}:
             self.events.append((name, copy.deepcopy(facts)))
         self._event_sink(name, facts)
+
+    def _publish_safety_input(self, message):
+        """Packet-scoped R02e transport hold for one real pre-bind producer sample."""
+        if self._hold_next_safety_input:
+            if self._held_safety_input is not None:
+                raise RuntimeError('R02e captured more than one pre-bind Safety input')
+            self._held_safety_input = copy.deepcopy(message)
+            self._hold_next_safety_input = False
+            self.emit('R02E_PREBIND_SAFETY_INPUT_HELD', {
+                'sample_sequence': message.sample_sequence,
+                'admission_token_hex': bytes(message.admission_token).hex(),
+                'episode_generation': message.episode_generation,
+                'reset_epoch': message.reset_epoch,
+                'runtime_generation': message.runtime_generation,
+                'stamp_ns': (message.header.stamp.sec * 1_000_000_000
+                    + message.header.stamp.nanosec),
+                'message_cdr_hex': __import__('rclpy.serialization', fromlist=['serialize_message'])
+                    .serialize_message(message).hex(),
+                'steady_ns': self.now()})
+            return
+        self.safety_publisher.publish(message)
 
     def observed_callback(self, message_type, topic, callback):
         """Giữ CDR do DDS trả trước decode/validator; không sửa payload nguồn."""
@@ -1454,7 +1497,7 @@ class TrainingWorkerIO:
         return replayed
 
     async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False,
-                          close_after_held_receipt=None):
+                          close_after_held_receipt=None, prebind_admission=False):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -1466,6 +1509,26 @@ class TrainingWorkerIO:
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
         await self.freeze_step_streams(deadline_ns=deadline)
+        held_prebind = None
+        if prebind_admission:
+            if self.ingress.pending_ack is None or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN:
+                raise RuntimeError('R02e needs a live previous pending token before rebinding')
+            with self.ingress.lock:
+                candidates = tuple(self.ingress.noisy_samples.values())
+            if not candidates:
+                raise RuntimeError('R02e has no actual noisy sample to carry across the bind')
+            sample = candidates[-1]
+            self.ingress.admission_publication_enabled = True
+            self._hold_next_safety_input = True
+            self.ingress._publish_safety(sample)
+            held_prebind = self._held_safety_input
+            if held_prebind is None:
+                raise RuntimeError('R02e producer did not create a held pre-bind input')
+            if (held_prebind.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                    or not any(held_prebind.admission_token)
+                    or held_prebind.sample_sequence == 0):
+                raise RuntimeError('R02e held sample is not a valid prior-token POLICY admission')
+            self.ingress.pause_admission_publication()
         # A SAFE_STOP arriving after OP_BIND_PENDING_STEP revokes the pending
         # admission by contract. The last zero receipt above is already native
         # applied, so stop emitting zero while this single slot is bound; native
@@ -1480,11 +1543,39 @@ class TrainingWorkerIO:
             pending_source_sequence=token.step_index, pending_transition_id=token.transition_id,
             action_barrier_stamp=self._time_msg(barrier))
         self.ingress.arm_pending(ack)
+        held_sample_sequence = None
+        if held_prebind is not None:
+            held_sample_sequence = held_prebind.sample_sequence
+            self.safety_publisher.publish(held_prebind)
+            self.emit('R02E_PREBIND_SAFETY_INPUT_RELEASED_AFTER_BIND', {
+                'sample_sequence': held_sample_sequence,
+                'prior_token_hex': bytes(held_prebind.admission_token).hex(),
+                'new_token_hex': bytes(ack.response.pending_admission_token).hex(),
+                'request_sequence': ack.request.request_sequence,
+                'binding_revision': ack.response.applied_binding_revision,
+                'steady_ns': self.now()})
+            if bytes(held_prebind.admission_token) == bytes(ack.response.pending_admission_token):
+                raise RuntimeError('R02e test sample unexpectedly has the current slot token')
         await self.until(lambda: self.safety.local_training.noisy if self.safety.local_training.noisy is not None
             and self.safety.local_training.noisy.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             and bytes(self.safety.local_training.noisy.admission_token) == bytes(ack.response.pending_admission_token)
             and self.ingress.last_published_sample_sequence == self.safety.local_training.noisy.sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
+        prebind_check = None
+        if held_sample_sequence is not None:
+            rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
+                .read_text().splitlines() if line.strip()]
+            fresh_sample_sequence = self.ingress.last_published_sample_sequence
+            prebind_check = verify_r02e_prebind_admission_rejected(rows,
+                held_sample_sequence=held_sample_sequence,
+                fresh_sample_sequence=fresh_sample_sequence,
+                pending_token=ack.response.pending_admission_token)
+            self.emit('R02E_PREBIND_ADMISSION_REJECTED_AND_FRESH_ACCEPTED', {
+                **prebind_check,
+                'prior_token_sha256': hashlib.sha256(bytes(held_prebind.admission_token)).hexdigest(),
+                'pending_token_sha256': hashlib.sha256(bytes(ack.response.pending_admission_token)).hexdigest(),
+                'steady_ns': self.now()})
+            self._last_prebind_check = prebind_check
         life = self.ingress.lifecycle
         envelope = CommandEnvelope()
         envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
@@ -1989,6 +2080,20 @@ async def training_child(path):
                 raise RuntimeError(packet['case'] + ' did not reject the late POLICY receipt')
             outcome = {'case':packet['case'], 'resets_confirmed':1,
                 'policy_steps_committed':0, **checked, 'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R02e':
+            if packet['fault_hooks'] != ['pre_bind_admission_sample']:
+                raise RuntimeError('R02e packet hook does not match the fixed pre-bind admission case')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            first = await io.policy_step(b1, (0.2, 0., 0.))
+            if first.termination.terminated or first.termination.truncated:
+                raise RuntimeError('R02e first POLICY slot terminated before pre-bind test')
+            second = await io.policy_step(b1, (0.2, 0., 0.), prebind_admission=True)
+            if second.termination.terminated or second.termination.truncated:
+                raise RuntimeError('R02e second POLICY slot terminated before fresh token check')
+            outcome = {'case':'R02e','resets_confirmed':1,'policy_steps_committed':2,
+                'prebind_admission':io._last_prebind_check,'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R02f':
             if packet['fault_hooks'] != ['safety_hold_after_adapter_issuance']:
                 raise RuntimeError('R02f packet hook does not match the fixed Safety hold case')

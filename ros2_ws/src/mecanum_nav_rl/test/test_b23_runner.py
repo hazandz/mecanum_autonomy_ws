@@ -8,7 +8,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
-    verify_r03_receipt_fault,
+    verify_r02e_prebind_admission_rejected, verify_r03_receipt_fault,
 )
 
 
@@ -18,6 +18,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R01e') == 'fault_task'
     assert campaign_phase('R02a') == 'fault_task'
     assert campaign_phase('R02b') == 'fault_task'
+    assert campaign_phase('R02e') == 'fault_task'
     assert campaign_phase('R02f') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
@@ -61,6 +62,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R02b') == ['native_hold_admission_until_receipt']
     assert case_fault_hooks('R02c') == ['hold_policy_receipt_until_safe_stop']
     assert case_fault_hooks('R02d') == ['hold_policy_receipt_until_admission_inhibited']
+    assert case_fault_hooks('R02e') == ['pre_bind_admission_sample']
     assert case_fault_hooks('R02f') == ['safety_hold_after_adapter_issuance']
     assert case_fault_hooks('R03a') == ['drop_native_policy_receipt_once']
     assert case_fault_hooks('R03b') == ['mutate_native_policy_transition_id_once']
@@ -373,6 +375,24 @@ def test_r02_close_marker_remains_observable_when_expected_fault_arrives_first()
             deadline_ns=clock.ns + 5_000_000,
             phase='held POLICY receipt released only after closing condition',
             expected_native_fault_flags=expected))
+
+
+def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02e_prebind_admission_rejected
+    rows = [{'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'9'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'11'}}]
+    result = verify_r02e_prebind_admission_rejected(rows, held_sample_sequence=10,
+        fresh_sample_sequence=11, pending_token=bytes([1])*16)
+    assert result == {'prebind_sample_sequence':10,'prebind_native_accept_count':0,
+        'postbind_sample_sequence':11,'postbind_native_accept_count':1,
+        'pending_token_nonzero':True}
+    rows.append({'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'10'}})
+    with pytest.raises(RuntimeError, match='pre-bind sample was accepted'):
+        verify_r02e_prebind_admission_rejected(rows, held_sample_sequence=10,
+            fresh_sample_sequence=11, pending_token=bytes([1])*16)
+    with pytest.raises(RuntimeError, match='fresh post-bind admission'):
+        verify_r02e_prebind_admission_rejected([], held_sample_sequence=10,
+            fresh_sample_sequence=11, pending_token=bytes([1])*16)
 
 
 def test_active_deadline_is_never_extended_by_predicate_budget():
