@@ -15,6 +15,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
+    r04_policy_step_fault_plan,
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
@@ -1373,6 +1374,28 @@ def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, messa
             'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK']
         assert events[0][1]['source_stamp_ns'] == (
             message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec)
+
+
+def test_r04c_delays_scan_only_after_control_policy_commit_path():
+    assert r04_policy_step_fault_plan('R04a') == ('R04a', None)
+    assert r04_policy_step_fault_plan('R04b') == ('R04b', None)
+    assert r04_policy_step_fault_plan('R04c') == (None, 'R04c')
+    with pytest.raises(ValueError, match='unsupported R04 POLICY-step fault plan'):
+        r04_policy_step_fault_plan('R04d')
+
+    source = textwrap.dedent(__import__('inspect').getsource(runner_module.training_child))
+    tree = ast.parse(source)
+    fault_calls = [node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == 'io'
+        and node.func.attr == 'policy_step'
+        and any(keyword.arg == 'measurement_fault_case' for keyword in node.keywords)]
+    fault_arguments = [next(keyword.value for keyword in node.keywords
+        if keyword.arg == 'measurement_fault_case') for node in fault_calls]
+    assert any(isinstance(value, ast.Name) and value.id == 'initial_fault_case'
+        for value in fault_arguments)
+    assert any(isinstance(value, ast.Name) and value.id == 'followup_fault_case'
+        for value in fault_arguments)
 
 
 def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():

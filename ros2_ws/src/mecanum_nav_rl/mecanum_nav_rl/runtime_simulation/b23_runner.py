@@ -707,6 +707,26 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
     return state
 
 
+def r04_policy_step_fault_plan(case):
+    """Arm R04 delivery faults on the policy step their contract measures.
+
+    R04a/R04b deliberately invalidate the current step. R04c first needs one
+    committed POLICY transition as a control, then delays a scan during the
+    following step to prove stale-input rejection. Arming R04c on the control
+    step can phase-align its first cutoff with the not-yet-applied newest
+    receipt and prevent the control transaction from completing.
+    """
+    plans = {
+        'R04a': ('R04a', None),
+        'R04b': ('R04b', None),
+        'R04c': (None, 'R04c'),
+    }
+    try:
+        return plans[case]
+    except (KeyError, TypeError) as error:
+        raise ValueError('unsupported R04 POLICY-step fault plan') from error
+
+
 def r04d_final_lifecycle_dispatch(original, marker_path, emit, schedule):
     """Delay the final-publisher lifecycle callback only during the R04d window.
 
@@ -4606,9 +4626,10 @@ async def training_child(path):
                     'no_policy_issued':True,'b1_commits_before_fault':prior_commits,
                     'completed_ns':time.monotonic_ns()}
             else:
+                initial_fault_case, followup_fault_case = r04_policy_step_fault_plan(packet['case'])
                 try:
                     transition = await io.policy_step(b1, (0.25, 0., 0.),
-                        measurement_fault_case=packet['case'])
+                        measurement_fault_case=initial_fault_case)
                 except (TimeoutError, RuntimeError) as error:
                     if packet['case'] not in ('R04a', 'R04b'):
                         raise
@@ -4698,21 +4719,24 @@ async def training_child(path):
                             'blocked_step_timeout':blocked_step_timeout,
                             'completed_ns':time.monotonic_ns()}
                     elif packet['case'] == 'R04c':
-                        state = io._r04_fault_state
-                        await io.until(lambda: state if state['delivered'] == 1 else None,
-                            deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
-                            phase='R04c bounded delayed scan delivery')
-                        delayed = next((facts for name, facts in reversed(io.events)
-                            if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK'
-                            and facts.get('case') == 'R04c'), None)
-                        if state['triggered'] != 1 or state['delivered'] != 1 or delayed is None:
-                            raise RuntimeError('R04c delayed scan callback did not complete exactly once')
                         blocked_step = transition.transition_identity.step_index + 1
                         blocked_step_timeout = None
                         try:
-                            await io.policy_step(b1, (0.25, 0., 0.))
+                            await io.policy_step(b1, (0.25, 0., 0.),
+                                measurement_fault_case=followup_fault_case)
                         except (TimeoutError, RuntimeError) as error:
                             blocked_step_timeout = repr(error)
+                            state = io._r04_fault_state
+                            await io.until(lambda: state if state['triggered'] == 1
+                                and state['delivered'] == 1 else None,
+                                deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                                phase='R04c bounded delayed scan delivery')
+                            delayed = next((facts for name, facts in reversed(io.events)
+                                if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK'
+                                and facts.get('case') == 'R04c'), None)
+                            if (state['triggered'] != 1 or state['delivered'] != 1
+                                    or delayed is None):
+                                raise RuntimeError('R04c delayed scan callback did not complete exactly once') from error
                             checked = verify_r04_stale_delivery(io, case='R04c')
                             blocked = verify_r04c_next_step_blocked(io,
                                 step_index=blocked_step,
