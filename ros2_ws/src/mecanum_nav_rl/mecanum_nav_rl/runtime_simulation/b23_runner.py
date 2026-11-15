@@ -3252,7 +3252,11 @@ class TrainingWorkerIO:
         previous_safe_stop = adapter.safe_stop_sequence
         adapter.set_policy_hold(True)
         adapter.set_stream_enabled(True)
-        self.ingress.pause_admission_publication()
+        # Revoke the consumed slot token and let native observe a fresh
+        # closing sample before freezing the stream.  Merely pausing here can
+        # leave POLICY_OPEN carrying an already-consumed token; native then
+        # rejects every later sample and the watermark drain cannot complete.
+        await self.inhibit_and_drain(deadline_ns=deadline_ns)
         await self.until(lambda: adapter.last_output
             if adapter.safe_stop_sequence > previous_safe_stop
             and adapter.last_output is not None

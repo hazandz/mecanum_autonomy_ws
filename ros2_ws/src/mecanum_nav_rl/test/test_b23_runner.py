@@ -2417,7 +2417,7 @@ def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader
 
 @pytest.mark.parametrize('last_source', ['safe_stop', 'policy'])
 def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(last_source):
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
     value, clock = worker()
     calls, events = [], []
     source = CommandEnvelope.SOURCE_SAFE_STOP if last_source == 'safe_stop' else CommandEnvelope.SOURCE_POLICY
@@ -2426,8 +2426,19 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
+    value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    def inhibit(*, zero_only=False):
+        calls.append(('inhibit', zero_only))
+        value.ingress.last_published_admission_state = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY
+            if zero_only else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+    value.ingress.inhibit = inhibit
     value.ingress.pause_admission_publication = lambda: calls.append(('pause_admission',))
-    value.read_native_input_watermark = lambda: 9
+    watermark = [9]
+    value._native_input_watermark = 9
+    def read_watermark():
+        value._native_input_watermark = watermark[0]
+        return watermark[0]
+    value.read_native_input_watermark = read_watermark
     stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=source,
         source_instance_id=44, sequence=7, final_publish_sequence=20))
@@ -2436,6 +2447,9 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.last_safe_stop_publish_sequence = 20
     async def pause(seconds):
         await clock.pause(seconds)
+        if value.ingress.last_published_sample_sequence == 9:
+            value.ingress.last_published_sample_sequence = 10
+            watermark[0] = 10
         adapter.safe_stop_sequence = 8
         adapter.last_output = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=8)
         value.final.last_publication = NS(source=stop.SOURCE_SAFE_STOP,
@@ -2447,6 +2461,14 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert ('hold', True) in calls
     assert ('stream', True) in calls
     assert ('stream', False) not in calls
+    assert ('inhibit', False) in calls
+    assert events[0][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
+    assert events[0][1]['sample_sequence'] == 10
+    assert events[0][1]['native_input_watermark'] == 10
+    names = [name for name, _ in events]
+    assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
+    assert names.index('ADMISSION_STREAM_FROZEN') < names.index('STEP_STREAMS_FROZEN')
+    assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     assert adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
     assert calls.index(('hold', True)) < calls.index(('stream', True))
     assert events[-1][0] == 'STEP_STREAMS_FROZEN'
@@ -2525,11 +2547,22 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         publication_for_source_sequence=lambda **kwargs: zero_policy_receipt)
     value.ingress.lifecycle = life
     value.ingress.last_published_sample_sequence = 1
+    value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    def inhibit(*, zero_only=False):
+        value.ingress.last_published_admission_state = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY
+            if zero_only else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+        history.append(('admission_inhibit', zero_only))
+    value.ingress.inhibit = inhibit
     value.ingress.pause_admission_publication = lambda: history.append(('freeze_admission',))
     value.ingress.scans = {}
     value.ingress.profile = {'safety_period_ms':20, 'final_command_timeout_ms':100,
         'scan_max_age_ms':500}
-    value.read_native_input_watermark = lambda: 1
+    native_watermark = [1]
+    value._native_input_watermark = 1
+    def read_watermark():
+        value._native_input_watermark = native_watermark[0]
+        return native_watermark[0]
+    value.read_native_input_watermark = read_watermark
     def emit(event, facts):
         history.append((event, facts))
         if event == 'POLICY_STEP_COMPLETE' and timing == 'late_publish': clock.ns = 3_000_000_000
@@ -2552,10 +2585,15 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     async def pause(seconds):
         await clock.pause(seconds)
         if armed:
-            value.ingress.last_published_sample_sequence = 2
+            value.ingress.last_published_sample_sequence = 3
+            value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+            native_watermark[0] = 3
             adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
-                admission_token=[7]*16, sample_sequence=2)
+                admission_token=[7]*16, sample_sequence=3)
         else:
+            value.ingress.last_published_sample_sequence = 2
+            value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
+            native_watermark[0] = 2
             adapter.safe_stop_sequence = 2
             adapter.last_output = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
                 source_instance_id=44, sequence=2)
