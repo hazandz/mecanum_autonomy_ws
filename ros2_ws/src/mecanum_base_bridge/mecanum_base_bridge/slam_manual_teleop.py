@@ -20,21 +20,23 @@ class BodyCommand:
 
 @dataclass(frozen=True)
 class SlamBenchMotionProfile:
-    """Owner/manifest inputs plus an experimental wheel-target ceiling.
+    """Named wheel-target profile for offline SLAM bench mapping.
 
-    ``wheel_rpm_per_output_rpm`` is unresolved in the bench manifest. A zero
-    value intentionally invalidates the profile and returns zero commands.
-    ``max_wheel_cps`` is the experimental PID4 target ceiling, not a measured
-    physical speed or an approved safety limit.
+    ``owner_design_172rpm`` treats 172 RPM as speed at the gearbox output and
+    does not multiply by the motor-to-output reduction. ``pid4_experimental_1400cps``
+    uses only the evidence-backed 1400 tick/s experimental ceiling. The
+    wheel-to-gearbox-output ratio remains required input; zero is invalid.
     """
 
     wheel_diameter_m: float
     wheelbase_m: float
     track_m: float
     ticks_per_wheel_revolution: float
-    motor_output_rpm: float = 172.0
-    wheel_rpm_per_output_rpm: float = 0.0
-    max_wheel_cps: float = 1400.0
+    profile_name: str = "pid4_experimental_1400cps"
+    owner_design_output_rpm: float = 172.0
+    motor_to_gearbox_output_ratio: float = 21.3
+    wheel_rpm_per_gearbox_output_rpm: float = 0.0
+    experimental_max_wheel_target_cps: float = 1400.0
     deadzone_radius: float = 0.12
     full_command_radius: float = 0.20
     sideways_fade_start_deg: float = 75.0
@@ -46,9 +48,10 @@ class SlamBenchMotionProfile:
             self.wheelbase_m,
             self.track_m,
             self.ticks_per_wheel_revolution,
-            self.motor_output_rpm,
-            self.wheel_rpm_per_output_rpm,
-            self.max_wheel_cps,
+            self.owner_design_output_rpm,
+            self.motor_to_gearbox_output_ratio,
+            self.wheel_rpm_per_gearbox_output_rpm,
+            self.experimental_max_wheel_target_cps,
         )
         return (
             all(math.isfinite(value) and value > 0.0 for value in positive)
@@ -57,7 +60,18 @@ class SlamBenchMotionProfile:
             and 0.0 <= self.deadzone_radius < self.full_command_radius <= 1.0
             and math.isfinite(self.sideways_fade_start_deg)
             and 0.0 < self.sideways_fade_start_deg < 90.0
+            and self.profile_name in (
+                "owner_design_172rpm", "pid4_experimental_1400cps")
         )
+
+    @property
+    def max_wheel_target_cps(self) -> float:
+        if self.profile_name == "owner_design_172rpm":
+            # The design speed is already at the gearbox output shaft.
+            return (self.owner_design_output_rpm
+                    * self.wheel_rpm_per_gearbox_output_rpm
+                    * self.ticks_per_wheel_revolution / 60.0)
+        return self.experimental_max_wheel_target_cps
 
     @property
     def rotation_radius_m(self) -> float:
@@ -65,8 +79,8 @@ class SlamBenchMotionProfile:
 
     @property
     def max_translation_mps(self) -> float:
-        wheel_rpm = self.motor_output_rpm * self.wheel_rpm_per_output_rpm
-        return wheel_rpm * (math.pi * self.wheel_diameter_m) / 60.0
+        counts_per_meter = self.ticks_per_wheel_revolution / (math.pi * self.wheel_diameter_m)
+        return self.max_wheel_target_cps / counts_per_meter
 
 
 def wheel_target_cps(command: BodyCommand, profile: SlamBenchMotionProfile) -> tuple[float, ...]:
@@ -86,15 +100,19 @@ def wheel_target_cps(command: BodyCommand, profile: SlamBenchMotionProfile) -> t
 
 def limit_command_to_wheel_cps(
     command: BodyCommand, profile: SlamBenchMotionProfile,
+    target_limit_cps: float | None = None,
 ) -> BodyCommand:
-    """Giảm đồng tỷ lệ vx/vy/wz nếu bất kỳ wheel target nào vượt max cps."""
+    """Giảm đồng tỷ lệ vx/vy/wz theo trần profile hoặc trần cấp tốc độ."""
     if not all(math.isfinite(value) for value in (command.vx, command.vy, command.wz)):
         return BodyCommand()
     targets = wheel_target_cps(command, profile)
     if not profile.valid or not all(math.isfinite(value) for value in targets):
         return BodyCommand()
+    limit = profile.max_wheel_target_cps if target_limit_cps is None else target_limit_cps
+    if not math.isfinite(limit) or limit <= 0.0 or limit > profile.max_wheel_target_cps:
+        return BodyCommand()
     peak = max(abs(value) for value in targets)
-    scale = min(1.0, profile.max_wheel_cps / peak) if peak > 0.0 else 1.0
+    scale = min(1.0, limit / peak) if peak > 0.0 else 1.0
     return BodyCommand(command.vx * scale, command.vy * scale, command.wz * scale)
 
 
@@ -176,9 +194,29 @@ def map_joystick(axes, buttons, level: float,
 
     if any(pressed[:FACE_BUTTON_COUNT]):
         command = _button_command(pressed, level, profile)
+        activation = 1.0
     else:
         command = _analog_command(x, y, level, profile)
-    return limit_command_to_wheel_cps(command, profile)
+        radius = min(1.0, math.hypot(x, y))
+        activation = _smoothstep(
+            (radius - profile.deadzone_radius) /
+            (profile.full_command_radius - profile.deadzone_radius))
+    # Normalize each direction to the selected fraction of the profile ceiling.
+    # This preserves five distinct tiers instead of clipping upper tiers from
+    # the separate 172 RPM design target down to the experimental 1400 cps cap.
+    targets = wheel_target_cps(command, profile)
+    peak = max(abs(value) for value in targets)
+    if peak <= 0.0:
+        return BodyCommand()
+    tier_limit = profile.max_wheel_target_cps * level * activation
+    if tier_limit <= 0.0:
+        return BodyCommand()
+    normalized = BodyCommand(
+        command.vx * tier_limit / peak,
+        command.vy * tier_limit / peak,
+        command.wz * tier_limit / peak,
+    )
+    return limit_command_to_wheel_cps(normalized, profile, tier_limit)
 
 
 class SlamManualTeleop:

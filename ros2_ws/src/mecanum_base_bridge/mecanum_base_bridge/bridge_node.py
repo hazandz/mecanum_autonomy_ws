@@ -7,7 +7,6 @@ from dataclasses import replace
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Joy
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -22,7 +21,6 @@ from .heartbeat import make_heartbeat
 from .telemetry_state import telemetry_health
 from .transport import SerialTransport
 from .wheel_odometry import WheelOdometry
-from .slam_manual_teleop import SlamBenchMotionProfile, SlamManualTeleop
 
 
 LIFECYCLE_TOPIC = "/mecanum/safety_lifecycle_state"
@@ -61,13 +59,6 @@ class UartBridgeNode(Node):
             self.declare_parameter("hardware_manifest", "")
             self.declare_parameter("heartbeat_topic", HEARTBEAT_TOPIC)
             self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
-            self.declare_parameter("slam_bench_motor_output_rpm", 172.0)
-            self.declare_parameter("slam_bench_wheel_rpm_per_output_rpm", 0.0)
-            self.declare_parameter("slam_bench_max_wheel_target_cps", 1400.0)
-            self.declare_parameter("slam_bench_joy_deadzone_radius", 0.12)
-            self.declare_parameter("slam_bench_joy_full_command_radius", 0.20)
-            self.declare_parameter("slam_bench_sideways_fade_start_deg", 75.0)
-            self.declare_parameter("slam_bench_joy_timeout_s", 0.25)
             if bool(self.get_parameter("use_sim_time").value):
                 raise ValueError("UART hardware adapter requires use_sim_time=false")
             port = str(self.get_parameter("serial_device").value)
@@ -84,32 +75,7 @@ class UartBridgeNode(Node):
             if not communication_config_valid(manifest):
                 raise HardwareConfigError("manifest communication profile is unsupported")
             digest = manifest_digest(manifest)
-            joy_timeout = float(self.get_parameter("slam_bench_joy_timeout_s").value)
-            if not math.isfinite(joy_timeout) or joy_timeout <= 0.0:
-                raise ValueError("slam_bench_joy_timeout_s must be finite and positive")
             geometry = wheel_geometry(manifest)
-            profile = SlamBenchMotionProfile(
-                wheel_diameter_m=geometry["wheel_diameter_m"],
-                wheelbase_m=geometry["wheelbase_m"],
-                track_m=geometry["track_m"],
-                ticks_per_wheel_revolution=geometry["ticks_per_wheel_revolution"],
-                motor_output_rpm=float(self.get_parameter("slam_bench_motor_output_rpm").value),
-                wheel_rpm_per_output_rpm=float(
-                    self.get_parameter("slam_bench_wheel_rpm_per_output_rpm").value),
-                max_wheel_cps=float(
-                    self.get_parameter("slam_bench_max_wheel_target_cps").value),
-                deadzone_radius=float(
-                    self.get_parameter("slam_bench_joy_deadzone_radius").value),
-                full_command_radius=float(
-                    self.get_parameter("slam_bench_joy_full_command_radius").value),
-                sideways_fade_start_deg=float(
-                    self.get_parameter("slam_bench_sideways_fade_start_deg").value),
-            )
-            # This source snapshot is offline-only. Joy remains disarmed until
-            # a measured wheel ratio and a separate approved enable decision exist.
-            self._teleop = SlamManualTeleop(profile, motion_enabled=False)
-            self._joy_timeout = joy_timeout
-            self._joy_received_at = None
             self._wheel_odom = WheelOdometry(
                 geometry["wheel_diameter_m"], geometry["wheelbase_m"], geometry["track_m"],
                 geometry["ticks_per_wheel_revolution"], tuple(geometry["encoder_tick_signs"]))
@@ -130,13 +96,11 @@ class UartBridgeNode(Node):
             self._heartbeat_pub = self.create_publisher(
                 Heartbeat, str(self.get_parameter("heartbeat_topic").value), 10)
             self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
-            self.create_subscription(Joy, "/joy", self._on_joy, 10)
             self.create_subscription(SafetyLifecycleState, LIFECYCLE_TOPIC,
                                      self._on_lifecycle, qos)
             self._reset_client = self.create_client(Trigger, RESET_SERVICE)
             self.create_timer(0.005, self._io_tick)
             self.create_timer(0.1, self._heartbeat_tick)
-            self.create_timer(min(0.05, joy_timeout / 2.0), self._joy_watchdog_tick)
         except Exception:
             if self._session is not None:
                 self._session.shutdown()
@@ -156,18 +120,6 @@ class UartBridgeNode(Node):
     def _on_cmd_vel(self, message: Twist) -> None:
         self._session.receive_cmd_vel(message.linear.x, message.linear.y,
                                      message.angular.z, self._steady_clock())
-
-    def _on_joy(self, message: Joy) -> None:
-        command = self._teleop.update(message.axes, message.buttons)
-        now = self._steady_clock()
-        self._joy_received_at = now
-        self._session.receive_cmd_vel(command.vx, command.vy, command.wz, now)
-
-    def _joy_watchdog_tick(self) -> None:
-        now = self._steady_clock()
-        if self._joy_received_at is None or now - self._joy_received_at > self._joy_timeout:
-            self._teleop.disconnected()
-            self._session.receive_cmd_vel(0.0, 0.0, 0.0, now)
 
     def _request_owner_reset(self) -> None:
         if not self._lifecycle_baseline_observed:

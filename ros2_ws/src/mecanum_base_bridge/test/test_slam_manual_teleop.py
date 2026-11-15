@@ -21,9 +21,11 @@ def profile():
         wheelbase_m=0.216,
         track_m=0.190,
         ticks_per_wheel_revolution=937.2,
-        motor_output_rpm=172.0,
-        wheel_rpm_per_output_rpm=1.0,
-        max_wheel_cps=100_000.0,
+        profile_name="pid4_experimental_1400cps",
+        owner_design_output_rpm=172.0,
+        motor_to_gearbox_output_ratio=21.3,
+        wheel_rpm_per_gearbox_output_rpm=1.0,
+        experimental_max_wheel_target_cps=1400.0,
     )
 
 
@@ -41,6 +43,14 @@ def joy(*pressed):
 
 def expected_level_speed(profile, level):
     return profile.max_translation_mps * SPEED_LEVELS[level]
+
+
+def tier_normalized(command, profile, level):
+    peak = max(abs(value) for value in wheel_target_cps(command, profile))
+    target = profile.max_wheel_target_cps * SPEED_LEVELS[level]
+    return BodyCommand(command.vx * target / peak,
+                       command.vy * target / peak,
+                       command.wz * target / peak)
 
 
 def test_five_fixed_tiers_start_at_twenty_percent_and_buttons_step_once(teleop):
@@ -94,9 +104,9 @@ def test_analog_right_diagonals_translate_in_direction_and_turn_right(
     theta = math.radians(angle_deg)
     command = teleop.update([math.sin(theta), -math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
-    expected = BodyCommand(speed * math.cos(theta),
-                           -speed * math.sin(theta),
-                           -speed / profile.rotation_radius_m * math.sin(theta))
+    expected = tier_normalized(BodyCommand(
+        speed * math.cos(theta), -speed * math.sin(theta),
+        -speed / profile.rotation_radius_m * math.sin(theta)), profile, 0)
     assert command == pytest.approx(expected)
 
 
@@ -105,9 +115,9 @@ def test_analog_left_diagonals_are_symmetric(teleop, profile, angle_deg):
     theta = math.radians(angle_deg)
     command = teleop.update([-math.sin(theta), -math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
-    expected = BodyCommand(speed * math.cos(theta),
-                           speed * math.sin(theta),
-                           speed / profile.rotation_radius_m * math.sin(theta))
+    expected = tier_normalized(BodyCommand(
+        speed * math.cos(theta), speed * math.sin(theta),
+        speed / profile.rotation_radius_m * math.sin(theta)), profile, 0)
     assert command == pytest.approx(expected)
 
 
@@ -132,13 +142,18 @@ def test_deadzone_and_short_smooth_activation_ramp(teleop, profile):
 def test_sideways_transition_is_continuous_and_fades_translation_to_zero(teleop, profile):
     speed = expected_level_speed(profile, 0)
     fade_start = math.radians(profile.sideways_fade_start_deg)
-    near_start = teleop.update([math.sin(fade_start + 1e-5),
-                                -math.cos(fade_start + 1e-5)], [0] * 6)
-    assert math.hypot(near_start.vx, near_start.vy) == pytest.approx(speed, rel=1e-8)
+    at_start = teleop.update([math.sin(fade_start), -math.cos(fade_start)], [0] * 6)
+    near_theta = fade_start + 1e-5
+    near_start = teleop.update([math.sin(near_theta), -math.cos(near_theta)], [0] * 6)
+    assert math.dist(tuple(vars(at_start).values()), tuple(vars(near_start).values())) < 2e-6
 
     half_fade_angle = math.radians((profile.sideways_fade_start_deg + 90.0) / 2.0)
     half_fade = teleop.update([math.sin(half_fade_angle), -math.cos(half_fade_angle)], [0] * 6)
-    assert math.hypot(half_fade.vx, half_fade.vy) == pytest.approx(speed * 0.5)
+    raw_half = BodyCommand(speed * 0.5 * math.cos(half_fade_angle),
+                            -speed * 0.5 * math.sin(half_fade_angle),
+                            -speed / profile.rotation_radius_m * math.sin(half_fade_angle))
+    assert tuple(vars(half_fade).values()) == pytest.approx(
+        tuple(vars(tier_normalized(raw_half, profile, 0)).values()))
 
     horizontal = teleop.update([1.0, 0.0], [0] * 6)
     assert horizontal.vx == 0.0 and horizontal.vy == 0.0
@@ -167,8 +182,7 @@ def test_face_button_cardinal_directions_ignore_analog(teleop, profile, button, 
 ])
 def test_face_button_diagonals_keep_tier_magnitude(teleop, profile, pressed, expected):
     command = teleop.update([0.0, 0.0], joy(*pressed)[1])
-    speed = expected_level_speed(profile, 0)
-    assert math.hypot(command.vx, command.vy) == pytest.approx(speed)
+    assert max(abs(value) for value in wheel_target_cps(command, profile)) == pytest.approx(280.0)
     assert math.copysign(1.0, command.vx) == expected[0]
     assert math.copysign(1.0, command.vy) == expected[1]
     assert command.wz == 0.0
@@ -195,37 +209,76 @@ def test_face_button_with_l1_uses_new_tier_and_suppresses_stick(teleop, profile)
 
 
 def test_wheel_target_limit_scales_all_axes_together(profile):
-    capped = replace(profile, max_wheel_cps=1400.0)
+    capped = profile
     request = BodyCommand(vx=0.8, vy=0.35, wz=1.4)
     raw_targets = wheel_target_cps(request, capped)
     limited = limit_command_to_wheel_cps(request, capped)
     final_targets = wheel_target_cps(limited, capped)
-    assert max(abs(value) for value in raw_targets) > 1400.0
-    assert max(abs(value) for value in final_targets) == pytest.approx(1400.0)
+    assert max(abs(value) for value in raw_targets) > capped.max_wheel_target_cps
+    assert max(abs(value) for value in final_targets) == pytest.approx(capped.max_wheel_target_cps)
     ratios = (limited.vx / request.vx, limited.vy / request.vy, limited.wz / request.wz)
     assert ratios[0] == pytest.approx(ratios[1]) == pytest.approx(ratios[2])
 
 
 def test_all_five_tiers_obey_wheel_target_cap_even_with_turn(profile):
-    capped = replace(profile, max_wheel_cps=1400.0)
+    capped = profile
     teleop = SlamManualTeleop(capped, motion_enabled=True)
     axes = [math.sin(math.radians(60)), -math.cos(math.radians(60))]
     buttons = [0] * 6
+    actual_peaks = []
     for expected_level in range(5):
         command = teleop.update(axes, buttons)
-        assert max(abs(value) for value in wheel_target_cps(command, capped)) <= 1400.0 + 1e-9
+        peak = max(abs(value) for value in wheel_target_cps(command, capped))
+        actual_peaks.append(peak)
+        assert peak <= 1400.0 + 1e-9
         if expected_level < 4:
             teleop.update([0.0, 0.0], joy(4)[1])
             teleop.update([0.0, 0.0], [0] * 6)
+    assert actual_peaks == pytest.approx([280.0, 560.0, 840.0, 1120.0, 1400.0])
+
+
+@pytest.mark.parametrize("axes", ([0.0, -1.0], [1.0, 0.0]))
+def test_all_five_levels_are_distinct_for_forward_and_rotation(profile, axes):
+    teleop = SlamManualTeleop(profile, motion_enabled=True)
+    peaks = []
+    for index in range(5):
+        command = teleop.update(axes, [0] * 6)
+        peaks.append(max(abs(v) for v in wheel_target_cps(command, profile)))
+        if index < 4:
+            teleop.update([0.0, 0.0], joy(4)[1])
+            teleop.update([0.0, 0.0], [0] * 6)
+    assert peaks == pytest.approx([280.0, 560.0, 840.0, 1120.0, 1400.0])
+
+
+@pytest.mark.parametrize("pressed", ((3,), (2,), (2, 3), (1, 3), (0, 1), (0, 2)))
+def test_all_five_levels_are_distinct_for_face_and_diagonal_buttons(profile, pressed):
+    teleop = SlamManualTeleop(profile, motion_enabled=True)
+    peaks = []
+    for index in range(5):
+        command = teleop.update([0.0, 0.0], joy(*pressed)[1])
+        peaks.append(max(abs(v) for v in wheel_target_cps(command, profile)))
+        if index < 4:
+            teleop.update([0.0, 0.0], joy(4)[1])
+            teleop.update([0.0, 0.0], [0] * 6)
+    assert peaks == pytest.approx([280.0, 560.0, 840.0, 1120.0, 1400.0])
 
 
 def test_172_rpm_nominal_exceeds_experimental_pid_target_ceiling(profile):
-    assert profile.max_translation_mps == pytest.approx(0.8735721972)
-    nominal_cps = profile.motor_output_rpm * profile.ticks_per_wheel_revolution / 60.0
+    nominal_cps = (profile.owner_design_output_rpm
+                   * profile.wheel_rpm_per_gearbox_output_rpm
+                   * profile.ticks_per_wheel_revolution / 60.0)
     assert nominal_cps == pytest.approx(2686.64)
-    capped = replace(profile, max_wheel_cps=1400.0)
-    command = SlamManualTeleop(capped, motion_enabled=True).update([0.0, -1.0], [0] * 6)
-    assert max(abs(value) for value in wheel_target_cps(command, capped)) <= 1400.0 + 1e-9
+    assert 172.0 * 906.0 / 60.0 == pytest.approx(2597.2)
+    assert nominal_cps - 2597.2 == pytest.approx(89.44)
+    assert profile.max_wheel_target_cps == pytest.approx(1400.0)
+    assert profile.max_translation_mps == pytest.approx(0.45521584)
+    design = replace(profile, profile_name="owner_design_172rpm")
+    assert design.max_wheel_target_cps == pytest.approx(2686.64)
+    assert design.max_translation_mps == pytest.approx(0.8735721972)
+    # 21.3:1 is motor-to-gearbox-output only and is not multiplied into output RPM.
+    assert design.motor_to_gearbox_output_ratio == 21.3
+    command = SlamManualTeleop(profile, motion_enabled=True).update([0.0, -1.0], [0] * 6)
+    assert max(abs(value) for value in wheel_target_cps(command, profile)) == pytest.approx(280.0)
 
 
 def test_bad_axes_and_button_values_fail_zero(teleop):
@@ -243,7 +296,7 @@ def test_missing_buttons_disconnect_and_invalid_configuration_fail_zero(profile)
     assert SlamManualTeleop(None, motion_enabled=True).update(
         [0.0, -1.0], [0] * 6) == BodyCommand()
 
-    missing_ratio = replace(profile, wheel_rpm_per_output_rpm=0.0)
+    missing_ratio = replace(profile, wheel_rpm_per_gearbox_output_rpm=0.0)
     assert not missing_ratio.valid
     assert SlamManualTeleop(missing_ratio, motion_enabled=True).update(
         [0.0, -1.0], [0] * 6) == BodyCommand()

@@ -5,14 +5,3 @@ mecanum_uart_bridge:
     hardware_manifest: ""
     heartbeat_topic: /mcu/heartbeat
     lifecycle_timeout_s: 0.6
-    # Candidate inputs only; UartBridgeNode keeps Joy motion disabled in this source snapshot.
-    # 172 RPM is Owner-selected (80% of 215 RPM); not a measured wheel-speed approval.
-    slam_bench_motor_output_rpm: 172.0
-    # Manifest gear_ratio_motor_to_wheel is TBD_MEASURED; zero invalidates the motion profile.
-    slam_bench_wheel_rpm_per_output_rpm: 0.0
-    # PID4 experimental target ceiling from WP12 evidence; not a physical safety limit.
-    slam_bench_max_wheel_target_cps: 1400.0
-    slam_bench_joy_deadzone_radius: 0.12
-    slam_bench_joy_full_command_radius: 0.20
-    slam_bench_sideways_fade_start_deg: 75.0
-    slam_bench_joy_timeout_s: 0.25

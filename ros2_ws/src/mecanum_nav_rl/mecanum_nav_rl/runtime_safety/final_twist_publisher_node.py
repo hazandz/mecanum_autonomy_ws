@@ -13,6 +13,10 @@ class FinalTwistPublisherNode(Node):
     def __init__(self) -> None:
         super().__init__("final_twist_publisher")
         self.declare_parameter("use_sim_time", True)
+        self.declare_parameter("navigation_mode", "NAV2_BASELINE")
+        self._navigation_mode = str(self.get_parameter("navigation_mode").value)
+        if self._navigation_mode not in ("NAV2_BASELINE", "MAPPING"):
+            raise ValueError("FINAL_PUBLISHER_NAVIGATION_MODE_INVALID")
         self._identity: SafetyLifecycleState | None = None
         self._final_publish_sequence = 0
         self._publisher_instance_id = os.getpid()
@@ -42,7 +46,15 @@ class FinalTwistPublisherNode(Node):
     def _on_accepted(self, envelope: CommandEnvelope) -> None:
         identity = self._identity
         is_safe_stop = envelope.source == CommandEnvelope.SOURCE_SAFE_STOP
-        if not is_safe_stop and envelope.source != CommandEnvelope.SOURCE_NAV2:
+        is_teleop = envelope.source == CommandEnvelope.SOURCE_TELEOP
+        is_nav2 = envelope.source == CommandEnvelope.SOURCE_NAV2
+        source_allowed = (is_safe_stop
+                          or (is_teleop and self._navigation_mode == "MAPPING")
+                          or (is_nav2 and self._navigation_mode == "NAV2_BASELINE"))
+        if not source_allowed:
+            return
+        if not is_safe_stop and envelope.source not in (
+                CommandEnvelope.SOURCE_NAV2, CommandEnvelope.SOURCE_TELEOP):
             return
         if not is_safe_stop:
             if identity is None:
@@ -58,13 +70,13 @@ class FinalTwistPublisherNode(Node):
                 identity.runtime_generation,
             )
             if envelope_identity != lifecycle_identity:
-                self.get_logger().error("NAV2_COMMAND_LIFECYCLE_IDENTITY_MISMATCH")
+                self.get_logger().error("FINAL_COMMAND_LIFECYCLE_IDENTITY_MISMATCH")
                 return
             now_ns = self.get_clock().now().nanoseconds
             identity_ns = identity.header.stamp.sec * 1_000_000_000 + identity.header.stamp.nanosec
             identity_fresh = identity_ns > 0 and 0 <= now_ns - identity_ns <= 500_000_000
             if not identity.motion_permitted or not identity_fresh:
-                self.get_logger().error("NAV2_COMMAND_LIFECYCLE_BARRIER_NOT_READY_OR_STALE")
+                self.get_logger().error("FINAL_COMMAND_LIFECYCLE_BARRIER_NOT_READY_OR_STALE")
                 return
         final_command = Twist() if is_safe_stop else envelope.twist
         try:
@@ -80,7 +92,8 @@ class FinalTwistPublisherNode(Node):
         receipt.reset_epoch = envelope.reset_epoch
         receipt.runtime_generation = envelope.runtime_generation
         receipt.step_index = envelope.sequence
-        receipt.transition_id = "sim_eval_nav2_baseline"
+        receipt.transition_id = ("mapping_teleop" if self._navigation_mode == "MAPPING"
+                                 else "sim_eval_nav2_baseline")
         receipt.source = envelope.source
         receipt.sequence = envelope.sequence
         receipt.source_instance_id = envelope.source_instance_id

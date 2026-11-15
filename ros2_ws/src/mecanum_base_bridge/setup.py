@@ -15,6 +15,7 @@ setup(
             'config/sim_eval_wheel_imu_ingress.static.yaml',
             'config/sim_eval_wheel_imu_runtime_source.yaml',
             'config/uart_bridge.yaml',
+            'config/slam_manual_joy.yaml',
         ]),
         ('share/' + package_name + '/config/bridge', [
             'config/bridge/sim_eval_wheel_imu_ingress.runtime.yaml',
@@ -34,6 +35,7 @@ setup(
         'console_scripts': [
             'sim_eval_wheel_imu_ingress = mecanum_base_bridge.sim_eval_wheel_imu_ingress_node:main',
             'mecanum_uart_bridge = mecanum_base_bridge.bridge_node:main',
+            'slam_manual_joy = mecanum_base_bridge.slam_manual_joy:main',
         ],
     },
 )

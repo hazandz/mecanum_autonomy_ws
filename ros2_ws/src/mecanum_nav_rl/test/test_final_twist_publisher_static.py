@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 def test_final_publisher_is_the_only_declared_ros_cmd_vel_publisher() -> None:
     source = (ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/final_twist_publisher_node.py").read_text()
     assert source.count('self.create_publisher(Twist, "/cmd_vel", command_qos)') == 1
+    assert "CommandEnvelope.SOURCE_TELEOP" in source
     assert 'create_subscription(CommandEnvelope, "/mecanum/safety_accepted_cmd"' in source
     assert "create_publisher(Twist, \"/cmd_vel\"" not in (
         ROOT / "ros2_ws/src/mecanum_nav_rl/mecanum_nav_rl/runtime_safety/safety_supervisor_node.py"
@@ -70,6 +71,7 @@ def node(current_identity, events, fail=False):
     now = SimpleNamespace(nanoseconds=10_100_000_000, to_msg=lambda: stamp(10, 100_000_000))
     value = SimpleNamespace(
         _identity=current_identity, _final_publish_sequence=0, _publisher_instance_id=77,
+        _navigation_mode="NAV2_BASELINE",
         _cmd_pub=Publisher(events, "cmd", fail), _receipt_pub=Publisher(events, "receipt"),
         get_clock=lambda: SimpleNamespace(now=lambda: now),
         get_logger=lambda: SimpleNamespace(error=lambda _message: None),
@@ -97,6 +99,14 @@ assert events == ["cmd"] and not n._receipt_pub.messages
 
 events=[]; n=node(identity(episode=7),events)
 FinalTwistPublisherNode._on_accepted(n,envelope(CommandEnvelope.SOURCE_NAV2,episode=6))
+assert events == [] and not n._cmd_pub.messages and not n._receipt_pub.messages
+
+events=[]; n=node(None,events); n._navigation_mode="MAPPING"
+FinalTwistPublisherNode._on_accepted(n,envelope(CommandEnvelope.SOURCE_TELEOP))
+assert events == [] and not n._cmd_pub.messages and not n._receipt_pub.messages
+
+events=[]; n=node(None,events); n._navigation_mode="MAPPING"
+FinalTwistPublisherNode._on_accepted(n,envelope(CommandEnvelope.SOURCE_NAV2))
 assert events == [] and not n._cmd_pub.messages and not n._receipt_pub.messages
 '''
     env = os.environ.copy()
