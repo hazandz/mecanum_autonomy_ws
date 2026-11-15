@@ -81,6 +81,9 @@ def safety_payload_bytes(msg):
 
 class LocalTrainingIngress:
     CAPACITY = 64
+    # The reset transaction may span 15 s while B1 advances contact coverage
+    # only at its cutoff. Preserve every 100 Hz world pair across that window.
+    PHYSICS_PAIR_CAPACITY = 4096
 
     def __init__(self, identity: BackendSessionIdentity, profile: dict, *, final_publisher_id: int,
                  policy_source_id: int, safe_stop_source_id: int, safety_publish, emit,
@@ -105,7 +108,7 @@ class LocalTrainingIngress:
         self.noisy_samples = OrderedDict()
         self.scans = OrderedDict()
         self._oracles, self._states = OrderedDict(), OrderedDict()
-        self.physics_pairs = deque(maxlen=self.CAPACITY)
+        self.physics_pairs = deque(maxlen=self.PHYSICS_PAIR_CAPACITY)
         self.receipts = deque(maxlen=128)
         self.backend_state = None
         self.backend_received_ns = -1

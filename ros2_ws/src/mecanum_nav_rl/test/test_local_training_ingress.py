@@ -478,6 +478,10 @@ def test_b1_application_proof_survives_physics_pair_window_eviction(source):
 
     # Advance only the production ingress with non-applying native pairs until
     # the bounded 64-pair oracle/status window evicts the applied POLICY pair.
+    # Keep this test's view explicitly bounded: production now retains the
+    # longer reset/contact continuity window independently of that ledger.
+    from collections import deque
+    f.ingress.physics_pairs = deque(f.ingress.physics_pairs, maxlen=f.ingress.CAPACITY)
     for iteration in range(14, 80):
         f.advance()
         f.ingress.on_ground_truth(f.gt())
@@ -495,6 +499,27 @@ def test_b1_application_proof_survives_physics_pair_window_eviction(source):
     applied_stamp_ns = status.applied_sim_stamp.sec * 1_000_000_000 + status.applied_sim_stamp.nanosec
     with pytest.raises(B1SnapshotPending, match='native application'):
         chain.b1._prove_application(receipt, applied_stamp_ns - 1)
+
+
+def test_b1_contact_continuity_survives_cutoff_after_more_than_old_pair_window(source):
+    """Reset-to-cutoff continuity remains available across a delayed cutoff."""
+    f = source; chain = b1_runtime_chain(f)
+    first_contact_iteration = chain.b1.last_contact_iteration
+    assert first_contact_iteration == 1
+
+    # Model the bounded wait for a production cutoff while the 100 Hz world
+    # continues to deliver complete, consecutive physics/oracle pairs.
+    for iteration in range(14, 114):
+        f.advance()
+        f.ingress.on_ground_truth(f.gt())
+        f.ingress.on_backend(f.backend(iteration=iteration, sequence=iteration))
+
+    assert len(f.ingress.physics_pairs) == 113
+    assert f.ingress.physics_pairs[0].iteration == 1
+    chain.b1._observe_contact(f.clock.ros)
+    assert chain.b1.last_contact_iteration == 113
+    assert chain.b1.contact.state.source_healthy is True
+    assert chain.b1.contact.state.contact_active is False
 
 
 def test_b1_changed_transform_or_backend_fault_never_uses_fallback(source):
@@ -649,6 +674,7 @@ def test_fresh_reset_scan_flows_through_runner_measurement_and_real_b1_commit(so
         value.ros_now=lambda:f.clock.ros
         value.deadline_ns=f.clock.steady+1_000_000_000
         value.stop_requested=False;value.abort_requested=None;value.pump_error=None
+        value._r06b_measurement_fault=None
         value.expected_paused=True;value.last_clock_ns=0;value.last_clock_advance_ns=f.clock.steady
         transform=NS(transform=NS(translation=NS(x=-0.031765,y=0.,z=.14),
                                    rotation=NS(x=0.,y=0.,z=0.,w=1.)))
