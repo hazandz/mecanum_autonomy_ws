@@ -98,12 +98,12 @@ def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
         'inhibit_revision':inhibit_ack.response.applied_binding_revision}
 
 
-def verify_r07a_unexpected_pause(*, world_ack, backend_state, pre_pause_policy_receipts,
+def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state, pre_pause_policy_receipts,
                                  post_pause_policy_receipts, reset_count_before,
                                  reset_count_after):
     """Require external pause to produce native fault/zero without later POLICY."""
-    if not world_ack.success or not world_ack.pause:
-        raise RuntimeError('R07a world did not acknowledge the requested pause')
+    if not world_ack.success or world_pause_state is not True:
+        raise RuntimeError('R07a world pause ACK/state was not confirmed')
     if (backend_state is None or backend_state.fault_flags != 1
             or not backend_state.local_zero_override or backend_state.actuator_inhibited is False):
         raise RuntimeError('R07a lacks native unexpected-pause fault and zero override')
@@ -111,7 +111,8 @@ def verify_r07a_unexpected_pause(*, world_ack, backend_state, pre_pause_policy_r
         raise RuntimeError('R07a observed a POLICY receipt after unexpected pause')
     if reset_count_after != reset_count_before:
         raise RuntimeError('R07a reset/observation0 advanced after unexpected pause')
-    return {'world_pause_acknowledged':True,'native_fault_flags':backend_state.fault_flags,
+    return {'world_pause_acknowledged':True,'world_pause_state':world_pause_state,
+        'native_fault_flags':backend_state.fault_flags,
         'native_zero_override':True,'policy_receipt_count_unchanged':True,
         'reset_count_unchanged':True}
 
@@ -1571,7 +1572,7 @@ class TrainingWorkerIO:
             phase='world_pause' if pause else 'world_resume')
         self.emit('WORLD_PAUSE_CONTROL', {'world':world_name,'requested_pause':pause,
             'request_cdr_hex':serialize_message(request).hex(),
-            'response_success':response.success,'response_pause':response.pause,
+            'response_success':response.success,
             'steady_ns':self.now()})
         return response
 
@@ -1595,10 +1596,10 @@ class TrainingWorkerIO:
             'world':'b2_training_arena','pause':False,'reset_all':False,
             'reset_time_only':True,'reset_model_only':False,
             'request_cdr_hex':serialize_message(request).hex(),
-            'response_success':response.success,'response_pause':response.pause,
+            'response_success':response.success,
             'sim_before_ns':before,'sim_after_ns':after,'steady_ns':self.now()})
-        if not response.success or response.pause:
-            raise RuntimeError('R07b world time_only API returned wrong success/pause state')
+        if not response.success:
+            raise RuntimeError('R07b world time_only API returned unsuccessful ACK')
         if after >= before or self._r07b_rollback_observed is None:
             raise RuntimeError('R07b clock rollback was not observed through the worker clock monitor')
         self.last_clock_ns, self.last_clock_advance_ns = after, self.now()
@@ -3235,6 +3236,8 @@ async def training_child(path):
             io.expected_paused = True
             world_ack = await io.control_world(world_name='b2_training_arena', pause=True,
                 timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            pause_state = await io.paused_state(True, min(1.0,
+                max(0.0, (io.deadline_ns-io.now())/1e9)))
             io.emit('B23_R07A_UNEXPECTED_PAUSE_ARMED', {
                 'after_policy_step':transition.transition_identity.step_index,
                 'pre_pause_policy_receipt_count':before_policy,
@@ -3252,6 +3255,7 @@ async def training_child(path):
                 if receipt.source == receipt.SOURCE_POLICY)
             reset_fact_after = b1.lifecycle.snapshot.reset_commit_facts
             checked = verify_r07a_unexpected_pause(world_ack=world_ack,
+                world_pause_state=pause_state,
                 backend_state=state, pre_pause_policy_receipts=before_policy,
                 post_pause_policy_receipts=policy_after,
                 reset_count_before=reset_fact_before, reset_count_after=reset_fact_after)
@@ -3260,6 +3264,8 @@ async def training_child(path):
                 raise TimeoutError('R07a pause hold reached active deadline')
             resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
                 timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            resume_state = await io.paused_state(False, min(1.0,
+                max(0.0, (io.deadline_ns-io.now())/1e9)))
             io.expected_paused = False
             io.last_clock_advance_ns = io.now()
             await io.until(lambda: io.ros_now() if io.ros_now() > previous_ros else None,
@@ -3268,11 +3274,11 @@ async def training_child(path):
                 expected_native_fault_flags=1)
             inhibit_ack = await io.control.inhibit(
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
-            if not resume_ack.success or resume_ack.pause:
+            if not resume_ack.success or resume_state is not True:
                 raise RuntimeError('R07a world resume was not acknowledged')
             io.emit('B23_R07A_VERIFIED', {'checked':checked,
-                'world_pause_success':world_ack.success,'world_pause_state':world_ack.pause,
-                'world_resume_success':resume_ack.success,'world_resume_state':resume_ack.pause,
+                'world_pause_success':world_ack.success,'world_pause_state':pause_state,
+                'world_resume_success':resume_ack.success,'world_resume_state':not resume_state,
                 'native_status_sequence':state.status_sequence,
                 'native_inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
                 'native_inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),

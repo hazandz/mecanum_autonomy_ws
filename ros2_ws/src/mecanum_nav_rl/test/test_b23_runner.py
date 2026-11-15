@@ -174,21 +174,81 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
 
 
 def test_r07a_unexpected_pause_requires_world_ack_native_zero_and_no_followon_policy():
-    world = NS(success=True, pause=True)
+    world = NS(success=True)
     state = NS(fault_flags=1, local_zero_override=True, actuator_inhibited=True)
-    result = verify_r07a_unexpected_pause(world_ack=world, backend_state=state,
+    result = verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
         pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
         reset_count_before='reset-0', reset_count_after='reset-0')
+    assert result['world_pause_state'] is True
     assert result['native_zero_override']
     with pytest.raises(RuntimeError, match='POLICY receipt after unexpected pause'):
-        verify_r07a_unexpected_pause(world_ack=world, backend_state=state,
+        verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
             pre_pause_policy_receipts=1, post_pause_policy_receipts=2,
             reset_count_before='reset-0', reset_count_after='reset-0')
     with pytest.raises(RuntimeError, match='native unexpected-pause'):
-        verify_r07a_unexpected_pause(world_ack=world,
+        verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True,
             backend_state=NS(fault_flags=0, local_zero_override=False, actuator_inhibited=False),
             pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
             reset_count_before='reset-0', reset_count_after='reset-0')
+    with pytest.raises(RuntimeError, match='pause ACK/state'):
+        verify_r07a_unexpected_pause(world_ack=world, world_pause_state=False,
+            backend_state=state, pre_pause_policy_receipts=1,
+            post_pause_policy_receipts=1, reset_count_before='reset-0',
+            reset_count_after='reset-0')
+
+
+def test_control_world_records_success_without_nonexistent_response_pause_field():
+    from ros_gz_interfaces.srv import ControlWorld
+    worker = object.__new__(TrainingWorkerIO)
+    worker.control_world_type = ControlWorld
+    worker.world_client = object()
+    worker.now = lambda: 123
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    response = ControlWorld.Response(success=True)
+    async def fake_call(client, request, *, timeout_s, phase):
+        assert client is worker.world_client
+        assert timeout_s == 1.0 and phase == 'world_pause'
+        assert request.world_control.pause is True
+        return response
+    worker.call = fake_call
+    result = asyncio.run(worker.control_world(world_name='b2_training_arena', pause=True,
+        timeout_s=1.0))
+    assert result is response
+    assert events[0][0] == 'WORLD_PAUSE_CONTROL'
+    assert events[0][1]['requested_pause'] is True
+    assert events[0][1]['response_success'] is True
+    assert 'response_pause' not in events[0][1]
+
+
+def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
+    from ros_gz_interfaces.srv import ControlWorld
+    worker = object.__new__(TrainingWorkerIO)
+    worker.control_world_type = ControlWorld
+    worker.world_client = object()
+    worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    worker._r07b_rollback_pending_before_ns = None
+    worker._r07b_rollback_observed = None
+    worker.ros_now = iter((200, 100)).__next__
+    worker.now = lambda: 321
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    response = ControlWorld.Response(success=True)
+    async def fake_call(client, request, *, timeout_s, phase):
+        assert client is worker.world_client
+        assert phase == 'R07b_world_time_only_rollback'
+        assert request.world_control.pause is False
+        assert request.world_control.reset.time_only is True
+        assert request.world_control.reset.all is False
+        assert request.world_control.reset.model_only is False
+        worker._r07b_rollback_observed = {'before_ns':200,'after_ns':100}
+        return response
+    worker.call = fake_call
+    before, after = asyncio.run(worker.reset_world_time_only(timeout_s=1.0))
+    assert (before, after) == (200, 100)
+    assert events[0][0] == 'B23_R07B_TIME_ONLY_RESET'
+    assert events[0][1]['response_success'] is True
+    assert 'response_pause' not in events[0][1]
 
 
 def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
