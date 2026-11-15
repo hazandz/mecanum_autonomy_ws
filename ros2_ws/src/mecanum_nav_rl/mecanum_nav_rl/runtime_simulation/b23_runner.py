@@ -147,6 +147,24 @@ def verify_r05_contact_query_revocation(root, *, original_ack, replay_ack,
         'native_fault_flags':int(backend_state.fault_flags)}
 
 
+def expected_r05_revoked_query_ack(error, *, start_request_sequence):
+    """Return only the exact native rejection that proves a fresh QUERY is revoked."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    if not isinstance(error, BackendControlError) or error.ack is None:
+        raise RuntimeError('R05 fresh QUERY rejection lacks its native ACK') from error
+    ack = error.ack
+    request, response = ack.request, ack.response
+    if (request.operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+            or request.probe_action != Control.Request.PROBE_ACTION_QUERY
+            or request.probe_start_request_sequence != start_request_sequence
+            or response.result != Control.Response.RESULT_REJECTED
+            or response.reason_code != Control.Response.REASON_CONTACT_PROBE_FAILED
+            or response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED):
+        raise RuntimeError('R05 fresh QUERY rejection does not match revoked probe identity/state') from error
+    return ack
+
+
 def enable_r04_adapter_fault_dispatch(adapter_class):
     """Install a no-op-by-default dispatch seam before Safety subscriptions bind callbacks."""
     for method_name in ('on_safety_input', 'on_scan', 'on_lifecycle'):
@@ -2901,11 +2919,21 @@ async def training_child(path):
             replay_ack = await io.control.replay(io.contact_ack,
                 deadline_ns=min(io.deadline_ns, time.monotonic_ns()+1_000_000_000))
             from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-            fresh_ack = await io.control.transact(
-                Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
-                deadline_ns=min(io.deadline_ns, time.monotonic_ns()+1_000_000_000),
-                probe_action=Control.Request.PROBE_ACTION_QUERY,
-                probe_start_request_sequence=io.contact_start_request_sequence)
+            from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+            try:
+                fresh_ack = await io.control.transact(
+                    Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+                    deadline_ns=min(io.deadline_ns, time.monotonic_ns()+1_000_000_000),
+                    probe_action=Control.Request.PROBE_ACTION_QUERY,
+                    probe_start_request_sequence=io.contact_start_request_sequence)
+            except BackendControlError as error:
+                fresh_ack = expected_r05_revoked_query_ack(
+                    error, start_request_sequence=io.contact_start_request_sequence)
+                sink.record('R05_FRESH_QUERY_REJECTED_AFTER_REVOCATION', {
+                    'request_cdr_hex':fresh_ack.request_bytes.hex(),
+                    'response_cdr_hex':fresh_ack.response_bytes.hex(),
+                    'reason_code':fresh_ack.response.reason_code,
+                    'observed_ns':fresh_ack.observed_steady_ns})
             checked = verify_r05_contact_query_revocation(descriptor['run_root'],
                 original_ack=io.contact_ack, replay_ack=replay_ack,
                 fresh_ack=fresh_ack, backend_state=state)

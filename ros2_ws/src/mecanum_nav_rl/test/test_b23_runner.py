@@ -18,6 +18,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
+    expected_r05_revoked_query_ack,
 )
 
 
@@ -149,6 +150,27 @@ def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_sta
         verify_r05_contact_query_revocation(tmp_path, original_ack=original,
             replay_ack=query(Control.Response.CAPABILITY_VERIFIED, backend_id=9),
             fresh_ack=query(Control.Response.CAPABILITY_FAILED), backend_state=state)
+
+
+def test_r05_accepts_only_exact_native_rejection_for_fresh_revoked_query():
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    request=NS(operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+        probe_action=Control.Request.PROBE_ACTION_QUERY,
+        probe_start_request_sequence=7)
+    response=NS(result=Control.Response.RESULT_REJECTED,
+        reason_code=Control.Response.REASON_CONTACT_PROBE_FAILED,
+        contact_capability_state=Control.Response.CAPABILITY_FAILED)
+    ack=NS(request=request,response=response)
+    assert expected_r05_revoked_query_ack(BackendControlError('backend control rejected: 16',ack),
+        start_request_sequence=7) is ack
+    with pytest.raises(RuntimeError,match='does not match revoked probe identity/state'):
+        wrong_request=NS(operation=request.operation,probe_action=request.probe_action,
+            probe_start_request_sequence=8)
+        expected_r05_revoked_query_ack(BackendControlError('wrong request',
+            NS(request=wrong_request,response=response)),start_request_sequence=7)
+    with pytest.raises(RuntimeError,match='lacks its native ACK'):
+        expected_r05_revoked_query_ack(BackendControlError('no ACK'),start_request_sequence=7)
 
 
 @pytest.mark.parametrize('case,mode,ingress_count', [
