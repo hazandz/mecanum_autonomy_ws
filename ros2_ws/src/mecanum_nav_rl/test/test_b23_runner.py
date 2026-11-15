@@ -481,6 +481,49 @@ def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
     assert 'response_pause' not in events[1][1]
 
 
+def test_r07b_rollback_disposition_requires_post_rollback_native_clock_fault():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07b_post_rollback_backend_disposition
+    old_id = 101
+    state = NS(backend_instance_id=old_id, session_id='r07b-session',
+        config_hash='a'*64, status_sequence=8, physics_iteration=50,
+        fault_flags=64, local_zero_override=True, actuator_inhibited=True)
+    io = NS(descriptor={'backend_instance_id':old_id,'session_id':'r07b-session',
+        'config_hash':'a'*64}, ingress=NS(backend_state=state,
+        backend_received_ns=1_999), _r07b_replacement_backend_statuses=[])
+    # A CLOCK fault status that predates the observed rollback cannot authorize QUERY.
+    assert r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000) is None
+    io.ingress.backend_received_ns = 2_001
+    disposition = r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000)
+    assert disposition == {
+        'kind':'pinned_backend_clock_fault','backend_instance_id':old_id,
+        'status_sequence':8,'physics_iteration':50,'fault_flags':64,
+        'local_zero_override':True,'actuator_inhibited':True,'received_ns':2_001}
+    io.ingress.backend_received_ns = 2_002
+    io.ingress.backend_state.fault_flags = 0
+    assert r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000) is None
+
+
+def test_r07b_rollback_disposition_accepts_only_bound_replacement_zero_status():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07b_post_rollback_backend_disposition
+    io = NS(descriptor={'backend_instance_id':101,'session_id':'r07b-session',
+        'config_hash':'a'*64}, ingress=NS(backend_state=None,
+        backend_received_ns=-1), _r07b_replacement_backend_statuses=[{
+            'backend_instance_id':202,'session_id':'r07b-session','config_hash':'a'*64,
+            'status_sequence':4,'physics_iteration':9,'fault_flags':272,
+            'local_zero_override':True,'actuator_inhibited':True,'received_ns':3_001}])
+    got = r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=101, rollback_observed_ns=3_000)
+    assert got['kind'] == 'replacement_backend'
+    assert got['backend_instance_id'] == 202
+    assert got['fault_flags'] == 272
+    io._r07b_replacement_backend_statuses[0]['session_id'] = 'other-session'
+    assert r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=101, rollback_observed_ns=3_000) is None
+
+
 def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     original = NS(request_bytes=b'original-query',

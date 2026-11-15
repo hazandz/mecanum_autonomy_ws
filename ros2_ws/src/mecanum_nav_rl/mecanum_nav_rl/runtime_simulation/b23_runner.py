@@ -245,6 +245,49 @@ def r07b_stale_rollback_input_reason(topic, message, wire, ingress):
     return None
 
 
+def r07b_post_rollback_backend_disposition(io, *, old_backend_instance_id,
+                                           rollback_observed_ns):
+    """Return only native status received after rollback, bound to this session.
+
+    The Gazebo clock callback can observe time_only rollback before the
+    backend's next physics update. Sending QUERY in that interval can race the
+    backend's proof invalidation and return the pre-rollback cached proof.
+    Wait for either the pinned backend's applied CLOCK fault/zero or a status
+    from a replacement instance before issuing any post-rollback QUERY.
+    """
+    descriptor = io.descriptor
+    ingress = io.ingress
+    state = ingress.backend_state
+    received_ns = ingress.backend_received_ns
+    if (state is not None and received_ns > rollback_observed_ns
+            and state.backend_instance_id == old_backend_instance_id
+            and state.session_id == descriptor['session_id']
+            and state.config_hash == descriptor['config_hash']
+            and state.fault_flags & 64 and state.local_zero_override
+            and state.actuator_inhibited):
+        return {
+            'kind':'pinned_backend_clock_fault',
+            'backend_instance_id':int(state.backend_instance_id),
+            'status_sequence':int(state.status_sequence),
+            'physics_iteration':int(state.physics_iteration),
+            'fault_flags':int(state.fault_flags),
+            'local_zero_override':bool(state.local_zero_override),
+            'actuator_inhibited':bool(state.actuator_inhibited),
+            'received_ns':int(received_ns),
+        }
+    for status in reversed(io._r07b_replacement_backend_statuses):
+        if (status['received_ns'] > rollback_observed_ns
+                and status['backend_instance_id'] != old_backend_instance_id
+                and status['session_id'] == descriptor['session_id']
+                and status['config_hash'] == descriptor['config_hash']
+                and status['status_sequence'] > 0
+                and status['physics_iteration'] > 0
+                and status['local_zero_override']
+                and status['actuator_inhibited']):
+            return {'kind':'replacement_backend', **status}
+    return None
+
+
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  pre_pause_policy_step_identities,
                                  post_pause_policy_step_identities, reset_count_before,
@@ -3621,6 +3664,13 @@ async def training_child(path):
             original_backend_id = io.descriptor['backend_instance_id']
             before, after, rollback = await io.reset_world_time_only(timeout_s=
                 min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            rollback_disposition = await io.until(
+                lambda: r07b_post_rollback_backend_disposition(
+                    io, old_backend_instance_id=original_backend_id,
+                    rollback_observed_ns=rollback['observed_steady_ns']),
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07b native post-rollback disposition')
+            io.emit('B23_R07B_NATIVE_ROLLBACK_DISPOSITION', rollback_disposition)
             replay_ack, replay_error, replay_identity_ack = None, None, None
             try:
                 replay_ack = await io.control.replay(original,
