@@ -313,13 +313,42 @@ def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
 
 
 def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receipt():
-    io = NS(events=[('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
-        'steady_ns':900})], ingress=NS(receipts=[NS(source=1,source_sequence=1)]))
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from geometry_msgs.msg import Twist
+    receipt = FinalIssuedCommandReceipt()
+    receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.source_instance_id = 70
+    receipt.sequence = 9
+    receipt.final_publisher_instance_id = 80
+    receipt.final_publish_sequence = 99
+    receipt.final_command = Twist()
+    events = [
+        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+            'steady_ns':900}),
+        ('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,
+            'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
+            'iteration':12,'stamp_ns':120_000_000}),
+    ]
+    final = NS(publisher_instance_id=80)
+    final.publication_for_source_sequence = lambda **kwargs: receipt if (
+        kwargs == {'source':FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,'sequence':9}) else None
+    io = NS(events=events, ingress=NS(safe_stop_source_id=70,
+        receipts=[NS(source=1,source_sequence=1)]), final=final)
     result = verify_r04a_next_step_blocked(io, step_index=2)
     assert result['blocked_step_index'] == 2
     assert result['policy_not_accepted'] is True
     assert result['native_policy_receipt_absent'] is True
     assert result['b1_transition_absent'] is True
+    assert result['native_zero_application'] == {
+        'source_sequence':9,'final_publish_sequence':99,'publisher_instance_id':80,
+        'native_iteration':12,'native_stamp_ns':120_000_000,
+        'native_application_steady_ns':950}
+    events.pop()
+    with pytest.raises(RuntimeError, match='lacks a post-rejection exact native SAFE_STOP'):
+        verify_r04a_next_step_blocked(io, step_index=2)
+    events.append(('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,
+        'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
+        'iteration':12,'stamp_ns':120_000_000}))
     io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'candidate_sequence':2}))
     with pytest.raises(RuntimeError, match='accepted the POLICY slot'):
         verify_r04a_next_step_blocked(io, step_index=2)

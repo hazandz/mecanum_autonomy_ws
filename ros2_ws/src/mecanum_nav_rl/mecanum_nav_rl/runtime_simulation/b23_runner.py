@@ -512,11 +512,42 @@ def verify_r04a_next_step_blocked(io, *, step_index):
     if any(getattr(receipt, 'source_sequence', None) == step_index
             and getattr(receipt, 'source', None) == 1 for receipt in io.ingress.receipts):
         raise RuntimeError('R04a POLICY receipt for the blocked slot reached native ingress')
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    rejection_ns = rejected.get('steady_ns')
+    applied_zero = None
+    for name, facts in io.events:
+        if (name != 'NATIVE_APPLICATION_JOINED'
+                or type(facts.get('steady_ns')) is not int
+                or facts['steady_ns'] <= rejection_ns
+                or facts.get('source_instance_id') != io.ingress.safe_stop_source_id
+                or facts.get('step_index') != 0
+                or facts.get('transition_id') != ''):
+            continue
+        receipt = io.final.publication_for_source_sequence(
+            source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+            sequence=facts.get('source_sequence'))
+        if (receipt is None
+                or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+                or receipt.source_instance_id != io.ingress.safe_stop_source_id
+                or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+                or receipt.final_publish_sequence != facts.get('publish_sequence')
+                or receipt.sequence != facts.get('source_sequence')
+                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z))):
+            continue
+        applied_zero = {'source_sequence': receipt.sequence,
+            'final_publish_sequence': receipt.final_publish_sequence,
+            'publisher_instance_id': receipt.final_publisher_instance_id,
+            'native_iteration': facts.get('iteration'), 'native_stamp_ns': facts.get('stamp_ns'),
+            'native_application_steady_ns': facts['steady_ns']}
+        break
+    if applied_zero is None:
+        raise RuntimeError('R04a lacks a post-rejection exact native SAFE_STOP receipt application')
     return {'blocked_step_index':step_index,
         'safety_rejection_reasons':list(rejected.get('reasons', ())),
         'rejected_steady_ns':rejected['steady_ns'],
         'policy_not_accepted':True,'native_policy_receipt_absent':True,
-        'b1_transition_absent':True}
+        'b1_transition_absent':True,'native_zero_application':applied_zero}
 
 
 def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
@@ -2665,20 +2696,6 @@ async def training_child(path):
                             await io.policy_step(b1, (0.25, 0., 0.))
                         except TimeoutError as error:
                             blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
-                            native_state = io.ingress.backend_state
-                            stop = io.safety.local_training.last_output
-                            if (native_state is None or native_state.local_zero_override
-                                    or native_state.fault_flags != 0 or stop is None
-                                    or stop.source != stop.SOURCE_SAFE_STOP
-                                    or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
-                                raise RuntimeError('R04a blocked next POLICY slot lacks healthy zero output') from error
-                            receipt = io.final.publication_for_source_sequence(
-                                source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence)
-                            if (receipt is None
-                                    or native_state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
-                                    or native_state.applied_final_publish_sequence != receipt.final_publish_sequence
-                                    or not native_state.applied_receipt_valid):
-                                raise RuntimeError('R04a blocked next slot lacks exact native SAFE_STOP application') from error
                             aborted = b1.lifecycle.abort_step('R04a_delayed_input_blocked_next_slot')
                         else:
                             raise RuntimeError('R04a next POLICY slot completed after delayed-input invalidation')
