@@ -16,14 +16,13 @@ MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardwar
 SLAM_BENCH_MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest_slam_manual_bench.yaml'
 
 
-def test_slam_bench_encoder_signs_remain_unresolved_without_motor_sign_changes():
+def test_slam_bench_encoder_signs_use_owner_report_without_motor_sign_changes():
     canonical = load_manifest(MANIFEST)
     bench = load_manifest(SLAM_BENCH_MANIFEST)
-    assert wheel_geometry(bench, require_signs=False)['encoder_tick_signs'] is None
-    with pytest.raises(HardwareConfigError, match='signs are unresolved'):
-        wheel_geometry(bench)
-    assert all(bench['wheel_sign_mapping'][wheel]['encoder_tick_sign']['status'] == 'TBD_MEASURED'
+    assert wheel_geometry(bench)['encoder_tick_signs'] == [1, 1, 1, 1]
+    assert all(bench['wheel_sign_mapping'][wheel]['encoder_tick_sign']['status'] == 'OWNER_REPORTED'
                for wheel in ('FL', 'FR', 'RL', 'RR'))
+    assert 'Owner-reported' in bench['wheel_sign_mapping']['FR']['encoder_tick_sign']['provenance']
     for wheel in ('FL', 'FR', 'RL', 'RR'):
         assert bench['wheel_sign_mapping'][wheel]['motor_command_sign'] == canonical['wheel_sign_mapping'][wheel]['motor_command_sign']
     assert bench['wheel_order'] == canonical['wheel_order'] == ['FL', 'FR', 'RL', 'RR']
@@ -51,6 +50,13 @@ def test_manual_slam_rejects_missing_or_unconfirmed_drive_ratio():
     manifest['drive_ratios']['wheel_rpm_per_gearbox_output_rpm']['status'] = 'TBD_MEASURED'
     with pytest.raises(HardwareConfigError, match='invalid or unresolved'):
         manual_slam_drive_ratios(manifest)
+
+
+def test_owner_reported_encoder_sign_requires_provenance():
+    manifest = load_manifest(SLAM_BENCH_MANIFEST)
+    manifest['wheel_sign_mapping']['FR']['encoder_tick_sign'].pop('provenance')
+    with pytest.raises(HardwareConfigError, match='signs are unresolved'):
+        wheel_geometry(manifest)
 
 
 def test_manifest_digest_uses_domain_nul_and_complete_mapping():

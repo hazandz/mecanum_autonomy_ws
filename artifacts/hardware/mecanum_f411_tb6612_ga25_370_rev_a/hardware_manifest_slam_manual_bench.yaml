@@ -64,28 +64,32 @@ wheel_sign_mapping:
       status: TBD_MEASURED
     encoder_tick_sign:
       value: 1
-      status: TBD_MEASURED
+      status: OWNER_REPORTED
+      provenance: "Owner-reported manual forward rotation: count increased; raw telemetry file not present in this checkout."
   FR:
     motor_command_sign:
       value: null
       status: TBD_MEASURED
     encoder_tick_sign:
       value: 1
-      status: TBD_MEASURED
+      status: OWNER_REPORTED
+      provenance: "Owner-reported: initially no FR counts; after reconnect count increased from 0 to 1583 during forward manual rotation; raw file not present in this checkout."
   RL:
     motor_command_sign:
       value: null
       status: TBD_MEASURED
     encoder_tick_sign:
       value: 1
-      status: TBD_MEASURED
+      status: OWNER_REPORTED
+      provenance: "Owner-reported manual forward rotation: count increased; raw telemetry file not present in this checkout."
   RR:
     motor_command_sign:
       value: null
       status: TBD_MEASURED
     encoder_tick_sign:
       value: 1
-      status: TBD_MEASURED
+      status: OWNER_REPORTED
+      provenance: "Owner-reported manual forward rotation: count increased; raw telemetry file not present in this checkout."
 
 motor_driver_pins:
   FL:

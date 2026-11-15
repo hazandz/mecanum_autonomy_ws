@@ -125,10 +125,27 @@ Use one identical explicit `hardware_manifest` path for mapper and bridge, and
 use that same file as firmware CMake's `MECANUM_HARDWARE_MANIFEST` when building
 the matching image. The manifest/hash must be regenerated and checked against
 STM32 `CONFIG_STATUS`; a successful source build alone does not prove the
-installed MCU hash. The current firmware candidate has a disabled profile:
-937.2 tick/wheel revolution and 1400 tick/s are explicit references, but PID,
-feedforward, and effort limits remain zero and motor enable remains false.
-There is no compatible runtime PID profile to permit motor output.
+installed MCU hash. Firmware now represents the PID4 experiment per wheel and
+direction in order FL/FR/RL/RR. Kp is `0.084 permille/(tick/s)`, Ki is
+`1.05 permille/tick`, target limit is `1400 tick/s`, integral limit is
+`±80 permille`, and output cap is `400 permille`. Feedforward is
+`u0 + kv × |target_cps|`, with `u0` in
+permille and `kv` in permille per count/second:
+
+| Wheel | Forward u0 | Forward kv | Reverse u0 | Reverse kv |
+|---|---:|---:|---:|---:|
+| FL | 40.330665 | 0.217819026 | 36.253577 | 0.225076821 |
+| FR | 32.415574 | 0.231811480 | 34.233335 | 0.226312521 |
+| RL | 61.698998 | 0.212679580 | 54.760209 | 0.223609266 |
+| RR | 37.521999 | 0.223981830 | 32.707200 | 0.229221684 |
+
+These values are sourced from PID4 commit
+`231010db7de8a3f49f49a715da4339e129a48755` and evidence record
+`476d114697f5f3fb034dddd48c82d9297c3888b7`. Runtime converts permille through
+the TIM3 auto-reload value. The profile remains disabled: the evidence source
+worktree was dirty and no exact ELF/flash image is pinned; PID4's 10 s arm
+delay, 1 s ramp, 5 s run, 1 s stop hold, and wrong-direction/stall/sync guards
+are not reproduced by this runtime. No motor output is permitted.
 
 Example form (driver launch names and measurement values are supplied by the
 Owner for the exact Pi installation; this is not an executed command):
@@ -152,10 +169,13 @@ IMU output to `imu_link`, use `use_sim_time=false`, and accept the configurable
 port/frame and I2C bus/address launch argument names. Defaults for I2C are bus
 1 and decimal address 41 (`0x29`); verify the exact Pi hardware. EKF config,
 driver versions/parameters, sensor transforms, and ROS graph are not validated
-in this repository. The checked-in MANUAL_SLAM bench manifest still marks all
-four encoder signs `TBD_MEASURED`; the launch preflight and `UartBridgeNode`
-reject it for wheel odometry until those signs are measured and explicitly
-confirmed. Do not replace them with the current placeholder `+1` values.
+in this repository. The MANUAL_SLAM bench manifest records all four encoder
+signs as `OWNER_REPORTED` from the Owner's manual forward rotation observation.
+The raw `/home/hazan/slam-config-telemetry-20261111-175136.json` and the
+separate FR reconnect result file were not present on this laptop; the FR
+filename is not guessed. The manifest records provenance without promoting
+this to raw measured evidence. Provide the original files and paths/hashes for
+independent review. The canonical manifest is unchanged by this sign update.
 Verify the Owner's main power switch disconnects power to both motor drivers;
 that behavior has not been tested or assumed. The firmware
 reports auxiliary E-stop `UNKNOWN`; it is not converted to inactive. No

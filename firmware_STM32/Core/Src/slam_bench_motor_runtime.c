@@ -30,11 +30,16 @@ static bool valid_config(void)
 {
     const slam_bench_motor_config_t *c = &slam_bench_motor_config;
     const float values[] = {c->wheel_diameter_m,c->wheelbase_m,c->track_m,
-        c->counts_per_revolution,c->max_wheel_cps,c->max_pwm_effort,c->kp,c->ki,
-        c->integral_limit,c->forward_ff_u0,c->forward_ff_kv,c->reverse_ff_u0,c->reverse_ff_kv};
+        c->counts_per_revolution,c->max_wheel_cps,c->max_pwm_permille,c->kp,c->ki,
+        c->integral_limit,c->forward_ff_u0[0],c->forward_ff_u0[1],
+        c->forward_ff_u0[2],c->forward_ff_u0[3],c->forward_ff_kv[0],
+        c->forward_ff_kv[1],c->forward_ff_kv[2],c->forward_ff_kv[3],
+        c->reverse_ff_u0[0],c->reverse_ff_u0[1],c->reverse_ff_u0[2],
+        c->reverse_ff_u0[3],c->reverse_ff_kv[0],c->reverse_ff_kv[1],
+        c->reverse_ff_kv[2],c->reverse_ff_kv[3]};
     for (unsigned i=0; i<sizeof(values)/sizeof(values[0]); ++i)
         if (!isfinite(values[i]) || values[i] <= 0.0f) return false;
-    return c->experimental_profile_enabled && c->max_pwm_effort <= 65535.0f;
+    return c->experimental_profile_enabled && c->max_pwm_permille <= 1000.0f;
 }
 
 bool slam_bench_motor_runtime_init(void)
@@ -95,16 +100,15 @@ void slam_bench_motor_runtime_step(float dt)
         measured[i]=(float)((double)(ticks[i]-previous_ticks[i])/elapsed); /* encoder counts/s */
     previous_time_us=s.monotonic_time_us;
     memcpy(previous_ticks,ticks,sizeof(ticks));
-    PidControllerConfig p={slam_bench_motor_config.kp,slam_bench_motor_config.ki,
-        slam_bench_motor_config.integral_limit,slam_bench_motor_config.max_pwm_effort,
-        slam_bench_motor_config.max_wheel_cps,slam_bench_motor_config.forward_ff_u0,
-        slam_bench_motor_config.forward_ff_kv,slam_bench_motor_config.reverse_ff_u0,
-        slam_bench_motor_config.reverse_ff_kv};
     float effort[MECANUM_WHEEL_COUNT];
-    for(unsigned i=0;i<MECANUM_WHEEL_COUNT;i++)
-        if(!pid_controller_step(&p,&pid_state[i],targets[i],measured[i],(float)elapsed,&effort[i])) {
+    for(unsigned i=0;i<MECANUM_WHEEL_COUNT;i++) {
+        PidControllerConfig p;
+        if(!slam_bench_motor_profile_pid_config_for_wheel(i, &p) ||
+           !pid_controller_step(&p,&pid_state[i],targets[i],measured[i],
+                                (float)elapsed,&effort[i])) {
             slam_bench_motor_runtime_stop(); return;
         }
+    }
     bool has_motion_target=false;
     for(unsigned i=0;i<MECANUM_WHEEL_COUNT;i++) has_motion_target |= targets[i] != 0.0f;
     if(!has_motion_target) { slam_bench_motor_runtime_stop(); return; }
@@ -121,11 +125,18 @@ void slam_bench_motor_runtime_step(float dt)
     }
     for(unsigned i=0;i<MECANUM_WHEEL_COUNT;i++) {
         float e=effort[i];
-        if(!isfinite(e) || fabsf(e)>slam_bench_motor_config.max_pwm_effort) {
+        if(!isfinite(e) || fabsf(e)>slam_bench_motor_config.max_pwm_permille) {
             slam_bench_motor_runtime_stop(); return;
         }
         motor_logic_set_direction((MotorWheel)i,e>0.0f?MOTOR_DIRECTION_FORWARD:
             (e<0.0f?MOTOR_DIRECTION_REVERSE:MOTOR_DIRECTION_COAST));
-        __HAL_TIM_SET_COMPARE(&htim3,pwm_channel(i),(uint32_t)fabsf(e));
+        {
+            uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim3);
+            uint32_t duty_permille = (uint32_t)(fabsf(e) + 0.5f);
+            uint32_t compare = (uint32_t)(((uint64_t)arr + 1ULL) *
+                                          duty_permille / 1000ULL);
+            if (duty_permille > 0U && compare == 0U) compare = 1U;
+            __HAL_TIM_SET_COMPARE(&htim3,pwm_channel(i),compare);
+        }
     }
 }

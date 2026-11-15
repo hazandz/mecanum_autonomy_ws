@@ -127,7 +127,8 @@ def _actions(context):
         ),
         LifecycleNode(
             package="mecanum_nav_rl", executable="safety_lifecycle",
-            name="safety_lifecycle", output="screen", parameters=[{"use_sim_time": False}],
+            name="safety_lifecycle", namespace="/", output="screen",
+            parameters=[{"use_sim_time": False}],
         ),
         Node(
             package="nav2_lifecycle_manager", executable="lifecycle_manager",

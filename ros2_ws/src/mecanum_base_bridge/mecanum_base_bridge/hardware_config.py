@@ -130,7 +130,11 @@ def wheel_geometry(manifest: dict[str, Any], require_signs: bool = True) -> dict
         raise HardwareConfigError("wheel geometry is unresolved")
     signs_valid = all(type(sign) is int and sign in (-1, 1)
                       for sign in resolved_signs) and all(
-                          status == "OWNER_CONFIRMED" for status in sign_statuses)
+                          status == "OWNER_CONFIRMED"
+                          or (status == "OWNER_REPORTED"
+                              and isinstance(entry.get("provenance"), str)
+                              and entry["provenance"].startswith("Owner-reported"))
+                          for entry, status in zip(encoder_signs, sign_statuses))
     if require_signs and not signs_valid:
         raise HardwareConfigError("wheel encoder signs are unresolved")
     if any(value <= 0 for value in values.values()):

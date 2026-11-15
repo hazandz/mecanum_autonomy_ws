@@ -35,6 +35,11 @@ mode change requires a separate review.
   retained as a separate unresolved observation and does not replace it.
 - Motor-shaft/gearbox-output reduction: `21.3:1`.
 - Wheel/gearbox-output ratio: `1.0` (Owner-confirmed direct coupling).
+- The MANUAL_SLAM bench manifest records encoder tick signs `+1` for FL/FR/RL/RR
+  with `OWNER_REPORTED` provenance from the Owner's manual forward rotation
+  observation. The cited raw telemetry and FR reconnect result were unavailable
+  in this checkout; this is not raw-file-verified measurement evidence and does
+  not alter the canonical manifest.
 - The `172 RPM` design target remains reference-only and is not the selected
   runtime ceiling.
 
@@ -55,9 +60,11 @@ mode change requires a separate review.
 - E-stop auxiliary remains `UNKNOWN` when firmware cannot read a validated
   input. The Owner's main switch has not been verified to disconnect both motor
   drivers and is not treated as an E-stop.
-- Firmware motor runtime remains disarmed until a compatible, fully sourced
-  PID/feedforward/effort profile and matching generated manifest hash are
-  available. No motor is enabled by this ACR or launch.
+- Firmware motor runtime remains disarmed. PID4 numerical values and per-wheel,
+  per-direction feedforward are represented from the pinned experimental
+  source; this candidate does not reproduce PID4 timing and fault guards, and
+  no exact ELF/flash image is pinned. Matching manifest hash and hardware
+  profile review are also pending. No motor is enabled by this ACR or launch.
 
 ## Verification boundary
 
