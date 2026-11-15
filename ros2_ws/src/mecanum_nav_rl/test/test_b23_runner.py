@@ -33,6 +33,9 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R02g') == 'fault_task'
     assert campaign_phase('R04a') == 'fault_task'
     assert campaign_phase('R05') == 'fault_task'
+    assert campaign_phase('R06a') == 'fault_task'
+    assert campaign_phase('R06b') == 'fault_task'
+    assert campaign_phase('R06c') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -46,7 +49,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R06a')
+        campaign_phase('R07a')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -138,6 +141,9 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R04c') == ['delay_scan_delivery_650ms_once']
     assert case_fault_hooks('R04d') == ['delay_lifecycle_delivery_650ms_once']
     assert case_fault_hooks('R05') == ['mask_contact_coverage_after_verified']
+    assert case_fault_hooks('R06a') == ['set_pose_ack_with_wrong_target']
+    assert case_fault_hooks('R06b') == ['omit_one_settle_physics_iteration']
+    assert case_fault_hooks('R06c') == ['hold_observation0_adjacent_receipt_until_reset_deadline']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -3009,3 +3015,35 @@ def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
         verify_residue_revalidation_attestation(attestation, run_id=run_id,
             packet_sha256=packet_hash, evidence_root=evidence_root,
             cgroup_root=cgroup_root, proc_root=proc_root)
+
+
+@pytest.mark.parametrize(('case','error','extra'), [
+    ('R06a', ValueError('measured XY reset error exceeds 0.01 m'),
+        [('B23_R06A_SET_POSE_TARGET_MUTATED', {'actual_target':{'x_m':.25}})]),
+    ('R06b', ValueError('standstill measurement has a missing physics iteration'),
+        [('B23_R06B_PHYSICS_ITERATION_OMITTED', {'iteration':103,'stamp_ns':1_030_000_000})]),
+    ('R06c', TimeoutError('observation0 did not confirm within reset deadline'),
+        [('B23_R06C_FAULT_ARMED', {'zero_anchor_sequence':25})]),
+])
+def test_r06_fault_verifier_requires_real_reason_and_preserves_inhibit(tmp_path, case, error, extra):
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r06_reset_fault
+
+    root = tmp_path / case
+    root.mkdir()
+    events = list(extra)
+    if case == 'R06c':
+        events.append(('B1_RESET_STARTED', {'cutoff_pending':True}))
+    io = NS(events=events, descriptor={'run_root':str(root)},
+        ingress=NS(admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED,
+            last_published_admission_state=LocalTrainingSafetyInput.ADMISSION_INHIBITED,
+            backend_state=NS(local_zero_override=True)),
+        safety=NS(local_training=NS(policy_hold=True)),
+        _r06c_held_receipts=[{'final_publish_sequence':26,'wire_sha256':'a'*64}],
+        _r06c_reset_deadline_ns=15_000_000_000)
+    outcome = verify_r06_reset_fault(io, case=case, error=error,
+        anchor_sequence=25 if case == 'R06c' else None)
+    assert outcome['expected_rejection'] is True, outcome
+    assert outcome['no_observation0_commit'] is True, outcome
+    assert outcome['no_policy_issuance'] is True, outcome
+    assert outcome['policy_inhibited'] is True, outcome

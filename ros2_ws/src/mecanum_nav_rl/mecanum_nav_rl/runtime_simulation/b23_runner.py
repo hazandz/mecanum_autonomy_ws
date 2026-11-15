@@ -23,7 +23,8 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
     'R02e':'fault_task', 'R02f':'fault_task', 'R02g':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
-    'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task', 'R08': 'soak'}
+    'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task',
+    'R06a':'fault_task', 'R06b':'fault_task', 'R06c':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -44,6 +45,9 @@ CASE_HOOKS = {
     'R04c': ('delay_scan_delivery_650ms_once',),
     'R04d': ('delay_lifecycle_delivery_650ms_once',),
     'R05': ('mask_contact_coverage_after_verified',),
+    'R06a': ('set_pose_ack_with_wrong_target',),
+    'R06b': ('omit_one_settle_physics_iteration',),
+    'R06c': ('hold_observation0_adjacent_receipt_until_reset_deadline',),
     'R08': (),
 }
 
@@ -572,6 +576,67 @@ def technical_outcome(case, success):
     if case not in CASE_PHASES:
         raise ValueError('unsupported B2.3 campaign case: ' + str(case))
     return case + '_COMPLETED' if success else 'INCOMPLETE'
+
+
+def verify_r06_reset_fault(io, *, case, error, anchor_sequence=None):
+    """Chấm fault reset qua lỗi của adapter thật, giữ B1/POLICY đóng."""
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    expected = {
+        'R06a': (ValueError, 'measured XY reset error exceeds 0.01 m'),
+        'R06b': (ValueError, 'standstill measurement has a missing physics iteration'),
+    }
+    if case not in {'R06a','R06b','R06c'}:
+        raise ValueError('unsupported R06 case')
+    if case == 'R06c':
+        valid_timeout = (isinstance(error, TimeoutError)
+            and 'observation0 did not confirm within reset deadline' in str(error))
+        valid_native_expiry = (isinstance(error, RuntimeError)
+            and str(error).startswith('native fault flags='))
+        if not (valid_timeout or valid_native_expiry):
+            raise RuntimeError('R06c did not fail at reset cutoff/receipt expiry: ' + repr(error)) from error
+    else:
+        error_type, message = expected[case]
+        if not isinstance(error, error_type) or message not in str(error):
+            raise RuntimeError(case + ' did not fail at its pinned reset acceptance condition: ' + repr(error)) from error
+    names = [name for name, _ in io.events]
+    forbidden = {'B1_RESET_COMMITTED','RESET_COMPLETE'}
+    if case != 'R06c':
+        forbidden.add('B1_RESET_STARTED')
+    if any(name in forbidden for name in names):
+        raise RuntimeError(case + ' advanced observation0/B1 reset despite the expected reset fault')
+    issued = _ledger_rows(io.descriptor['run_root'], 'policy_adapter_issued.jsonl') \
+        if Path(io.descriptor['run_root'], 'policy_adapter_issued.jsonl').exists() else []
+    if issued:
+        raise RuntimeError(case + ' issued POLICY before the reset failure')
+    if (io.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_INHIBITED
+            or io.ingress.last_published_admission_state != LocalTrainingSafetyInput.ADMISSION_INHIBITED
+            or not io.safety.local_training.policy_hold):
+        raise RuntimeError(case + ' did not leave POLICY inhibited after reset failure')
+    detail = {'case':case, 'expected_rejection':True, 'error_type':type(error).__name__,
+        'error':str(error), 'no_observation0_commit':True, 'no_policy_issuance':True,
+        'policy_inhibited':True, 'completed_ns':time.monotonic_ns()}
+    if case == 'R06a':
+        mutations = [facts for name, facts in io.events if name == 'B23_R06A_SET_POSE_TARGET_MUTATED']
+        if len(mutations) != 1:
+            raise RuntimeError('R06a missing exact SetEntityPose target mutation evidence')
+        detail['set_pose_mutation'] = mutations[0]
+    elif case == 'R06b':
+        omitted = [facts for name, facts in io.events if name == 'B23_R06B_PHYSICS_ITERATION_OMITTED']
+        if len(omitted) != 1:
+            raise RuntimeError('R06b missing one omitted production measurement record')
+        detail['omitted_iteration'] = omitted[0]
+    else:
+        held = list(io._r06c_held_receipts)
+        if (anchor_sequence is None or not held
+                or any(row['final_publish_sequence'] <= anchor_sequence for row in held)):
+            raise RuntimeError('R06c did not hold a post-anchor SAFE_STOP receipt')
+        if valid_native_expiry and not (io.ingress.backend_state is not None
+                and bool(io.ingress.backend_state.local_zero_override)):
+            raise RuntimeError('R06c native expiry did not retain a verified zero override')
+        detail.update({'zero_anchor_sequence':anchor_sequence,
+            'held_receipt_count':len(held), 'held_receipts':held,
+            'reset_deadline_ns':io._r06c_reset_deadline_ns})
+    return detail
 
 
 def verify_r01b_external_pause_rejection(io, error):
@@ -1118,6 +1183,9 @@ class TrainingWorkerIO:
         self._held_safety_input = None
         self._r04d_fault_state = None
         self._r04d_pending_ingress_lifecycle = None
+        self._r06b_measurement_fault = {'active':False, 'yielded':False, 'dropped':False}
+        self._r06c_hold_after_sequence = None
+        self._r06c_held_receipts = []
         self.expected_paused = True
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
@@ -1202,7 +1270,9 @@ class TrainingWorkerIO:
                     'B23_R04_NOISY_ODOMETRY_DROPPED',
                     'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
                     'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
-                    'B23_R04_FAULT_ARMED'}:
+                    'B23_R04_FAULT_ARMED','B23_R06A_SET_POSE_TARGET_MUTATED',
+                    'B23_R06B_PHYSICS_ITERATION_OMITTED','B23_R06B_FAULT_ARMED',
+                    'B23_R06C_FAULT_ARMED','B23_R06C_OBSERVATION0_RECEIPT_HELD'}:
             self.events.append((name, copy.deepcopy(facts)))
         elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
                 and type(facts.get('candidate_sequence')) is int):
@@ -1245,6 +1315,20 @@ class TrainingWorkerIO:
                 'message_info':{key:value for key,value in info.items() if type(value) is int}})
             try:
                 message = deserialize_message(wire,message_type)
+                if (topic == '/mecanum/final_issued_command'
+                        and 'hold_observation0_adjacent_receipt_until_reset_deadline' in getattr(self, 'fault_hooks', ())
+                        and self._r06c_hold_after_sequence is not None
+                        and int(message.source) == message.SOURCE_SAFE_STOP
+                        and int(message.final_publish_sequence) > self._r06c_hold_after_sequence):
+                    record = {'case':'R06c',
+                        'final_publish_sequence':int(message.final_publish_sequence),
+                        'header_stamp_ns':int(message.header.stamp.sec)*1_000_000_000 + int(message.header.stamp.nanosec),
+                        'wire_cdr_hex':wire.hex(), 'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'held_ns':self.now(), 'hold_after_sequence':self._r06c_hold_after_sequence,
+                        'reset_deadline_ns':self._r06c_reset_deadline_ns}
+                    self._r06c_held_receipts.append(record)
+                    self.emit('B23_R06C_OBSERVATION0_RECEIPT_HELD', record)
+                    return None
                 # R04d delays lifecycle delivery to both consumers. Delaying
                 # Safety alone lets ingress advance first and rejects the old
                 # SAFE_STOP identity before the stale lifecycle is measured.
@@ -1807,12 +1891,23 @@ class TrainingWorkerIO:
                 pair.backend_received_steady_ns, status.episode_generation, status.runtime_generation,
                 pair.oracle_received_steady_ns, pair.stamp_ns)
             last = pair.iteration
+            fault = self._r06b_measurement_fault
+            if ('omit_one_settle_physics_iteration' in getattr(self, 'fault_hooks', ())
+                    and fault['active'] and fault['yielded'] and not fault['dropped']):
+                fault['dropped'] = True
+                self.emit('B23_R06B_PHYSICS_ITERATION_OMITTED', {
+                    'iteration':int(pair.iteration), 'stamp_ns':int(pair.stamp_ns),
+                    'after_iteration':int(after_iteration), 'steady_ns':self.now(),
+                    'reason':'packet-pinned fault omits one exact post-reset measurement'})
+                continue
             self.emit('RESET_MEASUREMENT', {'iteration': sample.iteration, 'stamp_ns': sample.stamp_ns,
                 'position_xyz': [sample.x_m, sample.y_m, sample.z_m], 'rpy': [roll, pitch, yaw],
                 'linear_xyz': list(sample.linear_xyz_mps), 'angular_xyz': list(sample.angular_xyz_radps),
                 'clearance_m': clearance, 'contact_healthy': sample.contact_healthy,
                 'contact_active': sample.contact_active, 'backend_received_ns': sample.receive_steady_ns,
                 'oracle_received_ns': sample.oracle_receive_steady_ns, 'steady_ns': self.now()})
+            if 'omit_one_settle_physics_iteration' in getattr(self, 'fault_hooks', ()) and fault['active']:
+                fault['yielded'] = True
             yield sample
         raise TimeoutError('reset measurement stream deadline expired')
 
@@ -1880,12 +1975,35 @@ class TrainingWorkerIO:
             monotonic=lambda: self.now() / 1e9, sleep=self.pause,
             oracle_max_age_ns=self.ingress.profile['oracle_max_age_ms'] * 1_000_000,
             now_ros_ns=self.ros_now, native_pause=native_pause)
-        facts = await adapter.execute_async(target=target,
+        original_set_entity_pose = self.set_entity_pose
+        if 'set_pose_ack_with_wrong_target' in getattr(self, 'fault_hooks', ()):
+            async def wrong_target_pose(**kwargs):
+                actual = copy.copy(kwargs['target'])
+                actual = type(actual)(x_m=actual.x_m + 0.25, y_m=actual.y_m,
+                    z_m=actual.z_m, yaw_rad=actual.yaw_rad)
+                self.emit('B23_R06A_SET_POSE_TARGET_MUTATED', {
+                    'requested_target':{'x_m':kwargs['target'].x_m,'y_m':kwargs['target'].y_m,
+                        'z_m':kwargs['target'].z_m,'yaw_rad':kwargs['target'].yaw_rad},
+                    'actual_target':{'x_m':actual.x_m,'y_m':actual.y_m,
+                        'z_m':actual.z_m,'yaw_rad':actual.yaw_rad}, 'steady_ns':self.now()})
+                return await original_set_entity_pose(**{**kwargs, 'target':actual})
+            self.set_entity_pose = wrong_target_pose
+        async def reset_buffers():
+            self.ingress.reset_noise(seed)
+            if 'omit_one_settle_physics_iteration' in getattr(self, 'fault_hooks', ()):
+                self._r06b_measurement_fault['active'] = True
+                self.emit('B23_R06B_FAULT_ARMED', {'after_reset_buffer_clear':True,
+                    'reset_scan_stamp_ns':self.ingress.scan_reset_stamp_ns,'steady_ns':self.now()})
+        try:
+            facts = await adapter.execute_async(target=target,
             measured_standstill=self.measurements(deadline_ns=deadline, after_iteration=before),
-            applied_zero_receipt=w1, reset_emulator_and_buffers=lambda: self.ingress.reset_noise(seed),
+            applied_zero_receipt=w1, reset_emulator_and_buffers=reset_buffers,
             reset_deadline=deadline / 1e9, paused_hold_s=paused_hold_s,
             stop_deadline=min(deadline, started+5_000_000_000)/1e9,
             braking_start_stamp_ns=w0.applied_sim_stamp_ns)
+        finally:
+            if 'set_pose_ack_with_wrong_target' in getattr(self, 'fault_hooks', ()):
+                self.__dict__.pop('set_entity_pose', None)
         l2 = await self.lifecycle_event(rearm=True, deadline_ns=min(deadline, self.now() + 1_000_000_000))
         await self.control.transact(Control.Request.OP_BIND_RESET_CONTEXT,
             deadline_ns=min(deadline, self.now() + 1_000_000_000), **lifecycle_request_fields(l2),
@@ -1911,6 +2029,14 @@ class TrainingWorkerIO:
         self.ingress.inhibit()
         self.safety.local_training.set_stream_enabled(True)
         observation0_zero = await self.freeze_zero(deadline_ns=deadline_ns)
+        if 'hold_observation0_adjacent_receipt_until_reset_deadline' in getattr(self, 'fault_hooks', ()):
+            self._r06c_hold_after_sequence = int(observation0_zero.final_publish_sequence)
+            self._r06c_reset_deadline_ns = int(deadline_ns)
+            self.emit('B23_R06C_FAULT_ARMED', {
+                'zero_anchor_sequence':self._r06c_hold_after_sequence,
+                'zero_anchor_stamp_ns':int(observation0_zero.applied_sim_stamp_ns),
+                'reset_deadline_ns':int(deadline_ns), 'steady_ns':self.now(),
+                'reason':'withhold subsequent SAFE_STOP receipt callbacks through the original reset deadline'})
         self.emit('OBSERVATION0_ZERO_ANCHOR', {'publish_sequence': observation0_zero.final_publish_sequence,
             'application_stamp_ns': observation0_zero.applied_sim_stamp_ns,
             'application_iteration': observation0_zero.applied_physics_iteration, 'steady_ns': self.now()})
@@ -2960,6 +3086,22 @@ async def training_child(path):
             outcome = {'case':'R05','resets_confirmed':0,
                 'policy_steps_committed':0, **checked,
                 'completed_ns':time.monotonic_ns()}
+        elif packet['case'] in ('R06a','R06b','R06c'):
+            if packet['fault_hooks'] != case_fault_hooks(packet['case']):
+                raise RuntimeError(packet['case'] + ' reset fault hook does not match the case contract')
+            target = ResetTarget(**packet['reset_target'])
+            try:
+                await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                    paused_hold_s=.250)
+            except (ValueError, TimeoutError, RuntimeError) as error:
+                anchor = next((facts for name, facts in io.events
+                    if name == 'B23_R06C_FAULT_ARMED'), None)
+                checked = verify_r06_reset_fault(io, case=packet['case'], error=error,
+                    anchor_sequence=None if anchor is None else anchor['zero_anchor_sequence'])
+                outcome = {'case':packet['case'], 'resets_confirmed':0,
+                    'policy_steps_committed':0, **checked}
+            if outcome is None:
+                raise RuntimeError(packet['case'] + ' expected reset acceptance rejection was not observed')
         elif packet['case'] in ('R02a','R02b'):
             if packet['case'] == 'R02b':
                 expected_env = case_environment(packet['case'], packet['fault_hooks'])
