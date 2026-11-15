@@ -2231,8 +2231,14 @@ async def training_child(path):
                     io.ingress.inhibit(zero_only=(route == 'zero_only'))
                     adapter.set_stream_enabled(True)
                 else:
+                    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+                    # OP_INHIBIT is the final route in this matrix. Stop the
+                    # Safety timer before dispatch so a concurrent SAFE_STOP
+                    # cannot arrive at the gate after the native operation
+                    # invalidates it.
+                    adapter.set_stream_enabled(False)
                     adapter.set_policy_hold(True)
-                    adapter.set_stream_enabled(True)
+                    io.ingress.inhibit()
                     control_ack = await io.control.transact(r02g_inhibit_operation(),
                         deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                     state = await io.until(lambda: io.ingress.backend_state
@@ -2240,7 +2246,8 @@ async def training_child(path):
                         and io.ingress.backend_state.local_zero_override
                         and io.ingress.backend_state.status_sequence > 0 else None,
                         deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
-                        phase='R02g native OP_INHIBIT zero state')
+                        phase='R02g native OP_INHIBIT zero state',
+                        expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
                     result = verify_r02g_close(io, route=route,
                         policy_receipt_count=len(io.ingress.receipts), backend_state=state,
                         control_ack=control_ack)
@@ -2250,8 +2257,6 @@ async def training_child(path):
                         'control_response_cdr_hex':control_ack.response_bytes.hex(),
                         'steady_ns':io.now()})
                     checked_routes.append(result)
-                    await io.inhibit_and_drain(deadline_ns=min(io.deadline_ns,
-                        io.now() + 1_000_000_000))
                     continue
                 stop = await io.until(lambda: adapter.last_output
                     if adapter.last_output is not None
