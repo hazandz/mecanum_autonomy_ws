@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 #include <iterator>
 #include <regex>
@@ -210,23 +209,7 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
         r.step_index == pending_policy_->step_index &&
         r.transition_id == pending_policy_->transition_id;
     if (!matches_current && !matches_pending)
-    {
-      std::fprintf(stderr,
-          "B23_POLICY_BINDING_MISMATCH source=%u source_instance=%llu sequence=%llu step=%llu transition=%s expected_source_instance=%llu expected_sequence=%llu expected_step=%llu expected_transition=%s pending_present=%u pending_sequence=%llu pending_step=%llu pending_transition=%s\n",
-          static_cast<unsigned>(r.source),
-          static_cast<unsigned long long>(r.source_instance_id),
-          static_cast<unsigned long long>(r.sequence),
-          static_cast<unsigned long long>(r.step_index), r.transition_id.c_str(),
-          static_cast<unsigned long long>(binding_.policy_source_instance_id),
-          static_cast<unsigned long long>(binding_.next_policy_sequence),
-          static_cast<unsigned long long>(binding_.expected_step_index),
-          binding_.expected_transition_id.c_str(), pending_policy_ ? 1U : 0U,
-          static_cast<unsigned long long>(pending_policy_ ? pending_policy_->source_sequence : 0),
-          static_cast<unsigned long long>(pending_policy_ ? pending_policy_->step_index : 0),
-          pending_policy_ ? pending_policy_->transition_id.c_str() : "");
-      std::fflush(stderr);
       return Fault("policy_issuance_binding_mismatch");
-    }
     const auto action_barrier_ns = matches_pending ?
         pending_policy_->action_barrier_ns : current_action_barrier_ns_;
     if (r.stamp_ns <= action_barrier_ns)
@@ -290,7 +273,27 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
         std::numeric_limits<std::uint64_t>::max())
       return Fault("safe_stop_source_sequence_exhausted");
     ++binding_.next_safe_stop_sequence;
-    if (binding_.require_policy_admission) RevokePolicyAdmission();
+    if (binding_.require_policy_admission)
+    {
+      // A zero received before this slot was bound is drained after control
+      // processing in PreUpdate. It closes any older current slot but must not
+      // revoke the newly bound slot. A zero received at or after bind still
+      // revokes both current and pending admission as before.
+      const bool received_before_pending_bind = pending_policy_ &&
+          item.receive_steady_ns <= pending_policy_->bound_steady_ns;
+      if (received_before_pending_bind)
+      {
+        if (current_policy_)
+        {
+          current_policy_->token.fill(0);
+          current_policy_->admission.reset();
+        }
+      }
+      else
+      {
+        RevokePolicyAdmission();
+      }
+    }
   }
   else return Fault("unsupported_receipt_source");
 

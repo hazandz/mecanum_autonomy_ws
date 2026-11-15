@@ -394,6 +394,63 @@ TEST(ReceiptAdmission, AdmissionFirstRejectsWrongEmptyAndPreBindSamples)
   EXPECT_EQ(gate.ConsumeNext(1'400, 3'000).disposition, GateDisposition::Applied);
 }
 
+TEST(ReceiptAdmission, PreBindSafeStopConsumedAfterBindPreservesPendingStep)
+{
+  ReceiptGate gate(AdmissionBinding());
+  AcceptAnchor(gate);
+
+  auto stop = Anchor();
+  stop.key.publish_sequence = 101;
+  stop.sequence = 2;
+  stop.stamp_ns = 1'100;
+  ASSERT_TRUE(gate.Enqueue(stop, 2'100));
+
+  // PreUpdate binds control before draining receipt callbacks. This zero
+  // entered the queue before the pending step existed, even though it is
+  // consumed after the bind operation.
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(1, 1, "policy-uuid-1", 1'100,
+                                        Token(1), 1'100, 2'200));
+  const auto stopped = gate.ConsumeNext(1'200, 2'300);
+  ASSERT_EQ(stopped.disposition, GateDisposition::Applied) << stopped.reason;
+  ASSERT_TRUE(gate.HasPendingPolicyStep());
+
+  ASSERT_TRUE(gate.RecordPolicyAdmission(Token(1), 1'201, 2'301));
+  auto policy = AdmissionPolicy();
+  policy.key.publish_sequence = 102;
+  policy.stamp_ns = 1'201;
+  ASSERT_TRUE(gate.Enqueue(policy, 2'302));
+  const auto applied = gate.ConsumeNext(1'300, 2'303);
+  EXPECT_EQ(applied.disposition, GateDisposition::Applied) << applied.reason;
+  EXPECT_EQ(gate.Watermark(), 102u);
+  EXPECT_FALSE(gate.HasPendingPolicyStep());
+}
+
+TEST(ReceiptAdmission, PostBindSafeStopRevokesPendingStep)
+{
+  ReceiptGate gate(AdmissionBinding());
+  AcceptAnchor(gate);
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(1, 1, "policy-uuid-1", 1'100,
+                                        Token(1), 1'100, 2'200));
+
+  auto stop = Anchor();
+  stop.key.publish_sequence = 101;
+  stop.sequence = 2;
+  stop.stamp_ns = 1'100;
+  ASSERT_TRUE(gate.Enqueue(stop, 2'201));
+  const auto stopped = gate.ConsumeNext(1'200, 2'300);
+  ASSERT_EQ(stopped.disposition, GateDisposition::Applied) << stopped.reason;
+  EXPECT_FALSE(gate.HasPendingPolicyStep());
+  EXPECT_FALSE(gate.RecordPolicyAdmission(Token(1), 1'201, 2'301));
+
+  auto policy = AdmissionPolicy();
+  policy.key.publish_sequence = 102;
+  policy.stamp_ns = 1'201;
+  ASSERT_TRUE(gate.Enqueue(policy, 2'302));
+  const auto rejected = gate.ConsumeNext(1'300, 2'303);
+  EXPECT_EQ(rejected.disposition, GateDisposition::Faulted) << rejected.reason;
+  EXPECT_EQ(gate.Watermark(), 101u);
+}
+
 TEST(ReceiptAdmission, ReceiptWaitExpiresWithoutApplyAtFortyMilliseconds)
 {
   ReceiptGate gate(AdmissionBinding());
