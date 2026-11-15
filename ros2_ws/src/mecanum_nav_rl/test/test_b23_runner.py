@@ -2867,6 +2867,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     aligned = next((row[1] for row in history
         if row[0] == 'POLICY_ISSUANCE_PHASE_ALIGNED'), None)
     assert aligned is not None, f'POLICY issuance was not aligned to scan phase; history={history!r}'
+    aligned_index = next(i for i, row in enumerate(history)
+        if row[0] == 'POLICY_ISSUANCE_PHASE_ALIGNED')
+    bind_index = next(i for i, row in enumerate(history) if row[0] == 'bind')
+    assert aligned_index < bind_index, f'phase alignment must precede pending bind; history={history!r}'
     assert envelope.header.stamp.sec * 10**9 + envelope.header.stamp.nanosec > aligned['boundary_ns']
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing=='r09b_callback' else .08)

@@ -3424,6 +3424,10 @@ class TrainingWorkerIO:
                     or held_prebind.sample_sequence == 0):
                 raise RuntimeError('R02e held sample is not a valid prior-token POLICY admission')
             self.ingress.pause_admission_publication()
+        # Align while the applied SAFE_STOP stream is still running. Waiting
+        # after binding would consume the unchanged native command watchdog
+        # budget while the pending slot correctly forbids a closing SAFE_STOP.
+        await self.align_policy_issuance_after_scan_boundary(deadline_ns=deadline)
         # A SAFE_STOP arriving after OP_BIND_PENDING_STEP revokes the pending
         # admission by contract. The last zero receipt above is already native
         # applied, so stop emitting zero while this single slot is bound; native
@@ -3460,6 +3464,8 @@ class TrainingWorkerIO:
                 'sample_sequence': aligned_sample.sample_sequence,
                 'sample_stamp_ns': self.safety.local_training.stamp(aligned_sample.header.stamp),
                 'admission_ready_steady_ns': self.now()})
+            self.ingress.pause_admission_publication()
+            target_sample_sequence = aligned_sample.sample_sequence
         held_sample_sequence = None
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
@@ -3473,10 +3479,26 @@ class TrainingWorkerIO:
                 'steady_ns': self.now()})
             if bytes(held_prebind.admission_token) == bytes(ack.response.pending_admission_token):
                 raise RuntimeError('R02e test sample unexpectedly has the current slot token')
+        if not align_admission_after_scan_boundary:
+            post_ack_floor = self.ingress.last_published_sample_sequence
+            await self.until(lambda: self.ingress.last_published_sample_sequence
+                if (self.ingress.last_published_sample_sequence > post_ack_floor
+                    and self.ingress.last_published_admission_state
+                        == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN) else None,
+                deadline_ns=deadline, phase='first post-ACK admission publication')
+            # Freeze on one exact producer sequence; otherwise faster sensor
+            # callbacks can keep advancing the ingress target while the Safety
+            # callback is receiving the previous valid message.
+            self.ingress.pause_admission_publication()
+            target_sample_sequence = self.ingress.last_published_sample_sequence
+            self.emit('POST_ACK_ADMISSION_FROZEN', {
+                'sample_sequence': target_sample_sequence,
+                'steady_ns': self.now()})
         await self.until(lambda: self.safety.local_training.noisy if self.safety.local_training.noisy is not None
+            and self.safety.local_training.noisy.sample_sequence == target_sample_sequence
             and self.safety.local_training.noisy.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             and bytes(self.safety.local_training.noisy.admission_token) == bytes(ack.response.pending_admission_token)
-            and self.ingress.last_published_sample_sequence == self.safety.local_training.noisy.sample_sequence
+            and self.ingress.last_published_sample_sequence == target_sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
         prebind_check = None
         if held_sample_sequence is not None:
@@ -3498,7 +3520,6 @@ class TrainingWorkerIO:
                 'pending_token_sha256': hashlib.sha256(bytes(ack.response.pending_admission_token)).hexdigest(),
                 'steady_ns': self.now()})
             self._last_prebind_check = prebind_check
-        await self.align_policy_issuance_after_scan_boundary(deadline_ns=deadline)
         life = self.ingress.lifecycle
         envelope = CommandEnvelope()
         envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
