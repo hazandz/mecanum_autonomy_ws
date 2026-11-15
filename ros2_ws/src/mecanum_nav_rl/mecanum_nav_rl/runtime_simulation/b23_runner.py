@@ -43,7 +43,7 @@ CASE_HOOKS = {
     'R04b': ('drop_policy_noisy_odometry_delivery',),
     'R04c': ('delay_scan_delivery_650ms_once',),
     'R04d': ('delay_lifecycle_delivery_650ms_once',),
-    'R05': ('remove_contact_component_after_verified',),
+    'R05': ('mask_contact_coverage_after_verified',),
     'R08': (),
 }
 
@@ -90,14 +90,14 @@ def case_environment(case, hooks):
         return {'B23_RECEIPT_FAULT': 'hold_policy_until_inhibit'}
     if case == 'R02e':
         return {}
-    if case == 'R05' and hooks == ['remove_contact_component_after_verified']:
-        return {'B23_CONTACT_COVERAGE_FAULT':'remove_component_after_verified'}
+    if case == 'R05' and hooks == ['mask_contact_coverage_after_verified']:
+        return {'B23_CONTACT_COVERAGE_FAULT':'mask_coverage_after_verified'}
     return {}
 
 
 def verify_r05_contact_query_revocation(root, *, original_ack, replay_ack,
                                         fresh_ack, backend_state):
-    """Bind proof revocation to the removed native component and both QUERY paths."""
+    """Bind proof revocation to a pinned coverage mask and both QUERY paths."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     if original_ack is None or original_ack.response.contact_capability_state != \
             Control.Response.CAPABILITY_VERIFIED:
@@ -117,17 +117,17 @@ def verify_r05_contact_query_revocation(root, *, original_ack, replay_ack,
             raise RuntimeError('R05 ' + label + ' QUERY still contains old proof fields')
     rows = [json.loads(line) for line in
         (Path(root)/'native-events.jsonl').read_text().splitlines() if line.strip()]
-    removed = [row for row in rows if row.get('kind') == 'B23_CONTACT_COMPONENT_REMOVED'
-        and row.get('fields',{}).get('removed') == '1']
-    if not removed:
-        raise RuntimeError('R05 lacks native contact component removal evidence')
-    event = removed[0].get('fields',{})
+    masked = [row for row in rows if row.get('kind') == 'B23_CONTACT_COVERAGE_MASKED'
+        and row.get('fields',{}).get('masked') == '1']
+    if not masked:
+        raise RuntimeError('R05 lacks native pinned contact coverage mask evidence')
+    event = masked[0].get('fields',{})
     if not event.get('entity') or int(event.get('iteration','0')) <= 0:
-        raise RuntimeError('R05 removed component evidence lacks pinned entity/iteration')
+        raise RuntimeError('R05 coverage mask evidence lacks pinned entity/iteration')
     if (backend_state is None or not backend_state.local_zero_override
             or int(backend_state.fault_flags) & 16 == 0):
         raise RuntimeError('R05 contact loss did not close motion with contact coverage fault')
-    return {'removed_entity':event['entity'], 'removed_iteration':int(event['iteration']),
+    return {'masked_entity':event['entity'], 'masked_iteration':int(event['iteration']),
         'original_query_verified':True, 'replay_query_revoked':True,
         'fresh_query_revoked':True, 'policy_closed':True,
         'native_fault_flags':int(backend_state.fault_flags)}
@@ -2815,19 +2815,19 @@ async def training_child(path):
             outcome = await _run_b2_soak(io, b1, packet, sink)
         elif packet['case'] == 'R05':
             expected_env = case_environment(packet['case'], packet['fault_hooks'])
-            if (packet['fault_hooks'] != ['remove_contact_component_after_verified']
+            if (packet['fault_hooks'] != ['mask_contact_coverage_after_verified']
                     or any(packet['environment'].get(key) != value
                         for key, value in expected_env.items())
                     or io.contact_ack is None or io.contact_start_request_sequence is None):
                 raise RuntimeError('R05 packet/hook/original QUERY binding is incomplete')
-            def component_removed():
+            def coverage_masked():
                 rows = complete_jsonl_rows(descriptor['native_events_path'])
                 return next((row for row in rows
-                    if row.get('kind') == 'B23_CONTACT_COMPONENT_REMOVED'
-                    and row.get('fields',{}).get('removed') == '1'), None)
-            removed = await io.until(component_removed,
+                    if row.get('kind') == 'B23_CONTACT_COVERAGE_MASKED'
+                    and row.get('fields',{}).get('masked') == '1'), None)
+            masked = await io.until(coverage_masked,
                 deadline_ns=min(io.deadline_ns, time.monotonic_ns()+5_000_000_000),
-                phase='R05 pinned contact component removal',
+                phase='R05 pinned contact coverage mask',
                 expected_native_fault_flags=16)
             state = await io.until(lambda: io.ingress.backend_state
                     if (io.ingress.backend_state is not None
@@ -2854,7 +2854,7 @@ async def training_child(path):
                 'replay_response_cdr_hex':replay_ack.response_bytes.hex(),
                 'fresh_request_cdr_hex':fresh_ack.request_bytes.hex(),
                 'fresh_response_cdr_hex':fresh_ack.response_bytes.hex(),
-                'component_removed_event':removed, 'native_zero_state_sequence':state.sequence,
+                'coverage_mask_event':masked, 'native_zero_state_sequence':state.sequence,
                 'checked':checked, 'completed_ns':time.monotonic_ns()})
             outcome = {'case':'R05','resets_confirmed':0,
                 'policy_steps_committed':0, **checked,

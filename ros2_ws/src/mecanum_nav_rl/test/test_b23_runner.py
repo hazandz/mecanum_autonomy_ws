@@ -83,7 +83,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R04b') == ['drop_policy_noisy_odometry_delivery']
     assert case_fault_hooks('R04c') == ['delay_scan_delivery_650ms_once']
     assert case_fault_hooks('R04d') == ['delay_lifecycle_delivery_650ms_once']
-    assert case_fault_hooks('R05') == ['remove_contact_component_after_verified']
+    assert case_fault_hooks('R05') == ['mask_contact_coverage_after_verified']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -99,7 +99,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_environment('R03b', case_fault_hooks('R03b')) == {
         'B23_RECEIPT_FAULT':'mutate_policy_transition_id_once'}
     assert case_environment('R05', case_fault_hooks('R05')) == {
-        'B23_CONTACT_COVERAGE_FAULT':'remove_component_after_verified'}
+        'B23_CONTACT_COVERAGE_FAULT':'mask_coverage_after_verified'}
     assert case_environment('R01a', []) == {}
     with pytest.raises(ValueError, match='not approved for campaign case'):
         case_fault_hooks('R01a', 'pause_request_replay_after_terminal')
@@ -108,7 +108,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
 
 
-def test_r05_contact_query_revocation_requires_component_loss_and_zero_closed_state(tmp_path):
+def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 
     original = NS(response=NS(
@@ -122,14 +122,14 @@ def test_r05_contact_query_revocation_requires_component_loss_and_zero_closed_st
             floor_collision_entity_id=0, contact_sample_count=0,
             covered_empty_sample_count=0))
     (tmp_path/'native-events.jsonl').write_text(json.dumps({
-        'kind':'B23_CONTACT_COMPONENT_REMOVED','fields':{'removed':'1',
+        'kind':'B23_CONTACT_COVERAGE_MASKED','fields':{'masked':'1',
         'entity':'b2_training_arena::mecanum_b2::base_link::collision',
         'iteration':'123'}})+'\n')
     state=NS(local_zero_override=True, fault_flags=16)
     result=verify_r05_contact_query_revocation(tmp_path, original_ack=original,
         replay_ack=query(Control.Response.CAPABILITY_FAILED),
         fresh_ack=query(Control.Response.CAPABILITY_FAILED), backend_state=state)
-    assert result['removed_iteration'] == 123
+    assert result['masked_iteration'] == 123
     assert result['replay_query_revoked'] and result['fresh_query_revoked']
     with pytest.raises(RuntimeError, match='replay QUERY returned a stale verified proof'):
         verify_r05_contact_query_revocation(tmp_path, original_ack=original,

@@ -1162,6 +1162,30 @@ public:
     return system.BuildContactSample(info, ecm);
   }
 
+  static ContactDecision RunPinnedCoverageMaskFault(
+      BackendSystem &system, gz::sim::EntityComponentManager &ecm,
+      std::uint64_t collision, std::uint64_t iteration)
+  {
+    constexpr std::uint64_t kPinnedBit = 1;
+    const std::string name = "b2_training_arena::robot::collision";
+    system.contact_coverage_fault_mode_ = "mask_coverage_after_verified";
+    system.contact_capability_verified_ = true;
+    system.collision_bits_[name] = kPinnedBit;
+    system.collision_entity_names_[collision] = name;
+    system.collision_contact_bits_[collision] = kPinnedBit;
+    system.contact_coverage_ = std::make_unique<ContactCoverage>(1);
+    gz::sim::UpdateInfo info;
+    info.iterations = iteration;
+    info.simTime = std::chrono::milliseconds(iteration * 10);
+    info.paused = false;
+    system.ApplyContactCoverageFault(info);
+    const auto sample = system.BuildContactSample(info, ecm);
+    return system.contact_coverage_->Observe(sample);
+  }
+
+  static bool CoverageFaultWasApplied(const BackendSystem &system)
+  { return system.contact_coverage_fault_fired_; }
+
   static std::uint64_t ProbeSensor(const BackendSystem &system)
   {
     return system.probe_sensor_entity_;
@@ -4122,6 +4146,27 @@ TEST(BackendSystemContactBinding, RegisteredCoverageReadsCollisionEntity)
           system, ecm, collision, 2);
   EXPECT_TRUE(covered_empty.component_present);
   EXPECT_EQ(covered_empty.observed_mask, 1u);
+}
+
+TEST(BackendSystemContactBinding, R05MasksPinnedCoverageWithoutMutatingGazeboComponent)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto collision = ecm.CreateEntity();
+  ecm.CreateComponent(collision,
+      gz::sim::components::ContactSensorData(gz::msgs::Contacts()));
+
+  const auto decision = BackendSystemTestPeer::RunPinnedCoverageMaskFault(
+      system, ecm, collision, 22);
+
+  EXPECT_TRUE(BackendSystemTestPeer::CoverageFaultWasApplied(system));
+  EXPECT_NE(ecm.Component<gz::sim::components::ContactSensorData>(collision), nullptr)
+      << "R05 must not remove an ECS component read by Gazebo's Contact system";
+  EXPECT_FALSE(decision.healthy);
+  EXPECT_FALSE(decision.coverage_complete);
+  EXPECT_EQ(decision.observed_mask, 0u);
+  EXPECT_EQ(decision.fault_flags, 16u);
+  EXPECT_EQ(decision.reason, "missing_contact_component");
 }
 
 TEST(BackendSystemControlReceiver, ProbeQueryDoesNotExtendDeadlineAndLateSpawnCannotReviveAbort)

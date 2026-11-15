@@ -496,7 +496,7 @@ public:
     contact_coverage_fault_mode_ = contact_coverage_fault_env ?
         contact_coverage_fault_env : "";
     if (!contact_coverage_fault_mode_.empty() &&
-        contact_coverage_fault_mode_ != "remove_component_after_verified")
+        contact_coverage_fault_mode_ != "mask_coverage_after_verified")
     {
       SetFault(BackendState::FAULT_CONTEXT,
                "unsupported_b23_contact_coverage_fault");
@@ -798,7 +798,7 @@ public:
     ProgressResetPause(info, steady_now_ns);
     ProcessProbeServiceResults();
     AdvanceContactProbe(info, ecm, steady_now_ns);
-    ApplyContactCoverageFault(info, ecm);
+    ApplyContactCoverageFault(info);
     ProcessCallbackInputs(TimeNs(info), steady_now_ns);
     const auto pending_faults = callback_fault_flags_.exchange(0);
     if (pending_faults != 0) SetFault(pending_faults, "ros_callback_queue_or_context_fault");
@@ -1029,10 +1029,9 @@ private:
   friend class BackendSystemTestPeer;
 
   void ApplyContactCoverageFault(
-      const gz::sim::UpdateInfo &info,
-      gz::sim::EntityComponentManager &ecm)
+      const gz::sim::UpdateInfo &info)
   {
-    if (contact_coverage_fault_mode_ != "remove_component_after_verified" ||
+    if (contact_coverage_fault_mode_ != "mask_coverage_after_verified" ||
         contact_coverage_fault_fired_ || !contact_capability_verified_)
       return;
     if (contact_coverage_fault_target_iteration_ == 0)
@@ -1063,18 +1062,22 @@ private:
       contact_coverage_fault_fired_ = true;
       return;
     }
-    const bool removed = ecm.RemoveComponent<gz::sim::components::ContactSensorData>(
-        selected);
-    contact_coverage_fault_fired_ = true;
-    if (!removed)
+    const auto bit = collision_contact_bits_.find(selected);
+    if (bit == collision_contact_bits_.end())
     {
       SetFault(BackendState::FAULT_CONTACT_COVERAGE,
-               "pinned_contact_component_remove_failed");
+               "contact_fault_has_no_pinned_collision_coverage_bit");
+      contact_coverage_fault_fired_ = true;
+      return;
     }
-    gzmsg << "B23_CONTACT_COMPONENT_REMOVED mode="
+    contact_coverage_fault_target_entity_ = selected;
+    contact_coverage_fault_target_bit_ = bit->second;
+    contact_coverage_fault_target_iteration_ = info.iterations;
+    contact_coverage_fault_fired_ = true;
+    gzmsg << "B23_CONTACT_COVERAGE_MASKED mode="
           << contact_coverage_fault_mode_ << " entity=" << selected_name
           << " entity_id=" << selected << " iteration=" << info.iterations
-          << " removed=" << removed << std::endl;
+          << " masked=1" << std::endl;
     std::fflush(stdout);
   }
 
@@ -3492,6 +3495,14 @@ private:
     out.paused = info.paused;
     for (const auto &[collision, bit] : collision_contact_bits_)
     {
+      // Mask only the backend's pinned coverage sample. Removing the ECS
+      // ContactSensorData component would race Gazebo's Contact::PostUpdate
+      // consumer and can crash the simulator.
+      if (contact_coverage_fault_fired_ &&
+          info.iterations == contact_coverage_fault_target_iteration_ &&
+          collision == contact_coverage_fault_target_entity_ &&
+          bit == contact_coverage_fault_target_bit_)
+        continue;
       const auto *component = ecm.Component<gz::sim::components::ContactSensorData>(collision);
       if (!component) continue;
       const auto &contacts = component->Data();
@@ -3733,6 +3744,8 @@ private:
   std::string receipt_fault_mode_;
   std::string contact_coverage_fault_mode_;
   std::uint64_t contact_coverage_fault_target_iteration_{};
+  gz::sim::Entity contact_coverage_fault_target_entity_{};
+  std::uint64_t contact_coverage_fault_target_bit_{};
   bool contact_coverage_fault_fired_{};
   bool receipt_fault_used_{};
   std::optional<std::pair<ReceiptFacts, std::int64_t>> held_policy_receipt_;
