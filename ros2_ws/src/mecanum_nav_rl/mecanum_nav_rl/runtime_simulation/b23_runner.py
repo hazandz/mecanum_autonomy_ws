@@ -127,7 +127,10 @@ def verify_r09b_task_contact(transition, contact_state):
 
 async def restore_r09b_fixture_after_contact_pulse(io, *, deadline_ns,
                                                   after_status_sequence,
-                                                  after_physics_iteration):
+                                                  after_physics_iteration,
+                                                  zero_receipt,
+                                                  zero_applied_state,
+                                                  zero_applied_received_ns):
     """Capture a healthy fixture contact pulse, then clear contact before B1 cutoff."""
     def matching_status(*, active, after_sequence=0, after_iteration=0):
         status = io.ingress.backend_state
@@ -159,7 +162,9 @@ async def restore_r09b_fixture_after_contact_pulse(io, *, deadline_ns,
             +int(contact.header.stamp.nanosec), 'steady_ns':io.now()}
     io.emit('R09B_FIXTURE_CONTACT_PULSE_OBSERVED', contact_facts)
     await io.set_r09b_task_fixture_pose(pose_name='initial_pose',
-        deadline_ns=deadline_ns)
+        deadline_ns=deadline_ns, applied_zero_witness={
+            'receipt':zero_receipt, 'state':zero_applied_state,
+            'received_ns':zero_applied_received_ns})
     empty = await io.until(lambda: matching_status(active=False,
         after_sequence=contact.status_sequence,
         after_iteration=contact.physics_iteration), deadline_ns=deadline_ns,
@@ -2088,7 +2093,8 @@ class TrainingWorkerIO:
         await self.call(self.pose_client, request, timeout_s=timeout_s, phase='robot_set_pose')
         return True
 
-    async def set_r09b_task_fixture_pose(self, *, pose_name, deadline_ns, policy_receipt=None):
+    async def set_r09b_task_fixture_pose(self, *, pose_name, deadline_ns, policy_receipt=None,
+                                         applied_zero_witness=None):
         """Move only the pinned R09b world obstacle while actual robot zero is bound."""
         from rclpy.serialization import serialize_message
         from ros_gz_interfaces.msg import Entity
@@ -2111,7 +2117,54 @@ class TrainingWorkerIO:
             and state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
             and state.applied_final_publish_sequence == receipt.final_publish_sequence)
         emergency_zero = bool(state.local_zero_override and state.actuator_inhibited)
-        if not (applied_zero or emergency_zero) or state.fault_flags or state.paused:
+        witness_used = False
+        if pose_name == 'initial_pose' and not (applied_zero or emergency_zero):
+            witness = applied_zero_witness
+            witness_state = witness.get('state') if isinstance(witness, dict) else None
+            witness_receipt = witness.get('receipt') if isinstance(witness, dict) else None
+            witness_received_ns = witness.get('received_ns') if isinstance(witness, dict) else None
+            latest = self.final.last_publication
+            witness_age_ns = self.now() - witness_received_ns if type(witness_received_ns) is int else None
+            witness_stamp_ns = (int(witness_state.header.stamp.sec) * 1_000_000_000
+                + int(witness_state.header.stamp.nanosec)) if witness_state is not None else None
+            witness_applied_stamp_ns = (int(witness_state.applied_sim_stamp.sec) * 1_000_000_000
+                + int(witness_state.applied_sim_stamp.nanosec)) if witness_state is not None else None
+            witness_matches = bool(
+                witness_state is not None and witness_receipt is not None
+                and type(witness_age_ns) is int and 0 <= witness_age_ns <= 500_000_000
+                and witness_state.applied_receipt_valid and not witness_state.local_zero_override
+                and witness_state.fault_flags == 0 and not witness_state.paused
+                and not witness_state.actuator_inhibited
+                and witness_state.coverage_complete and witness_state.contact_source_healthy
+                and witness_state.required_collision_mask != 0
+                and witness_state.required_collision_mask == witness_state.observed_collision_mask
+                and not witness_state.contact_active
+                and witness_state.backend_instance_id == self.descriptor['backend_instance_id']
+                and witness_state.session_id == self.descriptor['session_id']
+                and witness_state.config_hash == self.descriptor['config_hash']
+                and witness_state.physics_iteration > 0
+                and witness_state.applied_physics_iteration == witness_state.physics_iteration
+                and witness_applied_stamp_ns == witness_stamp_ns
+                and witness_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
+                and witness_state.applied_final_publisher_instance_id == witness_receipt.final_publisher_instance_id
+                and witness_state.applied_final_publish_sequence == witness_receipt.final_publish_sequence
+                and witness_receipt.source == witness_receipt.SOURCE_POLICY
+                and not any((witness_receipt.final_command.linear.x,
+                    witness_receipt.final_command.linear.y,witness_receipt.final_command.angular.z))
+                and latest is not None
+                and latest.final_publisher_instance_id == self.final.publisher_instance_id
+                and latest.final_publish_sequence >= witness_receipt.final_publish_sequence
+                and latest.source in (latest.SOURCE_POLICY,latest.SOURCE_SAFE_STOP)
+                and not any((latest.final_command.linear.x,latest.final_command.linear.y,
+                    latest.final_command.angular.z))
+                and state.status_sequence > witness_state.status_sequence
+                and state.physics_iteration > witness_state.physics_iteration
+                and state.contact_active and state.coverage_complete and state.contact_source_healthy
+                and state.required_collision_mask != 0
+                and state.required_collision_mask == state.observed_collision_mask)
+            witness_used = witness_matches
+        if (not (applied_zero or emergency_zero or witness_used)
+                or state.fault_flags or state.paused):
             raise RuntimeError('R09b fixture mutation requires observed applied/emergency zero while unpaused')
         if (state.backend_instance_id != self.descriptor['backend_instance_id']
                 or state.session_id != self.descriptor['session_id']
@@ -2124,6 +2177,10 @@ class TrainingWorkerIO:
         request.pose.orientation.w = math.cos(pose['yaw_rad'] / 2)
         request.pose.orientation.z = math.sin(pose['yaw_rad'] / 2)
         started = self.now()
+        if witness_used:
+            witness_age_ns = started - witness_received_ns
+            if not 0 <= witness_age_ns <= 500_000_000:
+                raise RuntimeError('R09b fixture restore zero witness exceeded 500 ms freshness')
         remaining = min(1.0, (deadline_ns - started) / 1e9)
         if remaining <= 0:
             raise TimeoutError('R09b fixture SetEntityPose has no remaining step budget')
@@ -2133,6 +2190,8 @@ class TrainingWorkerIO:
             'zero_receipt_sequence':receipt.final_publish_sequence,
             'zero_receipt_source':receipt.source,
             'zero_applied':applied_zero, 'emergency_zero':emergency_zero,
+            'recent_zero_witness_used':witness_used,
+            'zero_witness_age_ns':(witness_age_ns if witness_used else None),
             'backend_instance_id':state.backend_instance_id,
             'session_id':state.session_id, 'config_hash':state.config_hash,
             'request_cdr_hex':serialize_message(request).hex(), 'started_ns':started})
@@ -3323,7 +3382,8 @@ class TrainingWorkerIO:
                 and self.ingress.backend_state.applied_final_publish_sequence
                     == receipt.final_publish_sequence else None,
                 deadline_ns=deadline, phase='R09b exact zero POLICY native application before fixture pose')
-            await after_policy_applied(receipt, applied, deadline)
+            applied_received_ns = self.ingress.backend_received_ns
+            await after_policy_applied(receipt, applied, deadline, applied_received_ns)
         minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
         last_pending = None
         last_pending_key = None
@@ -3740,7 +3800,8 @@ async def training_child(path):
             fixture_moved = False
             primary = None
             try:
-                async def move_fixture_after_zero_policy(receipt, applied_state, deadline_ns):
+                async def move_fixture_after_zero_policy(receipt, applied_state, deadline_ns,
+                                                         applied_received_ns):
                     nonlocal fixture_moved
                     if any((receipt.final_command.linear.x, receipt.final_command.linear.y,
                             receipt.final_command.angular.z)):
@@ -3758,7 +3819,9 @@ async def training_child(path):
                     await restore_r09b_fixture_after_contact_pulse(io,
                         deadline_ns=deadline_ns,
                         after_status_sequence=applied_state.status_sequence,
-                        after_physics_iteration=applied_state.physics_iteration)
+                        after_physics_iteration=applied_state.physics_iteration,
+                        zero_receipt=receipt, zero_applied_state=applied_state,
+                        zero_applied_received_ns=applied_received_ns)
                     fixture_moved = False
                 transition = await io.policy_step(b1, (0., 0., 0.),
                     after_policy_applied=move_fixture_after_zero_policy)

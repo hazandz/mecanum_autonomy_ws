@@ -331,20 +331,89 @@ def test_r09b_contact_pulse_is_captured_and_fixture_cleared_before_cutoff():
             if value is not None:
                 return value
         raise AssertionError('finite fake observations exhausted: '+phase)
-    async def set_pose(*, pose_name, deadline_ns):
-        timeline.append(('set_pose', pose_name, deadline_ns))
+    zero_receipt = NS(final_publish_sequence=88)
+    zero_applied_state = status(8, 80, False)
+    async def set_pose(*, pose_name, deadline_ns, applied_zero_witness=None):
+        timeline.append(('set_pose', pose_name, deadline_ns, applied_zero_witness))
     def emit(event, facts):
         timeline.append((event, facts))
     io.until, io.set_r09b_task_fixture_pose, io.emit = until, set_pose, emit
     result = asyncio.run(restore_r09b_fixture_after_contact_pulse(io, deadline_ns=1000,
-        after_status_sequence=8, after_physics_iteration=80))
+        after_status_sequence=8, after_physics_iteration=80,
+        zero_receipt=zero_receipt, zero_applied_state=zero_applied_state,
+        zero_applied_received_ns=400))
     assert result['contact']['status_sequence'] == 10
     assert result['restored_empty']['status_sequence'] == 13
     tags = [row[0] for row in timeline]
     assert tags.index('R09B_FIXTURE_CONTACT_PULSE_OBSERVED') < tags.index('set_pose')
     assert timeline[tags.index('set_pose')][1] == 'initial_pose'
+    assert timeline[tags.index('set_pose')][3]['receipt'] is zero_receipt
+    assert timeline[tags.index('set_pose')][3]['state'] is zero_applied_state
+    assert timeline[tags.index('set_pose')][3]['received_ns'] == 400
     assert tags.index('set_pose') < tags.index('R09B_FIXTURE_RESTORED_COVERED_EMPTY')
     assert len(batches) == 0
+
+
+def test_r09b_restore_accepts_only_fresh_zero_witness_and_current_zero_output():
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import R09B_TASK_FIXTURE, TrainingWorkerIO
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt, SimulationContactState
+    from ros_gz_interfaces.srv import SetEntityPose
+
+    def state(sequence, iteration, *, applied, contact, applied_sequence=88):
+        value = SimulationContactState()
+        value.backend_instance_id=12; value.session_id='session-1'; value.config_hash='c'*64
+        value.status_sequence=sequence; value.physics_iteration=iteration
+        value.coverage_complete=True; value.contact_source_healthy=True; value.contact_active=contact
+        value.required_collision_mask=3; value.observed_collision_mask=3
+        value.fault_flags=0; value.paused=False; value.actuator_inhibited=False; value.local_zero_override=False
+        value.applied_receipt_valid=applied
+        value.applied_final_publisher_instance_id=34 if applied else 0
+        value.applied_final_publish_sequence=applied_sequence if applied else 0
+        value.applied_physics_iteration=iteration if applied else 0
+        value.header.stamp.sec=1; value.header.stamp.nanosec=iteration*10_000_000
+        value.applied_sim_stamp.sec=1 if applied else 0
+        value.applied_sim_stamp.nanosec=iteration*10_000_000 if applied else 0
+        return value
+
+    io = object.__new__(TrainingWorkerIO)
+    io.descriptor={'task_fixture':dict(R09B_TASK_FIXTURE),'backend_instance_id':12,
+        'session_id':'session-1','config_hash':'c'*64}
+    witness_state=state(8,80,applied=True,contact=False)
+    current_state=state(9,81,applied=False,contact=True)
+    policy=FinalIssuedCommandReceipt(); policy.final_publisher_instance_id=34
+    policy.final_publish_sequence=88; policy.source=policy.SOURCE_POLICY
+    latest=FinalIssuedCommandReceipt(); latest.final_publisher_instance_id=34
+    latest.final_publish_sequence=89; latest.source=latest.SOURCE_SAFE_STOP
+    io.final=NS(publisher_instance_id=34,last_publication=latest)
+    io.ingress=NS(backend_state=current_state)
+    io.pose_type=SetEntityPose; io.pose_client=object(); io.now=lambda:400_000_000
+    calls=[]; emitted=[]
+    async def call(client,request,**kwargs):
+        calls.append((request,kwargs)); response=SetEntityPose.Response(); response.success=True; return response
+    io.call=call; io.emit=lambda event,facts:emitted.append((event,facts))
+    asyncio.run(io.set_r09b_task_fixture_pose(pose_name='initial_pose',
+        deadline_ns=1_000_000_000,applied_zero_witness={
+            'receipt':policy,'state':witness_state,'received_ns':100_000_000}))
+    assert len(calls)==1
+    request_facts=next(f for n,f in emitted if n=='R09B_FIXTURE_POSE_REQUESTED')
+    assert request_facts['recent_zero_witness_used'] is True
+    assert request_facts['zero_witness_age_ns']==300_000_000
+
+    calls.clear(); io.now=lambda:600_000_001
+    with pytest.raises(RuntimeError,match='observed applied/emergency zero'):
+        asyncio.run(io.set_r09b_task_fixture_pose(pose_name='initial_pose',
+            deadline_ns=1_000_000_000,applied_zero_witness={
+                'receipt':policy,'state':witness_state,'received_ns':100_000_000}))
+    assert calls==[]
+
+    calls.clear(); io.now=lambda:400_000_000
+    latest.final_command.linear.x=.01
+    with pytest.raises(RuntimeError,match='bound zero final command'):
+        asyncio.run(io.set_r09b_task_fixture_pose(pose_name='initial_pose',
+            deadline_ns=1_000_000_000,applied_zero_witness={
+                'receipt':policy,'state':witness_state,'received_ns':100_000_000}))
+    assert calls==[]
 
 
 def test_r09_scenario_identity_reads_ready_loader_artifact():
@@ -1971,7 +2040,7 @@ def worker():
     value.last_clock_ns, value.last_clock_advance_ns = 0, clock.ns
     value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=0)))
     value.emit = lambda _name, _facts: None
-    value.ingress = NS(fault=None, backend_state=None)
+    value.ingress = NS(fault=None, backend_state=None, backend_received_ns=clock.ns)
     return value, clock
 
 
@@ -2379,6 +2448,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if enabled and timing == 'r09b_callback' and adapter.command is not None:
             value.ingress.backend_state.applied_final_publish_sequence = 4
             value.ingress.backend_state.applied_receipt_valid = True
+            value.ingress.backend_received_ns = clock.ns
     adapter = NS(safe_stop_sequence=1,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
@@ -2455,10 +2525,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         return transition
     b1 = NS(begin_step=lambda: pending, record_issuance=record, commit_step=commit)
     callback_calls=[]
-    async def after_policy_applied(receipt, state, deadline_ns):
+    async def after_policy_applied(receipt, state, deadline_ns, applied_received_ns):
         history.append(('r09b_fixture_after_exact_zero_application',
-            receipt.final_publish_sequence, state.applied_final_publish_sequence))
-        callback_calls.append((receipt,state,deadline_ns))
+            receipt.final_publish_sequence, state.applied_final_publish_sequence,
+            applied_received_ns))
+        callback_calls.append((receipt,state,deadline_ns,applied_received_ns))
     if timing in ('ready','r09b_callback'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else {})
