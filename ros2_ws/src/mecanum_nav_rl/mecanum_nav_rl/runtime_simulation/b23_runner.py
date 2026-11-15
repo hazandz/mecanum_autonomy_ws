@@ -80,6 +80,21 @@ def validate_r09b_task_fixture(value):
     return R09B_TASK_FIXTURE
 
 
+def bind_install_ament_prefix(environment, install_prefix):
+    """Ensure runtime ament lookups see the exact packet-bound install first."""
+    import os
+    prefix = str(Path(install_prefix).resolve(strict=True))
+    existing = environment.get('AMENT_PREFIX_PATH', '')
+    if not isinstance(existing, str):
+        raise TypeError('AMENT_PREFIX_PATH must be a path string')
+    paths = [prefix]
+    paths.extend(item for item in existing.split(os.pathsep)
+        if item and str(Path(item).resolve()) != prefix)
+    bound = dict(environment)
+    bound['AMENT_PREFIX_PATH'] = os.pathsep.join(paths)
+    return bound
+
+
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -4580,6 +4595,9 @@ def verify_packet(path, expected_sha256):
             or os.getuid() != 1000 or pwd.getpwuid(os.getuid()).pw_name != 'hazan'
             or sys.version_info[:3] != (3,12,3) or str(Path(sys.executable).absolute()) != packet['python']):
         raise ValueError('packet authority/profile/phase mismatch')
+    ament_prefixes = packet.get('environment', {}).get('AMENT_PREFIX_PATH', '').split(os.pathsep)
+    if str(prefix) not in ament_prefixes:
+        raise ValueError('runtime AMENT_PREFIX_PATH omits the exact pinned install prefix')
     import importlib
     for name in ('mecanum_nav_rl.runtime_simulation.b23_runner',
                  'mecanum_nav_rl.runtime_simulation.local_training_coordinator',
@@ -5354,7 +5372,9 @@ def prepare_packet(args):
     environment_keys = ('HOME','USER','LOGNAME','PATH','LANG','LC_ALL','LD_LIBRARY_PATH','PYTHONPATH',
         'AMENT_PREFIX_PATH','CMAKE_PREFIX_PATH','COLCON_PREFIX_PATH','ROS_DISTRO','ROS_VERSION','ROS_PYTHON_VERSION',
         'RMW_IMPLEMENTATION','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS','LIBGL_ALWAYS_SOFTWARE','GZ_CONFIG_PATH')
-    environment = {k: os.environ[k] for k in environment_keys if k in os.environ}
+    environment = bind_install_ament_prefix(
+        {k: os.environ[k] for k in environment_keys if k in os.environ}, prefix,
+    )
     environment.update(ROS_DOMAIN_ID='84', ROS_HOME=str(root/'ros-home'), ROS_LOG_DIR=str(root/'ros-log'),
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)

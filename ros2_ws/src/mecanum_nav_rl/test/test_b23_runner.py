@@ -238,6 +238,19 @@ def test_r09b_task_fixture_is_exact_and_pinned_to_existing_world_model():
         validate_r09b_task_fixture(changed)
 
 
+def test_runtime_packet_ament_prefix_places_exact_install_before_underlays(tmp_path):
+    import os
+    from mecanum_nav_rl.runtime_simulation.b23_runner import bind_install_ament_prefix
+    install = tmp_path/'install'; install.mkdir()
+    other = tmp_path/'other'; other.mkdir()
+    bound = bind_install_ament_prefix(
+        {'AMENT_PREFIX_PATH':os.pathsep.join((str(other), str(install), '/opt/ros/jazzy')),
+         'PYTHONPATH':'kept'}, install)
+    assert bound['AMENT_PREFIX_PATH'].split(os.pathsep) == [
+        str(install.resolve()), str(other), '/opt/ros/jazzy']
+    assert bound['PYTHONPATH'] == 'kept'
+
+
 def test_r09b_fixture_set_pose_uses_zero_bound_robot_and_exact_entity():
     import asyncio
     from mecanum_nav_rl.runtime_simulation.b23_runner import (
@@ -2762,20 +2775,24 @@ def test_failed_state_clear_only_targets_the_bound_completed_invocation(monkeypa
     assert not calls
 
 
-def test_packet_environment_keeps_gazebo_vendor_discovery_without_unlisted_values():
+def test_packet_environment_keeps_gazebo_vendor_discovery_and_install_ament_prefix(tmp_path):
     import ast
+    import os
     from pathlib import Path
     from mecanum_nav_rl.runtime_simulation import b23_runner as module
     tree=ast.parse(Path(module.__file__).read_bytes())
     producer=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='prepare_packet')
     statements=[node for node in producer.body if isinstance(node,ast.Assign) and
         any(isinstance(target,ast.Name) and target.id in ('environment_keys','environment') for target in node.targets)]
+    install=tmp_path/'install'; install.mkdir()
     namespace={'os':NS(environ={'GZ_CONFIG_PATH':'/vendor/sim/share/gz:/vendor/transport/share/gz',
-        'PATH':'/vendor/bin','UNLISTED_SECRET':'must-not-leak'})}
+        'PATH':'/vendor/bin','AMENT_PREFIX_PATH':'/opt/ros/jazzy','UNLISTED_SECRET':'must-not-leak'}),
+        'Path':Path, 'prefix':install, 'bind_install_ament_prefix':module.bind_install_ament_prefix}
     exec(compile(ast.fix_missing_locations(ast.Module(body=statements,type_ignores=[])),module.__file__,'exec'),namespace)
     environment=namespace['environment']
     assert environment.get('GZ_CONFIG_PATH')==namespace['os'].environ['GZ_CONFIG_PATH'], environment
     assert environment['PATH']=='/vendor/bin' and 'UNLISTED_SECRET' not in environment
+    assert environment['AMENT_PREFIX_PATH'].split(os.pathsep)==[str(install.resolve()),'/opt/ros/jazzy']
 
 
 def test_graph_failure_preserves_observed_endpoint_identity_without_binding():
