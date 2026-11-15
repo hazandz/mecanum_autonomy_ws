@@ -18,7 +18,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
-    expected_r05_revoked_query_ack,
+    expected_r05_revoked_query_ack, verify_r07a_unexpected_pause,
+    verify_r07b_revocation,
 )
 
 
@@ -36,6 +37,8 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R06a') == 'fault_task'
     assert campaign_phase('R06b') == 'fault_task'
     assert campaign_phase('R06c') == 'fault_task'
+    assert campaign_phase('R07a') == 'fault_task'
+    assert campaign_phase('R07b') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -49,7 +52,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R07a')
+        campaign_phase('R09a')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -144,6 +147,8 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R06a') == ['set_pose_ack_with_wrong_target']
     assert case_fault_hooks('R06b') == ['omit_one_settle_physics_iteration']
     assert case_fault_hooks('R06c') == ['hold_observation0_adjacent_receipt_until_reset_deadline']
+    assert case_fault_hooks('R07a') == ['unexpected_pause_during_active_session']
+    assert case_fault_hooks('R07b') == ['time_only_rollback_after_contact_proof']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -166,6 +171,80 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+def test_r07a_unexpected_pause_requires_world_ack_native_zero_and_no_followon_policy():
+    world = NS(success=True, pause=True)
+    state = NS(fault_flags=1, local_zero_override=True, actuator_inhibited=True)
+    result = verify_r07a_unexpected_pause(world_ack=world, backend_state=state,
+        pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
+        reset_count_before='reset-0', reset_count_after='reset-0')
+    assert result['native_zero_override']
+    with pytest.raises(RuntimeError, match='POLICY receipt after unexpected pause'):
+        verify_r07a_unexpected_pause(world_ack=world, backend_state=state,
+            pre_pause_policy_receipts=1, post_pause_policy_receipts=2,
+            reset_count_before='reset-0', reset_count_after='reset-0')
+    with pytest.raises(RuntimeError, match='native unexpected-pause'):
+        verify_r07a_unexpected_pause(world_ack=world,
+            backend_state=NS(fault_flags=0, local_zero_override=False, actuator_inhibited=False),
+            pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
+            reset_count_before='reset-0', reset_count_after='reset-0')
+
+
+def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    original = NS(request_bytes=b'original-query',
+        response_bytes=b'verified-query',
+        request=NS(operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY),
+        response=NS(contact_capability_state=Control.Response.CAPABILITY_VERIFIED))
+    def revoked(request_bytes=b'original-query'):
+        return NS(request_bytes=request_bytes, response_bytes=b'revoked-query',
+            request=NS(operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY),
+            response=NS(result=Control.Response.RESULT_REJECTED,
+                reason_code=Control.Response.REASON_CONTACT_PROBE_FAILED,
+                contact_capability_state=Control.Response.CAPABILITY_FAILED,
+                proof_backend_instance_id=0, proof_session_id='', proof_config_hash='',
+                proof_asset_manifest_sha256=''))
+    inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT, request_sequence=7),
+        response=NS(result=Control.Response.RESULT_APPLIED,
+            reason_code=Control.Response.REASON_NONE, applied_binding_revision=3))
+    result = verify_r07b_revocation(response=revoked().response,
+        original_proof=original, sim_before_ns=900, sim_after_ns=1,
+        replay_ack=revoked(), fresh_ack=revoked(b'new-query'), inhibit_ack=inhibit)
+    assert result['query_replay_revoked'] and result['fresh_query_revoked']
+    with pytest.raises(RuntimeError, match='replayed QUERY exposed proof'):
+        stale_response = NS(result=Control.Response.RESULT_APPLIED,
+            reason_code=Control.Response.REASON_NONE,
+            contact_capability_state=Control.Response.CAPABILITY_VERIFIED,
+            proof_backend_instance_id=8, proof_session_id='session',
+            proof_config_hash='a'*64, proof_asset_manifest_sha256='b'*64)
+        verify_r07b_revocation(response=original.response, original_proof=original,
+            sim_before_ns=900, sim_after_ns=1,
+            replay_ack=NS(**{**revoked().__dict__, 'response_bytes':b'verified-query',
+                'response':stale_response}), fresh_ack=revoked(), inhibit_ack=inhibit)
+
+
+def test_r07b_worker_clock_monitor_accepts_only_one_packet_armed_rollback():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.deadline_ns = 1000
+    worker.now = lambda: 20
+    worker.ros_now = lambda: 5
+    worker.last_clock_ns = 10
+    worker.last_clock_advance_ns = 10
+    worker.expected_paused = False
+    worker._r07b_rollback_pending_before_ns = 15
+    worker._r07b_rollback_observed = None
+    worker.emit = lambda kind, facts: None
+    worker.ingress = NS(fault=None, backend_state=None)
+    worker.check()
+    assert worker._r07b_rollback_observed == {
+        'before_ns':15,'after_ns':5,'observed_steady_ns':20}
+    worker.ros_now = lambda: 4
+    with pytest.raises(RuntimeError, match='ROS clock rolled backward'):
+        worker.check()
 
 
 def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):

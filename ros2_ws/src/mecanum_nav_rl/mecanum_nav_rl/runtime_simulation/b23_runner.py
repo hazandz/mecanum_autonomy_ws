@@ -24,7 +24,8 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R02e':'fault_task', 'R02f':'fault_task', 'R02g':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
     'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task',
-    'R06a':'fault_task', 'R06b':'fault_task', 'R06c':'fault_task', 'R08': 'soak'}
+    'R06a':'fault_task', 'R06b':'fault_task', 'R06c':'fault_task',
+    'R07a':'fault_task', 'R07b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -48,6 +49,8 @@ CASE_HOOKS = {
     'R06a': ('set_pose_ack_with_wrong_target',),
     'R06b': ('omit_one_settle_physics_iteration',),
     'R06c': ('hold_observation0_adjacent_receipt_until_reset_deadline',),
+    'R07a': ('unexpected_pause_during_active_session',),
+    'R07b': ('time_only_rollback_after_contact_proof',),
     'R08': (),
 }
 
@@ -57,6 +60,60 @@ def service_properties_for(active_s):
     if type(active_s) is not int or active_s not in (120, 900):
         raise ValueError('unsupported B2.3 active runtime budget')
     return (*SERVICE_PROPERTIES, f'RuntimeMaxSec={active_s + 60}s')
+
+
+def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
+                           sim_after_ns, replay_ack, fresh_ack, inhibit_ack):
+    """Require rollback, revoked QUERY replay/fresh response, and INHIBIT ACK."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    if sim_after_ns >= sim_before_ns:
+        raise RuntimeError('R07b did not observe simulation time rollback')
+    if original_proof.response.contact_capability_state != Control.Response.CAPABILITY_VERIFIED:
+        raise RuntimeError('R07b original contact proof was not verified')
+    for label, ack in (('replayed', replay_ack), ('fresh', fresh_ack)):
+        if (ack.request.operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+                or ack.response.result != Control.Response.RESULT_REJECTED
+                or ack.response.reason_code != Control.Response.REASON_CONTACT_PROBE_FAILED
+                or ack.response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+                or ack.response.proof_backend_instance_id != 0
+                or ack.response.proof_session_id or ack.response.proof_config_hash
+                or ack.response.proof_asset_manifest_sha256):
+            raise RuntimeError('R07b ' + label + ' QUERY exposed proof after clock rollback')
+    if (replay_ack.request_bytes != original_proof.request_bytes
+            or replay_ack.response_bytes == original_proof.response_bytes):
+        raise RuntimeError('R07b exact QUERY replay did not return a revoked response')
+    if (response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+            or response.proof_backend_instance_id != 0 or response.proof_session_id):
+        raise RuntimeError('R07b contact proof remains valid after rollback')
+    if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
+            or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
+            or inhibit_ack.response.reason_code != Control.Response.REASON_NONE):
+        raise RuntimeError('R07b lacks the native applied INHIBIT after rollback')
+    return {'clock_rollback_observed':True, 'contact_proof_invalidated':True,
+        'native_inhibit_applied':True, 'simulation_time_before_ns':sim_before_ns,
+        'simulation_time_after_ns':sim_after_ns,
+        'contact_state':response.contact_capability_state,
+        'query_replay_revoked':True,'fresh_query_revoked':True,
+        'inhibit_request_sequence':inhibit_ack.request.request_sequence,
+        'inhibit_revision':inhibit_ack.response.applied_binding_revision}
+
+
+def verify_r07a_unexpected_pause(*, world_ack, backend_state, pre_pause_policy_receipts,
+                                 post_pause_policy_receipts, reset_count_before,
+                                 reset_count_after):
+    """Require external pause to produce native fault/zero without later POLICY."""
+    if not world_ack.success or not world_ack.pause:
+        raise RuntimeError('R07a world did not acknowledge the requested pause')
+    if (backend_state is None or backend_state.fault_flags != 1
+            or not backend_state.local_zero_override or backend_state.actuator_inhibited is False):
+        raise RuntimeError('R07a lacks native unexpected-pause fault and zero override')
+    if post_pause_policy_receipts != pre_pause_policy_receipts:
+        raise RuntimeError('R07a observed a POLICY receipt after unexpected pause')
+    if reset_count_after != reset_count_before:
+        raise RuntimeError('R07a reset/observation0 advanced after unexpected pause')
+    return {'world_pause_acknowledged':True,'native_fault_flags':backend_state.fault_flags,
+        'native_zero_override':True,'policy_receipt_count_unchanged':True,
+        'reset_count_unchanged':True}
 
 
 SOAK_ACTIONS = (
@@ -1192,6 +1249,8 @@ class TrainingWorkerIO:
         self._native_input_watermark = 0
         self.contact_ack = None
         self.contact_start_request_sequence = None
+        self._r07b_rollback_pending_before_ns = None
+        self._r07b_rollback_observed = None
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
@@ -1426,7 +1485,15 @@ class TrainingWorkerIO:
         if now >= self.deadline_ns:
             raise TimeoutError('B23 active deadline reached')
         if ros < self.last_clock_ns:
-            raise RuntimeError('ROS clock rolled backward')
+            rollback_before = self._r07b_rollback_pending_before_ns
+            if (rollback_before is None or ros >= rollback_before
+                    or self._r07b_rollback_observed is not None):
+                raise RuntimeError('ROS clock rolled backward')
+            self._r07b_rollback_observed = {
+                'before_ns': rollback_before, 'after_ns': ros, 'observed_steady_ns': now}
+            self._r07b_rollback_pending_before_ns = None
+            self.last_clock_ns, self.last_clock_advance_ns = ros, now
+            self.emit('B23_R07B_CLOCK_ROLLBACK_OBSERVED', self._r07b_rollback_observed)
         if ros > self.last_clock_ns:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
         if not self.expected_paused and now - self.last_clock_advance_ns > 1_000_000_000:
@@ -1495,12 +1562,47 @@ class TrainingWorkerIO:
                 self.calls.remove(future)
 
     async def control_world(self, *, world_name, pause, timeout_s):
+        from rclpy.serialization import serialize_message
         if world_name != 'b2_training_arena' or type(pause) is not bool:
             raise ValueError('world control target invalid')
         request = self.control_world_type.Request()
         request.world_control.pause = pause
-        await self.call(self.world_client, request, timeout_s=timeout_s, phase='world_pause' if pause else 'world_resume')
-        return True
+        response = await self.call(self.world_client, request, timeout_s=timeout_s,
+            phase='world_pause' if pause else 'world_resume')
+        self.emit('WORLD_PAUSE_CONTROL', {'world':world_name,'requested_pause':pause,
+            'request_cdr_hex':serialize_message(request).hex(),
+            'response_success':response.success,'response_pause':response.pause,
+            'steady_ns':self.now()})
+        return response
+
+    async def reset_world_time_only(self, *, timeout_s):
+        """Apply the packet-pinned Gazebo time_only rollback through ControlWorld."""
+        from rclpy.serialization import serialize_message
+        before = self.ros_now()
+        request = self.control_world_type.Request()
+        request.world_control.reset.time_only = True
+        request.world_control.reset.all = False
+        request.world_control.reset.model_only = False
+        request.world_control.pause = False
+        if 'time_only_rollback_after_contact_proof' not in self.fault_hooks:
+            raise RuntimeError('R07b time_only reset is not authorized by this packet hook')
+        self._r07b_rollback_pending_before_ns = before
+        self._r07b_rollback_observed = None
+        response = await self.call(self.world_client, request, timeout_s=timeout_s,
+            phase='R07b_world_time_only_rollback')
+        after = self.ros_now()
+        self.emit('B23_R07B_TIME_ONLY_RESET', {
+            'world':'b2_training_arena','pause':False,'reset_all':False,
+            'reset_time_only':True,'reset_model_only':False,
+            'request_cdr_hex':serialize_message(request).hex(),
+            'response_success':response.success,'response_pause':response.pause,
+            'sim_before_ns':before,'sim_after_ns':after,'steady_ns':self.now()})
+        if not response.success or response.pause:
+            raise RuntimeError('R07b world time_only API returned wrong success/pause state')
+        if after >= before or self._r07b_rollback_observed is None:
+            raise RuntimeError('R07b clock rollback was not observed through the worker clock monitor')
+        self.last_clock_ns, self.last_clock_advance_ns = after, self.now()
+        return before, after
 
     async def set_entity_pose(self, *, world_name, entity_name, target, timeout_s):
         from ros_gz_interfaces.msg import Entity
@@ -3117,6 +3219,109 @@ async def training_child(path):
                     'policy_steps_committed':0, **checked}
             if outcome is None:
                 raise RuntimeError(packet['case'] + ' expected reset acceptance rejection was not observed')
+        elif packet['case'] == 'R07a':
+            if packet['fault_hooks'] != case_fault_hooks('R07a'):
+                raise RuntimeError('R07a packet does not pin the unexpected-pause hook')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            transition = await io.policy_step(b1, (0.20, 0.0, 0.0))
+            if transition.termination.terminated or transition.termination.truncated:
+                raise RuntimeError('R07a POLICY step terminated before external pause')
+            before_policy = sum(1 for receipt in io.ingress.receipts
+                if receipt.source == receipt.SOURCE_POLICY)
+            reset_fact_before = b1.lifecycle.snapshot.reset_commit_facts
+            previous_ros = io.ros_now()
+            io.expected_paused = True
+            world_ack = await io.control_world(world_name='b2_training_arena', pause=True,
+                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            io.emit('B23_R07A_UNEXPECTED_PAUSE_ARMED', {
+                'after_policy_step':transition.transition_identity.step_index,
+                'pre_pause_policy_receipt_count':before_policy,
+                'pre_pause_reset_fact':repr(reset_fact_before),
+                'sim_ns_before_pause':previous_ros,'steady_ns':io.now()})
+            state = await io.until(lambda: io.ingress.backend_state
+                if (io.ingress.backend_state is not None
+                    and io.ingress.backend_state.fault_flags == 1
+                    and io.ingress.backend_state.local_zero_override
+                    and io.ingress.backend_state.actuator_inhibited) else None,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07a native unexpected-pause zero/fault',
+                expected_native_fault_flags=1)
+            policy_after = sum(1 for receipt in io.ingress.receipts
+                if receipt.source == receipt.SOURCE_POLICY)
+            reset_fact_after = b1.lifecycle.snapshot.reset_commit_facts
+            checked = verify_r07a_unexpected_pause(world_ack=world_ack,
+                backend_state=state, pre_pause_policy_receipts=before_policy,
+                post_pause_policy_receipts=policy_after,
+                reset_count_before=reset_fact_before, reset_count_after=reset_fact_after)
+            await asyncio.sleep(min(.250, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            if io.now() >= io.deadline_ns:
+                raise TimeoutError('R07a pause hold reached active deadline')
+            resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
+                timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            io.expected_paused = False
+            io.last_clock_advance_ns = io.now()
+            await io.until(lambda: io.ros_now() if io.ros_now() > previous_ros else None,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07a simulation clock resumes after external pause',
+                expected_native_fault_flags=1)
+            inhibit_ack = await io.control.inhibit(
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            if not resume_ack.success or resume_ack.pause:
+                raise RuntimeError('R07a world resume was not acknowledged')
+            io.emit('B23_R07A_VERIFIED', {'checked':checked,
+                'world_pause_success':world_ack.success,'world_pause_state':world_ack.pause,
+                'world_resume_success':resume_ack.success,'world_resume_state':resume_ack.pause,
+                'native_status_sequence':state.status_sequence,
+                'native_inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                'native_inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                'steady_ns':io.now()})
+            outcome = {'case':'R07a','expected_unexpected_pause_fault':True,
+                **checked,'inhibit_applied':True,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R07b':
+            from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+            from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+            if (packet['fault_hooks'] != case_fault_hooks('R07b')
+                    or io.contact_ack is None or io.contact_start_request_sequence is None):
+                raise RuntimeError('R07b packet/contact proof binding is incomplete')
+            original = io.contact_ack
+            before, after = await io.reset_world_time_only(timeout_s=
+                min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
+            replay_ack = await io.control.replay(original,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            try:
+                fresh_ack = await io.control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                    probe_action=Control.Request.PROBE_ACTION_QUERY,
+                    probe_start_request_sequence=io.contact_start_request_sequence)
+            except BackendControlError as error:
+                if error.ack is None:
+                    raise
+                fresh_ack = error.ack
+            state = await io.until(lambda: io.ingress.backend_state
+                if (io.ingress.backend_state is not None
+                    and io.ingress.backend_state.fault_flags & 64
+                    and io.ingress.backend_state.local_zero_override) else None,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07b native clock rollback inhibit', expected_native_fault_flags=64)
+            inhibit_ack = await io.control.inhibit(
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            checked = verify_r07b_revocation(response=fresh_ack.response,
+                original_proof=original, sim_before_ns=before, sim_after_ns=after,
+                replay_ack=replay_ack, fresh_ack=fresh_ack, inhibit_ack=inhibit_ack)
+            io.emit('B23_R07B_VERIFIED', {'checked':checked,
+                'original_query_request_cdr_hex':original.request_bytes.hex(),
+                'original_query_response_cdr_hex':original.response_bytes.hex(),
+                'replay_query_request_cdr_hex':replay_ack.request_bytes.hex(),
+                'replay_query_response_cdr_hex':replay_ack.response_bytes.hex(),
+                'fresh_query_request_cdr_hex':fresh_ack.request_bytes.hex(),
+                'fresh_query_response_cdr_hex':fresh_ack.response_bytes.hex(),
+                'clock_fault_status_sequence':state.status_sequence,
+                'inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                'inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                'steady_ns':io.now()})
+            outcome = {'case':'R07b', **checked,'completed_ns':time.monotonic_ns()}
         elif packet['case'] in ('R02a','R02b'):
             if packet['case'] == 'R02b':
                 expected_env = case_environment(packet['case'], packet['fault_hooks'])
