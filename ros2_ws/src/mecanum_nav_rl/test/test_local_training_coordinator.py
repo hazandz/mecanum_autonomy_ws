@@ -316,6 +316,38 @@ def test_foreign_completed_ack_cannot_be_replayed():
     asyncio.run(exercise())
 
 
+def test_replay_response_from_replacement_backend_is_retained_as_rejected_ack():
+    session, client, clock, events = setup()
+    async def exercise():
+        original = await session.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+            deadline_ns=clock.ns + 1_000_000_000,
+            probe_action=Control.Request.PROBE_ACTION_QUERY,
+            probe_start_request_sequence=1)
+        def replacement_response(req, _n):
+            out = response(req)
+            out.backend_instance_id = 9
+            out.result = Control.Response.RESULT_REJECTED
+            out.reason_code = Control.Response.REASON_IDENTITY_MISMATCH
+            out.contact_capability_state = Control.Response.CAPABILITY_INVALIDATED
+            return out
+        client.respond = replacement_response
+        with pytest.raises(BackendControlError, match='identity/schema mismatch') as caught:
+            await session.replay(original, deadline_ns=clock.ns + 1_000_000_000)
+        rejected = caught.value.ack
+        assert rejected is not None
+        assert rejected.request_bytes == original.request_bytes
+        assert rejected.request.operation == Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+        assert rejected.response.backend_instance_id == 9
+        assert rejected.response.reason_code == Control.Response.REASON_IDENTITY_MISMATCH
+        assert rejected.response.contact_capability_state != Control.Response.CAPABILITY_VERIFIED
+        assert client.raw == [original.request_bytes, original.request_bytes]
+        rejected_events = [facts for name, facts in events
+            if name == 'CONTROL_REPLAY_RESPONSE_REJECTED']
+        assert rejected_events[-1]['response_cdr_hex'] == rejected.response_bytes.hex()
+        assert events[-1][0] == 'CONTROL_REPLAY_UNCERTAIN'
+    asyncio.run(exercise())
+
+
 def test_waiting_for_control_lock_uses_original_absolute_budget():
     session, client, clock, _ = setup()
     async def exercise():

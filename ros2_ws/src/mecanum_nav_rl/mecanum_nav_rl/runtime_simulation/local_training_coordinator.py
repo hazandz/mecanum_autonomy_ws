@@ -297,11 +297,18 @@ class BackendControlSession:
                 if observed >= deadline:
                     raise TimeoutError('replay ACK observed after deadline')
                 response = future.result()
-                if (not isinstance(response, Control.Response) or response.schema_version != 2
-                        or response.backend_instance_id != self.identity.backend_instance_id
-                        or response.request_sequence != request.request_sequence):
+                if not isinstance(response, Control.Response):
                     raise BackendControlError('replay ACK identity/schema mismatch')
                 ack = BackendControlAck(original.request_bytes, serialize_message(response), observed)
+                if (response.schema_version != 2
+                        or response.backend_instance_id != self.identity.backend_instance_id
+                        or response.request_sequence != request.request_sequence):
+                    self._emit('CONTROL_REPLAY_RESPONSE_REJECTED', {
+                        'request_sequence':request.request_sequence,
+                        'response_cdr_hex':ack.response_bytes.hex(),
+                        'observed_ns':observed,
+                        'reason':'schema/backend/request identity mismatch'})
+                    raise BackendControlError('replay ACK identity/schema mismatch', ack)
                 self._emit('CONTROL_REPLAY_RESPONSE', {'request_sequence': request.request_sequence,
                     'response_cdr_hex': ack.response_bytes.hex(), 'observed_ns': observed})
                 return ack

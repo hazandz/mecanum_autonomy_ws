@@ -100,6 +100,101 @@ def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
         'inhibit_revision':inhibit_ack.response.applied_binding_revision}
 
 
+def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
+                                replay_error, replay_identity_ack, replacement_ack, inhibit_ack,
+                                fresh_ack, replacement_status,
+                                old_backend_instance_id):
+    """Chấm riêng nhánh Gazebo thay backend trong time-only reset.
+
+    Không xem timeout của replay cũ là ACK revocation. Nhánh này chỉ đạt khi
+    identity backend mới được chứng minh, session cũ bị từ chối, backend mới
+    được INHIBIT và QUERY mới không có proof.
+    """
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    if type(sim_time_jump_delta_ns) is not int or sim_time_jump_delta_ns >= 0:
+        raise RuntimeError('R07b did not observe simulation time rollback')
+    if original_proof.response.contact_capability_state != Control.Response.CAPABILITY_VERIFIED:
+        raise RuntimeError('R07b original contact proof was not verified')
+    if isinstance(replay_error, TimeoutError):
+        if replay_identity_ack is not None:
+            raise RuntimeError('R07b replay timeout unexpectedly includes an identity ACK')
+    elif isinstance(replay_error, BackendControlError):
+        replayed = replay_identity_ack
+        if (replayed is None
+                or replayed.request_bytes != original_proof.request_bytes
+                or replayed.request.operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+                or replayed.request.probe_action != Control.Request.PROBE_ACTION_QUERY
+                or replayed.response.backend_instance_id == old_backend_instance_id
+                or replayed.response.request_sequence != original_proof.request.request_sequence
+                or replayed.response.result != Control.Response.RESULT_REJECTED
+                or replayed.response.reason_code != Control.Response.REASON_IDENTITY_MISMATCH
+                or replayed.response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+                or replayed.response.proof_backend_instance_id != 0
+                or replayed.response.proof_session_id
+                or replayed.response.proof_config_hash
+                or replayed.response.proof_asset_manifest_sha256):
+            raise RuntimeError('R07b exact QUERY replay did not retain a rejected replacement-identity ACK')
+    else:
+        raise RuntimeError('R07b old QUERY replay failure type is not an expected bounded outcome')
+    stale = replacement_ack
+    new_id = stale.response.backend_instance_id
+    if (stale.request.operation != Control.Request.OP_INHIBIT
+            or stale.request.expected_backend_instance_id != old_backend_instance_id
+            or stale.request.session_id != original_proof.request.session_id
+            or stale.response.result != Control.Response.RESULT_REJECTED
+            or stale.response.reason_code != Control.Response.REASON_IDENTITY_MISMATCH
+            or new_id == old_backend_instance_id
+            or stale.response.request_sequence != stale.request.request_sequence):
+        raise RuntimeError('R07b replacement backend identity was not bounded to old-session rejection')
+    for label, ack in (('new INHIBIT', inhibit_ack), ('new QUERY', fresh_ack)):
+        if (ack.response.backend_instance_id != new_id
+                or ack.request.expected_backend_instance_id != new_id
+                or ack.request.session_id != original_proof.request.session_id
+                or ack.response.request_sequence != ack.request.request_sequence):
+            raise RuntimeError('R07b ' + label + ' identity binding mismatch')
+    if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
+            or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
+            or inhibit_ack.response.reason_code != Control.Response.REASON_NONE
+            or inhibit_ack.response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+            or inhibit_ack.response.proof_backend_instance_id != 0
+            or inhibit_ack.response.proof_session_id):
+        raise RuntimeError('R07b replacement backend lacks an applied proof-free INHIBIT')
+    if (fresh_ack.request.operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+            or fresh_ack.request.probe_action != Control.Request.PROBE_ACTION_QUERY
+            or fresh_ack.response.result != Control.Response.RESULT_REJECTED
+            or fresh_ack.response.reason_code != Control.Response.REASON_CONTACT_PROBE_NOT_READY
+            or fresh_ack.response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+            or fresh_ack.response.proof_backend_instance_id != 0
+            or fresh_ack.response.proof_session_id
+            or fresh_ack.response.proof_config_hash
+            or fresh_ack.response.proof_asset_manifest_sha256):
+        raise RuntimeError('R07b replacement QUERY returned stale or unverifiable proof')
+    status = replacement_status
+    if (status['backend_instance_id'] != new_id
+            or status['session_id'] != original_proof.request.session_id
+            or status['config_hash'] != stale.request.config_hash
+            or type(status['status_sequence']) is not int or status['status_sequence'] <= 0
+            or type(status['physics_iteration']) is not int or status['physics_iteration'] <= 0
+            or status['received_ns'] <= inhibit_ack.observed_steady_ns
+            or status['fault_flags'] != 0
+            or not status['local_zero_override'] or not status['actuator_inhibited']):
+        raise RuntimeError('R07b replacement backend status did not prove inhibited zero after ACK')
+    return {'clock_rollback_observed':True, 'backend_restarted':True,
+        'old_backend_instance_id':old_backend_instance_id,
+        'new_backend_instance_id':new_id,
+        'old_query_replay_unavailable_due_backend_replacement':True,
+        'old_query_replay_identity_ack_observed':replay_identity_ack is not None,
+        'old_session_rejected':True, 'replacement_backend_inhibit_applied':True,
+        'replacement_backend_zero_status_confirmed':True,
+        'fresh_query_has_no_contact_proof':True,
+        'simulation_time_jump_delta_ns':sim_time_jump_delta_ns,
+        'inhibit_request_sequence':inhibit_ack.request.request_sequence,
+        'inhibit_revision':inhibit_ack.response.applied_binding_revision,
+        'replacement_status_sequence':status['status_sequence'],
+        'replacement_status_iteration':status['physics_iteration']}
+
+
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  pre_pause_policy_step_identities,
                                  post_pause_policy_step_identities, reset_count_before,
@@ -1302,6 +1397,8 @@ class TrainingWorkerIO:
         self._r07b_rollback_pending_before_ns = None
         self._r07b_rollback_observed = None
         self._r07b_request_started_ns = None
+        self._r07b_replacement_backend_statuses = []
+        self._r07b_cleanup_control = None
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
@@ -1431,6 +1528,30 @@ class TrainingWorkerIO:
                 'message_info':{key:value for key,value in info.items() if type(value) is int}})
             try:
                 message = deserialize_message(wire,message_type)
+                if (topic == '/mecanum/local_training/backend_state'
+                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                        and self._r07b_rollback_observed is not None
+                        and int(message.backend_instance_id) != self.descriptor['backend_instance_id']):
+                    status = {
+                        'backend_instance_id':int(message.backend_instance_id),
+                        'session_id':str(message.session_id),
+                        'config_hash':str(message.config_hash),
+                        'status_sequence':int(message.status_sequence),
+                        'physics_iteration':int(message.physics_iteration),
+                        'stamp_ns':(int(message.header.stamp.sec)*1_000_000_000
+                            + int(message.header.stamp.nanosec)),
+                        'fault_flags':int(message.fault_flags),
+                        'local_zero_override':bool(message.local_zero_override),
+                        'actuator_inhibited':bool(message.actuator_inhibited),
+                        'received_ns':self.now(),
+                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                    }
+                    self._r07b_replacement_backend_statuses.append(status)
+                    self.emit('B23_R07B_REPLACEMENT_BACKEND_STATUS', status)
+                    # Giữ consumer cũ pin đúng identity. Status instance mới
+                    # được lưu raw/typed để nhánh restart kiểm tra riêng; không
+                    # đưa nó vào session/ingress đã bị invalidation.
+                    return message
                 if (topic == '/mecanum/final_issued_command'
                         and 'hold_observation0_adjacent_receipt_until_reset_deadline' in getattr(self, 'fault_hooks', ())
                         and self._r06c_hold_after_sequence is not None
@@ -1497,6 +1618,15 @@ class TrainingWorkerIO:
             except BaseException as error:
                 self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
+                if (topic == '/mecanum/final_issued_command'
+                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                        and self._r07b_rollback_observed is not None
+                        and repr(error) == "ValueError('receipt source timestamp rollback or future')"):
+                    self.emit('B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED', {
+                        'reason':'receipt source timestamp rollback or future',
+                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'detected_ns':self.now()})
+                    return None
                 raise
         return receive
 
@@ -1894,13 +2024,16 @@ class TrainingWorkerIO:
                 errors.append('original_pump_error:' + repr(error))
             # Chỉ còn RPC callbacks; thu ACK thực trước khi đóng executor.
             self.pump_task = asyncio.create_task(self._pump(), name='b23-owned-cleanup-rpc-pump')
+        cleanup_control = self._r07b_cleanup_control or self.control
         try:
-            await self.control.inhibit(deadline_ns=min(deadline_ns, self.now() + 1_000_000_000))
+            await cleanup_control.inhibit(deadline_ns=min(deadline_ns, self.now() + 1_000_000_000))
         except BaseException as error:
             errors.append('inhibit:' + repr(error))
         self.safety.local_training.set_stream_enabled(False)
         self.ingress.pause_admission_publication()
-        self.control.cancel_pending_calls()
+        cleanup_control.cancel_pending_calls()
+        if cleanup_control is not self.control:
+            self.control.cancel_pending_calls()
         for future in self.calls:
             if not future.done(): future.cancel()
         self.stop_requested = True
@@ -3417,48 +3550,136 @@ async def training_child(path):
                 **checked,'inhibit_applied':True,'completed_ns':time.monotonic_ns()}
         elif packet['case'] == 'R07b':
             from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-            from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+            from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+                BackendControlError, BackendSessionIdentity, BackendControlSession)
+            from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
             if (packet['fault_hooks'] != case_fault_hooks('R07b')
                     or io.contact_ack is None or io.contact_start_request_sequence is None):
                 raise RuntimeError('R07b packet/contact proof binding is incomplete')
             original = io.contact_ack
+            original_backend_id = io.descriptor['backend_instance_id']
             before, after, rollback = await io.reset_world_time_only(timeout_s=
                 min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
-            replay_ack = await io.control.replay(original,
-                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            replay_ack, replay_error, replay_identity_ack = None, None, None
             try:
-                fresh_ack = await io.control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
-                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                    probe_action=Control.Request.PROBE_ACTION_QUERY,
-                    probe_start_request_sequence=io.contact_start_request_sequence)
+                replay_ack = await io.control.replay(original,
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            except TimeoutError as error:
+                replay_error = error
+                io.emit('B23_R07B_OLD_QUERY_REPLAY_UNAVAILABLE', {
+                    'request_sequence':original.request.request_sequence,
+                    'error':repr(error),'reason':'replay window expired after time_only reset'})
             except BackendControlError as error:
                 if error.ack is None:
                     raise
-                fresh_ack = error.ack
-            state = await io.until(lambda: io.ingress.backend_state
-                if (io.ingress.backend_state is not None
-                    and io.ingress.backend_state.fault_flags & 64
-                    and io.ingress.backend_state.local_zero_override) else None,
-                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                phase='R07b native clock rollback inhibit', expected_native_fault_flags=64)
-            inhibit_ack = await io.control.inhibit(
-                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
-            checked = verify_r07b_revocation(response=fresh_ack.response,
-                original_proof=original, sim_before_ns=before, sim_after_ns=after,
-                sim_time_jump_delta_ns=rollback['delta_ns'],
-                replay_ack=replay_ack, fresh_ack=fresh_ack, inhibit_ack=inhibit_ack)
-            io.emit('B23_R07B_VERIFIED', {'checked':checked,
-                'original_query_request_cdr_hex':original.request_bytes.hex(),
-                'original_query_response_cdr_hex':original.response_bytes.hex(),
-                'replay_query_request_cdr_hex':replay_ack.request_bytes.hex(),
-                'replay_query_response_cdr_hex':replay_ack.response_bytes.hex(),
-                'fresh_query_request_cdr_hex':fresh_ack.request_bytes.hex(),
-                'fresh_query_response_cdr_hex':fresh_ack.response_bytes.hex(),
-                'clock_fault_status_sequence':state.status_sequence,
-                'inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
-                'inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
-                'steady_ns':io.now()})
-            outcome = {'case':'R07b', **checked,'completed_ns':time.monotonic_ns()}
+                replay_error, replay_identity_ack = error, error.ack
+                io.emit('B23_R07B_OLD_QUERY_REPLAY_REJECTED', {
+                    'request_sequence':original.request.request_sequence,
+                    'request_cdr_hex':error.ack.request_bytes.hex(),
+                    'response_cdr_hex':error.ack.response_bytes.hex(),
+                    'reason':'replacement backend identity mismatch'})
+            if replay_error is None:
+                try:
+                    fresh_ack = await io.control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+                        deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                        probe_action=Control.Request.PROBE_ACTION_QUERY,
+                        probe_start_request_sequence=io.contact_start_request_sequence)
+                except BackendControlError as error:
+                    if error.ack is None:
+                        raise
+                    fresh_ack = error.ack
+                state = await io.until(lambda: io.ingress.backend_state
+                    if (io.ingress.backend_state is not None
+                        and io.ingress.backend_state.fault_flags & 64
+                        and io.ingress.backend_state.local_zero_override) else None,
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                    phase='R07b native clock rollback inhibit', expected_native_fault_flags=64)
+                inhibit_ack = await io.control.inhibit(
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+                checked = verify_r07b_revocation(response=fresh_ack.response,
+                    original_proof=original, sim_before_ns=before, sim_after_ns=after,
+                    sim_time_jump_delta_ns=rollback['delta_ns'],
+                    replay_ack=replay_ack, fresh_ack=fresh_ack, inhibit_ack=inhibit_ack)
+                io.emit('B23_R07B_VERIFIED', {'checked':checked,
+                    'original_query_request_cdr_hex':original.request_bytes.hex(),
+                    'original_query_response_cdr_hex':original.response_bytes.hex(),
+                    'replay_query_request_cdr_hex':replay_ack.request_bytes.hex(),
+                    'replay_query_response_cdr_hex':replay_ack.response_bytes.hex(),
+                    'fresh_query_request_cdr_hex':fresh_ack.request_bytes.hex(),
+                    'fresh_query_response_cdr_hex':fresh_ack.response_bytes.hex(),
+                    'clock_fault_status_sequence':state.status_sequence,
+                    'inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                    'inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                    'steady_ns':io.now()})
+                outcome = {'case':'R07b', **checked,'completed_ns':time.monotonic_ns()}
+            else:
+                # Một số Gazebo time_only reset thay instance plugin/backend.
+                # Không dùng status hoặc proof của instance cũ trong trường hợp
+                # đó: xác minh identity mismatch bằng INHIBIT cũ rồi mở một
+                # control client chỉ cho instance mới để chứng minh zero.
+                try:
+                    await io.control.inhibit(deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+                    raise RuntimeError('R07b old backend identity unexpectedly remained accepted')
+                except BackendControlError as error:
+                    replacement_ack = error.ack
+                    if replacement_ack is None:
+                        raise
+                new_backend_id = replacement_ack.response.backend_instance_id
+                if (replacement_ack.request.operation != Control.Request.OP_INHIBIT
+                        or replacement_ack.response.reason_code != Control.Response.REASON_IDENTITY_MISMATCH
+                        or new_backend_id == original_backend_id):
+                    raise RuntimeError('R07b replay timeout was not bound to backend replacement')
+                identity = BackendSessionIdentity(io.descriptor['session_id'],
+                    io.descriptor['config_hash'], io.descriptor['asset_manifest_sha256'],
+                    io.descriptor['coordinator_ingress_instance_id'], new_backend_id)
+                replacement_control = BackendControlSession(
+                    LocalTrainingBackendControlPort.from_node(io.node), identity,
+                    emit=io.emit, now_ns=io.now, pause=io.pause)
+                io._r07b_cleanup_control = replacement_control
+                inhibit_ack = await replacement_control.inhibit(
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+                try:
+                    await replacement_control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+                        deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                        probe_action=Control.Request.PROBE_ACTION_QUERY,
+                        probe_start_request_sequence=io.contact_start_request_sequence)
+                    raise RuntimeError('R07b replacement backend unexpectedly retained contact proof')
+                except BackendControlError as error:
+                    fresh_ack = error.ack
+                    if fresh_ack is None:
+                        raise
+                status_deadline = min(io.deadline_ns, io.now()+1_000_000_000)
+                replacement_status = None
+                while io.now() < status_deadline:
+                    candidates = [status for status in io._r07b_replacement_backend_statuses
+                        if status['backend_instance_id'] == new_backend_id
+                        and status['received_ns'] > inhibit_ack.observed_steady_ns]
+                    if candidates:
+                        replacement_status = candidates[-1]
+                        break
+                    await io.pause(min(.005, max(0., (status_deadline-io.now())/1e9)))
+                if replacement_status is None:
+                    raise TimeoutError('R07b replacement backend zero status not observed after INHIBIT ACK')
+                checked = verify_r07b_backend_restart(original_proof=original,
+                    sim_time_jump_delta_ns=rollback['delta_ns'], replay_error=replay_error,
+                    replay_identity_ack=replay_identity_ack,
+                    replacement_ack=replacement_ack, inhibit_ack=inhibit_ack,
+                    fresh_ack=fresh_ack, replacement_status=replacement_status,
+                    old_backend_instance_id=original_backend_id)
+                io.emit('B23_R07B_BACKEND_REPLACEMENT_VERIFIED', {'checked':checked,
+                    'clock_jump':rollback,'old_query_request_cdr_hex':original.request_bytes.hex(),
+                    'old_query_response_cdr_hex':original.response_bytes.hex(),
+                    'old_query_replay_identity_response_cdr_hex':(
+                        replay_identity_ack.response_bytes.hex() if replay_identity_ack else None),
+                    'old_session_rejection_request_cdr_hex':replacement_ack.request_bytes.hex(),
+                    'old_session_rejection_response_cdr_hex':replacement_ack.response_bytes.hex(),
+                    'replacement_inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                    'replacement_inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                    'replacement_query_request_cdr_hex':fresh_ack.request_bytes.hex(),
+                    'replacement_query_response_cdr_hex':fresh_ack.response_bytes.hex(),
+                    'replacement_status':replacement_status,'steady_ns':io.now()})
+                outcome = {'case':'R07b','clock_rollback_observed':True,
+                    'backend_restarted':True,**checked,'completed_ns':time.monotonic_ns()}
         elif packet['case'] in ('R02a','R02b'):
             if packet['case'] == 'R02b':
                 expected_env = case_environment(packet['case'], packet['fault_hooks'])

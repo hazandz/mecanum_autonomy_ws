@@ -20,7 +20,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
-    verify_r07b_revocation,
+    verify_r07b_revocation, verify_r07b_backend_restart,
 )
 
 
@@ -549,6 +549,152 @@ def test_r07b_clock_jump_threshold_matches_jazzy_backward_duration_contract():
     threshold = JumpThreshold(min_forward=None,
         min_backward=Duration(nanoseconds=-1), on_clock_change=False)
     assert threshold.min_backward.nanoseconds == -1
+
+
+def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_proof_free_query():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    old_id, new_id = 101, 202
+    session, config, assets = 'session-r07b', 'a'*64, 'b'*64
+    original = NS(request=NS(session_id=session), response=NS(
+        contact_capability_state=Control.Response.CAPABILITY_VERIFIED), request_bytes=b'original-query')
+    old_rejection = NS(
+        request=NS(operation=Control.Request.OP_INHIBIT,
+            expected_backend_instance_id=old_id, session_id=session,
+            request_sequence=10, config_hash=config),
+        response=NS(result=Control.Response.RESULT_REJECTED,
+            reason_code=Control.Response.REASON_IDENTITY_MISMATCH,
+            backend_instance_id=new_id, request_sequence=10))
+    inhibit = NS(observed_steady_ns=400, request=NS(
+        operation=Control.Request.OP_INHIBIT, expected_backend_instance_id=new_id,
+        session_id=session, request_sequence=1), response=NS(
+            result=Control.Response.RESULT_APPLIED, reason_code=Control.Response.REASON_NONE,
+            backend_instance_id=new_id, request_sequence=1,
+            applied_binding_revision=1,
+            contact_capability_state=Control.Response.CAPABILITY_FAILED,
+            proof_backend_instance_id=0, proof_session_id=''))
+    fresh_query = NS(request=NS(operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+            probe_action=Control.Request.PROBE_ACTION_QUERY,
+            expected_backend_instance_id=new_id, session_id=session, request_sequence=2),
+        response=NS(result=Control.Response.RESULT_REJECTED,
+            reason_code=Control.Response.REASON_CONTACT_PROBE_NOT_READY,
+            backend_instance_id=new_id, request_sequence=2,
+            contact_capability_state=Control.Response.CAPABILITY_FAILED,
+            proof_backend_instance_id=0, proof_session_id='',
+            proof_config_hash='', proof_asset_manifest_sha256=''))
+    status = {'backend_instance_id':new_id,'session_id':session,'config_hash':config,
+        'status_sequence':12,'physics_iteration':34,'stamp_ns':340_000_000,
+        'fault_flags':0,'local_zero_override':True,'actuator_inhibited':True,
+        'received_ns':401,'wire_sha256':'c'*64}
+    result = verify_r07b_backend_restart(original_proof=original,
+        sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
+        replay_identity_ack=None,
+        replacement_ack=old_rejection, inhibit_ack=inhibit, fresh_ack=fresh_query,
+        replacement_status=status, old_backend_instance_id=old_id)
+    assert result['backend_restarted'] is True
+    assert result['old_query_replay_unavailable_due_backend_replacement'] is True
+    assert result['replacement_backend_zero_status_confirmed'] is True
+    assert result['new_backend_instance_id'] == new_id
+
+    stale_query = NS(**{**fresh_query.__dict__, 'response':NS(
+        **{**fresh_query.response.__dict__,
+           'result':Control.Response.RESULT_APPLIED,
+           'reason_code':Control.Response.REASON_NONE,
+           'contact_capability_state':Control.Response.CAPABILITY_VERIFIED,
+           'proof_backend_instance_id':new_id,'proof_session_id':session,
+           'proof_config_hash':config,'proof_asset_manifest_sha256':assets})})
+    with pytest.raises(RuntimeError, match='replacement QUERY returned stale'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-350_000_000,
+            replay_error=TimeoutError('service vanished'), replay_identity_ack=None,
+            replacement_ack=old_rejection,
+            inhibit_ack=inhibit, fresh_ack=stale_query, replacement_status=status,
+            old_backend_instance_id=old_id)
+
+    unconfirmed_zero = dict(status, local_zero_override=False)
+    with pytest.raises(RuntimeError, match='did not prove inhibited zero'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-350_000_000,
+            replay_error=TimeoutError('service vanished'), replay_identity_ack=None,
+            replacement_ack=old_rejection,
+            inhibit_ack=inhibit, fresh_ack=fresh_query, replacement_status=unconfirmed_zero,
+            old_backend_instance_id=old_id)
+
+
+def test_r07b_backend_restart_accepts_only_exact_replay_identity_mismatch_ack():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
+    old_id, new_id, session = 101, 202, 'session-r07b'
+    original = NS(request_bytes=b'exact-cdr', request=NS(
+        operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+        probe_action=Control.Request.PROBE_ACTION_QUERY, request_sequence=8,
+        session_id=session), response=NS(
+            contact_capability_state=Control.Response.CAPABILITY_VERIFIED))
+    rejected_replay = NS(request_bytes=b'exact-cdr', request=original.request,
+        response=NS(backend_instance_id=new_id, request_sequence=8,
+            result=Control.Response.RESULT_REJECTED,
+            reason_code=Control.Response.REASON_IDENTITY_MISMATCH,
+            contact_capability_state=Control.Response.CAPABILITY_INVALIDATED,
+            proof_backend_instance_id=0, proof_session_id='', proof_config_hash='',
+            proof_asset_manifest_sha256=''))
+    error = BackendControlError('replay ACK identity/schema mismatch', rejected_replay)
+    invalid_old_rejection = NS(request=NS(operation=Control.Request.OP_INHIBIT,
+        expected_backend_instance_id=old_id, session_id=session, request_sequence=9),
+        response=NS(backend_instance_id=old_id, result=Control.Response.RESULT_APPLIED,
+            reason_code=Control.Response.REASON_NONE, request_sequence=9))
+    # Any later replacement evidence is intentionally minimal here; the replay
+    # mismatch must be validated before downstream replacement fields.
+    with pytest.raises(RuntimeError, match='replacement backend identity'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-1, replay_error=error,
+            replay_identity_ack=rejected_replay, replacement_ack=invalid_old_rejection, inhibit_ack=NS(),
+            fresh_ack=NS(), replacement_status={}, old_backend_instance_id=old_id)
+    altered = NS(**{**rejected_replay.__dict__, 'request_bytes':b'other-cdr'})
+    with pytest.raises(RuntimeError, match='exact QUERY replay'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-1, replay_error=error,
+            replay_identity_ack=altered, replacement_ack=NS(), inhibit_ack=NS(),
+            fresh_ack=NS(), replacement_status={}, old_backend_instance_id=old_id)
+
+
+def test_r07b_callback_records_replacement_status_and_expected_future_receipt_without_killing_pump():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState, FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+    worker = object.__new__(TrainingWorkerIO)
+    worker.descriptor = {'backend_instance_id':101}
+    worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    worker._r07b_rollback_observed = {'delta_ns':-1}
+    worker._r07b_replacement_backend_statuses = []
+    worker.now = lambda: 777
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    status = SimulationContactState()
+    status.backend_instance_id = 202
+    status.session_id = 'session-r07b'
+    status.config_hash = 'a'*64
+    status.status_sequence = 12
+    status.physics_iteration = 34
+    status.local_zero_override = True
+    status.actuator_inhibited = True
+    result = worker.observed_callback(SimulationContactState,
+        '/mecanum/local_training/backend_state', lambda _: pytest.fail('old ingress must remain pinned'))(
+            serialize_message(status), {})
+    assert result.backend_instance_id == 202
+    assert worker._r07b_replacement_backend_statuses[0]['backend_instance_id'] == 202
+    assert events[-1][0] == 'B23_R07B_REPLACEMENT_BACKEND_STATUS'
+
+    receipt = FinalIssuedCommandReceipt()
+    returned = worker.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command',
+        lambda _: (_ for _ in ()).throw(ValueError('receipt source timestamp rollback or future')))(
+            serialize_message(receipt), {})
+    assert returned is None
+    assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED'
+
+    with pytest.raises(ValueError, match='unrelated receipt failure'):
+        worker.observed_callback(FinalIssuedCommandReceipt,
+            '/mecanum/final_issued_command',
+            lambda _: (_ for _ in ()).throw(ValueError('unrelated receipt failure')))(
+                serialize_message(receipt), {})
 
 
 def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):
