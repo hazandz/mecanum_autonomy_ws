@@ -1795,7 +1795,12 @@ class TrainingWorkerIO:
                     or rollback.get('request_started_ns') is None
                     or rollback.get('observed_steady_ns', 0) < rollback['request_started_ns']):
                 raise RuntimeError('ROS clock rolled backward')
-            self._r07b_rollback_pending_before_ns = None
+            self.emit('B23_R07B_AUTHORIZED_CLOCK_ROLLBACK_SAMPLE', {
+                'previous_ros_ns':self.last_clock_ns, 'current_ros_ns':ros,
+                'request_baseline_ns':self._r07b_rollback_pending_before_ns,
+                'request_started_ns':rollback['request_started_ns'],
+                'observed_steady_ns':self.now(),
+            })
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
         if ros > self.last_clock_ns:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
@@ -1931,8 +1936,6 @@ class TrainingWorkerIO:
                 or rollback['observed_steady_ns'] < rollback['request_started_ns']
                 or rollback['delta_ns'] >= 0):
             raise RuntimeError('R07b clock rollback was not observed during the requested reset')
-        self._r07b_rollback_pending_before_ns = None
-        self._r07b_request_started_ns = None
         self.last_clock_ns, self.last_clock_advance_ns = after, self.now()
         return before, after, rollback
 
@@ -3671,6 +3674,12 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07b native post-rollback disposition')
             io.emit('B23_R07B_NATIVE_ROLLBACK_DISPOSITION', rollback_disposition)
+            # Keep the clock rollback exception scoped to this reset until
+            # native proof invalidation/backend replacement is observable.
+            # Subsequent time_only samples may still move backward while the
+            # reset settles; no other phase gets this exception.
+            io._r07b_rollback_pending_before_ns = None
+            io._r07b_request_started_ns = None
             replay_ack, replay_error, replay_identity_ack = None, None, None
             try:
                 replay_ack = await io.control.replay(original,

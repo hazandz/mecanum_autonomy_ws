@@ -559,7 +559,7 @@ def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
                 'response':stale_response}), fresh_ack=revoked(), inhibit_ack=inhibit)
 
 
-def test_r07b_worker_clock_monitor_accepts_only_one_packet_armed_rollback():
+def test_r07b_worker_clock_monitor_keeps_packet_armed_window_until_native_disposition():
     worker = object.__new__(TrainingWorkerIO)
     worker.stop_requested = False
     worker.abort_requested = None
@@ -573,16 +573,24 @@ def test_r07b_worker_clock_monitor_accepts_only_one_packet_armed_rollback():
     worker._r07b_rollback_pending_before_ns = 15
     worker._r07b_request_started_ns = 15
     worker._r07b_rollback_observed = None
-    worker.emit = lambda kind, facts: None
+    events = []
+    worker.emit = lambda kind, facts: events.append((kind, facts))
     worker.ingress = NS(fault=None, backend_state=None)
     worker._on_r07b_clock_jump(NS(delta=NS(nanoseconds=-5)))
     worker.check()
     assert worker._r07b_rollback_observed == {
         'request_baseline_ns':15,'request_started_ns':15,
         'delta_ns':-5,'observed_steady_ns':20}
-    assert worker._r07b_rollback_pending_before_ns is None
+    assert worker._r07b_rollback_pending_before_ns == 15
+    worker.ros_now = lambda: 4
+    worker.check()
+    assert worker.last_clock_ns == 4
+    assert worker._r07b_rollback_pending_before_ns == 15
+    assert events[-1][0] == 'B23_R07B_AUTHORIZED_CLOCK_ROLLBACK_SAMPLE'
+    worker._r07b_rollback_pending_before_ns = None
     worker.ros_now = lambda: 4
     with pytest.raises(RuntimeError, match='ROS clock rolled backward'):
+        worker.last_clock_ns = 5
         worker.check()
 
 
