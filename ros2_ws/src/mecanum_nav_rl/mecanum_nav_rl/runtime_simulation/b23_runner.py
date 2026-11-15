@@ -2755,9 +2755,11 @@ async def training_child(path):
                             deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                         checked = verify_r04_stale_delivery(io, case='R04a')
                         blocked_step = transition.transition_identity.step_index + 1
+                        blocked_step_timeout = None
                         try:
                             await io.policy_step(b1, (0.25, 0., 0.))
                         except TimeoutError as error:
+                            blocked_step_timeout = repr(error)
                             blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
                             disposition = abort_r04a_pending_step_if_active(
                                 b1.lifecycle, expected_step_index=blocked_step)
@@ -2767,7 +2769,7 @@ async def training_child(path):
                             'policy_steps_committed':1, **checked, **blocked,
                             'safe_stop_applied':True,
                             'b1_step_disposition':disposition,
-                            'blocked_step_timeout':repr(error),
+                            'blocked_step_timeout':blocked_step_timeout,
                             'completed_ns':time.monotonic_ns()}
                     else:
                         checked = verify_r04_stale_delivery(io, case=packet['case'],

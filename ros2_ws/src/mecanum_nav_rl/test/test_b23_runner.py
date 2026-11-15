@@ -1,10 +1,13 @@
 """Biên deadline/ownership worker bằng I/O fakes, không tạo ROS context."""
+import ast
 import asyncio
 import json
 import threading
 import textwrap
+from pathlib import Path
 from types import SimpleNamespace as NS
 import pytest
+import mecanum_nav_rl.runtime_simulation.b23_runner as runner_module
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
@@ -436,6 +439,28 @@ def test_r04a_blocked_slot_distinguishes_prebegin_timeout_from_pending_abort():
     lifecycle.snapshot = NS(active_transition_identity=NS(step_index=3), step_index=1)
     with pytest.raises(RuntimeError, match='pending B1 identity differs'):
         abort_r04a_pending_step_if_active(lifecycle, expected_step_index=2)
+
+
+def test_r04a_timeout_detail_is_saved_inside_exception_handler():
+    tree = ast.parse(Path(runner_module.__file__).read_bytes())
+    handler = next(node for node in ast.walk(tree)
+        if isinstance(node, ast.ExceptHandler) and node.name == 'error'
+        and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            and child.func.id == 'abort_r04a_pending_step_if_active'
+            for statement in node.body for child in ast.walk(statement)))
+    saved = next(node for node in ast.walk(handler)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == 'blocked_step_timeout'
+            for target in node.targets))
+    assert isinstance(saved.value, ast.Call)
+    assert isinstance(saved.value.func, ast.Name) and saved.value.func.id == 'repr'
+    assert isinstance(saved.value.args[0], ast.Name) and saved.value.args[0].id == 'error'
+    outcome = next(node for node in ast.walk(tree)
+        if isinstance(node, ast.Dict) and any(isinstance(key, ast.Constant)
+            and key.value == 'blocked_step_timeout' for key in node.keys))
+    value = outcome.values[outcome.keys.index(next(key for key in outcome.keys
+        if isinstance(key, ast.Constant) and key.value == 'blocked_step_timeout'))]
+    assert isinstance(value, ast.Name) and value.id == 'blocked_step_timeout'
 
 
 @pytest.mark.parametrize('case,reason', [('R04c','SCAN_STALE_OR_FUTURE')])
