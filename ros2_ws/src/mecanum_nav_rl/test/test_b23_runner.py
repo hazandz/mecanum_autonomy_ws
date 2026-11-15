@@ -963,6 +963,17 @@ def test_r01c_d_fail_when_native_fault_status_never_arrives():
         asyncio.run(verify_r01_pause_ack_failure(io, TimeoutError('bounded fault timeout')))
 
 
+def test_r01c_d_preserves_unrelated_reset_error_before_pause_ack_hook():
+    io = NS(events=[], now=lambda: 20_000_000_000, pause=lambda _duration: None,
+        deadline_ns=21_000_000_000,
+        ingress=NS(backend_state=NS(fault_flags=0, local_zero_override=False)))
+    original = ValueError('stationary scan window missed reset deadline')
+    with pytest.raises(RuntimeError, match='pause ACK fault was not reached') as caught:
+        asyncio.run(verify_r01_pause_ack_failure(io, original))
+    assert 'stationary scan window missed reset deadline' in str(caught.value)
+    assert caught.value.__cause__ is original
+
+
 class Clock:
     def __init__(self): self.ns = 1_000_000_000
     def now(self): return self.ns

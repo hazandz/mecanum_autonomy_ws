@@ -478,7 +478,8 @@ async def verify_r01_pause_ack_failure(io, error):
                 or ack.response.reason_code != Control.Response.REASON_CONTROL_EXPIRED):
             raise RuntimeError('pause ACK fault did not produce CONTROL_EXPIRED rejection')
     elif not isinstance(error, TimeoutError):
-        raise RuntimeError('pause ACK fault did not terminate by bounded timeout')
+        raise RuntimeError('pause ACK fault was not reached; reset failed first: '
+            + repr(error)) from error
     # The service rejection and the status topic use separate DDS paths. Let
     # the already-running ingress pump collect the corresponding native status
     # for a short bounded evidence window; this does not extend reset or ACK
