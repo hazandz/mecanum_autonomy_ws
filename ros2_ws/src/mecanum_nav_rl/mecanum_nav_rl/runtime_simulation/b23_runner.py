@@ -121,7 +121,9 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
         raise ValueError('unsupported R04 delivery fault') from error
     import threading
     state = {'triggered': 0, 'scheduled': 0, 'delivered': 0, 'timers': [],
-        'lock': threading.Lock()}
+        'lock': threading.Lock(), 'case':case,
+        'delay_s': (production_delay if delay_s is None else delay_s),
+        'ingress_scheduled':False}
     def eligible(message):
         if case == 'R04a':
             return message.admission_state == message.ADMISSION_POLICY_OPEN
@@ -874,6 +876,8 @@ class TrainingWorkerIO:
         self.subscriptions = []
         self._hold_next_safety_input = False
         self._held_safety_input = None
+        self._r04d_fault_state = None
+        self._r04d_pending_ingress_lifecycle = None
         self.expected_paused = True
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
@@ -955,6 +959,7 @@ class TrainingWorkerIO:
                     'NATIVE_APPLICATION_JOINED',
                     'B23_R04_NOISY_ODOMETRY_DROPPED',
                     'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
+                    'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
                     'B23_R04_FAULT_ARMED'}:
             self.events.append((name, copy.deepcopy(facts)))
         elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
@@ -997,7 +1002,28 @@ class TrainingWorkerIO:
                 'received_ns':self.now(), 'wire_cdr_hex':wire.hex(),
                 'message_info':{key:value for key,value in info.items() if type(value) is int}})
             try:
-                return callback(deserialize_message(wire,message_type))
+                message = deserialize_message(wire,message_type)
+                # R04d delays lifecycle delivery to both consumers. Delaying
+                # Safety alone lets ingress advance first and rejects the old
+                # SAFE_STOP identity before the stale lifecycle is measured.
+                if (topic == '/mecanum/safety_lifecycle_state'
+                        and self._r04d_fault_state is not None
+                        and self._r04d_pending_ingress_lifecycle is None
+                        and not self._r04d_fault_state.get('ingress_scheduled')):
+                    state = self._r04d_fault_state
+                    state['ingress_scheduled'] = True
+                    delay_s = max(0., state['delay_s'] - 0.025)
+                    due_ns = self.now() + int(delay_s * 1_000_000_000)
+                    source_stamp_ns = (message.header.stamp.sec * 1_000_000_000
+                        + message.header.stamp.nanosec)
+                    self._r04d_pending_ingress_lifecycle = (
+                        due_ns, callback, copy.deepcopy(message), source_stamp_ns)
+                    self.emit('B23_R04_INGRESS_DELIVERY_SCHEDULED', {
+                        'case':'R04d','delay_s':delay_s,
+                        'source_stamp_ns':source_stamp_ns,
+                        'received_ns':self.now(),'due_ns':due_ns})
+                    return None
+                return callback(message)
             except BaseException as error:
                 self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
@@ -1017,12 +1043,25 @@ class TrainingWorkerIO:
             while not self.stop_requested:
                 for _ in range(16):
                     self.executor.spin_once(timeout_sec=0.)
+                self._deliver_r04d_ingress_lifecycle_if_due()
                 await self.pause(0.001)
         except asyncio.CancelledError:
             raise
         except BaseException as error:
             self.pump_error = error
             raise
+
+    def _deliver_r04d_ingress_lifecycle_if_due(self):
+        pending = self._r04d_pending_ingress_lifecycle
+        if pending is None or self.now() < pending[0]:
+            return
+        self._r04d_pending_ingress_lifecycle = None
+        due_ns, callback, message, source_stamp_ns = pending
+        delivered_ns = self.now()
+        callback(message)
+        self.emit('B23_R04_INGRESS_DELIVERY_COMPLETED', {
+            'case':'R04d','source_stamp_ns':source_stamp_ns,
+            'due_ns':due_ns,'delivery_ns':delivered_ns})
 
     def check(self, *, expected_native_fault_flags=None):
         if self.stop_requested or self.abort_requested is not None:
@@ -2701,6 +2740,7 @@ async def training_child(path):
                     if Path(packet['run_root'], 'b1_transition_committed.jsonl').exists() else 0
                 state = install_r04_delivery_fault(io.safety.local_training,
                     packet['case'], io.emit)
+                io._r04d_fault_state = state
                 io.emit('B23_R04_FAULT_ARMED', {'case':'R04d',
                     'next_operation':'lifecycle reset event', 'steady_ns':io.now()})
                 await io.lifecycle_event(rearm=False,
@@ -2710,16 +2750,25 @@ async def training_child(path):
                     and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())), None),
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
                     phase='R04d delayed lifecycle rejected by actual Safety')
-                if state['scheduled'] != 1:
+                if state['scheduled'] != 1 or state['delivered'] != 1:
                     raise RuntimeError('R04d delayed lifecycle callback did not complete exactly once')
                 scheduled = next((facts for name, facts in io.events
                     if name == 'B23_R04_DELIVERY_DELAY_SCHEDULED' and facts.get('case') == 'R04d'), None)
                 delayed = next((facts for name, facts in io.events
                     if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04d'), None)
+                ingress_scheduled = next((facts for name, facts in io.events
+                    if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
+                ingress_delivered = next((facts for name, facts in io.events
+                    if name == 'B23_R04_INGRESS_DELIVERY_COMPLETED' and facts.get('case') == 'R04d'), None)
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
                         or rejected['steady_ns'] < delayed['delivery_ns']
-                        or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000):
+                        or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000
+                        or ingress_scheduled is None or ingress_delivered is None
+                        or ingress_scheduled.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
+                        or ingress_delivered.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
+                        or ingress_delivered['delivery_ns'] > delayed['delivery_ns']
+                        or ingress_delivered['delivery_ns'] - ingress_scheduled['received_ns'] <= 500_000_000):
                     raise RuntimeError('R04d Safety rejection is not bound to delayed stale lifecycle source')
                 issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
                 commit_path = Path(packet['run_root'])/'b1_transition_committed.jsonl'

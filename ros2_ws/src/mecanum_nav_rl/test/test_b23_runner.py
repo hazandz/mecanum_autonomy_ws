@@ -293,6 +293,33 @@ def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, messa
             message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec)
 
 
+def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    now = [1_000_000_000]
+    delivered, events = [], []
+    io = object.__new__(TrainingWorkerIO)
+    io._r04d_fault_state = {'case':'R04d','delay_s':.650,'ingress_scheduled':False}
+    io._r04d_pending_ingress_lifecycle = (1_625_000_000,
+        lambda message: delivered.append(message), object(), 900_000_000)
+    io.now = lambda: now[0]
+    io.emit = lambda name, facts: events.append((name, facts))
+
+    io._deliver_r04d_ingress_lifecycle_if_due()
+    assert delivered == []
+    now[0] = 1_624_999_999
+    io._deliver_r04d_ingress_lifecycle_if_due()
+    assert delivered == []
+    now[0] = 1_625_000_001
+    io._deliver_r04d_ingress_lifecycle_if_due()
+
+    assert len(delivered) == 1
+    assert events == [('B23_R04_INGRESS_DELIVERY_COMPLETED', {
+        'case':'R04d','source_stamp_ns':900_000_000,
+        'due_ns':1_625_000_000,'delivery_ns':1_625_000_001})]
+    assert io._r04d_pending_ingress_lifecycle is None
+
+
 def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
     # Use the exact event names and ordering emitted by the production worker.
     io = NS(policy_source_id=9, events=[
