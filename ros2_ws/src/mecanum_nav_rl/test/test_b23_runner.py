@@ -395,6 +395,46 @@ def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted(
             fresh_sample_sequence=11, pending_token=bytes([1])*16)
 
 
+def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
+    value, clock = worker()
+    native = tmp_path/'native-events.jsonl'
+    record = json.dumps({'kind':'B23_ADMISSION_ACCEPTED',
+        'fields':{'sample':'11'}}).encode()+b'\n'
+    native.write_bytes(b'{"kind":')
+    value.descriptor = {'native_events_path':str(native)}
+    value.ros_now = lambda: 0
+    pauses = []
+    async def pause(seconds):
+        await clock.pause(seconds)
+        pauses.append(seconds)
+        if len(pauses) == 1:
+            with native.open('ab') as stream:
+                stream.write(record[len(b'{"kind":'):])
+    value.pause = pause
+
+    result = asyncio.run(value.wait_r02e_native_admission(
+        held_sample_sequence=10, fresh_sample_sequence=11,
+        pending_token=bytes([1])*16, deadline_ns=clock.ns+10_000_000))
+
+    assert result == {'prebind_sample_sequence':10,'prebind_native_accept_count':0,
+        'postbind_sample_sequence':11,'postbind_native_accept_count':1,
+        'pending_token_nonzero':True}
+    assert len(pauses) == 1
+
+
+def test_r02e_wait_rejects_prebind_acceptance_while_native_log_is_pending(tmp_path):
+    value, clock = worker()
+    native = tmp_path/'native-events.jsonl'
+    native.write_text(json.dumps({'kind':'B23_ADMISSION_ACCEPTED',
+        'fields':{'sample':'10'}})+'\n')
+    value.descriptor = {'native_events_path':str(native)}
+    value.ros_now = lambda: 0
+    with pytest.raises(RuntimeError, match='pre-bind sample was accepted'):
+        asyncio.run(value.wait_r02e_native_admission(
+            held_sample_sequence=10, fresh_sample_sequence=11,
+            pending_token=bytes([1])*16, deadline_ns=clock.ns+10_000_000))
+
+
 def test_active_deadline_is_never_extended_by_predicate_budget():
     value, clock = worker()
     value.deadline_ns = clock.ns + 3_000_000

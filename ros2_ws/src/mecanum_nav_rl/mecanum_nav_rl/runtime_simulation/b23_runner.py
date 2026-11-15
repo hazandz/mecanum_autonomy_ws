@@ -87,13 +87,16 @@ def case_environment(case, hooks):
 
 
 def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
-                                           fresh_sample_sequence, pending_token):
+                                           fresh_sample_sequence, pending_token,
+                                           allow_pending=False):
     """Require the pre-bind sample to stay out of the new native admission slot."""
     accepted = [row for row in rows if row.get('kind') == 'B23_ADMISSION_ACCEPTED']
     if any(int(row.get('fields', {}).get('sample', '0')) == held_sample_sequence for row in accepted):
         raise RuntimeError('R02e pre-bind sample was accepted by the new native slot')
     fresh = [row for row in accepted
         if int(row.get('fields', {}).get('sample', '0')) == fresh_sample_sequence]
+    if not fresh and allow_pending:
+        return None
     if len(fresh) != 1 or not any(pending_token):
         raise RuntimeError('R02e fresh post-bind admission was not accepted exactly once')
     return {'prebind_sample_sequence': held_sample_sequence,
@@ -101,6 +104,18 @@ def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
         'postbind_sample_sequence': fresh_sample_sequence,
         'postbind_native_accept_count': 1,
         'pending_token_nonzero': True}
+
+
+def complete_jsonl_rows(path):
+    """Read complete newline-terminated records, leaving a partial tail pending."""
+    raw = Path(path).read_bytes()
+    rows = []
+    for line in raw.splitlines(keepends=True):
+        if not line.endswith(b'\n'):
+            break
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
 
 
 async def verify_r03_receipt_fault(io, *, case, step_index, error):
@@ -625,6 +640,16 @@ class TrainingWorkerIO:
                 if self.now() <= before:
                     raise RuntimeError('worker pause did not advance monotonic clock')
         raise TimeoutError(phase + ': deadline expired')
+
+    async def wait_r02e_native_admission(self, *, held_sample_sequence,
+            fresh_sample_sequence, pending_token, deadline_ns):
+        """Wait within the active step budget for the native event-pipe record."""
+        path = self.descriptor['native_events_path']
+        return await self.until(lambda: verify_r02e_prebind_admission_rejected(
+                complete_jsonl_rows(path), held_sample_sequence=held_sample_sequence,
+                fresh_sample_sequence=fresh_sample_sequence, pending_token=pending_token,
+                allow_pending=True),
+            deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
 
     async def call(self, client, request, *, timeout_s, phase):
         from rclpy.serialization import serialize_message
@@ -1563,13 +1588,18 @@ class TrainingWorkerIO:
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
         prebind_check = None
         if held_sample_sequence is not None:
-            rows = [json.loads(line) for line in Path(self.descriptor['native_events_path'])
-                .read_text().splitlines() if line.strip()]
             fresh_sample_sequence = self.ingress.last_published_sample_sequence
-            prebind_check = verify_r02e_prebind_admission_rejected(rows,
+            current_input = self.safety.local_training.noisy
+            if current_input is None or current_input.sample_sequence != fresh_sample_sequence:
+                raise RuntimeError('R02e fresh Safety input changed before native evidence wait')
+            # Stop advancing the sample target while the asynchronous native
+            # stdout collector records the acceptance event for this exact input.
+            self.ingress.pause_admission_publication()
+            prebind_check = await self.wait_r02e_native_admission(
                 held_sample_sequence=held_sample_sequence,
                 fresh_sample_sequence=fresh_sample_sequence,
-                pending_token=ack.response.pending_admission_token)
+                pending_token=ack.response.pending_admission_token,
+                deadline_ns=deadline)
             self.emit('R02E_PREBIND_ADMISSION_REJECTED_AND_FRESH_ACCEPTED', {
                 **prebind_check,
                 'prior_token_sha256': hashlib.sha256(bytes(held_prebind.admission_token)).hexdigest(),
