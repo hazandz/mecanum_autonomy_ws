@@ -2241,13 +2241,16 @@ async def training_child(path):
                     io.ingress.inhibit()
                     control_ack = await io.control.transact(r02g_inhibit_operation(),
                         deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
+                    # Native gate invalidation reports the now-closed active
+                    # POLICY slot as sequence+stale while retaining zero.
                     state = await io.until(lambda: io.ingress.backend_state
                         if io.ingress.backend_state is not None
                         and io.ingress.backend_state.local_zero_override
                         and io.ingress.backend_state.status_sequence > 0 else None,
                         deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                         phase='R02g native OP_INHIBIT zero state',
-                        expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
+                        expected_native_fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
+                            | SimulationContactState.FAULT_COMMAND_STALE))
                     result = verify_r02g_close(io, route=route,
                         policy_receipt_count=len(io.ingress.receipts), backend_state=state,
                         control_ack=control_ack)
