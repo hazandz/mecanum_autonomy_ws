@@ -19,6 +19,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
+    policy_step_identities,
     verify_r07b_revocation,
 )
 
@@ -173,27 +174,46 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
 
 
-def test_r07a_unexpected_pause_requires_world_ack_native_zero_and_no_followon_policy():
+def test_r07a_allows_timer_republication_but_rejects_new_policy_step_identity():
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
     world = True
     state = NS(fault_flags=1, local_zero_override=True, actuator_inhibited=True)
+    lifecycle = EpisodeLifecycleIdentity(1, 2, 3)
+    def receipt(sequence, step, transition):
+        return NS(source=ReceiptSource.POLICY, session_id='session-1',
+            ingress_config_hash='a'*64, lifecycle=lifecycle,
+            source_instance_id=91, source_sequence=sequence, step_index=step,
+            transition_id=transition, final_publish_sequence=sequence+100)
+    issued = receipt(1, 1, 'transition-1')
+    repeated = receipt(1, 1, 'transition-1')
+    pre_keys = policy_step_identities([issued])
+    post_keys = policy_step_identities([issued, repeated])
     result = verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
-        pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
+        pre_pause_policy_step_identities=pre_keys, post_pause_policy_step_identities=post_keys,
         reset_count_before='reset-0', reset_count_after='reset-0')
     assert result['world_pause_state'] is True
     assert result['native_zero_override']
-    with pytest.raises(RuntimeError, match='POLICY receipt after unexpected pause'):
+    with pytest.raises(RuntimeError, match='new POLICY step identity'):
         verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
-            pre_pause_policy_receipts=1, post_pause_policy_receipts=2,
+            pre_pause_policy_step_identities=pre_keys,
+            post_pause_policy_step_identities=policy_step_identities(
+                [issued, repeated, receipt(2, 2, 'transition-2')]),
+            reset_count_before='reset-0', reset_count_after='reset-0')
+    with pytest.raises(RuntimeError, match='did not observe its committed POLICY step'):
+        verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
+            pre_pause_policy_step_identities=frozenset(), post_pause_policy_step_identities=frozenset(),
             reset_count_before='reset-0', reset_count_after='reset-0')
     with pytest.raises(RuntimeError, match='native unexpected-pause'):
         verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True,
             backend_state=NS(fault_flags=0, local_zero_override=False, actuator_inhibited=False),
-            pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
+            pre_pause_policy_step_identities=pre_keys, post_pause_policy_step_identities=post_keys,
             reset_count_before='reset-0', reset_count_after='reset-0')
     with pytest.raises(RuntimeError, match='pause ACK/state'):
         verify_r07a_unexpected_pause(world_ack=world, world_pause_state=False,
-            backend_state=state, pre_pause_policy_receipts=1,
-            post_pause_policy_receipts=1, reset_count_before='reset-0',
+            backend_state=state, pre_pause_policy_step_identities=pre_keys,
+            post_pause_policy_step_identities=post_keys, reset_count_before='reset-0',
             reset_count_after='reset-0')
 
 

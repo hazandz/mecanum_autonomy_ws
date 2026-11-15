@@ -98,22 +98,25 @@ def verify_r07b_revocation(*, response, original_proof, sim_before_ns,
         'inhibit_revision':inhibit_ack.response.applied_binding_revision}
 
 
-def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state, pre_pause_policy_receipts,
-                                 post_pause_policy_receipts, reset_count_before,
+def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
+                                 pre_pause_policy_step_identities,
+                                 post_pause_policy_step_identities, reset_count_before,
                                  reset_count_after):
-    """Require external pause to produce native fault/zero without later POLICY."""
+    """Require external pause to fault/zero without admitting a new POLICY step."""
     if world_ack is not True or world_pause_state is not True:
         raise RuntimeError('R07a world pause ACK/state was not confirmed')
     if (backend_state is None or backend_state.fault_flags != 1
             or not backend_state.local_zero_override or backend_state.actuator_inhibited is False):
         raise RuntimeError('R07a lacks native unexpected-pause fault and zero override')
-    if post_pause_policy_receipts != pre_pause_policy_receipts:
-        raise RuntimeError('R07a observed a POLICY receipt after unexpected pause')
+    if not pre_pause_policy_step_identities:
+        raise RuntimeError('R07a did not observe its committed POLICY step before unexpected pause')
+    if post_pause_policy_step_identities != pre_pause_policy_step_identities:
+        raise RuntimeError('R07a observed a new POLICY step identity after unexpected pause')
     if reset_count_after != reset_count_before:
         raise RuntimeError('R07a reset/observation0 advanced after unexpected pause')
     return {'world_pause_acknowledged':True,'world_pause_state':world_pause_state,
         'native_fault_flags':backend_state.fault_flags,
-        'native_zero_override':True,'policy_receipt_count_unchanged':True,
+        'native_zero_override':True,'policy_step_identities_unchanged':True,
         'reset_count_unchanged':True}
 
 
@@ -121,6 +124,16 @@ def policy_receipt_count(receipts):
     """Count copied receipt-v2 views using the pure-core source enum."""
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     return sum(1 for receipt in receipts if receipt.source == ReceiptSource.POLICY)
+
+
+def policy_step_identities(receipts):
+    """Return distinct source-step identities, ignoring timer republishes."""
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    return frozenset((receipt.session_id, receipt.ingress_config_hash,
+        (receipt.lifecycle.episode_generation, receipt.lifecycle.reset_epoch,
+         receipt.lifecycle.runtime_generation), receipt.source_instance_id,
+        receipt.source_sequence, receipt.step_index, receipt.transition_id)
+        for receipt in receipts if receipt.source == ReceiptSource.POLICY)
 
 
 SOAK_ACTIONS = (
@@ -3240,6 +3253,7 @@ async def training_child(path):
             if transition.termination.terminated or transition.termination.truncated:
                 raise RuntimeError('R07a POLICY step terminated before external pause')
             before_policy = policy_receipt_count(io.ingress.receipts)
+            before_policy_identities = policy_step_identities(io.ingress.receipts)
             reset_fact_before = b1.lifecycle.snapshot.reset_commit_facts
             previous_ros = io.ros_now()
             io.expected_paused = True
@@ -3250,6 +3264,7 @@ async def training_child(path):
             io.emit('B23_R07A_UNEXPECTED_PAUSE_ARMED', {
                 'after_policy_step':transition.transition_identity.step_index,
                 'pre_pause_policy_receipt_count':before_policy,
+                'pre_pause_policy_step_identities':sorted(before_policy_identities, key=repr),
                 'pre_pause_reset_fact':repr(reset_fact_before),
                 'sim_ns_before_pause':previous_ros,'steady_ns':io.now()})
             state = await io.until(lambda: io.ingress.backend_state
@@ -3261,11 +3276,17 @@ async def training_child(path):
                 phase='R07a native unexpected-pause zero/fault',
                 expected_native_fault_flags=1)
             policy_after = policy_receipt_count(io.ingress.receipts)
+            policy_after_identities = policy_step_identities(io.ingress.receipts)
+            io.emit('B23_R07A_POLICY_OBSERVATION', {
+                'post_pause_policy_receipt_count':policy_after,
+                'post_pause_policy_step_identities':sorted(policy_after_identities, key=repr),
+                'steady_ns':io.now()})
             reset_fact_after = b1.lifecycle.snapshot.reset_commit_facts
             checked = verify_r07a_unexpected_pause(world_ack=world_ack,
                 world_pause_state=pause_state,
-                backend_state=state, pre_pause_policy_receipts=before_policy,
-                post_pause_policy_receipts=policy_after,
+                backend_state=state,
+                pre_pause_policy_step_identities=before_policy_identities,
+                post_pause_policy_step_identities=policy_after_identities,
                 reset_count_before=reset_fact_before, reset_count_after=reset_fact_after)
             await asyncio.sleep(min(.250, max(0.0, (io.deadline_ns-io.now())/1e9)))
             if io.now() >= io.deadline_ns:
