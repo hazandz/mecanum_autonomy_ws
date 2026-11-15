@@ -320,6 +320,64 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
     assert io._r04d_pending_ingress_lifecycle is None
 
 
+def test_r04d_final_publisher_keeps_bound_identity_until_stale_safety_window():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace as NS
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_lifecycle_dispatch
+
+    with TemporaryDirectory() as directory:
+        marker_path = Path(directory) / 'r04d-final-lifecycle-delay.json'
+        node = NS(_b23_r04d_run_id='RUN-1', _b23_r04d_invocation_id='INV-1')
+        delivered, events, scheduled = [], [], []
+        original = lambda owner, message: delivered.append((owner, message.sequence))
+        dispatch = r04d_final_lifecycle_dispatch(original, marker_path,
+            lambda name, facts: events.append((name, facts)),
+            lambda owner, due_ns, callback: scheduled.append((owner, due_ns, callback)))
+        before = NS(sequence=4, episode_generation=1, reset_epoch=2,
+            runtime_generation=3, header=NS(stamp=NS(sec=1, nanosec=2)))
+        dispatch(node, before)
+        assert delivered == [(node, 4)]
+        marker_path.write_text(json.dumps({'schema':'b23_r04d_delay_marker/v1',
+            'run_id':'RUN-1','invocation_id':'INV-1','baseline_sequence':4,
+            'baseline_identity':[1,2,3],'armed_ns':100,'delay_ns':700_000_000}))
+        changed = NS(sequence=5, episode_generation=2, reset_epoch=2,
+            runtime_generation=3, header=NS(stamp=NS(sec=2, nanosec=3)))
+        dispatch(node, changed)
+        dispatch(node, changed)
+        assert delivered == [(node, 4)]
+        assert len(scheduled) == 1
+        assert scheduled[0][1] >= events[0][1]['received_ns'] + 700_000_000
+        assert events[0][0] == 'R04D_FINAL_LIFECYCLE_DELIVERY_SCHEDULED'
+        assert events[0][1]['identity'] == [2,2,3]
+        scheduled[0][2]()
+        assert delivered == [(node, 4), (node, 5)]
+        assert events[1][0] == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
+
+
+def test_r04d_final_lifecycle_delay_rejects_foreign_marker():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace as NS
+    import pytest
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_lifecycle_dispatch
+
+    with TemporaryDirectory() as directory:
+        marker_path = Path(directory) / 'r04d-final-lifecycle-delay.json'
+        marker_path.write_text(json.dumps({'schema':'b23_r04d_delay_marker/v1',
+            'run_id':'OTHER','invocation_id':'INV-1','baseline_sequence':4,
+            'baseline_identity':[1,2,3],'armed_ns':100,'delay_ns':700_000_000}))
+        node = NS(_b23_r04d_run_id='RUN-1', _b23_r04d_invocation_id='INV-1')
+        message = NS(sequence=5, episode_generation=2, reset_epoch=2,
+            runtime_generation=3, header=NS(stamp=NS(sec=2, nanosec=3)))
+        dispatch = r04d_final_lifecycle_dispatch(lambda *_: None, marker_path,
+            lambda *_: None, lambda *_: None)
+        with pytest.raises(RuntimeError, match='ownership/schema mismatch'):
+            dispatch(node, message)
+
+
 def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
     # Use the exact event names and ordering emitted by the production worker.
     io = NS(policy_source_id=9, events=[

@@ -181,6 +181,64 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
     return state
 
 
+def r04d_final_lifecycle_dispatch(original, marker_path, emit, schedule):
+    """Delay the final-publisher lifecycle callback only during the R04d window.
+
+    R04d measures a delayed Safety callback. Keeping the final publisher on its
+    previously bound identity during that same window prevents it from emitting
+    a receipt with a lifecycle tuple the native backend has not bound yet. The
+    packet-scoped marker is written by the worker immediately before the reset
+    lifecycle request; outside that interval this is a transparent dispatch.
+    """
+    marker_path = Path(marker_path)
+    pending = {}
+    def dispatch(node, message):
+        if not marker_path.exists():
+            return original(node, message)
+        marker = json.loads(marker_path.read_bytes())
+        if (marker.get('schema') != 'b23_r04d_delay_marker/v1'
+                or marker.get('run_id') != node._b23_r04d_run_id
+                or marker.get('invocation_id') != node._b23_r04d_invocation_id
+                or type(marker.get('baseline_sequence')) is not int
+                or not isinstance(marker.get('baseline_identity'), list)
+                or len(marker['baseline_identity']) != 3
+                or any(type(value) is not int for value in marker['baseline_identity'])
+                or type(marker.get('delay_ns')) is not int
+                or marker['delay_ns'] <= 0):
+            raise RuntimeError('R04d final lifecycle marker ownership/schema mismatch')
+        sequence = int(message.sequence)
+        if sequence <= marker['baseline_sequence']:
+            return original(node, message)
+        key = (sequence, int(message.episode_generation), int(message.reset_epoch),
+            int(message.runtime_generation))
+        if list(key[1:]) == marker['baseline_identity']:
+            return original(node, message)
+        if key in pending:
+            return None
+        received_ns = time.monotonic_ns()
+        pending[key] = True
+        release_after_ns = received_ns + marker['delay_ns']
+        source_stamp_ns = (int(message.header.stamp.sec) * 1_000_000_000
+            + int(message.header.stamp.nanosec))
+        emit('R04D_FINAL_LIFECYCLE_DELIVERY_SCHEDULED', {
+            'run_id': marker['run_id'], 'invocation_id': marker['invocation_id'],
+            'sequence': sequence, 'identity': list(key[1:]),
+            'source_stamp_ns': source_stamp_ns, 'received_ns': received_ns,
+            'release_after_ns': release_after_ns, 'delay_ns': marker['delay_ns']})
+        def deliver():
+            pending.pop(key, None)
+            delivered_ns = time.monotonic_ns()
+            original(node, message)
+            emit('R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED', {
+                'run_id': marker['run_id'], 'invocation_id': marker['invocation_id'],
+                'sequence': sequence, 'identity': list(key[1:]),
+                'source_stamp_ns': source_stamp_ns,
+                'received_ns': received_ns, 'delivery_ns': delivered_ns})
+        schedule(node, release_after_ns, deliver)
+        return None
+    return dispatch
+
+
 def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
                                            fresh_sample_sequence, pending_token,
                                            allow_pending=False):
@@ -2411,11 +2469,32 @@ def final_child(path):
         stop = True
     signal.signal(signal.SIGTERM, stopping); signal.signal(signal.SIGINT, stopping)
     error = None
+    r04d_original_lifecycle = None
     try:
         rclpy.init(context=context)
+        if packet['case'] == 'R04d':
+            from rclpy.clock import Clock, ClockType
+            r04d_original_lifecycle = FinalTwistPublisherNode._on_lifecycle
+            marker_path = Path(descriptor['run_root'])/'r04d-final-lifecycle-delay.json'
+            def schedule_steady(node, release_after_ns, callback):
+                steady = Clock(clock_type=ClockType.STEADY_TIME)
+                timer_holder = {}
+                def poll_release():
+                    if time.monotonic_ns() < release_after_ns:
+                        return
+                    timer = timer_holder['timer']
+                    timer.cancel()
+                    node.destroy_timer(timer)
+                    callback()
+                timer_holder['timer'] = node.create_timer(.005, poll_release, clock=steady)
+            FinalTwistPublisherNode._on_lifecycle = r04d_final_lifecycle_dispatch(
+                r04d_original_lifecycle, marker_path, sink.record, schedule_steady)
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
             Parameter('session_id', value=descriptor['session_id'])], evidence_sink=sink.record)
+        if packet['case'] == 'R04d':
+            node._b23_r04d_run_id = descriptor['run_id']
+            node._b23_r04d_invocation_id = descriptor['invocation_id']
         executor = SingleThreadedExecutor(context=context); executor.add_node(node)
         write_record_once(descriptor['final_boot_path'], {'schema': 'b23_final_boot/v1',
             'run_id': descriptor['run_id'], 'invocation_id': descriptor['invocation_id'],
@@ -2467,6 +2546,8 @@ def final_child(path):
         if node is not None:
             node.destroy_node()
         if context.ok(): context.shutdown()
+        if r04d_original_lifecycle is not None:
+            FinalTwistPublisherNode._on_lifecycle = r04d_original_lifecycle
         sink.close()
     return 0 if error is None else 1
 
@@ -2741,8 +2822,23 @@ async def training_child(path):
                 state = install_r04_delivery_fault(io.safety.local_training,
                     packet['case'], io.emit)
                 io._r04d_fault_state = state
+                marker_armed_ns = io.now()
+                baseline_lifecycle = io.ingress.lifecycle
+                if baseline_lifecycle is None:
+                    raise RuntimeError('R04d requires a bound lifecycle before fault arming')
+                write_record_once(Path(packet['run_root'])/'r04d-final-lifecycle-delay.json', {
+                    'schema':'b23_r04d_delay_marker/v1', 'run_id':packet['run_id'],
+                    'invocation_id':io.descriptor['invocation_id'],
+                    'baseline_sequence':int(baseline_lifecycle.sequence),
+                    'baseline_identity':[int(baseline_lifecycle.episode_generation),
+                        int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)],
+                    'armed_ns':marker_armed_ns,
+                    'delay_ns':700_000_000,
+                    'reason':'keep final publisher on bound identity until the R04d Safety stale-lifecycle observation window closes'})
                 io.emit('B23_R04_FAULT_ARMED', {'case':'R04d',
-                    'next_operation':'lifecycle reset event', 'steady_ns':io.now()})
+                    'next_operation':'lifecycle reset event', 'steady_ns':io.now(),
+                    'final_lifecycle_delay_ns':700_000_000,
+                    'final_lifecycle_baseline_sequence':int(baseline_lifecycle.sequence)})
                 await io.lifecycle_event(rearm=False,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
                 rejected = await io.until(lambda: next((facts for name, facts in io.events
