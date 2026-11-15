@@ -2728,7 +2728,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     adapter = NS(safe_stop_sequence=1,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
-        set_policy_hold=lambda state: history.append(('hold', state)))
+        set_policy_hold=lambda state: history.append(('hold', state)),
+        scan_period_ns=100_000_000, last_tick_ros_ns=1_000_000_000)
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     zero_policy_receipt = FinalIssuedCommandReceipt()
@@ -2778,6 +2779,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.policy_publisher = NS(publish=publish)
     async def pause(seconds):
         await clock.pause(seconds)
+        adapter.last_tick_ros_ns = clock.ns
         if armed:
             value.ingress.last_published_sample_sequence = 3
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -2862,6 +2864,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if i > issued and row == ('hold', False))
     assert stream_off < bind < issued < stream_on_after_issue < hold_off_after_issue
     envelope = next(row[1] for row in history if row[0] == 'publish')
+    aligned = next((row[1] for row in history
+        if row[0] == 'POLICY_ISSUANCE_PHASE_ALIGNED'), None)
+    assert aligned is not None, f'POLICY issuance was not aligned to scan phase; history={history!r}'
+    assert envelope.header.stamp.sec * 10**9 + envelope.header.stamp.nanosec > aligned['boundary_ns']
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing=='r09b_callback' else .08)
     assert len([row for row in history if row[0] == 'publish']) == 1

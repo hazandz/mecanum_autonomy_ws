@@ -3310,6 +3310,33 @@ class TrainingWorkerIO:
             'application_received_ns': application['received_ns'],
             'steady_ns': self.now()})
 
+    async def align_policy_issuance_after_scan_boundary(self, *, deadline_ns):
+        """Stamp POLICY just after a scan boundary so native application can precede its cutoff.
+
+        The step stream is frozen while this runs. Waiting for ROS time to cross
+        the next scan boundary moves the eventual receipt/application away from
+        the phase-locked case where the latest receipt is stamped exactly at a
+        scan cutoff and native applies it one physics iteration later.
+        """
+        adapter = self.safety.local_training
+        period_ns = getattr(adapter, 'scan_period_ns', None)
+        if type(period_ns) is not int or period_ns <= 0:
+            raise RuntimeError('POLICY scan phase alignment requires a valid Safety scan period')
+        before_ros_ns = self.ros_now()
+        boundary_ns = (before_ros_ns // period_ns + 1) * period_ns
+        crossed = await self.until(lambda: {
+                'ros_ns': self.ros_now(), 'steady_ns': self.now()
+            } if self.ros_now() > boundary_ns else None,
+            deadline_ns=deadline_ns,
+            phase='POLICY issuance after next scan boundary')
+        self.emit('POLICY_ISSUANCE_PHASE_ALIGNED', {
+            'before_ros_ns': before_ros_ns,
+            'boundary_ns': boundary_ns,
+            'aligned_ros_ns': crossed['ros_ns'],
+            'scan_period_ns': period_ns,
+            'steady_ns': crossed['steady_ns']})
+        return crossed
+
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -3471,6 +3498,7 @@ class TrainingWorkerIO:
                 'pending_token_sha256': hashlib.sha256(bytes(ack.response.pending_admission_token)).hexdigest(),
                 'steady_ns': self.now()})
             self._last_prebind_check = prebind_check
+        await self.align_policy_issuance_after_scan_boundary(deadline_ns=deadline)
         life = self.ingress.lifecycle
         envelope = CommandEnvelope()
         envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
