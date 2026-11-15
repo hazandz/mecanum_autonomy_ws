@@ -2955,7 +2955,7 @@ async def training_child(path):
                 'replay_response_cdr_hex':replay_ack.response_bytes.hex(),
                 'fresh_request_cdr_hex':fresh_ack.request_bytes.hex(),
                 'fresh_response_cdr_hex':fresh_ack.response_bytes.hex(),
-                'coverage_mask_event':masked, 'native_zero_state_sequence':state.sequence,
+                'coverage_mask_event':masked, 'native_zero_state_sequence':state.status_sequence,
                 'checked':checked, 'completed_ns':time.monotonic_ns()})
             outcome = {'case':'R05','resets_confirmed':0,
                 'policy_steps_committed':0, **checked,
