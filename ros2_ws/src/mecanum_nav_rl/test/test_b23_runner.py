@@ -341,11 +341,15 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     receipt.final_publish_sequence = 99
     receipt.final_command = Twist()
     events = [
+        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT',
+            'steady_ns':901}),
         ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
-            'steady_ns':900}),
+            'steady_ns':902}),
         ('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,
             'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
             'iteration':12,'stamp_ns':120_000_000}),
+        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+            'steady_ns':1_000}),
     ]
     final = NS(publisher_instance_id=80)
     final.publication_for_source_sequence = lambda **kwargs: receipt if (
@@ -357,11 +361,13 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     assert result['policy_not_accepted'] is True
     assert result['native_policy_receipt_absent'] is True
     assert result['b1_transition_absent'] is True
+    assert result['input_rejection_steady_ns'] == 901
+    assert result['rejected_steady_ns'] == 902
     assert result['native_zero_application'] == {
         'source_sequence':9,'final_publish_sequence':99,'publisher_instance_id':80,
         'native_iteration':12,'native_stamp_ns':120_000_000,
         'native_application_steady_ns':950}
-    events.pop()
+    events.pop(2)
     with pytest.raises(RuntimeError, match='lacks a post-rejection exact native SAFE_STOP'):
         verify_r04a_next_step_blocked(io, step_index=2)
     events.append(('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,

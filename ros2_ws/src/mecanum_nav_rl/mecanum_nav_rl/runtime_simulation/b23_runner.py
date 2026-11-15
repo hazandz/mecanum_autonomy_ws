@@ -513,9 +513,14 @@ async def await_r04a_production_rejection(io, *, deadline_ns):
 
 def verify_r04a_next_step_blocked(io, *, step_index):
     """Prove delayed out-of-order Safety input cannot authorize the next slot."""
-    rejected = next((facts for name, facts in reversed(io.events)
+    input_rejected = next((facts for name, facts in io.events
+        if name == 'SAFETY_INPUT_REJECTED'
+        and facts.get('reason') == 'SAFETY_INPUT_REPLAY_OR_CONFLICT'), None)
+    rejected = next((facts for name, facts in io.events
         if name == 'SAFETY_REJECTED'
-        and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())), None)
+        and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
+        and input_rejected is not None
+        and facts.get('steady_ns', 0) >= input_rejected.get('steady_ns', 0)), None)
     if rejected is None:
         raise RuntimeError('R04a lacks production Safety rejection after delayed-input invalidation')
     if any(name == 'SAFETY_ACCEPTED'
@@ -562,6 +567,7 @@ def verify_r04a_next_step_blocked(io, *, step_index):
     if applied_zero is None:
         raise RuntimeError('R04a lacks a post-rejection exact native SAFE_STOP receipt application')
     return {'blocked_step_index':step_index,
+        'input_rejection_steady_ns':input_rejected['steady_ns'],
         'safety_rejection_reasons':list(rejected.get('reasons', ())),
         'rejected_steady_ns':rejected['steady_ns'],
         'policy_not_accepted':True,'native_policy_receipt_absent':True,
