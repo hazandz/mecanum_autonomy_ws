@@ -53,7 +53,7 @@ mode change requires a separate review.
   assigned as a stop control because no unused physical button has been
   confirmed. The mapper's explicit disarm service is software-only.
 - `UartBridgeNode`, `BridgeSession`, session identity/lifecycle checks, UART
-  protocol, command freshness, and STM32 watchdog remain in use. No Joy callback
+  protocol and command validation remain in use; command-watchdog expiry is explicitly disabled for the validated MANUAL_SLAM bench profile. No Joy callback
   may access the session directly.
 - No lifecycle READY/rearm is emitted by the launch. Any later operator rearm
   is outside this offline candidate and requires a separate reviewed procedure.
@@ -70,19 +70,22 @@ rewritten to `INACTIVE` and no hardware state is fabricated. The bridge may be
 explicitly configured with `manual_slam_bench_unmonitored_estop=true` only in
 the MANUAL_SLAM bench launch: this suppresses unhealthy status caused solely
 by the absent auxiliary input. A reported `ACTIVE`, any MCU fault, stale
-telemetry, UART/session loss, or motor fault remains unhealthy/stopping. Command watchdog expiry is disabled only
-when generated firmware configuration validates the MANUAL_SLAM bench profile;
-therefore loss of commands or connection silence is not automatically stopped
-by that watchdog in this bench mode. Non-bench/invalid-profile builds keep the
-command watchdog enabled. All other modes retain strict UNKNOWN handling and
-watchdog behavior. The main switch's ability to
+telemetry, UART/session loss, or motor fault remains unhealthy/stopping. In
+the validated MANUAL_SLAM bench firmware profile, command-watchdog expiry is
+disabled, so loss of commands or connection silence alone does not stop the
+active target. UART/transport failure, explicit zero/disarm, and PID4 motor
+fault handling remain separate stopping paths. No IWDG/WWDG hardware watchdog
+refresh or shutdown path is configured in this firmware source; do not infer
+one from the command watchdog. Invalid/non-bench profile builds enable command
+watchdog expiry. Other modes retain their own strict E-stop and watchdog
+policies. The main switch's ability to
 disconnect both drivers is unverified; this exception is not an equivalent
 physical E-stop and does not establish robot readiness.
 - The MANUAL_SLAM firmware candidate enables the PID4 experimental numerical
   profile only when built from a manifest whose geometry, 937.2 encoder scale,
   wheel order and Owner-reported signs validate. MCU output is disabled at boot;
   movement requires a matching session CONFIG and an accepted nonzero command.
-  Zero command, watchdog, transport/session failure or PID4 guard fault disables
+  Zero command, transport/session failure or PID4 guard fault disables
   output. A guard fault moves the session to SAFE_STOP and requires a new
   accepted CONFIG before another command can be accepted. Launch does not
   configure or rearm the MCU.
