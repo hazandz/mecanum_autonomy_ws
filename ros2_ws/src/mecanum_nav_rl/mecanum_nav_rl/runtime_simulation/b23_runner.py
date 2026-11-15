@@ -844,7 +844,7 @@ class TrainingWorkerIO:
             self.ingress = LocalTrainingIngress(identity, document['training']['local_training'],
                 final_publisher_id=self.final.publisher_instance_id, policy_source_id=self.policy_source_id,
                 safe_stop_source_id=self.safe_stop_source_id, safety_publish=self._publish_safety_input,
-                emit=emit, now_ros_ns=self.ros_now)
+                emit=self.emit, now_ros_ns=self.ros_now)
             self.final.ingress = self.ingress
             for message, topic, callback, qos in (
                 (Odometry, '/mecanum/internal/ground_truth/odom', self.ingress.on_ground_truth, backend_qos),

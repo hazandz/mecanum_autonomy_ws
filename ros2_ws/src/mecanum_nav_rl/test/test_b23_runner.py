@@ -2,6 +2,7 @@
 import asyncio
 import json
 import threading
+import textwrap
 from types import SimpleNamespace as NS
 import pytest
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
@@ -335,6 +336,15 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     from geometry_msgs.msg import Twist
     from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    import ast
+    import inspect
+    constructor = ast.parse(textwrap.dedent(inspect.getsource(TrainingWorkerIO.__init__)))
+    ingress_call = next(node for node in ast.walk(constructor)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == 'LocalTrainingIngress')
+    emitter_arg = next(item.value for item in ingress_call.keywords if item.arg == 'emit')
+    assert (isinstance(emitter_arg, ast.Attribute) and emitter_arg.attr == 'emit'
+        and isinstance(emitter_arg.value, ast.Name) and emitter_arg.value.id == 'self')
     receipt = FinalIssuedCommandReceipt()
     receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
     receipt.source_instance_id = 70
