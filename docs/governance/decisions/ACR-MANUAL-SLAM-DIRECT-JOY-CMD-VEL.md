@@ -70,8 +70,12 @@ rewritten to `INACTIVE` and no hardware state is fabricated. The bridge may be
 explicitly configured with `manual_slam_bench_unmonitored_estop=true` only in
 the MANUAL_SLAM bench launch: this suppresses unhealthy status caused solely
 by the absent auxiliary input. A reported `ACTIVE`, any MCU fault, stale
-telemetry, UART/session loss, or watchdog fault remains unhealthy/stopping.
-All other modes retain strict UNKNOWN handling. The main switch's ability to
+telemetry, UART/session loss, or motor fault remains unhealthy/stopping. Command watchdog expiry is disabled only
+when generated firmware configuration validates the MANUAL_SLAM bench profile;
+therefore loss of commands or connection silence is not automatically stopped
+by that watchdog in this bench mode. Non-bench/invalid-profile builds keep the
+command watchdog enabled. All other modes retain strict UNKNOWN handling and
+watchdog behavior. The main switch's ability to
 disconnect both drivers is unverified; this exception is not an equivalent
 physical E-stop and does not establish robot readiness.
 - The MANUAL_SLAM firmware candidate enables the PID4 experimental numerical

@@ -181,7 +181,7 @@ def generate_launch_description():
         ("imu_bus", "1"),
         ("imu_address", "41"),
         ("imu_bus_arg", "i2c_bus"),
-        ("imu_address_arg", "i2c_address"),
+        ("imu_address_arg", "i2c_addr"),
         ("imu_frame_arg", "frame_id"),
         ("imu_use_sim_time_arg", "use_sim_time"),
         ("joy_device_id", "0"),

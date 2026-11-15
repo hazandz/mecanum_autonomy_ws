@@ -68,7 +68,7 @@ def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypa
         "imu_bus": "1",
         "imu_address": "41",
         "imu_bus_arg": "i2c_bus",
-        "imu_address_arg": "i2c_address",
+        "imu_address_arg": "i2c_addr",
         "imu_frame_arg": "frame_id",
         "imu_use_sim_time_arg": "use_sim_time",
         "joy_device_id": "0",
@@ -94,3 +94,26 @@ def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypa
         key[0].text == "use_sim_time" and value is False
         for group in joy._Node__parameters for key, value in group.items()
     )
+
+
+def test_bno055_wrapper_passes_exact_i2c_parameter_names_and_values():
+    spec = importlib.util.spec_from_file_location(
+        "manual_slam_bno_wrapper", ROOT /
+        "ros2_ws/src/mecanum_nav_bringup/launch/manual_slam_bno055_i2c.launch.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    actions = module.generate_launch_description().entities
+    node = next(action for action in actions if isinstance(action, Node))
+    assert node._Node__package == "bno055"
+    assert node.node_executable == "bno055"
+    context = LaunchContext()
+    context.launch_configurations.update({"i2c_bus": "1", "i2c_addr": "41",
+                                          "frame_id": "imu_link", "use_sim_time": "false"})
+    params = {key[0].text: value[0].perform(context) if isinstance(value, tuple)
+              else value for key, value in node._Node__parameters[0].items()}
+    assert params["i2c_addr"] == "41"
+    assert "i2c_address" not in params
+    assert params["i2c_bus"] == "1"
+    assert params["frame_id"] == "imu_link"
+    assert params["data_query_frequency"] == 50
+    assert params["use_sim_time"] == "false"
