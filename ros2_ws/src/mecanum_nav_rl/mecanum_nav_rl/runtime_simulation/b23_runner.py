@@ -62,6 +62,23 @@ CASE_SCENARIOS = {
     'R09b': ('sim_train_local_training_contact.resolved.json', 'B2_CONTACT_V1.json'),
 }
 
+R09B_TASK_FIXTURE = {
+    'entity_name': 'obstacle_0',
+    'entity_type': 'MODEL',
+    'frame': 'world',
+    'initial_pose': {'x_m': 2.5, 'y_m': 0.0, 'z_m': 0.5, 'yaw_rad': 0.0},
+    # The tracked robot base collision is 0.4 x 0.28 x 0.10 m. This pose
+    # overlaps that collision while leaving the robot at its reset pose.
+    'contact_pose': {'x_m': 0.15, 'y_m': 0.0, 'z_m': 0.5, 'yaw_rad': 0.0},
+}
+
+
+def validate_r09b_task_fixture(value):
+    """Pin R09b SetEntityPose to the existing world fixture and two poses."""
+    if value != R09B_TASK_FIXTURE:
+        raise ValueError('R09b task fixture binding/pose differs from the approved packet')
+    return R09B_TASK_FIXTURE
+
 
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
@@ -78,17 +95,19 @@ def verify_r09a_goal_settle(transition):
 
 
 def verify_r09b_task_contact(transition, contact_state):
-    """Require a real external-contact pulse committed and terminated by B1."""
+    """Require the exact contact pulse consumed by this B1 terminal commit."""
     from mecanum_nav_rl.termination.manager import TerminationReason
+    transition_id = transition.transition_identity.transition_id
+    consumed = getattr(contact_state, 'consumed_transition_ids', ())
     if (not transition.termination.terminated
             or transition.termination.reason is not TerminationReason.COLLISION
             or not contact_state.source_healthy
-            or not contact_state.contact_active
-            or not contact_state.collision_pulse_pending):
+            or transition_id not in consumed):
         raise RuntimeError('R09b lacks a healthy B1-committed task contact terminal')
-    return {'task_contact_committed':True, 'contact_active':True,
-        'collision_pulse_pending':True,
-        'transition_id':transition.transition_identity.transition_id}
+    return {'task_contact_committed':True,
+        'contact_active_at_commit':bool(contact_state.contact_active),
+        'contact_pulse_consumed_by_b1':True,
+        'transition_id':transition_id}
 
 
 def require_r09_scenario(artifact_result, expected_scenario_id):
@@ -2002,6 +2021,65 @@ class TrainingWorkerIO:
         await self.call(self.pose_client, request, timeout_s=timeout_s, phase='robot_set_pose')
         return True
 
+    async def set_r09b_task_fixture_pose(self, *, pose_name, deadline_ns, policy_receipt=None):
+        """Move only the pinned R09b world obstacle while actual robot zero is bound."""
+        from rclpy.serialization import serialize_message
+        from ros_gz_interfaces.msg import Entity
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+        fixture = validate_r09b_task_fixture(self.descriptor.get('task_fixture'))
+        if pose_name not in ('contact_pose', 'initial_pose'):
+            raise ValueError('R09b fixture pose must be the packet contact or restore pose')
+        pose = fixture[pose_name]
+        receipt = policy_receipt or self.final.last_publication
+        state = self.ingress.backend_state
+        if receipt is None or state is None:
+            raise RuntimeError('R09b fixture mutation lacks final receipt/backend state')
+        if (receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                or (pose_name == 'contact_pose'
+                    and receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY)
+                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z))):
+            raise RuntimeError('R09b fixture mutation requires the bound zero final command')
+        applied_zero = (state.applied_receipt_valid
+            and state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
+            and state.applied_final_publish_sequence == receipt.final_publish_sequence)
+        emergency_zero = bool(state.local_zero_override and state.actuator_inhibited)
+        if not (applied_zero or emergency_zero) or state.fault_flags or state.paused:
+            raise RuntimeError('R09b fixture mutation requires observed applied/emergency zero while unpaused')
+        if (state.backend_instance_id != self.descriptor['backend_instance_id']
+                or state.session_id != self.descriptor['session_id']
+                or state.config_hash != self.descriptor['config_hash']):
+            raise RuntimeError('R09b fixture mutation backend/session/config identity mismatch')
+        request = self.pose_type.Request()
+        request.entity.name, request.entity.type = fixture['entity_name'], Entity.MODEL
+        request.pose.position.x, request.pose.position.y, request.pose.position.z = (
+            pose['x_m'], pose['y_m'], pose['z_m'])
+        request.pose.orientation.w = math.cos(pose['yaw_rad'] / 2)
+        request.pose.orientation.z = math.sin(pose['yaw_rad'] / 2)
+        started = self.now()
+        remaining = min(1.0, (deadline_ns - started) / 1e9)
+        if remaining <= 0:
+            raise TimeoutError('R09b fixture SetEntityPose has no remaining step budget')
+        self.emit('R09B_FIXTURE_POSE_REQUESTED', {
+            'entity_name':fixture['entity_name'], 'entity_type':'MODEL', 'frame':'world',
+            'pose_name':pose_name, 'target_pose':dict(pose),
+            'zero_receipt_sequence':receipt.final_publish_sequence,
+            'zero_receipt_source':receipt.source,
+            'zero_applied':applied_zero, 'emergency_zero':emergency_zero,
+            'backend_instance_id':state.backend_instance_id,
+            'session_id':state.session_id, 'config_hash':state.config_hash,
+            'request_cdr_hex':serialize_message(request).hex(), 'started_ns':started})
+        response = await self.call(self.pose_client, request, timeout_s=remaining,
+            phase='R09b_task_fixture_' + pose_name)
+        if not response.success:
+            raise RuntimeError('R09b SetEntityPose returned success=false for pinned fixture')
+        self.emit('R09B_FIXTURE_POSE_APPLIED', {
+            'entity_name':fixture['entity_name'], 'pose_name':pose_name,
+            'target_pose':dict(pose), 'response_success':bool(response.success),
+            'response_cdr_hex':serialize_message(response).hex(),
+            'completed_ns':self.now()})
+        return response
+
     async def lifecycle_event(self, *, rearm, deadline_ns):
         old = self.ingress.lifecycle
         previous = old.sequence if old is not None else 0
@@ -2904,7 +2982,8 @@ class TrainingWorkerIO:
     async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False,
                           close_after_held_receipt=None, prebind_admission=False,
                           measurement_fault_case=None,
-                          align_admission_after_scan_boundary=False):
+                          align_admission_after_scan_boundary=False,
+                          after_policy_applied=None):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -3157,6 +3236,27 @@ class TrainingWorkerIO:
                 'b1_step_aborted': True, 'transition_id': token.transition_id}
         self.safety.local_training.set_stream_enabled(True)
         self.safety.local_training.set_policy_hold(False)
+        if after_policy_applied is not None:
+            from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+            if not callable(after_policy_applied):
+                raise TypeError('after_policy_applied must be callable')
+            receipt = await self.until(lambda: self.final.publication_for_source_sequence(
+                source=FinalIssuedCommandReceipt.SOURCE_POLICY, sequence=token.step_index),
+                deadline_ns=deadline, phase='R09b exact zero POLICY receipt before fixture pose')
+            if any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                    receipt.final_command.angular.z)):
+                raise RuntimeError('R09b fixture callback requires an exact zero POLICY receipt')
+            applied = await self.until(lambda: self.ingress.backend_state
+                if self.ingress.backend_state is not None
+                and self.ingress.backend_state.fault_flags == 0
+                and not self.ingress.backend_state.paused
+                and self.ingress.backend_state.applied_receipt_valid
+                and self.ingress.backend_state.applied_final_publisher_instance_id
+                    == receipt.final_publisher_instance_id
+                and self.ingress.backend_state.applied_final_publish_sequence
+                    == receipt.final_publish_sequence else None,
+                deadline_ns=deadline, phase='R09b exact zero POLICY native application before fixture pose')
+            await after_policy_applied(receipt, applied, deadline)
         minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
         last_pending = None
         last_pending_key = None
@@ -3566,36 +3666,86 @@ async def training_child(path):
             if packet['fault_hooks'] or len(packet['episode_seeds']) != 1:
                 raise RuntimeError('R09b packet must pin the clean contact-task scenario')
             require_r09_scenario(artifact, 'B2_CONTACT_V1')
+            fixture = validate_r09b_task_fixture(packet.get('task_fixture'))
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                 paused_hold_s=.250)
-            progress, committed_steps = [], 0
-            for _ in range(120):
-                transition = await io.policy_step(b1, (1., 0., 0.))
-                committed_steps += 1
+            fixture_moved = False
+            primary = None
+            try:
+                async def move_fixture_after_zero_policy(receipt, applied_state, deadline_ns):
+                    nonlocal fixture_moved
+                    if any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                            receipt.final_command.angular.z)):
+                        raise RuntimeError('R09b fixture movement blocked: POLICY receipt is not zero')
+                    if (not applied_state.applied_receipt_valid
+                            or applied_state.applied_final_publish_sequence
+                                != receipt.final_publish_sequence
+                            or applied_state.actuator_inhibited):
+                        raise RuntimeError('R09b fixture movement lacks exact active zero POLICY application')
+                    # Once the RPC is submitted, its result can be uncertain on
+                    # timeout. Always attempt the exact restore in finalization.
+                    fixture_moved = True
+                    await io.set_r09b_task_fixture_pose(pose_name='contact_pose',
+                        deadline_ns=deadline_ns, policy_receipt=receipt)
+                transition = await io.policy_step(b1, (0., 0., 0.),
+                    after_policy_applied=move_fixture_after_zero_policy)
+                committed_steps = 1
                 pair = io.ingress.physics_pairs[-1] if io.ingress.physics_pairs else None
+                progress = []
                 if pair is not None:
                     oracle = deserialize_message(pair.oracle_bytes, Odometry)
                     status = deserialize_message(pair.backend_bytes, SimulationContactState)
                     sample = {'transition_id':transition.transition_identity.transition_id,
                         'physics_iteration':pair.iteration, 'sim_stamp_ns':pair.stamp_ns,
                         'pose_xy_m':[oracle.pose.pose.position.x,oracle.pose.pose.position.y],
+                        'twist_xyz':[oracle.twist.twist.linear.x, oracle.twist.twist.linear.y,
+                            oracle.twist.twist.angular.z],
                         'contact_active':bool(status.contact_active),
                         'coverage_complete':bool(status.coverage_complete),
                         'fault_flags':int(status.fault_flags), 'steady_ns':io.now()}
                     progress.append(sample)
                     sink.record('R09B_CONTACT_TASK_PROGRESS', sample)
                 contact = b1.contact.state
-                if transition.termination.terminated:
-                    checked = verify_r09b_task_contact(transition, contact)
-                    outcome = {'case':'R09b','resets_confirmed':1,
-                        'policy_steps_committed':committed_steps, 'progress_samples':progress,
-                        **checked, 'completed_ns':time.monotonic_ns()}
-                    break
                 if transition.termination.truncated:
                     raise RuntimeError('R09b task ended by truncation before contact')
-            if outcome is None:
-                raise TimeoutError('R09b did not produce a B1 contact terminal within 120 committed steps')
+                checked = verify_r09b_task_contact(transition, contact)
+                if (pair is None or not sample['coverage_complete']
+                        or sample['fault_flags'] != 0
+                        or not (sample['contact_active'] or checked['contact_pulse_consumed_by_b1'])):
+                    raise RuntimeError('R09b terminal lacks matching covered contact evidence at B1 cutoff')
+                outcome = {'case':'R09b','resets_confirmed':1,
+                    'policy_steps_committed':committed_steps, 'progress_samples':progress,
+                    'task_fixture':fixture, **checked, 'completed_ns':time.monotonic_ns()}
+            except BaseException as error:
+                primary = error
+                raise
+            finally:
+                if fixture_moved:
+                    try:
+                        await io.set_r09b_task_fixture_pose(pose_name='initial_pose',
+                            deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+                        empty = await io.until(lambda: io.ingress.backend_state
+                            if io.ingress.backend_state is not None
+                            and io.ingress.backend_state.coverage_complete
+                            and not io.ingress.backend_state.contact_active
+                            and io.ingress.backend_state.fault_flags == 0
+                            and not io.ingress.backend_state.paused else None,
+                            deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                            phase='R09b restored fixture covered-empty confirmation')
+                        sink.record('R09B_FIXTURE_RESTORED_COVERED_EMPTY', {
+                            'entity_name':fixture['entity_name'], 'pose':fixture['initial_pose'],
+                            'coverage_complete':bool(empty.coverage_complete),
+                            'contact_active':bool(empty.contact_active),
+                            'physics_iteration':int(empty.physics_iteration),
+                            'sim_stamp_ns':int(empty.header.stamp.sec)*1_000_000_000
+                                +int(empty.header.stamp.nanosec),
+                            'steady_ns':io.now()})
+                    except BaseException as restore_error:
+                        sink.record('R09B_FIXTURE_RESTORE_ERROR', {
+                            'error':repr(restore_error), 'steady_ns':io.now()})
+                        if primary is None:
+                            raise
         elif packet['case'] == 'R05':
             expected_env = case_environment(packet['case'], packet['fault_hooks'])
             if (packet['fault_hooks'] != ['mask_contact_coverage_after_verified']
@@ -4414,6 +4564,10 @@ def verify_packet(path, expected_sha256):
         if packet.get('case') in ('R09a','R09b') else [2026102900,2026102901])
     expected_scenario = {'R09a':'B2_GOAL_SETTLE_V1', 'R09b':'B2_CONTACT_V1'}.get(
         packet.get('case'), 'B2_SOAK_V1')
+    if packet.get('case') == 'R09b':
+        validate_r09b_task_fixture(packet.get('task_fixture'))
+    elif 'task_fixture' in packet:
+        raise ValueError('task fixture mutation is only valid for R09b')
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
             or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
             or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != expected_seeds
@@ -4969,6 +5123,7 @@ async def run_parent(packet_path, packet_sha256):
         active_deadline_ns=active_end, total_deadline_ns=total_end,
         coordinator_ingress_instance_id=packet['coordinator_ingress_instance_id'],
         config_hash=packet['config_hash'], asset_manifest_sha256=packet['asset_manifest_sha256'],
+        task_fixture=packet.get('task_fixture'),
         native_events_path=str(root/'native-events.jsonl'))
     try:
         if time.monotonic_ns() >= active_end:
@@ -5233,6 +5388,8 @@ def prepare_packet(args):
             'excluded_actions':['B22 contact-only runtime','hardware/HIL','PPO training'],
             'quoted_approval':'B23_CAMPAIGN_APPROVED; case-scoped campaign hook.'},
         'source_preflight':[commit_record,branch,dirty]}
+    if args.case == 'R09b':
+        packet['task_fixture'] = dict(R09B_TASK_FIXTURE)
     packet['service_properties'] = list(service_properties_for(active_s))
     packet['launch_argv_template'] = service_launch_command(packet, str(root/'packet.json'), '{PACKET_SHA256}')
     digest = write_record_once(root/'packet.json', packet)
