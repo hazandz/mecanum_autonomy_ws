@@ -502,6 +502,7 @@ def test_r07b_verifier_requires_exact_rollback_and_both_queries_revoked():
         sim_time_jump_delta_ns=-900,
         replay_ack=revoked(), fresh_ack=revoked(b'new-query'), inhibit_ack=inhibit)
     assert result['query_replay_revoked'] and result['fresh_query_revoked']
+    assert result['simulation_time_jump_delta_ns'] == -900
     with pytest.raises(RuntimeError, match='replayed QUERY exposed proof'):
         stale_response = NS(result=Control.Response.RESULT_APPLIED,
             reason_code=Control.Response.REASON_NONE,

@@ -3422,7 +3422,7 @@ async def training_child(path):
                     or io.contact_ack is None or io.contact_start_request_sequence is None):
                 raise RuntimeError('R07b packet/contact proof binding is incomplete')
             original = io.contact_ack
-            before, after = await io.reset_world_time_only(timeout_s=
+            before, after, rollback = await io.reset_world_time_only(timeout_s=
                 min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
             replay_ack = await io.control.replay(original,
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
@@ -3445,6 +3445,7 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
             checked = verify_r07b_revocation(response=fresh_ack.response,
                 original_proof=original, sim_before_ns=before, sim_after_ns=after,
+                sim_time_jump_delta_ns=rollback['delta_ns'],
                 replay_ack=replay_ack, fresh_ack=fresh_ack, inhibit_ack=inhibit_ack)
             io.emit('B23_R07B_VERIFIED', {'checked':checked,
                 'original_query_request_cdr_hex':original.request_bytes.hex(),
