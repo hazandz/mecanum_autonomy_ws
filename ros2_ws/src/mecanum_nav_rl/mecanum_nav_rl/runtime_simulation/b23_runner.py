@@ -1630,14 +1630,16 @@ class TrainingWorkerIO:
                 if (topic == '/mecanum/internal/ground_truth/odom'
                         and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                         and self._r07b_rollback_observed is not None
-                        and repr(error) == "ValueError('oracle clock rollback')"):
+                        and repr(error) in ("ValueError('oracle clock rollback')",
+                                            "ValueError('oracle same stamp changed bytes')")):
                     # Ingress vẫn pin high-watermark cũ và cố ý từ chối mọi
                     # mẫu oracle thấp hơn sau time_only reset. Chỉ ghi nhận
                     # rồi bỏ các callback rollback để pump tiếp tục quan sát
                     # backend replacement; không hạ watermark hay dùng dữ
                     # liệu cũ để tạo physics pair.
+                    reason = str(error)
                     self.emit('B23_R07B_POST_ROLLBACK_ORACLE_REJECTED', {
-                        'reason':'oracle clock rollback',
+                        'reason':reason,
                         'wire_sha256':hashlib.sha256(wire).hexdigest(),
                         'detected_ns':self.now()})
                     return None

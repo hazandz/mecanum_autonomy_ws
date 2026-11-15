@@ -714,6 +714,13 @@ def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
     assert result is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED'
     assert events[-1][1]['reason'] == 'oracle clock rollback'
+    result = worker.observed_callback(Odometry,
+        '/mecanum/internal/ground_truth/odom',
+        lambda _: (_ for _ in ()).throw(ValueError('oracle same stamp changed bytes')))(
+            serialize_message(oracle), {})
+    assert result is None
+    assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED'
+    assert events[-1][1]['reason'] == 'oracle same stamp changed bytes'
     with pytest.raises(ValueError, match='unrelated oracle failure'):
         worker.observed_callback(Odometry,
             '/mecanum/internal/ground_truth/odom',
