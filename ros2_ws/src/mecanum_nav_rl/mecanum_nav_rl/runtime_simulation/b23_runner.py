@@ -828,6 +828,30 @@ class TrainingWorkerIO:
                              deadline_ns=deadline_ns, phase='native safety-input drain')
         self.emit('ADMISSION_STREAM_FROZEN', {'last_sample_sequence': target, 'steady_ns': self.now()})
 
+    async def inhibit_and_drain(self, *, deadline_ns, zero_only=False):
+        """Publish one fresh closing admission sample and observe it natively."""
+        from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+        previous = self.ingress.last_published_sample_sequence
+        self.ingress.inhibit(zero_only=zero_only)
+        self.safety.local_training.set_stream_enabled(True)
+        expected = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY if zero_only
+                    else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+
+        def drained():
+            target = self.ingress.last_published_sample_sequence
+            if (target <= previous or self.ingress.last_published_admission_state != expected
+                    or self.read_native_input_watermark() < target):
+                return None
+            return target
+
+        target = await self.until(drained, deadline_ns=deadline_ns,
+            phase='fresh inhibited safety-input native drain')
+        self.emit('INHIBITED_SAFETY_INPUT_DRAINED', {
+            'previous_sample_sequence': previous, 'sample_sequence': target,
+            'admission_state': expected, 'native_input_watermark': self._native_input_watermark,
+            'steady_ns': self.now()})
+        return target
+
     async def freeze_zero(self, *, deadline_ns):
         from mecanum_nav_rl.simulation.local_training_reset import AppliedZeroReceiptFact
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
@@ -2220,8 +2244,8 @@ async def training_child(path):
                         'control_response_cdr_hex':control_ack.response_bytes.hex(),
                         'steady_ns':io.now()})
                     checked_routes.append(result)
-                    io.ingress.inhibit()
-                    adapter.set_stream_enabled(True)
+                    await io.inhibit_and_drain(deadline_ns=min(io.deadline_ns,
+                        io.now() + 1_000_000_000))
                     continue
                 stop = await io.until(lambda: adapter.last_output
                     if adapter.last_output is not None
@@ -2249,9 +2273,8 @@ async def training_child(path):
                     'policy_transition_id':b1.lifecycle.snapshot.committed_transition_ids[-1],
                     'steady_ns':io.now()})
                 checked_routes.append(result)
-                if route == 'safe_stop':
-                    io.ingress.inhibit()
-                adapter.set_stream_enabled(True)
+                await io.inhibit_and_drain(deadline_ns=min(io.deadline_ns,
+                    io.now() + 1_000_000_000), zero_only=(route == 'zero_only'))
             expected_routes = {'safe_stop','admission_inhibited','zero_only','op_inhibit'}
             if {item['route'] for item in checked_routes} != expected_routes:
                 raise RuntimeError('R02g did not verify every production closing route')

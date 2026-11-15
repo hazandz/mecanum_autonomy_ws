@@ -375,6 +375,39 @@ def test_until_none_and_frozen_pause_fail_bounded():
         asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000, phase='frozen'))
 
 
+def test_r02g_inhibit_drain_requires_a_new_native_observed_sample():
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+    value, clock = worker()
+    class Ingress:
+        fault = None
+        backend_state = None
+        last_published_sample_sequence = 8
+        last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+        def inhibit(self, *, zero_only=False):
+            self.last_published_admission_state = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY
+                if zero_only else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+        def publish_fresh_on_next_pause(self, zero_only=False):
+            self.last_published_sample_sequence = 9
+            self.last_published_admission_state = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY
+                if zero_only else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+    ingress = Ingress()
+    value.ingress = ingress
+    watermark = [8]
+    async def pause(seconds):
+        clock.ns += round(seconds * 1e9)
+        ingress.publish_fresh_on_next_pause()
+        watermark[0] = 9
+        await asyncio.sleep(0)
+    value.pause = pause
+    value.read_native_input_watermark = lambda: watermark[0]
+    value._native_input_watermark = 9
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled: None))
+    drained = asyncio.run(value.inhibit_and_drain(deadline_ns=clock.ns+20_000_000))
+    assert drained == 9
+    assert ingress.last_published_sample_sequence > 8
+    assert ingress.last_published_admission_state == LocalTrainingSafetyInput.ADMISSION_INHIBITED
+
+
 def test_until_can_observe_only_the_case_expected_native_zero_fault():
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     expected = (SimulationContactState.FAULT_COMMAND_SEQUENCE
