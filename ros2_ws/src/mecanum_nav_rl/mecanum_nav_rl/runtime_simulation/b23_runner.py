@@ -25,7 +25,8 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
     'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task',
     'R06a':'fault_task', 'R06b':'fault_task', 'R06c':'fault_task',
-    'R07a':'fault_task', 'R07b':'fault_task', 'R08': 'soak'}
+    'R07a':'fault_task', 'R07b':'fault_task', 'R09a':'fault_task',
+    'R09b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -51,8 +52,43 @@ CASE_HOOKS = {
     'R06c': ('hold_observation0_adjacent_receipt_until_reset_deadline',),
     'R07a': ('unexpected_pause_during_active_session',),
     'R07b': ('time_only_rollback_after_contact_proof',),
+    'R09a': (),
+    'R09b': (),
     'R08': (),
 }
+
+CASE_SCENARIOS = {
+    'R09a': ('sim_train_local_training_goal_settle.resolved.json', 'B2_GOAL_SETTLE_V1.json'),
+    'R09b': ('sim_train_local_training_contact.resolved.json', 'B2_CONTACT_V1.json'),
+}
+
+
+def verify_r09a_goal_settle(transition):
+    """Require a committed, healthy B1 GOAL terminal under zero command."""
+    from mecanum_nav_rl.termination.manager import TerminationReason
+    if (not transition.termination.terminated
+            or transition.termination.reason is not TerminationReason.GOAL
+            or transition.goal_settle_result is None
+            or not transition.goal_settle_result.healthy
+            or not transition.goal_settle_result.success
+            or transition.command_history != (0., 0., 0.)):
+        raise RuntimeError('R09a terminal was not a healthy zero-command B1 goal settle')
+    return {'goal_settled':True, 'goal_distance_m':transition.goal_settle_result.distance_m,
+        'zero_command':True, 'transition_id':transition.transition_identity.transition_id}
+
+
+def verify_r09b_task_contact(transition, contact_state):
+    """Require a real external-contact pulse committed and terminated by B1."""
+    from mecanum_nav_rl.termination.manager import TerminationReason
+    if (not transition.termination.terminated
+            or transition.termination.reason is not TerminationReason.COLLISION
+            or not contact_state.source_healthy
+            or not contact_state.contact_active
+            or not contact_state.collision_pulse_pending):
+        raise RuntimeError('R09b lacks a healthy B1-committed task contact terminal')
+    return {'task_contact_committed':True, 'contact_active':True,
+        'collision_pulse_pending':True,
+        'transition_id':transition.transition_identity.transition_id}
 
 
 def service_properties_for(active_s):
@@ -3488,6 +3524,65 @@ async def training_child(path):
             if len(packet['episode_seeds']) != 30:
                 raise RuntimeError('R08 requires the exact 30 B2_SOAK_V1 seeds')
             outcome = await _run_b2_soak(io, b1, packet, sink)
+        elif packet['case'] == 'R09a':
+            if (packet['fault_hooks'] or len(packet['episode_seeds']) != 1
+                    or artifact.identity.scenario_id != 'B2_GOAL_SETTLE_V1'):
+                raise RuntimeError('R09a packet must pin the clean goal-settle scenario')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            committed = []
+            for _ in range(30):
+                transition = await io.policy_step(b1, (0., 0., 0.))
+                committed.append(transition.transition_identity.transition_id)
+                if transition.termination.terminated:
+                    checked = verify_r09a_goal_settle(transition)
+                    outcome = {'case':'R09a', 'resets_confirmed':1,
+                        'policy_steps_committed':len(committed), 'transition_ids':committed,
+                        **checked,
+                        'completed_ns':time.monotonic_ns()}
+                    break
+                if transition.termination.truncated:
+                    raise RuntimeError('R09a zero-command goal settle truncated before success')
+            if outcome is None:
+                raise TimeoutError('R09a did not settle at the bound goal within 30 committed steps')
+        elif packet['case'] == 'R09b':
+            from rclpy.serialization import deserialize_message
+            from nav_msgs.msg import Odometry
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
+            if (packet['fault_hooks'] or len(packet['episode_seeds']) != 1
+                    or artifact.identity.scenario_id != 'B2_CONTACT_V1'):
+                raise RuntimeError('R09b packet must pin the clean contact-task scenario')
+            target = ResetTarget(**packet['reset_target'])
+            await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
+                paused_hold_s=.250)
+            progress, committed_steps = [], 0
+            for _ in range(120):
+                transition = await io.policy_step(b1, (1., 0., 0.))
+                committed_steps += 1
+                pair = io.ingress.physics_pairs[-1] if io.ingress.physics_pairs else None
+                if pair is not None:
+                    oracle = deserialize_message(pair.oracle_bytes, Odometry)
+                    status = deserialize_message(pair.backend_bytes, SimulationContactState)
+                    sample = {'transition_id':transition.transition_identity.transition_id,
+                        'physics_iteration':pair.iteration, 'sim_stamp_ns':pair.stamp_ns,
+                        'pose_xy_m':[oracle.pose.pose.position.x,oracle.pose.pose.position.y],
+                        'contact_active':bool(status.contact_active),
+                        'coverage_complete':bool(status.coverage_complete),
+                        'fault_flags':int(status.fault_flags), 'steady_ns':io.now()}
+                    progress.append(sample)
+                    sink.record('R09B_CONTACT_TASK_PROGRESS', sample)
+                contact = b1.contact.state
+                if transition.termination.terminated:
+                    checked = verify_r09b_task_contact(transition, contact)
+                    outcome = {'case':'R09b','resets_confirmed':1,
+                        'policy_steps_committed':committed_steps, 'progress_samples':progress,
+                        **checked, 'completed_ns':time.monotonic_ns()}
+                    break
+                if transition.termination.truncated:
+                    raise RuntimeError('R09b task ended by truncation before contact')
+            if outcome is None:
+                raise TimeoutError('R09b did not produce a B1 contact terminal within 120 committed steps')
         elif packet['case'] == 'R05':
             expected_env = case_environment(packet['case'], packet['fault_hooks'])
             if (packet['fault_hooks'] != ['mask_contact_coverage_after_verified']
@@ -4301,7 +4396,11 @@ def verify_packet(path, expected_sha256):
     expected_hooks = {case: list(hooks) for case, hooks in CASE_HOOKS.items()}
     expected_phase = campaign_phase(packet.get('case'))
     expected_active_s = 900 if packet.get('case') == 'R08' else 120
-    expected_seeds = list(range(2026102900, 2026102930)) if packet.get('case') == 'R08' else [2026102900,2026102901]
+    expected_seeds = (list(range(2026102900, 2026102930)) if packet.get('case') == 'R08' else
+        [2026103028 if packet.get('case') == 'R09a' else 2026103029]
+        if packet.get('case') in ('R09a','R09b') else [2026102900,2026102901])
+    expected_scenario = {'R09a':'B2_GOAL_SETTLE_V1', 'R09b':'B2_CONTACT_V1'}.get(
+        packet.get('case'), 'B2_SOAK_V1')
     if (packet['schema'] != 'b23_packet/v1' or packet['case'] not in expected_hooks
             or packet['fault_hooks'] != expected_hooks[packet['case']] or packet['gui'] is not False
             or packet.get('world_seed') != 20261029 or packet.get('episode_seeds') != expected_seeds
@@ -4329,7 +4428,8 @@ def verify_packet(path, expected_sha256):
             raise ValueError('runtime input bytes changed: ' + filename)
     document, config_hash, asset_hash, scenario_id = load_bound_config(Path(packet['resolved_config']))
     if (config_hash != packet['config_hash'] or asset_hash != packet['asset_manifest_sha256']
-            or scenario_id != 'B2_SOAK_V1' or document['map_identity']['training_binding']['binding_status'] != 'BOUND'):
+            or scenario_id != expected_scenario
+            or document['map_identity']['training_binding']['binding_status'] != 'BOUND'):
         raise ValueError('packet config/asset/scenario binding mismatch')
     root = Path(packet['run_root']).resolve(strict=True)
     canonical = Path('/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
@@ -5028,7 +5128,11 @@ def prepare_packet(args):
     if not evidence:
         raise ValueError('offline evidence required before packet preparation')
     rl, desc, bringup = (prefix/'share'/name for name in ('mecanum_nav_rl','ROBOT_URDF_final_description','mecanum_nav_bringup'))
-    document, config_hash, asset_hash, _ = load_bound_config(rl/'config/v3/resolved/sim_train_local_training_soak.resolved.json')
+    config_name, scenario_name = CASE_SCENARIOS.get(args.case,
+        ('sim_train_local_training_soak.resolved.json', 'B2_SOAK_V1.json'))
+    resolved_config = rl/'config/v3/resolved'/config_name
+    scenario_path = rl/'scenarios/local_training'/scenario_name
+    document, config_hash, asset_hash, _ = load_bound_config(resolved_config)
     import re
     if not re.fullmatch(r'B23_[A-Z0-9_]{1,60}', args.run_id):
         raise ValueError('run ID invalid')
@@ -5045,7 +5149,7 @@ def prepare_packet(args):
     if len(engine_files) != 1:
         raise ValueError('DART binary missing or ambiguous')
     engine_file = engine_files[0]
-    plan = build_launch_plan(gui='false', resolved_config=rl/'config/v3/resolved/sim_train_local_training_soak.resolved.json',
+    plan = build_launch_plan(gui='false', resolved_config=resolved_config,
         world_file=desc/'worlds/b2_training_arena.sdf', gui_config=bringup/'config/gui/local_training.config',
         session_id=session_id, partition='mecanum_' + args.run_id.lower(),
         bridge_config=bringup/'config/bridge/local_training.runtime.yaml',
@@ -5090,7 +5194,9 @@ def prepare_packet(args):
     environment.update(case_environment(args.case, fault_hooks))
     active_s = 900 if args.case == 'R08' else 120
     cleanup_s = 60
-    episode_seeds = list(range(2026102900, 2026102930)) if args.case == 'R08' else [2026102900,2026102901]
+    episode_seeds = (list(range(2026102900, 2026102930)) if args.case == 'R08' else
+        [2026103028 if args.case == 'R09a' else 2026103029] if args.case in ('R09a','R09b') else
+        [2026102900,2026102901])
     packet = {'schema': 'b23_packet/v1', 'run_id': args.run_id, 'session_id':session_id, 'unit': args.run_id.lower().replace('_','-')+'.service',
         'case': args.case, 'gui': False,
         'fault_hooks': fault_hooks,
@@ -5101,7 +5207,7 @@ def prepare_packet(args):
         'build_binding_sha256': hashlib.sha256(build_binding_raw).hexdigest(), 'python': str(Path(sys.executable).absolute()),
         'run_root': str(root), 'guard_path': str(guard), 'active_s':active_s, 'cleanup_s':cleanup_s,
         'resolved_config': str(plan.resolved_config), 'config_hash':config_hash, 'asset_manifest_sha256':asset_hash,
-        'asset_manifest':str(desc/'manifests/b2/asset_manifest.json'), 'scenario':str(rl/'scenarios/local_training/B2_SOAK_V1.json'),
+        'asset_manifest':str(desc/'manifests/b2/asset_manifest.json'), 'scenario':str(scenario_path),
         'coordinator_ingress_instance_id':ingress, 'physics_engine_sha256':inputs[str(engine_file)],
         'launch_plan':values, 'environment':environment, 'input_sha256':inputs,
         'reset_target':{'x_m':0.,'y_m':0.,'z_m':supports[0],'yaw_rad':0.},

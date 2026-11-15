@@ -21,7 +21,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
-    query_replacement_backend_then_inhibit,
+    query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
+    verify_r09b_task_contact,
 )
 
 
@@ -41,6 +42,8 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R06c') == 'fault_task'
     assert campaign_phase('R07a') == 'fault_task'
     assert campaign_phase('R07b') == 'fault_task'
+    assert campaign_phase('R09a') == 'fault_task'
+    assert campaign_phase('R09b') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -54,7 +57,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R09a')
+        campaign_phase('R10')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -172,6 +175,11 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R06c') == ['hold_observation0_adjacent_receipt_until_reset_deadline']
     assert case_fault_hooks('R07a') == ['unexpected_pause_during_active_session']
     assert case_fault_hooks('R07b') == ['time_only_rollback_after_contact_proof']
+    assert case_fault_hooks('R09a') == []
+    assert case_fault_hooks('R09b') == []
+    from mecanum_nav_rl.runtime_simulation.b23_runner import CASE_SCENARIOS
+    assert CASE_SCENARIOS['R09a'] == ('sim_train_local_training_goal_settle.resolved.json', 'B2_GOAL_SETTLE_V1.json')
+    assert CASE_SCENARIOS['R09b'] == ('sim_train_local_training_contact.resolved.json', 'B2_CONTACT_V1.json')
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -192,8 +200,30 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     with pytest.raises(ValueError, match='not approved for campaign case'):
         case_fault_hooks('R01a', 'pause_request_replay_after_terminal')
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
+    assert technical_outcome('R09a', True) == 'R09a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+def test_r09_task_verifiers_require_b1_goal_and_contact_facts():
+    from mecanum_nav_rl.termination.manager import TerminationReason
+    transition_id = NS(transition_id='transition-1')
+    goal = NS(termination=NS(terminated=True, reason=TerminationReason.GOAL),
+        goal_settle_result=NS(healthy=True, success=True, distance_m=0.0),
+        command_history=(0.,0.,0.), transition_identity=transition_id)
+    assert verify_r09a_goal_settle(goal) == {'goal_settled':True,
+        'goal_distance_m':0.0,'zero_command':True,'transition_id':'transition-1'}
+    with pytest.raises(RuntimeError, match='healthy zero-command B1 goal settle'):
+        verify_r09a_goal_settle(NS(**{**vars(goal), 'command_history':(0.1,0.,0.)}))
+    contact = NS(termination=NS(terminated=True, reason=TerminationReason.COLLISION),
+        transition_identity=transition_id)
+    state = NS(source_healthy=True, contact_active=True, collision_pulse_pending=True)
+    assert verify_r09b_task_contact(contact, state) == {
+        'task_contact_committed':True,'contact_active':True,
+        'collision_pulse_pending':True,'transition_id':'transition-1'}
+    with pytest.raises(RuntimeError, match='B1-committed task contact terminal'):
+        verify_r09b_task_contact(contact, NS(source_healthy=True,
+            contact_active=False,collision_pulse_pending=False))
 
 
 def test_r07a_allows_timer_republication_but_rejects_new_policy_step_identity():
