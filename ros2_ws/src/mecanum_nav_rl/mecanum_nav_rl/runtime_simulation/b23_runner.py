@@ -2230,6 +2230,111 @@ class TrainingWorkerIO:
             zero_receipt=policy_receipt, zero_applied_state=policy_applied_state,
             zero_applied_received_ns=applied_received_ns)
 
+    async def align_r09b_application_cutoff(self, b1, *, policy_receipt,
+                                            minimum_cutoff_ns, deadline_ns):
+        """Pin an applied zero and its following receipt around a B1 cutoff.
+
+        During the R09b contact pulse Safety emits SAFE_STOP continuously. A
+        receipt can therefore be newer than the last native application at a
+        scan cutoff. Freeze the zero stream, wait for the exact latest receipt
+        to be applied, then collect a paired cutoff after that application and
+        publish the adjacent boundary receipt after the cutoff. All existing
+        freshness, application and B1 cutoff checks remain in force.
+        """
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
+            lifecycle_identity, stamp_ns,
+        )
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+
+        self.safety.local_training.set_stream_enabled(False)
+        while self.now() < deadline_ns:
+            self.check()
+            with self.ingress.lock:
+                receipts = tuple(self.ingress.receipts)
+            if not receipts:
+                raise RuntimeError('R09b cutoff alignment has no final receipt')
+            applied_receipt = receipts[-1]
+            if (applied_receipt.source is not ReceiptSource.SAFE_STOP
+                    or applied_receipt.lifecycle != policy_receipt.lifecycle
+                    or applied_receipt.session_id != policy_receipt.session_id
+                    or applied_receipt.publish_stamp_ns < policy_receipt.publish_stamp_ns
+                    or any(applied_receipt.final_command)):
+                raise RuntimeError('R09b cutoff alignment lacks the pinned zero SAFE_STOP receipt')
+
+            def exact_application():
+                with self.ingress.lock:
+                    status = self.ingress.backend_state
+                    if status is None:
+                        return None
+                    applied_ns = stamp_ns(status.applied_sim_stamp)
+                    if (not status.applied_receipt_valid or status.local_zero_override
+                            or status.fault_flags or lifecycle_identity(status) != applied_receipt.lifecycle
+                            or status.applied_final_publisher_instance_id
+                                != applied_receipt.final_publisher_instance_id
+                            or status.applied_final_publish_sequence
+                                != applied_receipt.final_publish_sequence
+                            or status.applied_physics_iteration != status.physics_iteration
+                            or applied_ns != stamp_ns(status.header.stamp)
+                            or applied_ns < applied_receipt.publish_stamp_ns):
+                        return None
+                    return status, applied_ns
+
+            status, applied_ns = await self.until(exact_application,
+                deadline_ns=deadline_ns, phase='R09b frozen SAFE_STOP application')
+            if self.now() >= deadline_ns:
+                raise TimeoutError('R09b frozen SAFE_STOP application completed after step deadline')
+
+            def paired_cutoff():
+                for cutoff_ns in sorted(self.ingress.scans):
+                    if cutoff_ns < minimum_cutoff_ns or cutoff_ns <= applied_ns:
+                        continue
+                    try:
+                        b1._joined(cutoff_ns)
+                    except B1SnapshotPending:
+                        continue
+                    return cutoff_ns
+                return None
+
+            cutoff_ns = await self.until(paired_cutoff, deadline_ns=deadline_ns,
+                phase='R09b paired scan after zero application')
+            if self.now() >= deadline_ns:
+                raise TimeoutError('R09b paired cutoff completed after step deadline')
+
+            self.safety.local_training.set_stream_enabled(True)
+            expected_sequence = applied_receipt.final_publish_sequence + 1
+
+            def adjacent_boundary():
+                with self.ingress.lock:
+                    receipt = self.ingress._receipt_views.get(expected_sequence)
+                if (receipt is None or receipt.source is not ReceiptSource.SAFE_STOP
+                        or receipt.lifecycle != applied_receipt.lifecycle
+                        or receipt.session_id != applied_receipt.session_id
+                        or any(receipt.final_command)):
+                    return None
+                return receipt
+
+            boundary = await self.until(adjacent_boundary, deadline_ns=deadline_ns,
+                phase='R09b SAFE_STOP receipt after paired cutoff')
+            self.safety.local_training.set_stream_enabled(False)
+            if self.now() >= deadline_ns:
+                raise TimeoutError('R09b cutoff boundary completed after step deadline')
+            if boundary.publish_stamp_ns <= cutoff_ns:
+                # The publication raced the scan timestamp. Freeze again and
+                # establish a later application/cutoff/boundary within the
+                # original step deadline; no deadline is extended.
+                continue
+            self.emit('R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED', {
+                'selected_publish_sequence':applied_receipt.final_publish_sequence,
+                'selected_application_stamp_ns':applied_ns,
+                'cutoff_ns':cutoff_ns,
+                'adjacent_publish_sequence':boundary.final_publish_sequence,
+                'adjacent_publish_stamp_ns':boundary.publish_stamp_ns,
+                'status_sequence':status.status_sequence,
+                'steady_ns':self.now()})
+            return cutoff_ns
+        raise TimeoutError('R09b could not align an applied receipt around a B1 cutoff')
+
     async def lifecycle_event(self, *, rearm, deadline_ns):
         old = self.ingress.lifecycle
         previous = old.sequence if old is not None else 0
@@ -3409,6 +3514,9 @@ class TrainingWorkerIO:
             applied_received_ns = self.ingress.backend_received_ns
             await after_policy_applied(receipt, applied, deadline, applied_received_ns)
         minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
+        if after_policy_applied is not None:
+            await self.align_r09b_application_cutoff(b1, policy_receipt=receipt,
+                minimum_cutoff_ns=minimum_cutoff, deadline_ns=deadline)
         last_pending = None
         last_pending_key = None
         while self.now() < deadline:

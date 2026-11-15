@@ -2530,6 +2530,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             receipt.final_publish_sequence, state.applied_final_publish_sequence,
             applied_received_ns))
         callback_calls.append((receipt,state,deadline_ns,applied_received_ns))
+    async def align_r09b_application_cutoff(b1_adapter, *, policy_receipt,
+            minimum_cutoff_ns, deadline_ns):
+        history.append(('r09b_application_cutoff_aligned',
+            policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
+    value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','r09b_callback'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else {})
@@ -2562,6 +2567,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         callback_index=tags.index('r09b_fixture_after_exact_zero_application')
         assert callback_index > tags.index('issued')
         assert callback_index < tags.index('POLICY_STEP_COMPLETE')
+        alignment_index=tags.index('r09b_application_cutoff_aligned')
+        assert callback_index < alignment_index < tags.index('POLICY_STEP_COMPLETE')
     assert commit_calls[-1] > expected_minimum
     assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback') else clock.ns == 3_000_000_000
     assert all(row[0] != 'align_policy_boundary' for row in history)
@@ -2614,6 +2621,94 @@ def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():
     assert tags.count('policy_hold') == 1
     assert result['contact']['physics_iteration'] == 101
     assert result['restored_empty']['physics_iteration'] == 102
+
+
+def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        CutoffStatus, IssuedCommandReceiptView, PolicyActionIssuance,
+        ReceiptSource, ReceiptStreamBinding, select_final_issued_at_cutoff,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    identity = EpisodeLifecycleIdentity(1, 1, 2)
+    policy = IssuedCommandReceiptView(1_250_000_000, 90, 39,
+        ReceiptSource.POLICY, 7, 1, 1, 'transition-1', identity,
+        'session-a', 'c'*64, (0., 0., 0.), 100, 'base_link', True)
+    applied_stop = IssuedCommandReceiptView(1_370_000_000, 90, 40,
+        ReceiptSource.SAFE_STOP, 8, 1, 0, '', identity,
+        'session-a', 'c'*64, (0., 0., 0.), 101, 'base_link', True)
+    boundary = IssuedCommandReceiptView(1_400_000_000, 90, 41,
+        ReceiptSource.SAFE_STOP, 8, 2, 0, '', identity,
+        'session-a', 'c'*64, (0., 0., 0.), 103, 'base_link', True)
+    status = NS(applied_receipt_valid=True, local_zero_override=False,
+        fault_flags=0, episode_generation=1, reset_epoch=1, runtime_generation=2,
+        applied_final_publisher_instance_id=90, applied_final_publish_sequence=40,
+        applied_physics_iteration=128, physics_iteration=128,
+        applied_sim_stamp=Time(sec=1, nanosec=380_000_000),
+        header=NS(stamp=Time(sec=1, nanosec=380_000_000)), status_sequence=55)
+
+    class FakeIO:
+        def __init__(self):
+            self.stream = []
+            self.safety = NS(local_training=NS(set_stream_enabled=lambda value:
+                self.stream.append(value)))
+            self.ingress = NS(lock=threading.RLock(), receipts=[policy, applied_stop],
+                _receipt_views={40:applied_stop}, backend_state=status,
+                scans={1_390_000_000:object()})
+            self.calls = []
+            self.boundary_added = False
+
+        def now(self):
+            return 200
+
+        def check(self):
+            return None
+
+        def emit(self, event, facts):
+            self.calls.append((event, facts))
+
+        async def until(self, predicate, *, deadline_ns, phase):
+            self.calls.append(('wait', phase))
+            value = predicate()
+            if value is not None:
+                return value
+            if phase == 'R09b SAFE_STOP receipt after paired cutoff':
+                self.boundary_added = True
+                self.ingress.receipts.append(boundary)
+                self.ingress._receipt_views[41] = boundary
+                return predicate()
+            raise AssertionError('fake did not provide expected evidence for '+phase)
+
+    class FakeB1:
+        def __init__(self):
+            self.joined = []
+
+        def _joined(self, cutoff):
+            self.joined.append(cutoff)
+            return {'cutoff':cutoff}
+
+    io, b1 = FakeIO(), FakeB1()
+    cutoff = asyncio.run(TrainingWorkerIO.align_r09b_application_cutoff(io, b1,
+        policy_receipt=policy, minimum_cutoff_ns=1_350_000_000,
+        deadline_ns=1_000))
+
+    assert cutoff == 1_390_000_000
+    assert b1.joined == [1_390_000_000]
+    assert io.stream == [False, True, False]
+    assert io.boundary_added
+    assert io.calls[-1][0] == 'R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED'
+    selected = select_final_issued_at_cutoff(
+        (policy, applied_stop, boundary),
+        binding=ReceiptStreamBinding(90, 'session-a', 'c'*64, identity, 'base_link'),
+        issuance=PolicyActionIssuance(7, 1, identity, 1, 'transition-1'),
+        cutoff_ros_ns=cutoff, evaluation_ros_now_ns=boundary.publish_stamp_ns,
+        evaluation_steady_now_ns=105, reset_barrier_ros_ns=0,
+        action_barrier_ros_ns=1_200_000_000, physical_scales=(1., 1., 1.))
+    assert selected.status is CutoffStatus.READY, selected
+    assert selected.receipt == applied_stop
+    assert selected.adjacent_receipt == boundary
+    assert applied_stop.publish_stamp_ns < cutoff < boundary.publish_stamp_ns
 
 
 def test_evidence_sink_routes_actual_server_output_and_keeps_books_distinct(tmp_path):
