@@ -153,10 +153,11 @@ port/frame and I2C bus/address launch argument names. Defaults for I2C are bus
 1 and decimal address 41 (`0x29`); verify the exact Pi hardware. EKF config,
 driver versions/parameters, sensor transforms, and ROS graph are not validated
 in this repository. The checked-in MANUAL_SLAM bench manifest still marks all
-four encoder signs `TBD_MEASURED`; `UartBridgeNode` now rejects it for wheel
-odometry until those signs are measured and explicitly confirmed. Do not replace
-them with the current placeholder `+1` values. Verify the Owner's main power switch disconnects power to
-both motor drivers; that behavior has not been tested or assumed. The firmware
+four encoder signs `TBD_MEASURED`; the launch preflight and `UartBridgeNode`
+reject it for wheel odometry until those signs are measured and explicitly
+confirmed. Do not replace them with the current placeholder `+1` values.
+Verify the Owner's main power switch disconnects power to both motor drivers;
+that behavior has not been tested or assumed. The firmware
 reports auxiliary E-stop `UNKNOWN`; it is not converted to inactive. No
 physical E-stop is present, no Joy stop button is assigned, and the controller
 candidate remains disarmed pending a compatible PID/FF/effort profile and

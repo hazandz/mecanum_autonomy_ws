@@ -18,6 +18,8 @@ def test_manual_slam_launch_has_only_explicit_direct_joy_route():
     assert 'executable="safety_supervisor"' not in source
     assert 'executable="final_twist_publisher"' not in source
     assert "slam_toolbox" not in source
+    assert "wheel_geometry(manifest_data)" in source
+    assert 'geometry["ticks_per_wheel_revolution"] != 937.2' in source
 
 
 def test_manual_slam_launch_requires_real_paths_and_measured_sensor_transforms():

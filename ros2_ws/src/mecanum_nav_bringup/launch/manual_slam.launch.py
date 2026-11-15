@@ -9,6 +9,10 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
+from mecanum_base_bridge.hardware_config import (
+    communication_config_valid, load_manifest, manual_slam_drive_ratios,
+    wheel_geometry,
+)
 
 
 def _required(context, name: str) -> str:
@@ -34,6 +38,17 @@ def _actions(context):
     for label, path in required_files.items():
         if not os.path.isfile(path):
             raise RuntimeError(f"manual_slam {label} is not a file: {path}")
+    try:
+        manifest_data = load_manifest(manifest)
+        geometry = wheel_geometry(manifest_data)
+        ratios = manual_slam_drive_ratios(manifest_data)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f"MANUAL_SLAM hardware manifest is unresolved: {error}") from error
+    if (not communication_config_valid(manifest_data)
+            or geometry["ticks_per_wheel_revolution"] != 937.2
+            or ratios["motor_to_gearbox_output_ratio"] != 21.3
+            or ratios["wheel_rpm_per_gearbox_output_rpm"] != 1.0):
+        raise RuntimeError("MANUAL_SLAM manifest does not match the selected bench profile")
     transforms = {}
     for name in ("lidar_x", "lidar_y", "lidar_z", "lidar_roll", "lidar_pitch", "lidar_yaw",
                  "imu_x", "imu_y", "imu_z", "imu_roll", "imu_pitch", "imu_yaw"):

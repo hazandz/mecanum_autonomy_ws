@@ -66,7 +66,7 @@ class SlamManualJoyNode(Node):
         if manifest_path.strip():
             try:
                 manifest = load_manifest(manifest_path)
-                geometry = wheel_geometry(manifest, require_signs=False)
+                geometry = wheel_geometry(manifest)
                 ratios = manual_slam_drive_ratios(manifest)
                 configured_ratios = (
                     float(self.get_parameter("motor_to_gearbox_output_ratio").value),
