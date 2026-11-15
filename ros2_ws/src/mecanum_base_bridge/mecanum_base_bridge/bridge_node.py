@@ -58,6 +58,9 @@ class UartBridgeNode(Node):
             self.declare_parameter("serial_device", "")
             self.declare_parameter("hardware_manifest", "")
             self.declare_parameter("heartbeat_topic", HEARTBEAT_TOPIC)
+            self.declare_parameter("manual_slam_bench_unmonitored_estop", False)
+            self._manual_slam_bench_unmonitored_estop = bool(
+                self.get_parameter("manual_slam_bench_unmonitored_estop").value)
             self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
             if bool(self.get_parameter("use_sim_time").value):
                 raise ValueError("UART hardware adapter requires use_sim_time=false")
@@ -210,7 +213,9 @@ class UartBridgeNode(Node):
             report.packet.reset_epoch if report is not None else (owner_epoch or 0),
             self._session.state == SessionState.ACTIVE, health.fresh,
             report if health.fresh else None,
-            self._session.transport_healthy)
+            self._session.transport_healthy,
+            estop_aux_monitored=not bool(getattr(
+                self, "_manual_slam_bench_unmonitored_estop", False)))
         message = Heartbeat()
         stamp = self.get_clock().now().to_msg()
         message.header.stamp = stamp

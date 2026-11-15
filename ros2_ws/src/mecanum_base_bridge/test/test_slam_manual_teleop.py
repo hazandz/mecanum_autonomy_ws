@@ -90,11 +90,13 @@ def test_l1_r1_never_move_by_themselves_and_simultaneous_press_cancels(teleop):
 
 
 def test_analog_twelve_hour_is_full_forward_and_fixed_above_deadzone(teleop, profile):
-    shallow = teleop.update([0.0, -0.3], [0] * 6)
-    deep = teleop.update([0.0, -1.0], [0] * 6)
+    shallow = teleop.update([0.0, 0.3], [0] * 6)
+    deep = teleop.update([0.0, 1.0], [0] * 6)
     expected = expected_level_speed(profile, 0)
     assert shallow == pytest.approx(BodyCommand(expected, 0.0, 0.0))
     assert deep == pytest.approx(shallow)
+    reverse = teleop.update([0.0, -1.0], [0] * 6)
+    assert reverse.vx < 0.0
 
 
 @pytest.mark.parametrize("angle_deg", (30.0, 60.0))
@@ -102,7 +104,7 @@ def test_analog_right_diagonals_translate_in_direction_and_turn_right(
     teleop, profile, angle_deg,
 ):
     theta = math.radians(angle_deg)
-    command = teleop.update([math.sin(theta), -math.cos(theta)], [0] * 6)
+    command = teleop.update([math.sin(theta), math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
     expected = tier_normalized(BodyCommand(
         speed * math.cos(theta), -speed * math.sin(theta),
@@ -113,7 +115,7 @@ def test_analog_right_diagonals_translate_in_direction_and_turn_right(
 @pytest.mark.parametrize("angle_deg", (30.0, 60.0))
 def test_analog_left_diagonals_are_symmetric(teleop, profile, angle_deg):
     theta = math.radians(angle_deg)
-    command = teleop.update([-math.sin(theta), -math.cos(theta)], [0] * 6)
+    command = teleop.update([-math.sin(theta), math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
     expected = tier_normalized(BodyCommand(
         speed * math.cos(theta), speed * math.sin(theta),
@@ -131,24 +133,24 @@ def test_analog_three_and_nine_hour_turn_in_place(teleop, profile, axis_x, turn_
 
 
 def test_deadzone_and_short_smooth_activation_ramp(teleop, profile):
-    assert teleop.update([0.0, -profile.deadzone_radius], [0] * 6) == BodyCommand()
+    assert teleop.update([0.0, profile.deadzone_radius], [0] * 6) == BodyCommand()
     half_radius = (profile.deadzone_radius + profile.full_command_radius) / 2.0
-    command = teleop.update([0.0, -half_radius], [0] * 6)
+    command = teleop.update([0.0, half_radius], [0] * 6)
     assert command.vx == pytest.approx(expected_level_speed(profile, 0) * 0.5)
-    full = teleop.update([0.0, -profile.full_command_radius], [0] * 6)
+    full = teleop.update([0.0, profile.full_command_radius], [0] * 6)
     assert full.vx == pytest.approx(expected_level_speed(profile, 0))
 
 
 def test_sideways_transition_is_continuous_and_fades_translation_to_zero(teleop, profile):
     speed = expected_level_speed(profile, 0)
     fade_start = math.radians(profile.sideways_fade_start_deg)
-    at_start = teleop.update([math.sin(fade_start), -math.cos(fade_start)], [0] * 6)
+    at_start = teleop.update([math.sin(fade_start), math.cos(fade_start)], [0] * 6)
     near_theta = fade_start + 1e-5
-    near_start = teleop.update([math.sin(near_theta), -math.cos(near_theta)], [0] * 6)
+    near_start = teleop.update([math.sin(near_theta), math.cos(near_theta)], [0] * 6)
     assert math.dist(tuple(vars(at_start).values()), tuple(vars(near_start).values())) < 2e-6
 
     half_fade_angle = math.radians((profile.sideways_fade_start_deg + 90.0) / 2.0)
-    half_fade = teleop.update([math.sin(half_fade_angle), -math.cos(half_fade_angle)], [0] * 6)
+    half_fade = teleop.update([math.sin(half_fade_angle), math.cos(half_fade_angle)], [0] * 6)
     raw_half = BodyCommand(speed * 0.5 * math.cos(half_fade_angle),
                             -speed * 0.5 * math.sin(half_fade_angle),
                             -speed / profile.rotation_radius_m * math.sin(half_fade_angle))
@@ -189,7 +191,7 @@ def test_face_button_diagonals_keep_tier_magnitude(teleop, profile, pressed, exp
 
 
 def test_opposing_face_buttons_suppress_analog_after_cancellation(teleop, profile):
-    axes = [0.0, -1.0]
+    axes = [0.0, 1.0]
     both_longitudinal = joy(0, 3)[1]
     assert teleop.update(axes, both_longitudinal) == BodyCommand()
 
@@ -237,7 +239,7 @@ def test_all_five_tiers_obey_wheel_target_cap_even_with_turn(profile):
     assert actual_peaks == pytest.approx([280.0, 560.0, 840.0, 1120.0, 1400.0])
 
 
-@pytest.mark.parametrize("axes", ([0.0, -1.0], [1.0, 0.0]))
+@pytest.mark.parametrize("axes", ([0.0, 1.0], [1.0, 0.0]))
 def test_all_five_levels_are_distinct_for_forward_and_rotation(profile, axes):
     teleop = SlamManualTeleop(profile, motion_enabled=True)
     peaks = []
@@ -277,7 +279,7 @@ def test_172_rpm_nominal_exceeds_experimental_pid_target_ceiling(profile):
     assert design.max_translation_mps == pytest.approx(0.8735721972)
     # 21.3:1 is motor-to-gearbox-output only and is not multiplied into output RPM.
     assert design.motor_to_gearbox_output_ratio == 21.3
-    command = SlamManualTeleop(profile, motion_enabled=True).update([0.0, -1.0], [0] * 6)
+    command = SlamManualTeleop(profile, motion_enabled=True).update([0.0, 1.0], [0] * 6)
     assert max(abs(value) for value in wheel_target_cps(command, profile)) == pytest.approx(280.0)
 
 
@@ -285,29 +287,29 @@ def test_bad_axes_and_button_values_fail_zero(teleop):
     for invalid in ([0.0], [0.0, float("nan")], [float("inf"), 0.0],
                     [2.0, 0.0], None):
         assert teleop.update(invalid, [0] * 6) == BodyCommand()
-    assert teleop.update([0.0, -1.0], [0, 0, 0, 0, "bad", 0]) == BodyCommand()
+    assert teleop.update([0.0, 1.0], [0, 0, 0, 0, "bad", 0]) == BodyCommand()
 
 
 def test_missing_buttons_disconnect_and_invalid_configuration_fail_zero(profile):
     teleop = SlamManualTeleop(profile, motion_enabled=True)
-    assert teleop.update([0.0, -1.0], [0] * 5) == BodyCommand()
+    assert teleop.update([0.0, 1.0], [0] * 5) == BodyCommand()
     assert teleop.disconnected() == BodyCommand()
-    assert SlamManualTeleop(profile).update([0.0, -1.0], [0] * 6) == BodyCommand()
+    assert SlamManualTeleop(profile).update([0.0, 1.0], [0] * 6) == BodyCommand()
     assert SlamManualTeleop(None, motion_enabled=True).update(
-        [0.0, -1.0], [0] * 6) == BodyCommand()
+        [0.0, 1.0], [0] * 6) == BodyCommand()
 
     missing_ratio = replace(profile, wheel_rpm_per_gearbox_output_rpm=0.0)
     assert not missing_ratio.valid
     assert SlamManualTeleop(missing_ratio, motion_enabled=True).update(
-        [0.0, -1.0], [0] * 6) == BodyCommand()
+        [0.0, 1.0], [0] * 6) == BodyCommand()
     bad_geometry = replace(profile, wheel_diameter_m=float("nan"))
     assert SlamManualTeleop(bad_geometry, motion_enabled=True).update(
-        [0.0, -1.0], [0] * 6) == BodyCommand()
+        [0.0, 1.0], [0] * 6) == BodyCommand()
 
 
 def test_manual_mode_requires_explicit_enable_and_neutral_sample_after_start_or_loss(profile):
     teleop = SlamManualTeleop(profile, motion_enabled=False)
-    stick_forward = [0.0, -1.0]
+    stick_forward = [0.0, 1.0]
     neutral = [0.0, 0.0]
     assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
     assert teleop.request_enable()
@@ -323,3 +325,8 @@ def test_manual_mode_requires_explicit_enable_and_neutral_sample_after_start_or_
     assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
     assert teleop.update(neutral, [0] * 6) == BodyCommand()
     assert teleop.update(stick_forward, [0] * 6) != BodyCommand()
+
+
+def test_tier_wheel_targets_are_280_to_1400_cps(profile):
+    assert [profile.max_wheel_target_cps * tier for tier in SPEED_LEVELS] == pytest.approx(
+        [280.0, 560.0, 840.0, 1120.0, 1400.0])

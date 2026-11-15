@@ -54,6 +54,23 @@ def test_unknown_estop_is_fresh_diagnostic_with_unhealthy_heartbeat_and_faults_p
     assert no_fault_health.fresh and not no_fault_health.active
 
 
+def test_unmonitored_estop_unknown_is_truthful_but_mode_scoped():
+    bench = make_heartbeat(5, 7, True, True, report(0, 2), True,
+                           estop_aux_monitored=False)
+    assert bench.healthy
+    assert bench.estop_aux_state == ESTOP_AUX_UNKNOWN
+    assert "not monitored" in bench.detail
+    active = make_heartbeat(6, 7, True, True, report(0, 1), True,
+                            estop_aux_monitored=False)
+    assert not active.healthy and active.estop_aux_state == ESTOP_AUX_ACTIVE
+    transport_loss = make_heartbeat(7, 7, True, True, report(0, 2), False,
+                                    estop_aux_monitored=False)
+    assert not transport_loss.healthy
+    fault = make_heartbeat(8, 7, True, True, report(4096, 2), True,
+                           estop_aux_monitored=False)
+    assert not fault.healthy and fault.fault_bits == 4096
+
+
 class _Clock:
     def __init__(self): self.value = 0.0
     def __call__(self): return self.value

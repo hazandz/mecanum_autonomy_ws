@@ -58,8 +58,11 @@ if(NOT STM32_ARM_BUILD)
   target_compile_options(test_communication_runtime PRIVATE -Wno-missing-field-initializers)
   add_test(NAME communication_runtime COMMAND test_communication_runtime)
   add_test(NAME control_safety_runtime COMMAND test_communication_runtime u4-session-runtime)
+  add_test(NAME control_safety_runtime_manual_no_watchdog COMMAND test_communication_runtime u4-manual-no-watchdog)
   add_test(NAME control_safety_runtime_pid4_fault
     COMMAND test_communication_runtime pid4-guard-fault)
+  add_test(NAME control_safety_runtime_pid4_fault_no_watchdog
+    COMMAND test_communication_runtime pid4-guard-fault-no-watchdog)
   foreach(case revision config-ticks recovery invalid-input)
     add_test(NAME telemetry_runtime_${case} COMMAND test_communication_runtime u5-telemetry-${case})
   endforeach()

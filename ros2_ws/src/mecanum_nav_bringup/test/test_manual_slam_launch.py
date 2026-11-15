@@ -18,7 +18,8 @@ def test_manual_slam_launch_has_only_explicit_direct_joy_route():
     assert '"hardware_manifest": manifest' in source
     assert '"serial_device": serial_device' in source
     assert 'executable="safety_lifecycle"' in source
-    assert 'executable="lifecycle_manager"' in source
+    assert 'executable="lifecycle_manager"' not in source
+    assert '"coalesce_interval_ms": 1,' in source
     assert 'executable="safety_supervisor"' not in source
     assert 'executable="final_twist_publisher"' not in source
     assert "slam_toolbox" not in source
@@ -30,7 +31,7 @@ def test_manual_slam_launch_requires_real_paths_and_measured_sensor_transforms()
     source = LAUNCH.read_text()
     for argument in (
         "serial_device", "hardware_manifest", "ekf_params_file",
-        "lidar_launch_file", "lidar_port", "imu_launch_file",
+        "lidar_parameter_file", "lidar_port",
         "lidar_x", "lidar_y", "lidar_z", "lidar_roll", "lidar_pitch", "lidar_yaw",
         "imu_x", "imu_y", "imu_z", "imu_roll", "imu_pitch", "imu_yaw",
     ):
@@ -52,17 +53,14 @@ def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypa
     spec = importlib.util.spec_from_file_location("manual_slam_launch_test", LAUNCH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(
-        module, "get_package_share_directory",
-        lambda package: str(ROOT / "ros2_ws/src/mecanum_base_bridge"),
-    )
+    monkeypatch.setattr(module, "get_package_share_directory", lambda package: str(
+        ROOT / "ros2_ws/src" / package))
     context = LaunchContext()
     args = {
         "serial_device": "/dev/null",
         "hardware_manifest": str(manifest),
         "ekf_params_file": str(ekf_file),
-        "lidar_launch_file": str(launch_file),
-        "imu_launch_file": str(launch_file),
+        "lidar_parameter_file": str(ekf_file),
         "lidar_port": "/dev/null",
         "lidar_port_arg": "port",
         "lidar_frame_arg": "frame_id",
@@ -88,6 +86,10 @@ def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypa
                if isinstance(action, Node) and action._Node__node_name == "joy_node")
     assert lifecycle._Node__node_name == "safety_lifecycle"
     assert lifecycle._Node__node_namespace == "/"
+    includes = [action for action in actions if action.__class__.__name__ == "IncludeLaunchDescription"]
+    assert len(includes) == 2
+    assert "manual_slam_ydlidar_x3.launch.py" in LAUNCH.read_text()
+    assert "manual_slam_bno055_i2c.launch.py" in LAUNCH.read_text()
     assert any(
         key[0].text == "use_sim_time" and value is False
         for group in joy._Node__parameters for key, value in group.items()

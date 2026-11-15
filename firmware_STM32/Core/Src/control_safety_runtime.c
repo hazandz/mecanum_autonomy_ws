@@ -18,6 +18,7 @@ static bool started;
 static bool telemetry_allowed;
 static uint32_t mcu_fault_bits;
 static uint32_t snapshot_revision;
+static bool command_watchdog_enabled;
 
 static void control_safety_task(void *argument)
 {
@@ -30,12 +31,13 @@ static void control_safety_task(void *argument)
 }
 
 bool control_safety_runtime_start(const uint8_t local_hash[32], bool config_valid,
-                                  uint64_t boot_id)
+                                  uint64_t boot_id, bool enable_command_watchdog)
 {
     if ((__get_IPSR() != 0U) || started || (local_hash == NULL) || (boot_id == 0U)) return false;
     if (!control_safety_session_init(&session, local_hash,
             config_valid && slam_bench_motor_runtime_profile_valid(), boot_id)) return false;
     command_watchdog_init(&watchdog, CONTROL_SAFETY_RUNTIME_WATCHDOG_MS);
+    command_watchdog_enabled = enable_command_watchdog;
     telemetry_allowed = false;
     mcu_fault_bits = 0U;
     snapshot_revision = 0U;
@@ -50,6 +52,7 @@ bool control_safety_runtime_start(const uint8_t local_hash[32], bool config_vali
 static void watchdog_expiry_check(uint32_t now)
 {
     control_safety_session_decision_t decision;
+    if (!command_watchdog_enabled) return;
     if ((session.state != CONTROL_SAFETY_SESSION_SAFE_STOP)
         && command_watchdog_expired(&watchdog, now)) {
         (void)control_safety_session_handle_watchdog_expired(&session, &decision);
@@ -175,9 +178,13 @@ void control_safety_runtime_service_once(void)
         return;
     }
     if (!communication_runtime_is_usable()) return; /* Startup prepare precedes RX arm. */
-    slam_bench_motor_runtime_step((float)CONTROL_SAFETY_RUNTIME_PERIOD_MS*0.001f);
-    (void)motor_fault_enter_safe_stop();
+    /* Stop stale output before any PID/PWM update from the previous target. */
     watchdog_expiry_check(HAL_GetTick());
+    (void)motor_fault_enter_safe_stop();
+    if (session.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE) {
+        slam_bench_motor_runtime_step((float)CONTROL_SAFETY_RUNTIME_PERIOD_MS*0.001f);
+        (void)motor_fault_enter_safe_stop();
+    }
     while ((budget-- > 0U) && communication_runtime_take_candidate(&candidate)) {
         uint32_t now = HAL_GetTick();
         watchdog_expiry_check(now); /* Expiry is checked before every queued candidate. */

@@ -33,7 +33,7 @@ typedef struct {
 } control_safety_snapshot_t;
 
 bool control_safety_runtime_start(const uint8_t local_hash[32], bool communication_config_valid,
-                                  uint64_t boot_id);
+                                  uint64_t boot_id, bool command_watchdog_enabled);
 void control_safety_runtime_service_once(void);
 bool control_safety_runtime_copy_snapshot(control_safety_snapshot_t *snapshot);
 /* Đưa telemetry vào TX FIFO chỉ khi snapshot session vẫn thuộc giao dịch này. */

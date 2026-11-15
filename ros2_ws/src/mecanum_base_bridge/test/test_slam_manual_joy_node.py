@@ -75,7 +75,7 @@ def _joy(axes, buttons=None, stamp=10):
 
 def test_manual_joy_publishes_only_zero_before_explicit_enable_and_neutral_sample():
     adapter = _adapter()
-    SlamManualJoyNode._on_joy(adapter, _joy([0.0, -1.0]))
+    SlamManualJoyNode._on_joy(adapter, _joy([0.0, 1.0]))
     assert adapter._cmd_pub.messages[-1] == Twist()
 
     request = SimpleNamespace()
@@ -86,11 +86,11 @@ def test_manual_joy_publishes_only_zero_before_explicit_enable_and_neutral_sampl
     assert response.message == "WAITING_FOR_FRESH_NEUTRAL_JOY"
 
     # A deflected stick cannot arm. Neutral acknowledges; next valid sample moves.
-    SlamManualJoyNode._on_joy(adapter, _joy([0.0, -1.0]))
+    SlamManualJoyNode._on_joy(adapter, _joy([0.0, 1.0]))
     assert adapter._cmd_pub.messages[-1] == Twist()
     SlamManualJoyNode._on_joy(adapter, _joy([0.0, 0.0]))
     assert adapter._cmd_pub.messages[-1] == Twist()
-    SlamManualJoyNode._on_joy(adapter, _joy([0.0, -1.0]))
+    SlamManualJoyNode._on_joy(adapter, _joy([0.0, 1.0]))
     assert adapter._cmd_pub.messages[-1].linear.x > 0.0
     assert CMD_VEL_TOPIC == "/cmd_vel"
 
@@ -99,13 +99,13 @@ def test_invalid_stale_joy_and_timeout_disarm_without_auto_resume():
     adapter = _adapter(steady=2.0)
     adapter._teleop.request_enable()
     SlamManualJoyNode._on_joy(adapter, _joy([0.0, 0.0]))
-    SlamManualJoyNode._on_joy(adapter, _joy([0.0, -1.0]))
+    SlamManualJoyNode._on_joy(adapter, _joy([0.0, 1.0]))
     assert adapter._cmd_pub.messages[-1].linear.x > 0.0
 
     invalid = _joy([float("nan"), 0.0])
     SlamManualJoyNode._on_joy(adapter, invalid)
     assert adapter._cmd_pub.messages[-1] == Twist()
-    assert adapter._teleop.update([0.0, -1.0], [0] * 6) == BodyCommand()
+    assert adapter._teleop.update([0.0, 1.0], [0] * 6) == BodyCommand()
 
     adapter._last_joy_received = 1.0
     adapter._steady = lambda: 2.0
@@ -113,7 +113,7 @@ def test_invalid_stale_joy_and_timeout_disarm_without_auto_resume():
     assert adapter._cmd_pub.messages[-1] == Twist()
     # Fresh non-neutral Joy remains zero after timeout until explicit re-enable.
     adapter._steady = lambda: 2.01
-    SlamManualJoyNode._on_joy(adapter, _joy([0.0, -1.0]))
+    SlamManualJoyNode._on_joy(adapter, _joy([0.0, 1.0]))
     assert adapter._cmd_pub.messages[-1] == Twist()
 
 

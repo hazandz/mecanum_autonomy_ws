@@ -135,7 +135,8 @@ def _analog_command(
     activation = _smoothstep(
         (radius - profile.deadzone_radius) /
         (profile.full_command_radius - profile.deadzone_radius))
-    forward, left = -y, -x
+    # This bench gamepad reports stick-up as axes[1] = +1.0.
+    forward, left = y, -x
     direction_norm = math.hypot(forward, left)
     if direction_norm == 0.0:
         return BodyCommand()

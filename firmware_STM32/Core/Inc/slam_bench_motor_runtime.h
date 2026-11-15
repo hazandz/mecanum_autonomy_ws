@@ -46,6 +46,7 @@ void slam_bench_motor_runtime_step(float dt_seconds);
 
 #ifdef MECANUM_HOST_TEST
 void slam_bench_motor_runtime_test_set_fault(slam_motor_runtime_fault_t fault);
+unsigned slam_bench_motor_runtime_test_step_calls(void);
 #endif
 
 #endif

@@ -244,7 +244,7 @@ static void prepare_u5_test_runtime(const uint8_t hash[32], uint64_t boot_id)
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     estop_input_valid = true; estop_input_active = false;
     assert(communication_runtime_prepare(&uart));
-    assert(control_safety_runtime_start(hash, true, boot_id));
+    assert(control_safety_runtime_start(hash, true, boot_id, true));
     assert(encoder_start(&fl, &fr, &rl, &rr));
     assert(telemetry_runtime_start());
     assert(encoder_sample_raw(0U, 0U, 0U, 0U, fake_tick));
@@ -372,7 +372,7 @@ static size_t make_command_frame(uint32_t sequence, uint32_t epoch, uint8_t *wir
     return size;
 }
 
-static int run_control_safety_case(void)
+static int run_control_safety_case(bool enable_watchdog)
 {
     uint8_t hash[32], wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM], byte = 0x55U;
     size_t size;
@@ -383,7 +383,7 @@ static int run_control_safety_case(void)
     memset(hash, 0xA5, sizeof(hash));
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     assert(communication_runtime_prepare(&uart));
-    assert(control_safety_runtime_start(hash, true, UINT64_C(123)));
+    assert(control_safety_runtime_start(hash, true, UINT64_C(123), enable_watchdog));
     assert(communication_runtime_arm_rx()); /* Tạo owner/task/queue trước khi arm RX. */
 
     size = make_config_frame(wire);
@@ -432,9 +432,14 @@ static int run_control_safety_case(void)
     assert(snapshot.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE);
     fake_tick = 513U; service_control_task();
     assert(control_safety_runtime_copy_snapshot(&snapshot));
-    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
     assert(snapshot.configured && snapshot.telemetry_allowed);
     assert(snapshot.last_accepted_command_sequence == 1U);
+    if (!enable_watchdog) {
+        assert(snapshot.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE);
+        assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_TIMEOUT) == 0U);
+        return 0;
+    }
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
     assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MCU_COMMAND_TIMEOUT) != 0U);
 
     /* CONFIG hợp lệ cùng epoch là cách duy nhất thoát watchdog SAFE_STOP. */
@@ -492,7 +497,7 @@ static int run_control_safety_case(void)
     return 0;
 }
 
-static int run_pid4_guard_fault_case(void)
+static int run_pid4_guard_fault_case(bool enable_watchdog)
 {
     uint8_t hash[32], wire[MECANUM_UART_V1_COBS_BUFFER_MINIMUM];
     size_t size;
@@ -500,7 +505,7 @@ static int run_pid4_guard_fault_case(void)
     memset(hash, 0xA5, sizeof(hash));
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     assert(communication_runtime_prepare(&uart));
-    assert(control_safety_runtime_start(hash, true, UINT64_C(321)));
+    assert(control_safety_runtime_start(hash, true, UINT64_C(321), enable_watchdog));
     assert(communication_runtime_arm_rx());
 
     size = make_config_frame(wire);
@@ -512,9 +517,17 @@ static int run_pid4_guard_fault_case(void)
     assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
     assert(snapshot.configured && !snapshot.motor_enabled);
 
+    /* Accepted command reaches the first active control step in both modes. */
+    size = make_command_frame(1U, UINT32_MAX, wire);
+    receive_chunk(wire, (uint16_t)size, 101U);
+    in_task = true; service_task(); in_task = false;
+    fake_tick = 102U; service_control_task();
+    fake_tick = 107U; service_control_task();
+    assert(slam_bench_motor_runtime_test_step_calls() > 0U);
+
     /* A hardware-runtime guard fault routes through session SAFE_STOP. */
     slam_bench_motor_runtime_test_set_fault(SLAM_MOTOR_RUNTIME_FAULT_DRIVER);
-    fake_tick = 102U;
+    fake_tick = 103U;
     service_control_task();
     assert(control_safety_runtime_copy_snapshot(&snapshot));
     assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
@@ -523,18 +536,18 @@ static int run_pid4_guard_fault_case(void)
 
     /* Commands cannot clear the fault; only a new accepted CONFIG resets it. */
     size = make_command_frame(1U, UINT32_MAX, wire);
-    receive_chunk(wire, (uint16_t)size, 103U);
+    receive_chunk(wire, (uint16_t)size, 104U);
     in_task = true; service_task(); in_task = false;
-    fake_tick = 104U;
+    fake_tick = 105U;
     service_control_task();
     assert(control_safety_runtime_copy_snapshot(&snapshot));
     assert(snapshot.state == CONTROL_SAFETY_SESSION_SAFE_STOP);
-    assert(snapshot.last_accepted_command_sequence == 0U);
+    assert(snapshot.last_accepted_command_sequence == 1U);
 
     size = make_config_frame(wire);
-    receive_chunk(wire, (uint16_t)size, 105U);
+    receive_chunk(wire, (uint16_t)size, 106U);
     in_task = true; service_task(); in_task = false;
-    fake_tick = 106U;
+    fake_tick = 107U;
     service_control_task();
     assert(control_safety_runtime_copy_snapshot(&snapshot));
     assert(snapshot.state == CONTROL_SAFETY_SESSION_CONFIG_ACCEPTED_MOTOR_DISABLED);
@@ -556,7 +569,7 @@ static int run_interop_peer(const char *hash_hex, const char *boot_text)
     }
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     if (!communication_runtime_prepare(&uart)
-        || !control_safety_runtime_start(hash, true, boot_id)
+        || !control_safety_runtime_start(hash, true, boot_id, true)
         || !communication_runtime_arm_rx()) return 4;
     puts("READY"); fflush(stdout);
     while (fgets(line, sizeof(line), stdin) != NULL) {
@@ -639,7 +652,7 @@ static int run_telemetry_interop_peer(const char *hash_hex, const char *boot_tex
     estop_input_active = false;
     uart.Instance = USART6; uart.ErrorCode = HAL_UART_ERROR_NONE;
     if (!communication_runtime_prepare(&uart)
-        || !control_safety_runtime_start(hash, true, boot_id)
+        || !control_safety_runtime_start(hash, true, boot_id, true)
         || !encoder_start(&fl, &fr, &rl, &rr)
         || !telemetry_runtime_start()
         || !encoder_sample_raw(0U, 0U, 0U, 0U, fake_tick)
@@ -817,9 +830,13 @@ int main(int argc, char **argv)
     if ((argc == 2) && (strncmp(argv[1], "u5-telemetry-", 13U) == 0))
         return run_u5_telemetry_case(argv[1]);
     if ((argc == 2) && (strcmp(argv[1], "u4-session-runtime") == 0))
-        return run_control_safety_case();
+        return run_control_safety_case(true);
+    if ((argc == 2) && (strcmp(argv[1], "u4-manual-no-watchdog") == 0))
+        return run_control_safety_case(false);
+    if ((argc == 2) && (strcmp(argv[1], "pid4-guard-fault-no-watchdog") == 0))
+        return run_pid4_guard_fault_case(false);
     if ((argc == 2) && (strcmp(argv[1], "pid4-guard-fault") == 0))
-        return run_pid4_guard_fault_case();
+        return run_pid4_guard_fault_case(true);
     if ((argc == 2) && (strcmp(argv[1], "isr-public-apis") == 0)) {
         in_isr = true;
         assert(!communication_runtime_start(&uart));

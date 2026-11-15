@@ -60,6 +60,20 @@ mode change requires a separate review.
 - E-stop auxiliary remains `UNKNOWN` when firmware cannot read a validated
   input. The Owner's main switch has not been verified to disconnect both motor
   drivers and is not treated as an E-stop.
+
+### MANUAL_SLAM bench auxiliary E-stop scope
+
+The Owner confirms no auxiliary E-stop circuit is installed on this bench and
+accepts the main power switch as the available manual interruption method for
+this bench trial only. Firmware telemetry remains `UNKNOWN`; it is never
+rewritten to `INACTIVE` and no hardware state is fabricated. The bridge may be
+explicitly configured with `manual_slam_bench_unmonitored_estop=true` only in
+the MANUAL_SLAM bench launch: this suppresses unhealthy status caused solely
+by the absent auxiliary input. A reported `ACTIVE`, any MCU fault, stale
+telemetry, UART/session loss, or watchdog fault remains unhealthy/stopping.
+All other modes retain strict UNKNOWN handling. The main switch's ability to
+disconnect both drivers is unverified; this exception is not an equivalent
+physical E-stop and does not establish robot readiness.
 - The MANUAL_SLAM firmware candidate enables the PID4 experimental numerical
   profile only when built from a manifest whose geometry, 937.2 encoder scale,
   wheel order and Owner-reported signs validate. MCU output is disabled at boot;

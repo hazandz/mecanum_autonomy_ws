@@ -74,6 +74,8 @@ setup(
                 "launch/sim_eval_tf_ekf_state_estimation.launch.py",
                 "launch/sim_eval_nav2_baseline_system.launch.py",
                 "launch/manual_slam.launch.py",
+                "launch/manual_slam_ydlidar_x3.launch.py",
+                "launch/manual_slam_bno055_i2c.launch.py",
             ],
         ),
     ],
