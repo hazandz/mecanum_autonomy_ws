@@ -2548,6 +2548,20 @@ def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
         66, 8, 0, '', identity, 'session-1', 'a'*64, (0.0, 0.0, 0.0),
         110, 'base_link', True)
     ingress._receipt_views[21] = receipt
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    ros_receipt = FinalIssuedCommandReceipt()
+    ros_receipt.header.frame_id = 'base_link'
+    ros_receipt.header.stamp.sec, ros_receipt.header.stamp.nanosec = 1, 50_000_000
+    ros_receipt.episode_generation, ros_receipt.reset_epoch, ros_receipt.runtime_generation = 1, 2, 3
+    ros_receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    ros_receipt.sequence = 8
+    ros_receipt.source_instance_id = 66
+    ros_receipt.step_index = 0
+    ros_receipt.transition_id = ''
+    ros_receipt.final_publisher_instance_id = 55
+    ros_receipt.final_publish_sequence = 21
+    ingress._receipt_bytes = __import__('collections').OrderedDict(
+        [(21, serialize_message(ros_receipt))])
     status = SimulationContactState()
     status.session_id, status.config_hash, status.backend_instance_id = 'session-1', 'a'*64, 13
     status.episode_generation, status.reset_epoch, status.runtime_generation = 1, 2, 3
@@ -2572,6 +2586,12 @@ def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
     assert proof['state'].applied_final_publish_sequence == 21
     assert proof['state'].applied_physics_iteration == 305
     assert proof['received_ns'] == 120
+    # Production FinalPublicationView returns the generated ROS message,
+    # while ingress retains its immutable scalar view for the same key.
+    # Both must join to the exact retained application record.
+    assert ingress.application_for_receipt(ros_receipt) == proof
+    ros_receipt.sequence += 1
+    assert ingress.application_for_receipt(ros_receipt) is None
     wrong = IssuedCommandReceiptView(1_050_000_000, 55, 22, ReceiptSource.SAFE_STOP,
         66, 9, 0, '', identity, 'session-1', 'a'*64, (0.0, 0.0, 0.0),
         110, 'base_link', True)

@@ -589,10 +589,27 @@ class LocalTrainingIngress:
         it does not infer application from a later watermark.
         """
         from rclpy.serialization import deserialize_message
-        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt, SimulationContactState
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
 
-        if not isinstance(receipt, IssuedCommandReceiptView):
+        if isinstance(receipt, FinalIssuedCommandReceipt):
+            # FinalPublicationView exposes the generated ROS message, whereas
+            # ingress joins immutable scalar views. Accept that production
+            # boundary only when the message serializes to the exact CDR bytes
+            # already retained for the publication key.
+            key = receipt.final_publish_sequence
+            try:
+                supplied_raw = serialize_message(receipt)
+            except Exception:
+                return None
+            with self.lock:
+                retained_raw = self._receipt_bytes.get(key)
+                retained_view = self._receipt_views.get(key)
+            if (retained_raw is None or retained_view is None
+                    or supplied_raw != retained_raw):
+                return None
+            receipt = retained_view
+        elif not isinstance(receipt, IssuedCommandReceiptView):
             return None
         with self.lock:
             raw = self._application_bytes.get(receipt.final_publish_sequence)
