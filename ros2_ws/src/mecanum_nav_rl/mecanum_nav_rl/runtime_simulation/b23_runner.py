@@ -123,7 +123,7 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
     state = {'triggered': 0, 'scheduled': 0, 'delivered': 0, 'timers': [],
         'lock': threading.Lock(), 'case':case,
         'delay_s': (production_delay if delay_s is None else delay_s),
-        'ingress_scheduled':False}
+        'ingress_scheduled':False, 'repeat_held':0, 'target_lifecycle':None}
     def eligible(message):
         if case == 'R04a':
             return message.admission_state == message.ADMISSION_POLICY_OPEN
@@ -144,8 +144,25 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
             return None
         with state['lock']:
             if state['triggered']:
+                if case == 'R04d':
+                    target = state['target_lifecycle']
+                    if (state['delivered'] == 0 and target is not None
+                            and int(message.sequence) >= target[0]):
+                        state['repeat_held'] += 1
+                        held_count = state['repeat_held']
+                        emit('B23_R04_LIFECYCLE_REPEAT_HELD', {
+                            'case':case, 'sequence':int(message.sequence),
+                            'target_sequence':target[0],
+                            'identity':[int(message.episode_generation),
+                                int(message.reset_epoch),int(message.runtime_generation)],
+                            'steady_ns':time.monotonic_ns(),'held_count':held_count})
+                        return None
                 return original(adapter, message)
             state['triggered'] += 1
+            if case == 'R04d':
+                state['target_lifecycle'] = (int(message.sequence),
+                    int(message.episode_generation), int(message.reset_epoch),
+                    int(message.runtime_generation))
         delay = production_delay if delay_s is None else delay_s
         received_ns = time.monotonic_ns()
         header = getattr(message, 'header', None)
@@ -234,6 +251,50 @@ def r04d_final_lifecycle_dispatch(original, marker_path, emit, schedule):
                 'sequence': sequence, 'identity': list(key[1:]),
                 'source_stamp_ns': source_stamp_ns,
                 'received_ns': received_ns, 'delivery_ns': delivered_ns})
+        schedule(node, release_after_ns, deliver)
+        return None
+    return dispatch
+
+
+def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
+    """Keep a new-context zero receipt out of the native gate until R04d observes stale Safety."""
+    marker_path = Path(marker_path)
+    pending = set()
+    def dispatch(node, envelope):
+        if not marker_path.exists():
+            return original(node, envelope)
+        marker = json.loads(marker_path.read_bytes())
+        if (marker.get('schema') != 'b23_r04d_delay_marker/v1'
+                or marker.get('run_id') != node._b23_r04d_run_id
+                or marker.get('invocation_id') != node._b23_r04d_invocation_id
+                or not isinstance(marker.get('baseline_identity'), list)
+                or len(marker['baseline_identity']) != 3
+                or type(marker.get('delay_ns')) is not int or marker['delay_ns'] <= 0
+                or type(marker.get('safe_stop_source_instance_id')) is not int):
+            raise RuntimeError('R04d final SAFE_STOP marker ownership/schema mismatch')
+        identity = [int(envelope.episode_generation), int(envelope.reset_epoch),
+            int(envelope.runtime_generation)]
+        if (envelope.source != safe_stop_source
+                or envelope.source_instance_id != marker['safe_stop_source_instance_id']
+                or identity == marker['baseline_identity']):
+            return original(node, envelope)
+        key = (int(envelope.sequence), *identity)
+        if key in pending:
+            return None
+        pending.add(key)
+        received_ns = time.monotonic_ns()
+        release_after_ns = received_ns + marker['delay_ns']
+        emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD', {
+            'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
+            'source_sequence':int(envelope.sequence),'source_instance_id':int(envelope.source_instance_id),
+            'identity':identity,'received_ns':received_ns,'release_after_ns':release_after_ns,
+            'delay_ns':marker['delay_ns']})
+        def deliver():
+            original(node, envelope)
+            emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED', {
+                'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
+                'source_sequence':int(envelope.sequence),'identity':identity,
+                'received_ns':received_ns,'delivery_ns':time.monotonic_ns()})
         schedule(node, release_after_ns, deliver)
         return None
     return dispatch
@@ -1064,6 +1125,19 @@ class TrainingWorkerIO:
                 # R04d delays lifecycle delivery to both consumers. Delaying
                 # Safety alone lets ingress advance first and rejects the old
                 # SAFE_STOP identity before the stale lifecycle is measured.
+                pending_ingress = getattr(self, '_r04d_pending_ingress_lifecycle', None)
+                if (topic == '/mecanum/safety_lifecycle_state'
+                        and self._r04d_fault_state is not None
+                        and pending_ingress is not None
+                        and int(message.sequence) >= int(pending_ingress[2].sequence)):
+                    state = self._r04d_fault_state
+                    state['ingress_repeats_held'] = state.get('ingress_repeats_held', 0) + 1
+                    self.emit('B23_R04_INGRESS_LIFECYCLE_REPEAT_HELD', {
+                        'case':'R04d','sequence':int(message.sequence),
+                        'target_sequence':int(pending_ingress[2].sequence),
+                        'received_ns':self.now(),
+                        'held_count':state['ingress_repeats_held']})
+                    return None
                 if (topic == '/mecanum/safety_lifecycle_state'
                         and self._r04d_fault_state is not None
                         and self._r04d_pending_ingress_lifecycle is None
@@ -2457,6 +2531,7 @@ def final_child(path):
     from rclpy.context import Context
     from rclpy.parameter import Parameter
     from rclpy.executors import SingleThreadedExecutor
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_safety.final_twist_publisher_node import FinalTwistPublisherNode
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, BackendSessionIdentity
     descriptor, packet = load_child_descriptor(path, 'final')
@@ -2470,11 +2545,13 @@ def final_child(path):
     signal.signal(signal.SIGTERM, stopping); signal.signal(signal.SIGINT, stopping)
     error = None
     r04d_original_lifecycle = None
+    r04d_original_accepted = None
     try:
         rclpy.init(context=context)
         if packet['case'] == 'R04d':
             from rclpy.clock import Clock, ClockType
             r04d_original_lifecycle = FinalTwistPublisherNode._on_lifecycle
+            r04d_original_accepted = FinalTwistPublisherNode._on_accepted
             marker_path = Path(descriptor['run_root'])/'r04d-final-lifecycle-delay.json'
             def schedule_steady(node, release_after_ns, callback):
                 steady = Clock(clock_type=ClockType.STEADY_TIME)
@@ -2489,6 +2566,9 @@ def final_child(path):
                 timer_holder['timer'] = node.create_timer(.005, poll_release, clock=steady)
             FinalTwistPublisherNode._on_lifecycle = r04d_final_lifecycle_dispatch(
                 r04d_original_lifecycle, marker_path, sink.record, schedule_steady)
+            FinalTwistPublisherNode._on_accepted = r04d_final_safe_stop_dispatch(
+                r04d_original_accepted, marker_path, sink.record, schedule_steady,
+                safe_stop_source=CommandEnvelope.SOURCE_SAFE_STOP)
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
             Parameter('session_id', value=descriptor['session_id'])], evidence_sink=sink.record)
@@ -2548,6 +2628,8 @@ def final_child(path):
         if context.ok(): context.shutdown()
         if r04d_original_lifecycle is not None:
             FinalTwistPublisherNode._on_lifecycle = r04d_original_lifecycle
+        if r04d_original_accepted is not None:
+            FinalTwistPublisherNode._on_accepted = r04d_original_accepted
         sink.close()
     return 0 if error is None else 1
 
@@ -2834,12 +2916,13 @@ async def training_child(path):
                         int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)],
                     'armed_ns':marker_armed_ns,
                     'delay_ns':700_000_000,
-                    'reason':'keep final publisher on bound identity until the R04d Safety stale-lifecycle observation window closes'})
+                    'safe_stop_source_instance_id':int(io.safe_stop_source_id),
+                    'reason':'hold final lifecycle delivery and a mismatched new-context SAFE_STOP receipt until the R04d stale-Safety observation window closes'})
                 io.emit('B23_R04_FAULT_ARMED', {'case':'R04d',
                     'next_operation':'lifecycle reset event', 'steady_ns':io.now(),
                     'final_lifecycle_delay_ns':700_000_000,
                     'final_lifecycle_baseline_sequence':int(baseline_lifecycle.sequence)})
-                await io.lifecycle_event(rearm=False,
+                fault_lifecycle = await io.lifecycle_event(rearm=False,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
                 rejected = await io.until(lambda: next((facts for name, facts in io.events
                     if name == 'SAFETY_REJECTED'
@@ -2856,6 +2939,18 @@ async def training_child(path):
                     if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
                 ingress_delivered = next((facts for name, facts in io.events
                     if name == 'B23_R04_INGRESS_DELIVERY_COMPLETED' and facts.get('case') == 'R04d'), None)
+                final_path = Path(packet['run_root'])/'final-events.jsonl'
+                final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
+                expected_lifecycle_identity = [int(fault_lifecycle.episode_generation),
+                    int(fault_lifecycle.reset_epoch), int(fault_lifecycle.runtime_generation)]
+                held_zero = [row['facts'] for row in final_rows
+                    if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
+                    and row.get('facts', {}).get('identity') == expected_lifecycle_identity]
+                published_new_context = [row['facts'] for row in final_rows
+                    if row.get('event') == 'FINAL_PUBLISHED'
+                    and int(row.get('facts', {}).get('steady_ns', 0)) >= marker_armed_ns
+                    and row.get('facts', {}).get('identity') != [int(baseline_lifecycle.episode_generation),
+                        int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)]]
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
                         or rejected['steady_ns'] < delayed['delivery_ns']
@@ -2864,7 +2959,10 @@ async def training_child(path):
                         or ingress_scheduled.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
                         or ingress_delivered.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
                         or ingress_delivered['delivery_ns'] > delayed['delivery_ns']
-                        or ingress_delivered['delivery_ns'] - ingress_scheduled['received_ns'] <= 500_000_000):
+                        or ingress_delivered['delivery_ns'] - ingress_scheduled['received_ns'] <= 500_000_000
+                        or state.get('repeat_held', 0) < 1
+                        or state.get('ingress_repeats_held', 0) < 1
+                        or not held_zero or published_new_context):
                     raise RuntimeError('R04d Safety rejection is not bound to delayed stale lifecycle source')
                 issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
                 commit_path = Path(packet['run_root'])/'b1_transition_committed.jsonl'
@@ -2877,6 +2975,10 @@ async def training_child(path):
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
                     'stale_rejection_reason':'LIFECYCLE_STALE_OR_FUTURE',
                     'rejected_steady_ns':rejected['steady_ns'], 'delayed_callbacks':state['scheduled'],
+                    'safety_repeat_callbacks_held':state['repeat_held'],
+                    'ingress_repeat_callbacks_held':state['ingress_repeats_held'],
+                    'final_new_context_safe_stop_held':len(held_zero),
+                    'final_new_context_receipts_published':len(published_new_context),
                     'source_stamp_ns':scheduled['source_stamp_ns'],
                     'source_ros_age_ns':rejected['ros_ns']-scheduled['source_stamp_ns'],
                     'no_policy_issued':True,'b1_commits_before_fault':prior_commits,

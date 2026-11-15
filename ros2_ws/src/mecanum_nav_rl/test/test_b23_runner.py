@@ -254,7 +254,8 @@ def test_r02g_admission_close_holds_policy_before_revoking_gate(zero_only):
     ('R04b','on_safety_input',NS(admission_state=1,ADMISSION_POLICY_OPEN=1,
         sample_sequence=8,header=NS(stamp=NS(sec=3,nanosec=5)))),
     ('R04c','on_scan',NS(header=NS(stamp=NS(sec=4,nanosec=5)))),
-    ('R04d','on_lifecycle',NS(header=NS(stamp=NS(sec=5,nanosec=6)))),
+    ('R04d','on_lifecycle',NS(sequence=6,episode_generation=2,reset_epoch=3,
+        runtime_generation=4,header=NS(stamp=NS(sec=5,nanosec=6)))),
 ])
 def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, message):
     class FakeAdapter:
@@ -318,6 +319,96 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
         'case':'R04d','source_stamp_ns':900_000_000,
         'due_ns':1_625_000_000,'delivery_ns':1_625_000_001})]
     assert io._r04d_pending_ingress_lifecycle is None
+
+
+def test_r04d_ingress_holds_repeated_new_identity_until_first_delivery():
+    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    target=SafetyLifecycleState(); target.sequence=5
+    repeated=SafetyLifecycleState(); repeated.sequence=6
+    delivered,events=[],[]
+    io=object.__new__(TrainingWorkerIO)
+    io._r04d_fault_state={'case':'R04d','delay_s':.650,'ingress_scheduled':True,
+        'ingress_repeats_held':0}
+    io._r04d_pending_ingress_lifecycle=(10_000,(lambda value:delivered.append(value)),
+        target,900)
+    io.now=lambda:20_000
+    io.emit=lambda name,facts:events.append((name,facts))
+    receive=io.observed_callback(SafetyLifecycleState,'/mecanum/safety_lifecycle_state',
+        lambda value:delivered.append(value))
+    assert receive(serialize_message(repeated),{}) is None
+    assert delivered==[] and io._r04d_fault_state['ingress_repeats_held']==1
+    assert events[-1][0]=='B23_R04_INGRESS_LIFECYCLE_REPEAT_HELD'
+
+    io._deliver_r04d_ingress_lifecycle_if_due()
+    assert delivered==[target]
+    assert io._r04d_pending_ingress_lifecycle is None
+
+
+def test_r04d_safety_lifecycle_repeats_stay_held_until_original_delivers():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import install_r04_delivery_fault
+
+    class Adapter:
+        def __init__(self): self.calls = []
+        def on_lifecycle(self, message): self.calls.append(message.sequence)
+        def on_scan(self, message): pass
+        def on_safety_input(self, message): pass
+
+    from mecanum_nav_rl.runtime_simulation.b23_runner import enable_r04_adapter_fault_dispatch
+    enable_r04_adapter_fault_dispatch(Adapter)
+    adapter, events = Adapter(), []
+    state = install_r04_delivery_fault(adapter, 'R04d',
+        lambda name, facts: events.append((name, facts)), delay_s=.04)
+    first = NS(sequence=6, episode_generation=2, reset_epoch=3, runtime_generation=4,
+        header=NS(stamp=NS(sec=5, nanosec=6)))
+    repeated = NS(sequence=6, episode_generation=2, reset_epoch=3, runtime_generation=4,
+        header=NS(stamp=NS(sec=5, nanosec=7)))
+    adapter.on_lifecycle(first)
+    adapter.on_lifecycle(repeated)
+    assert adapter.calls == []
+    assert state['repeat_held'] == 1
+    assert [name for name, _ in events] == [
+        'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_LIFECYCLE_REPEAT_HELD']
+
+    async def wait_delivery():
+        await asyncio.sleep(.06)
+    asyncio.run(wait_delivery())
+    for timer in state['timers']:
+        timer.join(timeout=.2)
+    assert adapter.calls == [6]
+    assert state['delivered'] == 1
+    adapter.on_lifecycle(repeated)
+    assert adapter.calls == [6,6]
+
+
+def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace as NS
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_safe_stop_dispatch
+
+    with TemporaryDirectory() as directory:
+        marker = Path(directory)/'marker.json'
+        marker.write_text(json.dumps({'schema':'b23_r04d_delay_marker/v1',
+            'run_id':'RUN-1','invocation_id':'INV-1','baseline_identity':[1,2,3],
+            'safe_stop_source_instance_id':77,'delay_ns':700_000_000}))
+        node=NS(_b23_r04d_run_id='RUN-1',_b23_r04d_invocation_id='INV-1')
+        envelope=NS(source=1,source_instance_id=77,sequence=8,episode_generation=2,
+            reset_epoch=2,runtime_generation=3)
+        calls,events,scheduled=[],[],[]
+        dispatch=r04d_final_safe_stop_dispatch(lambda owner,msg:calls.append(msg.sequence),
+            marker,lambda name,facts:events.append((name,facts)),
+            lambda owner,due,callback:scheduled.append((due,callback)),safe_stop_source=1)
+        assert dispatch(node,envelope) is None
+        assert calls == [] and len(scheduled)==1
+        assert events[0][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
+        assert scheduled[0][0] >= events[0][1]['received_ns'] + 700_000_000
+        scheduled[0][1]()
+        assert calls == [8]
+        assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
 
 
 def test_r04d_final_publisher_keeps_bound_identity_until_stale_safety_window():
