@@ -2414,6 +2414,11 @@ def write_record_once(path, record):
     return hashlib.sha256(raw).hexdigest()
 
 
+async def write_record_once_async(path, record):
+    """Ghi durable evidence mà không chặn event loop đang bơm ROS callbacks."""
+    return await asyncio.to_thread(write_record_once, path, record)
+
+
 def process_identity(pid):
     """Đọc bytes gốc cùng identity; lỗi đọc không được coi là PID vắng."""
     root = Path('/proc') / str(pid)
@@ -2908,7 +2913,12 @@ async def training_child(path):
                 baseline_lifecycle = io.ingress.lifecycle
                 if baseline_lifecycle is None:
                     raise RuntimeError('R04d requires a bound lifecycle before fault arming')
-                write_record_once(Path(packet['run_root'])/'r04d-final-lifecycle-delay.json', {
+                marker_path = Path(packet['run_root'])/'r04d-final-lifecycle-delay.json'
+                marker_write_started_ns = io.now()
+                io.emit('R04D_MARKER_WRITE_STARTED', {
+                    'steady_ns': marker_write_started_ns,
+                    'path': str(marker_path)})
+                marker_sha256 = await write_record_once_async(marker_path, {
                     'schema':'b23_r04d_delay_marker/v1', 'run_id':packet['run_id'],
                     'invocation_id':io.descriptor['invocation_id'],
                     'baseline_sequence':int(baseline_lifecycle.sequence),
@@ -2918,9 +2928,17 @@ async def training_child(path):
                     'delay_ns':700_000_000,
                     'safe_stop_source_instance_id':int(io.safe_stop_source_id),
                     'reason':'hold final lifecycle delivery and a mismatched new-context SAFE_STOP receipt until the R04d stale-Safety observation window closes'})
+                marker_write_completed_ns = io.now()
+                io.emit('R04D_MARKER_WRITE_COMPLETED', {
+                    'steady_ns': marker_write_completed_ns,
+                    'started_ns': marker_write_started_ns,
+                    'duration_ns': marker_write_completed_ns - marker_write_started_ns,
+                    'sha256': marker_sha256})
                 io.emit('B23_R04_FAULT_ARMED', {'case':'R04d',
                     'next_operation':'lifecycle reset event', 'steady_ns':io.now(),
                     'final_lifecycle_delay_ns':700_000_000,
+                    'marker_sha256':marker_sha256,
+                    'marker_write_duration_ns':marker_write_completed_ns-marker_write_started_ns,
                     'final_lifecycle_baseline_sequence':int(baseline_lifecycle.sequence)})
                 fault_lifecycle = await io.lifecycle_event(rearm=False,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))

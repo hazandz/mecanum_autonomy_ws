@@ -469,6 +469,54 @@ def test_r04d_final_lifecycle_delay_rejects_foreign_marker():
             dispatch(node, message)
 
 
+def test_r04d_durable_marker_write_does_not_block_ros_pump(monkeypatch):
+    import inspect
+    from mecanum_nav_rl.runtime_simulation.b23_runner import write_record_once_async
+
+    entered = threading.Event()
+    release = threading.Event()
+    writer_thread = []
+
+    def slow_durable_write(path, record):
+        writer_thread.append(threading.get_ident())
+        entered.set()
+        if not release.wait(1.0):
+            raise TimeoutError('fake durable write was not released')
+        return 'a' * 64
+
+    monkeypatch.setattr(runner_module, 'write_record_once', slow_durable_write)
+
+    async def exercise():
+        pulses = 0
+        finished = False
+
+        async def pump_pulses():
+            nonlocal pulses
+            while not finished:
+                pulses += 1
+                await asyncio.sleep(.005)
+
+        pump = asyncio.create_task(pump_pulses())
+        write = asyncio.create_task(write_record_once_async('marker', {}))
+        assert await asyncio.to_thread(entered.wait, .5)
+        await asyncio.sleep(.04)
+        progressed_while_writer_blocked = pulses >= 4 and not write.done()
+        release.set()
+        digest = await asyncio.wait_for(write, .5)
+        finished = True
+        await pump
+        return progressed_while_writer_blocked, digest
+
+    progressed, digest = asyncio.run(asyncio.wait_for(exercise(), 1.5))
+    assert progressed is True
+    assert digest == 'a' * 64
+    assert writer_thread and writer_thread[0] != threading.get_ident()
+
+    training_source = inspect.getsource(runner_module.training_child)
+    ast.parse(training_source)
+    assert "await write_record_once_async(marker_path" in training_source
+
+
 def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
     # Use the exact event names and ordering emitted by the production worker.
     io = NS(policy_source_id=9, events=[
