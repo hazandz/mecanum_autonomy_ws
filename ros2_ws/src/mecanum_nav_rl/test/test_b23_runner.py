@@ -11,7 +11,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
-    verify_r04a_next_step_blocked,
+    await_r04a_production_rejection, verify_r04a_next_step_blocked,
 )
 
 
@@ -310,6 +310,24 @@ def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
     io.events[1][1]['sample_sequence'] = 23
     with pytest.raises(RuntimeError, match='identity does not match'):
         verify_r04_stale_delivery(io, case='R04a')
+
+
+def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
+    events = [
+        ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04a','delivery_ns':300}),
+        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT','steady_ns':301}),
+    ]
+    calls = []
+    async def until(predicate, *, deadline_ns, phase):
+        calls.append((deadline_ns, phase))
+        assert predicate() is None
+        events.append(('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+            'steady_ns':302}))
+        return predicate()
+    io = NS(events=events, until=until)
+    result = __import__('asyncio').run(await_r04a_production_rejection(io, deadline_ns=1_000))
+    assert result['steady_ns'] == 302
+    assert calls == [(1_000,'R04a bounded production Safety rejection after delayed replay')]
 
 
 def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receipt():

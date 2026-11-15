@@ -493,6 +493,24 @@ def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
         'fresh_policy_recovery':accepted is not None}
 
 
+async def await_r04a_production_rejection(io, *, deadline_ns):
+    """Wait boundedly for Safety's tick after the delayed callback is delivered."""
+    def observed():
+        delayed = next((facts for name, facts in reversed(io.events)
+            if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04a'), None)
+        input_rejected = next((facts for name, facts in reversed(io.events)
+            if name == 'SAFETY_INPUT_REJECTED'
+            and facts.get('reason') == 'SAFETY_INPUT_REPLAY_OR_CONFLICT'), None)
+        if delayed is None or input_rejected is None or input_rejected.get('steady_ns', 0) < delayed.get('delivery_ns', 0):
+            return None
+        return next((facts for name, facts in reversed(io.events)
+            if name == 'SAFETY_REJECTED'
+            and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
+            and facts.get('steady_ns', 0) >= input_rejected['steady_ns']), None)
+    return await io.until(observed, deadline_ns=deadline_ns,
+        phase='R04a bounded production Safety rejection after delayed replay')
+
+
 def verify_r04a_next_step_blocked(io, *, step_index):
     """Prove delayed out-of-order Safety input cannot authorize the next slot."""
     rejected = next((facts for name, facts in reversed(io.events)
@@ -2618,6 +2636,8 @@ async def training_child(path):
                         state = io._r04_fault_state
                         if state['triggered'] != 1 or state['delivered'] != 1:
                             raise RuntimeError('R04a delayed callback did not finish exactly once') from error
+                        await await_r04a_production_rejection(io,
+                            deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                         checked = verify_r04_stale_delivery(io, case='R04a')
                         if not isinstance(error, TimeoutError):
                             raise RuntimeError('R04a expected the blocked POLICY step to reach its deadline') from error
@@ -2690,6 +2710,8 @@ async def training_child(path):
                         await io.until(lambda: state if state['delivered'] == 1 else None,
                             deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                             phase='R04a bounded delayed callback completion')
+                        await await_r04a_production_rejection(io,
+                            deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                         checked = verify_r04_stale_delivery(io, case='R04a')
                         blocked_step = transition.transition_identity.step_index + 1
                         try:
