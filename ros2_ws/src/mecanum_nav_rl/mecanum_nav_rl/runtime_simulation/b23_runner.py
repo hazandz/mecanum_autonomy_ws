@@ -1389,6 +1389,47 @@ def verify_r04c_next_step_blocked(io, *, step_index, delayed_delivery_ns):
         'b1_transition_absent':True,'native_zero_application':applied_zero}
 
 
+def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns):
+    """Prove a late scan was rejected and Safety's resulting zero was applied."""
+    rejected = next((facts for name, facts in io.events
+        if name == 'SAFETY_REJECTED'
+        and 'SCAN_STALE_OR_FUTURE' in facts.get('reasons', ())
+        and facts.get('steady_ns', 0) >= delayed_delivery_ns), None)
+    if rejected is None:
+        return None
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    for name, facts in io.events:
+        if (name != 'NATIVE_APPLICATION_JOINED'
+                or type(facts.get('steady_ns')) is not int
+                or facts['steady_ns'] <= rejected['steady_ns']
+                or facts.get('source_instance_id') != io.ingress.safe_stop_source_id
+                or facts.get('step_index') != 0
+                or facts.get('transition_id') != ''):
+            continue
+        receipt = io.final.publication_for_source_sequence(
+            source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+            sequence=facts.get('source_sequence'))
+        if (receipt is None or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+                or receipt.source_instance_id != io.ingress.safe_stop_source_id
+                or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+                or receipt.final_publish_sequence != facts.get('publish_sequence')
+                or receipt.sequence != facts.get('source_sequence')
+                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z))):
+            continue
+        applied_zero = {'source_sequence':receipt.sequence,
+            'final_publish_sequence':receipt.final_publish_sequence,
+            'publisher_instance_id':receipt.final_publisher_instance_id,
+            'native_iteration':facts.get('iteration'),
+            'native_stamp_ns':facts.get('stamp_ns'),
+            'native_application_steady_ns':facts['steady_ns']}
+        return {'case':'R04c','delayed_delivery_ns':delayed_delivery_ns,
+            'stale_rejection_reasons':list(rejected.get('reasons', ())),
+            'rejected_steady_ns':rejected['steady_ns'],
+            'native_zero_application':applied_zero}
+    return None
+
+
 def abort_r04a_pending_step_if_active(lifecycle, *, expected_step_index,
                                       reason='R04a_delayed_input_blocked_next_slot'):
     """Abort only an active B1 step; a pre-bind timeout has no step to abort."""
@@ -4745,13 +4786,54 @@ async def training_child(path):
                                 b1.lifecycle, expected_step_index=blocked_step,
                                 reason='R04c_stale_scan_blocked_next_slot')
                         else:
-                            raise RuntimeError('R04c stale scan allowed the next POLICY slot')
-                        outcome = {'case':'R04c','resets_confirmed':1,
-                            'policy_steps_committed':1, **checked, **blocked,
-                            'safe_stop_applied':True,
-                            'b1_step_disposition':disposition,
-                            'blocked_step_timeout':blocked_step_timeout,
-                            'completed_ns':time.monotonic_ns()}
+                            # One delayed scan is an out-of-order sample, not a
+                            # 650 ms sensor outage: fresh scans may legitimately
+                            # complete this step before the delayed callback.
+                            # Wait for the injected sample, prove Safety rejects
+                            # it and applies zero, then prove recovery on a later
+                            # POLICY slot using fresh scan data.
+                            state = io._r04_fault_state
+                            await io.until(lambda: state if state['triggered'] == 1
+                                and state['delivered'] == 1 else None,
+                                deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                                phase='R04c bounded delayed scan delivery after in-flight step')
+                            delayed = next((facts for name, facts in reversed(io.events)
+                                if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK'
+                                and facts.get('case') == 'R04c'), None)
+                            if delayed is None:
+                                raise RuntimeError('R04c delayed scan callback has no evidence')
+                            stale_zero = await io.until(
+                                lambda: verify_r04c_stale_rejection_and_zero(io,
+                                    delayed_delivery_ns=delayed['delivery_ns']),
+                                deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                                phase='R04c stale scan Safety rejection and applied zero')
+                            recovery_step = blocked_step + 1
+                            recovered = await io.policy_step(b1, (0.25, 0., 0.))
+                            if recovered.transition_identity.step_index != recovery_step:
+                                raise RuntimeError('R04c fresh recovery used an unexpected POLICY slot')
+                            checked = verify_r04_stale_delivery(io, case='R04c',
+                                policy_step_index=recovery_step)
+                            if not checked['fresh_policy_recovery']:
+                                raise RuntimeError('R04c did not recover from stale scan on fresh input')
+                            committed_steps = sum(1 for name, facts in io.events
+                                if name == 'b1_transition_committed'
+                                and facts.get('step_index') in (transition.transition_identity.step_index,
+                                    blocked_step, recovery_step))
+                            if committed_steps != 3:
+                                raise RuntimeError('R04c control, in-flight, and recovery commits are incomplete')
+                            outcome = {'case':'R04c','resets_confirmed':1,
+                                'policy_steps_committed':committed_steps,
+                                'delayed_step_committed_before_delivery':True,
+                                'stale_scan_safety_disposition':stale_zero,
+                                'fresh_recovery_step_index':recovery_step,
+                                **checked,'completed_ns':time.monotonic_ns()}
+                        if blocked_step_timeout is not None:
+                            outcome = {'case':'R04c','resets_confirmed':1,
+                                'policy_steps_committed':1, **checked, **blocked,
+                                'safe_stop_applied':True,
+                                'b1_step_disposition':disposition,
+                                'blocked_step_timeout':blocked_step_timeout,
+                                'completed_ns':time.monotonic_ns()}
                     else:
                         checked = verify_r04_stale_delivery(io, case=packet['case'],
                             policy_step_index=transition.transition_identity.step_index)

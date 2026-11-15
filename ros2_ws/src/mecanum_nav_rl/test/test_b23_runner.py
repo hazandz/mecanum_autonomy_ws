@@ -18,7 +18,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     r04_policy_step_fault_plan,
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
-    verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
+    verify_r04c_next_step_blocked, verify_r04c_stale_rejection_and_zero,
+    verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
@@ -1396,6 +1397,11 @@ def test_r04c_delays_scan_only_after_control_policy_commit_path():
         for value in fault_arguments)
     assert any(isinstance(value, ast.Name) and value.id == 'followup_fault_case'
         for value in fault_arguments)
+    source = textwrap.dedent(__import__('inspect').getsource(runner_module.training_child))
+    assert "R04c stale scan allowed the next POLICY slot" not in source
+    assert 'R04c stale scan Safety rejection and applied zero' in source
+    assert 'fresh_recovery_step_index' in source
+    assert 'policy_step_index=recovery_step' in source
 
 
 def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
@@ -1810,6 +1816,37 @@ def test_r04c_next_policy_slot_requires_stale_scan_rejection_and_applied_zero():
     io.events[1][1]['steady_ns'] = 799
     with pytest.raises(RuntimeError, match='lacks Safety rejection'):
         verify_r04c_next_step_blocked(io, step_index=2, delayed_delivery_ns=800)
+
+
+def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join():
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from geometry_msgs.msg import Twist
+    receipt = FinalIssuedCommandReceipt()
+    receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.source_instance_id = 70
+    receipt.sequence = 9
+    receipt.final_publisher_instance_id = 80
+    receipt.final_publish_sequence = 99
+    receipt.final_command = Twist()
+    joined = {'source_instance_id':70,'source_sequence':9,'step_index':0,
+        'transition_id':'','steady_ns':950,'publish_sequence':99,
+        'iteration':12,'stamp_ns':120_000_000}
+    io = NS(events=[
+        ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04c','delivery_ns':800,
+            'source_stamp_ns':1_000_000_000}),
+        ('SAFETY_REJECTED', {'reasons':['SCAN_STALE_OR_FUTURE'],
+            'steady_ns':900,'ros_ns':1_700_000_000}),
+        ('NATIVE_APPLICATION_JOINED', joined),
+    ], ingress=NS(safe_stop_source_id=70),
+       final=NS(publisher_instance_id=80,
+           publication_for_source_sequence=lambda **kwargs: receipt if kwargs == {
+               'source':FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,'sequence':9} else None))
+    result = verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800)
+    assert result['stale_rejection_reasons'] == ['SCAN_STALE_OR_FUTURE']
+    assert result['native_zero_application']['source_sequence'] == 9
+    assert result['native_zero_application']['native_application_steady_ns'] == 950
+    io.events.pop()
+    assert verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800) is None
 
 
 def test_r04a_accepts_exact_applied_zero_when_latest_safety_tick_is_ahead():
