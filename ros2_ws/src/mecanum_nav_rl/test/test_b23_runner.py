@@ -322,7 +322,8 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
 
 
 def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
-    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_ingress_lifecycle_delay_s
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r04d_final_publisher_precedes_ingress, r04d_ingress_lifecycle_delay_s)
 
     safety_lifecycle_delay_s = 0.650
     final_lifecycle_delay_s = 0.700
@@ -332,6 +333,10 @@ def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
     safety_delivery_delay_s = 0.650
     assert safety_delivery_delay_s < final_lifecycle_delay_s < ingress_delay_s
     assert ingress_delay_s == 0.725
+    assert r04d_final_publisher_precedes_ingress(700_000_000, 725_000_000)
+    assert r04d_final_publisher_precedes_ingress(725_000_000, 725_000_000)
+    assert not r04d_final_publisher_precedes_ingress(730_000_000, 725_000_000)
+    assert not r04d_final_publisher_precedes_ingress(None, 725_000_000)
 
 
 def test_r04d_ingress_binding_delay_rejects_invalid_final_delay():

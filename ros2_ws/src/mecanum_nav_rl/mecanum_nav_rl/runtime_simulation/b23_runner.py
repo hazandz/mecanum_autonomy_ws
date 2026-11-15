@@ -282,6 +282,12 @@ def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
         final_publisher_delay_s + 0.025)
 
 
+def r04d_final_publisher_precedes_ingress(final_delivery_ns, ingress_delivery_ns):
+    """Require publisher identity to switch before ingress accepts the new lifecycle."""
+    return (type(final_delivery_ns) is int and type(ingress_delivery_ns) is int
+        and final_delivery_ns <= ingress_delivery_ns)
+
+
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
     """Keep a new-context zero receipt out of the native gate until R04d observes stale Safety."""
     marker_path = Path(marker_path)
@@ -2993,6 +2999,10 @@ async def training_child(path):
                 final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
                 expected_lifecycle_identity = [int(fault_lifecycle.episode_generation),
                     int(fault_lifecycle.reset_epoch), int(fault_lifecycle.runtime_generation)]
+                final_lifecycle_delivery = next((row.get('facts', {}) for row in final_rows
+                    if row.get('event') == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
+                    and row.get('facts', {}).get('sequence') == fault_lifecycle.sequence
+                    and row.get('facts', {}).get('identity') == expected_lifecycle_identity), None)
                 held_zero = [row['facts'] for row in final_rows
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
                     and row.get('facts', {}).get('identity') == expected_lifecycle_identity]
@@ -3008,7 +3018,9 @@ async def training_child(path):
                         or ingress_scheduled is None or ingress_delivered is None
                         or ingress_scheduled.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
                         or ingress_delivered.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
-                        or ingress_delivered['delivery_ns'] > delayed['delivery_ns']
+                        or final_lifecycle_delivery is None
+                        or not r04d_final_publisher_precedes_ingress(
+                            final_lifecycle_delivery.get('delivery_ns'), ingress_delivered.get('delivery_ns'))
                         or ingress_delivered['delivery_ns'] - ingress_scheduled['received_ns'] <= 500_000_000
                         or state.get('repeat_held', 0) < 1
                         or state.get('ingress_repeats_held', 0) < 1
