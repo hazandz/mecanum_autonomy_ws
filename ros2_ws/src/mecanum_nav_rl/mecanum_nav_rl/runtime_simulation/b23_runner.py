@@ -3967,7 +3967,7 @@ async def training_child(path):
         artifact = ScenarioArtifactLoader(expected_gazebo_world_name=asset['world_id'],
             expected_world_file_sha256=asset['world_file_sha256']).load(Path(packet['scenario']).read_text())
         b1 = LocalTrainingB1Adapter(io.ingress, artifact, asset,
-            scan_transform=lambda: io.safety._tf_buffer.lookup_transform('base_link', 'lidar_frame', Time()), emit=sink.record)
+            scan_transform=lambda: io.safety._tf_buffer.lookup_transform('base_link', 'lidar_frame', Time()), emit=io.emit)
         if packet['case'] == 'R08':
             if len(packet['episode_seeds']) != 30:
                 raise RuntimeError('R08 requires the exact 30 B2_SOAK_V1 seeds')

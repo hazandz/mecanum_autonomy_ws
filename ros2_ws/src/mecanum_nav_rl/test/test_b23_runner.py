@@ -1849,6 +1849,34 @@ def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join()
     assert verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800) is None
 
 
+def test_training_worker_routes_b1_events_through_worker_event_recorder():
+    import ast
+    import inspect
+    from pathlib import Path
+    from mecanum_nav_rl.runtime_simulation import b23_runner
+
+    source = Path(inspect.getsourcefile(b23_runner)).read_bytes()
+    tree = ast.parse(source)
+    worker = next(node for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'training_child')
+    adapter = next(node for node in ast.walk(worker)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == 'LocalTrainingB1Adapter')
+    emitter = next(item.value for item in adapter.keywords if item.arg == 'emit')
+    assert (isinstance(emitter, ast.Attribute) and emitter.attr == 'emit'
+        and isinstance(emitter.value, ast.Name) and emitter.value.id == 'io'), ast.dump(emitter)
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    seen = []
+    recorder = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    recorder.events = []
+    recorder._accepted_policy_event_keys = set()
+    recorder._event_sink = lambda name, facts: seen.append((name, facts))
+    facts = {'step_index':1,'transition_id':'transition-1'}
+    recorder._emit('b1_transition_committed', facts)
+    assert recorder.events == [('b1_transition_committed', facts)]
+    assert seen == [('b1_transition_committed', facts)]
+
+
 def test_r04a_accepts_exact_applied_zero_when_latest_safety_tick_is_ahead():
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     proof = {'publisher_instance_id':80, 'final_publish_sequence':99,
