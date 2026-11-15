@@ -697,6 +697,30 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
                 serialize_message(receipt), {})
 
 
+def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import serialize_message
+    worker = object.__new__(TrainingWorkerIO)
+    worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    worker._r07b_rollback_observed = {'delta_ns':-360_000_000}
+    worker.now = lambda: 888
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    oracle = Odometry()
+    result = worker.observed_callback(Odometry,
+        '/mecanum/internal/ground_truth/odom',
+        lambda _: (_ for _ in ()).throw(ValueError('oracle clock rollback')))(
+            serialize_message(oracle), {})
+    assert result is None
+    assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED'
+    assert events[-1][1]['reason'] == 'oracle clock rollback'
+    with pytest.raises(ValueError, match='unrelated oracle failure'):
+        worker.observed_callback(Odometry,
+            '/mecanum/internal/ground_truth/odom',
+            lambda _: (_ for _ in ()).throw(ValueError('unrelated oracle failure')))(
+                serialize_message(oracle), {})
+
+
 def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 
