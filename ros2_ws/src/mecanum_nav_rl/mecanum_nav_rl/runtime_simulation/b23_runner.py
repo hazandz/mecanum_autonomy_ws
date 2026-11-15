@@ -372,6 +372,12 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
         'native_local_zero_override':bool(backend_state.local_zero_override)}
 
 
+def r02g_inhibit_operation():
+    """Resolve the production service operation used by the R02g OP_INHIBIT route."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    return Control.Request.OP_INHIBIT
+
+
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -2227,7 +2233,7 @@ async def training_child(path):
                 else:
                     adapter.set_policy_hold(True)
                     adapter.set_stream_enabled(True)
-                    control_ack = await io.control.transact(Control.Request.OP_INHIBIT,
+                    control_ack = await io.control.transact(r02g_inhibit_operation(),
                         deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                     state = await io.until(lambda: io.ingress.backend_state
                         if io.ingress.backend_state is not None

@@ -8,7 +8,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
-    verify_r02e_prebind_admission_rejected, verify_r02g_close, verify_r03_receipt_fault,
+    verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
+    verify_r03_receipt_fault,
 )
 
 
@@ -215,6 +216,11 @@ def test_r02g_close_accepts_production_deque_and_rejects_late_policy_receipt():
     with pytest.raises(RuntimeError,match='POLICY receipt after the close trigger'):
         verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
             zero_receipt=receipt,backend_state=state)
+
+
+def test_r02g_op_inhibit_resolves_installed_control_operation():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    assert r02g_inhibit_operation() == Control.Request.OP_INHIBIT
 
 
 def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequence():
