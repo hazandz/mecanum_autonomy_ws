@@ -102,7 +102,7 @@ def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  post_pause_policy_receipts, reset_count_before,
                                  reset_count_after):
     """Require external pause to produce native fault/zero without later POLICY."""
-    if not world_ack.success or world_pause_state is not True:
+    if world_ack is not True or world_pause_state is not True:
         raise RuntimeError('R07a world pause ACK/state was not confirmed')
     if (backend_state is None or backend_state.fault_flags != 1
             or not backend_state.local_zero_override or backend_state.actuator_inhibited is False):
@@ -1574,7 +1574,10 @@ class TrainingWorkerIO:
             'request_cdr_hex':serialize_message(request).hex(),
             'response_success':response.success,
             'steady_ns':self.now()})
-        return response
+        # ResetAdapter's GazeboResetServices contract is bool. The generated
+        # Jazzy ControlWorld response itself is only an ACK with `success`;
+        # observed pause state is checked separately from native status.
+        return response.success
 
     async def reset_world_time_only(self, *, timeout_s):
         """Apply the packet-pinned Gazebo time_only rollback through ControlWorld."""
@@ -3274,11 +3277,11 @@ async def training_child(path):
                 expected_native_fault_flags=1)
             inhibit_ack = await io.control.inhibit(
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
-            if not resume_ack.success or resume_state is not True:
+            if resume_ack is not True or resume_state is not True:
                 raise RuntimeError('R07a world resume was not acknowledged')
             io.emit('B23_R07A_VERIFIED', {'checked':checked,
-                'world_pause_success':world_ack.success,'world_pause_state':pause_state,
-                'world_resume_success':resume_ack.success,'world_resume_state':not resume_state,
+                'world_pause_success':world_ack,'world_pause_state':pause_state,
+                'world_resume_success':resume_ack,'world_resume_state':not resume_state,
                 'native_status_sequence':state.status_sequence,
                 'native_inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
                 'native_inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),

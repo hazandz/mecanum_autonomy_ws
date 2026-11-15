@@ -174,7 +174,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
 
 
 def test_r07a_unexpected_pause_requires_world_ack_native_zero_and_no_followon_policy():
-    world = NS(success=True)
+    world = True
     state = NS(fault_flags=1, local_zero_override=True, actuator_inhibited=True)
     result = verify_r07a_unexpected_pause(world_ack=world, world_pause_state=True, backend_state=state,
         pre_pause_policy_receipts=1, post_pause_policy_receipts=1,
@@ -214,7 +214,7 @@ def test_control_world_records_success_without_nonexistent_response_pause_field(
     worker.call = fake_call
     result = asyncio.run(worker.control_world(world_name='b2_training_arena', pause=True,
         timeout_s=1.0))
-    assert result is response
+    assert result is True
     assert events[0][0] == 'WORLD_PAUSE_CONTROL'
     assert events[0][1]['requested_pause'] is True
     assert events[0][1]['response_success'] is True
