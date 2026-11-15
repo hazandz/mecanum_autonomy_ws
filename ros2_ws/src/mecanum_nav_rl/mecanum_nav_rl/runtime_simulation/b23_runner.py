@@ -1313,7 +1313,7 @@ class TrainingWorkerIO:
             if ros_clock.clock_type != ClockType.ROS_TIME:
                 raise RuntimeError('R07b requires the worker node ROS clock')
             self._r07b_jump_handle = ros_clock.create_jump_callback(
-                JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=1),
+                JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=-1),
                     on_clock_change=False), post_callback=self._on_r07b_clock_jump)
             self.policy_source_id, self.safe_stop_source_id = secrets.randbelow(2**63 - 1) + 1, secrets.randbelow(2**63 - 1) + 1
             if self.policy_source_id == self.safe_stop_source_id:

@@ -541,6 +541,15 @@ def test_r07b_worker_clock_monitor_accepts_only_one_packet_armed_rollback():
         worker.check()
 
 
+def test_r07b_clock_jump_threshold_matches_jazzy_backward_duration_contract():
+    from rclpy.clock import JumpThreshold
+    from rclpy.duration import Duration
+
+    threshold = JumpThreshold(min_forward=None,
+        min_backward=Duration(nanoseconds=-1), on_clock_change=False)
+    assert threshold.min_backward.nanoseconds == -1
+
+
 def test_r05_contact_query_revocation_requires_coverage_mask_and_zero_closed_state(tmp_path):
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 
