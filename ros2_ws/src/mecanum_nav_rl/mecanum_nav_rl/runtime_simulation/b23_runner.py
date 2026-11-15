@@ -360,7 +360,12 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
                 or backend_state.applied_final_publisher_instance_id != zero_receipt.final_publisher_instance_id
                 or backend_state.applied_final_publish_sequence != zero_receipt.final_publish_sequence):
             raise RuntimeError('R02g closing route lacks exact native-applied zero receipt')
-    if any(item.source is ReceiptSource.POLICY for item in io.ingress.receipts[policy_receipt_count:]):
+    # The production ingress keeps receipts in a bounded deque, which does
+    # not support slicing. Snapshot it under the callback lock before checking
+    # the post-close suffix so the runtime path and offline fixtures agree.
+    with io.ingress.lock:
+        receipts_after_close = tuple(io.ingress.receipts)[policy_receipt_count:]
+    if any(item.source is ReceiptSource.POLICY for item in receipts_after_close):
         raise RuntimeError('R02g observed POLICY receipt after the close trigger')
     return {'route':route, 'closing_ack_applied':route == 'op_inhibit',
         'safe_stop_receipt_applied':route != 'op_inhibit',

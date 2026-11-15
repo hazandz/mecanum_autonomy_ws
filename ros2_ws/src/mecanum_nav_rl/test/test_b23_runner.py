@@ -176,7 +176,7 @@ def test_r02g_close_routes_require_exact_native_evidence():
     receipt.final_publish_sequence=42
     state=NS(fault_flags=0,local_zero_override=False,applied_receipt_valid=True,
         applied_final_publisher_instance_id=17,applied_final_publish_sequence=42)
-    io=NS(ingress=NS(receipts=[NS(source=ReceiptSource.POLICY)]))
+    io=NS(ingress=NS(receipts=[NS(source=ReceiptSource.POLICY)],lock=threading.RLock()))
     result=verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
         zero_receipt=receipt,backend_state=state)
     assert result['safe_stop_receipt_applied'] is True
@@ -198,6 +198,25 @@ def test_r02g_close_routes_require_exact_native_evidence():
     with pytest.raises(RuntimeError,match='exact native-applied zero receipt'):
         verify_r02g_close(io,route='zero_only',policy_receipt_count=1,
             zero_receipt=receipt,backend_state=NS(**{**vars(state),'applied_final_publish_sequence':41}))
+def test_r02g_close_accepts_production_deque_and_rejects_late_policy_receipt():
+    from collections import deque
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    receipt=FinalIssuedCommandReceipt()
+    receipt.source=receipt.SOURCE_SAFE_STOP
+    receipt.final_publisher_instance_id=17
+    receipt.final_publish_sequence=42
+    state=NS(fault_flags=0,local_zero_override=False,applied_receipt_valid=True,
+        applied_final_publisher_instance_id=17,applied_final_publish_sequence=42)
+    io=NS(ingress=NS(receipts=deque([NS(source=ReceiptSource.POLICY)]),lock=threading.RLock()))
+    assert verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
+        zero_receipt=receipt,backend_state=state)['route']=='safe_stop'
+    io.ingress.receipts.append(NS(source=ReceiptSource.POLICY))
+    with pytest.raises(RuntimeError,match='POLICY receipt after the close trigger'):
+        verify_r02g_close(io,route='safe_stop',policy_receipt_count=1,
+            zero_receipt=receipt,backend_state=state)
+
+
 def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequence():
     from rclpy.serialization import serialize_message
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
