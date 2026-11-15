@@ -72,6 +72,20 @@ def soak_action(episode_index, step_index):
     return (0.0, 0.0, 0.0)
 
 
+def r02b_admission_release_target_ns(now_ros_ns, scan_period_ns):
+    """Return the next scan cutoff R02b must observe before binding a step.
+
+    R02b measures the native 40 ms admission hold. The runner waits for an
+    actual Safety tick after this boundary while no new POLICY slot is bound,
+    so cutoff deferral cannot be folded into the admission-order measurement.
+    """
+    if (type(now_ros_ns) is not int or now_ros_ns < 0
+            or type(scan_period_ns) is not int or scan_period_ns <= 0):
+        raise ValueError('R02b scan release phase requires nonnegative ROS time and positive period')
+    next_boundary = (now_ros_ns // scan_period_ns + 1) * scan_period_ns
+    return next_boundary
+
+
 def case_environment(case, hooks):
     """Bind the single native ACK fault hook to its case-scoped child env."""
     if case == 'R02b' and hooks == ['native_hold_admission_until_receipt']:
@@ -2227,7 +2241,8 @@ class TrainingWorkerIO:
 
     async def policy_step(self, b1, action, *, hold_after_adapter_issuance=False,
                           close_after_held_receipt=None, prebind_admission=False,
-                          measurement_fault_case=None):
+                          measurement_fault_case=None,
+                          align_admission_after_scan_boundary=False):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -2239,6 +2254,25 @@ class TrainingWorkerIO:
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
         await self.freeze_step_streams(deadline_ns=deadline)
+        r02b_cutoff_evidence = None
+        if align_admission_after_scan_boundary:
+            adapter = self.safety.local_training
+            cutoff_ns = r02b_admission_release_target_ns(
+                self.ros_now(), adapter.scan_period_ns)
+
+            def observed_post_cutoff_tick():
+                ros_ns = self.ros_now()
+                tick_ros_ns = adapter.last_tick_ros_ns
+                if (ros_ns > cutoff_ns and tick_ros_ns is not None
+                        and tick_ros_ns > cutoff_ns):
+                    return {'cutoff_ns': cutoff_ns, 'ros_ns': ros_ns,
+                        'safety_tick_ros_ns': tick_ros_ns,
+                        'steady_ns': self.now()}
+                return None
+
+            r02b_cutoff_evidence = await self.until(observed_post_cutoff_tick,
+                deadline_ns=deadline,
+                phase='R02b Safety tick after scan cutoff before pending bind')
         if measurement_fault_case is not None:
             self._r04_fault_state = install_r04_delivery_fault(
                 self.safety.local_training, measurement_fault_case, self.emit)
@@ -2278,6 +2312,28 @@ class TrainingWorkerIO:
             pending_source_sequence=token.step_index, pending_transition_id=token.transition_id,
             action_barrier_stamp=self._time_msg(barrier))
         self.ingress.arm_pending(ack)
+        if align_admission_after_scan_boundary:
+            # Safety already consumed the upcoming scan cutoff while no new
+            # slot was bound. Now hold only the native admission delivery
+            # until the actual post-ACK sample reaches Safety.
+            self.ingress.pause_admission_publication()
+            adapter = self.safety.local_training
+            prior_sample_sequence = self.ingress.last_published_sample_sequence
+            self.ingress.admission_publication_enabled = True
+            aligned_sample = await self.until(lambda: adapter.noisy
+                if adapter.noisy is not None
+                and adapter.noisy.sample_sequence > prior_sample_sequence
+                and adapter.noisy.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                and bytes(adapter.noisy.admission_token) == bytes(ack.response.pending_admission_token)
+                and self.ingress.last_published_sample_sequence == adapter.noisy.sample_sequence
+                else None,
+                deadline_ns=deadline,
+                phase='R02b aligned post-cutoff admission reaches Safety')
+            self.emit('R02B_ADMISSION_RELEASE_ALIGNED', {
+                **r02b_cutoff_evidence,
+                'sample_sequence': aligned_sample.sample_sequence,
+                'sample_stamp_ns': self.safety.local_training.stamp(aligned_sample.header.stamp),
+                'admission_ready_steady_ns': self.now()})
         held_sample_sequence = None
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
@@ -2873,7 +2929,8 @@ async def training_child(path):
             target = ResetTarget(**packet['reset_target'])
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
             step_started_ns = time.monotonic_ns()
-            transition = await io.policy_step(b1, (0.4, 0., 0.))
+            transition = await io.policy_step(b1, (0.4, 0., 0.),
+                align_admission_after_scan_boundary=packet['case'] == 'R02b')
             if transition.termination.terminated or transition.termination.truncated:
                 raise RuntimeError('R02 target POLICY step terminated before order proof')
             evidence_end = min(io.deadline_ns, time.monotonic_ns()+500_000_000)

@@ -64,6 +64,20 @@ def test_d04_soak_schedule_and_unit_budget_are_exact():
         service_properties_for(180)
 
 
+@pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
+    (891_000_000, 100_000_000, 900_000_000),
+    (905_000_000, 100_000_000, 1_000_000_000),
+    (1_099_000_000, 100_000_000, 1_100_000_000),
+    (10, 16_000_000, 16_000_000),
+])
+def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expected_ns):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r02b_admission_release_target_ns
+
+    assert r02b_admission_release_target_ns(now_ns, period_ns) == expected_ns
+    with pytest.raises(ValueError, match='scan release phase'):
+        r02b_admission_release_target_ns(now_ns, 0)
+
+
 def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01a') == []
     assert case_fault_hooks('R01b') == ['external_pause_after_w1_before_native_dispatch']
