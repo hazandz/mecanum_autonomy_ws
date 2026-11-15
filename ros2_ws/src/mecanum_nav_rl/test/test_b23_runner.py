@@ -1853,3 +1853,117 @@ def test_postmortem_residue_rejects_tampered_or_outside_evidence_and_live_identi
         verify_postmortem_residue_attestation(attestation_path,
             run_id=run_id, packet_sha256=packet_hash, evidence_root=evidence_root,
             cgroup_root=cgroup_root, proc_root=live_proc)
+
+
+def _residue_revalidation_fixture(tmp_path):
+    import hashlib
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_residue_revalidation_attestation
+
+    evidence_root = tmp_path / 'evidence'
+    run_id = 'B23_R02B_20261115_001'
+    unit = 'b23-r02b-20261115-001.service'
+    packet_hash = '39aea4d9253f5f93daac5541e1c82df2a712a508e87432a2701f6e04b9ac1bce'
+    cgroup_root = tmp_path / 'cgroup'
+    cgroup_path = str(cgroup_root / 'user.slice/user-1000.slice/user@1000.service/app.slice' / unit)
+    run_root = evidence_root / 'B23_RESIDUE_REVALIDATION' / run_id
+    run_root.mkdir(parents=True)
+    identities = [{'pid': 989897, 'start_ticks': 123456}]
+    legacy_text = ("sha256 64cb78edb4e73cbc14a11d900ec193df98335fea0c37ef7f58989e04e795da4e\n"
+        "identities [{'pid': 989897, 'start_ticks': 123456}]\ncleanup_ack_present False\n")
+    source_record_raw = json.dumps({'type': 'response_item', 'payload': {
+        'type': 'custom_tool_call_output', 'output': [{'type': 'input_text', 'text': legacy_text}]}}).encode()+b'\n'
+    source_session = tmp_path / 'legacy-session.jsonl'
+    source_session.write_bytes(source_record_raw)
+    property_list = ('Id,LoadState,ActiveState,SubState,Result,InvocationID,ControlGroup,'
+        'MainPID,ExecMainPID,ExecMainCode,ExecMainStatus,ExecStart,Type,KillMode,RuntimeMaxUSec,'
+        'RuntimeRandomizedExtraUSec,TimeoutStartUSec,TimeoutStopUSec,SendSIGKILL,KillSignal,'
+        'FinalKillSignal,Restart,RemainAfterExit,ExecMainExitTimestampMonotonic,MemoryMax,'
+        'MemoryCurrent,MemoryPeak,OOMPolicy')
+    unit_argv = ['systemctl', '--user', 'show', unit, '--no-pager', '--property=' + property_list]
+    unit_stdout = ('Id=' + unit + '\nLoadState=not-found\nActiveState=inactive\nSubState=dead\n'
+        'MainPID=0\nControlGroup=\nInvocationID=\n')
+    raw = {
+        'unit_properties': json.dumps({'argv': unit_argv, 'returncode': 0, 'error': None,
+            'stdout': unit_stdout, 'stderr': '', 'stdout_hex': unit_stdout.encode().hex(),
+            'stderr_hex': '', 'started_ns': 100, 'completed_ns': 200}).encode(),
+        'pinned_cgroup': json.dumps({'path': cgroup_path, 'status': 'path_removed_confirmed',
+            'errno': 2, 'errors': [], 'members': [],
+            'started_monotonic_ns': 100, 'completed_monotonic_ns': 200}).encode(),
+        'process_identities': json.dumps({'identities': identities,
+            'observations': [{'pid': 989897, 'state': 'absent'}],
+            'started_monotonic_ns': 100, 'completed_monotonic_ns': 200}).encode(),
+        'legacy_identity_source': legacy_text.encode(),
+        'legacy_source_record': source_record_raw,
+    }
+    roles = {}
+    evidence_files = {}
+    for name, value in raw.items():
+        path = run_root / (name + '.json' if name != 'legacy_identity_source' else 'legacy-identity-source.txt')
+        if name == 'legacy_source_record': path = run_root / 'legacy-source-record.json'
+        path.write_bytes(value)
+        roles[name] = str(path)
+        evidence_files[str(path)] = hashlib.sha256(value).hexdigest()
+    record = {'schema': 'b23_residue_revalidation/v1', 'run_id': run_id,
+        'packet_sha256': packet_hash, 'unit': unit,
+        'pinned_cgroup': '/user.slice/user-1000.slice/user@1000.service/app.slice/' + unit,
+        'process_identities': identities, 'historical_verdict': 'UNRECOVERABLE',
+        'historical_attestation_sha256': '64cb78edb4e73cbc14a11d900ec193df98335fea0c37ef7f58989e04e795da4e',
+        'cleanup_ack_present': False, 'evidence_files': evidence_files, 'evidence_roles': roles,
+        'legacy_record_source': {'sha256': hashlib.sha256(source_record_raw).hexdigest(),
+            'path': str(source_session), 'line_number': 1}}
+    attestation = run_root / 'residue-revalidation.json'
+    attestation.write_text(json.dumps(record, sort_keys=True))
+    guard = tmp_path / 'guards' / run_id
+    guard.mkdir(parents=True)
+    (guard / 'authority.json').write_text(json.dumps({'run_id': run_id, 'packet_sha256': packet_hash}))
+    (guard / 'consumed.json').write_text(json.dumps({'run_id': run_id, 'packet_sha256': packet_hash}))
+    proc_root = tmp_path / 'proc'
+    proc_root.mkdir()
+    (cgroup_root / 'user.slice/user-1000.slice/user@1000.service/app.slice').mkdir(parents=True)
+    return evidence_root, run_id, packet_hash, attestation, cgroup_root, proc_root, guard, roles
+
+
+def test_residue_revalidation_requires_live_unit_cgroup_and_process_absence(tmp_path):
+    import hashlib
+    from pathlib import Path
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        verify_previous_run_residue, verify_residue_revalidation_attestation)
+
+    evidence_root, run_id, packet_hash, attestation, cgroup_root, proc_root, guard, roles = \
+        _residue_revalidation_fixture(tmp_path)
+    result = verify_residue_revalidation_attestation(attestation, run_id=run_id,
+        packet_sha256=packet_hash, evidence_root=evidence_root,
+        cgroup_root=cgroup_root, proc_root=proc_root)
+    assert result['residue_absent'] is True, result
+    assert result['cleanup_ack_present'] is False, result
+    assert result['historical_verdict'] == 'UNRECOVERABLE', result
+    verified = verify_previous_run_residue(guard.parent, guard,
+        evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
+    assert verified['residue_revalidation']['residue_absent'] is True, verified
+
+    unit_path = Path(roles['unit_properties'])
+    unit = json.loads(unit_path.read_bytes())
+    unit['stdout'] = unit['stdout'].replace('LoadState=not-found', 'LoadState=loaded')
+    unit_path.write_text(json.dumps(unit))
+    record = json.loads(attestation.read_text())
+    record['evidence_files'][str(unit_path)] = hashlib.sha256(unit_path.read_bytes()).hexdigest()
+    attestation.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match='exact unit absent'):
+        verify_residue_revalidation_attestation(attestation, run_id=run_id,
+            packet_sha256=packet_hash, evidence_root=evidence_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)
+
+
+def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_residue_revalidation_attestation
+
+    evidence_root, run_id, packet_hash, attestation, cgroup_root, proc_root, _guard, _roles = \
+        _residue_revalidation_fixture(tmp_path)
+    pid_path = proc_root / '989897'
+    pid_path.mkdir()
+    fields = ['S'] + ['1'] * 18 + ['123456']
+    (pid_path / 'stat').write_text('989897 (helper) ' + ' '.join(fields))
+    with pytest.raises(ValueError, match='remains live'):
+        verify_residue_revalidation_attestation(attestation, run_id=run_id,
+            packet_sha256=packet_hash, evidence_root=evidence_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)

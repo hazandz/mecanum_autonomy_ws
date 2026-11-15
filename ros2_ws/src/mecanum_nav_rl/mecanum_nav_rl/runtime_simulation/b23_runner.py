@@ -2366,6 +2366,188 @@ def verify_postmortem_residue_attestation(attestation_path, *, run_id, packet_sh
         'residue_absent': True, 'cleanup_ack_present': bool(record.get('cleanup_ack_present'))}
 
 
+def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_sha256,
+        evidence_root='/home/hazan/mecanum_runtime_evidence',
+        cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
+    """Xác minh lại residue hiện tại khi raw postmortem lịch sử đã mất.
+
+    Đây chỉ là bằng chứng vắng residue hiện tại. Không phục dựng InvocationID,
+    cleanup ACK hoặc verdict của lượt cũ.
+    """
+    import ast
+    import os
+    root = Path(evidence_root).resolve(strict=True)
+    path = Path(attestation_path).resolve(strict=True)
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise ValueError('residue revalidation is outside canonical evidence root') from error
+    record = json.loads(path.read_bytes())
+    unit = run_id.lower().replace('_', '-') + '.service'
+    pinned_cgroup = '/user.slice/user-1000.slice/user@1000.service/app.slice/' + unit
+    recovery_run = 'B23_R02B_20261115_001'
+    recovery_packet = '39aea4d9253f5f93daac5541e1c82df2a712a508e87432a2701f6e04b9ac1bce'
+    recovery_history = '64cb78edb4e73cbc14a11d900ec193df98335fea0c37ef7f58989e04e795da4e'
+    if (record.get('schema') != 'b23_residue_revalidation/v1'
+            or record.get('run_id') != run_id
+            or record.get('packet_sha256') != packet_sha256
+            or run_id != recovery_run or packet_sha256 != recovery_packet
+            or record.get('unit') != unit
+            or record.get('pinned_cgroup') != pinned_cgroup
+            or record.get('cleanup_ack_present') is not False
+            or record.get('historical_verdict') != 'UNRECOVERABLE'
+            or record.get('historical_attestation_sha256') != recovery_history):
+        raise ValueError('residue revalidation identity or history disposition mismatch')
+    evidence = record.get('evidence_files')
+    roles = record.get('evidence_roles')
+    required = {'unit_properties', 'pinned_cgroup', 'process_identities',
+        'legacy_identity_source', 'legacy_source_record'}
+    if not isinstance(evidence, dict) or not evidence or not isinstance(roles, dict) or not required.issubset(roles):
+        raise ValueError('residue revalidation evidence inventory incomplete')
+    for name, digest in evidence.items():
+        item = Path(name).resolve(strict=True)
+        try:
+            item.relative_to(root)
+        except ValueError as error:
+            raise ValueError('residue revalidation evidence is outside canonical root') from error
+        if hashlib.sha256(item.read_bytes()).hexdigest() != digest:
+            raise ValueError('residue revalidation evidence hash mismatch: ' + name)
+    if any(roles[name] not in evidence for name in required):
+        raise ValueError('residue revalidation role is not hash-bound')
+
+    unit_record = json.loads(Path(roles['unit_properties']).read_bytes())
+    expected_property_list = ('Id,LoadState,ActiveState,SubState,Result,InvocationID,ControlGroup,'
+        'MainPID,ExecMainPID,ExecMainCode,ExecMainStatus,ExecStart,Type,KillMode,RuntimeMaxUSec,'
+        'RuntimeRandomizedExtraUSec,TimeoutStartUSec,TimeoutStopUSec,SendSIGKILL,KillSignal,'
+        'FinalKillSignal,Restart,RemainAfterExit,ExecMainExitTimestampMonotonic,MemoryMax,'
+        'MemoryCurrent,MemoryPeak,OOMPolicy')
+    expected_unit_argv = ['systemctl', '--user', 'show', unit, '--no-pager',
+        '--property=' + expected_property_list]
+    stdout = unit_record.get('stdout', '')
+    props = {}
+    for line in stdout.splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            if key in props:
+                raise ValueError('duplicate unit property in residue revalidation: ' + key)
+            props[key] = value
+    if (unit_record.get('argv') != expected_unit_argv or unit_record.get('returncode') != 0
+            or unit_record.get('error') is not None
+            or unit_record.get('stdout_hex') != stdout.encode().hex()
+            or unit_record.get('stderr_hex') != unit_record.get('stderr', '').encode().hex()
+            or type(unit_record.get('started_ns')) is not int
+            or type(unit_record.get('completed_ns')) is not int
+            or unit_record['completed_ns'] < unit_record['started_ns']
+            or props.get('Id') != unit or props.get('LoadState') != 'not-found'
+            or props.get('ActiveState') != 'inactive' or props.get('SubState') != 'dead'
+            or props.get('MainPID') != '0' or props.get('ControlGroup') != ''
+            or props.get('InvocationID') != ''):
+        raise ValueError('current unit query does not prove the exact unit absent')
+
+    cgroup_record = json.loads(Path(roles['pinned_cgroup']).read_bytes())
+    expected_cgroup_path = str(Path(cgroup_root) / pinned_cgroup.lstrip('/'))
+    if (cgroup_record.get('path') != expected_cgroup_path
+            or cgroup_record.get('status') != 'path_removed_confirmed'
+            or cgroup_record.get('errno') != 2 or cgroup_record.get('members') != []
+            or cgroup_record.get('errors') != []
+            or type(cgroup_record.get('started_monotonic_ns')) is not int
+            or type(cgroup_record.get('completed_monotonic_ns')) is not int
+            or cgroup_record['completed_monotonic_ns'] < cgroup_record['started_monotonic_ns']):
+        raise ValueError('pinned cgroup revalidation is incomplete or not absent')
+    cgroup_path = Path(cgroup_root) / pinned_cgroup.lstrip('/')
+    try:
+        os.stat(cgroup_path.parent)
+    except OSError as error:
+        raise ValueError(f'pinned cgroup parent cannot be inspected: {error!r}') from error
+    try:
+        os.stat(cgroup_path)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise ValueError(f'pinned cgroup cannot be revalidated: {error!r}') from error
+    else:
+        raise ValueError('pinned cgroup reappeared after residue capture')
+
+    source = Path(roles['legacy_identity_source']).read_text()
+    if recovery_history not in source:
+        raise ValueError('historical identity inventory is not tied to prior attestation digest')
+    source_record_path = Path(roles['legacy_source_record'])
+    source_record_raw = source_record_path.read_bytes()
+    source_record = json.loads(source_record_raw)
+    source_output = '\n'.join(item.get('text', '') for item in
+        source_record.get('payload', {}).get('output', []) if item.get('type') == 'input_text')
+    if (source_record.get('type') != 'response_item'
+            or source_record.get('payload', {}).get('type') != 'custom_tool_call_output'
+            or source not in source_output
+            or record.get('legacy_record_source', {}).get('sha256')
+                != hashlib.sha256(source_record_raw).hexdigest()):
+        raise ValueError('historical identity inventory source record is not hash-bound')
+    source_meta = record.get('legacy_record_source', {})
+    try:
+        source_path = Path(source_meta.get('path', '')).resolve(strict=True)
+        source_lines = source_path.read_bytes().splitlines(keepends=True)
+        line_number = source_meta.get('line_number')
+        if (type(line_number) is not int or line_number <= 0
+                or source_lines[line_number - 1] != source_record_raw):
+            raise ValueError('historical identity source does not match its recorded session line')
+    except (OSError, IndexError) as error:
+        raise ValueError(f'historical identity source line cannot be verified: {error!r}') from error
+    marker = 'identities '
+    if marker not in source:
+        raise ValueError('historical process identity inventory missing')
+    try:
+        parsed = ast.literal_eval(source.split(marker, 1)[1].splitlines()[0])
+    except (SyntaxError, ValueError) as error:
+        raise ValueError('historical process identity inventory cannot be parsed') from error
+    if not isinstance(parsed, list) or not parsed:
+        raise ValueError('historical process identity inventory is empty')
+    saved = record.get('process_identities')
+    expected = [{'pid': row.get('pid'), 'start_ticks': row.get('start_ticks')} for row in parsed]
+    if saved != expected:
+        raise ValueError('revalidated process identities differ from historical inventory')
+    proc_record = json.loads(Path(roles['process_identities']).read_bytes())
+    proc_observations = proc_record.get('observations')
+    if (proc_record.get('identities') != saved or not isinstance(proc_observations, list)
+            or len(proc_observations) != len(saved)
+            or {item.get('pid') for item in proc_observations if isinstance(item, dict)}
+                != {item['pid'] for item in saved}):
+        raise ValueError('process identity observation does not match pinned inventory')
+    if (type(proc_record.get('started_monotonic_ns')) is not int
+            or type(proc_record.get('completed_monotonic_ns')) is not int
+            or proc_record['completed_monotonic_ns'] < proc_record['started_monotonic_ns']):
+        raise ValueError('process identity revalidation timestamps are invalid')
+    recorded_states = {item['pid']: item.get('state') for item in proc_observations}
+    observations = []
+    seen = set()
+    for identity in saved:
+        pid, ticks = identity.get('pid'), identity.get('start_ticks')
+        if type(pid) is not int or pid <= 0 or type(ticks) is not int or ticks <= 0 or pid in seen:
+            raise ValueError('revalidated PID identity tuple invalid')
+        seen.add(pid)
+        try:
+            current = _proc_start_ticks(proc_root, pid)
+        except FileNotFoundError:
+            if recorded_states.get(pid) != 'absent':
+                raise ValueError('live PID absence differs from recorded observation: ' + str(pid))
+            observations.append({'pid': pid, 'state': 'absent'})
+            continue
+        except OSError as error:
+            raise ValueError(f'PID identity unreadable during revalidation: {pid}: {error!r}') from error
+        except ValueError as error:
+            raise ValueError(f'PID identity invalid during revalidation: {pid}: {error!r}') from error
+        if current == ticks:
+            raise ValueError('historical process identity remains live: ' + str(pid))
+        if recorded_states.get(pid) != 'pid_reused':
+            raise ValueError('live PID reuse differs from recorded observation: ' + str(pid))
+        observations.append({'pid': pid, 'state': 'pid_reused', 'current_start_ticks': current})
+    return {'run_id': run_id, 'packet_sha256': packet_sha256, 'unit': unit,
+        'pinned_cgroup': pinned_cgroup, 'cgroup_status': 'path_removed_confirmed',
+        'process_observations': observations, 'source_attestation': str(path),
+        'source_attestation_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'residue_absent': True, 'cleanup_ack_present': False,
+        'historical_verdict': 'UNRECOVERABLE'}
+
+
 def verify_previous_run_residue(state_dir, previous, *, evidence_root,
         cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
     """Require a packet-bound residue proof for every previously consumed run."""
@@ -2387,15 +2569,26 @@ def verify_previous_run_residue(state_dir, previous, *, evidence_root,
         return {'run_id': run_id, 'source': str(terminal_path),
             'packet_sha256': consumed['packet_sha256'], 'residue_absent': True}
     attestation_path = (Path(evidence_root) / 'B23_POSTMORTEM' / run_id / 'terminal-residue.json')
+    if attestation_path.exists():
+        try:
+            result = verify_postmortem_residue_attestation(attestation_path,
+                run_id=run_id, packet_sha256=consumed['packet_sha256'],
+                evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
+        except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
+            raise RuntimeError('previous consumed run has unverified residue: ' + str(previous)) from error
+        return {'run_id': run_id, 'source': str(attestation_path),
+            'packet_sha256': consumed['packet_sha256'], 'residue_absent': True,
+            'postmortem': result}
+    revalidation_path = (Path(evidence_root) / 'B23_RESIDUE_REVALIDATION' / run_id / 'residue-revalidation.json')
     try:
-        result = verify_postmortem_residue_attestation(attestation_path,
+        result = verify_residue_revalidation_attestation(revalidation_path,
             run_id=run_id, packet_sha256=consumed['packet_sha256'],
             evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
     except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
         raise RuntimeError('previous consumed run has unverified residue: ' + str(previous)) from error
-    return {'run_id': run_id, 'source': str(attestation_path),
+    return {'run_id': run_id, 'source': str(revalidation_path),
         'packet_sha256': consumed['packet_sha256'], 'residue_absent': True,
-        'postmortem': result}
+        'residue_revalidation': result}
 
 
 async def run_parent(packet_path, packet_sha256):
