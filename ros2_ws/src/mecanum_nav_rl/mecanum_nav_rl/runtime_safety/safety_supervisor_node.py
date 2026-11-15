@@ -297,12 +297,14 @@ class LocalTrainingSafetyAdapter:
         self.noisy_bytes = self.status_bytes = None
         self.previous_velocity = self.previous_acceleration = VelocityCommand(0., 0., 0.)
         self.last_tick_ns = None
+        self.last_tick_ros_ns = None
         self.fault = None
         self.stream_enabled = True
         self.policy_hold = True
         self.safe_stop_sequence = 0
         self._reset_scan_boundary_stamp_ns = None
         self._reset_boundary_suppressed_stamp_ns = None
+        self._last_deferred_scan_cutoff_ns = None
         self.state_observer = None
         self.last_output = None
         self.expected_extrinsic = (tuple(self.context['sensor']['extrinsic_xyz_m']),
@@ -583,20 +585,32 @@ class LocalTrainingSafetyAdapter:
                 reasons += ('SAFETY_CLOCK_NOT_INCREASING',)
             if previous is None:
                 reasons += ('LIMITER_PRIMED',)
-            if not reasons and ros_ns > 0 and ros_ns % self.scan_period_ns == 0:
-                # A normal repeated command at the exact sensor cutoff can be
-                # visible to B1 before Gazebo's next physics update applies it.
-                # Defer this one normal publication so the already-applied
-                # prior receipt is the cutoff command and the next receipt is
-                # strictly after the scan. Fault/stop paths still publish
-                # immediately, and the steady loop resumes next period.
-                self.emit('SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF', {
-                    'ros_ns': ros_ns, 'steady_ns': now,
-                    'scan_period_ns': self.scan_period_ns,
-                    'prior_tick_ns': previous,
-                })
-                return None
+            previous_ros_ns = self.last_tick_ros_ns
+            if not reasons and previous_ros_ns is not None and ros_ns > 0:
+                period = self.scan_period_ns
+                prior_boundary = (previous_ros_ns // period) * period
+                current_boundary = (ros_ns // period) * period
+                crossed_boundary = current_boundary if current_boundary > prior_boundary else None
+                exact_boundary = ros_ns if ros_ns % period == 0 else None
+                boundary = exact_boundary or crossed_boundary
+                if (boundary is not None and boundary > prior_boundary
+                        and self._last_deferred_scan_cutoff_ns != boundary):
+                    # A normal publication stamped on or just after a scan
+                    # cutoff may precede native application by one physics
+                    # iteration. Defer once per crossed cutoff so B1 can use
+                    # the previously applied receipt, followed by an adjacent
+                    # receipt strictly after the cutoff. Fault/stop output is
+                    # still immediate; no clock or freshness allowance changes.
+                    self._last_deferred_scan_cutoff_ns = boundary
+                    evidence = {'ros_ns': ros_ns, 'steady_ns': now,
+                        'scan_period_ns': period, 'prior_tick_ns': previous}
+                    if exact_boundary is None:
+                        evidence.update(crossed_boundary_ns=boundary,
+                            reason='steady_tick_crossed_scan_cutoff')
+                    self.emit('SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF', evidence)
+                    return None
             self.last_tick_ns = now
+            self.last_tick_ros_ns = ros_ns
             if not reasons:
                 try:
                     candidate = VelocityCommand(self.command.twist.linear.x,

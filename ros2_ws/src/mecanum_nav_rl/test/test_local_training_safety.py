@@ -147,6 +147,35 @@ def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapt
     assert len(f.published) == published_count + 1
 
 
+def test_local_safety_defers_normal_output_when_steady_tick_crosses_scan_cutoff(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.advance()
+        assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert f.clock.ros == 1_080_000_000
+    previous_tick = adapter.last_tick_ns
+    published_count, state_count = len(f.published), len(f.state)
+
+    # The steady timer skips ROS 1.100 s and wakes at 1.110 s.
+    f.advance(30_000_000)
+    assert f.clock.ros == 1_110_000_000
+    assert adapter.tick() is None
+    assert adapter.last_tick_ns == previous_tick
+    assert len(f.published) == published_count and len(f.state) == state_count
+    deferred = [data for name, data in f.evidence
+        if name == 'SAFETY_OUTPUT_DEFERRED_AT_SCAN_CUTOFF']
+    assert deferred[-1] == {'ros_ns':1_110_000_000,'steady_ns':2_110_000_000,
+        'scan_period_ns':100_000_000,'prior_tick_ns':2_080_000_000,
+        'crossed_boundary_ns':1_100_000_000,
+        'reason':'steady_tick_crossed_scan_cutoff'}
+
+    f.advance()
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert adapter.last_tick_ns == f.clock.steady
+    assert len(f.published) == published_count + 1
+
+
 def test_local_safety_still_publishes_fault_zero_at_scan_cutoff(local_adapter):
     f = local_adapter; adapter = f.adapter
     assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
