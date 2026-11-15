@@ -1670,10 +1670,11 @@ class TrainingWorkerIO:
                 'type': item.topic_type, 'gid_hex': bytes(item.endpoint_gid).hex()} for item in values]
             for name, values in [('cmd_vel', cmd), ('safety', safety), ('ingress', ingress)]})
 
-    async def paused_state(self, paused, timeout):
+    async def paused_state(self, paused, timeout, *, expected_native_fault_flags=None):
         status = await self.until(lambda: self.ingress.backend_state if self.ingress.backend_state is not None
             and self.ingress.backend_state.paused is paused else None,
-            deadline_ns=self.now() + int(timeout * 1e9), phase='paused' if paused else 'resumed')
+            deadline_ns=self.now() + int(timeout * 1e9), phase='paused' if paused else 'resumed',
+            expected_native_fault_flags=expected_native_fault_flags)
         self.expected_paused = paused
         if not paused:
             self.last_clock_advance_ns = self.now()
@@ -3245,7 +3246,7 @@ async def training_child(path):
             world_ack = await io.control_world(world_name='b2_training_arena', pause=True,
                 timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
             pause_state = await io.paused_state(True, min(1.0,
-                max(0.0, (io.deadline_ns-io.now())/1e9)))
+                max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
             io.emit('B23_R07A_UNEXPECTED_PAUSE_ARMED', {
                 'after_policy_step':transition.transition_identity.step_index,
                 'pre_pause_policy_receipt_count':before_policy,
@@ -3272,7 +3273,7 @@ async def training_child(path):
             resume_ack = await io.control_world(world_name='b2_training_arena', pause=False,
                 timeout_s=min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
             resume_state = await io.paused_state(False, min(1.0,
-                max(0.0, (io.deadline_ns-io.now())/1e9)))
+                max(0.0, (io.deadline_ns-io.now())/1e9)), expected_native_fault_flags=1)
             io.expected_paused = False
             io.last_clock_advance_ns = io.now()
             await io.until(lambda: io.ros_now() if io.ros_now() > previous_ros else None,

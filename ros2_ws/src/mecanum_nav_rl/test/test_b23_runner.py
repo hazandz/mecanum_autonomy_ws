@@ -206,6 +206,29 @@ def test_policy_receipt_counter_uses_copied_receipt_source_enum():
     assert policy_receipt_count(receipts) == 2
 
 
+def test_paused_state_poll_accepts_only_packet_expected_native_fault_code():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.now = lambda: 100
+    worker.last_clock_advance_ns = 0
+    worker.expected_paused = False
+    status = NS(paused=True, status_sequence=9, physics_iteration=44,
+        fault_flags=1, local_zero_override=True)
+    worker.ingress = NS(backend_state=status)
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    observed = {}
+    async def fake_until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
+        observed.update(deadline_ns=deadline_ns, phase=phase,
+            expected_native_fault_flags=expected_native_fault_flags)
+        return predicate()
+    worker.until = fake_until
+    assert asyncio.run(worker.paused_state(True, 1.0,
+        expected_native_fault_flags=1)) is True
+    assert observed == {'deadline_ns':1_000_000_100,'phase':'paused',
+        'expected_native_fault_flags':1}
+    assert events[-1][1]['paused'] is True
+
+
 def test_control_world_records_success_without_nonexistent_response_pause_field():
     from ros_gz_interfaces.srv import ControlWorld
     worker = object.__new__(TrainingWorkerIO)
