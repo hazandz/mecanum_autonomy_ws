@@ -291,7 +291,9 @@ def test_r09b_fixture_set_pose_uses_zero_bound_robot_and_exact_entity():
     req=calls[0][1]
     assert req.entity.name=='obstacle_0'
     assert req.entity.type==Entity.MODEL
-    assert (req.pose.position.x,req.pose.position.y,req.pose.position.z)==(.15,0.,.5)
+    assert (req.pose.position.x,req.pose.position.y,req.pose.position.z)==(.27,0.,.5)
+    assert req.pose.position.x-.1 < .2  # fixture overlaps the base front edge
+    assert req.pose.position.x-.1-(-.031765) > .1  # lidar return is outside range_min
     assert any(name=='R09B_FIXTURE_POSE_APPLIED' for name,_ in emitted)
     receipt.final_command.linear.x=.01
     with pytest.raises(RuntimeError,match='bound zero final command'):

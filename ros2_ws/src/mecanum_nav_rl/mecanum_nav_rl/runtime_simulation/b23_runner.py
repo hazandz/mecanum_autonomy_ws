@@ -67,9 +67,9 @@ R09B_TASK_FIXTURE = {
     'entity_type': 'MODEL',
     'frame': 'world',
     'initial_pose': {'x_m': 2.5, 'y_m': 0.0, 'z_m': 0.5, 'yaw_rad': 0.0},
-    # The tracked robot base collision is 0.4 x 0.28 x 0.10 m. This pose
-    # overlaps that collision while leaving the robot at its reset pose.
-    'contact_pose': {'x_m': 0.15, 'y_m': 0.0, 'z_m': 0.5, 'yaw_rad': 0.0},
+    # The base half-length is 0.20 m; the 0.20 m fixture starts at x=0.17,
+    # giving 0.03 m overlap while keeping it beyond the lidar 0.10 m minimum.
+    'contact_pose': {'x_m': 0.27, 'y_m': 0.0, 'z_m': 0.5, 'yaw_rad': 0.0},
 }
 
 
