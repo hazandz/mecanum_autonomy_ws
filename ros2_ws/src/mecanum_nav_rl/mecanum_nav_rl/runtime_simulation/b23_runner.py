@@ -1336,9 +1336,11 @@ class TrainingWorkerIO:
             raise RuntimeError('ingress fault: ' + self.ingress.fault)
         if self.ingress.backend_state is not None and self.ingress.backend_state.fault_flags:
             state = self.ingress.backend_state
-            expected_zero_fault = (state.fault_flags == expected_native_fault_flags
-                and state.local_zero_override)
-            if not expected_zero_fault:
+            # The expected native fault and its zero override may arrive in
+            # adjacent status publications. While polling for the closed
+            # state, tolerate only the exact packet-pinned fault code; the
+            # caller's terminal predicate still requires local_zero_override.
+            if state.fault_flags != expected_native_fault_flags:
                 raise RuntimeError('native fault flags=' + str(state.fault_flags))
 
     async def until(self, predicate, *, deadline_ns, phase, expected_native_fault_flags=None):

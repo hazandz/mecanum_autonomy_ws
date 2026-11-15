@@ -80,6 +80,30 @@ def test_r05_native_mask_poll_waits_for_event_file_and_complete_record(tmp_path)
         r05_contact_coverage_mask_event(path)
 
 
+def test_r05_wait_tolerates_exact_fault_status_until_zero_override_is_published():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: 100
+    worker.ros_now = lambda: 50
+    worker.deadline_ns = 200
+    worker.last_clock_ns = 50
+    worker.last_clock_advance_ns = 99
+    worker.expected_paused = False
+    worker.ingress = NS(fault=None,
+        backend_state=NS(fault_flags=16, local_zero_override=False))
+
+    worker.check(expected_native_fault_flags=16)
+    worker.ingress.backend_state.local_zero_override = True
+    worker.check(expected_native_fault_flags=16)
+    with pytest.raises(RuntimeError, match='native fault flags=16'):
+        worker.check(expected_native_fault_flags=None)
+    worker.ingress.backend_state.fault_flags = 8
+    with pytest.raises(RuntimeError, match='native fault flags=8'):
+        worker.check(expected_native_fault_flags=16)
+
+
 @pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
     (891_000_000, 100_000_000, 900_000_000),
     (905_000_000, 100_000_000, 1_000_000_000),
@@ -1129,8 +1153,9 @@ def test_until_can_observe_only_the_case_expected_native_zero_fault():
 
     value, clock = worker()
     value.ingress.backend_state = NS(fault_flags=expected, local_zero_override=False)
-    with pytest.raises(RuntimeError, match='native fault flags=6'):
-        asyncio.run(value.until(lambda: value.ingress.backend_state,
+    with pytest.raises(TimeoutError, match='deadline expired'):
+        asyncio.run(value.until(lambda: value.ingress.backend_state
+            if value.ingress.backend_state.local_zero_override else None,
             deadline_ns=clock.ns + 5_000_000, phase='fault without zero',
             expected_native_fault_flags=expected))
 
