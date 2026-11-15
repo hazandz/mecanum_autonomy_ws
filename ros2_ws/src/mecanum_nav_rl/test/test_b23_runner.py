@@ -18,7 +18,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
-    expected_r05_revoked_query_ack, verify_r07a_unexpected_pause,
+    expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07b_revocation,
 )
 
@@ -195,6 +195,15 @@ def test_r07a_unexpected_pause_requires_world_ack_native_zero_and_no_followon_po
             backend_state=state, pre_pause_policy_receipts=1,
             post_pause_policy_receipts=1, reset_count_before='reset-0',
             reset_count_after='reset-0')
+
+
+def test_policy_receipt_counter_uses_copied_receipt_source_enum():
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    # The production IssuedCommandReceiptView has a source enum field but no
+    # generated ROS constant such as SOURCE_POLICY on each instance.
+    receipts = [NS(source=ReceiptSource.POLICY), NS(source=ReceiptSource.SAFE_STOP),
+        NS(source=ReceiptSource.POLICY)]
+    assert policy_receipt_count(receipts) == 2
 
 
 def test_control_world_records_success_without_nonexistent_response_pause_field():

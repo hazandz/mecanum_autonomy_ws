@@ -117,6 +117,12 @@ def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
         'reset_count_unchanged':True}
 
 
+def policy_receipt_count(receipts):
+    """Count copied receipt-v2 views using the pure-core source enum."""
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    return sum(1 for receipt in receipts if receipt.source == ReceiptSource.POLICY)
+
+
 SOAK_ACTIONS = (
     (0.40, 0.0, 0.0), (-0.40, 0.0, 0.0), (0.0, 0.40, 0.0),
     (0.0, 0.0, 0.40), (0.30, 0.30, 0.0), (0.30, -0.25, 0.30),
@@ -3232,8 +3238,7 @@ async def training_child(path):
             transition = await io.policy_step(b1, (0.20, 0.0, 0.0))
             if transition.termination.terminated or transition.termination.truncated:
                 raise RuntimeError('R07a POLICY step terminated before external pause')
-            before_policy = sum(1 for receipt in io.ingress.receipts
-                if receipt.source == receipt.SOURCE_POLICY)
+            before_policy = policy_receipt_count(io.ingress.receipts)
             reset_fact_before = b1.lifecycle.snapshot.reset_commit_facts
             previous_ros = io.ros_now()
             io.expected_paused = True
@@ -3254,8 +3259,7 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07a native unexpected-pause zero/fault',
                 expected_native_fault_flags=1)
-            policy_after = sum(1 for receipt in io.ingress.receipts
-                if receipt.source == receipt.SOURCE_POLICY)
+            policy_after = policy_receipt_count(io.ingress.receipts)
             reset_fact_after = b1.lifecycle.snapshot.reset_commit_facts
             checked = verify_r07a_unexpected_pause(world_ack=world_ack,
                 world_pause_state=pause_state,
