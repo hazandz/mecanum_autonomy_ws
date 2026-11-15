@@ -23,7 +23,7 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R02b':'fault_task', 'R02c':'fault_task', 'R02d':'fault_task',
     'R02e':'fault_task', 'R02f':'fault_task', 'R02g':'fault_task', 'R03a':'fault_task',
     'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
-    'R04c':'fault_task', 'R04d':'fault_task', 'R08': 'soak'}
+    'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
     'R01b': ('external_pause_after_w1_before_native_dispatch',),
@@ -43,6 +43,7 @@ CASE_HOOKS = {
     'R04b': ('drop_policy_noisy_odometry_delivery',),
     'R04c': ('delay_scan_delivery_650ms_once',),
     'R04d': ('delay_lifecycle_delivery_650ms_once',),
+    'R05': ('remove_contact_component_after_verified',),
     'R08': (),
 }
 
@@ -89,7 +90,47 @@ def case_environment(case, hooks):
         return {'B23_RECEIPT_FAULT': 'hold_policy_until_inhibit'}
     if case == 'R02e':
         return {}
+    if case == 'R05' and hooks == ['remove_contact_component_after_verified']:
+        return {'B23_CONTACT_COVERAGE_FAULT':'remove_component_after_verified'}
     return {}
+
+
+def verify_r05_contact_query_revocation(root, *, original_ack, replay_ack,
+                                        fresh_ack, backend_state):
+    """Bind proof revocation to the removed native component and both QUERY paths."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    if original_ack is None or original_ack.response.contact_capability_state != \
+            Control.Response.CAPABILITY_VERIFIED:
+        raise RuntimeError('R05 lacks the original verified QUERY response')
+    for label, ack in (('replay', replay_ack), ('fresh', fresh_ack)):
+        if ack is None or ack.response.contact_capability_state == \
+                Control.Response.CAPABILITY_VERIFIED:
+            raise RuntimeError('R05 ' + label + ' QUERY returned a stale verified proof')
+        proof = ack.response
+        if (proof.proof_backend_instance_id != 0 or proof.proof_session_id
+                or proof.proof_config_hash or proof.proof_asset_manifest_sha256
+                or proof.proof_world_name or proof.proof_collision_registry_sha256
+                or proof.proof_physics_engine_fingerprint_sha256
+                or proof.probe_model_entity_id or proof.probe_collision_entity_id
+                or proof.floor_collision_entity_id or proof.contact_sample_count
+                or proof.covered_empty_sample_count):
+            raise RuntimeError('R05 ' + label + ' QUERY still contains old proof fields')
+    rows = [json.loads(line) for line in
+        (Path(root)/'native-events.jsonl').read_text().splitlines() if line.strip()]
+    removed = [row for row in rows if row.get('kind') == 'B23_CONTACT_COMPONENT_REMOVED'
+        and row.get('fields',{}).get('removed') == '1']
+    if not removed:
+        raise RuntimeError('R05 lacks native contact component removal evidence')
+    event = removed[0].get('fields',{})
+    if not event.get('entity') or int(event.get('iteration','0')) <= 0:
+        raise RuntimeError('R05 removed component evidence lacks pinned entity/iteration')
+    if (backend_state is None or not backend_state.local_zero_override
+            or int(backend_state.fault_flags) & 16 == 0):
+        raise RuntimeError('R05 contact loss did not close motion with contact coverage fault')
+    return {'removed_entity':event['entity'], 'removed_iteration':int(event['iteration']),
+        'original_query_verified':True, 'replay_query_revoked':True,
+        'fresh_query_revoked':True, 'policy_closed':True,
+        'native_fault_flags':int(backend_state.fault_flags)}
 
 
 def enable_r04_adapter_fault_dispatch(adapter_class):
@@ -1037,6 +1078,8 @@ class TrainingWorkerIO:
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
         self._native_input_watermark = 0
+        self.contact_ack = None
+        self.contact_start_request_sequence = None
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
@@ -1589,6 +1632,7 @@ class TrainingWorkerIO:
             probe_action=Control.Request.PROBE_ACTION_START,
             **lifecycle_request_fields(self.ingress.lifecycle))
         reference = start_ack.request.request_sequence
+        self.contact_start_request_sequence = reference
         try:
             while self.now() < work_deadline:
                 last = await self.control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
@@ -2769,6 +2813,52 @@ async def training_child(path):
             if len(packet['episode_seeds']) != 30:
                 raise RuntimeError('R08 requires the exact 30 B2_SOAK_V1 seeds')
             outcome = await _run_b2_soak(io, b1, packet, sink)
+        elif packet['case'] == 'R05':
+            expected_env = case_environment(packet['case'], packet['fault_hooks'])
+            if (packet['fault_hooks'] != ['remove_contact_component_after_verified']
+                    or any(packet['environment'].get(key) != value
+                        for key, value in expected_env.items())
+                    or io.contact_ack is None or io.contact_start_request_sequence is None):
+                raise RuntimeError('R05 packet/hook/original QUERY binding is incomplete')
+            def component_removed():
+                rows = complete_jsonl_rows(descriptor['native_events_path'])
+                return next((row for row in rows
+                    if row.get('kind') == 'B23_CONTACT_COMPONENT_REMOVED'
+                    and row.get('fields',{}).get('removed') == '1'), None)
+            removed = await io.until(component_removed,
+                deadline_ns=min(io.deadline_ns, time.monotonic_ns()+5_000_000_000),
+                phase='R05 pinned contact component removal',
+                expected_native_fault_flags=16)
+            state = await io.until(lambda: io.ingress.backend_state
+                    if (io.ingress.backend_state is not None
+                        and int(io.ingress.backend_state.fault_flags) == 16
+                        and io.ingress.backend_state.local_zero_override) else None,
+                deadline_ns=min(io.deadline_ns, time.monotonic_ns()+2_000_000_000),
+                phase='R05 contact loss closes POLICY with native zero',
+                expected_native_fault_flags=16)
+            replay_ack = await io.control.replay(io.contact_ack,
+                deadline_ns=min(io.deadline_ns, time.monotonic_ns()+1_000_000_000))
+            from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+            fresh_ack = await io.control.transact(
+                Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
+                deadline_ns=min(io.deadline_ns, time.monotonic_ns()+1_000_000_000),
+                probe_action=Control.Request.PROBE_ACTION_QUERY,
+                probe_start_request_sequence=io.contact_start_request_sequence)
+            checked = verify_r05_contact_query_revocation(descriptor['run_root'],
+                original_ack=io.contact_ack, replay_ack=replay_ack,
+                fresh_ack=fresh_ack, backend_state=state)
+            sink.record('R05_CONTACT_QUERY_REVOCATION', {
+                'original_request_cdr_hex':io.contact_ack.request_bytes.hex(),
+                'original_response_cdr_hex':io.contact_ack.response_bytes.hex(),
+                'replay_request_cdr_hex':replay_ack.request_bytes.hex(),
+                'replay_response_cdr_hex':replay_ack.response_bytes.hex(),
+                'fresh_request_cdr_hex':fresh_ack.request_bytes.hex(),
+                'fresh_response_cdr_hex':fresh_ack.response_bytes.hex(),
+                'component_removed_event':removed, 'native_zero_state_sequence':state.sequence,
+                'checked':checked, 'completed_ns':time.monotonic_ns()})
+            outcome = {'case':'R05','resets_confirmed':0,
+                'policy_steps_committed':0, **checked,
+                'completed_ns':time.monotonic_ns()}
         elif packet['case'] in ('R02a','R02b'):
             if packet['case'] == 'R02b':
                 expected_env = case_environment(packet['case'], packet['fault_hooks'])

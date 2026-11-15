@@ -17,7 +17,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     await_r04a_production_rejection, verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
-    verify_r04c_next_step_blocked,
+    verify_r04c_next_step_blocked, verify_r05_contact_query_revocation,
 )
 
 
@@ -31,6 +31,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R02f') == 'fault_task'
     assert campaign_phase('R02g') == 'fault_task'
     assert campaign_phase('R04a') == 'fault_task'
+    assert campaign_phase('R05') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
     packet = {'case': 'R01e', 'run_id': 'B23_R01E_TEST'}
     authority = {'run_id': packet['run_id'], 'capacity': 1, 'packet_sha256': 'a'*64,
@@ -44,7 +45,7 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
             verify_guard_authority(packet, authority, 'a'*64)
         authority[key] = original
     with pytest.raises(ValueError, match='unsupported B2.3 campaign case'):
-        campaign_phase('R05')
+        campaign_phase('R06a')
 
 
 def test_d04_soak_schedule_and_unit_budget_are_exact():
@@ -82,6 +83,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R04b') == ['drop_policy_noisy_odometry_delivery']
     assert case_fault_hooks('R04c') == ['delay_scan_delivery_650ms_once']
     assert case_fault_hooks('R04d') == ['delay_lifecycle_delivery_650ms_once']
+    assert case_fault_hooks('R05') == ['remove_contact_component_after_verified']
     assert case_environment('R02b',case_fault_hooks('R02b')) == {
         'B23_ADMISSION_ORDER_FAULT':'receipt_before_admission'}
     assert case_environment('R02c', case_fault_hooks('R02c')) == {
@@ -96,12 +98,43 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
         'B23_RECEIPT_FAULT':'drop_policy_once'}
     assert case_environment('R03b', case_fault_hooks('R03b')) == {
         'B23_RECEIPT_FAULT':'mutate_policy_transition_id_once'}
+    assert case_environment('R05', case_fault_hooks('R05')) == {
+        'B23_CONTACT_COVERAGE_FAULT':'remove_component_after_verified'}
     assert case_environment('R01a', []) == {}
     with pytest.raises(ValueError, match='not approved for campaign case'):
         case_fault_hooks('R01a', 'pause_request_replay_after_terminal')
     assert technical_outcome('R01a', True) == 'R01a_COMPLETED'
     assert technical_outcome('R01e', True) == 'R01e_COMPLETED'
     assert technical_outcome('R01e', False) == 'INCOMPLETE'
+
+
+def test_r05_contact_query_revocation_requires_component_loss_and_zero_closed_state(tmp_path):
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+
+    original = NS(response=NS(
+        contact_capability_state=Control.Response.CAPABILITY_VERIFIED))
+    def query(state, *, backend_id=0):
+        return NS(response=NS(contact_capability_state=state,
+            proof_backend_instance_id=backend_id, proof_session_id='',
+            proof_config_hash='', proof_asset_manifest_sha256='', proof_world_name='',
+            proof_collision_registry_sha256='', proof_physics_engine_fingerprint_sha256='',
+            probe_model_entity_id=0, probe_collision_entity_id=0,
+            floor_collision_entity_id=0, contact_sample_count=0,
+            covered_empty_sample_count=0))
+    (tmp_path/'native-events.jsonl').write_text(json.dumps({
+        'kind':'B23_CONTACT_COMPONENT_REMOVED','fields':{'removed':'1',
+        'entity':'b2_training_arena::mecanum_b2::base_link::collision',
+        'iteration':'123'}})+'\n')
+    state=NS(local_zero_override=True, fault_flags=16)
+    result=verify_r05_contact_query_revocation(tmp_path, original_ack=original,
+        replay_ack=query(Control.Response.CAPABILITY_FAILED),
+        fresh_ack=query(Control.Response.CAPABILITY_FAILED), backend_state=state)
+    assert result['removed_iteration'] == 123
+    assert result['replay_query_revoked'] and result['fresh_query_revoked']
+    with pytest.raises(RuntimeError, match='replay QUERY returned a stale verified proof'):
+        verify_r05_contact_query_revocation(tmp_path, original_ack=original,
+            replay_ack=query(Control.Response.CAPABILITY_VERIFIED, backend_id=9),
+            fresh_ack=query(Control.Response.CAPABILITY_FAILED), backend_state=state)
 
 
 @pytest.mark.parametrize('case,mode,ingress_count', [

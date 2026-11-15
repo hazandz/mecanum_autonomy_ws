@@ -491,6 +491,18 @@ public:
       initialization_state_ = InitializationState::FAILED;
       return;
     }
+    const char *contact_coverage_fault_env =
+        std::getenv("B23_CONTACT_COVERAGE_FAULT");
+    contact_coverage_fault_mode_ = contact_coverage_fault_env ?
+        contact_coverage_fault_env : "";
+    if (!contact_coverage_fault_mode_.empty() &&
+        contact_coverage_fault_mode_ != "remove_component_after_verified")
+    {
+      SetFault(BackendState::FAULT_CONTEXT,
+               "unsupported_b23_contact_coverage_fault");
+      initialization_state_ = InitializationState::FAILED;
+      return;
+    }
     if (!sdf || entity == gz::sim::kNullEntity ||
         gz::sim::entityTypeId(entity, ecm) != gz::sim::components::Model::typeId)
     {
@@ -786,6 +798,7 @@ public:
     ProgressResetPause(info, steady_now_ns);
     ProcessProbeServiceResults();
     AdvanceContactProbe(info, ecm, steady_now_ns);
+    ApplyContactCoverageFault(info, ecm);
     ProcessCallbackInputs(TimeNs(info), steady_now_ns);
     const auto pending_faults = callback_fault_flags_.exchange(0);
     if (pending_faults != 0) SetFault(pending_faults, "ros_callback_queue_or_context_fault");
@@ -1014,6 +1027,56 @@ public:
 
 private:
   friend class BackendSystemTestPeer;
+
+  void ApplyContactCoverageFault(
+      const gz::sim::UpdateInfo &info,
+      gz::sim::EntityComponentManager &ecm)
+  {
+    if (contact_coverage_fault_mode_ != "remove_component_after_verified" ||
+        contact_coverage_fault_fired_ || !contact_capability_verified_)
+      return;
+    if (contact_coverage_fault_target_iteration_ == 0)
+    {
+      contact_coverage_fault_target_iteration_ = info.iterations;
+      gzmsg << "B23_CONTACT_COVERAGE_FAULT_ARMED mode="
+            << contact_coverage_fault_mode_
+            << " iteration=" << contact_coverage_fault_target_iteration_
+            << " capability_revision=" << capability_revision_ << std::endl;
+      std::fflush(stdout);
+    }
+    if (info.iterations < contact_coverage_fault_target_iteration_) return;
+
+    gz::sim::Entity selected = gz::sim::kNullEntity;
+    std::string selected_name;
+    for (const auto &[entity, name] : collision_entity_names_)
+    {
+      if (selected == gz::sim::kNullEntity || name < selected_name)
+      {
+        selected = entity;
+        selected_name = name;
+      }
+    }
+    if (selected == gz::sim::kNullEntity)
+    {
+      SetFault(BackendState::FAULT_CONTACT_COVERAGE,
+               "contact_fault_has_no_pinned_collision_component");
+      contact_coverage_fault_fired_ = true;
+      return;
+    }
+    const bool removed = ecm.RemoveComponent<gz::sim::components::ContactSensorData>(
+        selected);
+    contact_coverage_fault_fired_ = true;
+    if (!removed)
+    {
+      SetFault(BackendState::FAULT_CONTACT_COVERAGE,
+               "pinned_contact_component_remove_failed");
+    }
+    gzmsg << "B23_CONTACT_COMPONENT_REMOVED mode="
+          << contact_coverage_fault_mode_ << " entity=" << selected_name
+          << " entity_id=" << selected << " iteration=" << info.iterations
+          << " removed=" << removed << std::endl;
+    std::fflush(stdout);
+  }
 
   void ValidateNormalContext(const gz::sim::EntityComponentManager &ecm,
       std::int64_t sim_ns, std::int64_t steady_ns)
@@ -3668,6 +3731,9 @@ private:
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
   std::string policy_order_fault_;
   std::string receipt_fault_mode_;
+  std::string contact_coverage_fault_mode_;
+  std::uint64_t contact_coverage_fault_target_iteration_{};
+  bool contact_coverage_fault_fired_{};
   bool receipt_fault_used_{};
   std::optional<std::pair<ReceiptFacts, std::int64_t>> held_policy_receipt_;
   bool policy_order_hold_reported_{};
