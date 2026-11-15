@@ -334,6 +334,7 @@ def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
 def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receipt():
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     from geometry_msgs.msg import Twist
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
     receipt = FinalIssuedCommandReceipt()
     receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
     receipt.source_instance_id = 70
@@ -346,12 +347,18 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
             'steady_ns':901}),
         ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
             'steady_ns':902}),
-        ('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,
-            'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
-            'iteration':12,'stamp_ns':120_000_000}),
         ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
             'steady_ns':1_000}),
     ]
+    joined = {'source_instance_id':70,'source_sequence':9,
+        'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
+        'iteration':12,'stamp_ns':120_000_000}
+    emitter = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    emitter.events = []
+    emitter._accepted_policy_event_keys = set()
+    emitter._event_sink = lambda _name, _facts: None
+    emitter._emit('NATIVE_APPLICATION_JOINED', joined)
+    events.extend(emitter.events)
     final = NS(publisher_instance_id=80)
     final.publication_for_source_sequence = lambda **kwargs: receipt if (
         kwargs == {'source':FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,'sequence':9}) else None
@@ -368,12 +375,10 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
         'source_sequence':9,'final_publish_sequence':99,'publisher_instance_id':80,
         'native_iteration':12,'native_stamp_ns':120_000_000,
         'native_application_steady_ns':950}
-    events.pop(2)
+    events.remove(('NATIVE_APPLICATION_JOINED', joined))
     with pytest.raises(RuntimeError, match='lacks a post-rejection exact native SAFE_STOP'):
         verify_r04a_next_step_blocked(io, step_index=2)
-    events.append(('NATIVE_APPLICATION_JOINED', {'source_instance_id':70,'source_sequence':9,
-        'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
-        'iteration':12,'stamp_ns':120_000_000}))
+    events.append(('NATIVE_APPLICATION_JOINED', joined))
     io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'candidate_sequence':2}))
     with pytest.raises(RuntimeError, match='accepted the POLICY slot'):
         verify_r04a_next_step_blocked(io, step_index=2)

@@ -879,6 +879,7 @@ class TrainingWorkerIO:
         if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
                     'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
                     'SAFETY_REJECTED','SAFETY_INPUT_REJECTED','b1_transition_committed',
+                    'NATIVE_APPLICATION_JOINED',
                     'B23_R04_NOISY_ODOMETRY_DROPPED',
                     'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
                     'B23_R04_FAULT_ARMED'}:
