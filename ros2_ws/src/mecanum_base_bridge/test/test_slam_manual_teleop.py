@@ -303,3 +303,23 @@ def test_missing_buttons_disconnect_and_invalid_configuration_fail_zero(profile)
     bad_geometry = replace(profile, wheel_diameter_m=float("nan"))
     assert SlamManualTeleop(bad_geometry, motion_enabled=True).update(
         [0.0, -1.0], [0] * 6) == BodyCommand()
+
+
+def test_manual_mode_requires_explicit_enable_and_neutral_sample_after_start_or_loss(profile):
+    teleop = SlamManualTeleop(profile, motion_enabled=False)
+    stick_forward = [0.0, -1.0]
+    neutral = [0.0, 0.0]
+    assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
+    assert teleop.request_enable()
+    # Enable is only a request; a fresh neutral sample is required first.
+    assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
+    assert teleop.update(neutral, [0] * 6) == BodyCommand()
+    forward = teleop.update(stick_forward, [0] * 6)
+    assert max(abs(value) for value in wheel_target_cps(forward, profile)) == pytest.approx(280.0)
+
+    teleop.disconnected()
+    assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
+    assert teleop.request_enable()
+    assert teleop.update(stick_forward, [0] * 6) == BodyCommand()
+    assert teleop.update(neutral, [0] * 6) == BodyCommand()
+    assert teleop.update(stick_forward, [0] * 6) != BodyCommand()

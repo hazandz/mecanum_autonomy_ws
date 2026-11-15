@@ -29,6 +29,9 @@ if(NOT STM32_ARM_BUILD)
   add_test(NAME control_safety_session COMMAND test_control_safety_session)
   add_executable(test_watchdog Test/test_watchdog.c Core/Src/command_watchdog.c)
   add_test(NAME watchdog COMMAND test_watchdog)
+  add_executable(test_slam_manual_profile Test/test_slam_manual_profile.c
+    Core/Src/slam_manual_slam_profile.c)
+  add_test(NAME slam_manual_profile_disarmed COMMAND test_slam_manual_profile)
   add_executable(test_boot_id Test/test_boot_id.c Core/Src/boot_id.c)
   add_test(NAME boot_id COMMAND test_boot_id)
   add_executable(test_encoder Test/test_encoder.c Core/Src/encoder.c)
@@ -100,6 +103,7 @@ add_executable(stm32_uart_runtime
   ${FW}/Core/Src/mecanum_kinematics.c
   ${FW}/Core/Src/pid_controller.c
   ${FW}/Core/Src/slam_bench_motor_runtime.c
+  ${FW}/Core/Src/slam_manual_slam_profile.c
   ${FW}/Core/Src/encoder.c
   ${FW}/Core/Src/telemetry.c
   ${FW}/Core/Src/communication.c

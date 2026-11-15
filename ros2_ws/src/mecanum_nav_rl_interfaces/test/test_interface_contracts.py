@@ -26,6 +26,9 @@ EXPECTED_CONSTANTS = {
         "FAULT_MOTOR_DRIVER": 2048,
         "FAULT_ENCODER": 4096,
         "FAULT_IMU": 8192,
+        "ESTOP_AUX_UNKNOWN": 0,
+        "ESTOP_AUX_INACTIVE": 1,
+        "ESTOP_AUX_ACTIVE": 2,
     },
     SafetyState: {
         "STATE_INIT": 0,
@@ -95,6 +98,7 @@ EXPECTED_FIELDS = {
         ("healthy", "boolean"),
         ("fault_bits", "uint32"),
         ("detail", "string"),
+        ("estop_aux_state", "uint8"),
     ],
     SafetyState: [
         ("header", "std_msgs/Header"),

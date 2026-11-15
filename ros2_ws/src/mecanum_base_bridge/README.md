@@ -102,6 +102,66 @@ Pi dùng session U4 và codec hiện có, giữ tối đa 8 accepted reports; ov
 
 `mecanum_uart_bridge` yêu cầu `serial_device` và đường dẫn `hardware_manifest` tường minh, `use_sim_time=false`, dùng SingleThreadedExecutor, lifecycle QoS Reliable/Volatile, lifecycle freshness 0.6 s (publisher hiện có chạy 5 Hz), IO timer 5 ms và Heartbeat 10 Hz. Reset gọi service hiện có async/coalesced; không gọi rearm. Heartbeat dùng `SOURCE_MCU`; Pi-observed loss không thêm MCU fault bit, còn MCU fault chỉ được sao chép từ telemetry đã xác thực và còn fresh. Endpoint Heartbeat mặc định `/mcu/heartbeat` chỉ là endpoint component; consumer chưa được bringup tích hợp.
 
+## MANUAL_SLAM review candidate
+
+`mecanum_nav_bringup/launch/manual_slam.launch.py` is a separate direct Joy
+route: `joy_node -> slam_manual_joy -> /cmd_vel -> mecanum_uart_bridge`. It does
+not launch `SafetySupervisor`, `FinalTwistPublisher`, or SLAM Toolbox. SLAM
+Toolbox belongs in a second terminal. The launch includes the existing
+`safety_lifecycle` identity/reset component and lifecycle manager, but never
+calls rearm; the state remains non-ready until an operator action, so the
+bridge/session remains fail-closed for motion.
+
+The mapper requires `/manual_slam/enable`, then a fresh neutral Joy sample.
+Invalid/stale Joy, Joy timeout, detected extra `/cmd_vel` publishers, and
+`/manual_slam/disarm` publish zero and disarm the mapper. `/manual_slam/disarm`
+is software-only and is not an E-stop. `joy_node` autorepeats unchanged input
+at 20 Hz; mapper Joy timeout is 0.25 s, measured with a steady clock for receive
+age and ROS time for the message stamp. The mapper checks discovered `/cmd_vel`
+publishers and disarms when it sees another publisher; ROS graph discovery does
+not guarantee exclusivity.
+
+Use one identical explicit `hardware_manifest` path for mapper and bridge, and
+use that same file as firmware CMake's `MECANUM_HARDWARE_MANIFEST` when building
+the matching image. The manifest/hash must be regenerated and checked against
+STM32 `CONFIG_STATUS`; a successful source build alone does not prove the
+installed MCU hash. The current firmware candidate has a disabled profile:
+937.2 tick/wheel revolution and 1400 tick/s are explicit references, but PID,
+feedforward, and effort limits remain zero and motor enable remains false.
+There is no compatible runtime PID profile to permit motor output.
+
+Example form (driver launch names and measurement values are supplied by the
+Owner for the exact Pi installation; this is not an executed command):
+
+```bash
+ros2 launch mecanum_nav_bringup manual_slam.launch.py \\
+  serial_device:=/dev/ttyAMA0 \\
+  hardware_manifest:=/absolute/path/hardware_manifest_slam_manual_bench.yaml \\
+  ekf_params_file:=/absolute/path/owner_ekf_real.yaml \\
+  lidar_launch_file:=/absolute/path/owner_ydlidar.launch.py \\
+  lidar_port:=/dev/serial/by-id/OWNER_LIDAR_DEVICE \\
+  imu_launch_file:=/absolute/path/owner_bno055.launch.py \\
+  lidar_x:=MEASURED lidar_y:=MEASURED lidar_z:=MEASURED \\
+  lidar_roll:=MEASURED lidar_pitch:=MEASURED lidar_yaw:=MEASURED \\
+  imu_x:=MEASURED imu_y:=MEASURED imu_z:=MEASURED \\
+  imu_roll:=MEASURED imu_pitch:=MEASURED imu_yaw:=MEASURED
+```
+
+The supplied driver launch files must map LiDAR output to `lidar_frame` and
+IMU output to `imu_link`, use `use_sim_time=false`, and accept the configurable
+port/frame and I2C bus/address launch argument names. Defaults for I2C are bus
+1 and decimal address 41 (`0x29`); verify the exact Pi hardware. EKF config,
+driver versions/parameters, sensor transforms, and ROS graph are not validated
+in this repository. The checked-in MANUAL_SLAM bench manifest still marks all
+four encoder signs `TBD_MEASURED`; `UartBridgeNode` now rejects it for wheel
+odometry until those signs are measured and explicitly confirmed. Do not replace
+them with the current placeholder `+1` values. Verify the Owner's main power switch disconnects power to
+both motor drivers; that behavior has not been tested or assumed. The firmware
+reports auxiliary E-stop `UNKNOWN`; it is not converted to inactive. No
+physical E-stop is present, no Joy stop button is assigned, and the controller
+candidate remains disarmed pending a compatible PID/FF/effort profile and
+independent audit.
+
 Unit/host tests có thể dùng ticks, lifecycle và E-stop synthetic có nhãn; đó không phải ROS runtime hay hardware evidence. E-stop mapping, encoder signs, U6 physical UART/HIL và U7 clean production consolidation/audit/integration vẫn còn. Motor permission luôn false; chưa có Gate 3/4, deploy_real hoặc robot validation.
 
 ### U6 corrective — E-stop auxiliary UNKNOWN (offline)
@@ -112,7 +172,8 @@ khác bị từ chối. Firmware đọc validity riêng với value; auxiliary c
 mapping tạo UNKNOWN, không tự đặt `FAULT_ESTOP_ACTIVE`, còn telemetry chỉ được
 enqueue sau CONFIG và các gate snapshot/encoder/session/motor-disabled hiện
 hữu. Pi giữ session ACTIVE và telemetry fresh khi session hợp lệ; Heartbeat báo
-unhealthy với detail `E-stop auxiliary unavailable` và giữ fault MCU khác.
+unhealthy, `Heartbeat.estop_aux_state=ESTOP_AUX_UNKNOWN`, detail
+`E-stop auxiliary UNKNOWN`, và giữ fault MCU khác.
 UNKNOWN chỉ là diagnostic; không thêm gate COMMAND hoặc motor permission.
 Receiver cũ chỉ hiểu 0/1 sẽ từ chối 2, nên hai đầu phải được cập nhật đồng bộ.
 Đây là evidence offline; không chứng minh UART vật lý, E-stop độc lập, HIL,

@@ -220,6 +220,7 @@ class UartBridgeNode(Node):
         message.healthy = state.healthy
         message.fault_bits = state.fault_bits
         message.detail = state.detail
+        message.estop_aux_state = state.estop_aux_state
         self._heartbeat_pub.publish(message)
         self._heartbeat_sequence = (self._heartbeat_sequence + 1) & 0xFFFFFFFF
 

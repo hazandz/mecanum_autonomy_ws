@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -119,13 +120,17 @@ def wheel_geometry(manifest: dict[str, Any], require_signs: bool = True) -> dict
             "track_m": kin["track_m"]["value"],
             "ticks_per_wheel_revolution": enc["ticks_per_wheel_revolution"]["value"],
         }
-        resolved_signs = [signs[name]["encoder_tick_sign"]["value"]
-                          for name in EXPECTED_WHEEL_ORDER]
+        encoder_signs = [signs[name]["encoder_tick_sign"]
+                         for name in EXPECTED_WHEEL_ORDER]
+        resolved_signs = [entry["value"] for entry in encoder_signs]
+        sign_statuses = [entry["status"] for entry in encoder_signs]
     except (KeyError, TypeError) as exc:
         raise HardwareConfigError("manifest lacks wheel geometry/sign fields") from exc
     if any(type(value) not in (int, float) for value in values.values()):
         raise HardwareConfigError("wheel geometry is unresolved")
-    signs_valid = all(type(sign) is int and sign in (-1, 1) for sign in resolved_signs)
+    signs_valid = all(type(sign) is int and sign in (-1, 1)
+                      for sign in resolved_signs) and all(
+                          status == "OWNER_CONFIRMED" for status in sign_statuses)
     if require_signs and not signs_valid:
         raise HardwareConfigError("wheel encoder signs are unresolved")
     if any(value <= 0 for value in values.values()):
@@ -134,6 +139,29 @@ def wheel_geometry(manifest: dict[str, Any], require_signs: bool = True) -> dict
         raise HardwareConfigError("wheel radius does not match diameter")
     return {**values, "encoder_tick_signs": resolved_signs if signs_valid else None,
             "rotational_lever_arm_m": (values["wheelbase_m"] + values["track_m"]) / 2.0}
+
+
+def manual_slam_drive_ratios(manifest: dict[str, Any]) -> dict[str, float]:
+    """Read only the explicitly named, Owner-confirmed MANUAL_SLAM ratios."""
+    try:
+        ratios = manifest["drive_ratios"]
+        motor = ratios["motor_to_gearbox_output"]
+        wheel = ratios["wheel_rpm_per_gearbox_output_rpm"]
+        values = (motor["value"], wheel["value"])
+        statuses = (motor["status"], wheel["status"])
+        units = (motor["units"], wheel["units"])
+    except (KeyError, TypeError) as exc:
+        raise HardwareConfigError("MANUAL_SLAM drive ratios are missing") from exc
+    if (statuses != ("OWNER_CONFIRMED", "OWNER_CONFIRMED")
+            or units != ("motor_revolutions_per_gearbox_output_revolution",
+                         "wheel_rpm_per_gearbox_output_rpm")
+            or any(type(value) not in (int, float) or value <= 0 for value in values)):
+        raise HardwareConfigError("MANUAL_SLAM drive ratios are invalid or unresolved")
+    converted = tuple(float(value) for value in values)
+    if not all(math.isfinite(value) for value in converted):
+        raise HardwareConfigError("MANUAL_SLAM drive ratios are nonfinite")
+    return {"motor_to_gearbox_output_ratio": converted[0],
+            "wheel_rpm_per_gearbox_output_rpm": converted[1]}
 
 
 def manifest_digest(manifest: dict[str, Any]) -> bytes:

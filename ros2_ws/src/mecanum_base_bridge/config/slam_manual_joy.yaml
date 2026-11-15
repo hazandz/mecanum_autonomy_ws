@@ -1,20 +1,22 @@
 slam_manual_joy:
   ros__parameters:
     use_sim_time: false
-    # Bind explicitly to artifacts/hardware/.../hardware_manifest_slam_manual_bench.yaml.
-    # Blank means missing profile and therefore zero output.
+    control_mode: MANUAL_SLAM
+    manual_slam_selected: false
+    # Supply the identical manifest path to the mapper, UART bridge, and
+    # firmware CMake MECANUM_HARDWARE_MANIFEST input.
     hardware_manifest: ""
     # Named reference targets. 172 RPM is already the gearbox output shaft.
     profile_name: pid4_experimental_1400cps
     owner_design_output_rpm: 172.0
     # Motor shaft : gearbox output only; 172 RPM already denotes gearbox output.
     motor_to_gearbox_output_ratio: 21.3
-    # Ratio of wheel RPM to gearbox output RPM; unmeasured, so profile invalid.
-    wheel_rpm_per_gearbox_output_rpm: 0.0
+    # Owner-confirmed direct coupling, also encoded in drive_ratios/hash.
+    wheel_rpm_per_gearbox_output_rpm: 1.0
     # PID4 experimental ceiling, not a physical safety limit or 172 RPM.
     experimental_max_wheel_target_cps: 1400.0
     joy_timeout_s: 0.25
     joy_deadzone_radius: 0.12
     joy_full_command_radius: 0.20
     sideways_fade_start_deg: 75.0
-    # Mapper node keeps motion_enabled=false in this audit candidate.
+    # Motion starts disarmed; use /manual_slam/enable then provide neutral Joy.

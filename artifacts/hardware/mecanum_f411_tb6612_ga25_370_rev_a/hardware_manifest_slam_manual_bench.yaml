@@ -46,6 +46,17 @@ encoders:
     - RL
     - RR
 
+# Owner-confirmed direct wheel/output coupling; distinct from motor gearbox.
+drive_ratios:
+  motor_to_gearbox_output:
+    value: 21.3
+    units: motor_revolutions_per_gearbox_output_revolution
+    status: OWNER_CONFIRMED
+  wheel_rpm_per_gearbox_output_rpm:
+    value: 1.0
+    units: wheel_rpm_per_gearbox_output_rpm
+    status: OWNER_CONFIRMED
+
 wheel_sign_mapping:
   FL:
     motor_command_sign:

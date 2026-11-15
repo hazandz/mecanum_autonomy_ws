@@ -12,9 +12,6 @@
 
 extern TIM_HandleTypeDef htim1, htim2, htim3, htim4, htim5;
 
-/* SLAM_BENCH_EXPERIMENTAL: deliberately unconfigured and disarmed by default. */
-const slam_bench_motor_config_t slam_bench_motor_config = {0};
-
 static PidControllerState pid_state[MECANUM_WHEEL_COUNT];
 static float targets[MECANUM_WHEEL_COUNT];
 static int64_t previous_ticks[MECANUM_WHEEL_COUNT];

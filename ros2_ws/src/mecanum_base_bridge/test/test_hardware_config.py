@@ -6,7 +6,8 @@ import pytest
 import rfc8785
 
 from mecanum_base_bridge.hardware_config import (
-    DOMAIN, HardwareConfigError, generate, load_manifest, manifest_digest, wheel_geometry,
+    DOMAIN, HardwareConfigError, generate, load_manifest, manifest_digest,
+    manual_slam_drive_ratios, wheel_geometry,
 )
 
 
@@ -15,13 +16,41 @@ MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardwar
 SLAM_BENCH_MANIFEST = ROOT / 'artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/hardware_manifest_slam_manual_bench.yaml'
 
 
-def test_slam_bench_encoder_signs_are_resolved_without_motor_sign_changes():
+def test_slam_bench_encoder_signs_remain_unresolved_without_motor_sign_changes():
     canonical = load_manifest(MANIFEST)
     bench = load_manifest(SLAM_BENCH_MANIFEST)
-    assert wheel_geometry(bench)['encoder_tick_signs'] == [1, 1, 1, 1]
+    assert wheel_geometry(bench, require_signs=False)['encoder_tick_signs'] is None
+    with pytest.raises(HardwareConfigError, match='signs are unresolved'):
+        wheel_geometry(bench)
+    assert all(bench['wheel_sign_mapping'][wheel]['encoder_tick_sign']['status'] == 'TBD_MEASURED'
+               for wheel in ('FL', 'FR', 'RL', 'RR'))
     for wheel in ('FL', 'FR', 'RL', 'RR'):
         assert bench['wheel_sign_mapping'][wheel]['motor_command_sign'] == canonical['wheel_sign_mapping'][wheel]['motor_command_sign']
     assert bench['wheel_order'] == canonical['wheel_order'] == ['FL', 'FR', 'RL', 'RR']
+
+
+def test_manual_slam_uses_named_owner_ratios_and_shared_encoder_scale():
+    canonical = load_manifest(MANIFEST)
+    bench = load_manifest(SLAM_BENCH_MANIFEST)
+    assert canonical['encoders']['ticks_per_wheel_revolution']['value'] == 937.2
+    assert bench['encoders']['ticks_per_wheel_revolution']['value'] == 937.2
+    assert manual_slam_drive_ratios(bench) == {
+        'motor_to_gearbox_output_ratio': 21.3,
+        'wheel_rpm_per_gearbox_output_rpm': 1.0,
+    }
+    # Both variants bind the ratios into the full-manifest hardware digest.
+    assert manifest_digest(canonical) != manifest_digest(bench)
+
+
+def test_manual_slam_rejects_missing_or_unconfirmed_drive_ratio():
+    manifest = load_manifest(SLAM_BENCH_MANIFEST)
+    del manifest['drive_ratios']['wheel_rpm_per_gearbox_output_rpm']
+    with pytest.raises(HardwareConfigError, match='ratios are missing'):
+        manual_slam_drive_ratios(manifest)
+    manifest = load_manifest(SLAM_BENCH_MANIFEST)
+    manifest['drive_ratios']['wheel_rpm_per_gearbox_output_rpm']['status'] = 'TBD_MEASURED'
+    with pytest.raises(HardwareConfigError, match='invalid or unresolved'):
+        manual_slam_drive_ratios(manifest)
 
 
 def test_manifest_digest_uses_domain_nul_and_complete_mapping():

@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from mecanum_base_bridge.heartbeat import ALLOWED_MCU_FAULTS, SOURCE_MCU, make_heartbeat
+from mecanum_base_bridge.heartbeat import (
+    ALLOWED_MCU_FAULTS, ESTOP_AUX_ACTIVE, ESTOP_AUX_INACTIVE,
+    ESTOP_AUX_UNKNOWN, SOURCE_MCU, make_heartbeat,
+)
 from mecanum_base_bridge.telemetry_state import telemetry_health
 
 
@@ -30,6 +33,7 @@ def test_reserved_fault_and_invalid_estop_are_rejected():
     estop = make_heartbeat(1, 0, True, True, report(0, 3), True)
     assert not invalid.healthy and invalid.fault_bits == 0
     assert not estop.healthy and estop.fault_bits == 0
+    assert invalid.estop_aux_state == ESTOP_AUX_UNKNOWN
     assert not telemetry_health(True, True, report(256)).active
     assert not telemetry_health(True, False, report(0)).fresh
 
@@ -38,7 +42,12 @@ def test_unknown_estop_is_fresh_diagnostic_with_unhealthy_heartbeat_and_faults_p
     diagnostic = make_heartbeat(4, 7, True, True, report(256, 2), True)
     assert not diagnostic.healthy
     assert diagnostic.fault_bits == 256
-    assert diagnostic.detail == "E-stop auxiliary unavailable"
+    assert diagnostic.detail == "E-stop auxiliary UNKNOWN"
+    assert diagnostic.estop_aux_state == ESTOP_AUX_UNKNOWN
+    inactive = make_heartbeat(1, 0, True, True, report(0, 0), True)
+    active = make_heartbeat(1, 0, True, True, report(0, 1), True)
+    assert inactive.estop_aux_state == ESTOP_AUX_INACTIVE
+    assert active.estop_aux_state == ESTOP_AUX_ACTIVE
     health = telemetry_health(True, True, report(256, 2))
     assert health.fresh and not health.active and health.fault_bits == 256
     no_fault_health = telemetry_health(True, True, report(0, 2))
@@ -98,7 +107,8 @@ def test_unknown_estop_through_session_is_not_transport_loss_and_preserves_fault
     message = adapter._heartbeat_pub.messages[-1]
     assert not message.healthy
     assert message.fault_bits == 4096
-    assert message.detail == "E-stop auxiliary unavailable"
+    assert message.detail == "E-stop auxiliary UNKNOWN"
+    assert message.estop_aux_state == ESTOP_AUX_UNKNOWN
 
 
 class _HeartbeatPublisher:

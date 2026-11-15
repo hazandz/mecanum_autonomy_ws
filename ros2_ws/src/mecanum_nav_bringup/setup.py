@@ -73,6 +73,7 @@ setup(
                 "launch/navigation_v1_lifecycle.launch.py",
                 "launch/sim_eval_tf_ekf_state_estimation.launch.py",
                 "launch/sim_eval_nav2_baseline_system.launch.py",
+                "launch/manual_slam.launch.py",
             ],
         ),
     ],

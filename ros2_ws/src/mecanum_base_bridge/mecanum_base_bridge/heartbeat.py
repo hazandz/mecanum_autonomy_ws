@@ -3,6 +3,9 @@ from dataclasses import dataclass
 
 SOURCE_MCU = 2
 ALLOWED_MCU_FAULTS = 1 | 2 | 256 | 512 | 1024 | 2048 | 4096
+ESTOP_AUX_UNKNOWN = 0
+ESTOP_AUX_INACTIVE = 1
+ESTOP_AUX_ACTIVE = 2
 
 
 @dataclass(frozen=True)
@@ -13,6 +16,7 @@ class HeartbeatState:
     healthy: bool
     fault_bits: int
     detail: str
+    estop_aux_state: int
 
 
 def make_heartbeat(sequence: int, reset_epoch: int, session_active: bool,
@@ -23,11 +27,23 @@ def make_heartbeat(sequence: int, reset_epoch: int, session_active: bool,
                    and type(report.packet.estop_aux_active) is int
                    and report.packet.estop_aux_active in (0, 1, 2))
     faults = report.packet.mcu_fault_bits if trusted else 0
-    estop = bool(trusted and report.packet.estop_aux_active == 1)
-    unknown = bool(trusted and report.packet.estop_aux_active == 2)
+    if not trusted:
+        estop_state = ESTOP_AUX_UNKNOWN
+    else:
+        # UART v1 values: 0=INACTIVE, 1=ACTIVE, 2=UNKNOWN.
+        estop_state = {
+            0: ESTOP_AUX_INACTIVE,
+            1: ESTOP_AUX_ACTIVE,
+            2: ESTOP_AUX_UNKNOWN,
+        }[report.packet.estop_aux_active]
+    estop = estop_state == ESTOP_AUX_ACTIVE
+    unknown = estop_state == ESTOP_AUX_UNKNOWN
     healthy = bool(session_active and trusted and transport_healthy and faults == 0
                    and not estop and not unknown)
-    detail = ("E-stop auxiliary unavailable" if unknown else
-              ("MCU telemetry fresh" if trusted else "Pi observed UART/session loss"))
+    if not trusted:
+        detail = ("Pi observed UART/session loss; E-stop auxiliary UNKNOWN"
+                  if unknown else "Pi observed UART/session loss")
+    else:
+        detail = "E-stop auxiliary UNKNOWN" if unknown else "MCU telemetry fresh"
     return HeartbeatState(SOURCE_MCU, sequence & 0xFFFFFFFF, reset_epoch,
-                          healthy, faults, detail)
+                          healthy, faults, detail, estop_state)

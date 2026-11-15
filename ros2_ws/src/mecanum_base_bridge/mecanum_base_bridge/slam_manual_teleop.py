@@ -226,6 +226,7 @@ class SlamManualTeleop:
                  motion_enabled: bool = False):
         self._profile = profile
         self._motion_enabled = bool(motion_enabled)
+        self._waiting_for_neutral = False
         self._level_index = 0  # 20 percent after startup
         self._previous_buttons: tuple[int, ...] = (0,) * 6
 
@@ -239,24 +240,47 @@ class SlamManualTeleop:
 
     def disconnected(self) -> BodyCommand:
         self._previous_buttons = (0,) * 6
+        self._motion_enabled = False
+        self._waiting_for_neutral = False
         return BodyCommand()
+
+    def request_enable(self) -> bool:
+        """Require an explicit service request followed by a fresh neutral Joy."""
+        if self._profile is None or not self._profile.valid:
+            self.disconnected()
+            return False
+        self._motion_enabled = False
+        self._waiting_for_neutral = True
+        self._previous_buttons = (0,) * 6
+        return True
+
+    def request_disarm(self) -> None:
+        self.disconnected()
 
     def update(self, axes, buttons) -> BodyCommand:
         try:
             if len(axes) < 2 or len(buttons) < 6:
                 self._previous_buttons = (0,) * 6
+                self._motion_enabled = False
+                self._waiting_for_neutral = False
                 return BodyCommand()
         except TypeError:
             self._previous_buttons = (0,) * 6
+            self._motion_enabled = False
+            self._waiting_for_neutral = False
             return BodyCommand()
         try:
             values = (float(axes[0]), float(axes[1]))
             pressed = tuple(1 if int(buttons[i]) else 0 for i in range(6))
         except (IndexError, TypeError, ValueError, OverflowError):
             self._previous_buttons = (0,) * 6
+            self._motion_enabled = False
+            self._waiting_for_neutral = False
             return BodyCommand()
         if not all(math.isfinite(value) and -1.0 <= value <= 1.0 for value in values):
             self._previous_buttons = (0,) * 6
+            self._motion_enabled = False
+            self._waiting_for_neutral = False
             return BodyCommand()
 
         rising = tuple(pressed[i] and not self._previous_buttons[i] for i in range(6))
@@ -269,5 +293,13 @@ class SlamManualTeleop:
                                     max(0, self._level_index + delta))
 
         level = SPEED_LEVELS[self._level_index]
+        neutral = (self._profile is not None and self._profile.valid
+                   and math.hypot(values[0], values[1]) <= self._profile.deadzone_radius
+                   and not any(pressed[:FACE_BUTTON_COUNT]))
+        if self._waiting_for_neutral:
+            if neutral:
+                self._waiting_for_neutral = False
+                self._motion_enabled = True
+            return BodyCommand()
         return map_joystick(values, pressed, level, self._profile,
                             self._motion_enabled)

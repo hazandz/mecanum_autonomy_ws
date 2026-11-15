@@ -24,6 +24,11 @@ uint32 FAULT_MOTOR_DRIVER=2048
 uint32 FAULT_ENCODER=4096
 uint32 FAULT_IMU=8192
 
+# Trạng thái E-stop phụ được sao chép trung thực từ telemetry STM32.
+uint8 ESTOP_AUX_UNKNOWN=0
+uint8 ESTOP_AUX_INACTIVE=1
+uint8 ESTOP_AUX_ACTIVE=2
+
 # Thông tin heartbeat
 std_msgs/Header header
 uint8 source
@@ -32,3 +37,4 @@ uint32 reset_epoch
 bool healthy
 uint32 fault_bits
 string detail
+uint8 estop_aux_state
