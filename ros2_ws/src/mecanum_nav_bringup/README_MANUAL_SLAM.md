@@ -41,7 +41,9 @@ LiDAR wrapper gọi driver X3 với YAML được truyền; BNO055 wrapper mặc
 truyền argument tương ứng trong launch phần cứng. Không dùng giá trị transform
 mẫu thay cho phép đo.
 
-Giữ terminal 1 mở. Terminal 2 cần nhận `/scan`, `/imu/data`, `/joy`,
+Giữ terminal 1 mở. Theo quan sát Pi do Owner cung cấp, BNO055 node `bno055`
+phát IMU tại `/bno055/imu`; wrapper không remap topic này. Terminal 2 cần nhận
+`/scan`, `/bno055/imu`, `/joy`,
 `/mcu/heartbeat` và trạng thái `/mecanum/safety_lifecycle_state` từ tuyến này.
 
 ## Terminal 2: SLAM Toolbox và readiness gates
@@ -55,7 +57,7 @@ ros2 launch mecanum_nav_bringup manual_slam_mapping.launch.py
 
 Launch chạy `async_slam_toolbox_node` với cấu hình mapping async được cài trong
 `mecanum_nav_bringup/config/manual_slam/mapper_params_online_async.yaml`. Nó
-đợi SLAM Toolbox và `/safety_lifecycle` active, sensor topics và heartbeat còn
+đợi SLAM Toolbox và `/safety_lifecycle` active, `/scan`, topic IMU và heartbeat còn
 mới/healthy, cùng một mẫu `/joy` mới và trung tính. Sau đó launch gọi safety
 rearm, xác nhận `motion_permitted`, kiểm tra lại Joy trung tính, gọi
 `/manual_slam/enable` và đợi một mẫu Joy mới, còn hạn, vẫn trung tính để xác
@@ -66,13 +68,16 @@ tạo lệnh.
 Mỗi service có timeout mặc định 10 giây, dependency có timeout 30 giây và toàn
 bộ khởi động có timeout 120 giây. Có thể điều chỉnh qua launch arguments
 `service_timeout_s`, `dependency_timeout_s`, `startup_timeout_s`,
-`slam_params_file`, `joy_max_age_s` và `heartbeat_max_age_s`. Deadzone Joy cố
-định 0.12 bán kính để khớp mapper hiện tại.
+`slam_params_file`, `imu_topic`, `slam_state_check_period_s`, `joy_max_age_s` và
+`heartbeat_max_age_s`. `imu_topic` mặc định `/bno055/imu`; topic sai hoặc không
+có dữ liệu sẽ timeout và thông báo tên topic đang chờ. Deadzone Joy cố định
+0.12 bán kính để khớp mapper hiện tại.
 Thông báo `waiting for ...` nêu dependency đang chờ; hết hạn hoặc service từ
 chối sẽ đóng launch terminal 2 và không báo sẵn sàng.
 Sau khi enable, coordinator tiếp tục theo dõi freshness của scan/IMU/Joy,
-heartbeat và lifecycle motion permission; mất một dependency sẽ yêu cầu
-software disarm rồi đóng launch terminal 2.
+heartbeat, safety motion permission và lifecycle `/slam_toolbox` (kiểm tra định kỳ
+0.5 giây). SLAM không còn ở `active` hoặc mất một dependency sẽ yêu cầu
+software disarm rồi đóng launch terminal 2 với lý do cụ thể.
 
 ## Dừng
 

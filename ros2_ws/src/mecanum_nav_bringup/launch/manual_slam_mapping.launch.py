@@ -8,6 +8,8 @@ from launch.event_handlers import OnProcessExit
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.substitutions import FindPackageShare
 
+from mecanum_nav_bringup.manual_slam_orchestration import DEFAULT_IMU_TOPIC
+
 
 def generate_launch_description():
     slam_config = LaunchConfiguration("slam_params_file")
@@ -19,6 +21,8 @@ def generate_launch_description():
             "startup_timeout_s": LaunchConfiguration("startup_timeout_s"),
             "dependency_timeout_s": LaunchConfiguration("dependency_timeout_s"),
             "service_timeout_s": LaunchConfiguration("service_timeout_s"),
+            "slam_state_check_period_s": LaunchConfiguration("slam_state_check_period_s"),
+            "imu_topic": LaunchConfiguration("imu_topic"),
             "joy_max_age_s": LaunchConfiguration("joy_max_age_s"),
             "heartbeat_max_age_s": LaunchConfiguration("heartbeat_max_age_s"),
         }],
@@ -40,6 +44,8 @@ def generate_launch_description():
         DeclareLaunchArgument("startup_timeout_s", default_value="120.0"),
         DeclareLaunchArgument("dependency_timeout_s", default_value="30.0"),
         DeclareLaunchArgument("service_timeout_s", default_value="10.0"),
+        DeclareLaunchArgument("slam_state_check_period_s", default_value="0.5"),
+        DeclareLaunchArgument("imu_topic", default_value=DEFAULT_IMU_TOPIC),
         DeclareLaunchArgument("joy_max_age_s", default_value="0.25"),
         DeclareLaunchArgument("heartbeat_max_age_s", default_value="0.6"),
         RegisterEventHandler(OnProcessExit(

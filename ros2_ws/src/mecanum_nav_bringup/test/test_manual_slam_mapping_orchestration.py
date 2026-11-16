@@ -11,7 +11,9 @@ from launch_ros.actions import LifecycleNode, Node
 from lifecycle_msgs.msg import State, Transition
 
 from mecanum_nav_bringup.manual_slam_orchestration import (
-    Readiness, fresh_neutral_after_enable, joy_is_neutral, joy_sample_valid, missing_dependencies,
+    BNO055_NODE_NAME, DEFAULT_IMU_TOPIC, Readiness,
+    fresh_neutral_after_enable, joy_is_neutral,
+    joy_sample_valid, missing_dependencies,
     run_shutdown_sequence, run_startup_sequence, runtime_missing_dependencies,
     startup_actions,
 )
@@ -72,6 +74,8 @@ class LifecycleClient:
             self.on_transition(request.transition.id)
         return ImmediateFuture(type("ChangeStateResponse", (), {"success": success})())
 
+    def service_is_ready(self): return True
+
 
 class LifecycleHarness:
     _startup_deadline = 60.0
@@ -85,6 +89,8 @@ class LifecycleHarness:
                 Transition.TRANSITION_ACTIVATE: State.PRIMARY_STATE_ACTIVE,
             }[transition_id]
         self.change_client = LifecycleClient(responses=responses, on_transition=transition)
+        self._slam_get = self.get_client
+        self._service_timeout = 10.0
         self.service_waits = []
         self.logs = []
 
@@ -92,6 +98,7 @@ class LifecycleHarness:
     def _step_deadline(self, timeout): return min(self._startup_deadline, timeout)
     def _service_ready(self, _client, label, _deadline): self.service_waits.append(label)
     def _wait_future(self, future, _label, _deadline): return future.result()
+    def _spin(self, _duration=0.05): pass
     def get_logger(self): return self
     def info(self, message): self.logs.append(message)
 
@@ -178,6 +185,17 @@ def test_readiness_requires_all_live_dependencies_and_neutral_joy():
         True, True, True, False, True, True, True, True)) == ()
     assert "healthy UART/session heartbeat" in runtime_missing_dependencies(Readiness(
         True, True, True, False, True, False, True, True))
+    assert DEFAULT_IMU_TOPIC in missing_dependencies(
+        Readiness(True, False, True, True, True, True, True))
+    assert DEFAULT_IMU_TOPIC in runtime_missing_dependencies(
+        Readiness(True, False, True, False, True, True, True, True))
+    wrong_imu_topic = "/wrong/imu_topic"
+    assert missing_dependencies(
+        Readiness(True, False, True, True, True, True, True),
+        imu_topic=wrong_imu_topic) == (wrong_imu_topic,)
+    assert runtime_missing_dependencies(
+        Readiness(True, False, True, False, True, True, True, True),
+        imu_topic=wrong_imu_topic) == (wrong_imu_topic,)
 
 
 def test_joy_neutral_gate_rejects_invalid_shape_motion_and_pressed_buttons():
@@ -221,6 +239,8 @@ def test_mapping_launch_creates_async_lifecycle_and_coordinator_with_timeouts():
     assert orchestrator.node_executable == "manual_slam_orchestrator"
     assert declarations["dependency_timeout_s"] == "30.0"
     assert declarations["service_timeout_s"] == "10.0"
+    assert declarations["imu_topic"] == DEFAULT_IMU_TOPIC
+    assert declarations["slam_state_check_period_s"] == "0.5"
     assert declarations["joy_max_age_s"] == "0.25"
     assert sum(isinstance(action, RegisterEventHandler) for action in actions) == 2
     assert PARAMS.is_file()
@@ -230,6 +250,85 @@ def test_mapping_launch_creates_async_lifecycle_and_coordinator_with_timeouts():
     (sim_time_key, sim_time_value), = slam_parameters[1].items()
     assert sim_time_key[0].text == "use_sim_time"
     assert sim_time_value is False
+    coordinator_params = orchestrator._Node__parameters[0]
+    context.launch_configurations["imu_topic"] = declarations["imu_topic"]
+    imu_parameter = next(
+        (key, value) for key, value in coordinator_params.items()
+        if key[0].text == "imu_topic")
+    assert imu_parameter[1][0].perform(context) == DEFAULT_IMU_TOPIC
+
+
+def test_coordinator_imu_topic_matches_bno055_wrapper_pi_topic_contract():
+    wrapper_path = ROOT / (
+        "ros2_ws/src/mecanum_nav_bringup/launch/manual_slam_bno055_i2c.launch.py")
+    wrapper_spec = importlib.util.spec_from_file_location("bno055_wrapper_test", wrapper_path)
+    wrapper = importlib.util.module_from_spec(wrapper_spec)
+    wrapper_spec.loader.exec_module(wrapper)
+    wrapper_node = next(
+        entity for entity in wrapper.generate_launch_description().entities
+        if isinstance(entity, Node))
+    assert wrapper_node._Node__node_name == BNO055_NODE_NAME == "bno055"
+    assert wrapper_node._Node__remappings == []
+    assert DEFAULT_IMU_TOPIC == "/bno055/imu"
+
+    spec = importlib.util.spec_from_file_location("manual_slam_mapping_imu_topic", LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    actions = module.generate_launch_description().entities
+    declaration = next(action for action in actions
+                       if isinstance(action, DeclareLaunchArgument)
+                       and action.name == "imu_topic")
+    assert declaration.default_value[0].perform(LaunchContext()) == DEFAULT_IMU_TOPIC
+    hardware_launch = (ROOT / "ros2_ws/src/mecanum_nav_bringup/launch/manual_slam.launch.py")
+    assert "manual_slam_bno055_i2c.launch.py" in hardware_launch.read_text()
+
+
+@pytest.mark.parametrize("state_id", [
+    State.PRIMARY_STATE_INACTIVE,
+    State.PRIMARY_STATE_FINALIZED,
+])
+def test_monitor_rejects_slam_toolbox_leaving_active(state_id):
+    active = LifecycleHarness(State.PRIMARY_STATE_ACTIVE)
+    ManualSlamOrchestrator._assert_slam_toolbox_active(active)
+
+    harness = LifecycleHarness(state_id)
+    with pytest.raises(RuntimeError, match=r"/slam_toolbox lifecycle left ACTIVE"):
+        ManualSlamOrchestrator._assert_slam_toolbox_active(harness)
+
+
+def test_monitor_checks_slam_lifecycle_and_main_finally_requests_disarm(monkeypatch):
+    from mecanum_nav_bringup import manual_slam_orchestrator as orchestrator_module
+
+    monitor = LifecycleHarness(State.PRIMARY_STATE_FINALIZED)
+    monitor._assert_slam_toolbox_active = lambda: (
+        ManualSlamOrchestrator._assert_slam_toolbox_active(monitor))
+    monkeypatch.setattr(orchestrator_module.rclpy, "ok", lambda: True)
+    with pytest.raises(RuntimeError, match=r"/slam_toolbox lifecycle left ACTIVE"):
+        ManualSlamOrchestrator.monitor_ready(monitor)
+
+    class FailedMappingNode:
+        def __init__(self):
+            self.disarm_requests = 0
+            self.destroyed = False
+
+        def run_sequence(self): pass
+        def monitor_ready(self):
+            raise RuntimeError("/slam_toolbox lifecycle left ACTIVE (state id 4)")
+        def disarm_mapper(self): self.disarm_requests += 1
+        def destroy_node(self): self.destroyed = True
+        def get_logger(self): return self
+        def fatal(self, _message): pass
+
+    failed_node = FailedMappingNode()
+    monkeypatch.setattr(orchestrator_module.rclpy, "init", lambda **_kwargs: None)
+    monkeypatch.setattr(orchestrator_module.rclpy, "shutdown", lambda: None)
+    monkeypatch.setattr(orchestrator_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(orchestrator_module, "ManualSlamOrchestrator", lambda: failed_node)
+    with pytest.raises(SystemExit) as exit_info:
+        orchestrator_module.main()
+    assert exit_info.value.code == 2
+    assert failed_node.disarm_requests == 1
+    assert failed_node.destroyed
 
 
 def test_manual_mapping_parameters_match_existing_async_mapping_configuration():
@@ -251,6 +350,7 @@ def test_orchestrator_ros_jazzy_constructor_creates_only_gates_and_services():
         assert node._enable.srv_name == "/manual_slam/enable"
         assert node._disarm.srv_name == "/manual_slam/disarm"
         assert node._last_joy is None
+        assert node._imu_topic == DEFAULT_IMU_TOPIC
     finally:
         if node is not None:
             node.destroy_node()

@@ -57,13 +57,14 @@ mode change requires a separate review.
   may access the session directly.
 - The hardware launch keeps `/safety_lifecycle` disarmed. The separately
   approved terminal-2 mapping launch may configure/activate SLAM Toolbox and
-  `/safety_lifecycle`, wait for fresh scan/IMU/Joy and a healthy MCU heartbeat,
+  `/safety_lifecycle`, wait for fresh `/scan`, `/bno055/imu`, Joy and a healthy MCU heartbeat,
   require a fresh neutral Joy sample, call the existing safety rearm service,
   verify lifecycle motion permission, then call the mapper enable service.
   It never fabricates Joy, publishes a movement command, or rearms during
   terminal-1 hardware launch. Service/dependency timeout or rejection aborts
   the mapping launch without a ready claim. After startup it monitors fresh
-  sensor/Joy/heartbeat and lifecycle readiness; dependency loss requests mapper
+  sensor/Joy/heartbeat and lifecycle readiness, including periodic verification
+  that `/slam_toolbox` remains active; dependency or lifecycle loss requests mapper
   software disarm and ends the mapping launch. Shutdown also requests disarm
   best-effort; this is not a physical E-stop or main-switch substitute.
 

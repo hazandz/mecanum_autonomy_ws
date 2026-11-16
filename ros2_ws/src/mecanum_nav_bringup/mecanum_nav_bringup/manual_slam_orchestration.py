@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import math
 
 JOY_DEADZONE_RADIUS = 0.12
+BNO055_NODE_NAME = "bno055"
+# Pi-observed output topic supplied by the Owner; the wrapper does not remap it.
+DEFAULT_IMU_TOPIC = "/bno055/imu"
 
 
 @dataclass(frozen=True)
@@ -40,9 +43,12 @@ def joy_is_neutral(axes, buttons, deadzone: float) -> bool:
             and all(value == 0 for value in buttons[:6]))
 
 
-def missing_dependencies(state: Readiness, *, require_motion_permitted: bool = False) -> tuple[str, ...]:
+def missing_dependencies(
+    state: Readiness, *, require_motion_permitted: bool = False,
+    imu_topic: str = DEFAULT_IMU_TOPIC,
+) -> tuple[str, ...]:
     missing = []
-    for field, label in ((state.scan_fresh, "/scan"), (state.imu_fresh, "/imu/data"),
+    for field, label in ((state.scan_fresh, "/scan"), (state.imu_fresh, imu_topic),
                          (state.joy_fresh, "fresh /joy"), (state.joy_neutral, "neutral /joy"),
                          (state.heartbeat_fresh, "fresh /mcu/heartbeat"),
                          (state.heartbeat_healthy, "healthy UART/session heartbeat"),
@@ -54,10 +60,12 @@ def missing_dependencies(state: Readiness, *, require_motion_permitted: bool = F
     return tuple(missing)
 
 
-def runtime_missing_dependencies(state: Readiness) -> tuple[str, ...]:
+def runtime_missing_dependencies(
+    state: Readiness, *, imu_topic: str = DEFAULT_IMU_TOPIC,
+) -> tuple[str, ...]:
     """Runtime health omits neutral-stick gating after intentional control starts."""
     missing = []
-    for field, label in ((state.scan_fresh, "/scan"), (state.imu_fresh, "/imu/data"),
+    for field, label in ((state.scan_fresh, "/scan"), (state.imu_fresh, imu_topic),
                          (state.joy_fresh, "fresh /joy"),
                          (state.heartbeat_fresh, "fresh /mcu/heartbeat"),
                          (state.heartbeat_healthy, "healthy UART/session heartbeat"),

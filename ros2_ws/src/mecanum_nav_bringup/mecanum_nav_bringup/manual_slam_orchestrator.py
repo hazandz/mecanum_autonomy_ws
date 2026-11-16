@@ -21,7 +21,8 @@ from std_srvs.srv import Trigger
 from mecanum_nav_rl_interfaces.msg import Heartbeat, SafetyLifecycleState
 
 from .manual_slam_orchestration import (
-    JOY_DEADZONE_RADIUS, Readiness, fresh_neutral_after_enable, joy_is_neutral,
+    DEFAULT_IMU_TOPIC, JOY_DEADZONE_RADIUS, Readiness,
+    fresh_neutral_after_enable, joy_is_neutral,
     joy_sample_valid, missing_dependencies,
     run_shutdown_sequence, run_startup_sequence, runtime_missing_dependencies,
 )
@@ -33,11 +34,16 @@ class ManualSlamOrchestrator(Node):
         self.declare_parameter("startup_timeout_s", 90.0)
         self.declare_parameter("dependency_timeout_s", 30.0)
         self.declare_parameter("service_timeout_s", 10.0)
+        self.declare_parameter("slam_state_check_period_s", 0.5)
+        self.declare_parameter("imu_topic", DEFAULT_IMU_TOPIC)
         self.declare_parameter("joy_max_age_s", 0.25)
         self.declare_parameter("heartbeat_max_age_s", 0.6)
         self._startup_timeout = float(self.get_parameter("startup_timeout_s").value)
         self._dependency_timeout = float(self.get_parameter("dependency_timeout_s").value)
         self._service_timeout = float(self.get_parameter("service_timeout_s").value)
+        self._slam_state_check_period = float(
+            self.get_parameter("slam_state_check_period_s").value)
+        self._imu_topic = str(self.get_parameter("imu_topic").value).strip()
         self._joy_deadzone = JOY_DEADZONE_RADIUS
         self._joy_max_age = float(self.get_parameter("joy_max_age_s").value)
         self._heartbeat_max_age = float(self.get_parameter("heartbeat_max_age_s").value)
@@ -51,7 +57,7 @@ class ManualSlamOrchestrator(Node):
         self._scan_sub = self.create_subscription(
             LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
         self._imu_sub = self.create_subscription(
-            Imu, "/imu/data", self._on_imu, qos_profile_sensor_data)
+            Imu, self._imu_topic, self._on_imu, qos_profile_sensor_data)
         self._joy_sub = self.create_subscription(
             Joy, "/joy", self._on_joy, qos_profile_sensor_data)
         self._heartbeat_sub = self.create_subscription(
@@ -66,9 +72,13 @@ class ManualSlamOrchestrator(Node):
         self._safety_get = self.create_client(GetState, "/safety_lifecycle/get_state")
         self._safety_change = self.create_client(ChangeState, "/safety_lifecycle/change_state")
         timeouts = (self._startup_timeout, self._dependency_timeout, self._service_timeout,
-                    self._joy_max_age, self._heartbeat_max_age)
+                    self._slam_state_check_period, self._joy_max_age,
+                    self._heartbeat_max_age)
         if not all(math.isfinite(value) and value > 0.0 for value in timeouts):
-            raise ValueError("startup/dependency/service/Joy/heartbeat timeouts must be positive")
+            raise ValueError(
+                "startup/dependency/service/SLAM/Joy/heartbeat timeouts must be positive")
+        if not self._imu_topic.startswith("/"):
+            raise ValueError("imu_topic must be an absolute topic name")
         self._startup_deadline = self._now() + self._startup_timeout
 
     def _now(self) -> float:
@@ -174,6 +184,19 @@ class ManualSlamOrchestrator(Node):
     def ensure_safety_active(self) -> None:
         self._ensure_active("/safety_lifecycle", self._safety_get, self._safety_change)
 
+    def _assert_slam_toolbox_active(self) -> None:
+        deadline = self._now() + self._service_timeout
+        if not self._slam_get.service_is_ready():
+            self._service_ready(self._slam_get, "/slam_toolbox/get_state", deadline)
+        result = self._wait_future(
+            self._slam_get.call_async(GetState.Request()),
+            "/slam_toolbox/get_state during mapping", deadline)
+        state_id = result.current_state.id
+        if state_id != State.PRIMARY_STATE_ACTIVE:
+            raise RuntimeError(
+                "/slam_toolbox lifecycle left ACTIVE while mapping "
+                f"(state id {state_id}, expected {State.PRIMARY_STATE_ACTIVE})")
+
     def _step_deadline(self, timeout: float) -> float:
         return min(self._startup_deadline, self._now() + timeout)
 
@@ -226,13 +249,15 @@ class ManualSlamOrchestrator(Node):
         while rclpy.ok() and self._now() < deadline:
             self._spin()
             state = self._readiness()
-            missing = missing_dependencies(state, require_motion_permitted=motion)
+            missing = missing_dependencies(
+                state, require_motion_permitted=motion, imu_topic=self._imu_topic)
             if not missing:
                 return
             if self._now() - last_report >= 3.0:
                 self.get_logger().info(f"{label}: waiting for {', '.join(missing)}")
                 last_report = self._now()
-        missing = missing_dependencies(self._readiness(), require_motion_permitted=motion)
+        missing = missing_dependencies(
+            self._readiness(), require_motion_permitted=motion, imu_topic=self._imu_topic)
         raise RuntimeError(f"timeout during {label}; not ready: {', '.join(missing)}")
 
     def _fresh_neutral_joy(self, deadline: float) -> None:
@@ -252,10 +277,17 @@ class ManualSlamOrchestrator(Node):
         self.get_logger().info("startup gates passed; no nonzero movement command was issued")
 
     def monitor_ready(self) -> None:
-        self.get_logger().info("monitoring fresh sensor, Joy, safety and UART/session state")
+        self.get_logger().info(
+            "monitoring fresh sensor, Joy, safety, UART/session and SLAM lifecycle state")
+        next_slam_check = self._now()
         while rclpy.ok():
             self._spin()
-            missing = runtime_missing_dependencies(self._readiness())
+            now = self._now()
+            if now >= next_slam_check:
+                self._assert_slam_toolbox_active()
+                next_slam_check = now + self._slam_state_check_period
+            missing = runtime_missing_dependencies(
+                self._readiness(), imu_topic=self._imu_topic)
             if missing:
                 raise RuntimeError(f"runtime dependency lost: {', '.join(missing)}")
 
@@ -282,7 +314,7 @@ def main(args=None) -> None:
         node.monitor_ready()
     except Exception as error:
         if node is not None:
-            node.get_logger().fatal(f"MANUAL_SLAM startup failed; not ready: {error}")
+            node.get_logger().fatal(f"MANUAL_SLAM orchestration failed; not ready: {error}")
         raise SystemExit(2) from error
     finally:
         if node is not None:
