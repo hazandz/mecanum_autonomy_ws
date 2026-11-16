@@ -896,6 +896,29 @@ def test_owned_restart_request_is_pinned_to_run_case_role_and_exact_identity():
                 process_identity_record=identity)
 
 
+def test_owned_restart_request_ignores_mutable_proc_snapshot_but_pins_identity_tuple():
+    identity = {'pid':101,'uid':1000,'start_ticks':77,
+        'argv':['/usr/bin/gz','sim','--headless-rendering'],
+        'pgid':101,'sid':101,'state':'R','ppid':90,
+        'raw_hex':{'stat':'aa','status':'bb','cmdline':'cc','cgroup':'dd'}}
+    request = {'schema':'b23_owned_restart_request/v1','run_id':'B23_R07C_TEST',
+        'invocation_id':'a'*32,'case':'R07c','operation':'restart_owned_process',
+        'target_role':'server','identity':identity}
+    current = {**identity,'state':'S','ppid':99,
+        'raw_hex':{'stat':'11','status':'22','cmdline':'cc','cgroup':'ee'}}
+    assert verify_owned_restart_request(request, run_id='B23_R07C_TEST',
+        invocation_id='a'*32, case='R07c', role='server',
+        process_identity_record=current)
+    for field, value in (('pid',102),('uid',1001),('start_ticks',78),
+                         ('argv',['/usr/bin/gz','sim','different']),
+                         ('pgid',102),('sid',102)):
+        changed = {**current,field:value}
+        with pytest.raises(ValueError, match='identity mismatch'):
+            verify_owned_restart_request(request, run_id='B23_R07C_TEST',
+                invocation_id='a'*32, case='R07c', role='server',
+                process_identity_record=changed)
+
+
 def test_r07c_owned_backend_restart_requires_new_identity_old_rejection_and_inhibit():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     old_id, new_id = 11, 22

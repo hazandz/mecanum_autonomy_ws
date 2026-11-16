@@ -1095,6 +1095,20 @@ def campaign_phase(case):
 def verify_owned_restart_request(request, *, run_id, invocation_id, case,
                                  role, process_identity_record):
     """Bind one restart request to this run and the exact currently owned PID."""
+    identity = request.get('identity') if isinstance(request, dict) else None
+    identity_fields = ('pid', 'uid', 'start_ticks', 'argv', 'pgid', 'sid')
+    stable_identity_matches = (
+        isinstance(identity, dict)
+        and isinstance(process_identity_record, dict)
+        and all(identity.get(field) == process_identity_record.get(field)
+                for field in identity_fields)
+        and all(type(identity.get(field)) is int and identity[field] > 0
+                for field in ('pid', 'start_ticks', 'pgid', 'sid'))
+        and type(identity.get('uid')) is int and identity['uid'] >= 0
+        and isinstance(identity.get('argv'), list)
+        and bool(identity['argv'])
+        and all(isinstance(value, str) and value for value in identity['argv'])
+    )
     if (not isinstance(request, dict)
             or request.get('schema') != 'b23_owned_restart_request/v1'
             or request.get('run_id') != run_id
@@ -1102,7 +1116,7 @@ def verify_owned_restart_request(request, *, run_id, invocation_id, case,
             or request.get('case') != case
             or request.get('target_role') != role
             or request.get('operation') != 'restart_owned_process'
-            or request.get('identity') != process_identity_record):
+            or not stable_identity_matches):
         raise ValueError('owned restart request identity mismatch')
     allowed = {'R07c':'server', 'R07d':'final'}
     if allowed.get(case) != role:
