@@ -3908,6 +3908,77 @@ class TrainingWorkerIO:
         return {'receipt': receipt, 'state': applied_state,
             'received_ns': application['received_ns']}
 
+    async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness):
+        """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
+
+        Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
+        chuyển sang BIND_PENDING_STEP ở một cửa sổ còn đủ thời gian cho ACK,
+        mẫu admission và receipt POLICY trước scan cutoff kế tiếp. Nếu đang
+        sát cutoff, chờ một SAFE_STOP receipt đã được native apply sau cutoff
+        trong khi stream vẫn inhibit, rồi mới đóng stream và bind.
+        """
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        adapter = self.safety.local_training
+        period_ns = adapter.scan_period_ns
+        now_ros_ns = self.ros_now()
+        remaining_ns = period_ns - (now_ros_ns % period_ns)
+        # Measured R09a path needed about 60 ms from pending bind through the
+        # first eligible final receipt. Keep a 10 ms margin to the 100 ms scan
+        # boundary; this does not alter the native 100 ms watchdog.
+        launch_guard_ns = 90_000_000
+        if remaining_ns >= launch_guard_ns:
+            return zero_witness
+
+        target_cutoff_ns = now_ros_ns + remaining_ns
+        baseline = max((receipt.final_publish_sequence for receipt in self.ingress.receipts
+            if receipt.final_publisher_instance_id == self.final.publisher_instance_id
+            and receipt.source is ReceiptSource.SAFE_STOP), default=0)
+
+        def fresh_applied_zero_after_cutoff():
+            state = self.ingress.backend_state
+            if state is None or state.fault_flags != 0 or state.paused:
+                return None
+            for receipt in reversed(tuple(self.ingress.receipts)):
+                if (receipt.final_publish_sequence <= baseline
+                        or receipt.source is not ReceiptSource.SAFE_STOP
+                        or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                        or receipt.publish_stamp_ns <= target_cutoff_ns
+                        or any(receipt.final_command)):
+                    continue
+                application = self.ingress.application_for_receipt(receipt)
+                if application is None:
+                    continue
+                if (not state.applied_receipt_valid
+                        or state.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                        or state.applied_final_publish_sequence < receipt.final_publish_sequence):
+                    continue
+                current = self.ingress.receipt_for_publication_sequence(
+                    state.applied_final_publish_sequence)
+                if (current is None or current.source is not ReceiptSource.SAFE_STOP
+                        or current.final_publisher_instance_id != self.final.publisher_instance_id
+                        or any(current.final_command)):
+                    continue
+                return {'receipt':receipt, 'state':state,
+                    'application':application, 'target_cutoff_ns':target_cutoff_ns}
+            return None
+
+        aligned = await self.until(fresh_applied_zero_after_cutoff,
+            deadline_ns=deadline_ns,
+            phase='post-cutoff applied SAFE_STOP before pending policy bind')
+        self.emit('POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF', {
+            'target_cutoff_ns':target_cutoff_ns,
+            'zero_publish_sequence':aligned['receipt'].final_publish_sequence,
+            'zero_publish_stamp_ns':aligned['receipt'].publish_stamp_ns,
+            'zero_application_iteration':aligned['application']['state'].applied_physics_iteration,
+            'zero_application_stamp_ns':(
+                aligned['application']['state'].applied_sim_stamp.sec * 1_000_000_000
+                + aligned['application']['state'].applied_sim_stamp.nanosec),
+            'zero_application_received_ns':aligned['application']['received_ns'],
+            'remaining_to_next_cutoff_ns':period_ns - (self.ros_now() % period_ns),
+            'steady_ns':self.now()})
+        return {'receipt':aligned['receipt'], 'state':aligned['state'],
+            'received_ns':aligned['application']['received_ns']}
+
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -3989,6 +4060,9 @@ class TrainingWorkerIO:
         # 100 ms command watchdog continues to run. The publisher and Safety
         # keep their existing scan-cutoff and freshness checks.
         if before_pending_bind is None:
+            if not prebind_admission:
+                zero_witness = await self.align_policy_step_launch_window(
+                    deadline_ns=deadline, zero_witness=zero_witness)
             self.safety.local_training.set_stream_enabled(False)
         if prebind_admission:
             # Build the held input after native has observed the closing

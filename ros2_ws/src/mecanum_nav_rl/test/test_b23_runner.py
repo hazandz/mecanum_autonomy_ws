@@ -386,6 +386,72 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
         r02b_admission_release_target_ns(now_ns, 0)
 
 
+def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too_short():
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    worker = object.__new__(TrainingWorkerIO)
+    clock = {'ros_ns':3_440_000_000, 'steady_ns':50}
+    status = NS(fault_flags=0, paused=False, applied_receipt_valid=True,
+        applied_final_publisher_instance_id=77, applied_final_publish_sequence=2)
+    life = EpisodeLifecycleIdentity(1, 2, 3)
+    def receipt(sequence, stamp):
+        return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
+            88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
+    old = receipt(1,3_420_000_000)
+    new = receipt(2,3_520_000_000)
+    application = {'state':NS(applied_physics_iteration=352,
+        applied_sim_stamp=NS(sec=3,nanosec=520_000_000)), 'received_ns':101}
+    ingress = NS(receipts=[old], backend_state=status,
+        application_for_receipt=lambda receipt: application if receipt is new else None,
+        receipt_for_publication_sequence=lambda sequence: new if sequence == 2 else None)
+    worker.ingress, worker.final = ingress, NS(publisher_instance_id=77)
+    worker.safety = NS(local_training=NS(scan_period_ns=100_000_000))
+    worker.ros_now = lambda:clock['ros_ns']
+    worker.now = lambda:clock['steady_ns']
+    events=[]
+    worker.emit=lambda name,facts:events.append((name,facts))
+    waits=[]
+
+    async def until(predicate, *, deadline_ns, phase):
+        waits.append((deadline_ns,phase))
+        clock.update(ros_ns=3_520_000_000,steady_ns=100)
+        ingress.receipts.append(new)
+        value=predicate()
+        assert value is not None
+        return value
+
+    worker.until=until
+    witness={'receipt':old,'state':status,'received_ns':90}
+    result=asyncio.run(worker.align_policy_step_launch_window(
+        deadline_ns=2_000_000_000,zero_witness=witness))
+    assert len(waits)==1
+    assert waits[0][1]=='post-cutoff applied SAFE_STOP before pending policy bind'
+    assert result['receipt'] is new
+    assert result['state'] is status
+    assert result['received_ns']==101
+    assert events==[('POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF',{
+        'target_cutoff_ns':3_500_000_000,'zero_publish_sequence':2,
+        'zero_publish_stamp_ns':3_520_000_000,'zero_application_iteration':352,
+        'zero_application_stamp_ns':3_520_000_000,'zero_application_received_ns':101,
+        'remaining_to_next_cutoff_ns':80_000_000,'steady_ns':100})]
+
+
+def test_policy_step_keeps_current_zero_witness_when_full_scan_window_remains():
+    worker=object.__new__(TrainingWorkerIO)
+    worker.ros_now=lambda:3_300_000_000
+    worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
+    worker.ingress=NS(receipts=[])
+    witness={'bound':'actual zero witness'}
+    async def unexpected_wait(*args,**kwargs):
+        raise AssertionError('a full scan period remains; no alignment wait is needed')
+    worker.until=unexpected_wait
+    assert asyncio.run(worker.align_policy_step_launch_window(
+        deadline_ns=2_000_000_000,zero_witness=witness)) is witness
+
+
 def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01a') == []
     assert case_fault_hooks('R01b') == ['external_pause_after_w1_before_native_dispatch']
