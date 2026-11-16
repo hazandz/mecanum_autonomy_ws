@@ -5108,6 +5108,23 @@ def _proc_start_ticks(proc_root, pid):
     return int(fields[19])
 
 
+def packet_scan_period_ns(packet):
+    """Resolve scan cadence from the packet-pinned and hash-verified config."""
+    import math
+    from mecanum_nav_bringup.local_training_launch_contract import load_bound_config
+
+    document, config_hash, asset_hash, _scenario_id = load_bound_config(
+        Path(packet['resolved_config']))
+    if (config_hash != packet['config_hash']
+            or asset_hash != packet['asset_manifest_sha256']):
+        raise ValueError('scan cadence config/asset binding mismatch')
+    rate_hz = document['training']['local_training']['lidar_rate_hz']
+    if (isinstance(rate_hz, bool) or not isinstance(rate_hz, (int, float))
+            or not math.isfinite(rate_hz) or rate_hz <= 0):
+        raise ValueError('packet-pinned LiDAR rate is invalid')
+    return round(1_000_000_000 / rate_hz)
+
+
 def verify_postmortem_residue_attestation(attestation_path, *, run_id, packet_sha256,
         evidence_root='/home/hazan/mecanum_runtime_evidence',
         cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
@@ -5611,7 +5628,7 @@ async def run_parent(packet_path, packet_sha256):
         coordinator_ingress_instance_id=packet['coordinator_ingress_instance_id'],
         config_hash=packet['config_hash'], asset_manifest_sha256=packet['asset_manifest_sha256'],
         task_fixture=packet.get('task_fixture'),
-        scan_period_ns=round(1_000_000_000 / document['training']['local_training']['lidar_rate_hz']),
+        scan_period_ns=packet_scan_period_ns(packet),
         native_events_path=str(root/'native-events.jsonl'))
     try:
         if time.monotonic_ns() >= active_end:

@@ -62,6 +62,31 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
         campaign_phase('R10')
 
 
+def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
+    from mecanum_nav_bringup import local_training_launch_contract as contract
+    from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
+
+    seen = []
+    document = {'training': {'local_training': {'lidar_rate_hz': 20}}}
+    monkeypatch.setattr(contract, 'load_bound_config', lambda path: (
+        seen.append(path) or document, 'config-pin', 'asset-pin', 'B2_SOAK_V1'))
+    packet = {'resolved_config': '/pin/resolved.json', 'config_hash': 'config-pin',
+        'asset_manifest_sha256': 'asset-pin'}
+    assert packet_scan_period_ns(packet) == 50_000_000
+    assert seen == [Path('/pin/resolved.json')]
+
+    monkeypatch.setattr(contract, 'load_bound_config', lambda path: (
+        document, 'wrong-config', 'asset-pin', 'B2_SOAK_V1'))
+    with pytest.raises(ValueError, match='config/asset binding mismatch'):
+        packet_scan_period_ns(packet)
+
+    monkeypatch.setattr(contract, 'load_bound_config', lambda path: (
+        {'training': {'local_training': {'lidar_rate_hz': 0}}},
+        'config-pin', 'asset-pin', 'B2_SOAK_V1'))
+    with pytest.raises(ValueError, match='LiDAR rate is invalid'):
+        packet_scan_period_ns(packet)
+
+
 def test_d04_soak_schedule_and_unit_budget_are_exact():
     from mecanum_nav_rl.runtime_simulation.b23_runner import soak_action, service_properties_for
     assert soak_action(0, 1) == (0., 0., 0.)
