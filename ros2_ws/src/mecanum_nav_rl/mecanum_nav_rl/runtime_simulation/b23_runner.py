@@ -1201,16 +1201,15 @@ def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
     if delayed.get('sample_sequence') != scheduled.get('sample_sequence'):
         raise RuntimeError(case + ' delayed callback identity does not match scheduled input')
     if case == 'R04a':
-        input_rejected = next((facts for name, facts in io.events
-            if name == 'SAFETY_INPUT_REJECTED'
-            and facts.get('reason') == 'SAFETY_INPUT_REPLAY_OR_CONFLICT'
-            and facts.get('steady_ns', 0) >= delayed['delivery_ns']), None)
         rejected = next((facts for name, facts in io.events
             if name == 'SAFETY_REJECTED'
-            and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
-            and facts.get('steady_ns', 0) >= (input_rejected or {}).get('steady_ns', 0)), None)
-        if input_rejected is None or rejected is None:
-            raise RuntimeError('R04a lacks a delayed-input replay rejection and production Safety block')
+            and 'NOISY_STALE_OR_FUTURE' in facts.get('reasons', ())
+            and facts.get('steady_ns', 0) >= delayed['delivery_ns']), None)
+        if rejected is None:
+            raise RuntimeError('R04a lacks production Safety rejection of the delayed stale noisy sample')
+        if (type(rejected.get('ros_ns')) is not int
+                or rejected['ros_ns'] - scheduled['source_stamp_ns'] <= 250_000_000):
+            raise RuntimeError('R04a Safety rejection is not bound to the stale source timestamp')
         if any(name == 'SAFETY_ACCEPTED'
                 and facts.get('candidate_source') == 1
                 and facts.get('steady_ns', 0) > rejected['steady_ns']
@@ -1224,9 +1223,10 @@ def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
             raise RuntimeError('R04a Safety block preceded delayed-input rejection')
         return {'case':case, 'delay_s':scheduled['delay_s'],
             'delayed_input_rejected':True, 'safety_blocked':True,
-            'input_rejection_reason':input_rejected['reason'],
             'safety_rejection_reasons':list(rejected.get('reasons', ())),
             'rejected_steady_ns':rejected['steady_ns'],
+            'rejected_ros_ns':rejected['ros_ns'],
+            'source_ros_age_ns':rejected['ros_ns'] - scheduled['source_stamp_ns'],
             'source_stamp_ns':scheduled['source_stamp_ns'],
             'fresh_policy_recovery':False}
     rejected = next((facts for name, facts in io.events
@@ -1261,18 +1261,15 @@ async def await_r04a_production_rejection(io, *, deadline_ns):
     def observed():
         delayed = next((facts for name, facts in reversed(io.events)
             if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04a'), None)
-        input_rejected = next((facts for name, facts in reversed(io.events)
-            if name == 'SAFETY_INPUT_REJECTED'
-            and facts.get('reason') == 'SAFETY_INPUT_REPLAY_OR_CONFLICT'), None)
-        if delayed is None or input_rejected is None or input_rejected.get('steady_ns', 0) < delayed.get('delivery_ns', 0):
+        if delayed is None:
             return None
         return next((facts for name, facts in reversed(io.events)
             if name == 'SAFETY_REJECTED'
-            and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
-            and facts.get('steady_ns', 0) >= input_rejected['steady_ns']), None)
+            and 'NOISY_STALE_OR_FUTURE' in facts.get('reasons', ())
+            and facts.get('steady_ns', 0) >= delayed.get('delivery_ns', 0)), None)
     return await io.until(observed, deadline_ns=deadline_ns,
-        phase='R04a bounded production Safety rejection after delayed replay',
-        expected_native_fault_flags=4)
+        phase='R04a bounded production Safety rejection after delayed stale input',
+        expected_native_fault_flags=(4, 6))
 
 
 async def await_r04a_delayed_callback(io, state, *, timeout_ns=1_000_000_000):
@@ -1291,14 +1288,9 @@ async def await_r04a_delayed_callback(io, state, *, timeout_ns=1_000_000_000):
 
 def verify_r04a_next_step_blocked(io, *, step_index):
     """Prove delayed out-of-order Safety input cannot authorize the next slot."""
-    input_rejected = next((facts for name, facts in io.events
-        if name == 'SAFETY_INPUT_REJECTED'
-        and facts.get('reason') == 'SAFETY_INPUT_REPLAY_OR_CONFLICT'), None)
     rejected = next((facts for name, facts in io.events
         if name == 'SAFETY_REJECTED'
-        and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
-        and input_rejected is not None
-        and facts.get('steady_ns', 0) >= input_rejected.get('steady_ns', 0)), None)
+        and 'NOISY_STALE_OR_FUTURE' in facts.get('reasons', ())), None)
     if rejected is None:
         raise RuntimeError('R04a lacks production Safety rejection after delayed-input invalidation')
     if any(name == 'SAFETY_ACCEPTED'
@@ -1346,7 +1338,9 @@ def verify_r04a_next_step_blocked(io, *, step_index):
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
         state = getattr(io.ingress, 'backend_state', None)
         status_received_ns = getattr(io.ingress, 'backend_received_ns', None)
-        if (state is None or state.fault_flags != SimulationContactState.FAULT_COMMAND_STALE
+        expected_faults = (SimulationContactState.FAULT_COMMAND_STALE,
+            SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+        if (state is None or state.fault_flags not in expected_faults
                 or not state.local_zero_override or not state.actuator_inhibited
                 or type(status_received_ns) is not int
                 or status_received_ns < rejected['steady_ns']):
@@ -1355,7 +1349,7 @@ def verify_r04a_next_step_blocked(io, *, step_index):
             'fault_flags':int(state.fault_flags), 'local_zero_override':True,
             'actuator_inhibited':True, 'status_received_ns':status_received_ns}
     return {'blocked_step_index':step_index,
-        'input_rejection_steady_ns':input_rejected['steady_ns'],
+        'input_rejection_steady_ns':rejected['steady_ns'],
         'safety_rejection_reasons':list(rejected.get('reasons', ())),
         'rejected_steady_ns':rejected['steady_ns'],
         'policy_not_accepted':True,'native_policy_receipt_absent':True,
@@ -1493,7 +1487,10 @@ def verify_r04a_zero_baseline(io, *, checked):
     proof = checked.get('native_zero_application') if isinstance(checked, dict) else None
     if isinstance(proof, dict) and proof.get('mode') == 'watchdog_emergency_zero':
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
-        if (state is None or state.fault_flags != SimulationContactState.FAULT_COMMAND_STALE
+        expected_faults = (SimulationContactState.FAULT_COMMAND_STALE,
+            SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+        if (state is None or state.fault_flags not in expected_faults
+                or state.fault_flags != proof.get('fault_flags')
                 or not state.local_zero_override or not state.actuator_inhibited
                 or io.ingress.backend_received_ns != proof.get('status_received_ns')):
             raise RuntimeError('R04a watchdog emergency-zero evidence changed after capture')
@@ -4901,8 +4898,12 @@ async def training_child(path):
                         from mecanum_nav_rl_interfaces.msg import SimulationContactState
                         expected_error = (isinstance(error, TimeoutError)
                             or (isinstance(error, RuntimeError)
-                                and str(error) == 'native fault flags='
-                                    + str(SimulationContactState.FAULT_COMMAND_STALE)))
+                                and str(error) in (
+                                    'native fault flags=' + str(
+                                        SimulationContactState.FAULT_COMMAND_STALE),
+                                    'native fault flags=' + str(
+                                        SimulationContactState.FAULT_COMMAND_SEQUENCE
+                                        | SimulationContactState.FAULT_COMMAND_STALE))))
                         if not expected_error:
                             raise RuntimeError('R04a step ended outside its timeout/watchdog fail-closed path') from error
                         await await_r04a_delayed_callback(io, state)

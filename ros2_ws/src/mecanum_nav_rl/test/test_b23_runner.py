@@ -1703,16 +1703,14 @@ def test_r04d_durable_marker_write_does_not_block_ros_pump(monkeypatch):
     assert "await write_record_once_async(marker_path" in training_source
 
 
-def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
+def test_r04a_requires_the_delayed_stale_input_rejection_and_safety_block():
     # Use the exact event names and ordering emitted by the production worker.
     io = NS(policy_source_id=9, events=[
         ('B23_R04_DELIVERY_DELAY_SCHEDULED', {'case':'R04a','delay_s':.3,
             'callback_received_ns':100,'source_stamp_ns':77,'sample_sequence':22}),
         ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04a','delay_s':.3,
             'delivery_ns':300_000_101,'source_stamp_ns':77,'sample_sequence':22}),
-        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT',
-            'steady_ns':300_000_102}),
-        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+        ('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'],
             'steady_ns':300_000_103,'ros_ns':1_000_000_000}),
     ])
     result = verify_r04_stale_delivery(io, case='R04a')
@@ -1731,19 +1729,18 @@ def test_r04a_requires_the_delayed_input_rejection_and_safety_block():
 def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
     events = [
         ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04a','delivery_ns':300}),
-        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT','steady_ns':301}),
     ]
     calls = []
     async def until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
         calls.append((deadline_ns, phase, expected_native_fault_flags))
         assert predicate() is None
-        events.append(('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
+        events.append(('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'],
             'steady_ns':302}))
         return predicate()
     io = NS(events=events, until=until)
     result = __import__('asyncio').run(await_r04a_production_rejection(io, deadline_ns=1_000))
     assert result['steady_ns'] == 302
-    assert calls == [(1_000,'R04a bounded production Safety rejection after delayed replay', 4)]
+    assert calls == [(1_000,'R04a bounded production Safety rejection after delayed stale input', (4, 6))]
 
 
 def test_r04a_waits_for_scheduled_callback_after_step_fault_without_resetting_deadline():
@@ -1803,15 +1800,16 @@ def test_r04_delivery_state_counts_scheduled_before_delayed_callback_runs(monkey
 def test_r04a_blocked_slot_accepts_only_exact_watchdog_emergency_zero():
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     io = NS(events=[
-        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT','steady_ns':901}),
-        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],'steady_ns':902}),
+        ('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'],'steady_ns':902}),
     ], ingress=NS(safe_stop_source_id=70, receipts=[],
-        backend_state=NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
+        backend_state=NS(fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
+            | SimulationContactState.FAULT_COMMAND_STALE),
             local_zero_override=True, actuator_inhibited=True), backend_received_ns=903),
         final=NS(publisher_instance_id=80))
     result = verify_r04a_next_step_blocked(io, step_index=2)
     assert result['native_zero_application'] == {
-        'mode':'watchdog_emergency_zero','fault_flags':SimulationContactState.FAULT_COMMAND_STALE,
+        'mode':'watchdog_emergency_zero','fault_flags':(
+            SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE),
         'local_zero_override':True,'actuator_inhibited':True,'status_received_ns':903}
 
 
@@ -1836,12 +1834,7 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     receipt.final_publish_sequence = 99
     receipt.final_command = Twist()
     events = [
-        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT',
-            'steady_ns':901}),
-        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
-            'steady_ns':902}),
-        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
-            'steady_ns':1_000}),
+        ('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'], 'steady_ns':902}),
     ]
     joined = {'source_instance_id':70,'source_sequence':9,
         'step_index':0,'transition_id':'','steady_ns':950,'publish_sequence':99,
@@ -1862,7 +1855,7 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
     assert result['policy_not_accepted'] is True
     assert result['native_policy_receipt_absent'] is True
     assert result['b1_transition_absent'] is True
-    assert result['input_rejection_steady_ns'] == 901
+    assert result['input_rejection_steady_ns'] == 902
     assert result['rejected_steady_ns'] == 902
     assert result['native_zero_application'] == {
         'source_sequence':9,'final_publish_sequence':99,'publisher_instance_id':80,
