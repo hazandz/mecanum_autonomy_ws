@@ -236,6 +236,195 @@ def test_goal_sequence_uses_actual_sub_250ms_samples_between_commits():
     assert result.state.last_ros_ns == 1_000_000_000
 
 
+def test_production_coordinator_bridges_300ms_b1_cutoffs_with_actual_samples():
+    """The coordinator supplies retained physics samples to the real evaluator."""
+    import threading
+    from types import SimpleNamespace
+
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+        LocalTrainingB1Adapter,
+    )
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    lifecycle = EpisodeLifecycleIdentity(1, 2, 3)
+    events = []
+    raw_samples = {}
+    receipts = []
+    safety_states = []
+    scans = {}
+    noisy_samples = {}
+    physics_pairs = []
+    current = {'ros_ns': 1_000_000_000, 'steady_ns': 10_000_000_000}
+
+    def make_status(stamp_ns, sequence):
+        status = SimulationContactState()
+        status.header.stamp.sec, status.header.stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000
+        )
+        status.session_id = _SESSION_ID
+        status.config_hash = 'a' * 64
+        status.backend_instance_id = 13
+        status.episode_generation, status.reset_epoch, status.runtime_generation = (
+            _LIFECYCLE_KEY
+        )
+        status.physics_iteration = stamp_ns // 10_000_000
+        status.applied_receipt_valid = True
+        status.applied_final_publisher_instance_id = 11
+        status.applied_final_publish_sequence = sequence
+        status.applied_physics_iteration = status.physics_iteration
+        status.applied_sim_stamp.sec, status.applied_sim_stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000
+        )
+        return status
+
+    for sequence, stamp_ns in enumerate(
+        range(1_100_000_000, 2_300_000_000, 100_000_000), start=1
+    ):
+        received_ns = 10_000_000_000 + stamp_ns - 1_000_000_000
+        status = make_status(stamp_ns, sequence)
+        receipt = SimpleNamespace(
+            final_publish_sequence=sequence,
+            lifecycle=lifecycle,
+            final_publisher_instance_id=11,
+            source=ReceiptSource.POLICY,
+            session_id=_SESSION_ID,
+            ingress_config_hash='a' * 64,
+            publish_stamp_ns=stamp_ns - 10_000_000,
+            received_steady_ns=received_ns - 5_000_000,
+            final_command=(0.0, 0.0, 0.0),
+            frame_id='base_link',
+            receipt_key=f'11:{sequence}',
+            admission_valid=True,
+        )
+        receipts.append(receipt)
+        raw_samples[stamp_ns] = (status, receipt, received_ns)
+        scans[stamp_ns] = SimpleNamespace(received_steady_ns=received_ns)
+        noisy_samples[stamp_ns] = SimpleNamespace(received_steady_ns=received_ns)
+        physics_pairs.append(SimpleNamespace(
+            stamp_ns=stamp_ns,
+            backend_bytes=serialize_message(status),
+            oracle_received_steady_ns=received_ns,
+            backend_received_steady_ns=received_ns,
+        ))
+        safety_states.append((stamp_ns, received_ns, SimpleNamespace(
+            reset_epoch=2, runtime_generation=3,
+        )))
+
+    adapter.ingress = SimpleNamespace(
+        scans=scans,
+        noisy_samples=noisy_samples,
+        physics_pairs=physics_pairs,
+        receipts=receipts,
+        safety_states=safety_states,
+        final_publisher_id=11,
+        identity=SimpleNamespace(
+            session_id=_SESSION_ID,
+            config_hash='a' * 64,
+            backend_instance_id=13,
+        ),
+        lifecycle_received_ns=10_000_000_000,
+        profile={'b1_receipt_max_age_ms': 500},
+        lock=threading.RLock(),
+        _receipt_views={item.final_publish_sequence: item for item in receipts},
+        _application_bytes={
+            item.final_publish_sequence: serialize_message(raw_samples[stamp][0])
+            for stamp, item in ((stamp, raw_samples[stamp][1]) for stamp in raw_samples)
+        },
+        _application_received_ns={
+            item.final_publish_sequence: raw_samples[stamp][2]
+            for stamp, item in ((stamp, raw_samples[stamp][1]) for stamp in raw_samples)
+        },
+        ros_now=lambda: current['ros_ns'],
+        now=lambda: current['steady_ns'],
+    )
+    adapter.binding = SimpleNamespace(lifecycle_identity=lifecycle)
+    adapter.emit = lambda name, facts: events.append((name, facts))
+
+    def joined(stamp_ns, *, evaluation_ros_now_ns=None,
+               evaluation_steady_now_ns=None):
+        status, _receipt, _received = raw_samples[stamp_ns]
+        return {
+            'identity': lifecycle,
+            'cutoff': stamp_ns,
+            'ros_now': evaluation_ros_now_ns,
+            'steady_now': evaluation_steady_now_ns,
+            'status': status,
+        }
+
+    def actual_goal_sample(facts, _receipt, _safety, _safety_received):
+        stamp_ns = facts['cutoff']
+        receives = {name: facts['steady_now'] for name in (
+            'oracle', 'oracle_twist', 'scan', 'noisy_odometry',
+            'reference', 'measured_twist', 'lifecycle', 'receipt',
+        )}
+        source_stamps = {'receipt': stamp_ns - 10_000_000}
+        source_health = health(
+            stamp_ns,
+            evaluation_ros_now_ns=facts['ros_now'],
+            evaluation_steady_now_ns=facts['steady_now'],
+            source_timestamps=source_stamps,
+            source_receives=receives,
+        )
+        return sample(
+            stamp_ns, vx=0.0, vy=0.0, wz=0.0, health_facts=source_health
+        )
+
+    adapter._joined = joined
+    adapter._goal_settle_sample_for_exact_cutoff = actual_goal_sample
+    final_state = evaluate(sample(1_000_000_000, vx=0.0, vy=0.0, wz=0.0),
+                           GoalSettleState()).state
+    previous_cutoff = 1_000_000_000
+
+    for cutoff_ns in (1_300_000_000, 1_600_000_000,
+                      1_900_000_000, 2_200_000_000):
+        # B1 commits are 300 ms apart, while these are the actual available
+        # 100 ms physics samples retained by the ingress between commits.
+        assert cutoff_ns - previous_cutoff == 300_000_000
+        current['ros_ns'] = cutoff_ns
+        current['steady_ns'] = 10_000_000_000 + cutoff_ns - 1_000_000_000
+        final_sample = actual_goal_sample(
+            joined(cutoff_ns, evaluation_ros_now_ns=cutoff_ns,
+                   evaluation_steady_now_ns=current['steady_ns']),
+            receipts[-1], None, current['steady_ns'],
+        )
+        window, reset_before = adapter._goal_settle_sample_sequence(
+            cutoff_ns,
+            {},
+            SimpleNamespace(receipt=receipts[-1]),
+            final_sample,
+            final_state,
+            True,
+        )
+        assert not reset_before
+        assert window[0].timestamp_ns == previous_cutoff + 100_000_000, events[-8:]
+        assert window[-1].timestamp_ns == cutoff_ns
+        assert all(
+            right.timestamp_ns - left.timestamp_ns <= 250_000_000
+            for left, right in zip(window, window[1:])
+        )
+        result = evaluate_local_training_goal_sequence(
+            window,
+            final_state,
+            expected_scenario_session_binding=_BINDING,
+            expected_task_id=_TASK_ID,
+            expected_session_id=_SESSION_ID,
+            expected_goal_id=_GOAL_ID,
+            expected_goal_xy_m=_GOAL_XY_M,
+        )
+        assert result.healthy, result.reason
+        final_state = result.state
+        previous_cutoff = cutoff_ns
+
+    assert result.success, result
+    assert final_state.settled_since_ros_ns == 1_000_000_000
+    assert final_state.last_ros_ns == 2_200_000_000
+    assert len([event for event in events
+                if event[0] == 'GOAL_SETTLE_SAMPLE_WINDOW']) == 4
+
+
 def test_goal_sequence_gap_over_250ms_restarts_actual_sample_window():
     """A real sample gap over the locked limit restarts settle time."""
     samples = tuple(sample(timestamp) for timestamp in (
