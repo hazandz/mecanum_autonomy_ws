@@ -169,6 +169,65 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
         worker.check(expected_native_fault_flags=(1, 7))
 
 
+def test_r07c_owned_server_restart_scopes_expected_clock_stall():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: 1_500_000_001
+    worker.ros_now = lambda: 10
+    worker.deadline_ns = 10_000_000_000
+    worker.last_clock_ns = 10
+    worker.last_clock_advance_ns = 0
+    worker.expected_paused = False
+    worker._r07c_restart_clock_phase = 'restart_in_progress'
+    worker._r07c_restart_clock_grace_deadline_ns = None
+    worker._r07b_rollback_observed = None
+    worker._r07b_rollback_pending_before_ns = None
+    worker.ingress = NS(fault=None, backend_state=None)
+    worker.emit = lambda *_: None
+
+    worker.check()
+
+    worker._r07c_restart_clock_phase = 'awaiting_clock'
+    worker._r07c_restart_clock_grace_deadline_ns = 2_000_000_000
+    worker.check()
+    worker.now = lambda: 2_000_000_000
+    with pytest.raises(RuntimeError, match='unexpected clock stall exceeded 1 s'):
+        worker.check()
+
+
+def test_r07c_clock_resume_restores_normal_one_second_stall_guard():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: 1_500_000_001
+    worker.ros_now = lambda: 11
+    worker.deadline_ns = 10_000_000_000
+    worker.last_clock_ns = 10
+    worker.last_clock_advance_ns = 0
+    worker.expected_paused = False
+    worker._r07c_restart_clock_phase = 'awaiting_clock'
+    worker._r07c_restart_clock_grace_deadline_ns = 2_000_000_000
+    worker._r07c_restart_started_ns = 1
+    worker._r07b_rollback_observed = None
+    worker._r07b_rollback_pending_before_ns = None
+    worker.ingress = NS(fault=None, backend_state=None)
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+
+    worker.check()
+
+    assert worker._r07c_restart_clock_phase == 'idle'
+    assert worker._r07c_restart_clock_grace_deadline_ns is None
+    assert events == [('B23_R07C_SIM_CLOCK_RESUMED_AFTER_BACKEND_RESTART', {
+        'restart_started_ns':1,'clock_resumed_ns':1_500_000_001,'ros_time_ns':11})]
+    worker.now = lambda: 2_500_000_002
+    with pytest.raises(RuntimeError, match='unexpected clock stall exceeded 1 s'):
+        worker.check()
+
+
 @pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
     (891_000_000, 100_000_000, 900_000_000),
     (905_000_000, 100_000_000, 1_000_000_000),

@@ -1892,6 +1892,8 @@ class TrainingWorkerIO:
         self._r07b_replacement_backend_statuses = []
         self._r07b_cleanup_control = None
         self._r07c_restart_started_ns = None
+        self._r07c_restart_clock_phase = 'idle'
+        self._r07c_restart_clock_grace_deadline_ns = None
         self._r07c_replacement_backend_statuses = []
         try:
             rclpy.init(context=self.context)
@@ -2277,6 +2279,7 @@ class TrainingWorkerIO:
         if self.pump_error is not None:
             raise RuntimeError('executor callback failed') from self.pump_error
         now, ros = self.now(), self.ros_now()
+        restart_clock_phase = getattr(self, '_r07c_restart_clock_phase', 'idle')
         if now >= self.deadline_ns:
             raise TimeoutError('B23 active deadline reached')
         if ros < self.last_clock_ns:
@@ -2295,7 +2298,20 @@ class TrainingWorkerIO:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
         if ros > self.last_clock_ns:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
-        if not self.expected_paused and now - self.last_clock_advance_ns > 1_000_000_000:
+            if restart_clock_phase == 'awaiting_clock':
+                self._r07c_restart_clock_phase = 'idle'
+                self._r07c_restart_clock_grace_deadline_ns = None
+                self.emit('B23_R07C_SIM_CLOCK_RESUMED_AFTER_BACKEND_RESTART', {
+                    'restart_started_ns':self._r07c_restart_started_ns,
+                    'clock_resumed_ns':now,'ros_time_ns':ros})
+        restart_clock_expected = (
+            restart_clock_phase == 'restart_in_progress'
+            or (restart_clock_phase == 'awaiting_clock'
+                and getattr(self, '_r07c_restart_clock_grace_deadline_ns', None) is not None
+                and now < self._r07c_restart_clock_grace_deadline_ns)
+        )
+        if (not self.expected_paused and not restart_clock_expected
+                and now - self.last_clock_advance_ns > 1_000_000_000):
             raise RuntimeError('unexpected clock stall exceeded 1 s')
         if self.ingress.fault:
             raise RuntimeError('ingress fault: ' + self.ingress.fault)
@@ -2416,6 +2432,7 @@ class TrainingWorkerIO:
         response_path = Path(self.descriptor['owned_restart_response_path'])
         if case == 'R07c':
             self._r07c_restart_started_ns = self.now()
+            self._r07c_restart_clock_phase = 'restart_in_progress'
         write_record_once(request_path, request)
         request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
         self.emit('B23_OWNED_PROCESS_RESTART_REQUESTED', {
@@ -2436,6 +2453,14 @@ class TrainingWorkerIO:
             return response
         response = await self.until(response_ready, deadline_ns=self.deadline_ns,
             phase=case + ' owned process restart ACK')
+        if case == 'R07c':
+            self._r07c_restart_clock_phase = 'awaiting_clock'
+            self._r07c_restart_clock_grace_deadline_ns = min(
+                self.deadline_ns, self.now() + 1_000_000_000)
+            self.emit('B23_R07C_REPLACEMENT_READY_WAITING_FOR_CLOCK', {
+                'restart_started_ns':self._r07c_restart_started_ns,
+                'replacement_ready_ns':self.now(),
+                'clock_resume_deadline_ns':self._r07c_restart_clock_grace_deadline_ns})
         self.emit('B23_OWNED_PROCESS_RESTART_ACKNOWLEDGED', response)
         return response
 
