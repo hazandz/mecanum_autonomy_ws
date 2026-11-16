@@ -923,7 +923,9 @@ class LocalTrainingB1Adapter:
         The terminal B1 sample remains the exact transaction cutoff. Earlier
         samples are accepted only when scan, noisy odometry, oracle, native
         application, Safety state and receipt all bind the same lifecycle and
-        cutoff. An unavailable candidate starts a new continuity segment.
+        cutoff. Unavailable candidates are omitted; the evaluator resets
+        continuity only when the gap between actual accepted samples exceeds
+        the locked 250 ms limit.
         """
         source = self.ingress
         reset_prior = not health_continuous
@@ -942,7 +944,6 @@ class LocalTrainingB1Adapter:
                 pairs = [pair for pair in source.physics_pairs
                          if pair.stamp_ns == sample_cutoff]
                 if scan is None or noisy is None or len(pairs) != 1:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
                         'reason': 'exact scan/noisy/oracle/backend sample is unavailable',
@@ -957,7 +958,6 @@ class LocalTrainingB1Adapter:
                     and item[2].runtime_generation
                     == self.binding.lifecycle_identity.runtime_generation]
                 if candidate is None or not safety_candidates:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
                         'reason': ('fresh zero receipt/native application unavailable'
@@ -980,14 +980,12 @@ class LocalTrainingB1Adapter:
                         evaluation_ros_now_ns=evaluation_ros_ns,
                         evaluation_steady_now_ns=evaluation_steady_ns)
                 except B1SnapshotPending as error:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff, 'reason': str(error),
                         'steady_ns': source.now()})
                     continue
                 selected = self._goal_settle_zero_receipt_at_cutoff(facts, candidate)
                 if selected is None:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
                         'reason': 'fresh zero receipt/native zero state is unavailable',
@@ -999,7 +997,6 @@ class LocalTrainingB1Adapter:
                     and item[2].reset_epoch == facts['identity'].reset_epoch
                     and item[2].runtime_generation == facts['identity'].runtime_generation]
                 if not safety_candidates:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
                         'reason': 'no actual Safety state at or before cutoff',
@@ -1018,7 +1015,6 @@ class LocalTrainingB1Adapter:
                     sample = self._goal_settle_sample_for_exact_cutoff(
                         facts, receipt, safety_state, safety_received_ns)
                 except (TypeError, ValueError) as error:
-                    reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff, 'reason': str(error),
                         'steady_ns': source.now()})

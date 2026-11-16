@@ -295,8 +295,8 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
     }
 
 
-def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
-    """A missing source cutoff cannot be bridged by later samples."""
+def test_goal_settle_window_skips_missing_cutoff_when_valid_cadence_is_within_limit():
+    """An omitted source cutoff does not erase valid samples within 250 ms."""
     from rclpy.serialization import serialize_message
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
 
@@ -398,9 +398,9 @@ def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
         1_400_000_000, {}, SimpleNamespace(receipt=SimpleNamespace(receipt_key='7:3')),
         final, SimpleNamespace(last_ros_ns=1_000_000_000), True)
 
-    assert reset_prior
+    assert not reset_prior
     assert [item.timestamp_ns for item in samples] == [
-        1_300_000_000, 1_400_000_000,
+        1_100_000_000, 1_300_000_000, 1_400_000_000,
     ]
     assert any(name == 'GOAL_SETTLE_SAMPLE_GAP' for name, _ in events)
 
