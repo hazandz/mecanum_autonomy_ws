@@ -13,7 +13,7 @@ int main(void)
     assert(fabsf(slam_bench_motor_config.wheelbase_m - 0.216f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.track_m - 0.190f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.counts_per_revolution - 937.2f) < 1e-4f);
-    assert(fabsf(slam_bench_motor_config.max_wheel_cps - 1400.0f) < 1e-6f);
+    assert(fabsf(slam_bench_motor_config.max_wheel_cps - 2000.0f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.max_pwm_permille - 400.0f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.kp - 0.084f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.ki - 1.05f) < 1e-6f);
@@ -33,7 +33,7 @@ int main(void)
         assert(fabsf(slam_bench_motor_config.reverse_ff_kv[wheel] - ff_kv_reverse[wheel]) < 1e-6f);
         assert(slam_bench_motor_profile_pid_config_for_wheel(wheel, &config));
         assert(fabsf(config.output_limit - 400.0f) < 1e-6f);
-        assert(fabsf(config.max_target_cps - 1400.0f) < 1e-6f);
+        assert(fabsf(config.max_target_cps - 2000.0f) < 1e-6f);
         assert(fabsf(config.kp - 0.084f) < 1e-6f);
         assert(fabsf(config.ki - 1.05f) < 1e-6f);
         assert(fabsf(config.integral_limit - 80.0f) < 1e-6f);
@@ -43,10 +43,14 @@ int main(void)
         assert(fabsf(effort + (ff_u0_reverse[wheel] + ff_kv_reverse[wheel] * 1000.0f)) < 1e-4f);
         assert(pid_controller_step(&config, &state, 0.0f, 1000.0f, 0.02f, &effort));
         assert(effort == 0.0f && state.integral == 0.0f);
-        assert(!pid_controller_step(&config, &state, 1400.01f, 0.0f, 0.02f, &effort));
+        assert(!pid_controller_step(&config, &state, 2000.01f, 0.0f, 0.02f, &effort));
         assert(effort == 0.0f);
-        assert(pid_controller_step(&config, &state, 1400.0f, -10000.0f, 0.02f, &effort));
-        assert(fabsf(effort) <= 400.0f);
+        assert(pid_controller_step(&config, &state, 2000.0f, 2000.0f, 0.02f, &effort));
+        assert(effort == 400.0f);
+        assert(ff_u0_forward[wheel] + ff_kv_forward[wheel] * 2000.0f > 400.0f);
+        assert(pid_controller_step(&config, &state, -2000.0f, -2000.0f, 0.02f, &effort));
+        assert(effort == -400.0f);
+        assert(ff_u0_reverse[wheel] + ff_kv_reverse[wheel] * 2000.0f > 400.0f);
         pid_controller_reset(&state);
         assert(pid_controller_step(&config, &state, 100.0f, 90.0f, 0.02f, &effort));
         assert(fabsf(state.integral - 0.21f) < 1e-6f);

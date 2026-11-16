@@ -127,8 +127,11 @@ the matching image. The manifest/hash must be regenerated and checked against
 STM32 `CONFIG_STATUS`; a successful source build alone does not prove the
 installed MCU hash. Firmware now represents the PID4 experiment per wheel and
 direction in order FL/FR/RL/RR. Kp is `0.084 permille/(tick/s)`, Ki is
-`1.05 permille/tick`, target limit is `1400 tick/s`, integral limit is
-`±80 permille`, and output cap is `400 permille`. Feedforward is
+`1.05 permille/tick`, the original PID4 experiment target limit was
+`1400 tick/s`, integral limit is `±80 permille`, and output cap is
+`400 permille`. The current MANUAL_SLAM offline target candidate accepts up to
+`2000 tick/s`; PID4 gains/feedforward are not experimentally validated above
+1400 tick/s. Feedforward is
 `u0 + kv × |target_cps|`, with `u0` in
 permille and `kv` in permille per count/second:
 
@@ -166,6 +169,23 @@ guard fault latches the MCU session into SAFE_STOP until a new accepted CONFIG.
 The evidence source
 worktree was dirty and has no exact ELF/flash image pinned, so this remains an
 offline implementation candidate, not evidence of motor behavior.
+
+MANUAL_SLAM selects five target fractions `40%, 55%, 70%, 85%, 100%`, or
+`800, 1100, 1400, 1700, 2000 tick/s`; startup selects 40%. L1/R1 change the
+tier once per rising edge and clamp at the endpoints. Android Gamepad physical
+button indices are not inferred from an Xbox layout: configure
+`joy_button_a_index`, `joy_button_b_index`, `joy_button_x_index`,
+`joy_button_y_index`, `joy_button_l1_index`, and `joy_button_r1_index` in
+`config/slam_manual_joy.yaml` from captured `/joy` arrays. `-1` leaves a button
+unconfigured and ignored; analog movement remains available. Unit tests use an
+intentionally shuffled synthetic index map, not hardware evidence.
+
+At 2000 tick/s the unchanged feedforward values request 476/496/487/485
+permille forward and 486/487/502/491 permille reverse (FL/FR/RL/RR). The
+unchanged PID output cap clamps these requests to 400 permille, so this target
+candidate may saturate before tracking the selected wheel rate. This is a
+source-based calculation, not a measured speed or diagnosis of the reported
+motor noise; it is not operating validation.
 
 Example form (driver launch names and measurement values are supplied by the
 Owner for the exact Pi installation; this is not an executed command):

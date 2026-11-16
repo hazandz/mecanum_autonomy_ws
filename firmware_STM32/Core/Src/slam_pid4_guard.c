@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define SLAM_PID4_MAX_TARGET_CPS 1400.0f
+#define SLAM_PID4_MAX_TARGET_CPS 2000.0f
 #define SLAM_PID4_MAX_PWM_PERMILLE 400.0f
 #define SLAM_PID4_SYNC_GRACE_MS 500U
 #define SLAM_PID4_SYNC_WARNING_CPS 150.0f

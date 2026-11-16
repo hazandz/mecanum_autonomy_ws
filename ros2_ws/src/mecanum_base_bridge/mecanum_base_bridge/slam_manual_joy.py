@@ -14,7 +14,10 @@ from std_srvs.srv import Trigger
 
 from .hardware_config import (load_manifest, manual_slam_drive_ratios,
                               wheel_geometry)
-from .slam_manual_teleop import BodyCommand, SlamBenchMotionProfile, SlamManualTeleop
+from .slam_manual_teleop import (
+    UNCONFIGURED_BUTTON_INDEX, BodyCommand, JoyButtonMapping,
+    SlamBenchMotionProfile, SlamManualTeleop,
+)
 
 
 CMD_VEL_TOPIC = "/cmd_vel"
@@ -43,11 +46,17 @@ class SlamManualJoyNode(Node):
         self.declare_parameter("control_mode", "")
         self.declare_parameter("manual_slam_selected", False)
         self.declare_parameter("hardware_manifest", "")
-        self.declare_parameter("profile_name", "pid4_experimental_1400cps")
+        self.declare_parameter("profile_name", "pid4_candidate_2000cps")
         self.declare_parameter("owner_design_output_rpm", 172.0)
         self.declare_parameter("motor_to_gearbox_output_ratio", 21.3)
         self.declare_parameter("wheel_rpm_per_gearbox_output_rpm", 1.0)
-        self.declare_parameter("experimental_max_wheel_target_cps", 1400.0)
+        self.declare_parameter("experimental_max_wheel_target_cps", 2000.0)
+        self.declare_parameter("joy_button_a_index", UNCONFIGURED_BUTTON_INDEX)
+        self.declare_parameter("joy_button_b_index", UNCONFIGURED_BUTTON_INDEX)
+        self.declare_parameter("joy_button_x_index", UNCONFIGURED_BUTTON_INDEX)
+        self.declare_parameter("joy_button_y_index", UNCONFIGURED_BUTTON_INDEX)
+        self.declare_parameter("joy_button_l1_index", UNCONFIGURED_BUTTON_INDEX)
+        self.declare_parameter("joy_button_r1_index", UNCONFIGURED_BUTTON_INDEX)
         self.declare_parameter("joy_timeout_s", JOY_TIMEOUT_S)
         self.declare_parameter("joy_deadzone_radius", 0.12)
         self.declare_parameter("joy_full_command_radius", 0.20)
@@ -58,6 +67,15 @@ class SlamManualJoyNode(Node):
         self._publisher_conflict = False
         self._conflict_stop_published = False
         self._steady = time.monotonic
+        self._button_mapping = JoyButtonMapping.from_parameters(
+            self.get_parameter("joy_button_a_index").value,
+            self.get_parameter("joy_button_b_index").value,
+            self.get_parameter("joy_button_x_index").value,
+            self.get_parameter("joy_button_y_index").value,
+            self.get_parameter("joy_button_l1_index").value,
+            self.get_parameter("joy_button_r1_index").value,
+        )
+        self._button_mapping_valid = self._button_mapping.valid
         self._joy_timeout = float(self.get_parameter("joy_timeout_s").value)
         if not math.isfinite(self._joy_timeout) or self._joy_timeout <= 0.0:
             raise ValueError("joy_timeout_s must be finite and positive")
@@ -110,8 +128,10 @@ class SlamManualJoyNode(Node):
                 profile = None
 
         self._profile_valid = profile is not None and profile.valid
-        self._manual_valid = self._manual_slam_selected and self._profile_valid
-        self._teleop = SlamManualTeleop(profile, motion_enabled=False)
+        self._manual_valid = (self._manual_slam_selected and self._profile_valid
+                              and self._button_mapping_valid)
+        self._teleop = SlamManualTeleop(
+            profile, motion_enabled=False, button_mapping=self._button_mapping)
         self._cmd_pub = self.create_publisher(
             Twist, CMD_VEL_TOPIC, _reliable_volatile(1))
         self.create_subscription(
@@ -126,6 +146,10 @@ class SlamManualJoyNode(Node):
         if not self._manual_valid:
             self.get_logger().error(
                 "MANUAL_SLAM chưa được chọn hoặc manifest/profile không hợp lệ; mapper disarmed")
+        if not any(index is not None for index in self._button_mapping.indices):
+            self.get_logger().warning(
+                "Joy button indices are unconfigured; face buttons and L1/R1 are ignored; "
+                "analog mapping remains available")
 
     @staticmethod
     def _stamp_ns(stamp) -> int:
@@ -135,12 +159,12 @@ class SlamManualJoyNode(Node):
     def _valid_joy(message: Joy) -> bool:
         try:
             axes = tuple(float(value) for value in message.axes[:2])
-            buttons = tuple(message.buttons[:6])
+            buttons = tuple(message.buttons)
             button_count = len(message.buttons)
         except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
             return False
         return bool(
-            len(axes) == 2 and button_count >= 6 and len(buttons) == 6
+            len(axes) == 2 and button_count >= 1 and len(buttons) == button_count
             and all(math.isfinite(value) and -1.0 <= value <= 1.0 for value in axes)
             and all(type(value) is int and value in (0, 1) for value in buttons)
         )
@@ -197,7 +221,9 @@ class SlamManualJoyNode(Node):
         received = self._steady()
         self._last_joy_received = received
         self._last_timeout_stop = None
-        if (not self._manual_valid or self._publisher_conflict
+        if (not self._manual_valid or not self._button_mapping_valid
+                or len(message.buttons) < self._button_mapping.required_button_count
+                or self._publisher_conflict
                 or not fresh or not self._valid_joy(message)):
             self._teleop.disconnected()
             self._publish(BodyCommand())

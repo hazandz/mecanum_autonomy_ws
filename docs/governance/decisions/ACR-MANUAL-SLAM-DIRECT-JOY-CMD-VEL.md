@@ -28,8 +28,15 @@ mode change requires a separate review.
 
 ## Selected inputs
 
-- Gearbox output target profile: experimental ceiling `1400 tick/s`.
-- Five mapper levels: `280, 560, 840, 1120, 1400 tick/s`.
+- MANUAL_SLAM target candidate ceiling: `2000 tick/s`; this is an offline
+  requested target limit, not a validated operating speed.
+- Five mapper levels: `800, 1100, 1400, 1700, 2000 tick/s` (40%, 55%, 70%,
+  85%, 100% of that candidate ceiling), starting at 800 tick/s.
+- The PID4 evidence record used a `1400 tick/s` target ceiling. Extending the
+  mapper, firmware profile and PID4 target guard to 2000 changes only accepted
+  target range; Kp/Ki, per-wheel/direction feedforward, integral cap, PWM cap,
+  and direction/stall/synchronization guard thresholds are unchanged. The
+  2000 tick/s candidate is not validated by the PID4 evidence.
 - Encoder scale for mapper, wheel odometry, and the MANUAL_SLAM firmware profile:
   `937.2 tick/wheel revolution`. The approximately `906` count observation is
   retained as a separate unresolved observation and does not replace it.
@@ -52,6 +59,11 @@ mode change requires a separate review.
 - L1/R1 only change the selected tier on rising edges. No Joy button is
   assigned as a stop control because no unused physical button has been
   confirmed. The mapper's explicit disarm service is software-only.
+- Android Gamepad ROS `Joy.buttons` indices for A/B/X/Y/L1/R1 are not confirmed
+  by raw button-array captures. The mapper uses explicit `joy_button_*_index`
+  parameters; `-1` means unconfigured and ignores that physical button while
+  preserving analog-stick operation. Test mappings use shuffled synthetic
+  indices and are not hardware-layout evidence.
 - `UartBridgeNode`, `BridgeSession`, session identity/lifecycle checks, UART
   protocol and command validation remain in use; command-watchdog expiry is explicitly disabled for the validated MANUAL_SLAM bench profile. No Joy callback
   may access the session directly.
@@ -118,6 +130,12 @@ physical E-stop and does not establish robot readiness.
   magnitude per second. The 150 tick/s synchronization warning is kept
   internally but is not published as telemetry. No exact ELF/flash image or
   hardware behavior is verified by this candidate.
+- At 2000 tick/s, the unchanged feedforward equations `u0 + kv × target`
+  produce effort demands of approximately 476/496/487/485 permille forward
+  and 486/487/502/491 permille reverse (FL/FR/RL/RR), above the unchanged
+  400-permille output cap. The PID runtime therefore clamps effort at that
+  target. This source calculation indicates likely PWM saturation; it does
+  not establish achievable wheel speed or explain the reported motor noise.
 
 ## Verification boundary
 

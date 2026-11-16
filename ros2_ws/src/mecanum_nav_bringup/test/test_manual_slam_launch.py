@@ -42,6 +42,26 @@ def test_manual_slam_launch_requires_real_paths_and_measured_sensor_transforms()
     assert '"use_sim_time": False' in source
 
 
+def test_manual_slam_speed_candidate_and_unverified_button_indices_are_explicit():
+    import yaml
+
+    config = ROOT / "ros2_ws/src/mecanum_base_bridge/config/slam_manual_joy.yaml"
+    params = yaml.safe_load(config.read_text())["slam_manual_joy"]["ros__parameters"]
+    assert params["profile_name"] == "pid4_candidate_2000cps"
+    assert params["experimental_max_wheel_target_cps"] == 2000.0
+    assert {name: params[name] for name in (
+        "joy_button_a_index", "joy_button_b_index", "joy_button_x_index",
+        "joy_button_y_index", "joy_button_l1_index", "joy_button_r1_index",
+    )} == {
+        "joy_button_a_index": -1, "joy_button_b_index": -1,
+        "joy_button_x_index": -1, "joy_button_y_index": -1,
+        "joy_button_l1_index": -1, "joy_button_r1_index": -1,
+    }
+    source = LAUNCH.read_text()
+    assert '"profile_name": "pid4_candidate_2000cps"' in source
+    assert '"experimental_max_wheel_target_cps": 2000.0' in source
+
+
 def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypatch, tmp_path):
     manifest = ROOT / (
         "artifacts/hardware/mecanum_f411_tb6612_ga25_370_rev_a/"

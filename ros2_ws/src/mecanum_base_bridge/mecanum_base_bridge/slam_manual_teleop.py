@@ -5,10 +5,8 @@ import math
 from dataclasses import dataclass
 
 
-SPEED_LEVELS = (0.2, 0.4, 0.6, 0.8, 1.0)
-FACE_BUTTON_COUNT = 4
-L1_BUTTON_INDEX = 4
-R1_BUTTON_INDEX = 5
+SPEED_LEVELS = (0.40, 0.55, 0.70, 0.85, 1.0)
+UNCONFIGURED_BUTTON_INDEX = -1
 
 
 @dataclass(frozen=True)
@@ -19,12 +17,52 @@ class BodyCommand:
 
 
 @dataclass(frozen=True)
+class JoyButtonMapping:
+    """Explicit ROS Joy indices; None means the physical button is unverified."""
+
+    a: int | None = None
+    b: int | None = None
+    x: int | None = None
+    y: int | None = None
+    l1: int | None = None
+    r1: int | None = None
+
+    @property
+    def indices(self) -> tuple[int | None, ...]:
+        return (self.a, self.b, self.x, self.y, self.l1, self.r1)
+
+    @property
+    def valid(self) -> bool:
+        configured = []
+        for index in self.indices:
+            if index is None:
+                continue
+            if type(index) is not int or index < 0:
+                return False
+            configured.append(index)
+        return len(configured) == len(set(configured))
+
+    @property
+    def required_button_count(self) -> int:
+        return max((index + 1 for index in self.indices if index is not None), default=0)
+
+    @classmethod
+    def from_parameters(cls, a: int, b: int, x: int, y: int, l1: int, r1: int):
+        values = (a, b, x, y, l1, r1)
+        normalized = tuple(None if type(value) is int and
+                           value == UNCONFIGURED_BUTTON_INDEX else value
+                           for value in values)
+        return cls(*normalized)
+
+
+@dataclass(frozen=True)
 class SlamBenchMotionProfile:
     """Named wheel-target profile for offline SLAM bench mapping.
 
     ``owner_design_172rpm`` treats 172 RPM as speed at the gearbox output and
-    does not multiply by the motor-to-output reduction. ``pid4_experimental_1400cps``
-    uses only the evidence-backed 1400 tick/s experimental ceiling. The
+    does not multiply by the motor-to-output reduction. ``pid4_candidate_2000cps``
+    is an offline MANUAL_SLAM target candidate; existing PID4 gains and
+    feedforward have evidence only through 1400 tick/s. The
     wheel-to-gearbox-output ratio remains required input; zero is invalid.
     """
 
@@ -32,11 +70,11 @@ class SlamBenchMotionProfile:
     wheelbase_m: float
     track_m: float
     ticks_per_wheel_revolution: float
-    profile_name: str = "pid4_experimental_1400cps"
+    profile_name: str = "pid4_candidate_2000cps"
     owner_design_output_rpm: float = 172.0
     motor_to_gearbox_output_ratio: float = 21.3
     wheel_rpm_per_gearbox_output_rpm: float = 0.0
-    experimental_max_wheel_target_cps: float = 1400.0
+    experimental_max_wheel_target_cps: float = 2000.0
     deadzone_radius: float = 0.12
     full_command_radius: float = 0.20
     sideways_fade_start_deg: float = 75.0
@@ -61,7 +99,7 @@ class SlamBenchMotionProfile:
             and math.isfinite(self.sideways_fade_start_deg)
             and 0.0 < self.sideways_fade_start_deg < 90.0
             and self.profile_name in (
-                "owner_design_172rpm", "pid4_experimental_1400cps")
+                "owner_design_172rpm", "pid4_candidate_2000cps")
         )
 
     @property
@@ -159,13 +197,17 @@ def _analog_command(
     return BodyCommand(vx, vy, wz)
 
 
+def _button_value(buttons: tuple[int, ...], index: int | None) -> int:
+    return 0 if index is None else buttons[index]
+
+
 def _button_command(buttons: tuple[int, ...], level: float,
-                    profile: SlamBenchMotionProfile) -> BodyCommand:
-    # Xbox Joy indices inherited from the existing mapper: A=0, B=1, X=2, Y=3.
-    # Any directional button owns the whole command, so opposed pairs cannot
-    # accidentally restore analog movement after cancelling one axis.
-    forward = buttons[3] - buttons[0]
-    left = buttons[2] - buttons[1]
+                    profile: SlamBenchMotionProfile,
+                    mapping: JoyButtonMapping) -> BodyCommand:
+    # Any configured directional button owns the whole command, so opposed
+    # pairs cannot accidentally restore analog movement after cancelling one axis.
+    forward = _button_value(buttons, mapping.y) - _button_value(buttons, mapping.a)
+    left = _button_value(buttons, mapping.x) - _button_value(buttons, mapping.b)
     magnitude = math.hypot(forward, left)
     if magnitude == 0.0:
         return BodyCommand()
@@ -176,15 +218,20 @@ def _button_command(buttons: tuple[int, ...], level: float,
 
 def map_joystick(axes, buttons, level: float,
                  profile: SlamBenchMotionProfile | None,
-                 motion_enabled: bool = False) -> BodyCommand:
+                 motion_enabled: bool = False,
+                 button_mapping: JoyButtonMapping | None = None) -> BodyCommand:
     """Pure Joy→body command map; invalid/missing profile or disarm returns zero."""
-    if profile is None or not profile.valid or not motion_enabled:
+    mapping = button_mapping or JoyButtonMapping()
+    if (profile is None or not profile.valid or not mapping.valid
+            or not motion_enabled):
         return BodyCommand()
     try:
-        if len(axes) < 2 or len(buttons) < 6:
+        if len(axes) < 2 or len(buttons) < mapping.required_button_count:
             return BodyCommand()
         x, y = float(axes[0]), float(axes[1])
-        pressed = tuple(1 if int(buttons[i]) else 0 for i in range(6))
+        pressed = tuple(buttons)
+        if any(type(value) is not int or value not in (0, 1) for value in pressed):
+            return BodyCommand()
         level = float(level)
     except (IndexError, TypeError, ValueError, OverflowError):
         return BodyCommand()
@@ -193,8 +240,9 @@ def map_joystick(axes, buttons, level: float,
             or not 0.0 < level <= 1.0):
         return BodyCommand()
 
-    if any(pressed[:FACE_BUTTON_COUNT]):
-        command = _button_command(pressed, level, profile)
+    face_indices = (mapping.a, mapping.b, mapping.x, mapping.y)
+    if any(_button_value(pressed, index) for index in face_indices):
+        command = _button_command(pressed, level, profile, mapping)
         activation = 1.0
     else:
         command = _analog_command(x, y, level, profile)
@@ -204,7 +252,7 @@ def map_joystick(axes, buttons, level: float,
             (profile.full_command_radius - profile.deadzone_radius))
     # Normalize each direction to the selected fraction of the profile ceiling.
     # This preserves five distinct tiers instead of clipping upper tiers from
-    # the separate 172 RPM design target down to the experimental 1400 cps cap.
+    # the separate 172 RPM design target down to the selected candidate cap.
     targets = wheel_target_cps(command, profile)
     peak = max(abs(value) for value in targets)
     if peak <= 0.0:
@@ -224,12 +272,14 @@ class SlamManualTeleop:
     """Five fixed speed tiers with edge-triggered L1/R1 and fail-closed motion."""
 
     def __init__(self, profile: SlamBenchMotionProfile | None = None,
-                 motion_enabled: bool = False):
+                 motion_enabled: bool = False,
+                 button_mapping: JoyButtonMapping | None = None):
         self._profile = profile
+        self._button_mapping = button_mapping or JoyButtonMapping()
         self._motion_enabled = bool(motion_enabled)
         self._waiting_for_neutral = False
-        self._level_index = 0  # 20 percent after startup
-        self._previous_buttons: tuple[int, ...] = (0,) * 6
+        self._level_index = 0  # 40 percent after startup
+        self._previous_buttons: tuple[int, ...] = ()
 
     @property
     def level(self) -> int:
@@ -240,19 +290,20 @@ class SlamManualTeleop:
         return int(SPEED_LEVELS[self._level_index] * 100)
 
     def disconnected(self) -> BodyCommand:
-        self._previous_buttons = (0,) * 6
+        self._previous_buttons = ()
         self._motion_enabled = False
         self._waiting_for_neutral = False
         return BodyCommand()
 
     def request_enable(self) -> bool:
         """Require an explicit service request followed by a fresh neutral Joy."""
-        if self._profile is None or not self._profile.valid:
+        if (self._profile is None or not self._profile.valid
+                or not self._button_mapping.valid):
             self.disconnected()
             return False
         self._motion_enabled = False
         self._waiting_for_neutral = True
-        self._previous_buttons = (0,) * 6
+        self._previous_buttons = ()
         return True
 
     def request_disarm(self) -> None:
@@ -260,47 +311,56 @@ class SlamManualTeleop:
 
     def update(self, axes, buttons) -> BodyCommand:
         try:
-            if len(axes) < 2 or len(buttons) < 6:
-                self._previous_buttons = (0,) * 6
+            if (len(axes) < 2 or len(buttons) < self._button_mapping.required_button_count
+                    or not self._button_mapping.valid):
+                self._previous_buttons = ()
                 self._motion_enabled = False
                 self._waiting_for_neutral = False
                 return BodyCommand()
         except TypeError:
-            self._previous_buttons = (0,) * 6
+            self._previous_buttons = ()
             self._motion_enabled = False
             self._waiting_for_neutral = False
             return BodyCommand()
         try:
             values = (float(axes[0]), float(axes[1]))
-            pressed = tuple(1 if int(buttons[i]) else 0 for i in range(6))
+            pressed = tuple(buttons)
+            if any(type(value) is not int or value not in (0, 1) for value in pressed):
+                raise ValueError("Joy buttons must be integer zero/one values")
         except (IndexError, TypeError, ValueError, OverflowError):
-            self._previous_buttons = (0,) * 6
+            self._previous_buttons = ()
             self._motion_enabled = False
             self._waiting_for_neutral = False
             return BodyCommand()
         if not all(math.isfinite(value) and -1.0 <= value <= 1.0 for value in values):
-            self._previous_buttons = (0,) * 6
+            self._previous_buttons = ()
             self._motion_enabled = False
             self._waiting_for_neutral = False
             return BodyCommand()
 
-        rising = tuple(pressed[i] and not self._previous_buttons[i] for i in range(6))
+        previous = (self._previous_buttons if len(self._previous_buttons) == len(pressed)
+                    else (0,) * len(pressed))
+        rising = tuple(pressed[i] and not previous[i] for i in range(len(pressed)))
         self._previous_buttons = pressed
-        l1_rising = bool(rising[L1_BUTTON_INDEX])
-        r1_rising = bool(rising[R1_BUTTON_INDEX])
+        l1_rising = bool(self._button_mapping.l1 is not None
+                         and rising[self._button_mapping.l1])
+        r1_rising = bool(self._button_mapping.r1 is not None
+                         and rising[self._button_mapping.r1])
         if l1_rising != r1_rising:
             delta = 1 if l1_rising else -1
             self._level_index = min(len(SPEED_LEVELS) - 1,
                                     max(0, self._level_index + delta))
 
         level = SPEED_LEVELS[self._level_index]
+        face_indices = (self._button_mapping.a, self._button_mapping.b,
+                        self._button_mapping.x, self._button_mapping.y)
         neutral = (self._profile is not None and self._profile.valid
                    and math.hypot(values[0], values[1]) <= self._profile.deadzone_radius
-                   and not any(pressed[:FACE_BUTTON_COUNT]))
+                   and not any(_button_value(pressed, index) for index in face_indices))
         if self._waiting_for_neutral:
             if neutral:
                 self._waiting_for_neutral = False
                 self._motion_enabled = True
             return BodyCommand()
         return map_joystick(values, pressed, level, self._profile,
-                            self._motion_enabled)
+                            self._motion_enabled, self._button_mapping)

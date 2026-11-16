@@ -24,13 +24,14 @@
 #define MANUAL_SLAM_SIGN_RR 1
 #endif
 
-/* Owner-selected PID4 experimental profile, runtime gated by bench manifest. */
+/* Owner-selected offline MANUAL_SLAM target candidate, gated by bench manifest.
+ * PID4 gains/feedforward remain evidenced only through the prior 1400 tick/s run. */
 const slam_bench_motor_config_t slam_bench_motor_config = {
     .wheel_diameter_m = MANUAL_SLAM_WHEEL_DIAMETER_M,
     .wheelbase_m = MANUAL_SLAM_WHEELBASE_M,
     .track_m = MANUAL_SLAM_TRACK_M,
     .counts_per_revolution = MANUAL_SLAM_COUNTS_PER_REV,
-    .max_wheel_cps = 1400.0f,
+    .max_wheel_cps = 2000.0f,
     .max_pwm_permille = 400.0f,
     .kp = 0.084f,
     .ki = 1.05f,

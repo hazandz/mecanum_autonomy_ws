@@ -7,14 +7,23 @@ slam_manual_joy:
     # firmware CMake MECANUM_HARDWARE_MANIFEST input.
     hardware_manifest: ""
     # Named reference targets. 172 RPM is already the gearbox output shaft.
-    profile_name: pid4_experimental_1400cps
+    profile_name: pid4_candidate_2000cps
     owner_design_output_rpm: 172.0
     # Motor shaft : gearbox output only; 172 RPM already denotes gearbox output.
     motor_to_gearbox_output_ratio: 21.3
     # Owner-confirmed direct coupling, also encoded in drive_ratios/hash.
     wheel_rpm_per_gearbox_output_rpm: 1.0
-    # PID4 experimental ceiling, not a physical safety limit or 172 RPM.
-    experimental_max_wheel_target_cps: 1400.0
+    # Requested offline candidate ceiling. PID4 numeric gains/feedforward are
+    # evidenced only through 1400 tick/s; 2000 tick/s is not hardware-validated.
+    experimental_max_wheel_target_cps: 2000.0
+    # -1 means the Android Gamepad ROS Joy index is not yet verified. Fill each
+    # from one-button-at-a-time `ros2 topic echo --once /joy` captures.
+    joy_button_a_index: -1
+    joy_button_b_index: -1
+    joy_button_x_index: -1
+    joy_button_y_index: -1
+    joy_button_l1_index: -1
+    joy_button_r1_index: -1
     joy_timeout_s: 0.25
     joy_deadzone_radius: 0.12
     joy_full_command_radius: 0.20

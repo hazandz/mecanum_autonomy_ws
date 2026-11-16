@@ -13,14 +13,16 @@ int main(void)
     slam_pid4_guard_state_t state;
     float requested[4], measured[4], effort[4];
     slam_pid4_guard_reset(&state);
-    fill(requested, 1400.0f);
+    fill(requested, 2000.0f);
     assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_NONE);
     for (unsigned i = 0U; i < 4U; ++i)
-        assert(fabsf(state.ramped_target_cps[i] - 28.0f) < 1e-5f);
+        assert(fabsf(state.ramped_target_cps[i] - 40.0f) < 1e-5f);
     for (unsigned n = 1U; n < 50U; ++n)
         assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_NONE);
     for (unsigned i = 0U; i < 4U; ++i)
-        assert(fabsf(state.ramped_target_cps[i] - 1400.0f) < 1e-4f);
+        assert(fabsf(state.ramped_target_cps[i] - 2000.0f) < 1e-4f);
+    fill(requested, 2000.01f);
+    assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_INVALID_TARGET);
     fill(requested, 0.0f);
     assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_NONE);
     for (unsigned i = 0U; i < 4U; ++i) assert(state.ramped_target_cps[i] == 0.0f);
@@ -28,10 +30,10 @@ int main(void)
 
     /* Reverse commands slew through zero; no direct sign step is emitted. */
     slam_pid4_guard_reset(&state);
-    fill(requested, 1400.0f);
+    fill(requested, 2000.0f);
     for (unsigned n = 0U; n < 50U; ++n)
         assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_NONE);
-    fill(requested, -1400.0f);
+    fill(requested, -2000.0f);
     for (unsigned n = 0U; n < 50U; ++n) {
         assert(slam_pid4_guard_ramp(&state, requested, 20U) == SLAM_PID4_FAULT_NONE);
         assert(state.ramped_target_cps[0] >= 0.0f);

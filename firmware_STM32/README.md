@@ -162,4 +162,16 @@ TIM2 FL/TIM5 FR dùng bộ đếm 32 bit; TIM1 RL/TIM4 RR dùng 16 bit. Encoder 
 
 MANUAL_SLAM bench manifest records diameter 0.097 m, radius 0.0485 m, wheelbase 0.216 m, track 0.190 m and 937.2 tick/wheel revolution. Its encoder signs are Owner-reported `+1` for FL/FR/RL/RR, not independently verified raw measurements. Firmware header generation now carries manifest geometry/signs and rejects MANUAL_SLAM session configuration unless the selected bench profile validates. PID4 output remains physically off at boot and requires the existing matching session CONFIG and accepted command. Auxiliary E-stop has no validated firmware input; `safety_io_read_estop_aux()` returns invalid and telemetry must keep reporting UNKNOWN. Host/ARM builds are offline evidence only. Hardware E-stop behavior, main-switch interruption of both drivers, UART, encoder polarity, watchdog response, PWM mapping and motor response remain unverified.
 
+The current MANUAL_SLAM offline target candidate raises the profile and PID4
+target guard ceiling to `2000 tick/s`; target tiers are
+`800/1100/1400/1700/2000 tick/s`. The prior PID4 evidence reaches only
+`1400 tick/s`. Kp/Ki,
+per-wheel/direction feedforward, `±80 permille` integral cap, `400 permille`
+PWM cap and direction/stall/synchronization guard thresholds remain unchanged.
+At 2000 tick/s the existing forward feedforward calculates about
+`476/496/487/485 permille` and reverse `486/487/502/491 permille` for
+FL/FR/RL/RR, exceeding the unchanged PWM cap; the PID controller clamps these
+outputs to 400 permille. This is an offline source calculation, not evidence
+that 2000 tick/s is achieved or that this candidate is suitable to operate.
+
 U5 native gate: `cmake -S firmware_STM32 -B /tmp/wp07-u5-host -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/tmp/wp07-u4-venv/bin/python`, `cmake --build /tmp/wp07-u5-host --parallel 2` và `ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u5-host --output-on-failure`. ARM gate giữ U4 flags/toolchain/manifest, dùng `/tmp/wp07-u5-arm`; map và ELF nằm trong build directory này. Leak detection được tắt do LeakSanitizer không chạy được trong host ptrace sandbox.

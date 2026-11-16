@@ -8,8 +8,10 @@ from mecanum_base_bridge.slam_manual_joy import (
     CMD_VEL_TOPIC, SlamManualJoyNode, _reliable_volatile,
 )
 from mecanum_base_bridge.slam_manual_teleop import (
-    BodyCommand, SlamBenchMotionProfile, SlamManualTeleop,
+    BodyCommand, JoyButtonMapping, SlamBenchMotionProfile, SlamManualTeleop,
 )
+
+TEST_BUTTON_MAPPING = JoyButtonMapping(a=7, b=2, x=5, y=1, l1=6, r1=3)
 
 
 class _Publisher:
@@ -34,7 +36,7 @@ def _profile():
         ticks_per_wheel_revolution=937.2,
         motor_to_gearbox_output_ratio=21.3,
         wheel_rpm_per_gearbox_output_rpm=1.0,
-        experimental_max_wheel_target_cps=1400.0,
+        experimental_max_wheel_target_cps=2000.0,
     )
 
 
@@ -44,7 +46,10 @@ def _adapter(now_ns=10_000_000_000, steady=1.0):
         _last_timeout_stop=object(),
         _steady=lambda: steady,
         _joy_timeout=0.25,
-        _teleop=SlamManualTeleop(_profile(), motion_enabled=False),
+        _teleop=SlamManualTeleop(
+            _profile(), motion_enabled=False, button_mapping=TEST_BUTTON_MAPPING),
+        _button_mapping=TEST_BUTTON_MAPPING,
+        _button_mapping_valid=True,
         _cmd_pub=_Publisher(),
         _manual_valid=True,
         _publisher_conflict=False,
@@ -69,7 +74,7 @@ def _joy(axes, buttons=None, stamp=10):
     message.header.stamp = Time(sec=stamp)
     message.header.frame_id = "joy"
     message.axes = list(axes)
-    message.buttons = [0] * 6 if buttons is None else list(buttons)
+    message.buttons = [0] * 8 if buttons is None else list(buttons)
     return message
 
 
@@ -176,6 +181,9 @@ def test_slam_manual_joy_node_constructs_with_real_jazzy_rclpy_and_builtin_clock
         assert node.get_parameter("use_sim_time").value is False
         assert node._manual_slam_selected
         assert node._profile_valid and node._manual_valid
+        assert node._teleop._profile.max_wheel_target_cps == 2000.0
+        assert node._button_mapping.indices == (None, None, None, None, None, None)
+        assert node._button_mapping_valid
     finally:
         if node is not None:
             node.destroy_node()
