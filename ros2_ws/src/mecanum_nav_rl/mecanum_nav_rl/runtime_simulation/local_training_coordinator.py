@@ -967,21 +967,17 @@ class LocalTrainingB1Adapter:
                     continue
                 _safety_stamp, safety_received_ns, _safety_state = max(
                     safety_candidates, key=lambda item: (item[0], item[1]))
-                # Historical samples are assessed when the complete exact
-                # source tuple was actually available, not when a later B1
-                # transaction walks the retained buffer. This timestamp is
-                # the maximum recorded monotonic receive time of every input
-                # used below; it is never synthesized from simulation time.
-                evaluation_steady_ns = max(
-                    scan.received_steady_ns, noisy.received_steady_ns,
-                    pair.oracle_received_steady_ns,
-                    pair.backend_received_steady_ns,
-                    source.lifecycle_received_ns,
-                    candidate[0].received_steady_ns, candidate[2],
-                    safety_received_ns)
+                # Evaluate retained samples against the real clocks at the
+                # time this decision is made. The ingress holds the current
+                # lifecycle snapshot; using sample_cutoff as "now" can make
+                # that valid, newer snapshot look like a future timestamp.
+                # _joined still checks every source timestamp and receive age
+                # against these actual clocks, so stale data remains rejected.
+                evaluation_ros_ns = source.ros_now()
+                evaluation_steady_ns = source.now()
                 try:
                     facts = self._joined(sample_cutoff,
-                        evaluation_ros_now_ns=sample_cutoff,
+                        evaluation_ros_now_ns=evaluation_ros_ns,
                         evaluation_steady_now_ns=evaluation_steady_ns)
                 except B1SnapshotPending as error:
                     reset_prior, samples = True, []
