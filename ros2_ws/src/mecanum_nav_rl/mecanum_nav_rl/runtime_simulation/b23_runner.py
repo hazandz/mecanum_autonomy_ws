@@ -4392,33 +4392,46 @@ class RunEvidence:
         if event == 'owned_process_output' and facts.get('process') == 'server':
             import re
             text = re.sub(r'\x1b\[[0-9;]*m', '', facts['text'])
-            markers = list(re.finditer(r'\b(B23_[A-Z_]+)\s+', text))
-            if markers:
-                reason = None
-                if len(markers) != 1:
-                    reason = 'multiple_b23_markers_in_owned_output'
-                    fields = {}
+            messages = re.split(r'\[Msg\]\s*', text) if '[Msg]' in text else [text]
+            parsed = []
+            embedded_markers = []
+            for index, message in enumerate(messages):
+                match = re.match(r'\s*(B23_[A-Z_]+)\s+(.*)', message)
+                if match:
+                    parsed.append((index, match[1], match[2]))
                 else:
-                    pairs = re.findall(r'(\w+)=([^\s]+)', text[markers[0].end():])
-                    fields = dict(pairs)
-                    if len(fields) != len(pairs):
-                        reason = 'duplicate_native_event_field'
-                    elif markers[0][1] in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
-                        required = ('session', 'backend', 'ingress', 'sample')
-                        if (any(not fields.get(key) for key in required)
-                                or any(re.fullmatch(r'[0-9]+', fields[key]) is None
-                                       for key in ('backend', 'ingress', 'sample'))):
-                            reason = 'incomplete_native_input_identity'
-                common = {'raw_record': record, 'server_leader_pid': facts['pid'],
-                    'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
+                    embedded_markers.extend((index, found[1]) for found in
+                        re.finditer(r'\b(B23_[A-Z_]+)\b', message))
+            common = {'raw_record': record, 'server_leader_pid': facts['pid'],
+                'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
+            for index, kind, payload in parsed:
+                pairs = re.findall(r'(\w+)=([^\s]+)', payload)
+                fields = dict(pairs)
+                reason = None
+                if len(fields) != len(pairs):
+                    reason = 'duplicate_native_event_field'
+                elif kind in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
+                    required = ('session', 'backend', 'ingress', 'sample')
+                    if (any(not fields.get(key) for key in required)
+                            or any(re.fullmatch(r'[0-9]+', fields[key]) is None
+                                   for key in ('backend', 'ingress', 'sample'))):
+                        reason = 'incomplete_native_input_identity'
+                event_record = dict(common, message_index=index,
+                    message_text_sha256=hashlib.sha256(payload.encode()).hexdigest())
                 if reason is not None:
                     self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
-                        fields={'reason':reason, 'markers':[match[1] for match in markers],
+                        fields={'reason':reason, 'event_kind':kind,
                             'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
-                        **common))
+                        **event_record))
                 else:
-                    self.append('native-events.jsonl', dict(kind=markers[0][1],
-                        fields=fields, **common))
+                    self.append('native-events.jsonl', dict(kind=kind,
+                        fields=fields, **event_record))
+            for index, marker in embedded_markers:
+                self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
+                    fields={'reason':'event_marker_not_at_message_boundary', 'marker':marker,
+                        'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
+                    message_index=index, raw_record=record, server_leader_pid=facts['pid'],
+                    invocation_id=self.invocation_id, collected_ns=time.monotonic_ns()))
 
     async def cleanup_publisher(self, batch, deadline):
         """ACK chỉ sau batch đúng ID đã được ghi và các sổ đã flush/fsync."""

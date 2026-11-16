@@ -3289,14 +3289,30 @@ def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_waterma
     try:
         sink.record('owned_process_output', {
             'process':'server', 'pid':777,
+            'text':('[Msg] B23_SAFETY_INPUT_OBSERVED session=own-session backend=22 '
+                'ingress=11 sample=28[Msg] admission=0 episode='
+                'B23_SAFE_STOP_RECEIPT_INGRESS publisher=B23_SAFE_STOP_RECEIPT_INGRESS '
+                'publisher=1')})
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        safety = [row for row in rows if row['kind'] == 'B23_SAFETY_INPUT_OBSERVED']
+        assert len(safety) == 1
+        assert safety[0]['fields'] == {
+            'session':'own-session', 'backend':'22', 'ingress':'11', 'sample':'28'}
+        assert safety[0]['raw_record']['facts']['text'].startswith('[Msg] B23_SAFETY_INPUT_OBSERVED')
+        assert any(row['kind'] == 'B23_NATIVE_OUTPUT_REJECTED'
+            and row['fields']['reason'] == 'event_marker_not_at_message_boundary' for row in rows)
+        assert value.read_native_input_watermark() == 28
+
+        sink.record('owned_process_output', {
+            'process':'server', 'pid':777,
             'text':('[Msg] B23_SAFETY_INPUT_OBSERVED session=own-session backend='
                 '[Msg] B23_SAFE_STOP_RECEIPT_INGRESS publisher=33 admission=0 '
                 'backend=22 ingress=11 sample=28')})
         rows = [json.loads(line) for line in path.read_text().splitlines()]
-        assert [row['kind'] for row in rows] == ['B23_NATIVE_OUTPUT_REJECTED']
-        assert rows[0]['fields']['reason'] == 'multiple_b23_markers_in_owned_output'
-        assert rows[0]['raw_record']['facts']['text'].startswith('[Msg] B23_SAFETY_INPUT_OBSERVED')
-        assert value.read_native_input_watermark() == 0
+        assert [row for row in rows if row['kind'] == 'B23_SAFETY_INPUT_OBSERVED'] == safety
+        assert any(row['kind'] == 'B23_NATIVE_OUTPUT_REJECTED'
+            and row['fields']['reason'] == 'incomplete_native_input_identity' for row in rows)
+        assert value.read_native_input_watermark() == 28
     finally:
         sink.close()
 
@@ -3305,15 +3321,15 @@ def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_waterma
         'server_leader_pid':777,'invocation_id':'inv-1'}
     with path.open('a') as stream:
         stream.write(json.dumps(corrupt) + '\n')
-    assert value.read_native_input_watermark() == 0
+    assert value.read_native_input_watermark() == 28
     assert events[-1][0] == 'NATIVE_INPUT_WATERMARK_RECORD_REJECTED'
 
     valid = dict(kind='B23_SAFETY_INPUT_OBSERVED',
-        fields=dict(session='own-session', backend='22', ingress='11', sample='9'),
+        fields=dict(session='own-session', backend='22', ingress='11', sample='29'),
         server_leader_pid=777, invocation_id='inv-1')
     with path.open('a') as stream:
         stream.write(json.dumps(valid) + '\n')
-    assert value.read_native_input_watermark() == 9
+    assert value.read_native_input_watermark() == 29
 
 
 def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader):
