@@ -686,7 +686,6 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
             'callback_received_ns': received_ns})
         delivered_message = copy.deepcopy(message)
         def deliver():
-            state['scheduled'] += 1
             emit('B23_R04_DELIVERY_DELAYED_CALLBACK', {
                 'case': case, 'hook': hook_name, 'delay_s': delay,
                 'source_stamp_ns': stamp_ns_value,
@@ -702,6 +701,10 @@ def install_r04_delivery_fault(adapter, case, emit, *, delay_s=None):
         timer = threading.Timer(delay, deliver)
         timer.daemon = True
         state['timers'].append(timer)
+        # Keep scheduling distinct from callback execution.  The policy step
+        # may fail before this bounded delayed callback runs; the R04a error
+        # path must still know that exactly one delivery was scheduled.
+        state['scheduled'] += 1
         timer.start()
         return None
     adapter._b23_r04_injector = callback

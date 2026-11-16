@@ -1763,6 +1763,43 @@ def test_r04a_waits_for_scheduled_callback_after_step_fault_without_resetting_de
     assert state == {'triggered':1,'scheduled':1,'delivered':1}
 
 
+def test_r04_delivery_state_counts_scheduled_before_delayed_callback_runs(monkeypatch):
+    import threading
+    from mecanum_nav_rl.runtime_simulation.b23_runner import install_r04_delivery_fault
+
+    timers = []
+    class FakeTimer:
+        def __init__(self, delay, callback):
+            self.delay = delay
+            self.callback = callback
+            self.daemon = False
+            timers.append(self)
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, 'Timer', FakeTimer)
+    adapter = NS()
+    events = []
+    state = install_r04_delivery_fault(adapter, 'R04a',
+        lambda name, facts: events.append((name, facts)))
+    message = NS(admission_state=1, ADMISSION_POLICY_OPEN=1,
+        sample_sequence=7, header=NS(stamp=NS(sec=2, nanosec=3)))
+    delivered = []
+    assert adapter._b23_r04_injector(
+        'on_safety_input', message, lambda _adapter, item: delivered.append(item)) is None
+    assert state['triggered'] == 1
+    assert state['scheduled'] == 1
+    assert state['delivered'] == 0
+    assert len(timers) == 1 and timers[0].delay == .3
+    assert events[0][0] == 'B23_R04_DELIVERY_DELAY_SCHEDULED'
+
+    timers[0].callback()
+    assert state['scheduled'] == 1
+    assert state['delivered'] == 1
+    assert delivered == [message]
+    assert events[-1][0] == 'B23_R04_DELIVERY_DELAYED_CALLBACK'
+
+
 def test_r04a_blocked_slot_accepts_only_exact_watchdog_emergency_zero():
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     io = NS(events=[
