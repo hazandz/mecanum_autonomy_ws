@@ -337,7 +337,7 @@ def b1_runtime_chain(f, before_reset_commit=None, stop_after_observation0=False,
     adjacent.header.stamp, adjacent.final_publish_sequence = stamp(f.clock.ros), 4
     f.ingress.on_receipt(adjacent)
     state = SafetyState()
-    state.header.frame_id, state.header.stamp = 'base_link', stamp(f.clock.ros)
+    state.header.frame_id, state.header.stamp = 'base_link', stamp(cutoff)
     state.state, state.reset_epoch, state.runtime_generation = state.STATE_NORMAL, 2, 3
     state.command_valid = state.motion_permitted = True
     state.active_command_source = state.COMMAND_SOURCE_POLICY
@@ -452,7 +452,9 @@ def test_b1_missing_real_input_never_creates_transition_or_reward(source, missin
     if missing == 'scan': f.ingress.scans.clear()
     if missing == 'noisy': f.ingress.noisy_samples.clear()
     if missing == 'physics': f.ingress.physics_pairs.clear()
-    if missing == 'safety': f.ingress.safety_state = None
+    if missing == 'safety':
+        f.ingress.safety_state = None
+        f.ingress.safety_states.clear()
     with pytest.raises(ValueError): chain.b1.commit_step(chain.cutoff)
     assert not chain.b1.committer.committed
     assert 'b1_transition_committed' not in [name for name, _ in f.events]

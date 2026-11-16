@@ -70,7 +70,7 @@ from mecanum_nav_rl.tasks.local_training_goal import (
     GoalSettleState,
     LocalTrainingHealth,
     OracleGoalSample,
-    evaluate_local_training_goal,
+    evaluate_local_training_goal_sequence,
 )
 from mecanum_nav_rl.termination.manager import (
     EpisodeTaskSample,
@@ -115,6 +115,8 @@ class RLTransitionContext:
     valid_area: ValidArea | None
     goal_settle_result: GoalSettleResult | None = None
     task_history_sample: CommittedTaskHistorySample | None = None
+    goal_settle_samples: tuple[OracleGoalSample, ...] = ()
+    goal_settle_reset_before: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -666,8 +668,17 @@ class RLTransitionCommitter:
                 goal_id=committed_goal_state.goal_id,
                 goal_xy_m=committed_goal_state.goal_xy_m,
             )
-        goal_health = evaluate_local_training_goal(
-            goal_sample,
+        settle_samples = context.goal_settle_samples or (goal_sample,)
+        if (type(context.goal_settle_samples) is not tuple
+                or type(context.goal_settle_reset_before) is not bool
+                or settle_samples[-1] != goal_sample):
+            raise ValueError(
+                'goal settle sample sequence does not end at the committed cutoff'
+            )
+        if context.goal_settle_reset_before:
+            previous_settle_state = GoalSettleState()
+        goal_health = evaluate_local_training_goal_sequence(
+            settle_samples,
             previous_settle_state,
             expected_scenario_session_binding=(
                 goal_progress.scenario_session_binding

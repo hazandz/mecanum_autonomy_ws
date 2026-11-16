@@ -136,6 +136,7 @@ class LocalTrainingIngress:
         self.fault = None
         self.safety_state = None
         self.safety_received_ns = -1
+        self.safety_states = deque(maxlen=256)
         self._safety_publisher_gid = None
         self._safety_publications = OrderedDict()
         self._last_safety_payload = None
@@ -174,6 +175,7 @@ class LocalTrainingIngress:
                 if lifecycle_identity(raw) != lifecycle_identity(self.lifecycle):
                     self.noisy_samples.clear(); self.scans.clear()
                     self._oracles.clear(); self._states.clear(); self.physics_pairs.clear()
+                    self.safety_states.clear()
                     self.pending_ack = self.observation0_ack = None
                     self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
                     self.admission_publication_enabled = False
@@ -196,6 +198,7 @@ class LocalTrainingIngress:
             self._noise_ready = True
             self.noisy_samples.clear(); self.scans.clear()
             self._oracles.clear(); self._states.clear(); self.physics_pairs.clear()
+            self.safety_states.clear()
             self._last_join_iteration = 0
             self.emit('EMULATOR_RESET', {'seed': seed, 'steady_ns': self.now()})
 
@@ -536,6 +539,9 @@ class LocalTrainingIngress:
             if digest == self._last_safety_payload:
                 return  # DDS replay không làm mới receive time.
             self.safety_state, self.safety_received_ns = copy.deepcopy(msg), self.now()
+            self.safety_states.append((stamp_ns(msg.header.stamp),
+                                       self.safety_received_ns,
+                                       copy.deepcopy(msg)))
             self._last_safety_payload = digest
             self.emit('SAFETY_STATE_RECEIVED', {'semantic_payload_sha256': digest,
                 'payload_encoding':'SafetyState full fields canonical JSON/v1',

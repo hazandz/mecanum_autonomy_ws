@@ -684,16 +684,27 @@ class LocalTrainingB1Adapter:
             if not result.accepted:
                 raise ValueError('contact source continuity invalid: ' + str(result.reason))
 
-    def _goal_sample(self, facts, selection, reference, odometry, twist):
+    def _goal_sample(self, facts, selection, reference, odometry, twist, *,
+                     safety_state=None, safety_received_ns=None):
         from mecanum_nav_rl.tasks.local_training_goal import LocalTrainingHealth, OracleGoalSample
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns, lifecycle_identity
         from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
         source, status, life = self.ingress, facts['status'], self.ingress.lifecycle
-        safety = source.safety_state
+        if safety_state is None or safety_received_ns is None:
+            identity = facts['identity']
+            candidates = [item for item in source.safety_states
+                if item[0] <= facts['cutoff'] and item[1] <= facts['steady_now']
+                and item[2].reset_epoch == identity.reset_epoch
+                and item[2].runtime_generation == identity.runtime_generation]
+            if not candidates:
+                raise ValueError('no actual Safety state at or before goal cutoff')
+            _safety_stamp, safety_received_ns, safety_state = max(
+                candidates, key=lambda item: (item[0], item[1]))
+        safety = safety_state
         if safety is None:
             raise ValueError('actual Safety state/endpoint is missing')
         validate_dual_clock_freshness(source_ros_ns=stamp_ns(safety.header.stamp),
-            now_ros_ns=facts['ros_now'], receive_steady_ns=source.safety_received_ns,
+            now_ros_ns=facts['ros_now'], receive_steady_ns=safety_received_ns,
             now_steady_ns=facts['steady_now'], max_age_ns=source.profile['policy_ttl_ms'] * 1_000_000)
         identity = facts['identity']
         key = (identity.episode_generation, identity.reset_epoch, identity.runtime_generation)
@@ -760,13 +771,146 @@ class LocalTrainingB1Adapter:
             goal.x_m, goal.y_m, pose.position.x, pose.position.y,
             velocity.linear.x, velocity.linear.y, velocity.angular.z, health)
 
+    def _goal_settle_sample_for_exact_cutoff(self, facts, receipt, safety_state,
+                                             safety_received_ns):
+        """Create goal evidence from one exact scan/noisy/oracle/native cutoff."""
+        from mecanum_nav_rl.config.models import MotionLimitsConfig, ObservationConfig
+        from mecanum_nav_rl.observations.local_training_reference import (
+            LocalTrainingGoal, NoisyOdometryContext, build_local_training_reference,
+        )
+        from mecanum_nav_rl.observations.measured_twist import MeasuredTwistFeatureExtractor
+        from types import SimpleNamespace
+        identity, sample = facts['identity'], facts['noisy']
+        odometry = NoisyOdometryContext(sample.output.snapshot, identity,
+            self.binding.coordinate_reference_id, self.binding.scenario_id,
+            sample.received_steady_ns)
+        goal = self.artifact_result.artifact.task_definition.goal
+        reference = build_local_training_reference(
+            LocalTrainingGoal(goal.x_m, goal.y_m,
+                self.binding.coordinate_reference_id, self.binding.scenario_id),
+            odometry, evaluation_ros_now_ns=facts['ros_now'],
+            evaluation_steady_now_ns=facts['steady_now'],
+            scan_timestamp_ns=facts['cutoff'], scan_lifecycle=identity,
+            scan_scenario_identity=self.binding.scenario_id)
+        if not reference.ready:
+            raise ValueError('goal settle noisy reference is not ready: ' + str(reference.reason))
+        twist = MeasuredTwistFeatureExtractor(
+            ObservationConfig(), MotionLimitsConfig(max_vx_mps=self.scales[0],
+                max_vy_mps=self.scales[1], max_wz_radps=self.scales[2]),
+        ).extract(sample.output.snapshot)
+        if twist.features is None:
+            raise ValueError('goal settle measured twist is not ready')
+        return self._goal_sample(facts, SimpleNamespace(receipt=receipt),
+            reference, odometry, twist, safety_state=safety_state,
+            safety_received_ns=safety_received_ns)
+
+    def _goal_settle_sample_sequence(self, cutoff_ns, final_facts, final_selection,
+                                     final_sample, prior_state, health_continuous):
+        """Collect only retained actual scan-aligned samples in this B1 window.
+
+        The terminal B1 sample remains the exact transaction cutoff. Earlier
+        samples are accepted only when scan, noisy odometry, oracle, native
+        application, Safety state and receipt all bind the same lifecycle and
+        cutoff. An unavailable candidate starts a new continuity segment.
+        """
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
+            stamp_ns,
+        )
+        source = self.ingress
+        reset_prior = not health_continuous
+        samples = []
+        if health_continuous:
+            if prior_state is not None and prior_state.last_ros_ns is not None:
+                lower_ns = prior_state.last_ros_ns
+            else:
+                reset_facts = self.lifecycle.snapshot.reset_commit_facts
+                lower_ns = reset_facts.observation_provenance.observation_timestamp_ns
+            candidate_stamps = sorted(stamp for stamp in source.scans
+                                      if lower_ns < stamp < cutoff_ns)
+            for sample_cutoff in candidate_stamps:
+                try:
+                    facts = self._joined(sample_cutoff)
+                except B1SnapshotPending as error:
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff, 'reason': str(error),
+                        'steady_ns': source.now()})
+                    continue
+                status = facts['status']
+                applied_stamp = stamp_ns(status.applied_sim_stamp)
+                receipt = next((item for item in source.receipts
+                    if item.final_publish_sequence == status.applied_final_publish_sequence), None)
+                if (not status.applied_receipt_valid or status.local_zero_override
+                        or receipt is None or receipt.lifecycle != facts['identity']
+                        or receipt.final_publisher_instance_id != source.final_publisher_id
+                        or receipt.session_id != source.identity.session_id
+                        or receipt.ingress_config_hash != source.identity.config_hash
+                        or receipt.publish_stamp_ns > applied_stamp
+                        or applied_stamp != sample_cutoff
+                        or receipt.received_steady_ns > facts['steady_now']):
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'exact native application receipt is unavailable',
+                        'steady_ns': source.now()})
+                    continue
+                safety_candidates = [item for item in source.safety_states
+                    if item[0] <= sample_cutoff and item[1] <= facts['steady_now']
+                    and item[2].reset_epoch == facts['identity'].reset_epoch
+                    and item[2].runtime_generation == facts['identity'].runtime_generation]
+                if not safety_candidates:
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'no actual Safety state at or before cutoff',
+                        'steady_ns': source.now()})
+                    continue
+                _safety_stamp, safety_received_ns, safety_state = max(
+                    safety_candidates, key=lambda item: (item[0], item[1]))
+                try:
+                    sample = self._goal_settle_sample_for_exact_cutoff(
+                        facts, receipt, safety_state, safety_received_ns)
+                except (TypeError, ValueError) as error:
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff, 'reason': str(error),
+                        'steady_ns': source.now()})
+                    continue
+                samples.append(sample)
+        samples.append(final_sample)
+        if any(left.timestamp_ns >= right.timestamp_ns
+               for left, right in zip(samples, samples[1:])):
+            raise ValueError('goal settle samples are not strictly ordered')
+        self.emit('GOAL_SETTLE_SAMPLE_WINDOW', {
+            'cutoff_ns': cutoff_ns,
+            'sample_timestamps_ns': [item.timestamp_ns for item in samples],
+            'sample_facts': [{
+                'timestamp_ns': item.timestamp_ns,
+                'received_steady_ns': item.received_steady_ns,
+                'pose_xy_m': [item.pose_x_m, item.pose_y_m],
+                'body_twist': [item.body_vx_mps, item.body_vy_mps,
+                               item.body_wz_radps],
+                'identity': list(item.lifecycle_key),
+                'receipt_timestamp_ns': item.health.receipt_timestamp_ns,
+                'receipt_received_steady_ns': item.health.receipt_received_steady_ns,
+                'scan_timestamp_ns': item.health.scan_timestamp_ns,
+                'noisy_odometry_timestamp_ns': item.health.noisy_odometry_timestamp_ns,
+                'healthy': item.health.healthy(),
+            } for item in samples],
+            'sample_count': len(samples), 'reset_prior_state': reset_prior,
+            'final_receipt_key': final_selection.receipt.receipt_key,
+            'steady_ns': source.now()})
+        return tuple(samples), reset_prior
+
     def commit_step(self, cutoff_ns):
         import numpy as np
         from mecanum_nav_rl.core.episode_lifecycle import CommandReceiptSnapshot, StepCommitCandidate, EpisodeLifecycleState
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
         from mecanum_nav_rl.core.rl_transition import RLTransitionContext
         from mecanum_nav_rl.observations.previous_command import PreviousNormalizedCommand
-        from mecanum_nav_rl.tasks.local_training_goal import GoalSettleState, evaluate_local_training_goal
+        from mecanum_nav_rl.tasks.local_training_goal import (
+            GoalSettleState, evaluate_local_training_goal_sequence,
+        )
         from mecanum_nav_rl.termination.manager import EpisodeTaskSample, TerminationInput, TerminationManager, TerminationReason
         from mecanum_nav_rl.rewards.manager import RewardManager, TransitionRewardInput
         with self.ingress.lock:
@@ -796,11 +940,15 @@ class LocalTrainingB1Adapter:
             old = snapshot.goal_settle_state
             continuous = (snapshot.task_health_epoch == snapshot.committed_task_health_epoch
                           and self.contact.state.health_epoch == snapshot.committed_contact_health_epoch)
+            goal_samples, reset_goal_state = self._goal_settle_sample_sequence(
+                cutoff_ns, facts, selection, goal_sample, old, continuous)
             settle_state = GoalSettleState() if old is None or not continuous else GoalSettleState(
                 goal_sample.lifecycle_key, old.settled_since_ros_ns, old.last_ros_ns, old.success,
                 self.binding, old.task_id, old.session_id, old.goal_id, old.goal_xy_m)
             goal = self.artifact_result.artifact.task_definition.goal
-            goal_result = evaluate_local_training_goal(goal_sample, settle_state,
+            if reset_goal_state:
+                settle_state = GoalSettleState()
+            goal_result = evaluate_local_training_goal_sequence(goal_samples, settle_state,
                 expected_scenario_session_binding=self.binding, expected_task_id=self.task_id,
                 expected_session_id=self.ingress.identity.session_id, expected_goal_id=self.goal_id,
                 expected_goal_xy_m=(goal.x_m, goal.y_m))
@@ -833,7 +981,9 @@ class LocalTrainingB1Adapter:
                 (('step_index', token.step_index),), selection.receipt.receipt_key, selection, normalized,
                 token.transition_id, self.contact, self.issuance, applied_policy[0], clearance, provenance,
                 inputs, reference, odometry, twist, goal_sample, self.task_id, self.ingress.identity.session_id,
-                self.goal_id, (goal.x_m, goal.y_m), None)
+                self.goal_id, (goal.x_m, goal.y_m), None,
+                goal_settle_samples=goal_samples,
+                goal_settle_reset_before=reset_goal_state)
             application = applied_policy[1]
             if token.transition_id not in self._application_logged:
                 self._application_logged.add(token.transition_id)

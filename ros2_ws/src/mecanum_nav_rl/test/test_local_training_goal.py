@@ -9,6 +9,7 @@ from mecanum_nav_rl.tasks.local_training_goal import (
     LocalTrainingHealth,
     OracleGoalSample,
     evaluate_local_training_goal,
+    evaluate_local_training_goal_sequence,
 )
 
 import pytest
@@ -216,6 +217,86 @@ def test_goal_success_requires_full_ros_second_and_has_no_yaw_requirement():
     result = evaluate(sample(1_000_000_000), state)
     assert result.success
     assert result.state.success
+
+
+def test_goal_sequence_uses_actual_sub_250ms_samples_between_commits():
+    """Physics-aligned evidence can bridge slower B1 commit cadence."""
+    samples = tuple(sample(timestamp) for timestamp in range(
+        0, 1_000_000_001, 100_000_000
+    ))
+    result = evaluate_local_training_goal_sequence(
+        samples, GoalSettleState(),
+        expected_scenario_session_binding=_BINDING,
+        expected_task_id=_TASK_ID, expected_session_id=_SESSION_ID,
+        expected_goal_id=_GOAL_ID, expected_goal_xy_m=_GOAL_XY_M,
+    )
+    assert result.healthy, result.reason
+    assert result.success, result
+    assert result.state.settled_since_ros_ns == 0
+    assert result.state.last_ros_ns == 1_000_000_000
+
+
+def test_goal_sequence_gap_over_250ms_restarts_actual_sample_window():
+    """A real sample gap over the locked limit restarts settle time."""
+    samples = tuple(sample(timestamp) for timestamp in (
+        0, 100_000_000, 200_000_000, 500_000_000,
+        600_000_000, 700_000_000, 800_000_000, 900_000_000,
+        1_000_000_000, 1_100_000_000,
+    ))
+    result = evaluate_local_training_goal_sequence(
+        samples, GoalSettleState(),
+        expected_scenario_session_binding=_BINDING,
+        expected_task_id=_TASK_ID, expected_session_id=_SESSION_ID,
+        expected_goal_id=_GOAL_ID, expected_goal_xy_m=_GOAL_XY_M,
+    )
+    assert result.healthy, result.reason
+    assert not result.success
+    assert result.state.settled_since_ros_ns == 500_000_000
+
+
+@pytest.mark.parametrize('mutation', ['stale', 'identity', 'motion'])
+def test_goal_sequence_does_not_bridge_invalid_health_identity_or_motion(
+    mutation,
+):
+    """A bad actual sample cannot contribute to a later GOAL result."""
+    first = sample(0)
+    facts = health(100_000_000)
+    value = sample(100_000_000, health_facts=facts)
+    if mutation == 'stale':
+        stale = replace(facts, oracle_steady_age_ns=250_000_001)
+        value = replace(value, health=stale)
+    elif mutation == 'identity':
+        other_identity = replace(
+            value, lifecycle_key=(9, 9, 9),
+        )
+        value = other_identity
+    else:
+        value = sample(100_000_000, vx=0.030001)
+    result = evaluate_local_training_goal_sequence(
+        (first, value), GoalSettleState(),
+        expected_scenario_session_binding=_BINDING,
+        expected_task_id=_TASK_ID, expected_session_id=_SESSION_ID,
+        expected_goal_id=_GOAL_ID, expected_goal_xy_m=_GOAL_XY_M,
+    )
+    if mutation in ('stale', 'identity'):
+        assert not result.healthy, result
+    else:
+        assert result.healthy, result.reason
+        assert not result.success
+        assert result.state.settled_since_ros_ns is None
+
+
+def test_goal_sequence_rejects_duplicate_sample_timestamp():
+    """Repeated bytes/time are not additional cadence evidence."""
+    value = sample(100_000_000)
+    result = evaluate_local_training_goal_sequence(
+        (value, value), GoalSettleState(),
+        expected_scenario_session_binding=_BINDING,
+        expected_task_id=_TASK_ID, expected_session_id=_SESSION_ID,
+        expected_goal_id=_GOAL_ID, expected_goal_xy_m=_GOAL_XY_M,
+    )
+    assert not result.healthy
+    assert result.reason == 'goal settle samples are not strictly increasing'
 
 
 @pytest.mark.parametrize(

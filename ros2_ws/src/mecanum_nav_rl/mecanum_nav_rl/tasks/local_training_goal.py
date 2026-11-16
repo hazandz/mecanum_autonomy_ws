@@ -409,6 +409,50 @@ def evaluate_local_training_goal(
         return _invalid_result(str(error))
 
 
+def evaluate_local_training_goal_sequence(
+    samples: tuple[OracleGoalSample, ...],
+    state: GoalSettleState,
+    *,
+    expected_scenario_session_binding: ScenarioSessionBinding,
+    expected_task_id: str,
+    expected_session_id: str,
+    expected_goal_id: str,
+    expected_goal_xy_m: tuple[float, float],
+) -> GoalSettleResult:
+    """Evaluate an ordered run of distinct, actual oracle samples.
+
+    The caller may provide intermediate physics-aligned samples between B1
+    commits. Each sample still passes the same identity, health, freshness,
+    motion and 250 ms continuity checks as a commit sample. Missing or
+    malformed samples must not be synthesized by callers.
+    """
+    if type(samples) is not tuple or not samples:
+        return _invalid_result('goal settle requires a non-empty sample tuple')
+    current = state
+    result = None
+    previous_timestamp = None
+    for sample in samples:
+        if not isinstance(sample, OracleGoalSample):
+            return _invalid_result('goal settle sequence contains an invalid sample')
+        if (previous_timestamp is not None
+                and sample.timestamp_ns <= previous_timestamp):
+            return _invalid_result('goal settle samples are not strictly increasing')
+        result = evaluate_local_training_goal(
+            sample,
+            current,
+            expected_scenario_session_binding=expected_scenario_session_binding,
+            expected_task_id=expected_task_id,
+            expected_session_id=expected_session_id,
+            expected_goal_id=expected_goal_id,
+            expected_goal_xy_m=expected_goal_xy_m,
+        )
+        if not result.healthy:
+            return result
+        current = result.state
+        previous_timestamp = sample.timestamp_ns
+    return result
+
+
 def _valid_expected_context(
     binding: object,
     task_id: object,
@@ -647,4 +691,5 @@ __all__ = (
     'LocalTrainingHealth',
     'OracleGoalSample',
     'evaluate_local_training_goal',
+    'evaluate_local_training_goal_sequence',
 )

@@ -85,7 +85,7 @@ from mecanum_nav_rl.simulation.simulated_odometry import (
 )
 from mecanum_nav_rl.tasks.local_training_goal import (
     GoalSettleState, LocalTrainingHealth, OracleGoalSample,
-    evaluate_local_training_goal,
+    evaluate_local_training_goal_sequence,
 )
 from mecanum_nav_rl.termination.manager import (
     EpisodeTaskSample,
@@ -266,6 +266,7 @@ def context(
     measured_twist=(0.0, 0.0, 0.0), twist_features_override=None,
     task_id='task', session_id='session', goal_id='goal',
     goal_xy_m=(0.0, 0.0),
+    goal_settle_samples=(), goal_settle_reset_before=False,
 ):
     """Tạo dữ kiện transition nhất quán cho kiểm thử commit."""
     cutoff = candidate.observation_provenance.observation_timestamp_ns
@@ -444,8 +445,11 @@ def context(
             goal_id=settle_before.goal_id,
             goal_xy_m=settle_before.goal_xy_m,
         )
-    goal_result = evaluate_local_training_goal(
-        goal_sample, settle_state,
+    if goal_settle_reset_before:
+        settle_state = GoalSettleState()
+    settle_samples = goal_settle_samples or (goal_sample,)
+    goal_result = evaluate_local_training_goal_sequence(
+        settle_samples, settle_state,
         expected_scenario_session_binding=scenario_binding,
         expected_task_id=task_id, expected_session_id=session_id,
         expected_goal_id=goal_id, expected_goal_xy_m=goal_xy,
@@ -605,7 +609,33 @@ def context(
         expected_goal_id=goal_id,
         expected_goal_xy_m=goal_xy,
         valid_area=None,
+        goal_settle_samples=tuple(goal_settle_samples),
+        goal_settle_reset_before=goal_settle_reset_before,
     )
+
+
+def _retime_goal_sample(value, timestamp_ns):
+    """Shift a synthetic test fixture while preserving all recorded ages."""
+    delta = timestamp_ns - value.timestamp_ns
+    health = value.health
+    timestamp_fields = (
+        'oracle_timestamp_ns', 'oracle_twist_timestamp_ns',
+        'scan_timestamp_ns', 'noisy_odometry_timestamp_ns',
+        'reference_timestamp_ns', 'measured_twist_timestamp_ns',
+        'lifecycle_timestamp_ns', 'receipt_timestamp_ns',
+        'cutoff_ros_ns', 'evaluation_ros_now_ns',
+    )
+    receive_fields = (
+        'oracle_received_steady_ns', 'oracle_twist_received_steady_ns',
+        'scan_received_steady_ns', 'noisy_odometry_received_steady_ns',
+        'lifecycle_received_steady_ns', 'receipt_received_steady_ns',
+        'evaluation_steady_now_ns',
+    )
+    updates = {name: getattr(health, name) + delta
+               for name in (*timestamp_fields, *receive_fields)}
+    return replace(value, timestamp_ns=timestamp_ns,
+                   received_steady_ns=value.received_steady_ns + delta,
+                   health=replace(health, **updates))
 
 
 def test_atomic_commit_copies_observation_and_commits_full_tuple_once():
@@ -1236,6 +1266,122 @@ def test_goal_termination_comes_from_same_task_settle_across_commits():
     assert transitions[-1].reward.terms.terminal == 15.0
     assert transitions[-1].observation[78:81].tolist() == [0.0, 0.0, 0.0]
     assert transitions[-1].command_history == (0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ('timestamps', 'expected_goal'),
+    [
+        (tuple(range(1_200_000_000, 2_200_000_001, 100_000_000)), True),
+        ((1_200_000_000, 1_300_000_000, 1_400_000_000,
+          1_700_000_000, 1_800_000_000, 1_900_000_000,
+          2_000_000_000, 2_100_000_000, 2_200_000_000), False),
+    ],
+)
+def test_b1_commit_evaluates_actual_intermediate_goal_samples(
+    timestamps, expected_goal,
+):
+    """B1 commits GOAL only when the bound actual sample chain qualifies."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    binding = lifecycle.snapshot.committed_scenario_session_binding
+    cutoff = timestamps[-1]
+    provenance = ExactObservationProvenance(
+        identity, cutoff, cutoff, cutoff
+    )
+    prior_fact = candidate.goal_result.fact
+    candidate = replace(
+        candidate,
+        observation_provenance=provenance,
+        goal_result=TaskOracleResult(TaskOracleStatus.READY, replace(
+            prior_fact, goal_distance_m=0.0, goal_reached=False,
+            provenance=GoalFactProvenance(
+                GoalFactJoinMode.STEP_TRANSITION, binding, provenance,
+                cutoff, token,
+            ),
+        )),
+    )
+    contact = ContactLatch()
+    contact.reset(identity)
+    seed = context(
+        lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.SAFE_STOP, reason=None,
+        final_sequence=10, source_sequence=11,
+        oracle_pose_xy=(0.0, 0.0),
+    )
+    samples = tuple(
+        seed.goal_sample if timestamp == cutoff else
+        _retime_goal_sample(seed.goal_sample, timestamp)
+        for timestamp in timestamps
+    )
+    value = context(
+        lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.SAFE_STOP,
+        reason=TerminationReason.GOAL if expected_goal else None,
+        final_sequence=10, source_sequence=11,
+        oracle_pose_xy=(0.0, 0.0),
+        goal_settle_samples=samples,
+    )
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert result.committed, result.reason
+    assert (
+        result.transition.termination.reason is TerminationReason.GOAL
+    ) is expected_goal
+    assert (result.transition.reward.terms.terminal == 15.0) is expected_goal
+    assert result.transition.goal_settle_result.success is expected_goal
+
+
+def test_b1_does_not_commit_goal_when_an_intermediate_health_sample_is_bad():
+    """Invalid source health cannot create a terminal B1 GOAL commit."""
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    cutoff = 1_300_000_000
+    binding = lifecycle.snapshot.committed_scenario_session_binding
+    provenance = ExactObservationProvenance(
+        identity, cutoff, cutoff, cutoff
+    )
+    fact = replace(
+        candidate.goal_result.fact,
+        goal_distance_m=0.0,
+        goal_reached=False,
+        provenance=GoalFactProvenance(
+            GoalFactJoinMode.STEP_TRANSITION, binding, provenance, cutoff, token
+        ),
+    )
+    candidate = replace(
+        candidate, observation_provenance=provenance,
+        goal_result=TaskOracleResult(TaskOracleStatus.READY, fact),
+    )
+    contact = ContactLatch()
+    contact.reset(identity)
+    seed = context(
+        lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.SAFE_STOP, reason=None,
+        final_sequence=10, source_sequence=11,
+        oracle_pose_xy=(0.0, 0.0),
+    )
+    invalid = _retime_goal_sample(seed.goal_sample, 1_200_000_000)
+    invalid = replace(
+        invalid,
+        health=replace(invalid.health, contact_source_healthy=False),
+    )
+    valid_value = context(
+        lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.SAFE_STOP, reason=None,
+        final_sequence=10, source_sequence=11,
+        oracle_pose_xy=(0.0, 0.0),
+    )
+    value = replace(
+        valid_value, goal_settle_samples=(invalid, seed.goal_sample)
+    )
+    before = lifecycle.snapshot
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert not result.committed
+    assert 'health' in result.reason
+    after = lifecycle.snapshot
+    assert after.committed_transition_ids == before.committed_transition_ids
+    assert after.reward_baseline == before.reward_baseline
 
 
 @pytest.mark.parametrize('attempt_during_health_loss', [False, True])
