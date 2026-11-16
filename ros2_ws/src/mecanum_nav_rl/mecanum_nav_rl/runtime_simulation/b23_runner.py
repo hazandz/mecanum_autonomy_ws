@@ -1280,6 +1280,31 @@ async def await_r04a_production_rejection(io, *, deadline_ns):
         expected_native_fault_flags=(4, 6))
 
 
+async def await_r04a_post_rejection_zero(io, rejection, *, deadline_ns):
+    """Require a native zero/inhibit status sampled after the Safety rejection."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    rejected_ns = rejection.get('steady_ns') if isinstance(rejection, dict) else None
+    if type(rejected_ns) is not int or rejected_ns <= 0:
+        raise ValueError('R04a Safety rejection has no steady timestamp')
+    expected_flags = (SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+    def observed():
+        state = io.ingress.backend_state
+        received_ns = io.ingress.backend_received_ns
+        if (state is None or type(received_ns) is not int or received_ns <= rejected_ns
+                or state.fault_flags not in expected_flags
+                or not state.local_zero_override or not state.actuator_inhibited):
+            return None
+        return {'status_sequence':state.status_sequence, 'status_received_ns':received_ns,
+            'fault_flags':int(state.fault_flags), 'local_zero_override':True,
+            'actuator_inhibited':True, 'after_safety_rejection':True}
+    result = await io.until(observed, deadline_ns=deadline_ns,
+        phase='R04a backend zero status sampled after stale Safety rejection',
+        expected_native_fault_flags=expected_flags)
+    io.emit('R04A_POST_REJECTION_ZERO_OBSERVED', result)
+    return result
+
+
 async def await_r04a_delayed_callback(io, state, *, timeout_ns=1_000_000_000):
     """Wait boundedly for the injected callback after the POLICY attempt stops."""
     deadline_ns = min(io.deadline_ns, io.now() + timeout_ns)
@@ -4915,7 +4940,9 @@ async def training_child(path):
                         if not expected_error:
                             raise RuntimeError('R04a step ended outside its timeout/watchdog fail-closed path') from error
                         await await_r04a_delayed_callback(io, state)
-                        await await_r04a_production_rejection(io,
+                        rejected = await await_r04a_production_rejection(io,
+                            deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
+                        await await_r04a_post_rejection_zero(io, rejected,
                             deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                         checked = verify_r04_stale_delivery(io, case='R04a')
                         active = b1.lifecycle.snapshot.active_transition_identity

@@ -16,7 +16,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
-    await_r04a_production_rejection, await_r04a_delayed_callback,
+    await_r04a_production_rejection, await_r04a_post_rejection_zero,
+    await_r04a_delayed_callback,
     verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r04c_stale_rejection_and_zero,
@@ -1748,6 +1749,37 @@ def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
     assert result['steady_ns'] == 302
     assert safety_calls == [('policy_hold', True), ('stream_enabled', True)]
     assert calls == [(1_000,'R04a bounded production Safety rejection after delayed stale input', (4, 6))]
+
+
+def test_r04a_waits_for_backend_zero_status_after_safety_rejection():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    state = NS(fault_flags=SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE,
+        local_zero_override=True, actuator_inhibited=True, status_sequence=8)
+    ingress = NS(backend_state=state, backend_received_ns=99)
+    calls = []
+    events = []
+    clock = {'advance':True}
+    async def until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
+        calls.append((deadline_ns, phase, expected_native_fault_flags))
+        assert predicate() is None
+        if clock['advance']:
+            ingress.backend_received_ns = 101
+            return predicate()
+        raise TimeoutError(phase)
+    io = NS(ingress=ingress, until=until,
+        emit=lambda name, facts: events.append((name, facts)))
+    result = asyncio.run(await_r04a_post_rejection_zero(io,
+        {'steady_ns':100}, deadline_ns=200))
+    assert result == {'status_sequence':8,'status_received_ns':101,
+        'fault_flags':6,'local_zero_override':True,'actuator_inhibited':True,
+        'after_safety_rejection':True}
+    assert calls == [(200,'R04a backend zero status sampled after stale Safety rejection', (4, 6))]
+    assert events == [('R04A_POST_REJECTION_ZERO_OBSERVED', result)]
+    clock['advance'] = False
+    ingress.backend_received_ns = 99
+    with pytest.raises(TimeoutError):
+        asyncio.run(await_r04a_post_rejection_zero(io, {'steady_ns':100}, deadline_ns=200))
 
 
 def test_r04a_waits_for_scheduled_callback_after_step_fault_without_resetting_deadline():
