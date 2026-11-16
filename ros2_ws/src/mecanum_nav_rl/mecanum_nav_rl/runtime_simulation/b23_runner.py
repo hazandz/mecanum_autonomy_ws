@@ -2379,6 +2379,20 @@ class TrainingWorkerIO:
                     raise RuntimeError('worker pause did not advance monotonic clock')
         raise TimeoutError(phase + ': deadline expired')
 
+    async def wait_backend_control_ready(self, control, *, timeout_ns, phase):
+        """Wait for the backend service endpoint before sending a bounded RPC."""
+        port = getattr(control, '_port', None)
+        client = getattr(port, '_client', None)
+        ready = getattr(client, 'service_is_ready', None)
+        if not callable(ready):
+            raise RuntimeError('backend control client readiness API unavailable')
+        if type(timeout_ns) is not int or timeout_ns <= 0:
+            raise ValueError('backend control readiness budget must be positive')
+        deadline = min(self.deadline_ns, self.now() + timeout_ns)
+        await self.until(ready, deadline_ns=deadline, phase=phase)
+        self.emit('BACKEND_CONTROL_SERVICE_READY', {'phase':phase,'steady_ns':self.now()})
+        return self.now()
+
     async def wait_r02e_native_admission(self, *, held_sample_sequence,
             fresh_sample_sequence, pending_token, deadline_ns):
         """Wait within the active step budget for the native event-pipe record."""
@@ -4922,6 +4936,8 @@ async def training_child(path):
                 raise RuntimeError('R07c requires a clean packet and verified original contact proof')
             old_backend = int(io.descriptor['backend_instance_id'])
             restart = await io.request_owned_restart(case='R07c', target_role='server')
+            await io.wait_backend_control_ready(io.control, timeout_ns=10_000_000_000,
+                phase='R07c replacement backend control service readiness')
             old_rejection = None
             try:
                 await io.control.inhibit(deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))

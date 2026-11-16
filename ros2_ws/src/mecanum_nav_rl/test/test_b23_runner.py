@@ -1208,6 +1208,48 @@ def test_r07c_worker_finalization_uses_verified_replacement_backend():
     assert [name for name, _ in calls] == ['replacement']
 
 
+def test_worker_waits_for_backend_service_before_control_rpc():
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    clock = {'ns':100}
+    events = []
+    class Client:
+        def __init__(self, ready_after): self.calls, self.ready_after = 0, ready_after
+        def service_is_ready(self):
+            self.calls += 1
+            return self.ready_after is not None and self.calls >= self.ready_after
+    class PauseControl:
+        async def __call__(self, seconds): clock['ns'] += int(seconds * 1e9)
+    def io_for(client):
+        io = TrainingWorkerIO.__new__(TrainingWorkerIO)
+        io.deadline_ns = 100_000_000
+        io.now = lambda: clock['ns']
+        io.pause = PauseControl()
+        io.check = lambda **_kwargs: None
+        io.emit = lambda name, facts: events.append((name, facts))
+        return io
+
+    ready_client = Client(3)
+    control = NS(_port=NS(_client=ready_client))
+    reached = asyncio.run(io_for(ready_client).wait_backend_control_ready(
+        control, timeout_ns=20_000_000, phase='fake replacement service'))
+    assert ready_client.calls == 3
+    assert reached == clock['ns']
+    assert events[-1][0] == 'BACKEND_CONTROL_SERVICE_READY'
+    assert events[-1][1]['phase'] == 'fake replacement service'
+
+    clock['ns'] = 100
+    unavailable = Client(None)
+    with pytest.raises(TimeoutError, match='fake unavailable service: deadline expired'):
+        asyncio.run(io_for(unavailable).wait_backend_control_ready(
+            NS(_port=NS(_client=unavailable)), timeout_ns=5_000_000,
+            phase='fake unavailable service'))
+    with pytest.raises(RuntimeError, match='readiness API unavailable'):
+        asyncio.run(io_for(object()).wait_backend_control_ready(
+            NS(_port=object()), timeout_ns=5_000_000, phase='missing API'))
+
+
 def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(
