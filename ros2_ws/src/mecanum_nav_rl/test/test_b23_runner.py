@@ -655,7 +655,9 @@ def test_r09b_fixture_pose_waits_for_current_receipt_keyed_zero_application():
     state.episode_generation=1; state.reset_epoch=2; state.runtime_generation=3
     state.applied_receipt_valid=True; state.applied_final_publisher_instance_id=34
     state.applied_final_publish_sequence=88; state.fault_flags=0; state.paused=False
-    state.local_zero_override=False; state.actuator_inhibited=False
+    # Native may hold actuator_inhibited while applying the exact SAFE_STOP
+    # receipt. That is a valid zero proof for this fixture-only operation.
+    state.local_zero_override=False; state.actuator_inhibited=True
     state.coverage_complete=True; state.contact_source_healthy=True
     state.required_collision_mask=3; state.observed_collision_mask=3
     io=object.__new__(TrainingWorkerIO)
@@ -683,6 +685,7 @@ def test_r09b_fixture_pose_waits_for_current_receipt_keyed_zero_application():
     assert facts['zero_receipt_sequence']==88
     assert facts['zero_receipt_source']==receipt.SOURCE_SAFE_STOP
     assert facts['zero_applied'] is True
+    assert facts['actuator_inhibited'] is True
     assert facts['recent_zero_witness_used'] is False
 
 

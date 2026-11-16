@@ -2720,7 +2720,7 @@ class TrainingWorkerIO:
                         or latest.session_id != self.descriptor['session_id']
                         or latest.config_hash != self.descriptor['config_hash']
                         or latest.fault_flags or latest.paused or latest.local_zero_override
-                        or latest.actuator_inhibited or not latest.applied_receipt_valid
+                        or not latest.applied_receipt_valid
                         or latest.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
                         or latest.applied_final_publish_sequence != receipt.final_publish_sequence
                         or not latest.coverage_complete or not latest.contact_source_healthy
@@ -2735,7 +2735,7 @@ class TrainingWorkerIO:
                 age_ns = self.now() - received_ns if type(received_ns) is int else None
                 if (applied is None or type(age_ns) is not int or not 0 <= age_ns <= 500_000_000
                         or applied.fault_flags or applied.paused or applied.local_zero_override
-                        or applied.actuator_inhibited or not applied.applied_receipt_valid
+                        or not applied.applied_receipt_valid
                         or applied.backend_instance_id != self.descriptor['backend_instance_id']
                         or applied.session_id != self.descriptor['session_id']
                         or applied.config_hash != self.descriptor['config_hash']
@@ -2788,6 +2788,7 @@ class TrainingWorkerIO:
             'zero_receipt_sequence':receipt.final_publish_sequence,
             'zero_receipt_source':receipt.source,
             'zero_applied':applied_zero, 'emergency_zero':emergency_zero,
+            'actuator_inhibited':bool(state.actuator_inhibited),
             'recent_zero_witness_used':False,
             'zero_witness_age_ns':None,
             'backend_instance_id':state.backend_instance_id,
