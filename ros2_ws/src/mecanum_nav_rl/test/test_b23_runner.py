@@ -27,6 +27,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r07b_revocation, verify_r07b_backend_restart,
     verify_owned_restart_request, verify_r07c_backend_restart,
     verify_r07d_final_publisher_restart, prepare_r07d_final_publisher_restart,
+    pin_initial_final_publisher_identity,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
 )
@@ -1243,6 +1244,18 @@ def test_r07d_establishes_real_episode_before_native_inhibited_drain():
     assert calls[1] == ('B23_R07D_ACTIVE_CONTEXT_READY', {
         'episode_generation':1,'reset_epoch':1,'runtime_generation':1,'steady_ns':123})
     assert calls[2] == ('drain', io.deadline_ns)
+
+
+def test_r07d_parent_pins_initial_final_instance_for_owned_restart():
+    descriptor = {'run_id':'B23_R07D_TEST','invocation_id':'a'*32}
+    boot = {'run_id':'B23_R07D_TEST','invocation_id':'a'*32,
+        'publisher_instance_id':77,'identity':{'pid':101}}
+    assert pin_initial_final_publisher_identity(descriptor, boot, 101) == 77
+    assert descriptor['final_publisher_instance_id'] == 77
+    assert descriptor['final_publisher_pid'] == 101
+    with pytest.raises(RuntimeError, match='cannot be pinned'):
+        pin_initial_final_publisher_identity(descriptor, {**boot,
+            'publisher_instance_id':78}, 102)
 
 
 def test_worker_waits_for_backend_service_before_control_rpc():

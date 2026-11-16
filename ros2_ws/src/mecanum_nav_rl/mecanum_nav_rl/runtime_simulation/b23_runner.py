@@ -406,6 +406,24 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
         'replacement_publisher_instance_id':publisher_id}
 
 
+def pin_initial_final_publisher_identity(descriptor_base, boot, final_pid):
+    """Giữ publisher instance đầu tiên trong descriptor cha dùng cho R07d."""
+    publisher_id = boot.get('publisher_instance_id')
+    identity = boot.get('identity')
+    if (type(publisher_id) is not int or publisher_id <= 0
+            or type(final_pid) is not int or final_pid <= 0
+            or not isinstance(identity, dict) or identity.get('pid') != final_pid
+            or boot.get('run_id') != descriptor_base.get('run_id')
+            or boot.get('invocation_id') != descriptor_base.get('invocation_id')):
+        raise RuntimeError('initial final publisher binding cannot be pinned to this invocation')
+    previous = descriptor_base.get('final_publisher_instance_id')
+    if previous is not None and previous != publisher_id:
+        raise RuntimeError('initial final publisher binding conflicts with pinned identity')
+    descriptor_base.update(final_publisher_instance_id=publisher_id,
+        final_publisher_pid=final_pid)
+    return publisher_id
+
+
 async def query_replacement_backend_then_inhibit(control, *, query_deadline_ns,
                                                   inhibit_deadline_ns,
                                                   probe_start_request_sequence):
@@ -6341,6 +6359,7 @@ async def run_parent(packet_path, packet_sha256):
                     raise RuntimeError('final boot record ownership mismatch')
             return record
         boot = await wait_for(booted, 'final actual boot')
+        pin_initial_final_publisher_identity(descriptor_base, boot, final.pid)
         worker_descriptor = dict(descriptor_base, role='worker',
             final_publisher_instance_id=boot['publisher_instance_id'], final_publisher_pid=final.pid,
             final_binding_path=str(root/'final-binding.json'), final_binding_ack_path=str(root/'final-binding-ack.json'))
