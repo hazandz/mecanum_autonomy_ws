@@ -2478,13 +2478,26 @@ class TrainingWorkerIO:
             if not response_path.exists():
                 return None
             response = json.loads(response_path.read_bytes())
+            old_process = response.get('old_process')
+            old_identity = (old_process.get('identity')
+                if isinstance(old_process, dict) else None)
+            identity_fields = ('pid', 'uid', 'start_ticks', 'argv', 'pgid', 'sid')
+            old_process_matches = (
+                isinstance(old_process, dict)
+                and isinstance(old_identity, dict)
+                and old_process.get('pid') == identity.get('pid')
+                and type(old_process.get('exit_status')) is int
+                and old_process.get('group_absent') is True
+                and all(old_identity.get(field) == identity.get(field)
+                        for field in identity_fields)
+            )
             if (response.get('schema') != 'b23_owned_restart_response/v1'
                     or response.get('run_id') != self.descriptor['run_id']
                     or response.get('invocation_id') != self.descriptor['invocation_id']
                     or response.get('case') != case
                     or response.get('target_role') != target_role
                     or response.get('request_sha256') != request_hash
-                    or response.get('old_process', {}).get('identity') != identity):
+                    or not old_process_matches):
                 raise RuntimeError('owned restart response binding mismatch')
             return response
         response = await self.until(response_ready, deadline_ns=self.deadline_ns,

@@ -1036,6 +1036,96 @@ def test_owned_restart_request_ignores_mutable_proc_snapshot_but_pins_identity_t
                 process_identity_record=changed)
 
 
+def _owned_restart_ack_test_io(tmp_path, identity, response_identity,
+        *, group_absent=True, exit_status=0):
+    import asyncio
+    import hashlib
+    import json
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    request_path = tmp_path/'restart-request.json'
+    response_path = tmp_path/'restart-response.json'
+    io = object.__new__(TrainingWorkerIO)
+    io.descriptor = {
+        'run_id':'B23_R07C_RESPONSE_BINDING', 'invocation_id':'a'*32,
+        'server_identity':identity, 'server_leader_pid':101,
+        'backend_instance_id':11,
+        'owned_restart_request_path':str(request_path),
+        'owned_restart_response_path':str(response_path),
+    }
+    io.now = lambda:100
+    io.emit = lambda *_args, **_kwargs: None
+    io.deadline_ns = 1000
+    io._r07c_restart_started_ns = None
+    io._r07c_restart_clock_phase = 'idle'
+    io._r07c_clock_rollback_observed = False
+
+    async def until(predicate, *, deadline_ns, phase):
+        assert deadline_ns == 1000
+        assert phase == 'R07c owned process restart ACK'
+        request = json.loads(request_path.read_bytes())
+        response_path.write_text(json.dumps({
+            'schema':'b23_owned_restart_response/v1',
+            'run_id':request['run_id'],
+            'invocation_id':request['invocation_id'],
+            'case':'R07c', 'target_role':'server',
+            'request_sha256':hashlib.sha256(request_path.read_bytes()).hexdigest(),
+            'old_process':{'identity':response_identity,'pid':101,
+                           'exit_status':exit_status,'group_absent':group_absent},
+            'replacement':{'pid':202,'backend_instance_id':22},
+            'completed_ns':200,
+        }))
+        return predicate()
+
+    io.until = until
+    return io
+
+
+def test_owned_restart_ack_accepts_changed_mutable_proc_snapshot(tmp_path):
+    """A process may change state/proc metadata while retaining its identity."""
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    identity = {
+        'pid':101, 'uid':1000, 'start_ticks':77, 'pgid':101, 'sid':101,
+        'argv':['gz', 'sim', '--headless-rendering'], 'state':'S',
+        'ppid':90, 'raw_hex':{'stat':'aa','status':'bb','cmdline':'cc','cgroup':'dd'},
+    }
+    response_identity = {
+        **identity, 'state':'Z', 'ppid':1,
+        'raw_hex':{'stat':'11','status':'22','cmdline':'cc','cgroup':'ee'},
+    }
+    io = _owned_restart_ack_test_io(tmp_path, identity, response_identity)
+    response = asyncio.run(io.request_owned_restart(case='R07c', target_role='server'))
+    assert response['old_process']['identity']['pid'] == 101
+    assert response['old_process']['identity']['start_ticks'] == 77
+    assert response['old_process']['identity']['state'] == 'Z'
+
+
+def test_owned_restart_ack_rejects_changed_identity_or_live_group(tmp_path):
+    """A replacement ACK must retain identity and prove the old group absent."""
+    import asyncio
+    import pytest
+
+    identity = {
+        'pid':101, 'uid':1000, 'start_ticks':77, 'pgid':101, 'sid':101,
+        'argv':['gz', 'sim', '--headless-rendering'], 'state':'S',
+        'ppid':90, 'raw_hex':{'stat':'aa','status':'bb','cmdline':'cc','cgroup':'dd'},
+    }
+    bad_cases = (
+        ({**identity, 'start_ticks':78}, True),
+        (identity, False),
+    )
+    for index, (response_identity, group_absent) in enumerate(bad_cases):
+        io = _owned_restart_ack_test_io(
+            tmp_path/str(index), identity, response_identity,
+            group_absent=group_absent,
+        )
+        with pytest.raises(RuntimeError, match='owned restart response binding mismatch'):
+            asyncio.run(io.request_owned_restart(case='R07c', target_role='server'))
+
+
 def test_r07c_owned_backend_restart_requires_new_identity_old_rejection_and_inhibit():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     old_id, new_id = 11, 22
