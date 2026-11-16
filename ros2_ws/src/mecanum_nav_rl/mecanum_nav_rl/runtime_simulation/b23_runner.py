@@ -418,6 +418,17 @@ def r07d_restart_fault_flags():
         SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
 
 
+def r07d_post_restart_zero_status(ingress, inhibit_ack):
+    """Return only a zero/inhibited backend sample received after the INHIBIT ACK."""
+    state = ingress.backend_state
+    received_ns = ingress.backend_received_ns
+    if (state is None or type(received_ns) is not int
+            or received_ns <= inhibit_ack.observed_steady_ns
+            or not state.local_zero_override or not state.actuator_inhibited):
+        return None
+    return state
+
+
 def pin_initial_final_publisher_identity(descriptor_base, boot, final_pid):
     """Giữ publisher instance đầu tiên trong descriptor cha dùng cho R07d."""
     publisher_id = boot.get('publisher_instance_id')
@@ -5086,11 +5097,7 @@ async def training_child(path):
             inhibit_ack = await io.control.inhibit(
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
             expected_fault_flags = r07d_restart_fault_flags()
-            state = await io.until(lambda: io.ingress.backend_state
-                if io.ingress.backend_state is not None
-                and io.ingress.backend_state.received_steady_ns > inhibit_ack.observed_steady_ns
-                and io.ingress.backend_state.local_zero_override
-                and io.ingress.backend_state.actuator_inhibited else None,
+            state = await io.until(lambda: r07d_post_restart_zero_status(io.ingress, inhibit_ack),
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07d post-restart native zero/inhibit status',
                 expected_native_fault_flags=expected_fault_flags)

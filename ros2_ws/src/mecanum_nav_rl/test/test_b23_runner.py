@@ -1385,6 +1385,20 @@ def test_r07d_restart_poll_accepts_only_stale_and_exact_gate_invalidation(tmp_pa
         SimulationContactState.FAULT_COMMAND_SEQUENCE|SimulationContactState.FAULT_COMMAND_STALE)
 
 
+def test_r07d_post_restart_zero_uses_ingress_receive_timestamp_after_inhibit_ack():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07d_post_restart_zero_status
+    ack=NS(observed_steady_ns=100)
+    state=NS(local_zero_override=True,actuator_inhibited=True)
+    ingress=NS(backend_state=state,backend_received_ns=99)
+    assert r07d_post_restart_zero_status(ingress,ack) is None
+    ingress.backend_received_ns=101
+    assert r07d_post_restart_zero_status(ingress,ack) is state
+    ingress.backend_received_ns=None
+    assert r07d_post_restart_zero_status(ingress,ack) is None
+    ingress.backend_received_ns=102; state.actuator_inhibited=False
+    assert r07d_post_restart_zero_status(ingress,ack) is None
+
+
 def test_r07d_process_identity_ignores_volatile_proc_state_but_pins_stable_fields():
     expected = {'pid':41,'uid':1000,'ppid':8,'pgid':41,'sid':41,'start_ticks':900,
         'argv':['python','final','--descriptor','/run/final.json'],'state':'S',
