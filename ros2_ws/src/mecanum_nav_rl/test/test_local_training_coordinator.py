@@ -160,12 +160,17 @@ def test_real_lifecycle_core_motion_flag_is_copied_without_fabricating_hold():
 
 def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
     """Production coordinator carries retained sample gaps into B1."""
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
     adapter = object.__new__(LocalTrainingB1Adapter)
     events = []
     identity = SimpleNamespace(episode_generation=2, reset_epoch=3,
                                runtime_generation=4)
     receipt_rows = []
     safety_rows = []
+    pairs = []
+    scans, noisy_samples = {}, {}
     stamps = (1_100_000_000, 1_200_000_000, 1_250_000_000)
     for sequence, stamp in enumerate(stamps, start=1):
         receipt_rows.append(SimpleNamespace(
@@ -180,13 +185,23 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
         safety_rows.append((stamp - 1, stamp,
                             SimpleNamespace(reset_epoch=3,
                                             runtime_generation=4)))
+        scans[stamp] = SimpleNamespace(received_steady_ns=stamp - 2_000_000)
+        noisy_samples[stamp] = SimpleNamespace(received_steady_ns=stamp - 1_000_000)
+        status = SimulationContactState()
+        status.applied_final_publish_sequence = sequence
+        pairs.append(SimpleNamespace(stamp_ns=stamp,
+            oracle_received_steady_ns=stamp - 3_000_000,
+            backend_received_steady_ns=stamp - 2_500_000,
+            backend_bytes=serialize_message(status)))
     adapter.ingress = SimpleNamespace(
-        scans={stamp: object() for stamp in stamps},
+        scans=scans, noisy_samples=noisy_samples, physics_pairs=pairs,
         receipts=receipt_rows, safety_states=safety_rows,
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
+        lifecycle_received_ns=1_000_000_000,
         now=lambda: 1_300_000_000,
     )
+    adapter.binding = SimpleNamespace(lifecycle_identity=identity)
     adapter.emit = lambda name, facts: events.append((name, facts))
     pair_facts = {}
     for sequence, stamp in enumerate(stamps, start=1):
@@ -203,7 +218,14 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
                 local_zero_override=False,
             ),
         }
-    adapter._joined = lambda stamp: pair_facts[stamp]
+    evaluation_times = {}
+    def joined(stamp, *, evaluation_ros_now_ns=None,
+               evaluation_steady_now_ns=None):
+        evaluation_times[stamp] = (evaluation_ros_now_ns,
+                                   evaluation_steady_now_ns)
+        return {**pair_facts[stamp], 'ros_now': evaluation_ros_now_ns,
+                'steady_now': evaluation_steady_now_ns}
+    adapter._joined = joined
     def make_sample(facts, receipt, safety_state, safety_received_ns):
         return SimpleNamespace(
             timestamp_ns=facts['status'].applied_sim_stamp.sec * 1_000_000_000
@@ -215,10 +237,15 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
             health=SimpleNamespace(
                 receipt_timestamp_ns=receipt.publish_stamp_ns,
                 receipt_received_steady_ns=receipt.received_steady_ns,
+                    evaluation_ros_now_ns=facts['status'].applied_sim_stamp.sec
+                        * 1_000_000_000 + facts['status'].applied_sim_stamp.nanosec,
+                    evaluation_steady_now_ns=receipt.received_steady_ns,
                 scan_timestamp_ns=facts['status'].applied_sim_stamp.sec
                     * 1_000_000_000 + facts['status'].applied_sim_stamp.nanosec,
                 noisy_odometry_timestamp_ns=facts['status'].applied_sim_stamp.sec
                     * 1_000_000_000 + facts['status'].applied_sim_stamp.nanosec,
+                    scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+                    oracle_steady_age_ns=0, receipt_steady_age_ns=0,
                 healthy=lambda: True,
             ),
         )
@@ -229,8 +256,12 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
         lifecycle_key=(2, 3, 4), health=SimpleNamespace(
             receipt_timestamp_ns=1_290_000_000,
             receipt_received_steady_ns=1_300_000_000,
+            evaluation_ros_now_ns=1_300_000_000,
+            evaluation_steady_now_ns=1_300_000_000,
             scan_timestamp_ns=1_300_000_000,
             noisy_odometry_timestamp_ns=1_300_000_000,
+            scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+            oracle_steady_age_ns=0, receipt_steady_age_ns=0,
             healthy=lambda: True))
     final_selection = SimpleNamespace(receipt=SimpleNamespace(receipt_key='7:4'))
     prior = SimpleNamespace(last_ros_ns=1_000_000_000)
@@ -245,17 +276,25 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
     ]
     assert events[-1][0] == 'GOAL_SETTLE_SAMPLE_WINDOW'
     assert events[-1][1]['sample_count'] == 4
+    assert evaluation_times == {
+        stamp: (stamp, stamp) for stamp in stamps
+    }
 
 
 def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
     """A missing source cutoff cannot be bridged by later samples."""
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
     adapter = object.__new__(LocalTrainingB1Adapter)
     events = []
     identity = SimpleNamespace(episode_generation=2, reset_epoch=3,
                                runtime_generation=4)
     receipt_rows = []
     safety_rows = []
-    for sequence, stamp in enumerate((1_100_000_000, 1_300_000_000), start=1):
+    pairs = []
+    stamps = (1_100_000_000, 1_300_000_000)
+    for sequence, stamp in enumerate(stamps, start=1):
         receipt_rows.append(SimpleNamespace(
             final_publish_sequence=sequence, lifecycle=identity,
             final_publisher_instance_id=7, session_id='session',
@@ -265,20 +304,33 @@ def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
         ))
         safety_rows.append((stamp, stamp,
             SimpleNamespace(reset_epoch=3, runtime_generation=4)))
+        status = SimulationContactState()
+        status.applied_final_publish_sequence = sequence
+        pairs.append(SimpleNamespace(stamp_ns=stamp,
+            oracle_received_steady_ns=stamp,
+            backend_received_steady_ns=stamp,
+            backend_bytes=serialize_message(status)))
     adapter.ingress = SimpleNamespace(
-        scans={1_100_000_000: object(), 1_200_000_000: object(),
-               1_300_000_000: object()},
+        scans={stamp: SimpleNamespace(received_steady_ns=stamp)
+               for stamp in (1_100_000_000, 1_200_000_000, 1_300_000_000)},
+        noisy_samples={stamp: SimpleNamespace(received_steady_ns=stamp)
+                       for stamp in (1_100_000_000, 1_200_000_000, 1_300_000_000)},
+        physics_pairs=pairs,
         receipts=receipt_rows, safety_states=safety_rows,
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
+        lifecycle_received_ns=1_000_000_000,
         now=lambda: 1_300_000_000,
     )
+    adapter.binding = SimpleNamespace(lifecycle_identity=identity)
     adapter.emit = lambda name, facts: events.append((name, facts))
-    def joined(stamp):
+    def joined(stamp, *, evaluation_ros_now_ns=None,
+               evaluation_steady_now_ns=None):
         if stamp == 1_200_000_000:
             raise B1SnapshotPending('exact oracle/backend pair unavailable')
         sequence = 1 if stamp == 1_100_000_000 else 2
-        return {'identity': identity, 'steady_now': 1_300_000_000,
+        return {'identity': identity, 'ros_now': evaluation_ros_now_ns,
+            'steady_now': evaluation_steady_now_ns,
             'status': SimpleNamespace(
                 applied_sim_stamp=SimpleNamespace(sec=stamp // 1_000_000_000,
                     nanosec=stamp % 1_000_000_000),
@@ -293,18 +345,28 @@ def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
         body_vy_mps=0.0, body_wz_radps=0.0, lifecycle_key=(2, 3, 4),
         health=SimpleNamespace(receipt_timestamp_ns=receipt.publish_stamp_ns,
             receipt_received_steady_ns=receipt.received_steady_ns,
+            evaluation_ros_now_ns=facts['status'].applied_sim_stamp.sec * 1_000_000_000
+                + facts['status'].applied_sim_stamp.nanosec,
+            evaluation_steady_now_ns=receipt.received_steady_ns,
             scan_timestamp_ns=facts['status'].applied_sim_stamp.sec * 1_000_000_000
                 + facts['status'].applied_sim_stamp.nanosec,
             noisy_odometry_timestamp_ns=facts['status'].applied_sim_stamp.sec * 1_000_000_000
-                + facts['status'].applied_sim_stamp.nanosec, healthy=lambda: True))
+                + facts['status'].applied_sim_stamp.nanosec,
+            scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+            oracle_steady_age_ns=0, receipt_steady_age_ns=0,
+            healthy=lambda: True))
     final = SimpleNamespace(timestamp_ns=1_400_000_000,
         received_steady_ns=1_300_000_000, pose_x_m=0.0, pose_y_m=0.0,
         body_vx_mps=0.0, body_vy_mps=0.0, body_wz_radps=0.0,
         lifecycle_key=(2, 3, 4), health=SimpleNamespace(
             receipt_timestamp_ns=1_390_000_000,
             receipt_received_steady_ns=1_300_000_000,
+            evaluation_ros_now_ns=1_400_000_000,
+            evaluation_steady_now_ns=1_300_000_000,
             scan_timestamp_ns=1_400_000_000,
             noisy_odometry_timestamp_ns=1_400_000_000,
+            scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+            oracle_steady_age_ns=0, receipt_steady_age_ns=0,
             healthy=lambda: True))
 
     samples, reset_prior = adapter._goal_settle_sample_sequence(

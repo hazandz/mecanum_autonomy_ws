@@ -386,7 +386,8 @@ class LocalTrainingB1Adapter:
             identity.reset_epoch, identity.runtime_generation)), 'steady_ns': self.ingress.now()})
         return result
 
-    def _joined(self, cutoff_ns):
+    def _joined(self, cutoff_ns, *, evaluation_ros_now_ns=None,
+                evaluation_steady_now_ns=None):
         from nav_msgs.msg import Odometry
         from sensor_msgs.msg import LaserScan
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -405,7 +406,13 @@ class LocalTrainingB1Adapter:
         if len(pairs) != 1:
             raise B1SnapshotPending('exact oracle/backend iteration pair is not available')
         pair = pairs[0]
-        ros_now, steady_now = source.ros_now(), source.now()
+        ros_now = (source.ros_now() if evaluation_ros_now_ns is None
+                   else evaluation_ros_now_ns)
+        steady_now = (source.now() if evaluation_steady_now_ns is None
+                      else evaluation_steady_now_ns)
+        if (type(ros_now) is not int or ros_now < cutoff_ns
+                or type(steady_now) is not int or steady_now > source.now()):
+            raise B1SnapshotPending('sample evaluation clock is invalid')
         for name, stamp, received, age_ms in (
                 ('scan', cutoff_ns, scan.received_steady_ns, source.profile['scan_max_age_ms']),
                 ('noisy odometry', cutoff_ns, noisy.received_steady_ns, source.profile['odometry_max_age_ms']),
@@ -816,6 +823,7 @@ class LocalTrainingB1Adapter:
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
             stamp_ns,
         )
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
         source = self.ingress
         reset_prior = not health_continuous
         samples = []
@@ -828,8 +836,53 @@ class LocalTrainingB1Adapter:
             candidate_stamps = sorted(stamp for stamp in source.scans
                                       if lower_ns < stamp < cutoff_ns)
             for sample_cutoff in candidate_stamps:
+                scan = source.scans.get(sample_cutoff)
+                noisy = source.noisy_samples.get(sample_cutoff)
+                pairs = [pair for pair in source.physics_pairs
+                         if pair.stamp_ns == sample_cutoff]
+                if scan is None or noisy is None or len(pairs) != 1:
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'exact scan/noisy/oracle/backend sample is unavailable',
+                        'steady_ns': source.now()})
+                    continue
+                pair = pairs[0]
+                status = deserialize_message(pair.backend_bytes,
+                                             SimulationContactState)
+                receipt = next((item for item in source.receipts
+                    if item.final_publish_sequence
+                    == status.applied_final_publish_sequence), None)
+                safety_candidates = [item for item in source.safety_states
+                    if item[0] <= sample_cutoff and item[1] <= source.now()
+                    and item[2].reset_epoch == self.binding.lifecycle_identity.reset_epoch
+                    and item[2].runtime_generation
+                    == self.binding.lifecycle_identity.runtime_generation]
+                if receipt is None or not safety_candidates:
+                    reset_prior, samples = True, []
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': ('applied receipt unavailable' if receipt is None
+                                   else 'no actual Safety state at or before cutoff'),
+                        'steady_ns': source.now()})
+                    continue
+                _safety_stamp, safety_received_ns, _safety_state = max(
+                    safety_candidates, key=lambda item: (item[0], item[1]))
+                # Historical samples are assessed when the complete exact
+                # source tuple was actually available, not when a later B1
+                # transaction walks the retained buffer. This timestamp is
+                # the maximum recorded monotonic receive time of every input
+                # used below; it is never synthesized from simulation time.
+                evaluation_steady_ns = max(
+                    scan.received_steady_ns, noisy.received_steady_ns,
+                    pair.oracle_received_steady_ns,
+                    pair.backend_received_steady_ns,
+                    source.lifecycle_received_ns,
+                    receipt.received_steady_ns, safety_received_ns)
                 try:
-                    facts = self._joined(sample_cutoff)
+                    facts = self._joined(sample_cutoff,
+                        evaluation_ros_now_ns=sample_cutoff,
+                        evaluation_steady_now_ns=evaluation_steady_ns)
                 except B1SnapshotPending as error:
                     reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
@@ -893,8 +946,14 @@ class LocalTrainingB1Adapter:
                 'identity': list(item.lifecycle_key),
                 'receipt_timestamp_ns': item.health.receipt_timestamp_ns,
                 'receipt_received_steady_ns': item.health.receipt_received_steady_ns,
+                'evaluation_ros_now_ns': item.health.evaluation_ros_now_ns,
+                'evaluation_steady_now_ns': item.health.evaluation_steady_now_ns,
                 'scan_timestamp_ns': item.health.scan_timestamp_ns,
                 'noisy_odometry_timestamp_ns': item.health.noisy_odometry_timestamp_ns,
+                'scan_steady_age_ns': item.health.scan_steady_age_ns,
+                'noisy_odometry_steady_age_ns': item.health.noisy_odom_steady_age_ns,
+                'oracle_steady_age_ns': item.health.oracle_steady_age_ns,
+                'receipt_steady_age_ns': item.health.receipt_steady_age_ns,
                 'healthy': item.health.healthy(),
             } for item in samples],
             'sample_count': len(samples), 'reset_prior_state': reset_prior,
