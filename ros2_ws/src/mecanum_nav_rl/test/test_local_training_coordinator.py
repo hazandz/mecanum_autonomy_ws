@@ -291,7 +291,7 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
     assert events[-1][0] == 'GOAL_SETTLE_SAMPLE_WINDOW'
     assert events[-1][1]['sample_count'] == 4
     assert evaluation_times == {
-        stamp: (1_300_000_000, 1_300_000_000) for stamp in stamps
+        stamp: (1_300_000_000, stamp) for stamp in stamps
     }
 
 
@@ -568,7 +568,117 @@ def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipt
     selected = [facts for name, facts in events if name == 'GOAL_SETTLE_ZERO_RECEIPT_SELECTED']
     assert [item['cutoff_ns'] for item in selected] == [1_100_000_000, 1_200_000_000]
     assert selected[1]['native_zero_override'] is True
-    assert evaluation_times[1_200_000_000] == (1_300_000_000, 2_300_000_000)
+    assert evaluation_times[1_100_000_000] == (1_300_000_000, 2_100_000_000)
+    assert evaluation_times[1_200_000_000] == (1_300_000_000, 2_199_000_000)
+
+
+def test_goal_settle_sequence_checks_freshness_at_each_actual_collection_clock():
+    """Historical samples remain real and fresh at receive, not decision, time."""
+    from rclpy.serialization import serialize_message
+    from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import LaserScan
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    events = []
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    lifecycle = SimpleNamespace(
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=0)),
+        barrier_stamp=SimpleNamespace(sec=1, nanosec=0),
+    )
+    stamps = (1_100_000_000, 1_200_000_000, 1_300_000_000)
+    scans, noisy, pairs, receipt_candidates, safety = {}, {}, [], {}, []
+    for index, stamp in enumerate(stamps, start=1):
+        scan = LaserScan()
+        scan.header.stamp.sec, scan.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+        scans[stamp] = SimpleNamespace(received_steady_ns=2_000_000_000 + index * 100_000_000,
+            message_bytes=serialize_message(scan))
+        noisy[stamp] = SimpleNamespace(
+            received_steady_ns=2_005_000_000 + index * 100_000_000,
+            output=SimpleNamespace(snapshot=SimpleNamespace(timestamp_ns=stamp)),
+            lifecycle=identity)
+        oracle = Odometry()
+        oracle.header.stamp.sec, oracle.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+        oracle.pose.pose.orientation.w = 1.0
+        status = SimulationContactState()
+        status.header.stamp.sec, status.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+        status.episode_generation, status.reset_epoch, status.runtime_generation = (2, 3, 4)
+        status.physics_iteration = index
+        status.backend_instance_id = 13
+        status.session_id = 'session'
+        status.config_hash = 'a' * 64
+        pairs.append(SimpleNamespace(stamp_ns=stamp, iteration=index,
+            oracle_bytes=serialize_message(oracle), backend_bytes=serialize_message(status),
+            oracle_received_steady_ns=2_008_000_000 + index * 100_000_000,
+            backend_received_steady_ns=2_010_000_000 + index * 100_000_000))
+        receipt = SimpleNamespace(receipt_key=f'11:{index}',
+            publish_stamp_ns=stamp - 1_000_000,
+            received_steady_ns=2_012_000_000 + index * 100_000_000)
+        receipt_candidates[stamp] = (receipt, stamp, 2_013_000_000 + index * 100_000_000)
+        safety.append((stamp, 2_015_000_000 + index * 100_000_000,
+            SimpleNamespace(reset_epoch=3, runtime_generation=4)))
+    # The middle native status was already 200 ms old when its last source
+    # arrived, so production _joined must omit it under this 100 ms budget.
+    pairs[1] = SimpleNamespace(**{**pairs[1].__dict__,
+        'backend_received_steady_ns':2_020_000_000})
+    ingress = SimpleNamespace(
+        fault=None, binding=None, lifecycle=lifecycle,
+        lifecycle_received_ns=2_000_000_000,
+        scans=scans, noisy_samples=noisy, physics_pairs=pairs,
+        safety_states=safety,
+        identity=SimpleNamespace(session_id='session', config_hash='a' * 64,
+            backend_instance_id=13),
+        profile={'scan_max_age_ms':500,'odometry_max_age_ms':500,
+            'oracle_max_age_ms':500,'lifecycle_max_age_ms':5_000,
+            'backend_status_receive_age_ms':100},
+        ros_now=lambda:1_300_000_000, now=lambda:2_600_000_000)
+    adapter.ingress = ingress
+    adapter.binding = SimpleNamespace(lifecycle_identity=identity)
+    adapter.emit = lambda name, facts: events.append((name, facts))
+    adapter._goal_settle_zero_receipt_candidate = lambda stamp, _identity: receipt_candidates[stamp]
+    adapter._goal_settle_zero_receipt_at_cutoff = lambda facts, candidate: (
+        candidate[0], {'application_stamp_ns':candidate[1],
+            'application_received_steady_ns':candidate[2],
+            'native_zero_override':False,'native_actuator_inhibited':False})
+
+    def make_sample(facts, receipt, _safety_state, _safety_received_ns):
+        health = SimpleNamespace(
+            receipt_timestamp_ns=receipt.publish_stamp_ns,
+            receipt_received_steady_ns=receipt.received_steady_ns,
+            evaluation_ros_now_ns=facts['ros_now'],
+            evaluation_steady_now_ns=facts['steady_now'],
+            scan_timestamp_ns=facts['cutoff'],
+            noisy_odometry_timestamp_ns=facts['cutoff'],
+            scan_steady_age_ns=facts['steady_now']-scans[facts['cutoff']].received_steady_ns,
+            noisy_odom_steady_age_ns=facts['steady_now']-noisy[facts['cutoff']].received_steady_ns,
+            oracle_steady_age_ns=facts['steady_now']-next(p for p in pairs if p.stamp_ns==facts['cutoff']).oracle_received_steady_ns,
+            receipt_steady_age_ns=facts['steady_now']-receipt.received_steady_ns,
+            healthy=lambda:True)
+        return SimpleNamespace(timestamp_ns=facts['cutoff'],
+            received_steady_ns=health.evaluation_steady_now_ns,
+            pose_x_m=0.,pose_y_m=0.,body_vx_mps=0.,body_vy_mps=0.,body_wz_radps=0.,
+            lifecycle_key=(2,3,4),health=health)
+
+    adapter._goal_settle_sample_for_exact_cutoff = make_sample
+    final = make_sample({'cutoff':1_300_000_000,'ros_now':1_300_000_000,
+        'steady_now':2_600_000_000}, receipt_candidates[1_300_000_000][0], None, None)
+    samples, reset_prior = adapter._goal_settle_sample_sequence(
+        1_300_000_000, {}, SimpleNamespace(receipt=receipt_candidates[1_300_000_000][0]),
+        final, SimpleNamespace(last_ros_ns=1_000_000_000), True)
+
+    assert not reset_prior
+    assert [sample.timestamp_ns for sample in samples] == [
+        1_100_000_000, 1_300_000_000]
+    assert samples[0].health.evaluation_steady_now_ns == 2_115_000_000
+    assert samples[0].health.evaluation_steady_now_ns < ingress.now()
+    gaps = [facts for name, facts in events if name == 'GOAL_SETTLE_SAMPLE_GAP']
+    assert any(item['cutoff_ns']==1_200_000_000
+        and item['reason']=='joined backend state receive age expired' for item in gaps)
+    assert any(name=='GOAL_SETTLE_ZERO_RECEIPT_SELECTED'
+        and facts['sample_collection_steady_ns'] < facts['sample_decision_steady_ns']
+        for name, facts in events)
 
 
 def test_goal_settle_zero_receipt_candidate_rejects_nonzero_and_stale_commands():

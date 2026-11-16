@@ -967,14 +967,35 @@ class LocalTrainingB1Adapter:
                     continue
                 _safety_stamp, safety_received_ns, _safety_state = max(
                     safety_candidates, key=lambda item: (item[0], item[1]))
-                # Evaluate retained samples against the real clocks at the
-                # time this decision is made. The ingress holds the current
-                # lifecycle snapshot; using sample_cutoff as "now" can make
-                # that valid, newer snapshot look like a future timestamp.
-                # _joined still checks every source timestamp and receive age
-                # against these actual clocks, so stale data remains rejected.
+                receipt = candidate[0]
+                # A B1 step can finish after newer physics pairs have arrived.
+                # Evaluate this retained measurement at the actual monotonic
+                # instant when its last required source arrived, rather than
+                # at the later B1 decision time. This preserves real receive-
+                # age checks without making a fresh 100 ms sample stale while
+                # waiting for its adjacent receipt. ROS freshness still uses
+                # the current ROS clock, and _joined checks both clocks.
+                decision_steady_ns = source.now()
+                sample_receive_times = (
+                    scan.received_steady_ns,
+                    noisy.received_steady_ns,
+                    pair.oracle_received_steady_ns,
+                    pair.backend_received_steady_ns,
+                    source.lifecycle_received_ns,
+                    receipt.received_steady_ns,
+                    candidate[2],
+                    safety_received_ns,
+                )
+                if (any(type(value) is not int or value < 0
+                        or value > decision_steady_ns for value in sample_receive_times)):
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'sample source receive timestamp is incomplete or future',
+                        'steady_ns': decision_steady_ns})
+                    continue
+                sample_collection_steady_ns = max(sample_receive_times)
                 evaluation_ros_ns = source.ros_now()
-                evaluation_steady_ns = source.now()
+                evaluation_steady_ns = sample_collection_steady_ns
                 try:
                     facts = self._joined(sample_cutoff,
                         evaluation_ros_now_ns=evaluation_ros_ns,
@@ -1009,6 +1030,8 @@ class LocalTrainingB1Adapter:
                     'receipt_key': receipt.receipt_key,
                     'receipt_publish_stamp_ns': receipt.publish_stamp_ns,
                     'receipt_received_steady_ns': receipt.received_steady_ns,
+                    'sample_collection_steady_ns': sample_collection_steady_ns,
+                    'sample_decision_steady_ns': decision_steady_ns,
                     **zero_evidence,
                 })
                 try:
@@ -1026,6 +1049,7 @@ class LocalTrainingB1Adapter:
             raise ValueError('goal settle samples are not strictly ordered')
         self.emit('GOAL_SETTLE_SAMPLE_WINDOW', {
             'cutoff_ns': cutoff_ns,
+            'decision_steady_ns': source.now(),
             'sample_timestamps_ns': [item.timestamp_ns for item in samples],
             'sample_facts': [{
                 'timestamp_ns': item.timestamp_ns,
