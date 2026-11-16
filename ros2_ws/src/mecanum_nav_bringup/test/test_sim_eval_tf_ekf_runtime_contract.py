@@ -268,12 +268,14 @@ def test_setup_installs_only_the_two_explicit_wp06f_artifacts():
     ).stdout)
     baseline_deps = [node.text for node in baseline.findall("exec_depend")]
     inserted_runtime_roots = [
-        "mecanum_nav_rl", "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs"
+        "mecanum_nav_rl", "mecanum_nav_rl_interfaces", "mecanum_base_bridge", "joy",
+        "nav2_msgs", "slam_toolbox", "lifecycle_msgs", "rclpy", "std_srvs",
     ]
     expected = list(baseline_deps)
     launch_position = expected.index("launch")
     expected[launch_position:launch_position] = inserted_runtime_roots
     expected.insert(expected.index("ros_gz_bridge") + 1, "rosgraph_msgs")
+    expected.append("ament_index_python")
     assert deps == expected
     assert len(deps) == len(set(deps))
     assert deps.index("rosgraph_msgs") == deps.index("ros_gz_bridge") + 1

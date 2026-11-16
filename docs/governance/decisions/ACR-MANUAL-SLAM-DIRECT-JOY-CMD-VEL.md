@@ -55,8 +55,27 @@ mode change requires a separate review.
 - `UartBridgeNode`, `BridgeSession`, session identity/lifecycle checks, UART
   protocol and command validation remain in use; command-watchdog expiry is explicitly disabled for the validated MANUAL_SLAM bench profile. No Joy callback
   may access the session directly.
-- No lifecycle READY/rearm is emitted by the launch. Any later operator rearm
-  is outside this offline candidate and requires a separate reviewed procedure.
+- The hardware launch keeps `/safety_lifecycle` disarmed. The separately
+  approved terminal-2 mapping launch may configure/activate SLAM Toolbox and
+  `/safety_lifecycle`, wait for fresh scan/IMU/Joy and a healthy MCU heartbeat,
+  require a fresh neutral Joy sample, call the existing safety rearm service,
+  verify lifecycle motion permission, then call the mapper enable service.
+  It never fabricates Joy, publishes a movement command, or rearms during
+  terminal-1 hardware launch. Service/dependency timeout or rejection aborts
+  the mapping launch without a ready claim. After startup it monitors fresh
+  sensor/Joy/heartbeat and lifecycle readiness; dependency loss requests mapper
+  software disarm and ends the mapping launch. Shutdown also requests disarm
+  best-effort; this is not a physical E-stop or main-switch substitute.
+
+### Terminal-2 mapping orchestration scope
+
+This Owner-approved implementation candidate adds a second, MANUAL_SLAM-only
+launch for async SLAM mapping. It is not included in AI/Nav2 launches and does
+not change their lifecycle, safety, or command ownership. The orchestration
+uses the existing safety lifecycle/rearm and mapper enable/disarm contracts.
+Terminal-2 readiness gates are software checks; they do not establish ROS graph
+exclusivity, physical E-stop protection, UART correctness on the robot, or
+real-robot readiness. The terminal-1 hardware launch remains separate.
 - E-stop auxiliary remains `UNKNOWN` when firmware cannot read a validated
   input. The Owner's main switch has not been verified to disconnect both motor
   drivers and is not treated as an E-stop.

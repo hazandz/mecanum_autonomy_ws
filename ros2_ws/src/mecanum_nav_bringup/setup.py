@@ -12,7 +12,7 @@ setup(
             "share/ament_index/resource_index/packages",
             ["resource/" + package_name],
         ),
-        ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name, ["package.xml", "README_MANUAL_SLAM.md"]),
         (
             "share/" + package_name + "/config",
             [
@@ -65,6 +65,10 @@ setup(
             ["config/remaps/navigation_v1.yaml"],
         ),
         (
+            "share/" + package_name + "/config/manual_slam",
+            ["config/manual_slam/mapper_params_online_async.yaml"],
+        ),
+        (
             "share/" + package_name + "/launch",
             [
                 "launch/sim_eval_lidar_scan_bridge.launch.py",
@@ -76,6 +80,7 @@ setup(
                 "launch/manual_slam.launch.py",
                 "launch/manual_slam_ydlidar_x3.launch.py",
                 "launch/manual_slam_bno055_i2c.launch.py",
+                "launch/manual_slam_mapping.launch.py",
             ],
         ),
     ],
@@ -89,6 +94,7 @@ setup(
     entry_points={
         "console_scripts": [
             "sim_eval_scan_endpoint_probe = mecanum_nav_bringup.sim_eval_scan_endpoint_probe:main",
+            "manual_slam_orchestrator = mecanum_nav_bringup.manual_slam_orchestrator:main",
         ]
     },
 )

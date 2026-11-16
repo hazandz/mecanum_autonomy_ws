@@ -18,8 +18,9 @@ COMMON_NAVIGATION_V1_ROOTS = [
 ]
 PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS = [
     "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
-    "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
-    "launch", "launch_ros",
+    "mecanum_nav_rl_interfaces", "mecanum_base_bridge", "joy", "nav2_msgs",
+    "slam_toolbox", "lifecycle_msgs", "rclpy", "std_srvs", "launch",
+    "launch_ros", "ament_index_python",
 ]
 PROFILE_SPECIFIC_NOT_COMMON_LOCK = PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS
 
@@ -66,8 +67,9 @@ def test_package_exec_dependencies_are_common_roots_then_profile_specific_runtim
     ]
     assert PROFILE_SPECIFIC_RUNTIME_EXEC_DEPENDS == [
         "ros_gz_bridge", "rosgraph_msgs", "mecanum_nav_rl",
-        "mecanum_nav_rl_interfaces", "nav2_msgs", "lifecycle_msgs",
-        "launch", "launch_ros",
+        "mecanum_nav_rl_interfaces", "mecanum_base_bridge", "joy", "nav2_msgs",
+        "slam_toolbox", "lifecycle_msgs", "rclpy", "std_srvs", "launch",
+        "launch_ros", "ament_index_python",
     ]
     assert exec_dependencies.count("rosgraph_msgs") == 1
     assert _dependency_schema_is_exact(
@@ -120,8 +122,13 @@ def test_bringup_direct_launch_dependencies_are_profile_specific_and_order_locke
     additions = [
         "mecanum_nav_rl",
         "mecanum_nav_rl_interfaces",
+        "mecanum_base_bridge",
+        "joy",
         "nav2_msgs",
+        "slam_toolbox",
         "lifecycle_msgs",
+        "rclpy",
+        "std_srvs",
     ]
     expected_profile_roots = [
         "ros_gz_bridge",
@@ -129,6 +136,7 @@ def test_bringup_direct_launch_dependencies_are_profile_specific_and_order_locke
         *additions,
         "launch",
         "launch_ros",
+        "ament_index_python",
     ]
     assert baseline_profile_roots == ["ros_gz_bridge", "launch", "launch_ros"]
     assert actual == COMMON_NAVIGATION_V1_ROOTS + expected_profile_roots
