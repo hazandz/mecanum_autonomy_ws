@@ -1258,6 +1258,14 @@ def verify_r04_stale_delivery(io, *, case, policy_step_index=None):
 
 async def await_r04a_production_rejection(io, *, deadline_ns):
     """Wait boundedly for Safety's tick after the delayed callback is delivered."""
+    # A failed POLICY step may exit before policy_step() restores its periodic
+    # Safety output stream. Keep motion held, but resume the real Safety tick
+    # so it can evaluate the delayed source sample and publish its fail-closed
+    # SAFE_STOP. Without this, the worker waits for a rejection from a timer
+    # that the same failed transaction left disabled.
+    adapter = io.safety.local_training
+    adapter.set_policy_hold(True)
+    adapter.set_stream_enabled(True)
     def observed():
         delayed = next((facts for name, facts in reversed(io.events)
             if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04a'), None)

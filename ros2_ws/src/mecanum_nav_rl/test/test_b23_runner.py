@@ -1731,15 +1731,22 @@ def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
         ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04a','delivery_ns':300}),
     ]
     calls = []
+    safety_calls = []
+    class SafetyAdapter:
+        def set_policy_hold(self, value):
+            safety_calls.append(('policy_hold', value))
+        def set_stream_enabled(self, value):
+            safety_calls.append(('stream_enabled', value))
+            if value:
+                events.append(('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'],
+                    'steady_ns':302}))
     async def until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
         calls.append((deadline_ns, phase, expected_native_fault_flags))
-        assert predicate() is None
-        events.append(('SAFETY_REJECTED', {'reasons':['NOISY_STALE_OR_FUTURE'],
-            'steady_ns':302}))
         return predicate()
-    io = NS(events=events, until=until)
+    io = NS(events=events, until=until, safety=NS(local_training=SafetyAdapter()))
     result = __import__('asyncio').run(await_r04a_production_rejection(io, deadline_ns=1_000))
     assert result['steady_ns'] == 302
+    assert safety_calls == [('policy_hold', True), ('stream_enabled', True)]
     assert calls == [(1_000,'R04a bounded production Safety rejection after delayed stale input', (4, 6))]
 
 
