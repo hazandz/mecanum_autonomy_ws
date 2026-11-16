@@ -1384,9 +1384,11 @@ class LocalTrainingProcessSupervisor:
         self._task_residue = 'NONE'
         self._process_residue = 'NONE'
         self._heartbeat_files = ()
+        self._heartbeat_trace_segments: list[dict[str, object]] = []
         self._heartbeat_clock = None
         self._heartbeat_clock_domain_certificate = None
         self._heartbeat_library_sha256 = None
+        self._heartbeat_library_path = None
         self._heartbeat_trace_environment = {}
         self._heartbeat_trace_error = None
         self._heartbeat_trace_reported = False
@@ -1655,6 +1657,7 @@ class LocalTrainingProcessSupervisor:
                 ).resolve(strict=True)
                 library = prefix / 'lib/libmecanum_heartbeat_trace_writer.so'
             library = Path(library).resolve(strict=True)
+            self._heartbeat_library_path = library
             self._heartbeat_library_sha256 = hashlib.sha256(
                 library.read_bytes(),
             ).hexdigest()
@@ -1699,6 +1702,12 @@ class LocalTrainingProcessSupervisor:
                     self._heartbeat_clock['provenance']
                 ),
             }
+            self._heartbeat_trace_segments = [{
+                'segment_index': 0,
+                'files': [dict(entry) for entry in self._heartbeat_files],
+                'observer_state': None,
+                'backend_instance_id': None,
+            }]
         except asyncio.CancelledError:
             self._heartbeat_trace_error = (
                 self._heartbeat_trace_error or 'observer_prepare_cancelled'
@@ -2227,6 +2236,139 @@ class LocalTrainingProcessSupervisor:
             )
             return
         self._heartbeat_readiness_status = dict(status)
+        if self._heartbeat_trace_segments:
+            self._heartbeat_trace_segments[-1]['backend_instance_id'] = (
+                status['backend_instance_id']
+            )
+
+    async def prepare_heartbeat_backend_restart_segment(self) -> dict:
+        """Close the current trace segment and pin fresh files for a new backend.
+
+        R07c replaces the Gazebo process, which creates a new native backend
+        identity. Each native trace header binds exactly one backend, so the
+        previous observer is reaped and a new trace pair is prepared before
+        the replacement server starts.
+        """
+        if not self.heartbeat_diagnostics_enabled:
+            raise RuntimeError('heartbeat_diagnostics_required_for_backend_restart')
+        if self.heartbeat_observer_factory is not None:
+            raise RuntimeError('test_observer_adapter_cannot_rotate_runtime_trace')
+        if self._heartbeat_observer_process is None:
+            raise RuntimeError('heartbeat_observer_process_missing_before_rotation')
+        previous_status = getattr(
+            self.readiness, 'accepted_backend_status', None,
+        )
+        previous_backend_id = (
+            previous_status.get('backend_instance_id')
+            if isinstance(previous_status, dict) else None
+        )
+        stopped = await self._stop_observer_process()
+        if not (
+            stopped and stopped.get('joined') is True
+            and stopped.get('group_absent') is True
+            and stopped.get('stop_acknowledged') is True
+            and stopped.get('writer_closed') is True
+            and stopped.get('exit_status') == 0
+            and stopped.get('termination') == 'CLEAN_COOPERATIVE'
+        ):
+            raise RuntimeError('heartbeat_observer_segment_close_unconfirmed')
+        if not self._heartbeat_trace_segments:
+            raise RuntimeError('heartbeat_trace_segment_inventory_missing')
+        self._heartbeat_trace_segments[-1]['backend_instance_id'] = previous_backend_id
+        self._heartbeat_trace_segments[-1]['observer_state'] = copy.deepcopy(
+            self._heartbeat_observer_state,
+        )
+        segment_index = len(self._heartbeat_trace_segments)
+        directory = Path(self.heartbeat_trace_directory) / (
+            f'backend-segment-{segment_index:02d}'
+        )
+        directory.mkdir(mode=0o700, exist_ok=False)
+        observer_module = importlib.import_module(
+            'mecanum_nav_bringup.local_training_heartbeat_trace_observer'
+        )
+        files = observer_module.prepare_trace_pair(
+            directory, collection_id=self.plan.session_id,
+        )
+        backend_file = next(entry for entry in files if entry['role'] == 'backend')
+        observer_file = next(entry for entry in files if entry['role'] == 'observer')
+        self._heartbeat_files = tuple(self._heartbeat_files) + tuple(files)
+        self._heartbeat_trace_environment.update({
+            'MECANUM_B2_HEARTBEAT_BACKEND_FILE': backend_file['path'],
+            'MECANUM_B2_HEARTBEAT_BACKEND_DEVICE': str(backend_file['device']),
+            'MECANUM_B2_HEARTBEAT_BACKEND_INODE': str(backend_file['inode']),
+        })
+        self._heartbeat_trace_segments.append({
+            'segment_index': segment_index,
+            'files': [dict(entry) for entry in files],
+            'observer_state': None,
+            'backend_instance_id': None,
+        })
+        self.evidence_sink.record('heartbeat_trace_segment_prepared', {
+            'segment_index': segment_index,
+            'previous_backend_instance_id': previous_backend_id,
+            'files': [dict(entry) for entry in files],
+            'previous_observer': copy.deepcopy(self._heartbeat_observer_state),
+        })
+        self._heartbeat_observer = None
+        self._heartbeat_observer_process = None
+        self._heartbeat_observer_identity = None
+        self._heartbeat_observer_nonce = None
+        self._heartbeat_observer_spawn_task = None
+        self._heartbeat_observer_wait_task = None
+        self._heartbeat_observer_exit_status = None
+        self._heartbeat_observer_state = None
+        self._heartbeat_observer_stderr_task = None
+        self._heartbeat_observer_stderr = bytearray()
+        self._heartbeat_observer_stderr_total = 0
+        self._heartbeat_observer_protocol_lock = asyncio.Lock()
+        self._heartbeat_observer_cleanup_deadline = None
+        self._heartbeat_observer_stop_acknowledged = False
+        self._heartbeat_observer_end_written = False
+        self._heartbeat_observer_handle_closed = False
+        self._heartbeat_observer_writer_closed = False
+        self._heartbeat_observer_termination = 'NOT_STARTED'
+        self._heartbeat_observer_signal_dispatches = []
+        self._heartbeat_observer_protocol_started = False
+        return {'segment_index': segment_index, 'files': files,
+                'observer_file': observer_file,
+                'backend_file': backend_file}
+
+    async def bind_restarted_heartbeat_backend(self) -> dict:
+        """Start a fresh observer after replacement readiness and bind its ID."""
+        if not self.heartbeat_diagnostics_enabled or self._heartbeat_observer_process is not None:
+            raise RuntimeError('heartbeat_trace_rotation_state_invalid')
+        status = getattr(self.readiness, 'accepted_backend_status', None)
+        if not isinstance(status, dict) or not status:
+            raise RuntimeError('replacement_backend_readiness_status_missing')
+        backend_id = status.get('backend_instance_id')
+        if type(backend_id) is not int or backend_id <= 0:
+            raise RuntimeError('replacement_backend_identity_invalid')
+        if self._heartbeat_trace_segments[-1]['backend_instance_id'] is not None:
+            raise RuntimeError('replacement_backend_segment_already_bound')
+        observer_file = next(
+            entry for entry in self._heartbeat_trace_segments[-1]['files']
+            if entry['role'] == 'observer'
+        )
+        observer_module = importlib.import_module(
+            'mecanum_nav_bringup.local_training_heartbeat_trace_observer'
+        )
+        await self._start_heartbeat_observer_process(
+            observer_module, observer_file, self._heartbeat_library_path,
+        )
+        await self._bind_heartbeat_readiness()
+        if self._heartbeat_trace_error is not None:
+            raise RuntimeError('replacement_heartbeat_observer_bind_failed:'
+                               + str(self._heartbeat_trace_error))
+        self._heartbeat_trace_segments[-1]['backend_instance_id'] = backend_id
+        self.evidence_sink.record('heartbeat_trace_segment_bound', {
+            'segment_index': self._heartbeat_trace_segments[-1]['segment_index'],
+            'backend_instance_id': backend_id,
+            'observer_process_identity': self._heartbeat_observer_identity,
+            'files': self._heartbeat_trace_segments[-1]['files'],
+        })
+        return {'segment_index': self._heartbeat_trace_segments[-1]['segment_index'],
+                'backend_instance_id': backend_id,
+                'observer_process_identity': self._heartbeat_observer_identity}
 
     def _capture_output(self, record: ProcessRecord) -> None:
         """Drain child output into the injected evidence sink."""
@@ -3397,6 +3539,10 @@ class LocalTrainingProcessSupervisor:
                     self._heartbeat_trace_error or
                     f'observer_cleanup:{type(error).__name__}'
                 )
+        if self._heartbeat_trace_segments:
+            self._heartbeat_trace_segments[-1]['observer_state'] = copy.deepcopy(
+                observer_state,
+            )
         facts = {
             'session_id': self.plan.session_id,
             'config_hash': self.plan.config_hash,
@@ -3407,6 +3553,7 @@ class LocalTrainingProcessSupervisor:
                 self._heartbeat_clock_domain_certificate
             ),
             'files': list(self._heartbeat_files),
+            'trace_segments': copy.deepcopy(self._heartbeat_trace_segments),
             'observer': observer_state,
             'readiness_backend_status': getattr(
                 self, '_heartbeat_readiness_status', None,

@@ -6057,6 +6057,7 @@ async def run_parent(packet_path, packet_sha256):
         stopped = await stop_exact_owned_process(supervisor, old,
             identity=identity, deadline_ns=active_end)
         if role == 'server':
+            await supervisor.prepare_heartbeat_backend_restart_segment()
             server_command = tuple(plan.commands[0])
             server_environment = dict(plan.environment)
             for name in tuple(server_environment):
@@ -6071,7 +6072,7 @@ async def run_parent(packet_path, packet_sha256):
                 raise TimeoutError('R07c active deadline expired before replacement readiness')
             await supervisor.readiness.server_scene(plan, replacement.process,
                 min(supervisor.SERVER_READY_TIMEOUT_S, remaining))
-            await supervisor._bind_heartbeat_readiness()
+            await supervisor.bind_restarted_heartbeat_backend()
             replacement_facts = {'pid':replacement.pid,
                 'identity':process_identity(replacement.pid),
                 'backend_instance_id':supervisor.readiness.accepted_backend_status.get('backend_instance_id')

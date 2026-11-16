@@ -607,6 +607,48 @@ def test_isolated_observer_clean_exit_uses_process_join_evidence(tmp_path):
     asyncio.run(run())
 
 
+def test_backend_restart_rotates_to_identity_bound_trace_segment(tmp_path):
+    """A replacement backend gets a distinct observer and trace pair."""
+    async def run():
+        launcher = ControlledObserverLauncher('clean')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        await _start_fake_observer(supervisor)
+        first_files = tuple(supervisor._heartbeat_files)
+        prepared = await supervisor.prepare_heartbeat_backend_restart_segment()
+        assert len(launcher.controlled_starts) == 1
+        assert supervisor._heartbeat_observer_process is None
+        assert len(supervisor._heartbeat_trace_segments) == 2
+        assert supervisor._heartbeat_trace_segments[0]['backend_instance_id'] == 42
+        assert supervisor._heartbeat_trace_segments[0]['observer_state']['writer_closed']
+        assert all(entry['path'] not in {item['path'] for item in first_files}
+                   for entry in prepared['files'])
+        assert supervisor._heartbeat_trace_environment[
+            'MECANUM_B2_HEARTBEAT_BACKEND_FILE'
+        ] == prepared['backend_file']['path']
+
+        supervisor.readiness.accepted_backend_status = dict(
+            supervisor.readiness.accepted_backend_status,
+            backend_instance_id=99, status_sequence=1,
+        )
+        rebound = await supervisor.bind_restarted_heartbeat_backend()
+        assert rebound['backend_instance_id'] == 99
+        assert len(launcher.controlled_starts) == 2
+        assert supervisor._heartbeat_trace_segments[1]['backend_instance_id'] == 99
+        assert supervisor._heartbeat_trace_error is None
+
+        await supervisor._stop_heartbeat_diagnostics()
+        event = dict(sink.events)['heartbeat_trace_collection']
+        assert len(event['trace_segments']) == 2
+        assert [item['backend_instance_id'] for item in event['trace_segments']] == [42, 99]
+        assert all(item['observer_state']['writer_closed']
+                   for item in event['trace_segments'])
+        assert len(event['files']) == 4
+
+    asyncio.run(run())
+
+
 def test_isolated_observer_ignoring_term_escalates_and_is_not_clean(tmp_path):
     """TERM-resistant child is killed and cannot claim a clean close."""
     async def run():
