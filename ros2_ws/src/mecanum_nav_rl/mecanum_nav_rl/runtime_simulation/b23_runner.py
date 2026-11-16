@@ -2840,14 +2840,11 @@ class TrainingWorkerIO:
                                             minimum_cutoff_ns, deadline_ns):
         """Pin an applied zero and its following receipt around a B1 cutoff.
 
-        During the R09b contact pulse Safety emits SAFE_STOP continuously. A
-        receipt can therefore be newer than the last native application at a
-        scan cutoff. Freeze the zero stream, wait for the exact latest receipt
-        to be applied, then collect a paired cutoff after that application and
-        publish the adjacent boundary receipt after the cutoff. Once the
-        boundary is pinned, resume the held SAFE_STOP stream so the native
-        actuator watchdog remains fed while B1 evaluates the pinned cutoff.
-        Later zero receipts do not change the already selected cutoff evidence.
+        During the R09b contact pulse Safety emits SAFE_STOP continuously. Keep
+        that zero stream active while selecting the already retained exact
+        application record and its adjacent receipt across a paired B1 cutoff.
+        Freezing publication here can expire the native actuator watchdog
+        before the asynchronous cutoff join completes.
         """
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
@@ -2855,7 +2852,6 @@ class TrainingWorkerIO:
         )
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
 
-        self.safety.local_training.set_stream_enabled(False)
         with self.ingress.lock:
             policy_view = self.ingress._receipt_views.get(
                 policy_receipt.final_publish_sequence)
@@ -2871,99 +2867,63 @@ class TrainingWorkerIO:
             raise RuntimeError('R09b cutoff alignment lacks the exact accepted POLICY receipt view')
         while self.now() < deadline_ns:
             self.check()
-            with self.ingress.lock:
-                receipts = tuple(self.ingress.receipts)
-            if not receipts:
-                raise RuntimeError('R09b cutoff alignment has no final receipt')
-            applied_receipt = receipts[-1]
-            if (applied_receipt.source is not ReceiptSource.SAFE_STOP
-                    or applied_receipt.lifecycle != policy_view.lifecycle
-                    or applied_receipt.session_id != policy_view.session_id
-                    or applied_receipt.publish_stamp_ns < policy_view.publish_stamp_ns
-                    or any(applied_receipt.final_command)):
-                raise RuntimeError('R09b cutoff alignment lacks the pinned zero SAFE_STOP receipt')
-
-            def exact_application():
-                with self.ingress.lock:
-                    status = self.ingress.backend_state
-                    if status is None:
-                        return None
-                    applied_ns = stamp_ns(status.applied_sim_stamp)
-                    if (not status.applied_receipt_valid or status.local_zero_override
-                            or status.fault_flags or lifecycle_identity(status) != applied_receipt.lifecycle
-                            or status.applied_final_publisher_instance_id
-                                != applied_receipt.final_publisher_instance_id
-                            or status.applied_final_publish_sequence
-                                != applied_receipt.final_publish_sequence
-                            or status.applied_physics_iteration != status.physics_iteration
-                            or applied_ns != stamp_ns(status.header.stamp)
-                            or applied_ns < applied_receipt.publish_stamp_ns):
-                        return None
-                    return status, applied_ns
-
-            status, applied_ns = await self.until(exact_application,
-                deadline_ns=deadline_ns, phase='R09b frozen SAFE_STOP application')
-            if self.now() >= deadline_ns:
-                raise TimeoutError('R09b frozen SAFE_STOP application completed after step deadline')
-
             def paired_cutoff():
-                for cutoff_ns in sorted(self.ingress.scans):
-                    if cutoff_ns < minimum_cutoff_ns or cutoff_ns <= applied_ns:
+                with self.ingress.lock:
+                    receipts_by_sequence = dict(self.ingress._receipt_views)
+                    cutoff_stamps = tuple(sorted(self.ingress.scans))
+                receipt_views = tuple(receipts_by_sequence[key]
+                    for key in sorted(receipts_by_sequence))
+                for cutoff_ns in cutoff_stamps:
+                    if cutoff_ns < minimum_cutoff_ns:
                         continue
+                    matching_pairs = []
+                    for selected in receipt_views:
+                        boundary = receipts_by_sequence.get(
+                            selected.final_publish_sequence + 1)
+                        if (selected.source is not ReceiptSource.SAFE_STOP
+                                or selected.lifecycle != policy_view.lifecycle
+                                or selected.session_id != policy_view.session_id
+                                or selected.publish_stamp_ns < policy_view.publish_stamp_ns
+                                or any(selected.final_command)
+                                or boundary is None
+                                or boundary.source is not ReceiptSource.SAFE_STOP
+                                or boundary.lifecycle != selected.lifecycle
+                                or boundary.session_id != selected.session_id
+                                or any(boundary.final_command)
+                                or selected.publish_stamp_ns > cutoff_ns
+                                or boundary.publish_stamp_ns <= cutoff_ns):
+                            continue
+                        application = self.ingress.application_for_receipt(selected)
+                        if application is None:
+                            continue
+                        status = application['state']
+                        applied_ns = stamp_ns(status.applied_sim_stamp)
+                        if applied_ns >= cutoff_ns:
+                            continue
+                        matching_pairs.append((selected, boundary, application,
+                            applied_ns, cutoff_ns))
+                    if len(matching_pairs) != 1:
+                        continue
+                    selected, boundary, application, applied_ns, _ = matching_pairs[0]
                     try:
                         b1._joined(cutoff_ns)
                     except B1SnapshotPending:
                         continue
+                    if self.now() >= deadline_ns:
+                        raise TimeoutError('R09b paired cutoff completed after step deadline')
+                    self.emit('R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED', {
+                        'selected_publish_sequence':selected.final_publish_sequence,
+                        'selected_application_stamp_ns':applied_ns,
+                        'cutoff_ns':cutoff_ns,
+                        'adjacent_publish_sequence':boundary.final_publish_sequence,
+                        'adjacent_publish_stamp_ns':boundary.publish_stamp_ns,
+                        'status_sequence':application['state'].status_sequence,
+                        'steady_ns':self.now()})
                     return cutoff_ns
                 return None
 
-            # Keep sending inhibited zero SAFE_STOP receipts while waiting
-            # for the next eligible scan. At low real-time factor, the scan
-            # interval can exceed the native 100 ms watchdog even though the
-            # ROS executor and simulator are progressing normally.
-            self.safety.local_training.set_stream_enabled(True)
             cutoff_ns = await self.until(paired_cutoff, deadline_ns=deadline_ns,
-                phase='R09b paired scan after zero application')
-            self.safety.local_training.set_stream_enabled(False)
-            if self.now() >= deadline_ns:
-                raise TimeoutError('R09b paired cutoff completed after step deadline')
-
-            self.safety.local_training.set_stream_enabled(True)
-            expected_sequence = applied_receipt.final_publish_sequence + 1
-
-            def adjacent_boundary():
-                with self.ingress.lock:
-                    receipt = self.ingress._receipt_views.get(expected_sequence)
-                if (receipt is None or receipt.source is not ReceiptSource.SAFE_STOP
-                        or receipt.lifecycle != applied_receipt.lifecycle
-                        or receipt.session_id != applied_receipt.session_id
-                        or any(receipt.final_command)):
-                    return None
-                return receipt
-
-            boundary = await self.until(adjacent_boundary, deadline_ns=deadline_ns,
-                phase='R09b SAFE_STOP receipt after paired cutoff')
-            self.safety.local_training.set_stream_enabled(False)
-            if self.now() >= deadline_ns:
-                raise TimeoutError('R09b cutoff boundary completed after step deadline')
-            if boundary.publish_stamp_ns <= cutoff_ns:
-                # The publication raced the scan timestamp. Freeze again and
-                # establish a later application/cutoff/boundary within the
-                # original step deadline; no deadline is extended.
-                continue
-            self.emit('R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED', {
-                'selected_publish_sequence':applied_receipt.final_publish_sequence,
-                'selected_application_stamp_ns':applied_ns,
-                'cutoff_ns':cutoff_ns,
-                'adjacent_publish_sequence':boundary.final_publish_sequence,
-                'adjacent_publish_stamp_ns':boundary.publish_stamp_ns,
-                'status_sequence':status.status_sequence,
-                'steady_ns':self.now()})
-            # Keep the already asserted POLICY hold and zero-only SAFE_STOP
-            # publication active during B1 commit. Freezing here can let the
-            # native 100 ms actuator watchdog expire while B1 awaits its
-            # cutoff join, even though the adjacent boundary was valid.
-            self.safety.local_training.set_stream_enabled(True)
+                phase='R09b applied zero and adjacent SAFE_STOP around paired cutoff')
             return cutoff_ns
         raise TimeoutError('R09b could not align an applied receipt around a B1 cutoff')
 

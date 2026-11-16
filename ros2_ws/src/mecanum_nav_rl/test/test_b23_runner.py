@@ -3934,7 +3934,7 @@ def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():
     assert result['restored_empty']['physics_iteration'] == 102
 
 
-def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
+def test_r09b_application_cutoff_keeps_zero_stream_active_and_uses_retained_pair():
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     from mecanum_nav_rl.core.issued_command_cutoff import (
@@ -3972,14 +3972,21 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
     class FakeIO:
         def __init__(self):
             self.stream = []
-            self.safety = NS(local_training=NS(set_stream_enabled=lambda value:
-                self.stream.append(value)))
-            self.ingress = NS(lock=threading.RLock(), receipts=[policy, applied_stop],
-                _receipt_views={39:policy, 40:applied_stop}, backend_state=status,
-                scans={1_390_000_000:object()})
+            self.stream_enabled = True
+            def set_stream_enabled(value):
+                self.stream.append(value)
+                self.stream_enabled = value
+            self.safety = NS(local_training=NS(set_stream_enabled=set_stream_enabled))
+            def application_for_receipt(receipt):
+                self.application_requests.append(receipt.final_publish_sequence)
+                if receipt.final_publish_sequence != applied_stop.final_publish_sequence:
+                    return None
+                return {'state':status, 'received_ns':190}
+            self.ingress = NS(lock=threading.RLock(), receipts=[policy, applied_stop, boundary],
+                _receipt_views={39:policy, 40:applied_stop, 41:boundary}, backend_state=status,
+                scans={1_390_000_000:object()}, application_for_receipt=application_for_receipt)
             self.calls = []
-            self.boundary_added = False
-            self.paired_wait_stream_enabled = None
+            self.application_requests = []
 
         def now(self):
             return 200
@@ -3992,17 +3999,10 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
         async def until(self, predicate, *, deadline_ns, phase):
             self.calls.append(('wait', phase))
-            if phase == 'R09b paired scan after zero application':
-                self.paired_wait_stream_enabled = self.stream[-1]
+            assert phase == 'R09b applied zero and adjacent SAFE_STOP around paired cutoff'
             value = predicate()
-            if value is not None:
-                return value
-            if phase == 'R09b SAFE_STOP receipt after paired cutoff':
-                self.boundary_added = True
-                self.ingress.receipts.append(boundary)
-                self.ingress._receipt_views[41] = boundary
-                return predicate()
-            raise AssertionError('fake did not provide expected evidence for '+phase)
+            assert value is not None, 'fake must provide exact application, adjacent receipt, and joined cutoff'
+            return value
 
     class FakeB1:
         def __init__(self):
@@ -4019,11 +4019,15 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
     assert cutoff == 1_390_000_000
     assert b1.joined == [1_390_000_000]
-    assert io.stream == [False, True, False, True, False, True]
-    assert io.paired_wait_stream_enabled is True
-    assert io.stream[-1] is True  # zero SAFE_STOP continues during the B1 cutoff commit
-    assert io.boundary_added
+    assert io.stream == [], 'alignment must not pause the watchdog-fed SAFE_STOP stream'
+    assert io.stream_enabled is True
+    assert io.application_requests == [40]
     assert io.calls[-1][0] == 'R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED'
+    pinned = io.calls[-1][1]
+    assert pinned['selected_publish_sequence'] == 40
+    assert pinned['selected_application_stamp_ns'] == 1_380_000_000
+    assert pinned['cutoff_ns'] == cutoff
+    assert pinned['adjacent_publish_sequence'] == 41
     selected = select_final_issued_at_cutoff(
         (policy, applied_stop, boundary),
         binding=ReceiptStreamBinding(90, 'session-a', 'c'*64, identity, 'base_link'),
