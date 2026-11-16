@@ -25,6 +25,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
+    verify_owned_restart_request, verify_r07c_backend_restart,
+    verify_r07d_final_publisher_restart,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
 )
@@ -46,6 +48,8 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     assert campaign_phase('R06c') == 'fault_task'
     assert campaign_phase('R07a') == 'fault_task'
     assert campaign_phase('R07b') == 'fault_task'
+    assert campaign_phase('R07c') == 'fault_task'
+    assert campaign_phase('R07d') == 'fault_task'
     assert campaign_phase('R09a') == 'fault_task'
     assert campaign_phase('R09b') == 'fault_task'
     assert campaign_phase('R08') == 'soak'
@@ -872,6 +876,89 @@ def test_r07b_clock_jump_threshold_matches_jazzy_backward_duration_contract():
     threshold = JumpThreshold(min_forward=None,
         min_backward=Duration(nanoseconds=-1), on_clock_change=False)
     assert threshold.min_backward.nanoseconds == -1
+
+
+def test_owned_restart_request_is_pinned_to_run_case_role_and_exact_identity():
+    identity = {'pid':101,'uid':1000,'start_ticks':77,'argv':['gz','sim'],
+        'pgid':101,'sid':101}
+    request = {'schema':'b23_owned_restart_request/v1','run_id':'B23_R07C_TEST',
+        'invocation_id':'a'*32,'case':'R07c','operation':'restart_owned_process',
+        'target_role':'server','identity':identity}
+    assert verify_owned_restart_request(request, run_id='B23_R07C_TEST',
+        invocation_id='a'*32, case='R07c', role='server',
+        process_identity_record=identity)
+    for changes in ({'invocation_id':'b'*32}, {'target_role':'final'},
+                    {'identity':dict(identity, start_ticks=78)},
+                    {'case':'R07d'}):
+        with pytest.raises(ValueError, match='identity mismatch|not authorized'):
+            verify_owned_restart_request({**request, **changes}, run_id='B23_R07C_TEST',
+                invocation_id='a'*32, case='R07c', role='server',
+                process_identity_record=identity)
+
+
+def test_r07c_owned_backend_restart_requires_new_identity_old_rejection_and_inhibit():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    old_id, new_id = 11, 22
+    original = NS(response=NS(contact_capability_state=Control.Response.CAPABILITY_VERIFIED))
+    old_rejection = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(
+        result=Control.Response.RESULT_REJECTED,
+        reason_code=Control.Response.REASON_IDENTITY_MISMATCH,
+        backend_instance_id=new_id))
+    query = NS(request=NS(operation=Control.Request.OP_VERIFY_CONTACT_CAPABILITY), response=NS(
+        result=Control.Response.RESULT_REJECTED,
+        reason_code=Control.Response.REASON_CONTACT_PROBE_NOT_READY,
+        contact_capability_state=Control.Response.CAPABILITY_FAILED,
+        proof_backend_instance_id=0,proof_session_id='',proof_config_hash='',
+        proof_asset_manifest_sha256=''))
+    inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(
+        result=Control.Response.RESULT_APPLIED,reason_code=Control.Response.REASON_NONE))
+    status = {'backend_instance_id':new_id,'local_zero_override':True,
+        'actuator_inhibited':True,'fault_flags':0}
+    result = verify_r07c_backend_restart(original_proof=original,
+        old_backend_instance_id=old_id, old_process={'pid':101,'group_absent':True},
+        replacement={'pid':202,'backend_instance_id':new_id},
+        old_identity_rejection=old_rejection, query_ack=query,
+        inhibit_ack=inhibit, replacement_status=status)
+    assert result['backend_restarted'] is True
+    assert result['contact_proof_not_inherited'] is True
+    assert result['replacement_inhibit_applied'] is True
+    with pytest.raises(RuntimeError, match='did not remain natively inhibited'):
+        verify_r07c_backend_restart(original_proof=original,
+            old_backend_instance_id=old_id, old_process={'pid':101,'group_absent':True},
+            replacement={'pid':202,'backend_instance_id':new_id},
+            old_identity_rejection=old_rejection, query_ack=query,
+            inhibit_ack=inhibit, replacement_status={**status,'local_zero_override':False})
+    with pytest.raises(RuntimeError, match='old backend control'):
+        verify_r07c_backend_restart(original_proof=original,
+            old_backend_instance_id=old_id, old_process={'pid':101,'group_absent':True},
+            replacement={'pid':202,'backend_instance_id':new_id},
+            old_identity_rejection=NS(**{**old_rejection.__dict__,'response':NS(
+                result=Control.Response.RESULT_APPLIED,
+                reason_code=Control.Response.REASON_NONE,backend_instance_id=old_id)}),
+            query_ack=query,inhibit_ack=inhibit,replacement_status=status)
+
+
+def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(
+        result=Control.Response.RESULT_APPLIED))
+    old = {'pid':303,'group_absent':True}
+    replacement = {'pid':404,'publisher_instance_id':55,'binding_ack_exists':False}
+    backend = {'local_zero_override':True,'actuator_inhibited':True}
+    result = verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
+        old_process=old,replacement=replacement,backend_status=backend,
+        inhibit_ack=inhibit,new_receipts=[])
+    assert result['replacement_unbound'] is True
+    assert result['native_zero_inhibited'] is True
+    with pytest.raises(RuntimeError, match='replacement/binding boundary'):
+        verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
+            old_process=old,replacement={**replacement,'publisher_instance_id':44},
+            backend_status=backend,inhibit_ack=inhibit,new_receipts=[])
+    with pytest.raises(RuntimeError, match='zero/inhibit'):
+        verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
+            old_process=old,replacement=replacement,
+            backend_status={**backend,'actuator_inhibited':False},
+            inhibit_ack=inhibit,new_receipts=[])
 
 
 def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_proof_free_query():

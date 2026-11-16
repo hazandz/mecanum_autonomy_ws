@@ -26,7 +26,8 @@ CASE_PHASES = {'R01a': 'smoke', 'R01b': 'fault_task', 'R01c': 'fault_task',
     'R03b':'fault_task', 'R04a':'fault_task', 'R04b':'fault_task',
     'R04c':'fault_task', 'R04d':'fault_task', 'R05':'fault_task',
     'R06a':'fault_task', 'R06b':'fault_task', 'R06c':'fault_task',
-    'R07a':'fault_task', 'R07b':'fault_task', 'R09a':'fault_task',
+    'R07a':'fault_task', 'R07b':'fault_task', 'R07c':'fault_task',
+    'R07d':'fault_task', 'R09a':'fault_task',
     'R09b':'fault_task', 'R08': 'soak'}
 CASE_HOOKS = {
     'R01a': (),
@@ -53,6 +54,8 @@ CASE_HOOKS = {
     'R06c': ('hold_observation0_adjacent_receipt_until_reset_deadline',),
     'R07a': ('unexpected_pause_during_active_session',),
     'R07b': ('time_only_rollback_after_contact_proof',),
+    'R07c': (),
+    'R07d': (),
     'R09a': (),
     'R09b': (),
     'R08': (),
@@ -339,6 +342,68 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
         'inhibit_revision':inhibit_ack.response.applied_binding_revision,
         'replacement_status_sequence':status['status_sequence'],
         'replacement_status_iteration':status['physics_iteration']}
+
+
+def verify_r07c_backend_restart(*, original_proof, old_backend_instance_id,
+                                old_process, replacement, old_identity_rejection,
+                                query_ack, inhibit_ack, replacement_status):
+    """Require owned server replacement, old binding rejection and inhibited new backend."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    new_id = int(replacement_status['backend_instance_id'])
+    if (original_proof is None
+            or original_proof.response.contact_capability_state != Control.Response.CAPABILITY_VERIFIED
+            or old_process.get('group_absent') is not True
+            or replacement.get('pid') == old_process.get('pid')
+            or new_id == old_backend_instance_id
+            or replacement.get('backend_instance_id') not in (None, new_id)):
+        raise RuntimeError('R07c backend process/instance replacement was not proven')
+    if (old_identity_rejection.request.operation != Control.Request.OP_INHIBIT
+            or old_identity_rejection.response.result != Control.Response.RESULT_REJECTED
+            or old_identity_rejection.response.reason_code != Control.Response.REASON_IDENTITY_MISMATCH
+            or old_identity_rejection.response.backend_instance_id != new_id):
+        raise RuntimeError('R07c old backend control identity was not rejected')
+    if (query_ack.request.operation != Control.Request.OP_VERIFY_CONTACT_CAPABILITY
+            or query_ack.response.contact_capability_state == Control.Response.CAPABILITY_VERIFIED
+            or query_ack.response.result != Control.Response.RESULT_REJECTED
+            or query_ack.response.reason_code != Control.Response.REASON_CONTACT_PROBE_NOT_READY
+            or query_ack.response.proof_backend_instance_id != 0
+            or query_ack.response.proof_session_id
+            or query_ack.response.proof_config_hash
+            or query_ack.response.proof_asset_manifest_sha256):
+        raise RuntimeError('R07c replacement backend exposed old contact proof')
+    if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
+            or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
+            or inhibit_ack.response.reason_code != Control.Response.REASON_NONE
+            or not replacement_status['local_zero_override']
+            or not replacement_status['actuator_inhibited']):
+        raise RuntimeError('R07c replacement backend did not remain natively inhibited')
+    return {'backend_restarted':True,'contact_proof_not_inherited':True,
+        'old_control_rejected':True,'replacement_inhibit_applied':True,
+        'old_server_group_absent':True,'old_backend_instance_id':old_backend_instance_id,
+        'replacement_backend_instance_id':new_id}
+
+
+def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
+                                         old_process, replacement, backend_status,
+                                         inhibit_ack, new_receipts):
+    """Require a distinct unbound final process while native output stays zero/inhibited."""
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    publisher_id = int(replacement['publisher_instance_id'])
+    if (old_process.get('group_absent') is not True
+            or replacement.get('pid') == old_process.get('pid')
+            or publisher_id == old_publisher_instance_id
+            or replacement.get('binding_ack_exists') is not False
+            or new_receipts):
+        raise RuntimeError('R07d final publisher process replacement/binding boundary invalid')
+    if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
+            or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
+            or not backend_status.get('local_zero_override')
+            or not backend_status.get('actuator_inhibited')):
+        raise RuntimeError('R07d backend zero/inhibit was not confirmed after publisher restart')
+    return {'final_publisher_restarted':True,'old_final_group_absent':True,
+        'replacement_unbound':True,'replacement_emitted_no_receipt':True,
+        'native_zero_inhibited':True,'old_publisher_instance_id':old_publisher_instance_id,
+        'replacement_publisher_instance_id':publisher_id}
 
 
 async def query_replacement_backend_then_inhibit(control, *, query_deadline_ns,
@@ -1025,6 +1090,52 @@ def campaign_phase(case):
         return CASE_PHASES[case]
     except KeyError as error:
         raise ValueError('unsupported B2.3 campaign case: ' + str(case)) from error
+
+
+def verify_owned_restart_request(request, *, run_id, invocation_id, case,
+                                 role, process_identity_record):
+    """Bind one restart request to this run and the exact currently owned PID."""
+    if (not isinstance(request, dict)
+            or request.get('schema') != 'b23_owned_restart_request/v1'
+            or request.get('run_id') != run_id
+            or request.get('invocation_id') != invocation_id
+            or request.get('case') != case
+            or request.get('target_role') != role
+            or request.get('operation') != 'restart_owned_process'
+            or request.get('identity') != process_identity_record):
+        raise ValueError('owned restart request identity mismatch')
+    allowed = {'R07c':'server', 'R07d':'final'}
+    if allowed.get(case) != role:
+        raise ValueError('owned restart role is not authorized for this case')
+    return True
+
+
+async def stop_exact_owned_process(supervisor, record, *, identity, deadline_ns):
+    """Stop one identity-pinned process group with bounded TERM/KILL escalation."""
+    import signal
+    current = process_identity(record.pid)
+    keys = ('pid','uid','start_ticks','argv','pgid','sid')
+    if any(current.get(key) != identity.get(key) for key in keys):
+        raise RuntimeError('owned restart target identity changed before signal')
+    if record.process.returncode is None:
+        await supervisor.launcher.stop_group(record.process, signal.SIGTERM)
+        while time.monotonic_ns() < deadline_ns:
+            if record.process.returncode is not None and not supervisor.launcher.group_alive(record.process):
+                break
+            await asyncio.sleep(min(.01, max(0., (deadline_ns-time.monotonic_ns())/1e9)))
+        if record.process.returncode is None or supervisor.launcher.group_alive(record.process):
+            current = process_identity(record.pid)
+            if any(current.get(key) != identity.get(key) for key in keys):
+                raise RuntimeError('owned restart target identity changed before SIGKILL')
+            await supervisor.launcher.stop_group(record.process, signal.SIGKILL)
+            while time.monotonic_ns() < deadline_ns:
+                if record.process.returncode is not None and not supervisor.launcher.group_alive(record.process):
+                    break
+                await asyncio.sleep(min(.01, max(0., (deadline_ns-time.monotonic_ns())/1e9)))
+    if record.process.returncode is None or supervisor.launcher.group_alive(record.process):
+        raise TimeoutError('owned restart target group did not terminate before active deadline')
+    return {'pid':record.pid, 'exit_status':record.process.returncode,
+        'group_absent':True, 'identity':identity}
 
 
 def technical_outcome(case, success):
@@ -1766,6 +1877,8 @@ class TrainingWorkerIO:
         self._r07b_request_started_ns = None
         self._r07b_replacement_backend_statuses = []
         self._r07b_cleanup_control = None
+        self._r07c_restart_started_ns = None
+        self._r07c_replacement_backend_statuses = []
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
@@ -1931,6 +2044,24 @@ class TrainingWorkerIO:
                     # Giữ consumer cũ pin đúng identity. Status instance mới
                     # được lưu raw/typed để nhánh restart kiểm tra riêng; không
                     # đưa nó vào session/ingress đã bị invalidation.
+                    return message
+                if (topic == '/mecanum/local_training/backend_state'
+                        and 'owned_backend_restart' in getattr(self, 'fault_hooks', ())
+                        and self._r07c_restart_started_ns is not None
+                        and int(message.backend_instance_id) != self.descriptor['backend_instance_id']):
+                    status = {'backend_instance_id':int(message.backend_instance_id),
+                        'session_id':str(message.session_id), 'config_hash':str(message.config_hash),
+                        'status_sequence':int(message.status_sequence),
+                        'physics_iteration':int(message.physics_iteration),
+                        'stamp_ns':int(message.header.stamp.sec)*1_000_000_000
+                            +int(message.header.stamp.nanosec),
+                        'fault_flags':int(message.fault_flags),
+                        'local_zero_override':bool(message.local_zero_override),
+                        'actuator_inhibited':bool(message.actuator_inhibited),
+                        'received_ns':self.now(), 'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'wire_cdr_hex':wire.hex()}
+                    self._r07c_replacement_backend_statuses.append(status)
+                    self.emit('B23_R07C_REPLACEMENT_BACKEND_STATUS', status)
                     return message
                 if (topic == '/mecanum/final_issued_command'
                         and 'hold_observation0_adjacent_receipt_until_reset_deadline' in getattr(self, 'fault_hooks', ())
@@ -2244,6 +2375,55 @@ class TrainingWorkerIO:
         # Jazzy ControlWorld response itself is only an ACK with `success`;
         # observed pause state is checked separately from native status.
         return response.success
+
+    async def request_owned_restart(self, *, case, target_role):
+        """Ask the parent to restart one process already owned by this run."""
+        if case == 'R07c' and target_role == 'server':
+            identity = dict(self.descriptor['server_identity'])
+            if identity.get('pid') != self.descriptor.get('server_leader_pid'):
+                raise RuntimeError('R07c server identity is not the descriptor-pinned process')
+        elif case == 'R07d' and target_role == 'final':
+            identity = process_identity(int(self.descriptor['final_publisher_pid']))
+            if identity.get('pid') != self.descriptor['final_publisher_pid']:
+                raise RuntimeError('R07d final identity is not the descriptor-pinned process')
+        else:
+            raise ValueError('owned restart operation does not match R07 case')
+        request = {'schema':'b23_owned_restart_request/v1',
+            'run_id':self.descriptor['run_id'],
+            'invocation_id':self.descriptor['invocation_id'],
+            'case':case,'operation':'restart_owned_process','target_role':target_role,
+            'identity':identity,
+            'old_backend_instance_id':int(self.descriptor['backend_instance_id'])
+                if case == 'R07c' else None,
+            'old_publisher_instance_id':int(self.descriptor['final_publisher_instance_id'])
+                if case == 'R07d' else None,
+            'requested_ns':self.now()}
+        request_path = Path(self.descriptor['owned_restart_request_path'])
+        response_path = Path(self.descriptor['owned_restart_response_path'])
+        if case == 'R07c':
+            self._r07c_restart_started_ns = self.now()
+        write_record_once(request_path, request)
+        request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        self.emit('B23_OWNED_PROCESS_RESTART_REQUESTED', {
+            'case':case,'target_role':target_role,'identity':identity,
+            'request_sha256':request_hash,'steady_ns':self.now()})
+        def response_ready():
+            if not response_path.exists():
+                return None
+            response = json.loads(response_path.read_bytes())
+            if (response.get('schema') != 'b23_owned_restart_response/v1'
+                    or response.get('run_id') != self.descriptor['run_id']
+                    or response.get('invocation_id') != self.descriptor['invocation_id']
+                    or response.get('case') != case
+                    or response.get('target_role') != target_role
+                    or response.get('request_sha256') != request_hash
+                    or response.get('old_process', {}).get('identity') != identity):
+                raise RuntimeError('owned restart response binding mismatch')
+            return response
+        response = await self.until(response_ready, deadline_ns=self.deadline_ns,
+            phase=case + ' owned process restart ACK')
+        self.emit('B23_OWNED_PROCESS_RESTART_ACKNOWLEDGED', response)
+        return response
 
     async def reset_world_time_only(self, *, timeout_s):
         """Apply the packet-pinned Gazebo time_only rollback through ControlWorld."""
@@ -4635,6 +4815,99 @@ async def training_child(path):
                     'replacement_status':replacement_status,'steady_ns':io.now()})
                 outcome = {'case':'R07b','clock_rollback_observed':True,
                     'backend_restarted':True,**checked,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R07c':
+            from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+            from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
+                BackendControlError, BackendSessionIdentity, BackendControlSession)
+            from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
+            if packet['fault_hooks'] or io.contact_ack is None:
+                raise RuntimeError('R07c requires a clean packet and verified original contact proof')
+            old_backend = int(io.descriptor['backend_instance_id'])
+            restart = await io.request_owned_restart(case='R07c', target_role='server')
+            old_rejection = None
+            try:
+                await io.control.inhibit(deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+                raise RuntimeError('R07c old backend control unexpectedly accepted after restart')
+            except BackendControlError as error:
+                old_rejection = error.ack
+                if old_rejection is None:
+                    raise
+            new_backend = int(old_rejection.response.backend_instance_id)
+            if new_backend == old_backend:
+                raise RuntimeError('R07c old control rejection did not identify replacement backend')
+            identity = BackendSessionIdentity(io.descriptor['session_id'],
+                io.descriptor['config_hash'], io.descriptor['asset_manifest_sha256'],
+                io.descriptor['coordinator_ingress_instance_id'], new_backend)
+            replacement_control = BackendControlSession(
+                LocalTrainingBackendControlPort.from_node(io.node), identity,
+                emit=io.emit, now_ns=io.now, pause=io.pause)
+            query_ack, inhibit_ack = await query_replacement_backend_then_inhibit(
+                replacement_control, query_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                inhibit_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                probe_start_request_sequence=io.contact_start_request_sequence)
+            status_deadline = min(io.deadline_ns, io.now()+1_000_000_000)
+            replacement_status = None
+            while io.now() < status_deadline:
+                candidates = [status for status in io._r07c_replacement_backend_statuses
+                    if status['backend_instance_id'] == new_backend
+                    and status['received_ns'] > inhibit_ack.observed_steady_ns]
+                if candidates:
+                    replacement_status = candidates[-1]
+                    break
+                await io.pause(min(.005, max(0., (status_deadline-io.now())/1e9)))
+            if replacement_status is None:
+                raise TimeoutError('R07c replacement backend zero status not observed after INHIBIT')
+            checked = verify_r07c_backend_restart(original_proof=io.contact_ack,
+                old_backend_instance_id=old_backend, old_process=restart['old_process'],
+                replacement=restart['replacement'], old_identity_rejection=old_rejection,
+                query_ack=query_ack, inhibit_ack=inhibit_ack,
+                replacement_status=replacement_status)
+            io.emit('B23_R07C_BACKEND_RESTART_VERIFIED', {
+                'checked':checked,'restart':restart,
+                'old_control_request_cdr_hex':old_rejection.request_bytes.hex(),
+                'old_control_response_cdr_hex':old_rejection.response_bytes.hex(),
+                'query_request_cdr_hex':query_ack.request_bytes.hex(),
+                'query_response_cdr_hex':query_ack.response_bytes.hex(),
+                'inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                'inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                'replacement_status':replacement_status,'steady_ns':io.now()})
+            outcome = {'case':'R07c', **checked,'completed_ns':time.monotonic_ns()}
+        elif packet['case'] == 'R07d':
+            if packet['fault_hooks'] or io.contact_ack is None:
+                raise RuntimeError('R07d requires a clean packet and verified contact proof')
+            old_publisher = int(io.descriptor['final_publisher_instance_id'])
+            await io.inhibit_and_drain(deadline_ns=io.deadline_ns)
+            restart = await io.request_owned_restart(case='R07d', target_role='final')
+            replacement = dict(restart['replacement'])
+            if Path(replacement['binding_ack_path']).exists():
+                replacement['binding_ack_exists'] = True
+            else:
+                replacement['binding_ack_exists'] = False
+            inhibit_ack = await io.control.inhibit(
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            state = await io.until(lambda: io.ingress.backend_state
+                if io.ingress.backend_state is not None
+                and io.ingress.backend_state.received_steady_ns > inhibit_ack.observed_steady_ns
+                and io.ingress.backend_state.local_zero_override
+                and io.ingress.backend_state.actuator_inhibited else None,
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                phase='R07d post-restart native zero/inhibit status')
+            status = {'backend_instance_id':int(state.backend_instance_id),
+                'local_zero_override':bool(state.local_zero_override),
+                'actuator_inhibited':bool(state.actuator_inhibited),
+                'status_sequence':int(state.status_sequence),
+                'received_ns':int(state.received_steady_ns)}
+            new_receipts = [receipt.final_publish_sequence for receipt in io.ingress.receipts
+                if receipt.final_publisher_instance_id == replacement['publisher_instance_id']]
+            checked = verify_r07d_final_publisher_restart(
+                old_publisher_instance_id=old_publisher,
+                old_process=restart['old_process'], replacement=replacement,
+                backend_status=status, inhibit_ack=inhibit_ack, new_receipts=new_receipts)
+            io.emit('B23_R07D_FINAL_PUBLISHER_RESTART_VERIFIED', {
+                'checked':checked,'restart':restart,'inhibit_request_cdr_hex':inhibit_ack.request_bytes.hex(),
+                'inhibit_response_cdr_hex':inhibit_ack.response_bytes.hex(),
+                'backend_status':status,'steady_ns':io.now()})
+            outcome = {'case':'R07d', **checked,'completed_ns':time.monotonic_ns()}
         elif packet['case'] in ('R02a','R02b'):
             if packet['case'] == 'R02b':
                 expected_env = case_environment(packet['case'], packet['fault_hooks'])
@@ -5751,6 +6024,93 @@ async def run_parent(packet_path, packet_sha256):
     shared_cleanup_end = total_end
     cleanup_seen = False
     owned_identities = []
+    expected_restart_pids = set()
+    restart_request_processed = False
+    async def handle_owned_restart_request():
+        nonlocal restart_request_processed
+        request_path = root/'owned-restart-request.json'
+        response_path = root/'owned-restart-response.json'
+        if restart_request_processed or not request_path.exists():
+            return
+        request = json.loads(request_path.read_bytes())
+        case = packet['case']
+        role = 'server' if case == 'R07c' else 'final' if case == 'R07d' else None
+        if role is None:
+            raise RuntimeError('owned restart request is outside R07c/R07d')
+        expected_old_identity = (descriptor_base['backend_instance_id'] if case == 'R07c'
+            else descriptor_base['final_publisher_instance_id'])
+        identity_field = ('old_backend_instance_id' if case == 'R07c'
+            else 'old_publisher_instance_id')
+        if request.get(identity_field) != expected_old_identity:
+            raise RuntimeError('owned restart request prior instance binding mismatch')
+        candidates = [record for record in supervisor.owned if record.name == role]
+        if not candidates:
+            raise RuntimeError('owned restart target has no registered process')
+        old = candidates[-1]
+        identity = process_identity(old.pid)
+        verify_owned_restart_request(request, run_id=packet['run_id'],
+            invocation_id=invocation, case=case, role=role,
+            process_identity_record=identity)
+        if old.process.returncode is not None:
+            raise RuntimeError('owned restart target already exited before request')
+        expected_restart_pids.add(old.pid)
+        stopped = await stop_exact_owned_process(supervisor, old,
+            identity=identity, deadline_ns=active_end)
+        if role == 'server':
+            server_command = tuple(plan.commands[0])
+            server_environment = dict(plan.environment)
+            for name in tuple(server_environment):
+                if name.startswith('MECANUM_B2_HEARTBEAT_'):
+                    server_environment.pop(name)
+            server_environment['MECANUM_B2_HEARTBEAT_DIAGNOSTICS'] = '0'
+            server_environment.update(supervisor._heartbeat_trace_environment)
+            replacement = await supervisor._launch_owned_process(
+                'server', server_command, server_environment)
+            remaining = max(0., (active_end-time.monotonic_ns())/1e9)
+            if remaining <= 0:
+                raise TimeoutError('R07c active deadline expired before replacement readiness')
+            await supervisor.readiness.server_scene(plan, replacement.process,
+                min(supervisor.SERVER_READY_TIMEOUT_S, remaining))
+            await supervisor._bind_heartbeat_readiness()
+            replacement_facts = {'pid':replacement.pid,
+                'identity':process_identity(replacement.pid),
+                'backend_instance_id':supervisor.readiness.accepted_backend_status.get('backend_instance_id')
+                    if isinstance(supervisor.readiness.accepted_backend_status, dict) else None}
+            if replacement.pid == old.pid:
+                raise RuntimeError('R07c replacement reused old server PID')
+        else:
+            final_descriptor = dict(descriptor_base, role='final',
+                evidence_role='final_restart_1',
+                final_boot_path=str(root/'final-restart-1-boot.json'),
+                final_binding_path=str(root/'final-restart-1-binding.json'),
+                final_binding_ack_path=str(root/'final-restart-1-binding-ack.json'))
+            descriptor_path = root/'final-restart-1-descriptor.json'
+            write_record_once(descriptor_path, final_descriptor)
+            replacement = await launch('final', [sys.executable, '-B', '-m', MODULE,
+                'final', '--descriptor', str(descriptor_path)])
+            boot_path = Path(final_descriptor['final_boot_path'])
+            while time.monotonic_ns() < active_end and not boot_path.exists():
+                await asyncio.sleep(min(.01, max(0., (active_end-time.monotonic_ns())/1e9)))
+            if not boot_path.exists():
+                raise TimeoutError('R07d replacement final publisher did not boot')
+            boot = json.loads(boot_path.read_bytes())
+            if (boot.get('run_id') != packet['run_id']
+                    or boot.get('invocation_id') != invocation
+                    or boot.get('identity') != process_identity(replacement.pid)
+                    or boot.get('publisher_instance_id') == request.get('old_publisher_instance_id')):
+                raise RuntimeError('R07d replacement publisher identity did not change')
+            replacement_facts = {'pid':replacement.pid,
+                'identity':boot['identity'],
+                'publisher_instance_id':boot['publisher_instance_id'],
+                'boot_path':str(boot_path),
+                'binding_ack_path':final_descriptor['final_binding_ack_path']}
+        result = {'schema':'b23_owned_restart_response/v1',
+            'run_id':packet['run_id'],'invocation_id':invocation,'case':case,
+            'target_role':role,'request_sha256':hashlib.sha256(request_path.read_bytes()).hexdigest(),
+            'old_process':stopped,'replacement':replacement_facts,
+            'completed_ns':time.monotonic_ns()}
+        write_record_once(response_path, result)
+        restart_request_processed = True
     async def wait_for(predicate, label):
         nonlocal shared_cleanup_end, cleanup_seen
         while time.monotonic_ns() < (shared_cleanup_end if cleanup_seen else active_end):
@@ -5761,8 +6121,10 @@ async def run_parent(packet_path, packet_sha256):
                     run_id=packet['run_id'], invocation=invocation, total_end=total_end, now_ns=time.monotonic_ns()))
                 cleanup_seen = True
             if abort.is_set(): raise RuntimeError('parent cancellation requested')
+            await handle_owned_restart_request()
             for process in supervisor.owned:
-                if process.process.returncode is not None and process.name not in ('worker',):
+                if (process.process.returncode is not None and process.name not in ('worker',)
+                        and process.pid not in expected_restart_pids):
                     raise RuntimeError('owned process exited: ' + process.name + '=' + str(process.process.returncode))
             observer = supervisor._heartbeat_observer_process
             if observer is not None and observer.returncode is not None:
@@ -5789,6 +6151,8 @@ async def run_parent(packet_path, packet_sha256):
         coordinator_ingress_instance_id=packet['coordinator_ingress_instance_id'],
         config_hash=packet['config_hash'], asset_manifest_sha256=packet['asset_manifest_sha256'],
         task_fixture=packet.get('task_fixture'),
+        owned_restart_request_path=str(root/'owned-restart-request.json'),
+        owned_restart_response_path=str(root/'owned-restart-response.json'),
         scan_period_ns=packet_scan_period_ns(packet),
         native_events_path=str(root/'native-events.jsonl'))
     try:
@@ -5810,6 +6174,7 @@ async def run_parent(packet_path, packet_sha256):
         backend_id = status['backend_instance_id']
         server = next(row for row in supervisor.owned if row.name == 'server')
         descriptor_base.update(backend_instance_id=backend_id, server_leader_pid=server.pid,
+            server_identity=process_identity(server.pid),
             physics_engine_sha256=packet['physics_engine_sha256'])
         await launch('robot_state_publisher', packet['robot_state_publisher_argv'])
         final_descriptor = dict(descriptor_base, role='final', evidence_role='final',
