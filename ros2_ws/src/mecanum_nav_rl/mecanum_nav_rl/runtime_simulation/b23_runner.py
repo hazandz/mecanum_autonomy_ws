@@ -430,6 +430,31 @@ async def query_replacement_backend_then_inhibit(control, *, query_deadline_ns,
     return fresh_ack, inhibit_ack
 
 
+async def prepare_r07d_final_publisher_restart(io, b1, packet):
+    """Tạo context episode thật để có thể drain admission trước restart R07d.
+
+    R07d bắt đầu từ session bind/contact proof, khi noise emulator chưa reset.
+    SafetyInput chỉ được tạo từ noisy sample có lifecycle đang hoạt động; vì
+    vậy inhibit-and-drain ngay sau bind không thể sinh native watermark.
+    Dùng reset bình thường đã được packet pin trước khi yêu cầu drain.
+    """
+    from mecanum_nav_rl.simulation.local_training_reset import ResetTarget
+
+    if not packet.get('episode_seeds') or not isinstance(packet.get('reset_target'), dict):
+        raise ValueError('R07d packet lacks the pinned reset seed/target')
+    await io.reset_episode(b1, seed=packet['episode_seeds'][0],
+        target=ResetTarget(**packet['reset_target']), paused_hold_s=.250)
+    if (not io.ingress._noise_ready or io.ingress.lifecycle is None
+            or io.ingress.lifecycle.episode_generation <= 0):
+        raise RuntimeError('R07d reset did not establish an active noisy lifecycle')
+    io.emit('B23_R07D_ACTIVE_CONTEXT_READY', {
+        'episode_generation':int(io.ingress.lifecycle.episode_generation),
+        'reset_epoch':int(io.ingress.lifecycle.reset_epoch),
+        'runtime_generation':int(io.ingress.lifecycle.runtime_generation),
+        'steady_ns':io.now()})
+    return await io.inhibit_and_drain(deadline_ns=io.deadline_ns)
+
+
 def r07b_stale_rollback_input_reason(topic, message, wire, ingress):
     """Nhận diện đúng sample cũ cần quarantine trước khi ingress latch lỗi."""
     stamp = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
@@ -4991,7 +5016,7 @@ async def training_child(path):
             if packet['fault_hooks'] or io.contact_ack is None:
                 raise RuntimeError('R07d requires a clean packet and verified contact proof')
             old_publisher = int(io.descriptor['final_publisher_instance_id'])
-            await io.inhibit_and_drain(deadline_ns=io.deadline_ns)
+            await prepare_r07d_final_publisher_restart(io, b1, packet)
             restart = await io.request_owned_restart(case='R07d', target_role='final')
             replacement = dict(restart['replacement'])
             if Path(replacement['binding_ack_path']).exists():

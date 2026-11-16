@@ -26,7 +26,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r07a_resumed_inhibition, policy_step_identities,
     verify_r07b_revocation, verify_r07b_backend_restart,
     verify_owned_restart_request, verify_r07c_backend_restart,
-    verify_r07d_final_publisher_restart,
+    verify_r07d_final_publisher_restart, prepare_r07d_final_publisher_restart,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
 )
@@ -1206,6 +1206,43 @@ def test_r07c_worker_finalization_uses_verified_replacement_backend():
     io.deadline_ns = 1_000
     assert asyncio.run(io.stop(deadline_ns=1_000)) is True
     assert [name for name, _ in calls] == ['replacement']
+
+
+def test_r07d_establishes_real_episode_before_native_inhibited_drain():
+    """Production helper resets noisy lifecycle before waiting for native input."""
+    calls = []
+
+    class IO:
+        def __init__(self):
+            self.deadline_ns = 9_000_000_000
+            self.ingress = NS(_noise_ready=False, lifecycle=None)
+        async def reset_episode(self, b1, *, seed, target, paused_hold_s):
+            calls.append(('reset', b1, seed, target, paused_hold_s))
+            self.ingress._noise_ready = True
+            self.ingress.lifecycle = NS(episode_generation=1, reset_epoch=1,
+                runtime_generation=1)
+        async def inhibit_and_drain(self, *, deadline_ns):
+            calls.append(('drain', deadline_ns))
+            assert self.ingress._noise_ready is True
+            assert self.ingress.lifecycle.episode_generation == 1
+            return 7
+        def emit(self, event, facts):
+            calls.append((event, facts))
+        def now(self):
+            return 123
+
+    packet = {'episode_seeds':[2026102900],
+        'reset_target':{'x_m':0.0,'y_m':0.0,'z_m':0.1,'yaw_rad':0.0}}
+    io = IO()
+    result = asyncio.run(prepare_r07d_final_publisher_restart(io, object(), packet))
+    assert result == 7
+    assert calls[0][0] == 'reset'
+    assert calls[0][2] == 2026102900
+    assert calls[0][3].x_m == 0.0
+    assert calls[0][4] == .250
+    assert calls[1] == ('B23_R07D_ACTIVE_CONTEXT_READY', {
+        'episode_generation':1,'reset_epoch':1,'runtime_generation':1,'steady_ns':123})
+    assert calls[2] == ('drain', io.deadline_ns)
 
 
 def test_worker_waits_for_backend_service_before_control_rpc():
