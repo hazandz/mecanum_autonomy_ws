@@ -199,6 +199,7 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
         lifecycle_received_ns=1_000_000_000,
+        ros_time_at_receive=lambda _steady_ns: 1_300_000_000,
         ros_now=lambda: 1_300_000_000,
         now=lambda: 1_300_000_000,
     )
@@ -222,11 +223,9 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
     evaluation_times = {}
     def joined(stamp, *, evaluation_ros_now_ns=None,
                evaluation_steady_now_ns=None):
-        # Runtime ingress keeps the latest actual lifecycle snapshot. A
-        # historical goal sample must be checked against the actual current
-        # clocks, otherwise that lifecycle stamp is incorrectly classified
-        # as future and aborts the policy transaction.
-        if evaluation_ros_now_ns < 1_230_000_000:
+        # A retained goal sample must use the ROS clock paired with its last
+        # source receive, not the later B1 decision clock.
+        if evaluation_ros_now_ns < stamp:
             raise ValueError('future timestamps are invalid')
         evaluation_times[stamp] = (evaluation_ros_now_ns,
                                    evaluation_steady_now_ns)
@@ -334,6 +333,7 @@ def test_goal_settle_window_skips_missing_cutoff_when_valid_cadence_is_within_li
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
         lifecycle_received_ns=1_000_000_000,
+        ros_time_at_receive=lambda _steady_ns: 1_400_000_000,
         ros_now=lambda: 1_400_000_000,
         now=lambda: 1_300_000_000,
     )
@@ -517,6 +517,7 @@ def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipt
         profile={'b1_receipt_max_age_ms':500}, lock=threading.RLock(),
         _receipt_views={7:receipt}, _application_bytes={7:serialize_message(applied)},
         _application_received_ns={7:2_100_000_000},
+        ros_time_at_receive=lambda _steady_ns: 1_300_000_000,
         ros_now=lambda:1_300_000_000, now=lambda:2_300_000_000)
     adapter.binding = SimpleNamespace(lifecycle_identity=identity)
     adapter.emit = lambda name, facts: events.append((name, facts))
@@ -630,6 +631,7 @@ def test_goal_settle_sequence_checks_freshness_at_each_actual_collection_clock()
         safety_states=safety,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64,
             backend_instance_id=13),
+        ros_time_at_receive=lambda steady_ns: steady_ns - 1_000_000_000,
         profile={'scan_max_age_ms':500,'odometry_max_age_ms':500,
             'oracle_max_age_ms':500,'lifecycle_max_age_ms':5_000,
             'backend_status_receive_age_ms':100},
@@ -672,6 +674,12 @@ def test_goal_settle_sequence_checks_freshness_at_each_actual_collection_clock()
     assert [sample.timestamp_ns for sample in samples] == [
         1_100_000_000, 1_300_000_000]
     assert samples[0].health.evaluation_steady_now_ns == 2_115_000_000
+    assert samples[0].health.evaluation_ros_now_ns == 1_115_000_000
+    from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
+    with pytest.raises(ValueError, match='input exceeds ROS or local steady receive age'):
+        validate_dual_clock_freshness(source_ros_ns=1_090_000_000,
+            now_ros_ns=1_300_000_000, receive_steady_ns=2_115_000_000,
+            now_steady_ns=2_115_000_000, max_age_ns=100_000_000)
     assert samples[0].health.evaluation_steady_now_ns < ingress.now()
     gaps = [facts for name, facts in events if name == 'GOAL_SETTLE_SAMPLE_GAP']
     assert any(item['cutoff_ns']==1_200_000_000

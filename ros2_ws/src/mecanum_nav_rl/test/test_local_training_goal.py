@@ -337,6 +337,7 @@ def test_production_coordinator_bridges_300ms_b1_cutoffs_with_actual_samples():
             item.final_publish_sequence: raw_samples[stamp][2]
             for stamp, item in ((stamp, raw_samples[stamp][1]) for stamp in raw_samples)
         },
+        ros_time_at_receive=lambda steady_ns: steady_ns - 9_000_000_000,
         ros_now=lambda: current['ros_ns'],
         now=lambda: current['steady_ns'],
     )
@@ -345,6 +346,12 @@ def test_production_coordinator_bridges_300ms_b1_cutoffs_with_actual_samples():
 
     def joined(stamp_ns, *, evaluation_ros_now_ns=None,
                evaluation_steady_now_ns=None):
+        from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
+        validate_dual_clock_freshness(source_ros_ns=stamp_ns,
+            now_ros_ns=evaluation_ros_now_ns,
+            receive_steady_ns=evaluation_steady_now_ns,
+            now_steady_ns=evaluation_steady_now_ns,
+            max_age_ns=100_000_000)
         status, _receipt, _received = raw_samples[stamp_ns]
         return {
             'identity': lifecycle,

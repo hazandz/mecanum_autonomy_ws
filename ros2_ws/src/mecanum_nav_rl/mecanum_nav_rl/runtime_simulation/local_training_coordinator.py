@@ -994,7 +994,21 @@ class LocalTrainingB1Adapter:
                         'steady_ns': decision_steady_ns})
                     continue
                 sample_collection_steady_ns = max(sample_receive_times)
-                evaluation_ros_ns = source.ros_now()
+                try:
+                    evaluation_ros_ns = source.ros_time_at_receive(
+                        sample_collection_steady_ns)
+                except (AttributeError, KeyError, ValueError) as error:
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'paired ROS clock is unavailable: ' + str(error),
+                        'steady_ns': decision_steady_ns})
+                    continue
+                if type(evaluation_ros_ns) is not int or evaluation_ros_ns < sample_cutoff:
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
+                        'cutoff_ns': sample_cutoff,
+                        'reason': 'paired ROS clock precedes the exact sample cutoff',
+                        'steady_ns': decision_steady_ns})
+                    continue
                 evaluation_steady_ns = sample_collection_steady_ns
                 try:
                     facts = self._joined(sample_cutoff,
@@ -1031,6 +1045,7 @@ class LocalTrainingB1Adapter:
                     'receipt_publish_stamp_ns': receipt.publish_stamp_ns,
                     'receipt_received_steady_ns': receipt.received_steady_ns,
                     'sample_collection_steady_ns': sample_collection_steady_ns,
+                    'sample_collection_ros_ns': evaluation_ros_ns,
                     'sample_decision_steady_ns': decision_steady_ns,
                     **zero_evidence,
                 })

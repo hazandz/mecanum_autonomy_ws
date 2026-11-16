@@ -242,6 +242,34 @@ def test_scan_replay_does_not_refresh_receive_age(source):
     assert f.ingress.scans[first.stamp_ns] is first
 
 
+def test_ingress_pairs_ros_clock_with_the_original_steady_receive_timestamp(source):
+    f = source
+    scan = LaserScan()
+    scan.header.frame_id, scan.header.stamp = 'lidar_frame', stamp(f.clock.ros)
+    scan.range_min, scan.range_max = 0.1, 8.
+    scan.angle_min, scan.angle_max = -math.pi, math.pi
+    scan.angle_increment = 2 * math.pi / 499
+    scan.ranges = [float('inf')] * 500
+
+    f.ingress.on_scan(scan)
+    first = f.ingress.scans[f.clock.ros]
+    assert f.ingress.ros_time_at_receive(first.received_steady_ns) == f.clock.ros
+
+    f.advance(120_000_000)
+    f.ingress.on_scan(scan)
+    assert f.ingress.ros_time_at_receive(first.received_steady_ns) == 1_000_000_000
+    next_scan = copy.deepcopy(scan)
+    next_scan.header.stamp = stamp(f.clock.ros)
+    f.ingress.on_scan(next_scan)
+    second = f.ingress.scans[f.clock.ros]
+    assert second.received_steady_ns > first.received_steady_ns
+    assert f.ingress.ros_time_at_receive(second.received_steady_ns) == f.clock.ros
+    with pytest.raises(ValueError, match='receive steady timestamp is invalid'):
+        f.ingress.ros_time_at_receive(-1)
+    with pytest.raises(ValueError, match='paired ROS clock.*unavailable'):
+        f.ingress.ros_time_at_receive(second.received_steady_ns + 1)
+
+
 def test_context_change_revokes_pending_and_flushes_sensor_pair_buffers(source):
     f = source
     f.ingress.on_ground_truth(f.gt())
@@ -390,6 +418,7 @@ def test_b1_skips_expired_old_cutoff_then_commits_fresh_later_policy_cutoff(sour
     # selects the already-issued policy receipt. Then supply its adjacent
     # post-cutoff receipt and let the same production B1 path commit.
     f.clock.ros += 10_000_000
+    f.clock.steady += 10_000_000
     f.ingress.on_ground_truth(f.gt())
     status = f.backend(iteration=14, sequence=14)
     status.applied_receipt_valid = True

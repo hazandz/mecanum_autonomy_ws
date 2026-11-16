@@ -100,6 +100,11 @@ class LocalTrainingIngress:
             final_publisher_id, policy_source_id, safe_stop_source_id)
         self.publish, self.emit, self.now, self.ros_now = safety_publish, emit, now_ns, now_ros_ns
         self.lock = threading.RLock()
+        # Pair local receive time with the ROS clock observed in that same
+        # callback. Historical goal-settle samples can be evaluated at their
+        # actual collection point without substituting the later B1 decision
+        # clock. Keep this bounded like the source buffers.
+        self._receive_ros_by_steady = OrderedDict()
         self.lifecycle = None
         self.lifecycle_received_ns = -1
         self.noise_port = SimulatedOdometryPort()
@@ -140,6 +145,28 @@ class LocalTrainingIngress:
         self._safety_publisher_gid = None
         self._safety_publications = OrderedDict()
         self._last_safety_payload = None
+
+    def _record_receive_clock(self, steady_ns, ros_ns):
+        if (type(steady_ns) is not int or steady_ns < 0
+                or type(ros_ns) is not int or ros_ns < 0):
+            self._fail('receive clock pair is incomplete')
+        previous = self._receive_ros_by_steady.get(steady_ns)
+        if previous is not None and previous != ros_ns:
+            self._fail('receive steady timestamp maps to conflicting ROS clocks')
+        self._receive_ros_by_steady[steady_ns] = ros_ns
+        self._receive_ros_by_steady.move_to_end(steady_ns)
+        while len(self._receive_ros_by_steady) > 8192:
+            self._receive_ros_by_steady.popitem(last=False)
+
+    def ros_time_at_receive(self, steady_ns):
+        """Return the observed ROS clock paired with one exact receive time."""
+        if type(steady_ns) is not int or steady_ns < 0:
+            raise ValueError('receive steady timestamp is invalid')
+        with self.lock:
+            value = self._receive_ros_by_steady.get(steady_ns)
+        if value is None:
+            raise ValueError('paired ROS clock for source receive time is unavailable')
+        return value
 
     def _fail(self, reason):
         self.fault = reason
@@ -183,7 +210,9 @@ class LocalTrainingIngress:
                     self._pose_mutation = None
                     self._pause_transition = None
                     self._paused_pose_raw = None
-            self.lifecycle, self.lifecycle_received_ns = raw, self.now()
+            self.lifecycle_received_ns = self.now()
+            self._record_receive_clock(self.lifecycle_received_ns, self.ros_now())
+            self.lifecycle = raw
 
     def reset_noise(self, seed: int):
         """Gọi sau set-pose ACK; không sửa seed hoặc dữ liệu mẫu cũ."""
@@ -269,6 +298,7 @@ class LocalTrainingIngress:
             self._fail('oracle type mismatch')
         with self.lock:
             stamp, received, raw = stamp_ns(msg.header.stamp), self.now(), serialize_message(msg)
+            received_ros = self.ros_now()
             if msg.header.frame_id != 'world' or msg.child_frame_id != 'base_link':
                 self._fail('oracle frame mismatch')
             if stamp < self._last_gt_stamp:
@@ -302,6 +332,7 @@ class LocalTrainingIngress:
                 self._pause_transition = None
             self._paused_pose_raw = None
             self._last_gt_stamp, self._last_gt_bytes = stamp, raw
+            self._record_receive_clock(received, received_ros)
             self._put(self._oracles, stamp, (raw, received), 'oracle')
             self._join_physics(stamp)
             if not self._noise_ready or self.lifecycle is None:
@@ -369,6 +400,8 @@ class LocalTrainingIngress:
             self._fail('backend state type mismatch')
         with self.lock:
             raw, received = serialize_message(msg), self.now()
+            received_ros = self.ros_now()
+            self._record_receive_clock(received, received_ros)
             if (msg.schema_version != msg.SCHEMA_VERSION or msg.session_id != self.identity.session_id
                     or msg.config_hash != self.identity.config_hash
                     or msg.backend_instance_id != self.identity.backend_instance_id
@@ -428,7 +461,9 @@ class LocalTrainingIngress:
                 if raw != self.scans[stamp].message_bytes:
                     self._fail('scan same stamp changed bytes')
                 return  # Exact replay không làm mới receive age.
-            self._put(self.scans, stamp, ReceivedScan(stamp, self.now(), raw), 'scan')
+            received = self.now()
+            self._record_receive_clock(received, self.ros_now())
+            self._put(self.scans, stamp, ReceivedScan(stamp, received, raw), 'scan')
 
     def on_receipt(self, msg, *, received_ns=None):
         if not isinstance(msg, FinalIssuedCommandReceipt):
@@ -450,6 +485,7 @@ class LocalTrainingIngress:
                 received_ns = self.now()
             if type(received_ns) is not int or received_ns > self.now():
                 self._fail('receipt receive timestamp is invalid')
+            self._record_receive_clock(received_ns, self.ros_now())
             is_policy = msg.source == msg.SOURCE_POLICY
             if msg.source not in (msg.SOURCE_POLICY, msg.SOURCE_SAFE_STOP):
                 self._fail('receipt source not allowed in LOCAL_TRAINING')
@@ -539,6 +575,7 @@ class LocalTrainingIngress:
             if digest == self._last_safety_payload:
                 return  # DDS replay không làm mới receive time.
             self.safety_state, self.safety_received_ns = copy.deepcopy(msg), self.now()
+            self._record_receive_clock(self.safety_received_ns, self.ros_now())
             self.safety_states.append((stamp_ns(msg.header.stamp),
                                        self.safety_received_ns,
                                        copy.deepcopy(msg)))
