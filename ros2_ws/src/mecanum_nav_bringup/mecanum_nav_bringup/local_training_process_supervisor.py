@@ -217,6 +217,12 @@ class RclpyReadiness:
     ) -> None:
         """Prepare process seams without creating middleware or a worker."""
         self._stdin_buffers: dict[int, bytearray] = {}
+        self._worker_factory_override = worker_factory
+        self._identity_reader_override = identity_reader
+        self._signal_group_override = signal_group
+        self._monotonic_source = monotonic
+        self._monotonic_ns_source = monotonic_ns
+        self._sleep_source = sleep
         self._worker_factory = worker_factory or self._spawn_worker
         self._identity_reader = identity_reader or self._read_process_identity
         self._signal_group = signal_group or self._signal_verified_group
@@ -264,6 +270,25 @@ class RclpyReadiness:
                 and self._evidence_sink is not evidence_sink):
             raise RuntimeError('readiness evidence sink already bound')
         self._evidence_sink = evidence_sink
+
+    def fresh_attempt(self):
+        """Create a separately owned readiness worker after a clean attempt."""
+        if (not self._ready_attempted or self._residue != 'NONE'
+                or self._cleanup_record_error or self._evidence_errors
+                or self._readiness_deadline_violation
+                or self._cleanup_deadline_violation):
+            raise RuntimeError('readiness attempt cannot be replaced before clean completion')
+        attempt = RclpyReadiness(
+            worker_factory=self._worker_factory_override,
+            identity_reader=self._identity_reader_override,
+            signal_group=self._signal_group_override,
+            monotonic=self._monotonic_source,
+            monotonic_ns=self._monotonic_ns_source,
+            sleep=self._sleep_source,
+        )
+        if self._evidence_sink is not None:
+            attempt.bind_evidence_sink(self._evidence_sink)
+        return attempt
 
     @property
     def accepted_backend_status(self):

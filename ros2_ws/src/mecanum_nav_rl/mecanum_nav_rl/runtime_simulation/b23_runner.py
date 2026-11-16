@@ -6084,6 +6084,7 @@ async def run_parent(packet_path, packet_sha256):
             remaining = max(0., (active_end-time.monotonic_ns())/1e9)
             if remaining <= 0:
                 raise TimeoutError('R07c active deadline expired before replacement readiness')
+            supervisor.readiness = supervisor.readiness.fresh_attempt()
             await supervisor.readiness.server_scene(plan, replacement.process,
                 min(supervisor.SERVER_READY_TIMEOUT_S, remaining))
             await supervisor.bind_restarted_heartbeat_backend()

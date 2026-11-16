@@ -1009,6 +1009,58 @@ def test_readiness_request_uses_plan_binding_without_mutating_parent_env():
     assert dict(os.environ) == previous
 
 
+def test_readiness_fresh_attempt_requires_clean_completion_and_keeps_seams():
+    """A replacement server gets a new single-use worker with the same seams."""
+    worker_factory = lambda _environment: None
+    identity_reader = lambda _pid: {}
+    signal_group = lambda *_args: None
+    monotonic = lambda: 1.0
+    monotonic_ns = lambda: 1_000_000_000
+    sleep = asyncio.sleep
+    sink = FakeSink()
+    readiness = RclpyReadiness(
+        worker_factory=worker_factory,
+        identity_reader=identity_reader,
+        signal_group=signal_group,
+        monotonic=monotonic,
+        monotonic_ns=monotonic_ns,
+        sleep=sleep,
+    )
+    readiness.bind_evidence_sink(sink)
+
+    try:
+        readiness.fresh_attempt()
+    except RuntimeError as error:
+        assert str(error) == (
+            'readiness attempt cannot be replaced before clean completion'
+        )
+    else:
+        raise AssertionError('unconsumed readiness was replaced')
+
+    readiness._ready_attempted = True
+    readiness._residue = 'UNKNOWN'
+    try:
+        readiness.fresh_attempt()
+    except RuntimeError as error:
+        assert str(error) == (
+            'readiness attempt cannot be replaced before clean completion'
+        )
+    else:
+        raise AssertionError('unclean readiness was replaced')
+
+    readiness._residue = 'NONE'
+    replacement = readiness.fresh_attempt()
+    assert replacement is not readiness
+    assert replacement._ready_attempted is False
+    assert replacement._evidence_sink is sink
+    assert replacement._worker_factory is worker_factory
+    assert replacement._identity_reader is identity_reader
+    assert replacement._signal_group is signal_group
+    assert replacement._monotonic is monotonic
+    assert replacement._monotonic_ns is monotonic_ns
+    assert replacement._sleep is sleep
+
+
 def test_gui_start_failure_cleans_server_without_headless_fallback():
     """GUI startup failure stops the server without headless fallback."""
     async def run():
