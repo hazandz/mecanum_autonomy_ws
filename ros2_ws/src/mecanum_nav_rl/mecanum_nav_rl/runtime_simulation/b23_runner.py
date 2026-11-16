@@ -2699,7 +2699,7 @@ class TrainingWorkerIO:
         await self.call(self.pose_client, request, timeout_s=timeout_s, phase='robot_set_pose')
         return True
 
-    async def set_r09b_task_fixture_pose(self, *, pose_name, deadline_ns, policy_receipt=None,
+    async def set_r09b_task_fixture_pose(self, *, pose_name, deadline_ns, zero_receipt=None,
                                          applied_zero_witness=None):
         """Move only the pinned R09b world obstacle while actual robot zero is bound."""
         from rclpy.serialization import serialize_message
@@ -2709,13 +2709,14 @@ class TrainingWorkerIO:
         if pose_name not in ('contact_pose', 'initial_pose'):
             raise ValueError('R09b fixture pose must be the packet contact or restore pose')
         pose = fixture[pose_name]
-        receipt = policy_receipt or self.final.last_publication
+        receipt = zero_receipt or self.final.last_publication
         state = self.ingress.backend_state
         if receipt is None or state is None:
             raise RuntimeError('R09b fixture mutation lacks final receipt/backend state')
         if (receipt.final_publisher_instance_id != self.final.publisher_instance_id
                 or (pose_name == 'contact_pose'
-                    and receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY)
+                    and receipt.source not in (FinalIssuedCommandReceipt.SOURCE_POLICY,
+                        FinalIssuedCommandReceipt.SOURCE_SAFE_STOP))
                 or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
                         receipt.final_command.angular.z))):
             raise RuntimeError('R09b fixture mutation requires the bound zero final command')
@@ -2754,7 +2755,8 @@ class TrainingWorkerIO:
                 and witness_state.applied_final_publisher_instance_id == self.final.publisher_instance_id
                 and witness_state.applied_final_publisher_instance_id == witness_receipt.final_publisher_instance_id
                 and witness_state.applied_final_publish_sequence == witness_receipt.final_publish_sequence
-                and witness_receipt.source == witness_receipt.SOURCE_POLICY
+                and witness_receipt.source in (witness_receipt.SOURCE_POLICY,
+                    witness_receipt.SOURCE_SAFE_STOP)
                 and not any((witness_receipt.final_command.linear.x,
                     witness_receipt.final_command.linear.y,witness_receipt.final_command.angular.z))
                 and latest is not None
@@ -2812,28 +2814,29 @@ class TrainingWorkerIO:
             'completed_ns':self.now()})
         return response
 
-    async def run_r09b_contact_task_pulse(self, *, policy_receipt,
+    async def run_r09b_contact_task_pulse(self, *, zero_receipt,
                                          policy_applied_state, deadline_ns,
                                          applied_received_ns):
-        """Hold POLICY immediately after moving the pinned contact fixture.
+        """Measure and clear the pinned fixture pulse under an applied zero.
 
-        The zero POLICY receipt has already been applied and remains the B1
-        action witness. Holding the Safety policy stream before waiting for the
-        contact pulse prevents a later publication of that same admission from
-        racing the native SAFE_STOP that closes the slot during contact.
+        The caller may provide the bound SAFE_STOP zero while a B1 step is
+        pending but before its POLICY issuance. The contact facts then remain
+        in the real physics history for that step, while fixture RPC time
+        cannot age the POLICY issuance past B1's unchanged freshness bound.
         """
         await self.set_r09b_task_fixture_pose(pose_name='contact_pose',
-            deadline_ns=deadline_ns, policy_receipt=policy_receipt)
+            deadline_ns=deadline_ns, zero_receipt=zero_receipt)
         self.safety.local_training.set_policy_hold(True)
-        self.emit('R09B_POLICY_HELD_AFTER_CONTACT_FIXTURE_POSE', {
-            'policy_publish_sequence':int(policy_receipt.final_publish_sequence),
+        self.emit('R09B_ZERO_STREAM_HELD_DURING_CONTACT_FIXTURE_TASK', {
+            'zero_source':int(zero_receipt.source),
+            'zero_publish_sequence':int(zero_receipt.final_publish_sequence),
             'applied_publish_sequence':int(policy_applied_state.applied_final_publish_sequence),
             'steady_ns':self.now()})
         return await restore_r09b_fixture_after_contact_pulse(self,
             deadline_ns=deadline_ns,
             after_status_sequence=policy_applied_state.status_sequence,
             after_physics_iteration=policy_applied_state.physics_iteration,
-            zero_receipt=policy_receipt, zero_applied_state=policy_applied_state,
+            zero_receipt=zero_receipt, zero_applied_state=policy_applied_state,
             zero_applied_received_ns=applied_received_ns)
 
     async def align_r09b_application_cutoff(self, b1, *, policy_receipt,
@@ -3880,7 +3883,8 @@ class TrainingWorkerIO:
                           close_after_held_receipt=None, prebind_admission=False,
                           measurement_fault_case=None,
                           align_admission_after_scan_boundary=False,
-                          after_policy_applied=None):
+                          after_policy_applied=None,
+                          before_policy_issuance=None):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -4060,6 +4064,10 @@ class TrainingWorkerIO:
                 'pending_token_sha256': hashlib.sha256(bytes(ack.response.pending_admission_token)).hexdigest(),
                 'steady_ns': self.now()})
             self._last_prebind_check = prebind_check
+        if before_policy_issuance is not None:
+            if not callable(before_policy_issuance):
+                raise TypeError('before_policy_issuance must be callable')
+            await before_policy_issuance(deadline, token, barrier)
         life = self.ingress.lifecycle
         envelope = CommandEnvelope()
         envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
@@ -4678,26 +4686,54 @@ async def training_child(path):
             fixture_moved = False
             primary = None
             try:
-                async def move_fixture_after_zero_policy(receipt, applied_state, deadline_ns,
-                                                         applied_received_ns):
+                async def move_fixture_before_policy_issuance(deadline_ns, token, barrier_ns):
                     nonlocal fixture_moved
-                    if any((receipt.final_command.linear.x, receipt.final_command.linear.y,
-                            receipt.final_command.angular.z)):
-                        raise RuntimeError('R09b fixture movement blocked: POLICY receipt is not zero')
-                    if (not applied_state.applied_receipt_valid
-                            or applied_state.applied_final_publish_sequence
-                                != receipt.final_publish_sequence
-                            or applied_state.actuator_inhibited):
-                        raise RuntimeError('R09b fixture movement lacks exact active zero POLICY application')
+                    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+                    def exact_zero_witness():
+                        receipt = io.final.last_publication
+                        state = io.ingress.backend_state
+                        received_ns = io.ingress.backend_received_ns
+                        if (receipt is None or state is None or type(received_ns) is not int
+                                or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+                                or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+                                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                                    receipt.final_command.angular.z))
+                                or not state.applied_receipt_valid or state.local_zero_override
+                                or state.fault_flags or state.paused or state.actuator_inhibited
+                                or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                                or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                                or state.applied_physics_iteration == 0
+                                or state.applied_physics_iteration != state.physics_iteration
+                                or (int(state.applied_sim_stamp.sec) * 1_000_000_000
+                                    + int(state.applied_sim_stamp.nanosec)
+                                    != int(state.header.stamp.sec) * 1_000_000_000
+                                    + int(state.header.stamp.nanosec))
+                                or state.backend_instance_id != io.descriptor['backend_instance_id']
+                                or state.session_id != io.descriptor['session_id']
+                                or state.config_hash != io.descriptor['config_hash']
+                                or not state.coverage_complete or not state.contact_source_healthy
+                                or state.required_collision_mask == 0
+                                or state.required_collision_mask != state.observed_collision_mask
+                                or state.contact_active):
+                            return None
+                        return receipt, state, received_ns
+                    receipt, applied_state, applied_received_ns = await io.until(
+                        exact_zero_witness, deadline_ns=deadline_ns,
+                        phase='R09b exact applied SAFE_STOP zero before fixture task')
                     # Once the RPC is submitted, its result can be uncertain on
                     # timeout. Always attempt the exact restore in finalization.
                     fixture_moved = True
-                    await io.run_r09b_contact_task_pulse(policy_receipt=receipt,
+                    io.emit('R09B_PENDING_STEP_BOUND_BEFORE_FIXTURE_CONTACT', {
+                        'step_index':token.step_index, 'transition_id':token.transition_id,
+                        'action_barrier_ns':int(barrier_ns),
+                        'zero_publish_sequence':int(receipt.final_publish_sequence),
+                        'zero_source':int(receipt.source), 'steady_ns':io.now()})
+                    await io.run_r09b_contact_task_pulse(zero_receipt=receipt,
                         policy_applied_state=applied_state, deadline_ns=deadline_ns,
                         applied_received_ns=applied_received_ns)
                     fixture_moved = False
                 transition = await io.policy_step(b1, (0., 0., 0.),
-                    after_policy_applied=move_fixture_after_zero_policy)
+                    before_policy_issuance=move_fixture_before_policy_issuance)
                 committed_steps = 1
                 pair = io.ingress.physics_pairs[-1] if io.ingress.physics_pairs else None
                 progress = []
