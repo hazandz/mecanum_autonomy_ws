@@ -1168,6 +1168,46 @@ def test_r07c_owned_backend_restart_requires_new_identity_old_rejection_and_inhi
             query_ack=query,inhibit_ack=inhibit,replacement_status=status)
 
 
+def test_r07c_worker_finalization_uses_verified_replacement_backend():
+    """R07c's final cleanup must inhibit the replacement, not stale control."""
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    calls = []
+    class Control:
+        def __init__(self, name, backend_instance_id):
+            self.name = name
+            self.identity = NS(backend_instance_id=backend_instance_id)
+            self.owned_calls = []
+        async def inhibit(self, *, deadline_ns): calls.append((self.name, deadline_ns))
+        def cancel_pending_calls(self): pass
+    class Gate:
+        def set_policy_hold(self, value): pass
+        def set_stream_enabled(self, value): pass
+    class Ingress:
+        def inhibit(self): pass
+        def pause_admission_publication(self): pass
+    io = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    io.safety = NS(local_training=Gate())
+    io.ingress = Ingress()
+    io.subscriptions = []
+    io.pump_task = None
+    io.calls = []
+    io.control = Control('stale', 11)
+    io._r07b_cleanup_control = None
+    replacement = Control('replacement', 22)
+    io.pin_replacement_backend_for_cleanup(replacement, 22)
+    with pytest.raises(RuntimeError, match='identity mismatch'):
+        io.pin_replacement_backend_for_cleanup(Control('wrong', 33), 22)
+    io.now = lambda: 100
+    io.close_context = lambda: []
+    io.emit = lambda *args: None
+    io.cleanup_errors = ()
+    io.deadline_ns = 1_000
+    assert asyncio.run(io.stop(deadline_ns=1_000)) is True
+    assert [name for name, _ in calls] == ['replacement']
+
+
 def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(

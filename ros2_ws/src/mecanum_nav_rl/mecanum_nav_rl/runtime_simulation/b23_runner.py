@@ -3030,6 +3030,16 @@ class TrainingWorkerIO:
         self.cleanup_errors = tuple(errors)
         return not errors
 
+    def pin_replacement_backend_for_cleanup(self, control, expected_backend_instance_id):
+        """Use cleanup control only when it is bound to the verified replacement."""
+        identity = getattr(control, 'identity', None)
+        backend_instance_id = getattr(identity, 'backend_instance_id', None)
+        if (type(expected_backend_instance_id) is not int or expected_backend_instance_id <= 0
+                or type(backend_instance_id) is not int
+                or backend_instance_id != expected_backend_instance_id):
+            raise RuntimeError('replacement cleanup control identity mismatch')
+        self._r07b_cleanup_control = control
+
     def close_context(self):
         errors = []
         for node in reversed(self.nodes):
@@ -4865,7 +4875,7 @@ async def training_child(path):
                 replacement_control = BackendControlSession(
                     LocalTrainingBackendControlPort.from_node(io.node), identity,
                     emit=io.emit, now_ns=io.now, pause=io.pause)
-                io._r07b_cleanup_control = replacement_control
+                io.pin_replacement_backend_for_cleanup(replacement_control, new_backend_id)
                 fresh_ack, inhibit_ack = await query_replacement_backend_then_inhibit(
                     replacement_control,
                     query_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
@@ -4929,6 +4939,7 @@ async def training_child(path):
             replacement_control = BackendControlSession(
                 LocalTrainingBackendControlPort.from_node(io.node), identity,
                 emit=io.emit, now_ns=io.now, pause=io.pause)
+            io.pin_replacement_backend_for_cleanup(replacement_control, new_backend)
             query_ack, inhibit_ack = await query_replacement_backend_then_inhibit(
                 replacement_control, query_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 inhibit_deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
