@@ -104,7 +104,7 @@ def test_analog_right_diagonals_translate_in_direction_and_turn_right(
     teleop, profile, angle_deg,
 ):
     theta = math.radians(angle_deg)
-    command = teleop.update([math.sin(theta), math.cos(theta)], [0] * 6)
+    command = teleop.update([-math.sin(theta), math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
     expected = tier_normalized(BodyCommand(
         speed * math.cos(theta), -speed * math.sin(theta),
@@ -115,7 +115,7 @@ def test_analog_right_diagonals_translate_in_direction_and_turn_right(
 @pytest.mark.parametrize("angle_deg", (30.0, 60.0))
 def test_analog_left_diagonals_are_symmetric(teleop, profile, angle_deg):
     theta = math.radians(angle_deg)
-    command = teleop.update([-math.sin(theta), math.cos(theta)], [0] * 6)
+    command = teleop.update([math.sin(theta), math.cos(theta)], [0] * 6)
     speed = expected_level_speed(profile, 0)
     expected = tier_normalized(BodyCommand(
         speed * math.cos(theta), speed * math.sin(theta),
@@ -123,7 +123,7 @@ def test_analog_left_diagonals_are_symmetric(teleop, profile, angle_deg):
     assert command == pytest.approx(expected)
 
 
-@pytest.mark.parametrize(("axis_x", "turn_sign"), ((1.0, -1.0), (-1.0, 1.0)))
+@pytest.mark.parametrize(("axis_x", "turn_sign"), ((-1.0, -1.0), (1.0, 1.0)))
 def test_analog_three_and_nine_hour_turn_in_place(teleop, profile, axis_x, turn_sign):
     command = teleop.update([axis_x, 0.0], [0] * 6)
     expected_wz = turn_sign * expected_level_speed(profile, 0) / profile.rotation_radius_m
@@ -144,20 +144,20 @@ def test_deadzone_and_short_smooth_activation_ramp(teleop, profile):
 def test_sideways_transition_is_continuous_and_fades_translation_to_zero(teleop, profile):
     speed = expected_level_speed(profile, 0)
     fade_start = math.radians(profile.sideways_fade_start_deg)
-    at_start = teleop.update([math.sin(fade_start), math.cos(fade_start)], [0] * 6)
+    at_start = teleop.update([-math.sin(fade_start), math.cos(fade_start)], [0] * 6)
     near_theta = fade_start + 1e-5
-    near_start = teleop.update([math.sin(near_theta), math.cos(near_theta)], [0] * 6)
+    near_start = teleop.update([-math.sin(near_theta), math.cos(near_theta)], [0] * 6)
     assert math.dist(tuple(vars(at_start).values()), tuple(vars(near_start).values())) < 2e-6
 
     half_fade_angle = math.radians((profile.sideways_fade_start_deg + 90.0) / 2.0)
-    half_fade = teleop.update([math.sin(half_fade_angle), math.cos(half_fade_angle)], [0] * 6)
+    half_fade = teleop.update([-math.sin(half_fade_angle), math.cos(half_fade_angle)], [0] * 6)
     raw_half = BodyCommand(speed * 0.5 * math.cos(half_fade_angle),
                             -speed * 0.5 * math.sin(half_fade_angle),
                             -speed / profile.rotation_radius_m * math.sin(half_fade_angle))
     assert tuple(vars(half_fade).values()) == pytest.approx(
         tuple(vars(tier_normalized(raw_half, profile, 0)).values()))
 
-    horizontal = teleop.update([1.0, 0.0], [0] * 6)
+    horizontal = teleop.update([-1.0, 0.0], [0] * 6)
     assert horizontal.vx == 0.0 and horizontal.vy == 0.0
     assert horizontal.wz == pytest.approx(-speed / profile.rotation_radius_m)
 
@@ -225,7 +225,7 @@ def test_wheel_target_limit_scales_all_axes_together(profile):
 def test_all_five_tiers_obey_wheel_target_cap_even_with_turn(profile):
     capped = profile
     teleop = SlamManualTeleop(capped, motion_enabled=True)
-    axes = [math.sin(math.radians(60)), -math.cos(math.radians(60))]
+    axes = [-math.sin(math.radians(60)), math.cos(math.radians(60))]
     buttons = [0] * 6
     actual_peaks = []
     for expected_level in range(5):
@@ -330,3 +330,59 @@ def test_manual_mode_requires_explicit_enable_and_neutral_sample_after_start_or_
 def test_tier_wheel_targets_are_280_to_1400_cps(profile):
     assert [profile.max_wheel_target_cps * tier for tier in SPEED_LEVELS] == pytest.approx(
         [280.0, 560.0, 840.0, 1120.0, 1400.0])
+
+
+@pytest.mark.parametrize(("hour", "axes", "sign_vx", "sign_vy", "sign_wz"), [
+    (1, (-0.5, 0.8660254), 1, -1, -1),
+    (11, (0.5, 0.8660254), 1, 1, 1),
+    (5, (-0.5, -0.8660254), -1, -1, -1),
+    (7, (0.5, -0.8660254), -1, 1, 1),
+])
+def test_measured_stick_diagonal_hour_direction(hour, axes, sign_vx, sign_vy, sign_wz, profile):
+    command = SlamManualTeleop(profile, motion_enabled=True).update(axes, [0] * 6)
+    assert command.vx * sign_vx > 0.0
+    assert command.vy * sign_vy > 0.0
+    assert command.wz * sign_wz > 0.0
+
+
+def test_measured_right_and_left_stick_axes_match_robot_lateral_and_yaw(profile):
+    teleop = SlamManualTeleop(profile, motion_enabled=True)
+    right = teleop.update([-1.0, 0.0], [0] * 6)
+    left = teleop.update([1.0, 0.0], [0] * 6)
+    assert right.vy == pytest.approx(0.0) and right.wz < 0.0
+    assert left.vy == pytest.approx(0.0) and left.wz > 0.0
+    assert left.wz == pytest.approx(-right.wz)
+
+
+@pytest.mark.parametrize("axes", ([0.0, 1.0], [-0.5, 0.8660254],
+                                  [0.5, 0.8660254], [-0.5, -0.8660254],
+                                  [0.5, -0.8660254], [-1.0, 0.0], [1.0, 0.0]))
+def test_l1_speed_steps_scale_same_joystick_heading_exactly(axes, profile):
+    teleop = SlamManualTeleop(profile, motion_enabled=True)
+    button_up = [0] * 6
+    button_up[4] = 1  # Existing Xbox mapping: L1 index 4.
+    peaks = []
+    for tier in range(5):
+        buttons = button_up if tier else [0] * 6
+        command = teleop.update(axes, buttons)
+        peaks.append(max(abs(target) for target in wheel_target_cps(command, profile)))
+        if tier < 4:
+            teleop.update(axes, [0] * 6)
+    assert peaks == pytest.approx([280.0, 560.0, 840.0, 1120.0, 1400.0])
+
+
+def test_level_buttons_change_output_tier_without_scaling_or_reset(profile):
+    teleop = SlamManualTeleop(profile, motion_enabled=True)
+    forward = [0.0, 1.0]
+    l1 = [0, 0, 0, 0, 1, 0]
+    r1 = [0, 0, 0, 0, 0, 1]
+    assert teleop.update(forward, [0] * 6).vx > 0.0
+    assert teleop.update(forward, l1).vx > 0.0
+    assert teleop.level_percent == 40
+    assert teleop.update(forward, l1).vx > 0.0
+    assert teleop.level_percent == 40  # Held button does not repeat.
+    teleop.update(forward, [0] * 6)
+    teleop.update(forward, r1)
+    assert teleop.level_percent == 20
+    assert teleop.update(forward, r1).vx > 0.0
+    assert teleop.level_percent == 20
