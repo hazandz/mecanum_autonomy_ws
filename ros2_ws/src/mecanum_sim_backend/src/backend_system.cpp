@@ -859,6 +859,25 @@ public:
       timed_decision = gate_->ConsumeNextAtCurrentTime(
           now_sim, [this]() { return steady_clock_now_(); });
       decision = timed_decision.result;
+      if (decision.disposition == GateDisposition::Pending ||
+          decision.disposition == GateDisposition::Faulted ||
+          decision.disposition == GateDisposition::Anchored ||
+          decision.disposition == GateDisposition::Applied)
+      {
+        const auto key = decision.accepted ?
+            decision.accepted->key.publish_sequence : 0;
+        const auto source = decision.accepted ?
+            static_cast<unsigned>(decision.accepted->source) : 0;
+        gzmsg << "B23_RECEIPT_GATE_RESULT disposition="
+              << static_cast<unsigned>(decision.disposition)
+              << " reason=" << decision.reason
+              << " sim_ns=" << now_sim
+              << " steady_ns=" << timed_decision.steady_now_ns
+              << " watermark=" << gate_->Watermark()
+              << " next_safe_stop=" << gate_->ExpectedSafeStopSequence()
+              << " key=" << key << " source=" << source << std::endl;
+        std::fflush(stdout);
+      }
       if (gate_->WatchdogExpired(timed_decision.steady_now_ns))
       {
         fault_flags_ |= BackendState::FAULT_COMMAND_STALE;
@@ -3274,6 +3293,15 @@ private:
                    msg.final_command.angular.y, msg.final_command.angular.z};
     std::lock_guard<std::mutex> lock(callback_mutex_);
     const auto receive_ns = steady_clock_now_();
+    if (msg.source == Receipt::SOURCE_SAFE_STOP)
+    {
+      gzmsg << "B23_SAFE_STOP_RECEIPT_INGRESS publisher="
+            << msg.final_publisher_instance_id << " key="
+            << msg.final_publish_sequence << " source_sequence="
+            << msg.sequence << " stamp_ns=" << facts.stamp_ns
+            << " receive_ns=" << receive_ns << std::endl;
+      std::fflush(stdout);
+    }
     if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
         !receipt_fault_mode_.empty())
     {
