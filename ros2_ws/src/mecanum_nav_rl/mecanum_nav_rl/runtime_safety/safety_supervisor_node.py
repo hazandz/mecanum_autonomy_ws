@@ -32,7 +32,8 @@ class SafetySupervisorNode(Node):
         "limits.velocity", "limits.acceleration", "limits.jerk",
     )
 
-    def __init__(self, *, local_training_context=None, evidence_sink=None, **node_options) -> None:
+    def __init__(self, *, local_training_context=None, evidence_sink=None,
+                 _steady_now_ns=None, **node_options) -> None:
         super().__init__("safety_supervisor", **node_options)
         if self.get_parameter("use_sim_time").value is not True:
             raise ValueError("SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE")
@@ -43,6 +44,7 @@ class SafetySupervisorNode(Node):
         if mode == 'LOCAL_TRAINING':
             from rclpy.clock import Clock, ClockType
             from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput, SimulationContactState
+            import time
             self._tf_buffer = Buffer()
             self._tf_listener = TransformListener(self._tf_buffer, self)
             reliable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
@@ -55,6 +57,8 @@ class SafetySupervisorNode(Node):
                 CommandEnvelope, "/mecanum/safety_accepted_cmd", reliable)
             self._state_pub = self.create_publisher(SafetyState, '/mecanum/safety_state', reliable)
             self.local_training = LocalTrainingSafetyAdapter(self, local_training_context, emit=evidence_sink)
+            self._local_training_steady_now_ns = _steady_now_ns or time.monotonic_ns
+            self._local_training_last_timer_ns = None
             for message_type, topic, callback, qos in (
                 (CommandEnvelope, '/mecanum/cmd_policy', self.local_training.on_command, reliable),
                 (LaserScan, '/scan', self.local_training.on_scan, sensor),
@@ -80,7 +84,7 @@ class SafetySupervisorNode(Node):
             self._local_training_phase_timer = None
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
             self._local_training_timer = self.create_timer(
-                period_ns / 1_000_000_000, self.local_training.tick,
+                period_ns / 1_000_000_000, self._tick_local_training_steady,
                 clock=steady_clock)
             self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
                 'initial_offset_ns': 0,
@@ -141,6 +145,23 @@ class SafetySupervisorNode(Node):
         self.create_subscription(Odometry, "/odometry/filtered", self._on_odometry, reliable_volatile)
         self.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._on_barrier, reliable_volatile)
         self.create_timer(0.05, self._evaluate_and_publish)
+
+    def _tick_local_training_steady(self) -> None:
+        """Record timer lateness without changing watchdog or Safety decisions."""
+        now_ns = self._local_training_steady_now_ns()
+        previous_ns = self._local_training_last_timer_ns
+        self._local_training_last_timer_ns = now_ns
+        if previous_ns is not None:
+            gap_ns = now_ns - previous_ns
+            period_ns = self.local_training.safety_period_ns
+            if gap_ns > 2 * period_ns:
+                self.local_training.emit('SAFETY_TIMER_OVERRUN', {
+                    'clock': 'steady', 'previous_tick_ns': previous_ns,
+                    'current_tick_ns': now_ns, 'gap_ns': gap_ns,
+                    'period_ns': period_ns,
+                    'missed_periods_lower_bound': max(1, gap_ns // period_ns - 1),
+                })
+        self.local_training.tick()
 
     def _on_command(self, msg: Twist) -> None:
         self._command = msg

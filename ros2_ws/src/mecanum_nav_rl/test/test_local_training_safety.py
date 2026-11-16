@@ -418,19 +418,30 @@ ctx = dict(session_id='b23-test', config_hash='a'*64, ingress_instance_id=11,
            backend_instance_id=22, policy_source_instance_id=33, safe_stop_source_instance_id=44,
            profile=p, sensor=sensor, sim_estop_release_authorized=True)
 events = []
-node = module.SafetySupervisorNode(local_training_context=ctx, evidence_sink=lambda *args: events.append(args))
+tick_now = [0]
+node = module.SafetySupervisorNode(local_training_context=ctx,
+    evidence_sink=lambda *args: events.append(args), _steady_now_ns=lambda: tick_now[0])
 assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
-assert node.timers[0].callback == node.local_training.tick
+assert node.timers[0].callback == node._tick_local_training_steady
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
-assert events[-1][0] == 'SAFETY_TIMER_PHASE_STARTED'
-assert events[-1][1]['initial_offset_ns'] == 0
-assert events[-1][1]['period_ns'] == 20_000_000
-assert events[-1][1]['clock'] == 'steady'
+phase = next(fields for event, fields in events if event == 'SAFETY_TIMER_PHASE_STARTED')
+assert phase['initial_offset_ns'] == 0
+assert phase['period_ns'] == 20_000_000
+assert phase['clock'] == 'steady'
 assert node.local_training.policy_hold is True
 assert not hasattr(node, '_core')
+ticks = []
+node.local_training.tick = lambda: ticks.append(tick_now[0])
+for tick_now[0] in (0, 20_000_000, 100_000_000):
+    node._tick_local_training_steady()
+overruns = [(event, fields) for event, fields in events if event == 'SAFETY_TIMER_OVERRUN']
+assert ticks == [0, 20_000_000, 100_000_000]
+assert len(overruns) == 1 and overruns[0][1] == {
+    'clock':'steady', 'previous_tick_ns':20_000_000, 'current_tick_ns':100_000_000,
+    'gap_ns':80_000_000, 'period_ns':20_000_000, 'missed_periods_lower_bound':3}
 '''
     result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[4],
                             env=dict(os.environ), capture_output=True, text=True, timeout=10)
