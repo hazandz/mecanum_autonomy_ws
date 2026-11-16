@@ -493,7 +493,12 @@ async def prepare_r07d_final_publisher_restart(io, b1, packet):
         'reset_epoch':int(io.ingress.lifecycle.reset_epoch),
         'runtime_generation':int(io.ingress.lifecycle.runtime_generation),
         'steady_ns':io.now()})
-    return await io.inhibit_and_drain(deadline_ns=io.deadline_ns)
+    drained = await io.inhibit_and_drain(deadline_ns=io.deadline_ns)
+    # R07d does not reopen POLICY. Freeze further coordinator safety inputs
+    # after native inhibit is drained so a delayed/stale oracle callback cannot
+    # create a new admission while the final publisher is being replaced.
+    await io.freeze_admission(deadline_ns=io.deadline_ns)
+    return drained
 
 
 def r07b_stale_rollback_input_reason(topic, message, wire, ingress):

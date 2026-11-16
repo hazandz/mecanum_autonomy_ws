@@ -1226,7 +1226,11 @@ def test_r07d_establishes_real_episode_before_native_inhibited_drain():
             calls.append(('drain', deadline_ns))
             assert self.ingress._noise_ready is True
             assert self.ingress.lifecycle.episode_generation == 1
+            self.ingress.last_published_sample_sequence = 7
             return 7
+        async def freeze_admission(self, *, deadline_ns):
+            calls.append(('freeze_admission', deadline_ns,
+                self.ingress.last_published_sample_sequence))
         def emit(self, event, facts):
             calls.append((event, facts))
         def now(self):
@@ -1244,6 +1248,7 @@ def test_r07d_establishes_real_episode_before_native_inhibited_drain():
     assert calls[1] == ('B23_R07D_ACTIVE_CONTEXT_READY', {
         'episode_generation':1,'reset_epoch':1,'runtime_generation':1,'steady_ns':123})
     assert calls[2] == ('drain', io.deadline_ns)
+    assert calls[3] == ('freeze_admission', io.deadline_ns, 7)
 
 
 def test_r07d_parent_pins_initial_final_instance_for_owned_restart():
