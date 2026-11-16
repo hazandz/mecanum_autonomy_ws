@@ -3979,6 +3979,7 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
                 scans={1_390_000_000:object()})
             self.calls = []
             self.boundary_added = False
+            self.paired_wait_stream_enabled = None
 
         def now(self):
             return 200
@@ -3991,6 +3992,8 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
         async def until(self, predicate, *, deadline_ns, phase):
             self.calls.append(('wait', phase))
+            if phase == 'R09b paired scan after zero application':
+                self.paired_wait_stream_enabled = self.stream[-1]
             value = predicate()
             if value is not None:
                 return value
@@ -4016,7 +4019,8 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
     assert cutoff == 1_390_000_000
     assert b1.joined == [1_390_000_000]
-    assert io.stream == [False, True, False, True]
+    assert io.stream == [False, True, False, True, False, True]
+    assert io.paired_wait_stream_enabled is True
     assert io.stream[-1] is True  # zero SAFE_STOP continues during the B1 cutoff commit
     assert io.boundary_added
     assert io.calls[-1][0] == 'R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED'

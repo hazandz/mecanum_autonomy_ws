@@ -2917,8 +2917,14 @@ class TrainingWorkerIO:
                     return cutoff_ns
                 return None
 
+            # Keep sending inhibited zero SAFE_STOP receipts while waiting
+            # for the next eligible scan. At low real-time factor, the scan
+            # interval can exceed the native 100 ms watchdog even though the
+            # ROS executor and simulator are progressing normally.
+            self.safety.local_training.set_stream_enabled(True)
             cutoff_ns = await self.until(paired_cutoff, deadline_ns=deadline_ns,
                 phase='R09b paired scan after zero application')
+            self.safety.local_training.set_stream_enabled(False)
             if self.now() >= deadline_ns:
                 raise TimeoutError('R09b paired cutoff completed after step deadline')
 
