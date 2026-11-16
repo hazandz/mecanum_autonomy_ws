@@ -429,6 +429,18 @@ def r07d_post_restart_zero_status(ingress, inhibit_ack):
     return state
 
 
+def r07d_backend_status_record(state, received_steady_ns):
+    """Record native status with the ingress receive time, not a message field."""
+    if type(received_steady_ns) is not int or received_steady_ns < 0:
+        raise ValueError('R07d backend status lacks a valid ingress receive timestamp')
+    return {'backend_instance_id':int(state.backend_instance_id),
+        'local_zero_override':bool(state.local_zero_override),
+        'actuator_inhibited':bool(state.actuator_inhibited),
+        'fault_flags':int(state.fault_flags),
+        'status_sequence':int(state.status_sequence),
+        'received_ns':received_steady_ns}
+
+
 def pin_initial_final_publisher_identity(descriptor_base, boot, final_pid):
     """Giữ publisher instance đầu tiên trong descriptor cha dùng cho R07d."""
     publisher_id = boot.get('publisher_instance_id')
@@ -5106,12 +5118,7 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07d post-restart native zero/inhibit status',
                 expected_native_fault_flags=expected_fault_flags)
-            status = {'backend_instance_id':int(state.backend_instance_id),
-                'local_zero_override':bool(state.local_zero_override),
-                'actuator_inhibited':bool(state.actuator_inhibited),
-                'fault_flags':int(state.fault_flags),
-                'status_sequence':int(state.status_sequence),
-                'received_ns':int(state.received_steady_ns)}
+            status = r07d_backend_status_record(state, io.ingress.backend_received_ns)
             new_receipts = [receipt.final_publish_sequence for receipt in io.ingress.receipts
                 if receipt.final_publisher_instance_id == replacement['publisher_instance_id']]
             checked = verify_r07d_final_publisher_restart(

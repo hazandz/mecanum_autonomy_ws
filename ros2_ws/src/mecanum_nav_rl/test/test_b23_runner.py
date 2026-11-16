@@ -1404,6 +1404,25 @@ def test_r07d_post_restart_zero_uses_ingress_receive_timestamp_after_inhibit_ack
     assert r07d_post_restart_zero_status(ingress,ack) is None
 
 
+def test_r07d_backend_status_record_uses_ingress_timestamp_not_ros_message_field():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07d_backend_status_record
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+    state = SimulationContactState()
+    assert not hasattr(state, 'received_steady_ns')
+    state.backend_instance_id = 19
+    state.local_zero_override = True
+    state.actuator_inhibited = True
+    state.fault_flags = 6
+    state.status_sequence = 42
+    record = r07d_backend_status_record(state, 123456789)
+    assert record == {'backend_instance_id':19,'local_zero_override':True,
+        'actuator_inhibited':True,'fault_flags':6,'status_sequence':42,
+        'received_ns':123456789}
+    with pytest.raises(ValueError, match='ingress receive timestamp'):
+        r07d_backend_status_record(state, None)
+
+
 def test_r07d_process_identity_ignores_volatile_proc_state_but_pins_stable_fields():
     expected = {'pid':41,'uid':1000,'ppid':8,'pgid':41,'sid':41,'start_ticks':900,
         'argv':['python','final','--descriptor','/run/final.json'],'state':'S',
