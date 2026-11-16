@@ -643,6 +643,12 @@ def _observer_worker_main():
         if command.get('nonce') != nonce:
             _worker_write({'kind': 'error', 'code': 'command_nonce_invalid'})
             return 2
+        if command.get('kind') == 'snapshot':
+            _worker_write({
+                'kind': 'snapshot', 'nonce': nonce,
+                'snapshot': observer.snapshot(),
+            })
+            continue
         if command.get('kind') == 'bind':
             accepted = observer.bind_readiness_backend(command.get('status'))
             _worker_write({

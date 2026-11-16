@@ -91,6 +91,8 @@ class ControlledObserverProcess:
         self.stdout = asyncio.StreamReader()
         self.stderr = asyncio.StreamReader()
         self._exit = asyncio.Event()
+        self.snapshot_requests = 0
+        self.readiness_backend_id = None
         self.stdin = self._Stdin(self)
 
     class _Stdin:
@@ -101,7 +103,33 @@ class ControlledObserverProcess:
 
         def write(self, raw):
             message = json.loads(raw)
-            if message['kind'] == 'bind':
+            if message['kind'] == 'snapshot':
+                self.process.snapshot_requests += 1
+                writer_opened = (
+                    self.process.mode != 'writer-never'
+                    and (self.process.mode != 'writer-delayed'
+                         or self.process.snapshot_requests >= 3)
+                )
+                snapshot = {
+                    'ready': True,
+                    'readiness_backend_instance_id': (
+                        self.process.readiness_backend_id
+                    ),
+                    'backend_instance_id': (
+                        self.process.readiness_backend_id
+                        if writer_opened else None
+                    ),
+                    'writer_opened': writer_opened,
+                }
+                response = {
+                    'kind': 'snapshot', 'nonce': message['nonce'],
+                    'snapshot': snapshot,
+                }
+                self.process.stdout.feed_data(_control_frame(response))
+            elif message['kind'] == 'bind':
+                self.process.readiness_backend_id = message['status'][
+                    'backend_instance_id'
+                ]
                 response = {
                     'kind': 'bound', 'nonce': message['nonce'],
                     'accepted': True, 'snapshot': {'ready': True},
@@ -110,8 +138,13 @@ class ControlledObserverProcess:
             elif message['kind'] == 'stop':
                 joined = self.process.mode in {
                     'clean', 'end-fail', 'clean-nonzero-exit', 'ack-hang',
+                    'writer-delayed', 'writer-never',
                 }
-                end_written = joined and self.process.mode != 'end-fail'
+                end_written = (
+                    joined and self.process.mode not in (
+                        'end-fail', 'writer-never',
+                    )
+                )
                 handle_closed = joined
                 writer_closed = end_written and handle_closed
                 response = {
@@ -648,6 +681,37 @@ def test_backend_restart_rotates_to_identity_bound_trace_segment(tmp_path):
         assert all(item['observer_state']['writer_closed']
                    for item in event['trace_segments'])
         assert len(event['files']) == 4
+
+    asyncio.run(run())
+
+
+def test_backend_restart_waits_for_replacement_observer_callback(tmp_path):
+    """The new segment is not ready until a real bound status opens it."""
+    async def run():
+        launcher = ControlledObserverLauncher('writer-delayed')
+        supervisor, sink = _controlled_supervisor(
+            tmp_path, launcher, lambda pid: _fake_process_identity(pid),
+        )
+        await _start_fake_observer(supervisor)
+        await supervisor.prepare_heartbeat_backend_restart_segment()
+        supervisor.readiness.accepted_backend_status = dict(
+            supervisor.readiness.accepted_backend_status,
+            backend_instance_id=99, status_sequence=1,
+        )
+
+        bound = await supervisor.bind_restarted_heartbeat_backend()
+
+        assert bound['backend_instance_id'] == 99
+        assert launcher.child.snapshot_requests >= 3
+        assert (supervisor._heartbeat_trace_segments[-1]
+                ['backend_instance_id']) == 99
+        event = [item for item in sink.events
+                 if item[0] == 'heartbeat_trace_segment_bound'][-1]
+        assert event[1]['observer_baseline_snapshot'] == {
+            'ready': True, 'readiness_backend_instance_id': 99,
+            'backend_instance_id': 99, 'writer_opened': True,
+        }
+        await supervisor._stop_heartbeat_diagnostics()
 
     asyncio.run(run())
 

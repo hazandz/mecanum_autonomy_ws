@@ -1361,6 +1361,7 @@ class LocalTrainingProcessSupervisor:
     HEARTBEAT_OBSERVER_MAX_FRAME = 4096
     HEARTBEAT_OBSERVER_START_CAP_S = 3.0
     HEARTBEAT_OBSERVER_CLEANUP_CAP_S = 3.0
+    HEARTBEAT_OBSERVER_BASELINE_CAP_S = 1.0
     CLEANUP_CAP_S = 30.0
     CLEANUP_OBSERVER_TASK_JOIN_CAP_S = 0.25
     CLEANUP_SIGNAL_DISPATCH_CAP_S = 0.25
@@ -2233,6 +2234,40 @@ class LocalTrainingProcessSupervisor:
         return (result.get('kind') == 'bound'
                 and result.get('accepted') is True)
 
+    async def _wait_restarted_observer_baseline(self, backend_id):
+        """Wait for a real callback to open the replacement trace segment."""
+        deadline = self.monotonic() + self.HEARTBEAT_OBSERVER_BASELINE_CAP_S
+        while self.monotonic() < deadline:
+            if (self._heartbeat_observer_process is None
+                    or self._heartbeat_observer_process.returncode is not None
+                    or not self._observer_identity_matches_live_process()):
+                raise RuntimeError(
+                    'replacement_observer_identity_lost_before_baseline',
+                )
+            async with self._heartbeat_observer_protocol_lock:
+                await self._observer_send_frame({
+                    'kind': 'snapshot',
+                    'nonce': self._heartbeat_observer_nonce,
+                }, deadline)
+                response = await self._observer_read_frame(deadline)
+            snapshot = response.get('snapshot')
+            if (response.get('kind') != 'snapshot'
+                    or response.get('nonce') != self._heartbeat_observer_nonce
+                    or not isinstance(snapshot, dict)):
+                raise RuntimeError(
+                    'replacement_observer_snapshot_binding_invalid',
+                )
+            if (snapshot.get('readiness_backend_instance_id') == backend_id
+                    and snapshot.get('backend_instance_id') == backend_id
+                    and snapshot.get('writer_opened') is True):
+                return snapshot
+            remaining = deadline - self.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(min(0.025, remaining))
+        raise TimeoutError(
+            'replacement_observer_did_not_receive_bound_backend_status',
+        )
+
     async def _bind_heartbeat_readiness(self) -> None:
         """Bind trace identity to status accepted by the readiness parent."""
         if not self.heartbeat_diagnostics_enabled:
@@ -2394,11 +2429,15 @@ class LocalTrainingProcessSupervisor:
         if self._heartbeat_trace_error is not None:
             raise RuntimeError('replacement_heartbeat_observer_bind_failed:'
                                + str(self._heartbeat_trace_error))
+        observer_snapshot = await self._wait_restarted_observer_baseline(
+            backend_id,
+        )
         self._heartbeat_trace_segments[-1]['backend_instance_id'] = backend_id
         self.evidence_sink.record('heartbeat_trace_segment_bound', {
             'segment_index': self._heartbeat_trace_segments[-1]['segment_index'],
             'backend_instance_id': backend_id,
             'observer_process_identity': self._heartbeat_observer_identity,
+            'observer_baseline_snapshot': observer_snapshot,
             'files': self._heartbeat_trace_segments[-1]['files'],
         })
         return {'segment_index': self._heartbeat_trace_segments[-1]['segment_index'],
