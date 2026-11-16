@@ -27,7 +27,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r07b_revocation, verify_r07b_backend_restart,
     verify_owned_restart_request, verify_r07c_backend_restart,
     verify_r07d_final_publisher_restart, prepare_r07d_final_publisher_restart,
-    pin_initial_final_publisher_identity,
+    pin_initial_final_publisher_identity, same_process_identity,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
 )
@@ -1302,16 +1302,23 @@ def test_worker_waits_for_backend_service_before_control_rpc():
 
 def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     inhibit = NS(request=NS(operation=Control.Request.OP_INHIBIT), response=NS(
         result=Control.Response.RESULT_APPLIED))
     old = {'pid':303,'group_absent':True}
     replacement = {'pid':404,'publisher_instance_id':55,'binding_ack_exists':False}
-    backend = {'local_zero_override':True,'actuator_inhibited':True}
+    backend = {'local_zero_override':True,'actuator_inhibited':True,'fault_flags':0}
     result = verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
         old_process=old,replacement=replacement,backend_status=backend,
         inhibit_ack=inhibit,new_receipts=[])
     assert result['replacement_unbound'] is True
     assert result['native_zero_inhibited'] is True
+    assert result['native_fault_flags'] == 0
+    expected_watchdog = verify_r07d_final_publisher_restart(
+        old_publisher_instance_id=44,old_process=old,replacement=replacement,
+        backend_status={**backend,'fault_flags':SimulationContactState.FAULT_COMMAND_STALE},
+        inhibit_ack=inhibit,new_receipts=[])
+    assert expected_watchdog['native_fault_flags'] == SimulationContactState.FAULT_COMMAND_STALE
     with pytest.raises(RuntimeError, match='replacement/binding boundary'):
         verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
             old_process=old,replacement={**replacement,'publisher_instance_id':44},
@@ -1321,6 +1328,28 @@ def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
             old_process=old,replacement=replacement,
             backend_status={**backend,'actuator_inhibited':False},
             inhibit_ack=inhibit,new_receipts=[])
+    with pytest.raises(RuntimeError, match='zero/inhibit'):
+        verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
+            old_process=old,replacement=replacement,
+            backend_status={**backend,'fault_flags':SimulationContactState.FAULT_COMMAND_SEQUENCE},
+            inhibit_ack=inhibit,new_receipts=[])
+
+
+def test_r07d_process_identity_ignores_volatile_proc_state_but_pins_stable_fields():
+    expected = {'pid':41,'uid':1000,'ppid':8,'pgid':41,'sid':41,'start_ticks':900,
+        'argv':['python','final','--descriptor','/run/final.json'],'state':'S',
+        'raw_hex':{'cmdline':'6172677600','cgroup':'2f736572766963650a',
+            'stat':'old-stat-snapshot','status':'old-status-snapshot'}}
+    observed = {**expected,'state':'R','raw_hex':{
+        **expected['raw_hex'],'stat':'new-stat-snapshot','status':'new-status-snapshot'}}
+    assert same_process_identity(expected, observed)
+    for changes in (
+        {'start_ticks':901}, {'uid':1001}, {'pgid':99}, {'sid':99},
+        {'argv':['python','other']},
+    ):
+        assert not same_process_identity(expected, {**observed, **changes})
+    changed_cgroup = {**observed,'raw_hex':{**observed['raw_hex'],'cgroup':'2f6f746865720a'}}
+    assert not same_process_identity(expected, changed_cgroup)
 
 
 def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_proof_free_query():
@@ -3199,10 +3228,15 @@ def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
     assert proof['state'].applied_final_publish_sequence == 21
     assert proof['state'].applied_physics_iteration == 305
     assert proof['received_ns'] == 120
-    # Production FinalPublicationView returns the generated ROS message,
-    # while ingress retains its immutable scalar view for the same key.
-    # Both must join to the exact retained application record.
+    # Production FinalPublicationView returns a generated ROS message deserialized
+    # from retained raw CDR; join its semantic fields to the immutable receipt
+    # view without reserializing and comparing potentially variable padding.
     assert ingress.application_for_receipt(ros_receipt) == proof
+    ros_receipt.final_publish_sequence = 22
+    assert ingress.application_for_receipt(ros_receipt) is None
+    ros_receipt.final_publish_sequence = 21
+    ros_receipt.final_command.linear.x = 0.1
+    assert ingress.application_for_receipt(ros_receipt) is None
     ros_receipt.sequence += 1
     assert ingress.application_for_receipt(ros_receipt) is None
     wrong = IssuedCommandReceiptView(1_050_000_000, 55, 22, ReceiptSource.SAFE_STOP,

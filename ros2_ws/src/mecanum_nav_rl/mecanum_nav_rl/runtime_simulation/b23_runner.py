@@ -388,7 +388,9 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
                                          inhibit_ack, new_receipts):
     """Require a distinct unbound final process while native output stays zero/inhibited."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     publisher_id = int(replacement['publisher_instance_id'])
+    fault_flags = backend_status.get('fault_flags')
     if (old_process.get('group_absent') is not True
             or replacement.get('pid') == old_process.get('pid')
             or publisher_id == old_publisher_instance_id
@@ -397,11 +399,14 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
         raise RuntimeError('R07d final publisher process replacement/binding boundary invalid')
     if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
             or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
+            or type(fault_flags) is not int
+            or fault_flags not in (0, SimulationContactState.FAULT_COMMAND_STALE)
             or not backend_status.get('local_zero_override')
             or not backend_status.get('actuator_inhibited')):
         raise RuntimeError('R07d backend zero/inhibit was not confirmed after publisher restart')
     return {'final_publisher_restarted':True,'old_final_group_absent':True,
         'replacement_unbound':True,'replacement_emitted_no_receipt':True,
+        'native_fault_flags':fault_flags,
         'native_zero_inhibited':True,'old_publisher_instance_id':old_publisher_instance_id,
         'replacement_publisher_instance_id':publisher_id}
 
@@ -2557,8 +2562,19 @@ class TrainingWorkerIO:
                     or not old_process_matches):
                 raise RuntimeError('owned restart response binding mismatch')
             return response
-        response = await self.until(response_ready, deadline_ns=self.deadline_ns,
-            phase=case + ' owned process restart ACK')
+        expected_native_fault_flags = None
+        if case == 'R07d':
+            # Stopping the final publisher intentionally removes receipts; the
+            # unchanged native watchdog must latch stale and keep zero closed.
+            # Accept only that exact fail-closed flag while the owned restart
+            # response is being collected.
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
+            expected_native_fault_flags = SimulationContactState.FAULT_COMMAND_STALE
+        until_args = {'deadline_ns':self.deadline_ns,
+            'phase':case + ' owned process restart ACK'}
+        if expected_native_fault_flags is not None:
+            until_args['expected_native_fault_flags'] = expected_native_fault_flags
+        response = await self.until(response_ready, **until_args)
         if case == 'R07c':
             self._r07c_restart_clock_phase = 'awaiting_clock'
             self._r07c_restart_clock_grace_deadline_ns = min(
@@ -4250,6 +4266,25 @@ def process_identity(pid):
         'raw_hex': {name: data.hex() for name, data in raw.items()}}
 
 
+def same_process_identity(expected, observed):
+    """Compare process identity fields, excluding volatile /proc counters/state."""
+    fields = ('pid', 'uid', 'ppid', 'pgid', 'sid', 'start_ticks', 'argv')
+    if not isinstance(expected, dict) or not isinstance(observed, dict):
+        return False
+    if any(field not in expected or field not in observed
+           or expected[field] != observed[field] for field in fields):
+        return False
+    expected_raw = expected.get('raw_hex')
+    observed_raw = observed.get('raw_hex')
+    if not isinstance(expected_raw, dict) or not isinstance(observed_raw, dict):
+        return False
+    # cmdline/cgroup bind the executable arguments and service ownership; the
+    # remaining stat/status bytes contain changing state and CPU counters.
+    return all(isinstance(expected_raw.get(name), str)
+               and expected_raw.get(name) == observed_raw.get(name)
+               for name in ('cmdline', 'cgroup'))
+
+
 class RunEvidence:
     """Sổ riêng từng process, raw stdout native và bốn book không gộp số đếm."""
     BOOKS = frozenset(('policy_adapter_issued', 'policy_final_published',
@@ -5033,6 +5068,7 @@ async def training_child(path):
         elif packet['case'] == 'R07d':
             if packet['fault_hooks'] or io.contact_ack is None:
                 raise RuntimeError('R07d requires a clean packet and verified contact proof')
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
             old_publisher = int(io.descriptor['final_publisher_instance_id'])
             await prepare_r07d_final_publisher_restart(io, b1, packet)
             restart = await io.request_owned_restart(case='R07d', target_role='final')
@@ -5049,10 +5085,12 @@ async def training_child(path):
                 and io.ingress.backend_state.local_zero_override
                 and io.ingress.backend_state.actuator_inhibited else None,
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                phase='R07d post-restart native zero/inhibit status')
+                phase='R07d post-restart native zero/inhibit status',
+                expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
             status = {'backend_instance_id':int(state.backend_instance_id),
                 'local_zero_override':bool(state.local_zero_override),
                 'actuator_inhibited':bool(state.actuator_inhibited),
+                'fault_flags':int(state.fault_flags),
                 'status_sequence':int(state.status_sequence),
                 'received_ns':int(state.received_steady_ns)}
             new_receipts = [receipt.final_publish_sequence for receipt in io.ingress.receipts
@@ -6258,7 +6296,8 @@ async def run_parent(packet_path, packet_sha256):
             boot = json.loads(boot_path.read_bytes())
             if (boot.get('run_id') != packet['run_id']
                     or boot.get('invocation_id') != invocation
-                    or boot.get('identity') != process_identity(replacement.pid)
+                    or not same_process_identity(boot.get('identity'),
+                                                 process_identity(replacement.pid))
                     or boot.get('publisher_instance_id') == request.get('old_publisher_instance_id')):
                 raise RuntimeError('R07d replacement publisher identity did not change')
             replacement_facts = {'pid':replacement.pid,

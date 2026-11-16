@@ -598,20 +598,39 @@ class LocalTrainingIngress:
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
 
         if isinstance(receipt, FinalIssuedCommandReceipt):
-            # FinalPublicationView exposes the generated ROS message, whereas
-            # ingress joins immutable scalar views. Accept that production
-            # boundary only when the message serializes to the exact CDR bytes
-            # already retained for the publication key.
+            # FinalPublicationView deserializes the exact retained CDR. Join
+            # that generated message to the immutable scalar view by fields;
+            # reserializing can change CDR padding and is not source evidence.
             key = receipt.final_publish_sequence
-            try:
-                supplied_raw = serialize_message(receipt)
-            except Exception:
-                return None
             with self.lock:
-                retained_raw = self._receipt_bytes.get(key)
                 retained_view = self._receipt_views.get(key)
-            if (retained_raw is None or retained_view is None
-                    or supplied_raw != retained_raw):
+                retained_raw = self._receipt_bytes.get(key)
+            if retained_raw is None or retained_view is None:
+                return None
+            source = {FinalIssuedCommandReceipt.SOURCE_POLICY: ReceiptSource.POLICY,
+                FinalIssuedCommandReceipt.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP}.get(
+                    receipt.source)
+            try:
+                identity = lifecycle_identity(receipt)
+                values = (receipt.final_command.linear.x, receipt.final_command.linear.y,
+                    receipt.final_command.angular.z)
+                matches = (stamp_ns(receipt.header.stamp) == retained_view.publish_stamp_ns
+                    and receipt.final_publisher_instance_id == retained_view.final_publisher_instance_id
+                    and receipt.final_publish_sequence == retained_view.final_publish_sequence
+                    and source is retained_view.source
+                    and receipt.source_instance_id == retained_view.source_instance_id
+                    and receipt.sequence == retained_view.source_sequence
+                    and receipt.step_index == retained_view.step_index
+                    and receipt.transition_id == retained_view.transition_id
+                    and identity == retained_view.lifecycle
+                    and receipt.header.frame_id == retained_view.frame_id
+                    and values == retained_view.final_command
+                    and receipt.final_command.linear.z == 0.0
+                    and receipt.final_command.angular.x == 0.0
+                    and receipt.final_command.angular.y == 0.0)
+            except (AttributeError, TypeError, ValueError):
+                return None
+            if not matches:
                 return None
             receipt = retained_view
         elif not isinstance(receipt, IssuedCommandReceiptView):
