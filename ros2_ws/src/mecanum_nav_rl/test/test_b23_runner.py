@@ -110,6 +110,91 @@ def test_d04_soak_schedule_and_unit_budget_are_exact():
         service_properties_for(180)
 
 
+def _write_complete_soak_ledgers(root):
+    for name in ('policy_adapter_issued.jsonl','policy_final_published.jsonl',
+                 'policy_backend_applied.jsonl','b1_transition_committed.jsonl'):
+        (root / name).write_text(''.join(json.dumps({'facts': {
+            'transition_id': f'transition-{index}'}}) + '\n' for index in range(1000)))
+
+
+def test_r08_unfinished_scheduled_slots_are_collection_cutoffs_and_continue(tmp_path, monkeypatch):
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import _run_b2_soak
+
+    run_root = tmp_path / 'run'
+    run_root.mkdir()
+    _write_complete_soak_ledgers(run_root)
+    events = []
+
+    class FakeIO:
+        deadline_ns = 10**30
+        descriptor = {'run_root':str(run_root)}
+
+        def __init__(self):
+            self.episode_index = -1
+            self.step_index = 0
+            self.resets = []
+            self.actions = []
+
+        async def reset_episode(self, _b1, *, seed, target, paused_hold_s):
+            self.episode_index += 1
+            self.step_index = 0
+            self.resets.append((seed, target, paused_hold_s))
+
+        async def policy_step(self, _b1, action):
+            self.step_index += 1
+            self.actions.append((self.episode_index, self.step_index, action))
+            return NS(termination=NS(terminated=False, truncated=False))
+
+    io = FakeIO()
+    monkeypatch.setattr(runner_module.time, 'monotonic_ns', lambda: 0)
+    result = asyncio.run(_run_b2_soak(io, object(), {
+        'reset_target':{'x_m':0.,'y_m':0.,'z_m':0.,'yaw_rad':0.},
+        'episode_seeds':[2026102900 + index for index in range(30)],
+        'run_root':str(run_root)}, NS(record=lambda name, facts: events.append((name, facts)))))
+
+    cutoffs = [facts for name, facts in events if name == 'COLLECTION_CUTOFF']
+    assert len(io.resets) == 30
+    assert len(io.actions) == 1000
+    assert result['resets_confirmed'] == 30
+    assert result['policy_steps_committed'] == 1000
+    assert result['collection_cutoff'] is True
+    assert result['collection_cutoff_records'] == cutoffs
+    assert [item['episode_index'] for item in cutoffs] == list(range(30))
+    assert all(item['episode_complete'] is False for item in cutoffs)
+    assert cutoffs[0]['reason'] == 'scheduled_slot_unfinished'
+    assert cutoffs[-1]['reason'] == 'final_slot_unfinished'
+
+
+def test_r08_task_terminal_before_final_slot_still_fails_schedule(tmp_path, monkeypatch):
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import _run_b2_soak
+
+    class FakeIO:
+        deadline_ns = 10**30
+        descriptor = {'run_root':str(tmp_path)}
+
+        def __init__(self):
+            self.episode_index = -1
+            self.step_index = 0
+
+        async def reset_episode(self, _b1, *, seed, target, paused_hold_s):
+            self.episode_index += 1
+            self.step_index = 0
+
+        async def policy_step(self, _b1, _action):
+            self.step_index += 1
+            terminal = self.episode_index == 0 and self.step_index == 34
+            return NS(termination=NS(terminated=terminal, truncated=False))
+
+    monkeypatch.setattr(runner_module.time, 'monotonic_ns', lambda: 0)
+    with pytest.raises(RuntimeError, match='terminal before final episode invalidates fixed schedule'):
+        asyncio.run(_run_b2_soak(FakeIO(), object(), {
+            'reset_target':{'x_m':0.,'y_m':0.,'z_m':0.,'yaw_rad':0.},
+            'episode_seeds':[2026102900 + index for index in range(30)],
+            'run_root':str(tmp_path)}, NS(record=lambda *_args: None)))
+
+
 def test_r05_native_mask_poll_waits_for_event_file_and_complete_record(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import r05_contact_coverage_mask_event
 

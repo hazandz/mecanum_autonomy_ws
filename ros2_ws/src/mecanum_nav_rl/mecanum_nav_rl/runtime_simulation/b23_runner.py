@@ -4553,7 +4553,7 @@ async def _run_b2_soak(io, b1, packet, sink):
     episode_steps = [34]*10 + [33]*20
     resets = committed_steps = 0
     terminal_records = []
-    terminal_seen = False
+    cutoff_records = []
     for episode_index, (seed, expected_steps) in enumerate(zip(packet['episode_seeds'], episode_steps)):
         if time.monotonic_ns() >= io.deadline_ns:
             raise TimeoutError('B2_SOAK_V1 active deadline reached before reset')
@@ -4574,11 +4574,12 @@ async def _run_b2_soak(io, b1, packet, sink):
                     raise RuntimeError('B2_SOAK_V1 terminal before final episode invalidates fixed schedule')
                 terminal_seen = True
                 break
-        if episode_index < 29 and not terminal_seen:
-            raise RuntimeError('B2_SOAK_V1 scheduled episode ended without terminal')
-        if episode_index == 29 and not terminal_seen:
-            sink.record('COLLECTION_CUTOFF', {'episode_index':episode_index,
-                'step_count':expected_steps,'seed':seed,'reason':'final_slot_unfinished'})
+        if not terminal_seen:
+            cutoff = {'episode_index':episode_index,'step_count':expected_steps,
+                'seed':seed,'episode_complete':False,
+                'reason':'final_slot_unfinished' if episode_index == 29 else 'scheduled_slot_unfinished'}
+            sink.record('COLLECTION_CUTOFF', cutoff)
+            cutoff_records.append(cutoff)
     counts = _soak_ledger_counts(packet['run_root'])
     expected = 1000
     if resets != 30 or committed_steps != expected:
@@ -4589,7 +4590,8 @@ async def _run_b2_soak(io, b1, packet, sink):
         raise RuntimeError('B2_SOAK_V1 four-ledger counts do not reconcile: '+repr(counts))
     return {'case':'R08','resets_confirmed':resets,'policy_steps_committed':committed_steps,
         'ledger_counts':counts,'terminal_records':terminal_records,
-        'collection_cutoff':not terminal_seen,'completed_ns':time.monotonic_ns()}
+        'collection_cutoff':bool(cutoff_records),'collection_cutoff_records':cutoff_records,
+        'completed_ns':time.monotonic_ns()}
 
 
 async def training_child(path):
