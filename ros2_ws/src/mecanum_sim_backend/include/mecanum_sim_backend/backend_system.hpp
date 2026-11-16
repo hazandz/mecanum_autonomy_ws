@@ -234,6 +234,71 @@ inline std::array<double, 3> RotateWorldToBody(
           v[2] + w * tz + (x * ty - y * tx)};
 }
 
+inline std::optional<MeasuredWorldTwist3D> DerivePostPhysicsTwistFromPoseDelta(
+    const std::array<double, 3> &previous_position,
+    const std::array<double, 4> &previous_orientation_xyzw,
+    const std::array<double, 3> &current_position,
+    const std::array<double, 4> &current_orientation_xyzw,
+    std::int64_t previous_stamp_ns, std::int64_t current_stamp_ns)
+{
+  const auto finite = [](double value) { return std::isfinite(value); };
+  if (previous_stamp_ns < 0 || current_stamp_ns <= previous_stamp_ns)
+    return std::nullopt;
+  for (const auto value : previous_position) if (!finite(value)) return std::nullopt;
+  for (const auto value : current_position) if (!finite(value)) return std::nullopt;
+  for (const auto value : previous_orientation_xyzw) if (!finite(value)) return std::nullopt;
+  for (const auto value : current_orientation_xyzw) if (!finite(value)) return std::nullopt;
+
+  const auto normalized = [](const std::array<double, 4> &q)
+      -> std::optional<std::array<double, 4>>
+  {
+    double norm2 = 0.0;
+    for (const auto value : q) norm2 += value * value;
+    if (!std::isfinite(norm2) || norm2 < 1e-12) return std::nullopt;
+    const double inverse_norm = 1.0 / std::sqrt(norm2);
+    return std::array<double, 4>{q[0] * inverse_norm, q[1] * inverse_norm,
+                                 q[2] * inverse_norm, q[3] * inverse_norm};
+  };
+  const auto previous_q = normalized(previous_orientation_xyzw);
+  const auto current_q = normalized(current_orientation_xyzw);
+  if (!previous_q || !current_q) return std::nullopt;
+
+  // q_delta = q_current * inverse(q_previous), so its axis is in world frame.
+  const auto &p = *previous_q;
+  const auto &c = *current_q;
+  std::array<double, 4> delta{
+      c[3] * -p[0] + c[0] * p[3] + c[1] * -p[2] - c[2] * -p[1],
+      c[3] * -p[1] - c[0] * -p[2] + c[1] * p[3] + c[2] * -p[0],
+      c[3] * -p[2] + c[0] * -p[1] - c[1] * -p[0] + c[2] * p[3],
+      c[3] * p[3] - c[0] * -p[0] - c[1] * -p[1] - c[2] * -p[2]};
+  double delta_norm2 = 0.0;
+  for (const auto value : delta) delta_norm2 += value * value;
+  if (!std::isfinite(delta_norm2) || delta_norm2 < 1e-12) return std::nullopt;
+  const double delta_inverse_norm = 1.0 / std::sqrt(delta_norm2);
+  for (auto &value : delta) value *= delta_inverse_norm;
+  if (delta[3] < 0.0) for (auto &value : delta) value = -value;
+
+  const double vector_norm = std::sqrt(delta[0] * delta[0] +
+                                      delta[1] * delta[1] +
+                                      delta[2] * delta[2]);
+  const double dt_s = static_cast<double>(current_stamp_ns - previous_stamp_ns) /
+      1'000'000'000.0;
+  std::array<double, 3> angular_world{};
+  if (vector_norm > 1e-12)
+  {
+    const double angle = 2.0 * std::atan2(vector_norm, delta[3]);
+    const double scale = angle / (vector_norm * dt_s);
+    angular_world = {delta[0] * scale, delta[1] * scale, delta[2] * scale};
+  }
+  const std::array<double, 3> linear_world{
+      (current_position[0] - previous_position[0]) / dt_s,
+      (current_position[1] - previous_position[1]) / dt_s,
+      (current_position[2] - previous_position[2]) / dt_s};
+  return MeasuredWorldTwist3D{
+      RotateWorldToBody(linear_world, *current_q),
+      RotateWorldToBody(angular_world, *current_q)};
+}
+
 inline std::optional<BodyCommand3D> ComposeBodyPlanarCommand(
     const MeasuredWorldTwist3D &measurement,
     const std::array<double, 4> &world_from_body_xyzw,

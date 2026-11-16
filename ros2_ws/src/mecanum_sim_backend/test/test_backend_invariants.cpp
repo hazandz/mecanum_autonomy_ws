@@ -1642,6 +1642,38 @@ TEST(BackendInvariants, ZeroCommandIsNotAZeroMeasurement)
   EXPECT_FALSE(ComposeBodyPlanarCommand(missing,{0,0,0,1},0,0,0,reason));
 }
 
+TEST(BackendInvariants, PostPhysicsPoseDeltaRejectsStaleVelocityAtStandstill)
+{
+  // Gazebo 8.11 only refreshes velocity components for links in the changed-
+  // pose set. A stationary pose therefore must not inherit a prior twist.
+  const auto measured = DerivePostPhysicsTwistFromPoseDelta(
+      {1.0, -2.0, 0.1}, {0.0, 0.0, 0.0, 1.0},
+      {1.0, -2.0, 0.1}, {0.0, 0.0, 0.0, 1.0},
+      1'000'000'000, 1'010'000'000);
+  ASSERT_TRUE(measured);
+  for (const auto value : measured->linear) EXPECT_NEAR(value, 0.0, 1e-12);
+  for (const auto value : measured->angular) EXPECT_NEAR(value, 0.0, 1e-12);
+}
+
+TEST(BackendInvariants, PostPhysicsPoseDeltaMeasuresBodyTwistAndRejectsBadTime)
+{
+  const double half_angle = 0.001;
+  const auto measured = DerivePostPhysicsTwistFromPoseDelta(
+      {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0},
+      {0.01, 0.0, 0.0}, {0.0, 0.0, std::sin(half_angle), std::cos(half_angle)},
+      2'000'000'000, 2'010'000'000);
+  ASSERT_TRUE(measured);
+  EXPECT_NEAR(measured->linear[0], std::cos(0.002), 1e-9);
+  EXPECT_NEAR(measured->linear[1], -std::sin(0.002), 1e-9);
+  EXPECT_NEAR(measured->angular[0], 0.0, 1e-9);
+  EXPECT_NEAR(measured->angular[1], 0.0, 1e-9);
+  EXPECT_NEAR(measured->angular[2], 0.2, 1e-9);
+  EXPECT_FALSE(DerivePostPhysicsTwistFromPoseDelta(
+      {0, 0, 0}, {0, 0, 0, 1}, {0, 0, 0}, {0, 0, 0, 1}, 5, 5));
+  EXPECT_FALSE(DerivePostPhysicsTwistFromPoseDelta(
+      {0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0}, {0, 0, 0, 1}, 5, 6));
+}
+
 TEST(BackendInvariants, ContactPairsUseCollisionEntityIdsAndExactFloorPair)
 {
   const std::unordered_map<std::uint64_t, std::string> tracked{

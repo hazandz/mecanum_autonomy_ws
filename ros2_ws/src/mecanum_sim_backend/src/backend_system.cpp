@@ -1029,17 +1029,68 @@ public:
     const auto pose = base_link_.WorldPose(ecm);
     const auto world_linear = base_link_.WorldLinearVelocity(ecm);
     const auto world_angular = base_link_.WorldAngularVelocity(ecm);
-    measurement_healthy_ = pose && world_linear && world_angular && Finite(*pose) &&
-      std::isfinite(world_linear->X()) && std::isfinite(world_linear->Y()) && std::isfinite(world_linear->Z()) &&
-      std::isfinite(world_angular->X()) && std::isfinite(world_angular->Y()) && std::isfinite(world_angular->Z());
-    if (measurement_healthy_)
+    const bool velocity_components_valid = world_linear && world_angular &&
+        std::isfinite(world_linear->X()) && std::isfinite(world_linear->Y()) &&
+        std::isfinite(world_linear->Z()) && std::isfinite(world_angular->X()) &&
+        std::isfinite(world_angular->Y()) && std::isfinite(world_angular->Z());
+    std::optional<MeasuredWorldTwist3D> measured_twist;
+    bool paused_sample = false;
+    if (pose && Finite(*pose))
     {
-      const auto &q = pose->Rot();
-      const auto body_linear = RotateWorldToBody({world_linear->X(), world_linear->Y(), world_linear->Z()},
-                                                  {q.X(), q.Y(), q.Z(), q.W()});
-      const auto body_angular = RotateWorldToBody({world_angular->X(), world_angular->Y(), world_angular->Z()},
-                                                   {q.X(), q.Y(), q.Z(), q.W()});
-      PublishGroundTruth(*pose, body_linear, body_angular, sim_ns);
+      const auto &position = pose->Pos();
+      const auto &orientation = pose->Rot();
+      const std::array<double, 3> current_position{
+          position.X(), position.Y(), position.Z()};
+      const std::array<double, 4> current_orientation{
+          orientation.X(), orientation.Y(), orientation.Z(), orientation.W()};
+      if (has_ground_truth_pose_sample_)
+      {
+        if (info.paused)
+        {
+          // Do not publish while paused. Refresh the pose baseline, though:
+          // a reset may set the model pose while simulation time is frozen,
+          // and the next unpaused delta must start from that reset pose.
+          paused_sample = true;
+        }
+        else
+        {
+          measured_twist = DerivePostPhysicsTwistFromPoseDelta(
+              last_ground_truth_position_, last_ground_truth_orientation_,
+              current_position, current_orientation,
+              last_ground_truth_stamp_ns_, sim_ns);
+        }
+      }
+      else
+      {
+        // Seed once from the initial post-physics velocity. Subsequent samples
+        // use pose deltas so a stale velocity component cannot survive while
+        // Gazebo reports an unchanged pose.
+        if (velocity_components_valid)
+        {
+          measured_twist = MeasuredWorldTwist3D{
+              RotateWorldToBody(
+                  {world_linear->X(), world_linear->Y(), world_linear->Z()},
+                  current_orientation),
+              RotateWorldToBody(
+                  {world_angular->X(), world_angular->Y(), world_angular->Z()},
+                  current_orientation)};
+        }
+      }
+      last_ground_truth_position_ = current_position;
+      last_ground_truth_orientation_ = current_orientation;
+      last_ground_truth_stamp_ns_ = sim_ns;
+      has_ground_truth_pose_sample_ = true;
+    }
+    if (!paused_sample)
+      measurement_healthy_ = pose && velocity_components_valid && measured_twist.has_value();
+    if (paused_sample)
+    {
+      // Keep the last valid post-physics oracle sample across a pause.
+    }
+    else if (measurement_healthy_)
+    {
+      PublishGroundTruth(*pose, measured_twist->linear,
+                         measured_twist->angular, sim_ns);
     }
     else SetFault(BackendState::FAULT_CONTEXT, "ground_truth_measurement_missing_or_non_finite");
 
@@ -3778,6 +3829,10 @@ private:
   gz::sim::World world_{gz::sim::kNullEntity};
   gz::sim::Model model_{gz::sim::kNullEntity};
   gz::sim::Link base_link_{gz::sim::kNullEntity};
+  bool has_ground_truth_pose_sample_{false};
+  std::int64_t last_ground_truth_stamp_ns_{0};
+  std::array<double, 3> last_ground_truth_position_{};
+  std::array<double, 4> last_ground_truth_orientation_{0, 0, 0, 1};
   InitializationState initialization_state_{InitializationState::UNCONFIGURED};
   std::shared_ptr<const sdf::Element> pending_sdf_;
   std::string configured_model_name_;
