@@ -228,6 +228,64 @@ def test_r07c_clock_resume_restores_normal_one_second_stall_guard():
         worker.check()
 
 
+def test_r07c_owned_server_restart_allows_one_clock_epoch_reset_only():
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: 1_500_000_001
+    worker.ros_now = lambda: 10
+    worker.deadline_ns = 10_000_000_000
+    worker.last_clock_ns = 20
+    worker.last_clock_advance_ns = 0
+    worker.expected_paused = False
+    worker._r07c_restart_clock_phase = 'restart_in_progress'
+    worker._r07c_restart_clock_grace_deadline_ns = None
+    worker._r07c_restart_started_ns = 5
+    worker._r07c_clock_rollback_observed = False
+    worker._r07b_rollback_observed = None
+    worker._r07b_rollback_pending_before_ns = None
+    worker.ingress = NS(fault=None, backend_state=None)
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+
+    worker.check()
+
+    assert worker.last_clock_ns == 10
+    assert worker._r07c_clock_rollback_observed is True
+    assert events[0] == ('B23_R07C_AUTHORIZED_CLOCK_EPOCH_RESET', {
+        'previous_ros_ns':20,'current_ros_ns':10,'restart_started_ns':5,
+        'observed_steady_ns':1_500_000_001})
+    worker.ros_now = lambda: 9
+    with pytest.raises(RuntimeError, match='more than one simulation clock rollback'):
+        worker.check()
+
+
+def test_r07c_restart_epoch_oracle_is_quarantined_before_ingress():
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import serialize_message
+    worker = object.__new__(TrainingWorkerIO)
+    worker.now = lambda: 100
+    worker.emit = lambda name, facts: events.append((name, facts))
+    worker._r07c_restart_started_ns = 50
+    worker.descriptor = {'backend_instance_id':123}
+    events = []
+    delivered = []
+    msg = Odometry()
+    msg.header.stamp.sec = 0
+    msg.header.stamp.nanosec = 7
+    wire = serialize_message(msg)
+    receive = worker.observed_callback(Odometry,
+        '/mecanum/internal/ground_truth/odom', delivered.append)
+
+    assert receive(wire, {}) is None
+    assert delivered == []
+    assert events[-1][0] == 'B23_R07C_RESTART_EPOCH_SAMPLE_QUARANTINED'
+    assert events[-1][1]['topic'] == '/mecanum/internal/ground_truth/odom'
+    assert events[-1][1]['source_stamp_ns'] == 7
+    assert events[-1][1]['quarantined_before_ingress_validation'] is True
+
+
 @pytest.mark.parametrize(('now_ns', 'period_ns', 'expected_ns'), [
     (891_000_000, 100_000_000, 900_000_000),
     (905_000_000, 100_000_000, 1_000_000_000),

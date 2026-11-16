@@ -1894,6 +1894,7 @@ class TrainingWorkerIO:
         self._r07c_restart_started_ns = None
         self._r07c_restart_clock_phase = 'idle'
         self._r07c_restart_clock_grace_deadline_ns = None
+        self._r07c_clock_rollback_observed = False
         self._r07c_replacement_backend_statuses = []
         try:
             rclpy.init(context=self.context)
@@ -2015,8 +2016,31 @@ class TrainingWorkerIO:
     def observed_callback(self, message_type, topic, callback):
         """Giữ CDR do DDS trả trước decode/validator; không sửa payload nguồn."""
         from rclpy.serialization import deserialize_message
+        def quarantine_r07c_restart_epoch(message, wire, received_ns):
+            if getattr(self, '_r07c_restart_started_ns', None) is None:
+                return False
+            old_backend = (topic == '/mecanum/local_training/backend_state'
+                and int(message.backend_instance_id)
+                    == self.descriptor['backend_instance_id'])
+            if topic not in ('/mecanum/final_issued_command', '/scan',
+                    '/mecanum/internal/ground_truth/odom') and not old_backend:
+                return False
+            header = getattr(message, 'header', None)
+            source_stamp_ns = None if header is None else (
+                int(header.stamp.sec)*1_000_000_000 + int(header.stamp.nanosec))
+            self.emit('B23_R07C_RESTART_EPOCH_SAMPLE_QUARANTINED', {
+                'topic':topic,'reason':('old_backend_instance_after_restart_request'
+                    if old_backend else 'restart_scoped_sim_epoch_unbound'),
+                'source_stamp_ns':source_stamp_ns,'received_ns':received_ns,
+                'restart_started_ns':self._r07c_restart_started_ns,
+                'detected_ns':self.now(),'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                'quarantined_before_ingress_validation':True})
+            return True
+
         def process(message, wire, received_ns):
             try:
+                if quarantine_r07c_restart_epoch(message, wire, received_ns):
+                    return None
                 rollback_active = (
                     'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
@@ -2159,6 +2183,8 @@ class TrainingWorkerIO:
                 'message_info':{key:value for key,value in info.items() if type(value) is int}})
             try:
                 message = deserialize_message(wire,message_type)
+                if quarantine_r07c_restart_epoch(message, wire, received_ns):
+                    return None
                 rollback_active = (
                     'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
@@ -2283,18 +2309,28 @@ class TrainingWorkerIO:
         if now >= self.deadline_ns:
             raise TimeoutError('B23 active deadline reached')
         if ros < self.last_clock_ns:
-            rollback = self._r07b_rollback_observed
-            if (self._r07b_rollback_pending_before_ns is None or rollback is None
-                    or rollback.get('delta_ns', 0) >= 0
-                    or rollback.get('request_started_ns') is None
-                    or rollback.get('observed_steady_ns', 0) < rollback['request_started_ns']):
-                raise RuntimeError('ROS clock rolled backward')
-            self.emit('B23_R07B_AUTHORIZED_CLOCK_ROLLBACK_SAMPLE', {
-                'previous_ros_ns':self.last_clock_ns, 'current_ros_ns':ros,
-                'request_baseline_ns':self._r07b_rollback_pending_before_ns,
-                'request_started_ns':rollback['request_started_ns'],
-                'observed_steady_ns':self.now(),
-            })
+            if (restart_clock_phase in ('restart_in_progress','awaiting_clock')
+                    and getattr(self, '_r07c_restart_started_ns', None) is not None):
+                if getattr(self, '_r07c_clock_rollback_observed', False):
+                    raise RuntimeError('R07c observed more than one simulation clock rollback')
+                self._r07c_clock_rollback_observed = True
+                self.emit('B23_R07C_AUTHORIZED_CLOCK_EPOCH_RESET', {
+                    'previous_ros_ns':self.last_clock_ns,'current_ros_ns':ros,
+                    'restart_started_ns':self._r07c_restart_started_ns,
+                    'observed_steady_ns':now})
+            else:
+                rollback = self._r07b_rollback_observed
+                if (self._r07b_rollback_pending_before_ns is None or rollback is None
+                        or rollback.get('delta_ns', 0) >= 0
+                        or rollback.get('request_started_ns') is None
+                        or rollback.get('observed_steady_ns', 0) < rollback['request_started_ns']):
+                    raise RuntimeError('ROS clock rolled backward')
+                self.emit('B23_R07B_AUTHORIZED_CLOCK_ROLLBACK_SAMPLE', {
+                    'previous_ros_ns':self.last_clock_ns, 'current_ros_ns':ros,
+                    'request_baseline_ns':self._r07b_rollback_pending_before_ns,
+                    'request_started_ns':rollback['request_started_ns'],
+                    'observed_steady_ns':now,
+                })
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
         if ros > self.last_clock_ns:
             self.last_clock_ns, self.last_clock_advance_ns = ros, now
@@ -2433,6 +2469,7 @@ class TrainingWorkerIO:
         if case == 'R07c':
             self._r07c_restart_started_ns = self.now()
             self._r07c_restart_clock_phase = 'restart_in_progress'
+            self._r07c_clock_rollback_observed = False
         write_record_once(request_path, request)
         request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
         self.emit('B23_OWNED_PROCESS_RESTART_REQUESTED', {
