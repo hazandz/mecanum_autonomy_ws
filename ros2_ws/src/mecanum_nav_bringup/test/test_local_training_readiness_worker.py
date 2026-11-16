@@ -25,6 +25,7 @@ from mecanum_nav_bringup.local_training_readiness_worker import (
     run_worker,
     scene_facts,
     scene_readiness_matches,
+    status_readiness_matches,
     strict_json_loads,
     validate_request,
 )
@@ -150,7 +151,7 @@ def protocol_transcript(request, *, scene_outcome='MATCH', ready=True):
     digest = hashlib.sha256(canonical_request_bytes(request)).hexdigest()
     binding = {key: request[key] for key in (
         'session_id', 'config_hash', 'asset_manifest_sha256',
-        'coordinator_ingress_instance_id',
+        'coordinator_ingress_instance_id','expected_fault_flags',
     )}
     status = {
         'world_id': request['world_id'], 'session_id': request['session_id'],
@@ -544,7 +545,7 @@ def readiness_with_controlled_worker(monkeypatch, worker, sink=None):
 
 def test_request_is_canonical_strict_and_binds_domain_partition():
     """Validate canonical binding, field types and duplicate-key rejection."""
-    assert REQUEST_SCHEMA == 'mecanum_b2_scene_readiness_request/v1'
+    assert REQUEST_SCHEMA == 'mecanum_b2_scene_readiness_request/v2'
     assert EVENT_SCHEMA == 'mecanum_b2_scene_readiness_event/v2'
     request = {
         'schema_id': REQUEST_SCHEMA,
@@ -553,6 +554,7 @@ def test_request_is_canonical_strict_and_binds_domain_partition():
         'config_hash': CONFIG_HASH,
         'asset_manifest_sha256': MANIFEST_HASH,
         'coordinator_ingress_instance_id': 17,
+        'expected_fault_flags':0,
         'world_id': 'b2_training_arena',
         'model_id': 'mecanum_b2',
         'gz_partition': 'mecanum_b2_testpartition',
@@ -571,6 +573,8 @@ def test_request_is_canonical_strict_and_binds_domain_partition():
         validate_request(
             {**request, 'coordinator_ingress_instance_id': True}, env,
         )
+    with pytest.raises(ValueError, match='expected backend fault flags'):
+        validate_request({**request, 'expected_fault_flags':512}, env)
 
 
 def test_default_parent_client_uses_isolated_production_worker(
@@ -1085,6 +1089,26 @@ def test_installed_gz_scene_default_label_and_model_use_bound_predicate(
     assert scene_readiness_matches(status, facts, request)
 
 
+def test_r07c_readiness_accepts_only_explicit_restart_queue_fault():
+    request = {
+        'world_id':'b2_training_arena', 'session_id':SESSION,
+        'config_hash':CONFIG_HASH, 'asset_manifest_sha256':MANIFEST_HASH,
+        'coordinator_ingress_instance_id':17,
+        'expected_fault_flags':256,
+    }
+    status = {
+        'world_id':'b2_training_arena', 'session_id':SESSION,
+        'config_hash':CONFIG_HASH, 'backend_instance_id':29,
+        'status_sequence':4, 'fault_flags':256, 'actuator_inhibited':True,
+    }
+
+    assert status_readiness_matches(status, request)
+    assert not status_readiness_matches(status, {
+        **request, 'expected_fault_flags':0,
+    })
+    assert not status_readiness_matches({**status, 'fault_flags':257}, request)
+
+
 def test_scene_facts_counts_matching_nested_models():
     """Count the requested model recursively, not only top-level entries."""
     request = {
@@ -1587,6 +1611,7 @@ def test_parent_protocol_rejects_bad_event_binding_and_missing_result():
             'coordinator_ingress_instance_id': (
                 request['coordinator_ingress_instance_id']
             ),
+            'expected_fault_flags':request['expected_fault_flags'],
         }},
     }
     line = json.dumps(event).encode() + b'\n'
@@ -1668,7 +1693,7 @@ def test_parent_protocol_rejects_duplicate_terminal_result():
     binding = {
         key: request[key] for key in (
             'session_id', 'config_hash', 'asset_manifest_sha256',
-            'coordinator_ingress_instance_id',
+            'coordinator_ingress_instance_id', 'expected_fault_flags',
         )
     }
     records = [
@@ -1920,6 +1945,7 @@ def test_ready_result_rejects_boolean_scene_cardinality():
                         'session_id', 'config_hash',
                         'asset_manifest_sha256',
                         'coordinator_ingress_instance_id',
+                        'expected_fault_flags',
                     )
                 },
             },

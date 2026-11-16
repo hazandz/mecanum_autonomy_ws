@@ -5,7 +5,10 @@ import json
 import os
 import signal
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
+import uuid
+import pytest
 
 from mecanum_nav_bringup.local_training_launch_contract import LaunchPlan
 from mecanum_nav_bringup.local_training_process_supervisor import (
@@ -1060,6 +1063,21 @@ def test_readiness_fresh_attempt_requires_clean_completion_and_keeps_seams():
     assert replacement._monotonic_ns is monotonic_ns
     assert replacement._sleep is sleep
 
+    restart_readiness = RclpyReadiness(
+        worker_factory=worker_factory, identity_reader=identity_reader,
+        signal_group=signal_group, monotonic=monotonic,
+        monotonic_ns=monotonic_ns, sleep=sleep,
+    )
+    restart_readiness._ready_attempted = True
+    restart = restart_readiness.fresh_attempt(expected_fault_flags=256)
+    request = restart._make_request(
+        replace(plan(False), session_id=str(uuid.uuid4())),
+        'a' * 64, 2_000_000_000,
+    )
+    assert request['expected_fault_flags'] == 256
+    with pytest.raises(ValueError, match='unsupported expected backend fault flags'):
+        restart_readiness.fresh_attempt(expected_fault_flags=512)
+
 
 def test_gui_start_failure_cleans_server_without_headless_fallback():
     """GUI startup failure stops the server without headless fallback."""
@@ -1607,6 +1625,7 @@ def test_shared_scene_binding_predicate_uses_service_partition_and_backend():
         'world_id': 'b2_training_arena', 'model_id': 'mecanum_b2',
         'session_id': expected_plan.session_id, 'config_hash': 'a' * 64,
         'gz_partition': 'mecanum_b2_testpartition',
+        'expected_fault_flags':0,
     }
     status = {
         'world_id': request['world_id'],

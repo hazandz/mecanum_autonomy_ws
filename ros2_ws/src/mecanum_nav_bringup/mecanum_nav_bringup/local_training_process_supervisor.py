@@ -203,7 +203,7 @@ class RclpyReadiness:
 
     SERVER_READY_TIMEOUT_S = 30.0
     WORKER_MODULE = 'mecanum_nav_bringup.local_training_readiness_worker'
-    REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v1'
+    REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v2'
     EVENT_SCHEMA = READINESS_EVENT_SCHEMA
     MAX_REQUEST_BYTES = 16 * 1024
     MAX_RECORD_BYTES = 4 * 1024
@@ -213,7 +213,7 @@ class RclpyReadiness:
     def __init__(
         self, *, worker_factory=None, identity_reader=None, signal_group=None,
         monotonic=time.monotonic, monotonic_ns=time.monotonic_ns,
-        sleep=asyncio.sleep,
+        sleep=asyncio.sleep, expected_fault_flags=0,
     ) -> None:
         """Prepare process seams without creating middleware or a worker."""
         self._stdin_buffers: dict[int, bytearray] = {}
@@ -263,6 +263,10 @@ class RclpyReadiness:
         self._residue = 'NONE'
         self._active_request = None
         self._active_request_sha256 = None
+        if (type(expected_fault_flags) is not int
+                or expected_fault_flags not in (0, 256)):
+            raise ValueError('unsupported expected backend fault flags')
+        self._expected_fault_flags = expected_fault_flags
 
     def bind_evidence_sink(self, evidence_sink):
         """Bind the one owner responsible for readiness evidence."""
@@ -271,13 +275,16 @@ class RclpyReadiness:
             raise RuntimeError('readiness evidence sink already bound')
         self._evidence_sink = evidence_sink
 
-    def fresh_attempt(self):
+    def fresh_attempt(self, *, expected_fault_flags=0):
         """Create a separately owned readiness worker after a clean attempt."""
         if (not self._ready_attempted or self._residue != 'NONE'
                 or self._cleanup_record_error or self._evidence_errors
                 or self._readiness_deadline_violation
                 or self._cleanup_deadline_violation):
             raise RuntimeError('readiness attempt cannot be replaced before clean completion')
+        if (type(expected_fault_flags) is not int
+                or expected_fault_flags not in (0, 256)):
+            raise ValueError('unsupported expected backend fault flags')
         attempt = RclpyReadiness(
             worker_factory=self._worker_factory_override,
             identity_reader=self._identity_reader_override,
@@ -285,6 +292,7 @@ class RclpyReadiness:
             monotonic=self._monotonic_source,
             monotonic_ns=self._monotonic_ns_source,
             sleep=self._sleep_source,
+            expected_fault_flags=expected_fault_flags,
         )
         if self._evidence_sink is not None:
             attempt.bind_evidence_sink(self._evidence_sink)
@@ -433,6 +441,7 @@ class RclpyReadiness:
             'config_hash': config_hash,
             'asset_manifest_sha256': plan.asset_manifest_sha256,
             'coordinator_ingress_instance_id': coordinator,
+            'expected_fault_flags': self._expected_fault_flags,
             'world_id': 'b2_training_arena',
             'model_id': 'mecanum_b2',
             'gz_partition': partition,
@@ -625,6 +634,7 @@ class RclpyReadiness:
             'coordinator_ingress_instance_id': request[
                 'coordinator_ingress_instance_id'
             ],
+            'expected_fault_flags':request['expected_fault_flags'],
             'world_id': request['world_id'],
             'model_id': request['model_id'],
             'gz_partition': request['gz_partition'],
@@ -641,7 +651,7 @@ class RclpyReadiness:
         binding = {
             key: request[key] for key in (
                 'session_id', 'config_hash', 'asset_manifest_sha256',
-                'coordinator_ingress_instance_id',
+                'coordinator_ingress_instance_id','expected_fault_flags',
             )
         }
         if event == 'worker_started':
@@ -759,7 +769,7 @@ class RclpyReadiness:
         expected_binding = {
             key: request[key] for key in (
                 'session_id', 'config_hash', 'asset_manifest_sha256',
-                'coordinator_ingress_instance_id',
+                'coordinator_ingress_instance_id','expected_fault_flags',
             )
         }
         if binding != expected_binding:

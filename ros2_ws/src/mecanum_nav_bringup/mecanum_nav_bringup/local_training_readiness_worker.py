@@ -15,8 +15,9 @@ import time
 import uuid
 
 
-REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v1'
+REQUEST_SCHEMA = 'mecanum_b2_scene_readiness_request/v2'
 EVENT_SCHEMA = 'mecanum_b2_scene_readiness_event/v2'
+ALLOWED_EXPECTED_FAULT_FLAGS = (0, 256)  # 0 or the R07c restart FAULT_QUEUE bit.
 WORLD_IDENTITY_SOURCE = 'WORLD_SCOPED_SERVICE_AND_BOUND_BACKEND'
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RECORD_BYTES = 4 * 1024
@@ -26,6 +27,7 @@ REQUEST_FIELDS = {
     'schema_id', 'request_id', 'session_id', 'config_hash',
     'asset_manifest_sha256', 'coordinator_ingress_instance_id',
     'world_id', 'model_id', 'gz_partition', 'ros_domain_id',
+    'expected_fault_flags',
     'deadline_monotonic_ns',
 }
 EVENTS = {
@@ -90,6 +92,10 @@ def validate_request(request, environ):
     domain = request['ros_domain_id']
     if not isinstance(domain, str) or not domain.isdecimal():
         raise ValueError('ROS domain must be decimal text')
+    expected_fault_flags = request['expected_fault_flags']
+    if (type(expected_fault_flags) is not int
+            or expected_fault_flags not in ALLOWED_EXPECTED_FAULT_FLAGS):
+        raise ValueError('unsupported expected backend fault flags')
     if environ.get('GZ_PARTITION') != request['gz_partition']:
         raise ValueError('Gazebo partition does not match request')
     if environ.get('ROS_DOMAIN_ID') != domain:
@@ -149,7 +155,9 @@ def status_readiness_matches(status, request):
         and type(status['status_sequence']) is int
         and status['status_sequence'] > 0
         and type(status['fault_flags']) is int
-        and status['fault_flags'] == 0
+        and type(request.get('expected_fault_flags')) is int
+        and request['expected_fault_flags'] in ALLOWED_EXPECTED_FAULT_FLAGS
+        and status['fault_flags'] == request['expected_fault_flags']
         and status['actuator_inhibited'] is True
     )
 
@@ -271,6 +279,7 @@ def run_worker(
                 'coordinator_ingress_instance_id': request[
                     'coordinator_ingress_instance_id'
                 ],
+                'expected_fault_flags':request['expected_fault_flags'],
             },
         })
         if status_source_factory is None:
@@ -353,6 +362,7 @@ def run_worker(
                     'coordinator_ingress_instance_id': request[
                         'coordinator_ingress_instance_id'
                     ],
+                    'expected_fault_flags':request['expected_fault_flags'],
                 },
             })
             if previous_query_start_ns is not None:
@@ -435,6 +445,7 @@ def run_worker(
                     'coordinator_ingress_instance_id': request[
                         'coordinator_ingress_instance_id'
                     ],
+                    'expected_fault_flags':request['expected_fault_flags'],
                 },
             }
             break
