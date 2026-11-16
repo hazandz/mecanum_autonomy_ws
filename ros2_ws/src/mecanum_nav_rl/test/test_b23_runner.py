@@ -3739,6 +3739,38 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
 
 
+@pytest.mark.parametrize(('before_ros_ns', 'wait_for_clock'), [
+    (1_000_000_000, True),
+    (1_090_000_000, False),
+])
+def test_policy_phase_alignment_does_not_wait_for_a_later_scan_period(
+        before_ros_ns, wait_for_clock):
+    value, clock = worker()
+    clock.ns = before_ros_ns
+    value.ros_now = clock.now
+    value.safety = NS(local_training=NS(scan_period_ns=100_000_000))
+    events = []
+    value.emit = lambda name, facts: events.append((name, facts))
+    deadline_ns = before_ros_ns + 20_000_000
+
+    aligned = asyncio.run(value.align_policy_issuance_after_scan_boundary(
+        deadline_ns=deadline_ns))
+
+    assert aligned['ros_ns'] > (before_ros_ns // 100_000_000) * 100_000_000
+    assert aligned['steady_ns'] == clock.ns
+    if wait_for_clock:
+        assert clock.ns > before_ros_ns
+    else:
+        assert clock.ns == before_ros_ns
+    assert events == [('POLICY_ISSUANCE_PHASE_ALIGNED', {
+        'before_ros_ns':before_ros_ns,
+        'boundary_ns':(before_ros_ns // 100_000_000) * 100_000_000,
+        'aligned_ros_ns':aligned['ros_ns'],
+        'scan_period_ns':100_000_000,
+        'steady_ns':aligned['steady_ns'],
+    })]
+
+
 def test_r02e_old_token_sample_is_built_after_close_before_new_bind():
     import asyncio
     import threading

@@ -3858,31 +3858,37 @@ class TrainingWorkerIO:
             'steady_ns': self.now()})
 
     async def align_policy_issuance_after_scan_boundary(self, *, deadline_ns):
-        """Stamp POLICY just after a scan boundary so native application can precede its cutoff.
+        """Keep POLICY issuance on the post-boundary side without wasting a scan period.
 
-        The step stream is frozen while this runs. Waiting for ROS time to cross
-        the next scan boundary moves the eventual receipt/application away from
-        the phase-locked case where the latest receipt is stamped exactly at a
-        scan cutoff and native applies it one physics iteration later.
+        The step stream is frozen while this runs. A SAFE_STOP anchor already
+        applied after the latest scan boundary is sufficient; waiting for the
+        following boundary needlessly consumes the unchanged steady watchdog
+        window while the pending POLICY slot cannot emit another SAFE_STOP.
+        If the current ROS time is exactly on a cutoff, wait only until it has
+        advanced past that cutoff.
         """
         adapter = self.safety.local_training
         period_ns = getattr(adapter, 'scan_period_ns', None)
         if type(period_ns) is not int or period_ns <= 0:
             raise RuntimeError('POLICY scan phase alignment requires a valid Safety scan period')
         before_ros_ns = self.ros_now()
-        boundary_ns = (before_ros_ns // period_ns + 1) * period_ns
-        crossed = await self.until(lambda: {
-                'ros_ns': self.ros_now(), 'steady_ns': self.now()
-            } if self.ros_now() > boundary_ns else None,
-            deadline_ns=deadline_ns,
-            phase='POLICY issuance after next scan boundary')
+        boundary_ns = (before_ros_ns // period_ns) * period_ns
+        if before_ros_ns == boundary_ns:
+            crossed = await self.until(lambda: {
+                    'ros_ns': self.ros_now(), 'steady_ns': self.now()
+                } if self.ros_now() > boundary_ns else None,
+                deadline_ns=deadline_ns,
+                phase='POLICY issuance after current scan boundary')
+            aligned_ros_ns, aligned_steady_ns = crossed['ros_ns'], crossed['steady_ns']
+        else:
+            aligned_ros_ns, aligned_steady_ns = before_ros_ns, self.now()
         self.emit('POLICY_ISSUANCE_PHASE_ALIGNED', {
             'before_ros_ns': before_ros_ns,
             'boundary_ns': boundary_ns,
-            'aligned_ros_ns': crossed['ros_ns'],
+            'aligned_ros_ns': aligned_ros_ns,
             'scan_period_ns': period_ns,
-            'steady_ns': crossed['steady_ns']})
-        return crossed
+            'steady_ns': aligned_steady_ns})
+        return {'ros_ns': aligned_ros_ns, 'steady_ns': aligned_steady_ns}
 
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
