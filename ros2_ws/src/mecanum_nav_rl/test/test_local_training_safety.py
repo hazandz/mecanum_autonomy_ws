@@ -113,7 +113,7 @@ def test_local_safety_preserves_issuance_and_both_ttl_clocks(local_adapter):
         f.advance(); command = a.tick()
         assert command.source == command.SOURCE_POLICY, f.state[-1].intervention_reasons
         assert command.sequence == 1 and command.source_instance_id == 33
-        assert command.header.stamp == f.candidate.header.stamp
+        assert command.header.stamp == f.stamp(f.clock.ros)
         assert command.twist.linear.y < 0 and command.twist.angular.z > 0
     received = a.command_received
     a.on_command(f.candidate)

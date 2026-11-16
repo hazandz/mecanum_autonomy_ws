@@ -18,6 +18,7 @@ class FinalTwistPublisherNode(Node):
         if self.get_parameter("use_sim_time").value is not True:
             raise ValueError("SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE")
         self.declare_parameter('navigation_mode', 'NAV2_BASELINE')
+        self.declare_parameter('scan_period_ns', 0)
         self.declare_parameter('session_id', '')
         self.declare_parameter('policy_source_instance_id', 0)
         self.declare_parameter('safe_stop_source_instance_id', 0)
@@ -25,6 +26,10 @@ class FinalTwistPublisherNode(Node):
         if mode not in ('NAV2_BASELINE', 'LOCAL_TRAINING'):
             raise ValueError('unsupported FinalTwistPublisher mode')
         self._local_training = mode == 'LOCAL_TRAINING'
+        scan_period_ns = self.get_parameter('scan_period_ns').value
+        if self._local_training and (type(scan_period_ns) is not int or scan_period_ns <= 0):
+            raise ValueError('LOCAL_TRAINING publisher requires pinned scan period')
+        self._scan_period_ns = scan_period_ns if self._local_training else 0
         self._session_id = self.get_parameter('session_id').value
         self._policy_source = self.get_parameter('policy_source_instance_id').value
         self._safe_stop_source = self.get_parameter('safe_stop_source_instance_id').value
@@ -133,6 +138,16 @@ class FinalTwistPublisherNode(Node):
         self._identity = msg
         self._identity_received_ns = time.monotonic_ns()
 
+    @staticmethod
+    def _crossed_scan_boundary(source_stamp_ns, publish_stamp_ns, scan_period_ns):
+        """Reject a POLICY callback that is late at an observation cutoff."""
+        if (type(source_stamp_ns) is not int or source_stamp_ns <= 0
+                or type(publish_stamp_ns) is not int or publish_stamp_ns < source_stamp_ns
+                or type(scan_period_ns) is not int or scan_period_ns <= 0):
+            return True
+        return (source_stamp_ns % scan_period_ns == 0
+                or source_stamp_ns // scan_period_ns < publish_stamp_ns // scan_period_ns)
+
     def _on_accepted(self, envelope: CommandEnvelope) -> None:
         identity = self._identity
         is_safe_stop = envelope.source == CommandEnvelope.SOURCE_SAFE_STOP
@@ -183,6 +198,13 @@ class FinalTwistPublisherNode(Node):
                     and identity.barrier_state == identity.BARRIER_READY
                     and 0 <= time.monotonic_ns() - self._identity_received_ns <= 500_000_000
                     and source_ns > 0 and 0 <= now_ns - source_ns <= 200_000_000)
+                if (identity_fresh and FinalTwistPublisherNode._crossed_scan_boundary(
+                        source_ns, now_ns, self._scan_period_ns)):
+                    self._emit('FINAL_POLICY_PUBLICATION_DEFERRED_AT_SCAN_CUTOFF', {
+                        'source_stamp_ns':source_ns, 'publisher_stamp_ns':now_ns,
+                        'scan_period_ns':self._scan_period_ns,
+                        'reason':'accepted envelope crossed or landed on scan cutoff'})
+                    return
             if not identity.motion_permitted or not identity_fresh:
                 self.get_logger().error("NAV2_COMMAND_LIFECYCLE_BARRIER_NOT_READY_OR_STALE")
                 return

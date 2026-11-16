@@ -617,6 +617,9 @@ class LocalTrainingSafetyAdapter:
             if accepted:
                 self.previous_velocity, self.previous_acceleration = velocity, acceleration
                 envelope = copy.deepcopy(self.command)
+                # Stamp the accepted Safety tick itself. The final publisher
+                # can reject a queued callback that crosses a scan cutoff.
+                envelope.header.stamp = self.node.get_clock().now().to_msg()
                 envelope.twist.linear.x, envelope.twist.linear.y, envelope.twist.angular.z = (
                     velocity.linear_x, velocity.linear_y, velocity.angular_z)
             else:

@@ -3915,7 +3915,8 @@ def final_child(path):
                 safe_stop_source=CommandEnvelope.SOURCE_SAFE_STOP)
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
-            Parameter('session_id', value=descriptor['session_id'])], evidence_sink=sink.record)
+            Parameter('session_id', value=descriptor['session_id']),
+            Parameter('scan_period_ns', value=descriptor['scan_period_ns'])], evidence_sink=sink.record)
         if packet['case'] == 'R04d':
             node._b23_r04d_run_id = descriptor['run_id']
             node._b23_r04d_invocation_id = descriptor['invocation_id']
@@ -5610,6 +5611,7 @@ async def run_parent(packet_path, packet_sha256):
         coordinator_ingress_instance_id=packet['coordinator_ingress_instance_id'],
         config_hash=packet['config_hash'], asset_manifest_sha256=packet['asset_manifest_sha256'],
         task_fixture=packet.get('task_fixture'),
+        scan_period_ns=round(1_000_000_000 / document['training']['local_training']['lidar_rate_hz']),
         native_events_path=str(root/'native-events.jsonl'))
     try:
         if time.monotonic_ns() >= active_end:
