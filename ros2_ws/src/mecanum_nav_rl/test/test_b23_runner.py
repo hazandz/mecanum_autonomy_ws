@@ -2892,57 +2892,97 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
 
 
-def test_r02e_holds_old_token_sample_before_freeze_closes_previous_slot():
+def test_r02e_old_token_sample_is_built_after_close_before_new_bind():
     import asyncio
     import threading
+    from builtin_interfaces.msg import Time
     from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+    from mecanum_nav_rl.simulation.simulated_odometry import SimulatedOdometryStatus
     from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
 
-    class FreezeReached(Exception):
+    class BindReached(Exception):
         pass
 
-    io, _clock = worker()
+    io, clock = worker()
     held_events = []
-    message = LocalTrainingSafetyInput()
-    message.admission_state = message.ADMISSION_POLICY_OPEN
-    message.admission_token = [0x31] * 16
-    message.sample_sequence = 17
+    previous_token = [0x31] * 16
+    old_ack = NS(observed_steady_ns=clock.ns,
+        request=NS(request_sequence=7),
+        response=NS(pending_admission_token=previous_token,
+            applied_sim_stamp=Time(sec=1)))
+    sample = NS(
+        output=NS(snapshot=NS(timestamp_ns=1_010_000_000,
+            status=SimulatedOdometryStatus.VALID,
+            measurement=NS(vx_mps=.01, vy_mps=0., wz_radps=0.))),
+        received_steady_ns=1_010_000_000,
+        lifecycle=NS(episode_generation=1, reset_epoch=2, runtime_generation=3))
+    io.ros_now = clock.now
     io._hold_next_safety_input = False
     io._held_safety_input = None
     io._publish_safety_input = TrainingWorkerIO._publish_safety_input.__get__(io)
     io.emit = lambda name, facts: held_events.append((name, facts))
     io.ingress.lock = threading.RLock()
-    io.ingress.noisy_samples = {1: object()}
-    io.ingress.pending_ack = object()
-    io.ingress.admission_state = message.ADMISSION_POLICY_OPEN
+    io.ingress.noisy_samples = {1: sample}
+    io.ingress.pending_ack = old_ack
+    io.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
     io.ingress.admission_publication_enabled = True
-    io.ingress._publish_safety = lambda _sample: io._publish_safety_input(message)
-    io.ingress.pause_admission_publication = lambda: held_events.append(('admission_paused', {}))
+    io.ingress.lifecycle = NS(episode_generation=1, reset_epoch=2, runtime_generation=3)
+    io.ingress.identity = NS(session_id='session-1', config_hash='a'*64,
+        coordinator_ingress_instance_id=9)
+    io.ingress.profile = {'odometry_max_age_ms':500}
+    io.ingress.now = clock.now
+    io.ingress.ros_now = clock.now
+    io.ingress._sample_sequence = 30
+    io.ingress.last_published_sample_sequence = 29
+    io.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    io.ingress.observation0_ack = NS(request=NS(observation0_cutoff=Time(sec=1),
+        selected_zero_final_publisher_instance_id=55,
+        selected_zero_final_publish_sequence=11))
+    io.ingress.publish = io._publish_safety_input
+    io.ingress.emit = io.emit
+    io.ingress._publish_safety = LocalTrainingIngress._publish_safety.__get__(io.ingress)
 
-    async def freeze_after_closing_old_slot(*, deadline_ns):
+    async def freeze_closing_old_slot(*, deadline_ns):
         assert deadline_ns > io.now()
-        assert io._held_safety_input is message or (
-            io._held_safety_input is not None
-            and io._held_safety_input.sample_sequence == message.sample_sequence
-            and bytes(io._held_safety_input.admission_token) == bytes(message.admission_token))
         held_events.append(('freeze_step_streams', {}))
+        clock.ns = 1_020_000_000
         io.ingress.pending_ack = None
         io.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
-        raise FreezeReached
+        io.ingress.admission_publication_enabled = False
+        io.ingress.last_published_sample_sequence = 30
+        io.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
 
-    io.freeze_step_streams = freeze_after_closing_old_slot
-    with pytest.raises(FreezeReached):
-        asyncio.run(io.policy_step(object(), (0.2, 0.0, 0.0), prebind_admission=True))
+    async def align_after_close(*, deadline_ns):
+        held_events.append(('POLICY_ISSUANCE_PHASE_ALIGNED', {
+            'boundary_ns':1_000_000_000,'steady_ns':io.now()}))
 
+    io.freeze_step_streams = freeze_closing_old_slot
+    io.align_policy_issuance_after_scan_boundary = align_after_close
+    io.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
+        held_events.append(('stream',enabled))))
+
+    class B1:
+        def begin_step(self):
+            held_events.append(('bind_step_begin',{}))
+            raise BindReached
+
+    with pytest.raises(BindReached):
+        asyncio.run(io.policy_step(B1(), (0.2, 0.0, 0.0), prebind_admission=True))
+
+    held = io._held_safety_input
+    assert held is not None, f'production ingress did not build and hold a pre-bind input: {held_events!r}'
     tags = [name for name, _ in held_events]
-    held_index = tags.index('R02E_PREBIND_SAFETY_INPUT_HELD')
     freeze_index = tags.index('freeze_step_streams')
-    assert held_index < freeze_index, f'old-token sample must be retained before the old slot closes: {held_events!r}'
-    record = held_events[held_index][1]
-    assert record['sample_sequence'] == message.sample_sequence
-    assert record['admission_token_hex'] == bytes(message.admission_token).hex()
+    held_index = tags.index('R02E_PREBIND_SAFETY_INPUT_HELD')
+    bind_index = tags.index('bind_step_begin')
+    assert freeze_index < held_index < bind_index, f'held input must be built after close and before new bind: {held_events!r}'
+    held_record = held_events[held_index][1]
+    assert held_record['admission_token_hex'] == bytes(previous_token).hex()
+    assert held.sample_sequence == 31 and held.sample_sequence > 30
     assert io.ingress.pending_ack is None
-    assert io._held_safety_input.sample_sequence == message.sample_sequence
+    assert io.ingress.admission_state == LocalTrainingSafetyInput.ADMISSION_INHIBITED
+    assert ('stream',False) in held_events
 
 
 def test_r09b_holds_policy_before_waiting_for_contact_and_restoring_fixture():

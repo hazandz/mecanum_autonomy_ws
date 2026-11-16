@@ -3380,25 +3380,11 @@ class TrainingWorkerIO:
         started = self.now()
         deadline = min(self.deadline_ns, started + 2_000_000_000)
         held_prebind = None
+        previous_pending_ack = None
         if prebind_admission:
             if self.ingress.pending_ack is None or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN:
                 raise RuntimeError('R02e needs a live previous pending token before rebinding')
-            with self.ingress.lock:
-                candidates = tuple(self.ingress.noisy_samples.values())
-            if not candidates:
-                raise RuntimeError('R02e has no actual noisy sample to carry across the bind')
-            sample = candidates[-1]
-            self.ingress.admission_publication_enabled = True
-            self._hold_next_safety_input = True
-            self.ingress._publish_safety(sample)
-            held_prebind = self._held_safety_input
-            if held_prebind is None:
-                raise RuntimeError('R02e producer did not create a held pre-bind input')
-            if (held_prebind.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
-                    or not any(held_prebind.admission_token)
-                    or held_prebind.sample_sequence == 0):
-                raise RuntimeError('R02e held sample is not a valid prior-token POLICY admission')
-            self.ingress.pause_admission_publication()
+            previous_pending_ack = self.ingress.pending_ack
         await self.freeze_step_streams(deadline_ns=deadline)
         r02b_cutoff_evidence = None
         if align_admission_after_scan_boundary:
@@ -3428,6 +3414,46 @@ class TrainingWorkerIO:
         # after binding would consume the unchanged native command watchdog
         # budget while the pending slot correctly forbids a closing SAFE_STOP.
         await self.align_policy_issuance_after_scan_boundary(deadline_ns=deadline)
+        if prebind_admission:
+            # Build the held input after native has observed the closing
+            # inhibited sample, but before binding the new slot. This keeps
+            # its real producer sequence monotonic at the consumer while its
+            # token and measurement still belong to the previous slot.
+            with self.ingress.lock:
+                if (self.ingress.pending_ack is not None
+                        or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_INHIBITED):
+                    raise RuntimeError('R02e old slot was not closed before constructing the held sample')
+                candidates = tuple(self.ingress.noisy_samples.values())
+                if not candidates:
+                    raise RuntimeError('R02e has no actual noisy sample to carry across the bind')
+                sample = candidates[-1]
+                closed_sample_sequence = self.ingress.last_published_sample_sequence
+                old_state = self.ingress.admission_state
+                old_ack = self.ingress.pending_ack
+                old_enabled = self.ingress.admission_publication_enabled
+                self.ingress.pending_ack = previous_pending_ack
+                self.ingress.admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                self.ingress.admission_publication_enabled = True
+                self._hold_next_safety_input = True
+                try:
+                    self.ingress._publish_safety(sample)
+                finally:
+                    self.ingress.pending_ack = old_ack
+                    self.ingress.admission_state = old_state
+                    self.ingress.admission_publication_enabled = old_enabled
+                    if self._held_safety_input is None:
+                        self._hold_next_safety_input = False
+            held_prebind = self._held_safety_input
+            if (held_prebind is None
+                    or held_prebind.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                    or not any(held_prebind.admission_token)
+                    or held_prebind.sample_sequence <= closed_sample_sequence):
+                raise RuntimeError('R02e held sample is not a fresh monotonic prior-token POLICY admission')
+            self.emit('R02E_PREBIND_SAMPLE_HELD_AFTER_CLOSE', {
+                'closed_sample_sequence': closed_sample_sequence,
+                'held_sample_sequence': held_prebind.sample_sequence,
+                'previous_request_sequence': previous_pending_ack.request.request_sequence,
+                'steady_ns': self.now()})
         # A SAFE_STOP arriving after OP_BIND_PENDING_STEP revokes the pending
         # admission by contract. The last zero receipt above is already native
         # applied, so stop emitting zero while this single slot is bound; native
