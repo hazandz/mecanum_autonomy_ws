@@ -3739,32 +3739,31 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
 
 
-@pytest.mark.parametrize(('before_ros_ns', 'wait_for_clock'), [
-    (1_000_000_000, True),
-    (1_090_000_000, False),
+@pytest.mark.parametrize('before_ros_ns', [
+    1_000_000_000,
+    1_090_000_000,
+    1_100_000_000,
 ])
-def test_policy_phase_alignment_does_not_wait_for_a_later_scan_period(
-        before_ros_ns, wait_for_clock):
+def test_policy_phase_alignment_waits_past_next_scan_boundary(before_ros_ns):
     value, clock = worker()
     clock.ns = before_ros_ns
     value.ros_now = clock.now
     value.safety = NS(local_training=NS(scan_period_ns=100_000_000))
     events = []
     value.emit = lambda name, facts: events.append((name, facts))
-    deadline_ns = before_ros_ns + 20_000_000
+    deadline_ns = before_ros_ns + 120_000_000
+    value.deadline_ns = deadline_ns
 
     aligned = asyncio.run(value.align_policy_issuance_after_scan_boundary(
         deadline_ns=deadline_ns))
 
-    assert aligned['ros_ns'] > (before_ros_ns // 100_000_000) * 100_000_000
+    expected_boundary_ns = (before_ros_ns // 100_000_000 + 1) * 100_000_000
+    assert aligned['ros_ns'] > expected_boundary_ns
     assert aligned['steady_ns'] == clock.ns
-    if wait_for_clock:
-        assert clock.ns > before_ros_ns
-    else:
-        assert clock.ns == before_ros_ns
+    assert clock.ns > before_ros_ns
     assert events == [('POLICY_ISSUANCE_PHASE_ALIGNED', {
         'before_ros_ns':before_ros_ns,
-        'boundary_ns':(before_ros_ns // 100_000_000) * 100_000_000,
+        'boundary_ns':expected_boundary_ns,
         'aligned_ros_ns':aligned['ros_ns'],
         'scan_period_ns':100_000_000,
         'steady_ns':aligned['steady_ns'],

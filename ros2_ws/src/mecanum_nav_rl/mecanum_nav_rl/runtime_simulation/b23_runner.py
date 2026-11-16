@@ -3858,30 +3858,31 @@ class TrainingWorkerIO:
             'steady_ns': self.now()})
 
     async def align_policy_issuance_after_scan_boundary(self, *, deadline_ns):
-        """Keep POLICY issuance on the post-boundary side without wasting a scan period.
+        """Place the pending POLICY transaction after the next scan cutoff.
 
-        The step stream is frozen while this runs. A SAFE_STOP anchor already
-        applied after the latest scan boundary is sufficient; waiting for the
-        following boundary needlessly consumes the unchanged steady watchdog
-        window while the pending POLICY slot cannot emit another SAFE_STOP.
-        If the current ROS time is exactly on a cutoff, wait only until it has
-        advanced past that cutoff.
+        The SAFE_STOP stream remains active during this bounded wait. Merely
+        observing that the current time is after the *previous* cutoff leaves
+        bind/admission work free to consume the remaining scan period; the
+        accepted Safety envelope can then cross the next cutoff before the
+        final publisher receives it. Starting just after the next cutoff
+        leaves that work on the fresh-scan side of the following period.
         """
         adapter = self.safety.local_training
         period_ns = getattr(adapter, 'scan_period_ns', None)
         if type(period_ns) is not int or period_ns <= 0:
             raise RuntimeError('POLICY scan phase alignment requires a valid Safety scan period')
         before_ros_ns = self.ros_now()
-        boundary_ns = (before_ros_ns // period_ns) * period_ns
-        if before_ros_ns == boundary_ns:
-            crossed = await self.until(lambda: {
-                    'ros_ns': self.ros_now(), 'steady_ns': self.now()
-                } if self.ros_now() > boundary_ns else None,
-                deadline_ns=deadline_ns,
-                phase='POLICY issuance after current scan boundary')
-            aligned_ros_ns, aligned_steady_ns = crossed['ros_ns'], crossed['steady_ns']
-        else:
-            aligned_ros_ns, aligned_steady_ns = before_ros_ns, self.now()
+        boundary_ns = (before_ros_ns // period_ns + 1) * period_ns
+
+        def observe_post_boundary():
+            ros_ns = self.ros_now()
+            return ({'ros_ns': ros_ns, 'steady_ns': self.now()}
+                if ros_ns > boundary_ns else None)
+
+        crossed = await self.until(observe_post_boundary,
+            deadline_ns=deadline_ns,
+            phase='POLICY phase after next scan boundary')
+        aligned_ros_ns, aligned_steady_ns = crossed['ros_ns'], crossed['steady_ns']
         self.emit('POLICY_ISSUANCE_PHASE_ALIGNED', {
             'before_ros_ns': before_ros_ns,
             'boundary_ns': boundary_ns,
