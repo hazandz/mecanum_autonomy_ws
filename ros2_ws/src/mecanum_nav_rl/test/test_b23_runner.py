@@ -1052,6 +1052,7 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
     worker._r07b_rollback_observed = {'delta_ns':-1}
     worker._r07b_replacement_backend_statuses = []
+    worker.ros_now = lambda: 50
     worker.ingress = NS(lock=threading.RLock(), _last_receipt_stamp_ns=100,
         _last_gt_stamp=100, _last_gt_bytes=b'old-oracle', scans={}, fault=None)
     worker.now = lambda: 777
@@ -1073,6 +1074,7 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     assert events[-1][0] == 'B23_R07B_REPLACEMENT_BACKEND_STATUS'
 
     receipt = FinalIssuedCommandReceipt()
+    receipt.header.stamp.nanosec = 90
     returned = worker.observed_callback(FinalIssuedCommandReceipt,
         '/mecanum/final_issued_command',
         lambda _: pytest.fail('stale receipt must be quarantined before ingress validation'))(
@@ -1083,11 +1085,12 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     assert worker.ingress.fault is None
 
     receipt.header.stamp.nanosec = 200
+    worker.ros_now = lambda: 200
 
     with pytest.raises(ValueError, match='unrelated receipt failure'):
         worker.observed_callback(FinalIssuedCommandReceipt,
             '/mecanum/final_issued_command',
-            lambda _: (_ for _ in ()).throw(ValueError('unrelated receipt failure')))(
+            lambda _, **_kwargs: (_ for _ in ()).throw(ValueError('unrelated receipt failure')))(
                 serialize_message(receipt), {})
 
 
@@ -3561,6 +3564,66 @@ def test_subscription_keeps_actual_wire_before_decode_and_callback_failure():
     assert events[-1][1]['wire_sha256']==hashlib.sha256(wire).hexdigest()
 
 
+def test_future_receipt_waits_for_owned_ros_clock_and_keeps_original_receive_age():
+    from collections import deque
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    value._pending_future_receipts = deque()
+    value._receipt_max_age_ns = 500_000_000
+    ros_now = [1_000_000_000]
+    value.ros_now = lambda: ros_now[0]
+    events, delivered = [], []
+    value.emit = lambda name, facts: events.append((name, facts))
+
+    message = FinalIssuedCommandReceipt()
+    message.header.frame_id = 'base_link'
+    message.header.stamp.sec, message.header.stamp.nanosec = 1, 10_000_000
+    message.final_publish_sequence = 7
+    wire = serialize_message(message)
+    received_ns = clock.ns
+    def consume(receipt, *, received_ns):
+        delivered.append((receipt.final_publish_sequence, received_ns))
+        return 'accepted'
+
+    receive = value.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command', consume)
+    assert receive(wire, {}) is None
+    assert delivered == [] and len(value._pending_future_receipts) == 1
+    assert events[-1][0] == 'RECEIPT_CLOCK_CATCHUP_DEFERRED'
+    assert events[-1][1]['received_steady_ns'] == received_ns
+
+    ros_now[0] = 1_010_000_000
+    value._deliver_future_receipts_after_clock()
+    assert delivered == [(7, received_ns)]
+    assert not value._pending_future_receipts
+
+
+def test_future_receipt_deferral_expires_at_original_freshness_budget():
+    from collections import deque
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    value._pending_future_receipts = deque()
+    value._receipt_max_age_ns = 500_000_000
+    value.ros_now = lambda: 1_000_000_000
+    events = []
+    value.emit = lambda name, facts: events.append((name, facts))
+    message = FinalIssuedCommandReceipt()
+    message.header.frame_id = 'base_link'
+    message.header.stamp.sec, message.header.stamp.nanosec = 1, 10_000_000
+    message.final_publish_sequence = 7
+    receive = value.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command', lambda _msg, **_kwargs: pytest.fail('future receipt dispatched'))
+    assert receive(serialize_message(message), {}) is None
+    clock.ns += 500_000_001
+    with pytest.raises(TimeoutError, match='original B1 receipt freshness age'):
+        value._deliver_future_receipts_after_clock()
+    assert events[-1][0] == 'RECEIPT_CLOCK_CATCHUP_EXPIRED'
+
+
 def test_r06c_withholds_receipt_only_from_b1_after_real_ingress_callback():
     from collections import deque
     from threading import Lock
@@ -3574,11 +3637,12 @@ def test_r06c_withholds_receipt_only_from_b1_after_real_ingress_callback():
     value._r06c_hold_after_sequence=25
     value._r06c_reset_deadline_ns=15_000_000_000
     value._r06c_held_receipts=[]
+    value.ros_now=lambda:1_000_000_000
     receipts=deque()
     receipt_views={}
     value.ingress=NS(lock=Lock(),receipts=receipts,_receipt_views=receipt_views)
     delivered=[]
-    def production_receipt_consumer(message):
+    def production_receipt_consumer(message, *, received_ns):
         view=NS(final_publish_sequence=message.final_publish_sequence)
         with value.ingress.lock:
             receipts.append(view)

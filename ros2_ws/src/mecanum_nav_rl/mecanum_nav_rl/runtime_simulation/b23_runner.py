@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import math
+from collections import deque
 from pathlib import Path
 import time
 
@@ -1682,6 +1683,9 @@ class TrainingWorkerIO:
         self._r06b_measurement_fault = {'active':False, 'yielded':False, 'dropped':False}
         self._r06c_hold_after_sequence = None
         self._r06c_held_receipts = []
+        self._pending_future_receipts = deque()
+        self._receipt_max_age_ns = int(
+            document['training']['local_training']['b1_receipt_max_age_ms']) * 1_000_000
         self.expected_paused = True
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
@@ -1813,15 +1817,8 @@ class TrainingWorkerIO:
     def observed_callback(self, message_type, topic, callback):
         """Giữ CDR do DDS trả trước decode/validator; không sửa payload nguồn."""
         from rclpy.serialization import deserialize_message
-        def receive(raw, info):
-            if not isinstance(raw,(bytes,bytearray,memoryview)):
-                raise TypeError('raw subscription did not return serialized bytes')
-            wire=bytes(raw)
-            self.emit('INGRESS_WIRE_RECEIVED', {'topic':topic,
-                'received_ns':self.now(), 'wire_cdr_hex':wire.hex(),
-                'message_info':{key:value for key,value in info.items() if type(value) is int}})
+        def process(message, wire, received_ns):
             try:
-                message = deserialize_message(wire,message_type)
                 rollback_active = (
                     'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
@@ -1878,7 +1875,7 @@ class TrainingWorkerIO:
                     # its bounded unresolved-application queue long before the
                     # reset deadline; that tests observer overflow, not the
                     # missing B1 cutoff receipt.
-                    receipt_view = callback(message)
+                    receipt_view = callback(message, received_ns=received_ns)
                     sequence = int(message.final_publish_sequence)
                     with self.ingress.lock:
                         if (not self.ingress.receipts
@@ -1928,12 +1925,90 @@ class TrainingWorkerIO:
                         'source_stamp_ns':source_stamp_ns,
                         'received_ns':self.now(),'due_ns':due_ns})
                     return None
+                if topic == '/mecanum/final_issued_command':
+                    return callback(message, received_ns=received_ns)
                 return callback(message)
             except BaseException as error:
                 self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
                 raise
+
+        def receive(raw, info):
+            if not isinstance(raw,(bytes,bytearray,memoryview)):
+                raise TypeError('raw subscription did not return serialized bytes')
+            wire=bytes(raw)
+            received_ns = self.now()
+            self.emit('INGRESS_WIRE_RECEIVED', {'topic':topic,
+                'received_ns':received_ns, 'wire_cdr_hex':wire.hex(),
+                'message_info':{key:value for key,value in info.items() if type(value) is int}})
+            try:
+                message = deserialize_message(wire,message_type)
+                rollback_active = (
+                    'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                    and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
+                         or getattr(self, '_r07b_rollback_observed', None) is not None))
+                if rollback_active and getattr(self, 'ingress', None) is not None:
+                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress)
+                    if stale is not None:
+                        reason, source_stamp_ns, watermark_ns = stale
+                        event = {
+                            '/mecanum/final_issued_command':'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED',
+                            '/mecanum/internal/ground_truth/odom':'B23_R07B_POST_ROLLBACK_ORACLE_REJECTED',
+                            '/scan':'B23_R07B_POST_ROLLBACK_SCAN_REJECTED',
+                        }[topic]
+                        self.emit(event, {
+                            'reason':reason,'source_stamp_ns':source_stamp_ns,
+                            'pinned_high_watermark_ns':watermark_ns,
+                            'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                            'quarantined_before_ingress_validation':True,
+                            'detected_ns':self.now()})
+                        return None
+                if topic == '/mecanum/final_issued_command':
+                    source_stamp_ns = (int(message.header.stamp.sec) * 1_000_000_000
+                        + int(message.header.stamp.nanosec))
+                    ros_now_ns = self.ros_now()
+                    if source_stamp_ns > ros_now_ns:
+                        if received_ns > self.now():
+                            raise ValueError('receipt receive timestamp moved backward')
+                        if len(self._pending_future_receipts) >= 128:
+                            raise ValueError('future receipt deferral queue capacity exceeded')
+                        self._pending_future_receipts.append(
+                            (source_stamp_ns, received_ns, process, message, wire))
+                        self.emit('RECEIPT_CLOCK_CATCHUP_DEFERRED', {
+                            'source_stamp_ns':source_stamp_ns, 'observed_ros_now_ns':ros_now_ns,
+                            'received_steady_ns':received_ns, 'deferred_steady_ns':self.now(),
+                            'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                            'queue_size':len(self._pending_future_receipts),
+                            'max_original_receive_age_ns':self._receipt_max_age_ns})
+                        return None
+            except BaseException as error:
+                self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
+                    'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
+                raise
+            return process(message, wire, received_ns)
         return receive
+
+    def _deliver_future_receipts_after_clock(self):
+        """Process only after the owned ROS clock catches up, retaining DDS receive age."""
+        while self._pending_future_receipts:
+            source_stamp_ns, received_ns, process, message, wire = self._pending_future_receipts[0]
+            now_ns = self.now()
+            ros_now_ns = self.ros_now()
+            if type(now_ns) is not int or now_ns < received_ns:
+                raise RuntimeError('steady clock invalid while receipt waits for ROS clock')
+            age_ns = now_ns - received_ns
+            if age_ns > self._receipt_max_age_ns:
+                self.emit('RECEIPT_CLOCK_CATCHUP_EXPIRED', {
+                    'source_stamp_ns':source_stamp_ns, 'ros_now_ns':ros_now_ns,
+                    'received_steady_ns':received_ns, 'checked_steady_ns':now_ns,
+                    'original_receive_age_ns':age_ns,
+                    'max_original_receive_age_ns':self._receipt_max_age_ns,
+                    'wire_sha256':hashlib.sha256(wire).hexdigest()})
+                raise TimeoutError('receipt clock catch-up exceeded original B1 receipt freshness age')
+            if source_stamp_ns > ros_now_ns:
+                return
+            self._pending_future_receipts.popleft()
+            process(message, wire, received_ns)
 
     def ros_now(self):
         return self.node.get_clock().now().nanoseconds
@@ -1961,6 +2036,7 @@ class TrainingWorkerIO:
             while not self.stop_requested:
                 for _ in range(16):
                     self.executor.spin_once(timeout_sec=0.)
+                self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 await self.pause(0.001)
         except asyncio.CancelledError:

@@ -427,7 +427,7 @@ class LocalTrainingIngress:
                 return  # Exact replay không làm mới receive age.
             self._put(self.scans, stamp, ReceivedScan(stamp, self.now(), raw), 'scan')
 
-    def on_receipt(self, msg):
+    def on_receipt(self, msg, *, received_ns=None):
         if not isinstance(msg, FinalIssuedCommandReceipt):
             self._fail('receipt generated type mismatch')
         with self.lock:
@@ -443,6 +443,10 @@ class LocalTrainingIngress:
             published_ns = stamp_ns(msg.header.stamp)
             if published_ns < self._last_receipt_stamp_ns or published_ns > self.ros_now():
                 self._fail('receipt source timestamp rollback or future')
+            if received_ns is None:
+                received_ns = self.now()
+            if type(received_ns) is not int or received_ns > self.now():
+                self._fail('receipt receive timestamp is invalid')
             is_policy = msg.source == msg.SOURCE_POLICY
             if msg.source not in (msg.SOURCE_POLICY, msg.SOURCE_SAFE_STOP):
                 self._fail('receipt source not allowed in LOCAL_TRAINING')
@@ -469,7 +473,7 @@ class LocalTrainingIngress:
             receipt = IssuedCommandReceiptView(stamp_ns(msg.header.stamp), msg.final_publisher_instance_id,
                 msg.final_publish_sequence, ReceiptSource.POLICY if is_policy else ReceiptSource.SAFE_STOP,
                 source, msg.sequence, msg.step_index, msg.transition_id, lifecycle_identity(self.lifecycle),
-                self.identity.session_id, self.identity.config_hash, values, self.now(), 'base_link', True)
+                self.identity.session_id, self.identity.config_hash, values, received_ns, 'base_link', True)
             self._last_receipt_sequence = msg.final_publish_sequence
             self._last_receipt_stamp_ns = published_ns
             self._receipt_bytes[msg.final_publish_sequence] = raw
@@ -483,7 +487,8 @@ class LocalTrainingIngress:
                 pending = self._unresolved_applications.pop(msg.final_publish_sequence)
                 self._resolve_application(receipt, *pending)
             self.emit('RECEIPT_RECEIVED', {'receipt_key': receipt.receipt_key,
-                'received_ns': receipt.received_steady_ns, 'message_cdr_hex': raw.hex()})
+                'received_ns': receipt.received_steady_ns, 'accepted_ns': self.now(),
+                'message_cdr_hex': raw.hex()})
             return receipt
 
     def bind_safety_publisher_gid(self, gid):

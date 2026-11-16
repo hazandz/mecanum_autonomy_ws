@@ -187,6 +187,22 @@ def test_receipt_replay_keeps_original_bytes_receive_time_and_sequence(source):
         f.ingress.on_receipt(changed)
 
 
+def test_receipt_clock_deferral_preserves_original_receive_timestamp(source):
+    f = source
+    original_received_ns = f.clock.steady - 5_000_000
+    accepted = f.ingress.on_receipt(f.receipt(), received_ns=original_received_ns)
+    assert accepted.received_steady_ns == original_received_ns
+    assert [name for name, _ in f.events if name == 'RECEIPT_RECEIVED'] == ['RECEIPT_RECEIVED']
+
+
+def test_ingress_still_rejects_future_receipt_without_worker_clock_catchup(source):
+    f = source
+    future = f.receipt()
+    future.header.stamp = stamp(f.clock.ros + 1)
+    with pytest.raises(ValueError, match='receipt source timestamp rollback or future'):
+        f.ingress.on_receipt(future)
+
+
 def test_late_join_receipt_accepts_first_retained_sequence(source):
     f = source
     accepted = f.ingress.on_receipt(f.receipt(2))
