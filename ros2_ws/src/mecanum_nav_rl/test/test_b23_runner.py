@@ -16,7 +16,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
-    await_r04a_production_rejection, verify_r04a_next_step_blocked,
+    await_r04a_production_rejection, await_r04a_delayed_callback,
+    verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r04c_stale_rejection_and_zero,
     verify_r05_contact_query_revocation,
@@ -1733,8 +1734,8 @@ def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
         ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT','steady_ns':301}),
     ]
     calls = []
-    async def until(predicate, *, deadline_ns, phase):
-        calls.append((deadline_ns, phase))
+    async def until(predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
+        calls.append((deadline_ns, phase, expected_native_fault_flags))
         assert predicate() is None
         events.append(('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],
             'steady_ns':302}))
@@ -1742,7 +1743,39 @@ def test_r04a_waits_boundedly_for_production_safety_tick_after_callback():
     io = NS(events=events, until=until)
     result = __import__('asyncio').run(await_r04a_production_rejection(io, deadline_ns=1_000))
     assert result['steady_ns'] == 302
-    assert calls == [(1_000,'R04a bounded production Safety rejection after delayed replay')]
+    assert calls == [(1_000,'R04a bounded production Safety rejection after delayed replay', 4)]
+
+
+def test_r04a_waits_for_scheduled_callback_after_step_fault_without_resetting_deadline():
+    clock = {'ns':0}
+    state = {'triggered':1,'scheduled':1,'delivered':0}
+    events = []
+    async def pause(duration_s):
+        clock['ns'] += int(duration_s * 1_000_000_000)
+        if clock['ns'] >= 300_000_000 and state['delivered'] == 0:
+            state['delivered'] = 1
+            events.append(('B23_R04_DELIVERY_DELAYED_CALLBACK',
+                {'case':'R04a','delivery_ns':clock['ns']}))
+    io = NS(deadline_ns=2_000_000_000, now=lambda:clock['ns'], pause=pause, events=events)
+    delayed = asyncio.run(await_r04a_delayed_callback(io, state, timeout_ns=500_000_000))
+    assert delayed['delivery_ns'] >= 300_000_000
+    assert clock['ns'] < io.deadline_ns
+    assert state == {'triggered':1,'scheduled':1,'delivered':1}
+
+
+def test_r04a_blocked_slot_accepts_only_exact_watchdog_emergency_zero():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    io = NS(events=[
+        ('SAFETY_INPUT_REJECTED', {'reason':'SAFETY_INPUT_REPLAY_OR_CONFLICT','steady_ns':901}),
+        ('SAFETY_REJECTED', {'reasons':['SAFETY_INPUT_REPLAY_OR_CONFLICT'],'steady_ns':902}),
+    ], ingress=NS(safe_stop_source_id=70, receipts=[],
+        backend_state=NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
+            local_zero_override=True, actuator_inhibited=True), backend_received_ns=903),
+        final=NS(publisher_instance_id=80))
+    result = verify_r04a_next_step_blocked(io, step_index=2)
+    assert result['native_zero_application'] == {
+        'mode':'watchdog_emergency_zero','fault_flags':SimulationContactState.FAULT_COMMAND_STALE,
+        'local_zero_override':True,'actuator_inhibited':True,'status_received_ns':903}
 
 
 def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receipt():
@@ -1799,7 +1832,7 @@ def test_r04a_next_policy_slot_requires_safety_rejection_and_no_commit_or_receip
         'native_iteration':12,'native_stamp_ns':120_000_000,
         'native_application_steady_ns':950}
     events.remove(('NATIVE_APPLICATION_JOINED', joined))
-    with pytest.raises(RuntimeError, match='lacks a post-rejection exact native SAFE_STOP'):
+    with pytest.raises(RuntimeError, match='lacks post-rejection exact SAFE_STOP'):
         verify_r04a_next_step_blocked(io, step_index=2)
     events.append(('NATIVE_APPLICATION_JOINED', joined))
     io.events.append(('SAFETY_ACCEPTED', {'candidate_source':1,'candidate_sequence':2}))

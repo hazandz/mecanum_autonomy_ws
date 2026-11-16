@@ -1268,7 +1268,22 @@ async def await_r04a_production_rejection(io, *, deadline_ns):
             and 'SAFETY_INPUT_REPLAY_OR_CONFLICT' in facts.get('reasons', ())
             and facts.get('steady_ns', 0) >= input_rejected['steady_ns']), None)
     return await io.until(observed, deadline_ns=deadline_ns,
-        phase='R04a bounded production Safety rejection after delayed replay')
+        phase='R04a bounded production Safety rejection after delayed replay',
+        expected_native_fault_flags=4)
+
+
+async def await_r04a_delayed_callback(io, state, *, timeout_ns=1_000_000_000):
+    """Wait boundedly for the injected callback after the POLICY attempt stops."""
+    deadline_ns = min(io.deadline_ns, io.now() + timeout_ns)
+    while state['delivered'] < 1 and io.now() < deadline_ns:
+        before = io.now()
+        await io.pause(min(0.002, max(0., (deadline_ns - before) / 1e9)))
+        if io.now() <= before:
+            raise RuntimeError('R04a delayed callback wait did not advance monotonic time')
+    if state['triggered'] != 1 or state['scheduled'] != 1 or state['delivered'] != 1:
+        raise TimeoutError('R04a delayed callback did not complete exactly once before evidence deadline')
+    return next((facts for name, facts in reversed(io.events)
+        if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK' and facts.get('case') == 'R04a'), None)
 
 
 def verify_r04a_next_step_blocked(io, *, step_index):
@@ -1325,7 +1340,17 @@ def verify_r04a_next_step_blocked(io, *, step_index):
             'native_application_steady_ns': facts['steady_ns']}
         break
     if applied_zero is None:
-        raise RuntimeError('R04a lacks a post-rejection exact native SAFE_STOP receipt application')
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        state = getattr(io.ingress, 'backend_state', None)
+        status_received_ns = getattr(io.ingress, 'backend_received_ns', None)
+        if (state is None or state.fault_flags != SimulationContactState.FAULT_COMMAND_STALE
+                or not state.local_zero_override or not state.actuator_inhibited
+                or type(status_received_ns) is not int
+                or status_received_ns < rejected['steady_ns']):
+            raise RuntimeError('R04a lacks post-rejection exact SAFE_STOP application or watchdog zero')
+        applied_zero = {'mode':'watchdog_emergency_zero',
+            'fault_flags':int(state.fault_flags), 'local_zero_override':True,
+            'actuator_inhibited':True, 'status_received_ns':status_received_ns}
     return {'blocked_step_index':step_index,
         'input_rejection_steady_ns':input_rejected['steady_ns'],
         'safety_rejection_reasons':list(rejected.get('reasons', ())),
@@ -1459,7 +1484,21 @@ def verify_r04a_zero_baseline(io, *, checked):
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     state = io.ingress.backend_state
     stop = io.safety.local_training.last_output
+    if (stop is None or stop.source != CommandEnvelope.SOURCE_SAFE_STOP
+            or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
+        raise RuntimeError('R04a current Safety output is not zero SAFE_STOP')
     proof = checked.get('native_zero_application') if isinstance(checked, dict) else None
+    if isinstance(proof, dict) and proof.get('mode') == 'watchdog_emergency_zero':
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        if (state is None or state.fault_flags != SimulationContactState.FAULT_COMMAND_STALE
+                or not state.local_zero_override or not state.actuator_inhibited
+                or io.ingress.backend_received_ns != proof.get('status_received_ns')):
+            raise RuntimeError('R04a watchdog emergency-zero evidence changed after capture')
+        return {'native_fault_flags':int(state.fault_flags),
+            'local_zero_override':True, 'actuator_inhibited':True,
+            'backend_status_received_ns':io.ingress.backend_received_ns,
+            'current_safety_source':stop.source, 'current_safety_sequence':stop.sequence,
+            'current_safety_zero':True, 'native_zero_mode':'watchdog_emergency_zero'}
     if (not isinstance(proof, dict) or type(proof.get('publisher_instance_id')) is not int
             or type(proof.get('final_publish_sequence')) is not int
             or proof['publisher_instance_id'] != io.final.publisher_instance_id):
@@ -1469,9 +1508,6 @@ def verify_r04a_zero_baseline(io, *, checked):
             or state.applied_final_publisher_instance_id != io.final.publisher_instance_id
             or state.applied_final_publish_sequence < proof['final_publish_sequence']):
         raise RuntimeError('R04a native backend lost its healthy applied-zero baseline')
-    if (stop is None or stop.source != CommandEnvelope.SOURCE_SAFE_STOP
-            or any((stop.twist.linear.x, stop.twist.linear.y, stop.twist.angular.z))):
-        raise RuntimeError('R04a current Safety output is not zero SAFE_STOP')
     return {'current_native_publisher_instance_id':state.applied_final_publisher_instance_id,
         'current_native_publish_sequence':state.applied_final_publish_sequence,
         'proven_post_rejection_zero':proof,
@@ -4857,19 +4893,29 @@ async def training_child(path):
                         raise
                     if packet['case'] == 'R04a':
                         state = io._r04_fault_state
-                        if state['triggered'] != 1 or state['delivered'] != 1:
-                            raise RuntimeError('R04a delayed callback did not finish exactly once') from error
+                        if state['triggered'] != 1 or state['scheduled'] != 1:
+                            raise RuntimeError('R04a fault did not schedule exactly one delayed callback') from error
+                        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+                        expected_error = (isinstance(error, TimeoutError)
+                            or (isinstance(error, RuntimeError)
+                                and str(error) == 'native fault flags='
+                                    + str(SimulationContactState.FAULT_COMMAND_STALE)))
+                        if not expected_error:
+                            raise RuntimeError('R04a step ended outside its timeout/watchdog fail-closed path') from error
+                        await await_r04a_delayed_callback(io, state)
                         await await_r04a_production_rejection(io,
                             deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000))
                         checked = verify_r04_stale_delivery(io, case='R04a')
-                        if not isinstance(error, TimeoutError):
-                            raise RuntimeError('R04a expected the blocked POLICY step to reach its deadline') from error
-                        zero_baseline = verify_r04a_zero_baseline(io, checked=checked)
+                        active = b1.lifecycle.snapshot.active_transition_identity
+                        blocked_step = (active.step_index if active is not None
+                            else b1.lifecycle.snapshot.step_index + 1)
+                        blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
+                        zero_baseline = verify_r04a_zero_baseline(io, checked=blocked)
                         if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
                             raise RuntimeError('R04a POLICY receipt reached native ingress after delay fault')
                         aborted = b1.lifecycle.abort_step('R04a_delayed_noisy_input_rejected')
                         outcome = {'case':'R04a','resets_confirmed':1,'policy_steps_committed':0,
-                            'expected_rejection':True, **checked,
+                            'expected_rejection':True, **checked, **blocked,
                             'safe_stop_applied':True, 'safe_stop_baseline':zero_baseline,
                             'b1_abort_status':str(aborted.status),
                             'exception':repr(error),'completed_ns':time.monotonic_ns()}
