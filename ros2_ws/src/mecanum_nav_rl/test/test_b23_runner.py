@@ -3663,7 +3663,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         history.append((event, facts))
         if event == 'POLICY_STEP_COMPLETE' and timing == 'late_publish': clock.ns = 3_000_000_000
     value.emit = emit
+    bind_times = []
     async def transact(operation, **fields):
+        bind_times.append(clock.ns)
         history.append(('bind', operation))
         req, res = Control.Request(), Control.Response()
         req.operation = operation; req.pending_step_index = fields['pending_step_index']
@@ -3716,8 +3718,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         final_publisher_instance_id=55, final_command=(0.,0.,0.)) if sequence == 3 else None
     pending = NS(step_index=1, transition_id='actual-b1-token')
     commit_calls = []
+    issue_times = []
     def record(envelope, *, action_barrier_ns):
         nonlocal minimum_cutoff
+        issue_times.append(clock.ns)
         history.append(('issued', envelope.sequence))
         assert history[-2][0] == 'publish'
         assert action_barrier_ns <= envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec
@@ -3765,14 +3769,16 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if i > issued and row == ('hold', False))
     assert stream_off < bind < issued < stream_on_after_issue < hold_off_after_issue
     envelope = next(row[1] for row in history if row[0] == 'publish')
-    aligned = next((row[1] for row in history
-        if row[0] == 'POLICY_ISSUANCE_PHASE_ALIGNED'), None)
-    assert aligned is not None, f'POLICY issuance was not aligned to scan phase; history={history!r}'
-    aligned_index = next(i for i, row in enumerate(history)
-        if row[0] == 'POLICY_ISSUANCE_PHASE_ALIGNED')
-    bind_index = next(i for i, row in enumerate(history) if row[0] == 'bind')
-    assert aligned_index < bind_index, f'phase alignment must precede pending bind; history={history!r}'
-    assert envelope.header.stamp.sec * 10**9 + envelope.header.stamp.nanosec > aligned['boundary_ns']
+    frozen = next(row[1] for row in history
+        if isinstance(row, tuple) and len(row) == 2 and row[0] == 'STEP_STREAMS_FROZEN')
+    next_scan_boundary = ((frozen['application_stamp_ns'] // 100_000_000) + 1) * 100_000_000
+    assert bind_times and bind_times[0] - frozen['steady_ns'] < 100_000_000, (
+        f'pending bind waited through an unnecessary scan phase and consumed the native zero watchdog budget: {history!r}')
+    assert issue_times and issue_times[0] - frozen['steady_ns'] < 100_000_000, (
+        f'POLICY issuance exceeded the unchanged native zero watchdog budget: {history!r}')
+    issued_ros_ns = envelope.header.stamp.sec * 10**9 + envelope.header.stamp.nanosec
+    assert issued_ros_ns < next_scan_boundary, (
+        f'POLICY was not staged before the next scan cutoff: {history!r}')
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing=='r09b_callback' else .08)
     assert len([row for row in history if row[0] == 'publish']) == 1
@@ -3791,37 +3797,6 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert all(row[0] != 'align_policy_boundary' for row in history)
     assert ('stream', False) in history  # only pending-step freeze before bind
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
-
-
-@pytest.mark.parametrize('before_ros_ns', [
-    1_000_000_000,
-    1_090_000_000,
-    1_100_000_000,
-])
-def test_policy_phase_alignment_waits_past_next_scan_boundary(before_ros_ns):
-    value, clock = worker()
-    clock.ns = before_ros_ns
-    value.ros_now = clock.now
-    value.safety = NS(local_training=NS(scan_period_ns=100_000_000))
-    events = []
-    value.emit = lambda name, facts: events.append((name, facts))
-    deadline_ns = before_ros_ns + 120_000_000
-    value.deadline_ns = deadline_ns
-
-    aligned = asyncio.run(value.align_policy_issuance_after_scan_boundary(
-        deadline_ns=deadline_ns))
-
-    expected_boundary_ns = (before_ros_ns // 100_000_000 + 1) * 100_000_000
-    assert aligned['ros_ns'] > expected_boundary_ns
-    assert aligned['steady_ns'] == clock.ns
-    assert clock.ns > before_ros_ns
-    assert events == [('POLICY_ISSUANCE_PHASE_ALIGNED', {
-        'before_ros_ns':before_ros_ns,
-        'boundary_ns':expected_boundary_ns,
-        'aligned_ros_ns':aligned['ros_ns'],
-        'scan_period_ns':100_000_000,
-        'steady_ns':aligned['steady_ns'],
-    })]
 
 
 def test_r02e_old_token_sample_is_built_after_close_before_new_bind():
@@ -3885,12 +3860,7 @@ def test_r02e_old_token_sample_is_built_after_close_before_new_bind():
         io.ingress.last_published_sample_sequence = 30
         io.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
 
-    async def align_after_close(*, deadline_ns):
-        held_events.append(('POLICY_ISSUANCE_PHASE_ALIGNED', {
-            'boundary_ns':1_000_000_000,'steady_ns':io.now()}))
-
     io.freeze_step_streams = freeze_closing_old_slot
-    io.align_policy_issuance_after_scan_boundary = align_after_close
     io.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
         held_events.append(('stream',enabled))))
 

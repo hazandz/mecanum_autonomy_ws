@@ -3876,40 +3876,6 @@ class TrainingWorkerIO:
             'application_received_ns': application['received_ns'],
             'steady_ns': self.now()})
 
-    async def align_policy_issuance_after_scan_boundary(self, *, deadline_ns):
-        """Place the pending POLICY transaction after the next scan cutoff.
-
-        The SAFE_STOP stream remains active during this bounded wait. Merely
-        observing that the current time is after the *previous* cutoff leaves
-        bind/admission work free to consume the remaining scan period; the
-        accepted Safety envelope can then cross the next cutoff before the
-        final publisher receives it. Starting just after the next cutoff
-        leaves that work on the fresh-scan side of the following period.
-        """
-        adapter = self.safety.local_training
-        period_ns = getattr(adapter, 'scan_period_ns', None)
-        if type(period_ns) is not int or period_ns <= 0:
-            raise RuntimeError('POLICY scan phase alignment requires a valid Safety scan period')
-        before_ros_ns = self.ros_now()
-        boundary_ns = (before_ros_ns // period_ns + 1) * period_ns
-
-        def observe_post_boundary():
-            ros_ns = self.ros_now()
-            return ({'ros_ns': ros_ns, 'steady_ns': self.now()}
-                if ros_ns > boundary_ns else None)
-
-        crossed = await self.until(observe_post_boundary,
-            deadline_ns=deadline_ns,
-            phase='POLICY phase after next scan boundary')
-        aligned_ros_ns, aligned_steady_ns = crossed['ros_ns'], crossed['steady_ns']
-        self.emit('POLICY_ISSUANCE_PHASE_ALIGNED', {
-            'before_ros_ns': before_ros_ns,
-            'boundary_ns': boundary_ns,
-            'aligned_ros_ns': aligned_ros_ns,
-            'scan_period_ns': period_ns,
-            'steady_ns': aligned_steady_ns})
-        return {'ros_ns': aligned_ros_ns, 'steady_ns': aligned_steady_ns}
-
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -3983,10 +3949,12 @@ class TrainingWorkerIO:
                 self.safety.local_training, measurement_fault_case, self.emit)
             self.emit('B23_R04_FAULT_ARMED', {'case':measurement_fault_case,
                 'step_deadline_ns':deadline, 'steady_ns':self.now()})
-        # Align while the applied SAFE_STOP stream is still running. Waiting
-        # after binding would consume the unchanged native command watchdog
-        # budget while the pending slot correctly forbids a closing SAFE_STOP.
-        await self.align_policy_issuance_after_scan_boundary(deadline_ns=deadline)
+        # Begin the pending transaction immediately after the exact SAFE_STOP
+        # application above. Waiting for another scan boundary can place the
+        # first eligible Safety tick on that cutoff: it is correctly deferred,
+        # while the pending slot forbids a closing SAFE_STOP and the native
+        # 100 ms command watchdog continues to run. The publisher and Safety
+        # keep their existing scan-cutoff and freshness checks.
         if prebind_admission:
             # Build the held input after native has observed the closing
             # inhibited sample, but before binding the new slot. This keeps
