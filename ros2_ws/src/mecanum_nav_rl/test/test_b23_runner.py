@@ -1381,6 +1381,8 @@ def test_r07d_restart_poll_accepts_only_stale_and_exact_gate_invalidation(tmp_pa
     io.until=fake_until
     response=asyncio.run(io.request_owned_restart(case='R07d',target_role='final'))
     assert response['old_process']['group_absent'] is True
+    assert runner.r07d_restart_fault_flags()==(SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE|SimulationContactState.FAULT_COMMAND_STALE)
 
 
 def test_r07d_process_identity_ignores_volatile_proc_state_but_pins_stable_fields():

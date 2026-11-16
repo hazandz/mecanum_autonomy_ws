@@ -388,9 +388,9 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
                                          inhibit_ack, new_receipts):
     """Require a distinct unbound final process while native output stays zero/inhibited."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     publisher_id = int(replacement['publisher_instance_id'])
     fault_flags = backend_status.get('fault_flags')
+    expected_fault_flags = (0, *r07d_restart_fault_flags())
     if (old_process.get('group_absent') is not True
             or replacement.get('pid') == old_process.get('pid')
             or publisher_id == old_publisher_instance_id
@@ -400,9 +400,7 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
     if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
             or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
             or type(fault_flags) is not int
-            or fault_flags not in (0, SimulationContactState.FAULT_COMMAND_STALE,
-                    SimulationContactState.FAULT_COMMAND_SEQUENCE
-                    | SimulationContactState.FAULT_COMMAND_STALE)
+            or fault_flags not in expected_fault_flags
             or not backend_status.get('local_zero_override')
             or not backend_status.get('actuator_inhibited')):
         raise RuntimeError('R07d backend zero/inhibit was not confirmed after publisher restart')
@@ -411,6 +409,13 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
         'native_fault_flags':fault_flags,
         'native_zero_inhibited':True,'old_publisher_instance_id':old_publisher_instance_id,
         'replacement_publisher_instance_id':publisher_id}
+
+
+def r07d_restart_fault_flags():
+    """Only watchdog stale and its receipt-gate sequence invalidation are expected."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    return (SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
 
 
 def pin_initial_final_publisher_identity(descriptor_base, boot, final_pid):
@@ -2570,11 +2575,7 @@ class TrainingWorkerIO:
             # unchanged native watchdog latches stale. Receipt-gate invalidation
             # can additionally latch sequence fault; accept only these two
             # exact fail-closed states while collecting the owned restart ACK.
-            from mecanum_nav_rl_interfaces.msg import SimulationContactState
-            expected_native_fault_flags = (
-                SimulationContactState.FAULT_COMMAND_STALE,
-                SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE)
+            expected_native_fault_flags = r07d_restart_fault_flags()
         until_args = {'deadline_ns':self.deadline_ns,
             'phase':case + ' owned process restart ACK'}
         if expected_native_fault_flags is not None:
@@ -5084,6 +5085,7 @@ async def training_child(path):
                 replacement['binding_ack_exists'] = False
             inhibit_ack = await io.control.inhibit(
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
+            expected_fault_flags = r07d_restart_fault_flags()
             state = await io.until(lambda: io.ingress.backend_state
                 if io.ingress.backend_state is not None
                 and io.ingress.backend_state.received_steady_ns > inhibit_ack.observed_steady_ns
@@ -5091,7 +5093,7 @@ async def training_child(path):
                 and io.ingress.backend_state.actuator_inhibited else None,
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07d post-restart native zero/inhibit status',
-                expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
+                expected_native_fault_flags=expected_fault_flags)
             status = {'backend_instance_id':int(state.backend_instance_id),
                 'local_zero_override':bool(state.local_zero_override),
                 'actuator_inhibited':bool(state.actuator_inhibited),
