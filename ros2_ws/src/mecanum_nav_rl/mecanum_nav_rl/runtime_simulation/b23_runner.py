@@ -2839,6 +2839,69 @@ class TrainingWorkerIO:
             zero_receipt=zero_receipt, zero_applied_state=policy_applied_state,
             zero_applied_received_ns=applied_received_ns)
 
+    async def wait_r09b_pending_step_zero_witness(self, token, *, deadline_ns):
+        """Join the pinned SAFE_STOP application, not a latest-value iteration.
+
+        Physics status keeps advancing after a receipt is applied, so the
+        latest status's physics iteration is normally newer than the retained
+        application iteration. The receipt-keyed immutable application is the
+        proof; the latest status only confirms the same zero remains active.
+        """
+        from mecanum_nav_rl_interfaces.msg import (
+            FinalIssuedCommandReceipt, LocalTrainingSafetyInput,
+        )
+        from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+        ack = self.ingress.pending_ack
+        if (ack is None or ack.request.operation != Control.Request.OP_BIND_PENDING_STEP
+                or ack.request.pending_step_index != token.step_index
+                or ack.request.pending_transition_id != token.transition_id
+                or ack.response.result != Control.Response.RESULT_APPLIED
+                or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                or not any(ack.response.pending_admission_token)):
+            raise RuntimeError('R09b fixture task lacks the exact bound pending B1 slot')
+
+        def exact_zero_witness():
+            receipt = self.final.last_publication
+            latest = self.ingress.backend_state
+            if (receipt is None or latest is None
+                    or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+                    or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z))
+                    or latest.fault_flags or latest.paused or latest.actuator_inhibited
+                    or latest.local_zero_override or not latest.applied_receipt_valid
+                    or latest.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                    or latest.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or latest.backend_instance_id != self.descriptor['backend_instance_id']
+                    or latest.session_id != self.descriptor['session_id']
+                    or latest.config_hash != self.descriptor['config_hash']
+                    or not latest.coverage_complete or not latest.contact_source_healthy
+                    or latest.required_collision_mask == 0
+                    or latest.required_collision_mask != latest.observed_collision_mask
+                    or latest.contact_active):
+                return None
+            application = self.ingress.application_for_receipt(receipt)
+            if application is None:
+                return None
+            state = application.get('state')
+            received_ns = application.get('received_ns')
+            now = self.now()
+            if (state is None or type(received_ns) is not int
+                    or not 0 <= now - received_ns <= 500_000_000
+                    or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                    or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or state.backend_instance_id != self.descriptor['backend_instance_id']
+                    or state.session_id != self.descriptor['session_id']
+                    or state.config_hash != self.descriptor['config_hash']
+                    or state.fault_flags or state.paused or state.actuator_inhibited
+                    or state.local_zero_override or not state.coverage_complete
+                    or not state.contact_source_healthy or state.contact_active):
+                return None
+            return receipt, state, received_ns
+
+        return await self.until(exact_zero_witness, deadline_ns=deadline_ns,
+            phase='R09b exact applied SAFE_STOP zero before fixture task')
+
     async def align_r09b_application_cutoff(self, b1, *, policy_receipt,
                                             minimum_cutoff_ns, deadline_ns):
         """Pin an applied zero and its following receipt around a B1 cutoff.
@@ -4688,38 +4751,9 @@ async def training_child(path):
             try:
                 async def move_fixture_before_policy_issuance(deadline_ns, token, barrier_ns):
                     nonlocal fixture_moved
-                    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
-                    def exact_zero_witness():
-                        receipt = io.final.last_publication
-                        state = io.ingress.backend_state
-                        received_ns = io.ingress.backend_received_ns
-                        if (receipt is None or state is None or type(received_ns) is not int
-                                or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
-                                or receipt.final_publisher_instance_id != io.final.publisher_instance_id
-                                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
-                                    receipt.final_command.angular.z))
-                                or not state.applied_receipt_valid or state.local_zero_override
-                                or state.fault_flags or state.paused or state.actuator_inhibited
-                                or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
-                                or state.applied_final_publish_sequence != receipt.final_publish_sequence
-                                or state.applied_physics_iteration == 0
-                                or state.applied_physics_iteration != state.physics_iteration
-                                or (int(state.applied_sim_stamp.sec) * 1_000_000_000
-                                    + int(state.applied_sim_stamp.nanosec)
-                                    != int(state.header.stamp.sec) * 1_000_000_000
-                                    + int(state.header.stamp.nanosec))
-                                or state.backend_instance_id != io.descriptor['backend_instance_id']
-                                or state.session_id != io.descriptor['session_id']
-                                or state.config_hash != io.descriptor['config_hash']
-                                or not state.coverage_complete or not state.contact_source_healthy
-                                or state.required_collision_mask == 0
-                                or state.required_collision_mask != state.observed_collision_mask
-                                or state.contact_active):
-                            return None
-                        return receipt, state, received_ns
-                    receipt, applied_state, applied_received_ns = await io.until(
-                        exact_zero_witness, deadline_ns=deadline_ns,
-                        phase='R09b exact applied SAFE_STOP zero before fixture task')
+                    receipt, applied_state, applied_received_ns = (
+                        await io.wait_r09b_pending_step_zero_witness(token,
+                            deadline_ns=deadline_ns))
                     # Once the RPC is submitted, its result can be uncertain on
                     # timeout. Always attempt the exact restore in finalization.
                     fixture_moved = True

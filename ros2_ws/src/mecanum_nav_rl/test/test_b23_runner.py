@@ -592,6 +592,55 @@ def test_r09b_contact_pulse_is_captured_and_fixture_cleared_before_cutoff():
     assert len(batches) == 0
 
 
+def test_r09b_pending_step_uses_exact_zero_application_not_latest_physics_iteration():
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    from mecanum_nav_rl_interfaces.msg import (
+        FinalIssuedCommandReceipt, LocalTrainingSafetyInput, SimulationContactState,
+    )
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+
+    def state(iteration):
+        value=SimulationContactState()
+        value.backend_instance_id=12; value.session_id='session-1'; value.config_hash='c'*64
+        value.applied_receipt_valid=True; value.local_zero_override=False
+        value.applied_final_publisher_instance_id=34; value.applied_final_publish_sequence=88
+        value.applied_physics_iteration=100; value.physics_iteration=iteration
+        value.applied_sim_stamp.sec=1; value.applied_sim_stamp.nanosec=0
+        value.header.stamp.sec=1; value.header.stamp.nanosec=(iteration-100)*10_000_000
+        value.coverage_complete=True; value.contact_source_healthy=True
+        value.required_collision_mask=3; value.observed_collision_mask=3
+        value.fault_flags=0; value.paused=False; value.actuator_inhibited=False
+        value.contact_active=False
+        return value
+
+    receipt=FinalIssuedCommandReceipt()
+    receipt.final_publisher_instance_id=34; receipt.final_publish_sequence=88
+    receipt.source=receipt.SOURCE_SAFE_STOP
+    latest=state(104)
+    applied=state(100)
+    request=Control.Request(); request.operation=request.OP_BIND_PENDING_STEP
+    request.pending_step_index=1; request.pending_transition_id='transition-1'
+    response=Control.Response(); response.result=response.RESULT_APPLIED
+    response.pending_admission_token=[7]*16
+    io=object.__new__(TrainingWorkerIO)
+    io.descriptor={'backend_instance_id':12,'session_id':'session-1','config_hash':'c'*64}
+    io.final=NS(publisher_instance_id=34,last_publication=receipt)
+    io.ingress=NS(pending_ack=NS(request=request,response=response),
+        admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
+        backend_state=latest,application_for_receipt=lambda found: (
+            {'state':applied,'received_ns':950_000_000} if found is receipt else None))
+    io.now=lambda:1_000_000_000
+    async def until(predicate,*,deadline_ns,phase):
+        assert deadline_ns==2_000_000_000
+        assert phase=='R09b exact applied SAFE_STOP zero before fixture task'
+        return predicate()
+    io.until=until
+    token=NS(step_index=1,transition_id='transition-1')
+    result=asyncio.run(io.wait_r09b_pending_step_zero_witness(token,deadline_ns=2_000_000_000))
+    assert result==(receipt,applied,950_000_000)
+
+
 @pytest.mark.parametrize('source_name', ['policy', 'safe_stop'])
 def test_r09b_restore_accepts_only_fresh_zero_witness_and_current_zero_output(source_name):
     import asyncio
