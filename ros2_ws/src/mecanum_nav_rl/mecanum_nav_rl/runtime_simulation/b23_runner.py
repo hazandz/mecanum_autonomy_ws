@@ -400,7 +400,9 @@ def verify_r07d_final_publisher_restart(*, old_publisher_instance_id,
     if (inhibit_ack.request.operation != Control.Request.OP_INHIBIT
             or inhibit_ack.response.result != Control.Response.RESULT_APPLIED
             or type(fault_flags) is not int
-            or fault_flags not in (0, SimulationContactState.FAULT_COMMAND_STALE)
+            or fault_flags not in (0, SimulationContactState.FAULT_COMMAND_STALE,
+                    SimulationContactState.FAULT_COMMAND_SEQUENCE
+                    | SimulationContactState.FAULT_COMMAND_STALE)
             or not backend_status.get('local_zero_override')
             or not backend_status.get('actuator_inhibited')):
         raise RuntimeError('R07d backend zero/inhibit was not confirmed after publisher restart')
@@ -2565,11 +2567,14 @@ class TrainingWorkerIO:
         expected_native_fault_flags = None
         if case == 'R07d':
             # Stopping the final publisher intentionally removes receipts; the
-            # unchanged native watchdog must latch stale and keep zero closed.
-            # Accept only that exact fail-closed flag while the owned restart
-            # response is being collected.
+            # unchanged native watchdog latches stale. Receipt-gate invalidation
+            # can additionally latch sequence fault; accept only these two
+            # exact fail-closed states while collecting the owned restart ACK.
             from mecanum_nav_rl_interfaces.msg import SimulationContactState
-            expected_native_fault_flags = SimulationContactState.FAULT_COMMAND_STALE
+            expected_native_fault_flags = (
+                SimulationContactState.FAULT_COMMAND_STALE,
+                SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)
         until_args = {'deadline_ns':self.deadline_ns,
             'phase':case + ' owned process restart ACK'}
         if expected_native_fault_flags is not None:

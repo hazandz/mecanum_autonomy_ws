@@ -1319,6 +1319,13 @@ def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
         backend_status={**backend,'fault_flags':SimulationContactState.FAULT_COMMAND_STALE},
         inhibit_ack=inhibit,new_receipts=[])
     assert expected_watchdog['native_fault_flags'] == SimulationContactState.FAULT_COMMAND_STALE
+    expected_gate_invalidation = verify_r07d_final_publisher_restart(
+        old_publisher_instance_id=44,old_process=old,replacement=replacement,
+        backend_status={**backend,'fault_flags':(
+            SimulationContactState.FAULT_COMMAND_SEQUENCE
+            | SimulationContactState.FAULT_COMMAND_STALE)},
+        inhibit_ack=inhibit,new_receipts=[])
+    assert expected_gate_invalidation['native_fault_flags'] == 6
     with pytest.raises(RuntimeError, match='replacement/binding boundary'):
         verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
             old_process=old,replacement={**replacement,'publisher_instance_id':44},
@@ -1333,6 +1340,47 @@ def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
             old_process=old,replacement=replacement,
             backend_status={**backend,'fault_flags':SimulationContactState.FAULT_COMMAND_SEQUENCE},
             inhibit_ack=inhibit,new_receipts=[])
+    with pytest.raises(RuntimeError, match='zero/inhibit'):
+        verify_r07d_final_publisher_restart(old_publisher_instance_id=44,
+            old_process=old,replacement=replacement,
+            backend_status={**backend,'fault_flags':(
+                SimulationContactState.FAULT_CONTEXT
+                | SimulationContactState.FAULT_COMMAND_STALE)},
+            inhibit_ack=inhibit,new_receipts=[])
+
+
+def test_r07d_restart_poll_accepts_only_stale_and_exact_gate_invalidation(tmp_path, monkeypatch):
+    import asyncio
+    import hashlib
+    import json
+    import mecanum_nav_rl.runtime_simulation.b23_runner as runner
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+    identity = {'pid':101,'uid':1000,'start_ticks':77,'pgid':101,'sid':101,
+        'argv':['python','final','--descriptor','/run/final.json']}
+    monkeypatch.setattr(runner,'process_identity',lambda _pid: identity)
+    request_path=tmp_path/'restart-request.json'; response_path=tmp_path/'restart-response.json'
+    io=object.__new__(runner.TrainingWorkerIO)
+    io.descriptor={'run_id':'B23_R07D_FLAGS','invocation_id':'a'*32,
+        'final_publisher_pid':101,'final_publisher_instance_id':44,
+        'owned_restart_request_path':str(request_path),
+        'owned_restart_response_path':str(response_path)}
+    io.now=lambda:100; io.emit=lambda *_args,**_kwargs:None; io.deadline_ns=1000
+    async def fake_until(predicate,*,deadline_ns,phase,expected_native_fault_flags=None):
+        assert deadline_ns==1000 and phase=='R07d owned process restart ACK'
+        assert expected_native_fault_flags==(SimulationContactState.FAULT_COMMAND_STALE,
+            SimulationContactState.FAULT_COMMAND_SEQUENCE|SimulationContactState.FAULT_COMMAND_STALE)
+        request=json.loads(request_path.read_bytes())
+        response_path.write_text(json.dumps({'schema':'b23_owned_restart_response/v1',
+            'run_id':request['run_id'],'invocation_id':request['invocation_id'],
+            'case':'R07d','target_role':'final',
+            'request_sha256':hashlib.sha256(request_path.read_bytes()).hexdigest(),
+            'old_process':{'identity':identity,'pid':101,'exit_status':0,'group_absent':True},
+            'replacement':{'pid':202,'publisher_instance_id':55},'completed_ns':200}))
+        return predicate()
+    io.until=fake_until
+    response=asyncio.run(io.request_owned_restart(case='R07d',target_role='final'))
+    assert response['old_process']['group_absent'] is True
 
 
 def test_r07d_process_identity_ignores_volatile_proc_state_but_pins_stable_fields():
