@@ -3022,13 +3022,24 @@ class TrainingWorkerIO:
             if record['kind'] not in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
                 continue
             fields = record['fields']
+            try:
+                backend = int(fields['backend'])
+                ingress = int(fields['ingress'])
+                sample = int(fields['sample'])
+            except (KeyError, TypeError, ValueError):
+                self.emit('NATIVE_INPUT_WATERMARK_RECORD_REJECTED', {
+                    'kind':record.get('kind'),
+                    'reason':'incomplete_native_input_identity',
+                    'record_sha256':hashlib.sha256(line).hexdigest(),
+                    'fields':fields})
+                continue
             if (fields['session'] != self.descriptor['session_id']
-                    or int(fields['backend']) != self.descriptor['backend_instance_id']
-                    or int(fields['ingress']) != self.descriptor['coordinator_ingress_instance_id']
+                    or backend != self.descriptor['backend_instance_id']
+                    or ingress != self.descriptor['coordinator_ingress_instance_id']
                     or record['server_leader_pid'] != self.descriptor['server_leader_pid']
                     or record['invocation_id'] != self.descriptor['invocation_id']):
                 raise RuntimeError('native input evidence ownership mismatch')
-            self._native_input_watermark = max(self._native_input_watermark, int(fields['sample']))
+            self._native_input_watermark = max(self._native_input_watermark, sample)
         return self._native_input_watermark
 
     async def freeze_admission(self, *, deadline_ns):
@@ -4381,12 +4392,33 @@ class RunEvidence:
         if event == 'owned_process_output' and facts.get('process') == 'server':
             import re
             text = re.sub(r'\x1b\[[0-9;]*m', '', facts['text'])
-            match = re.search(r'\b(B23_[A-Z_]+)\s+(.*)', text)
-            if match:
-                fields = dict(re.findall(r'(\w+)=([^\s]+)', match[2]))
-                self.append('native-events.jsonl', {'kind': match[1], 'fields': fields,
-                    'raw_record': record, 'server_leader_pid': facts['pid'],
-                    'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()})
+            markers = list(re.finditer(r'\b(B23_[A-Z_]+)\s+', text))
+            if markers:
+                reason = None
+                if len(markers) != 1:
+                    reason = 'multiple_b23_markers_in_owned_output'
+                    fields = {}
+                else:
+                    pairs = re.findall(r'(\w+)=([^\s]+)', text[markers[0].end():])
+                    fields = dict(pairs)
+                    if len(fields) != len(pairs):
+                        reason = 'duplicate_native_event_field'
+                    elif markers[0][1] in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
+                        required = ('session', 'backend', 'ingress', 'sample')
+                        if (any(not fields.get(key) for key in required)
+                                or any(re.fullmatch(r'[0-9]+', fields[key]) is None
+                                       for key in ('backend', 'ingress', 'sample'))):
+                            reason = 'incomplete_native_input_identity'
+                common = {'raw_record': record, 'server_leader_pid': facts['pid'],
+                    'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
+                if reason is not None:
+                    self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
+                        fields={'reason':reason, 'markers':[match[1] for match in markers],
+                            'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
+                        **common))
+                else:
+                    self.append('native-events.jsonl', dict(kind=markers[0][1],
+                        fields=fields, **common))
 
     async def cleanup_publisher(self, batch, deadline):
         """ACK chỉ sau batch đúng ID đã được ghi và các sổ đã flush/fsync."""

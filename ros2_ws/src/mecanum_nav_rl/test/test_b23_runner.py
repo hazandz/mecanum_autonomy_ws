@@ -3280,6 +3280,42 @@ def test_native_ack_corrupt_complete_record_is_not_an_empty_scan(native_reader):
     assert value._native_input_watermark == 0
 
 
+def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_watermark(native_reader, tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+    value, path, record = native_reader
+    sink = RunEvidence(tmp_path, 'parent', run_id='B23_TEST', invocation_id='inv-1')
+    events = []
+    value.emit = lambda name, facts: events.append((name, facts))
+    try:
+        sink.record('owned_process_output', {
+            'process':'server', 'pid':777,
+            'text':('[Msg] B23_SAFETY_INPUT_OBSERVED session=own-session backend='
+                '[Msg] B23_SAFE_STOP_RECEIPT_INGRESS publisher=33 admission=0 '
+                'backend=22 ingress=11 sample=28')})
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        assert [row['kind'] for row in rows] == ['B23_NATIVE_OUTPUT_REJECTED']
+        assert rows[0]['fields']['reason'] == 'multiple_b23_markers_in_owned_output'
+        assert rows[0]['raw_record']['facts']['text'].startswith('[Msg] B23_SAFETY_INPUT_OBSERVED')
+        assert value.read_native_input_watermark() == 0
+    finally:
+        sink.close()
+
+    corrupt = {'kind':'B23_SAFETY_INPUT_OBSERVED',
+        'fields':{'session':'own-session','backend':'[Msg]','ingress':'11','sample':'28[Msg]'},
+        'server_leader_pid':777,'invocation_id':'inv-1'}
+    with path.open('a') as stream:
+        stream.write(json.dumps(corrupt) + '\n')
+    assert value.read_native_input_watermark() == 0
+    assert events[-1][0] == 'NATIVE_INPUT_WATERMARK_RECORD_REJECTED'
+
+    valid = dict(kind='B23_SAFETY_INPUT_OBSERVED',
+        fields=dict(session='own-session', backend='22', ingress='11', sample='9'),
+        server_leader_pid=777, invocation_id='inv-1')
+    with path.open('a') as stream:
+        stream.write(json.dumps(valid) + '\n')
+    assert value.read_native_input_watermark() == 9
+
+
 def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader):
     value, path, record = native_reader
     record['kind'] = 'B23_ADMISSION_ACCEPTED'
