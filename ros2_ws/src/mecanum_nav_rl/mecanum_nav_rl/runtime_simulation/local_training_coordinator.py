@@ -811,6 +811,111 @@ class LocalTrainingB1Adapter:
             reference, odometry, twist, safety_state=safety_state,
             safety_received_ns=safety_received_ns)
 
+    def _goal_settle_zero_receipt_candidate(self, cutoff_ns, identity):
+        """Return retained native proof for the newest zero receipt before cutoff."""
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
+            lifecycle_identity, stamp_ns,
+        )
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+        source = self.ingress
+        max_age_ns = source.profile['b1_receipt_max_age_ms'] * 1_000_000
+        with source.lock:
+            receipts = tuple(source.receipts)
+            receipt_views = dict(source._receipt_views)
+            applications = dict(source._application_bytes)
+            application_received = dict(source._application_received_ns)
+
+        eligible = []
+        for receipt in receipts:
+            if (receipt.lifecycle != identity
+                    or receipt.final_publisher_instance_id != source.final_publisher_id
+                    or receipt.session_id != source.identity.session_id
+                    or receipt.ingress_config_hash != source.identity.config_hash
+                    or receipt.frame_id != 'base_link'
+                    or receipt.source not in (ReceiptSource.POLICY, ReceiptSource.SAFE_STOP)
+                    or not receipt.admission_valid
+                    or receipt.publish_stamp_ns > cutoff_ns
+                    or cutoff_ns - receipt.publish_stamp_ns > max_age_ns
+                    or receipt.final_command != (0.0, 0.0, 0.0)
+                    or receipt_views.get(receipt.final_publish_sequence) != receipt):
+                continue
+            raw = applications.get(receipt.final_publish_sequence)
+            received = application_received.get(receipt.final_publish_sequence)
+            if raw is None or type(received) is not int:
+                continue
+            applied = deserialize_message(raw, SimulationContactState)
+            applied_stamp = stamp_ns(applied.applied_sim_stamp)
+            if (not applied.applied_receipt_valid or applied.local_zero_override
+                    or applied.paused or applied.fault_flags != 0
+                    or applied.actuator_inhibited
+                    or lifecycle_identity(applied) != identity
+                    or applied.session_id != source.identity.session_id
+                    or applied.config_hash != source.identity.config_hash
+                    or applied.backend_instance_id != source.identity.backend_instance_id
+                    or applied.applied_final_publisher_instance_id != source.final_publisher_id
+                    or applied.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or applied.applied_physics_iteration == 0
+                    or applied.applied_physics_iteration != applied.physics_iteration
+                    or applied_stamp != stamp_ns(applied.header.stamp)
+                    or not receipt.publish_stamp_ns <= applied_stamp <= cutoff_ns):
+                continue
+            eligible.append((applied_stamp, receipt.final_publish_sequence,
+                             receipt, received))
+        if not eligible:
+            return None
+        applied_stamp, _sequence, selected, received = max(eligible)
+        if any(item.lifecycle == identity
+               and item.final_publisher_instance_id == source.final_publisher_id
+               and (selected.publish_stamp_ns, selected.final_publish_sequence)
+                   < (item.publish_stamp_ns, item.final_publish_sequence)
+               and item.publish_stamp_ns <= cutoff_ns
+               and any(item.final_command) for item in receipts):
+            return None
+        return selected, applied_stamp, received
+
+    def _goal_settle_zero_receipt_at_cutoff(self, facts, candidate):
+        """Validate receipt freshness and the contemporaneous native zero fact."""
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
+            lifecycle_identity, stamp_ns,
+        )
+
+        if candidate is None:
+            return None
+        receipt, applied_stamp, application_received_ns = candidate
+        source, state = self.ingress, facts['status']
+        max_age_ns = source.profile['b1_receipt_max_age_ms'] * 1_000_000
+        if (state.paused or state.fault_flags != 0
+                or lifecycle_identity(state) != facts['identity']
+                or state.session_id != source.identity.session_id
+                or state.config_hash != source.identity.config_hash
+                or state.backend_instance_id != source.identity.backend_instance_id
+                or receipt.received_steady_ns > facts['steady_now']
+                or facts['steady_now'] - receipt.received_steady_ns > max_age_ns
+                or application_received_ns > facts['steady_now']
+                or stamp_ns(state.header.stamp) != facts['cutoff']):
+            return None
+        if state.local_zero_override:
+            if (not state.actuator_inhibited or state.applied_receipt_valid
+                    or any((state.applied_final_publisher_instance_id,
+                            state.applied_final_publish_sequence,
+                            state.applied_physics_iteration,
+                            stamp_ns(state.applied_sim_stamp)))):
+                return None
+        elif (not state.applied_receipt_valid
+                or state.applied_final_publisher_instance_id != source.final_publisher_id
+                or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                or stamp_ns(state.applied_sim_stamp) != facts['cutoff']
+                or applied_stamp != facts['cutoff']):
+            return None
+        return receipt, {
+            'application_stamp_ns': applied_stamp,
+            'application_received_steady_ns': application_received_ns,
+            'native_zero_override': bool(state.local_zero_override),
+            'native_actuator_inhibited': bool(state.actuator_inhibited),
+        }
+
     def _goal_settle_sample_sequence(self, cutoff_ns, final_facts, final_selection,
                                      final_sample, prior_state, health_continuous):
         """Collect only retained actual scan-aligned samples in this B1 window.
@@ -820,10 +925,6 @@ class LocalTrainingB1Adapter:
         application, Safety state and receipt all bind the same lifecycle and
         cutoff. An unavailable candidate starts a new continuity segment.
         """
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
-            stamp_ns,
-        )
-        from mecanum_nav_rl_interfaces.msg import SimulationContactState
         source = self.ingress
         reset_prior = not health_continuous
         samples = []
@@ -848,21 +949,19 @@ class LocalTrainingB1Adapter:
                         'steady_ns': source.now()})
                     continue
                 pair = pairs[0]
-                status = deserialize_message(pair.backend_bytes,
-                                             SimulationContactState)
-                receipt = next((item for item in source.receipts
-                    if item.final_publish_sequence
-                    == status.applied_final_publish_sequence), None)
+                candidate = self._goal_settle_zero_receipt_candidate(
+                    sample_cutoff, self.binding.lifecycle_identity)
                 safety_candidates = [item for item in source.safety_states
                     if item[0] <= sample_cutoff and item[1] <= source.now()
                     and item[2].reset_epoch == self.binding.lifecycle_identity.reset_epoch
                     and item[2].runtime_generation
                     == self.binding.lifecycle_identity.runtime_generation]
-                if receipt is None or not safety_candidates:
+                if candidate is None or not safety_candidates:
                     reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
-                        'reason': ('applied receipt unavailable' if receipt is None
+                        'reason': ('fresh zero receipt/native application unavailable'
+                                   if candidate is None
                                    else 'no actual Safety state at or before cutoff'),
                         'steady_ns': source.now()})
                     continue
@@ -878,7 +977,8 @@ class LocalTrainingB1Adapter:
                     pair.oracle_received_steady_ns,
                     pair.backend_received_steady_ns,
                     source.lifecycle_received_ns,
-                    receipt.received_steady_ns, safety_received_ns)
+                    candidate[0].received_steady_ns, candidate[2],
+                    safety_received_ns)
                 try:
                     facts = self._joined(sample_cutoff,
                         evaluation_ros_now_ns=sample_cutoff,
@@ -889,24 +989,15 @@ class LocalTrainingB1Adapter:
                         'cutoff_ns': sample_cutoff, 'reason': str(error),
                         'steady_ns': source.now()})
                     continue
-                status = facts['status']
-                applied_stamp = stamp_ns(status.applied_sim_stamp)
-                receipt = next((item for item in source.receipts
-                    if item.final_publish_sequence == status.applied_final_publish_sequence), None)
-                if (not status.applied_receipt_valid or status.local_zero_override
-                        or receipt is None or receipt.lifecycle != facts['identity']
-                        or receipt.final_publisher_instance_id != source.final_publisher_id
-                        or receipt.session_id != source.identity.session_id
-                        or receipt.ingress_config_hash != source.identity.config_hash
-                        or receipt.publish_stamp_ns > applied_stamp
-                        or applied_stamp != sample_cutoff
-                        or receipt.received_steady_ns > facts['steady_now']):
+                selected = self._goal_settle_zero_receipt_at_cutoff(facts, candidate)
+                if selected is None:
                     reset_prior, samples = True, []
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,
-                        'reason': 'exact native application receipt is unavailable',
+                        'reason': 'fresh zero receipt/native zero state is unavailable',
                         'steady_ns': source.now()})
                     continue
+                receipt, zero_evidence = selected
                 safety_candidates = [item for item in source.safety_states
                     if item[0] <= sample_cutoff and item[1] <= facts['steady_now']
                     and item[2].reset_epoch == facts['identity'].reset_epoch
@@ -920,6 +1011,13 @@ class LocalTrainingB1Adapter:
                     continue
                 _safety_stamp, safety_received_ns, safety_state = max(
                     safety_candidates, key=lambda item: (item[0], item[1]))
+                self.emit('GOAL_SETTLE_ZERO_RECEIPT_SELECTED', {
+                    'cutoff_ns': sample_cutoff,
+                    'receipt_key': receipt.receipt_key,
+                    'receipt_publish_stamp_ns': receipt.publish_stamp_ns,
+                    'receipt_received_steady_ns': receipt.received_steady_ns,
+                    **zero_evidence,
+                })
                 try:
                     sample = self._goal_settle_sample_for_exact_cutoff(
                         facts, receipt, safety_state, safety_received_ns)

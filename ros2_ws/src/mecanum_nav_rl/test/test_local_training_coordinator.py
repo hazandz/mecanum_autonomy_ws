@@ -226,6 +226,13 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
         return {**pair_facts[stamp], 'ros_now': evaluation_ros_now_ns,
                 'steady_now': evaluation_steady_now_ns}
     adapter._joined = joined
+    adapter._goal_settle_zero_receipt_candidate = lambda stamp, _identity: (
+        receipt_rows[stamps.index(stamp)], stamp - 5_000_000,
+        receipt_rows[stamps.index(stamp)].received_steady_ns)
+    adapter._goal_settle_zero_receipt_at_cutoff = lambda facts, candidate: (
+        candidate[0], {'application_stamp_ns':candidate[1],
+            'application_received_steady_ns':candidate[2],
+            'native_zero_override':False, 'native_actuator_inhibited':False})
     def make_sample(facts, receipt, safety_state, safety_received_ns):
         return SimpleNamespace(
             timestamp_ns=facts['status'].applied_sim_stamp.sec * 1_000_000_000
@@ -324,6 +331,16 @@ def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
     )
     adapter.binding = SimpleNamespace(lifecycle_identity=identity)
     adapter.emit = lambda name, facts: events.append((name, facts))
+    adapter._goal_settle_zero_receipt_candidate = lambda stamp, _identity: (
+        (next((item for item in receipt_rows
+               if item.publish_stamp_ns < stamp), None), stamp - 1,
+         next((item.received_steady_ns for item in receipt_rows
+               if item.publish_stamp_ns < stamp), None))
+        if any(item.publish_stamp_ns < stamp for item in receipt_rows) else None)
+    adapter._goal_settle_zero_receipt_at_cutoff = lambda facts, candidate: (
+        candidate[0], {'application_stamp_ns':candidate[1],
+            'application_received_steady_ns':candidate[2],
+            'native_zero_override':False, 'native_actuator_inhibited':False})
     def joined(stamp, *, evaluation_ros_now_ns=None,
                evaluation_steady_now_ns=None):
         if stamp == 1_200_000_000:
@@ -378,6 +395,196 @@ def test_goal_settle_window_breaks_continuity_when_exact_pair_is_missing():
         1_300_000_000, 1_400_000_000,
     ]
     assert any(name == 'GOAL_SETTLE_SAMPLE_GAP' for name, _ in events)
+
+
+def test_goal_settle_selects_only_a_fresh_applied_zero_receipt_under_override():
+    """The production selector uses pinned native application bytes, not a fabricated flag."""
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    import threading
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    receipt = SimpleNamespace(final_publish_sequence=7, lifecycle=identity,
+        final_publisher_instance_id=11, source=ReceiptSource.POLICY,
+        session_id='bound-session', ingress_config_hash='a' * 64,
+        publish_stamp_ns=1_000_000_000, received_steady_ns=2_000_000_000,
+        final_command=(0.0, 0.0, 0.0), frame_id='base_link',
+        receipt_key='11:7', admission_valid=True)
+    applied = SimulationContactState()
+    applied.header.stamp.sec = 1; applied.header.stamp.nanosec = 20_000_000
+    applied.session_id = 'bound-session'; applied.config_hash = 'a' * 64
+    applied.backend_instance_id = 13
+    applied.episode_generation = 2; applied.reset_epoch = 3
+    applied.runtime_generation = 4; applied.physics_iteration = 102
+    applied.applied_receipt_valid = True
+    applied.applied_final_publisher_instance_id = 11
+    applied.applied_final_publish_sequence = 7
+    applied.applied_physics_iteration = 102
+    applied.applied_sim_stamp.sec = 1; applied.applied_sim_stamp.nanosec = 20_000_000
+    current = SimulationContactState()
+    current.header.stamp.sec = 1; current.header.stamp.nanosec = 100_000_000
+    current.session_id = 'bound-session'; current.config_hash = 'a' * 64
+    current.backend_instance_id = 13
+    current.episode_generation = 2; current.reset_epoch = 3
+    current.runtime_generation = 4; current.physics_iteration = 110
+    current.local_zero_override = True; current.actuator_inhibited = True
+    source = SimpleNamespace(receipts=[receipt], _receipt_views={7:receipt},
+        _application_bytes={7:serialize_message(applied)},
+        _application_received_ns={7:2_020_000_000},
+        profile={'b1_receipt_max_age_ms':500}, lock=threading.RLock(),
+        identity=SimpleNamespace(session_id='bound-session', config_hash='a'*64,
+                                 backend_instance_id=13), final_publisher_id=11)
+    adapter.ingress = source
+    candidate = adapter._goal_settle_zero_receipt_candidate(1_100_000_000, identity)
+    assert candidate == (receipt, 1_020_000_000, 2_020_000_000)
+    selected = adapter._goal_settle_zero_receipt_at_cutoff({
+        'cutoff':1_100_000_000, 'ros_now':1_100_000_000,
+        'steady_now':2_100_000_000, 'identity':identity, 'status':current,
+    }, candidate)
+    assert selected is not None
+    assert selected[0] is receipt
+    assert selected[1]['native_zero_override'] is True
+    assert selected[1]['native_actuator_inhibited'] is True
+
+
+def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipts():
+    """The production sample sequence retains dense actual cutoffs during native zero hold."""
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    import threading
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    events, evaluation_times = [], {}
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    receipt = SimpleNamespace(final_publish_sequence=7, lifecycle=identity,
+        final_publisher_instance_id=11, source=ReceiptSource.POLICY,
+        session_id='bound-session', ingress_config_hash='a'*64,
+        publish_stamp_ns=1_080_000_000, received_steady_ns=2_080_000_000,
+        final_command=(0.0, 0.0, 0.0), frame_id='base_link',
+        receipt_key='11:7', admission_valid=True)
+
+    def status(stamp, *, applied, override=False):
+        msg = SimulationContactState()
+        msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+        msg.session_id = 'bound-session'; msg.config_hash = 'a'*64
+        msg.backend_instance_id = 13
+        msg.episode_generation = 2; msg.reset_epoch = 3
+        msg.runtime_generation = 4; msg.physics_iteration = stamp // 10_000_000
+        msg.local_zero_override = override
+        msg.actuator_inhibited = override
+        if applied:
+            msg.applied_receipt_valid = True
+            msg.applied_final_publisher_instance_id = 11
+            msg.applied_final_publish_sequence = 7
+            msg.applied_physics_iteration = msg.physics_iteration
+            msg.applied_sim_stamp.sec, msg.applied_sim_stamp.nanosec = divmod(
+                stamp, 1_000_000_000)
+        return msg
+
+    applied = status(1_100_000_000, applied=True)
+    rows = []
+    scans, noisy, pairs, safety = {}, {}, [], []
+    for stamp in (1_100_000_000, 1_200_000_000):
+        current = applied if stamp == 1_100_000_000 else status(
+            stamp, applied=False, override=True)
+        scans[stamp] = SimpleNamespace(received_steady_ns=2_095_000_000 + stamp - 1_100_000_000)
+        noisy[stamp] = SimpleNamespace(received_steady_ns=2_096_000_000 + stamp - 1_100_000_000)
+        pairs.append(SimpleNamespace(stamp_ns=stamp,
+            oracle_received_steady_ns=2_097_000_000 + stamp - 1_100_000_000,
+            backend_received_steady_ns=2_098_000_000 + stamp - 1_100_000_000,
+            backend_bytes=serialize_message(current)))
+        safety.append((stamp, 2_099_000_000 + stamp - 1_100_000_000,
+            SimpleNamespace(reset_epoch=3, runtime_generation=4)))
+        rows.append(current)
+    adapter.ingress = SimpleNamespace(scans=scans, noisy_samples=noisy,
+        physics_pairs=pairs, receipts=[receipt], safety_states=safety,
+        final_publisher_id=11, identity=SimpleNamespace(session_id='bound-session',
+            config_hash='a'*64, backend_instance_id=13),
+        lifecycle_received_ns=2_000_000_000,
+        profile={'b1_receipt_max_age_ms':500}, lock=threading.RLock(),
+        _receipt_views={7:receipt}, _application_bytes={7:serialize_message(applied)},
+        _application_received_ns={7:2_100_000_000}, now=lambda:2_300_000_000)
+    adapter.binding = SimpleNamespace(lifecycle_identity=identity)
+    adapter.emit = lambda name, facts: events.append((name, facts))
+
+    def joined(stamp, *, evaluation_ros_now_ns=None,
+               evaluation_steady_now_ns=None):
+        evaluation_times[stamp] = (evaluation_ros_now_ns, evaluation_steady_now_ns)
+        current = rows[(stamp - 1_100_000_000) // 100_000_000]
+        return {'identity':identity, 'cutoff':stamp,
+            'ros_now':evaluation_ros_now_ns, 'steady_now':evaluation_steady_now_ns,
+            'status':current}
+    adapter._joined = joined
+    def make_goal_sample(facts, chosen, _safety, _received):
+        health = SimpleNamespace(receipt_timestamp_ns=chosen.publish_stamp_ns,
+            receipt_received_steady_ns=chosen.received_steady_ns,
+            evaluation_ros_now_ns=facts['ros_now'],
+            evaluation_steady_now_ns=facts['steady_now'],
+            scan_timestamp_ns=facts['cutoff'],
+            noisy_odometry_timestamp_ns=facts['cutoff'],
+            scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+            oracle_steady_age_ns=0,
+            receipt_steady_age_ns=facts['steady_now']-chosen.received_steady_ns,
+            healthy=lambda:True)
+        return SimpleNamespace(timestamp_ns=facts['cutoff'],
+            received_steady_ns=facts['steady_now'], pose_x_m=0., pose_y_m=0.,
+            body_vx_mps=0., body_vy_mps=0., body_wz_radps=0.,
+            lifecycle_key=(2,3,4), health=health)
+    adapter._goal_settle_sample_for_exact_cutoff = make_goal_sample
+    final = SimpleNamespace(timestamp_ns=1_300_000_000,
+        received_steady_ns=2_250_000_000, pose_x_m=0., pose_y_m=0.,
+        body_vx_mps=0., body_vy_mps=0., body_wz_radps=0., lifecycle_key=(2,3,4),
+        health=SimpleNamespace(receipt_timestamp_ns=1_080_000_000,
+            receipt_received_steady_ns=2_080_000_000,
+            evaluation_ros_now_ns=1_300_000_000,
+            evaluation_steady_now_ns=2_250_000_000,
+            scan_timestamp_ns=1_300_000_000,
+            noisy_odometry_timestamp_ns=1_300_000_000,
+            scan_steady_age_ns=0, noisy_odom_steady_age_ns=0,
+            oracle_steady_age_ns=0, receipt_steady_age_ns=170_000_000,
+            healthy=lambda:True))
+
+    samples, reset_prior = adapter._goal_settle_sample_sequence(
+        1_300_000_000, {}, SimpleNamespace(receipt=receipt), final,
+        SimpleNamespace(last_ros_ns=1_000_000_000), True)
+
+    assert not reset_prior, [event for event in events if event[0] == 'GOAL_SETTLE_SAMPLE_GAP']
+    assert [item.timestamp_ns for item in samples] == [
+        1_100_000_000, 1_200_000_000, 1_300_000_000]
+    selected = [facts for name, facts in events if name == 'GOAL_SETTLE_ZERO_RECEIPT_SELECTED']
+    assert [item['cutoff_ns'] for item in selected] == [1_100_000_000, 1_200_000_000]
+    assert selected[1]['native_zero_override'] is True
+    assert evaluation_times[1_200_000_000] == (1_200_000_000, 2_199_000_000)
+
+
+def test_goal_settle_zero_receipt_candidate_rejects_nonzero_and_stale_commands():
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    import threading
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    identity = SimpleNamespace(episode_generation=2, reset_epoch=3,
+                               runtime_generation=4)
+    receipt = SimpleNamespace(final_publish_sequence=3, lifecycle=identity,
+        final_publisher_instance_id=11, source=ReceiptSource.POLICY,
+        session_id='bound-session', ingress_config_hash='a'*64,
+        publish_stamp_ns=500_000_000, received_steady_ns=1_000_000_000,
+        final_command=(0.1, 0.0, 0.0), frame_id='base_link',
+        receipt_key='11:3', admission_valid=True)
+    source = SimpleNamespace(receipts=[receipt], _receipt_views={3:receipt},
+        _application_bytes={}, _application_received_ns={},
+        profile={'b1_receipt_max_age_ms':500}, lock=threading.RLock(),
+        identity=SimpleNamespace(session_id='bound-session', config_hash='a'*64,
+                                 backend_instance_id=13), final_publisher_id=11)
+    adapter.ingress = source
+    assert adapter._goal_settle_zero_receipt_candidate(1_100_000_000, identity) is None
+    receipt.final_command = (0.0, 0.0, 0.0)
+    receipt.publish_stamp_ns = 500_000_000
+    assert adapter._goal_settle_zero_receipt_candidate(1_100_000_000, identity) is None
 
 
 def test_non_pending_response_cannot_leak_a_token():
