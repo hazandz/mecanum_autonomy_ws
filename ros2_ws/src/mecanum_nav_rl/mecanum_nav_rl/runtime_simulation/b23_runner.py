@@ -1344,9 +1344,16 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
     if case not in ('R02a','R02b') or not expected:
         raise RuntimeError(f'{case} native gate order mismatch: receipt={receipt_ns} admission={admission_ns}')
     admission_to_receipt_ns = receipt_ns - admission_receive_ns
+    receipt_to_admission_ns = admission_ns - receipt_ns
     if case == 'R02b':
-        if not 0 <= admission_to_receipt_ns <= 40_000_000:
-            raise RuntimeError('R02b receipt did not arrive within the 40 ms bounded admission hold')
+        # R02b holds the early Safety admission at the backend until a POLICY
+        # receipt reaches the gate. The contract's 40 ms bound applies to the
+        # receipt waiting for that admission to be accepted, not to the earlier
+        # admission callback waiting for a receipt. Compare native receipt
+        # ingress to gate acceptance so the measured interval is the held
+        # receipt's actual queue residence.
+        if not 0 <= receipt_to_admission_ns <= 40_000_000:
+            raise RuntimeError('R02b native receipt exceeded the 40 ms bounded gate hold')
         held = [row for row in rows if row.get('kind') == 'B23_POLICY_ADMISSION_HELD'
             and int(row.get('fields',{}).get('receive_ns','0')) == admission_receive_ns]
         if not held or int(held[0].get('fields',{}).get('limit_ns','0')) != 40_000_000:
@@ -1354,6 +1361,7 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
     return {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
         'admission_gate_ns':admission_ns,'admission_minus_receipt_ns':admission_ns-receipt_ns,
         'admission_to_receipt_ns':admission_to_receipt_ns,
+        'receipt_to_admission_ns':receipt_to_admission_ns,
         'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
 
 

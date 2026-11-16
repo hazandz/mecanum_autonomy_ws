@@ -2858,30 +2858,32 @@ def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
         verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)
 
 
-def test_r02b_measures_receipt_arrival_not_later_physics_tick(tmp_path):
+def test_r02b_measures_held_receipt_until_native_admission(tmp_path):
     import json
     path=tmp_path/'native-events.jsonl'
     admission_ns=1_000_000_000
     receipt_ns=admission_ns+39_500_000
-    # Gazebo may not run the next physics update until after 40 ms. The
-    # protocol bound concerns when the second input arrived, not when that
-    # later update drained the already-ready callback queue.
+    # Admission ingress precedes the POLICY receipt, and the fault hook holds
+    # it in the backend callback queue. The 40 ms contract is the interval
+    # from POLICY receipt ingress until the gate accepts it with admission,
+    # not the time the earlier admission waited for that receipt.
     rows=[
         {'kind':'B23_POLICY_ADMISSION_HELD','fields':{
             'receive_ns':str(admission_ns),'held_ns':'8_000_000','limit_ns':'40000000'}},
         {'kind':'B23_POLICY_RECEIPT_INGRESS','fields':{
             'step':'1','receive_ns':str(receipt_ns)}},
         {'kind':'B23_ADMISSION_ACCEPTED','fields':{
-            'receive_ns':str(admission_ns),'processed_ns':str(admission_ns+48_000_000)}},
+            'receive_ns':str(admission_ns),'processed_ns':str(receipt_ns+8_000_000)}},
     ]
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     result=verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
     assert result['order']=='receipt_before_admission', result
     assert result['admission_to_receipt_ns']==39_500_000, result
+    assert result['receipt_to_admission_ns']==8_000_000, result
 
-    rows[1]['fields']['receive_ns']=str(admission_ns+40_000_001)
+    rows[2]['fields']['processed_ns']=str(receipt_ns+40_000_001)
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
-    with pytest.raises(RuntimeError,match='within the 40 ms bounded admission hold'):
+    with pytest.raises(RuntimeError,match='40 ms bounded gate hold'):
         verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
 
 
