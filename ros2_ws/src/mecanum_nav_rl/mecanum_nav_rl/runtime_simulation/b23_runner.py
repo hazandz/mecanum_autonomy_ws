@@ -1744,6 +1744,23 @@ def verify_r04a_zero_baseline(io, *, checked):
             or type(proof.get('final_publish_sequence')) is not int
             or proof['publisher_instance_id'] != io.final.publisher_instance_id):
         raise RuntimeError('R04a native zero proof is not bound to the FinalTwistPublisher')
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    expected_faults = (SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+    received_ns = getattr(io.ingress, 'backend_received_ns', None)
+    if (state is not None and state.fault_flags in expected_faults
+            and state.local_zero_override and state.actuator_inhibited
+            and type(received_ns) is int
+            and type(proof.get('native_application_steady_ns')) is int
+            and received_ns >= proof['native_application_steady_ns']):
+        return {'current_native_publish_sequence':None,
+            'current_backend_status_received_ns':received_ns,
+            'native_fault_flags':int(state.fault_flags),
+            'local_zero_override':True, 'actuator_inhibited':True,
+            'proven_post_rejection_zero':proof,
+            'current_safety_source':stop.source,
+            'current_safety_sequence':stop.sequence, 'current_safety_zero':True,
+            'native_zero_mode':'watchdog_emergency_zero_after_applied_receipt'}
     if (state is None or not state.applied_receipt_valid or state.local_zero_override
             or state.fault_flags != 0
             or state.applied_final_publisher_instance_id != io.final.publisher_instance_id

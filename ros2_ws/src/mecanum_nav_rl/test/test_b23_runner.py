@@ -2716,6 +2716,33 @@ def test_r04a_accepts_exact_applied_zero_when_latest_safety_tick_is_ahead():
         verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
 
 
+def test_r04a_accepts_watchdog_zero_after_exact_applied_zero_proof():
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SimulationContactState
+    proof = {'publisher_instance_id':80, 'final_publish_sequence':99,
+        'source_sequence':42, 'native_iteration':151, 'native_stamp_ns':1_510_000_000,
+        'native_application_steady_ns':500}
+    io = NS(final=NS(publisher_instance_id=80),
+        ingress=NS(backend_state=NS(applied_receipt_valid=False,
+            local_zero_override=True, actuator_inhibited=True,
+            fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)),
+            backend_received_ns=600),
+        safety=NS(local_training=NS(last_output=NS(
+            source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=43,
+            twist=NS(linear=NS(x=0., y=0., z=0.),
+                angular=NS(x=0., y=0., z=0.))))))
+
+    result = verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
+
+    assert result['native_zero_mode'] == 'watchdog_emergency_zero_after_applied_receipt'
+    assert result['proven_post_rejection_zero'] == proof
+    assert result['actuator_inhibited'] is True
+    assert result['current_backend_status_received_ns'] == 600
+    io.ingress.backend_state.actuator_inhibited = False
+    with pytest.raises(RuntimeError, match='lost its healthy applied-zero baseline'):
+        verify_r04a_zero_baseline(io, checked={'native_zero_application':proof})
+
+
 def test_r04a_blocked_slot_distinguishes_prebegin_timeout_from_pending_abort():
     lifecycle = NS(snapshot=NS(active_transition_identity=None, step_index=1))
     result = abort_r04a_pending_step_if_active(lifecycle, expected_step_index=2)
