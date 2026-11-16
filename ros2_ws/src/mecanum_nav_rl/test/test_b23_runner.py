@@ -386,14 +386,20 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
         r02b_admission_release_target_ns(now_ns, 0)
 
 
-def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too_short():
+@pytest.mark.parametrize(('initial_ros_ns', 'target_cutoff_ns'), [
+    (3_440_000_000, 3_500_000_000),
+    # The exact boundary is closed: Safety defers a tick stamped at cutoff.
+    (3_500_000_000, 3_500_000_000),
+])
+def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too_short(
+        initial_ros_ns, target_cutoff_ns):
     from mecanum_nav_rl.core.issued_command_cutoff import (
         IssuedCommandReceiptView, ReceiptSource,
     )
     from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
 
     worker = object.__new__(TrainingWorkerIO)
-    clock = {'ros_ns':3_440_000_000, 'steady_ns':50}
+    clock = {'ros_ns':initial_ros_ns, 'steady_ns':50}
     status = NS(fault_flags=0, paused=False, applied_receipt_valid=True,
         applied_final_publisher_instance_id=77, applied_final_publish_sequence=2)
     life = EpisodeLifecycleIdentity(1, 2, 3)
@@ -433,7 +439,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     assert result['state'] is status
     assert result['received_ns']==101
     assert events==[('POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF',{
-        'target_cutoff_ns':3_500_000_000,'zero_publish_sequence':2,
+        'target_cutoff_ns':target_cutoff_ns,'zero_publish_sequence':2,
         'zero_publish_stamp_ns':3_520_000_000,'zero_application_iteration':352,
         'zero_application_stamp_ns':3_520_000_000,'zero_application_received_ns':101,
         'remaining_to_next_cutoff_ns':80_000_000,'steady_ns':100})]
@@ -441,7 +447,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
 
 def test_policy_step_keeps_current_zero_witness_when_full_scan_window_remains():
     worker=object.__new__(TrainingWorkerIO)
-    worker.ros_now=lambda:3_300_000_000
+    worker.ros_now=lambda:3_310_000_000
     worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
     worker.ingress=NS(receipts=[])
     witness={'bound':'actual zero witness'}

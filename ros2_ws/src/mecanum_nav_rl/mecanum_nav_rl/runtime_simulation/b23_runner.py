@@ -3921,7 +3921,11 @@ class TrainingWorkerIO:
         adapter = self.safety.local_training
         period_ns = adapter.scan_period_ns
         now_ros_ns = self.ros_now()
-        remaining_ns = period_ns - (now_ros_ns % period_ns)
+        phase_ns = now_ros_ns % period_ns
+        # Safety defers a normal tick stamped exactly on a cutoff. Treat that
+        # instant as the closed edge of the current window, not as a fresh
+        # full period; only a strictly post-cutoff tick opens the next window.
+        remaining_ns = period_ns - phase_ns if phase_ns else 0
         # Measured R09a path needed about 60 ms from pending bind through the
         # first eligible final receipt. Keep a 10 ms margin to the 100 ms scan
         # boundary; this does not alter the native 100 ms watchdog.
