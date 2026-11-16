@@ -2086,7 +2086,6 @@ class TrainingWorkerIO:
                     # đưa nó vào session/ingress đã bị invalidation.
                     return message
                 if (topic == '/mecanum/local_training/backend_state'
-                        and 'owned_backend_restart' in getattr(self, 'fault_hooks', ())
                         and self._r07c_restart_started_ns is not None
                         and int(message.backend_instance_id) != self.descriptor['backend_instance_id']):
                     status = {'backend_instance_id':int(message.backend_instance_id),

@@ -1323,6 +1323,40 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
                 serialize_message(receipt), {})
 
 
+def test_r07c_callback_records_replacement_backend_without_fault_hook():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from rclpy.serialization import serialize_message
+
+    worker = object.__new__(TrainingWorkerIO)
+    worker.descriptor = {'backend_instance_id':101}
+    worker.fault_hooks = ()
+    worker._r07c_restart_started_ns = 50
+    worker._r07c_replacement_backend_statuses = []
+    worker.now = lambda: 777
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    status = SimulationContactState()
+    status.backend_instance_id = 202
+    status.session_id = 'session-r07c'
+    status.config_hash = 'a'*64
+    status.status_sequence = 12
+    status.physics_iteration = 34
+    status.local_zero_override = True
+    status.actuator_inhibited = True
+    callback_calls = []
+
+    result = worker.observed_callback(SimulationContactState,
+        '/mecanum/local_training/backend_state',
+        lambda message: (callback_calls.append(message), message)[1])(
+            serialize_message(status), {})
+
+    assert callback_calls == []
+    assert result.backend_instance_id == 202
+    assert worker._r07c_replacement_backend_statuses[0]['backend_instance_id'] == 202
+    assert worker._r07c_replacement_backend_statuses[0]['received_ns'] == 777
+    assert events[-1][0] == 'B23_R07C_REPLACEMENT_BACKEND_STATUS'
+
+
 def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
     from nav_msgs.msg import Odometry
     from rclpy.serialization import serialize_message
