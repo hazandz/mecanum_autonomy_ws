@@ -4016,7 +4016,8 @@ def test_r09b_application_cutoff_freezes_zero_and_adds_adjacent_boundary():
 
     assert cutoff == 1_390_000_000
     assert b1.joined == [1_390_000_000]
-    assert io.stream == [False, True, False]
+    assert io.stream == [False, True, False, True]
+    assert io.stream[-1] is True  # zero SAFE_STOP continues during the B1 cutoff commit
     assert io.boundary_added
     assert io.calls[-1][0] == 'R09B_APPLICATION_CUTOFF_BOUNDARY_PINNED'
     selected = select_final_issued_at_cutoff(

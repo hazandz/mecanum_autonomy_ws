@@ -2844,8 +2844,10 @@ class TrainingWorkerIO:
         receipt can therefore be newer than the last native application at a
         scan cutoff. Freeze the zero stream, wait for the exact latest receipt
         to be applied, then collect a paired cutoff after that application and
-        publish the adjacent boundary receipt after the cutoff. All existing
-        freshness, application and B1 cutoff checks remain in force.
+        publish the adjacent boundary receipt after the cutoff. Once the
+        boundary is pinned, resume the held SAFE_STOP stream so the native
+        actuator watchdog remains fed while B1 evaluates the pinned cutoff.
+        Later zero receipts do not change the already selected cutoff evidence.
         """
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import (
@@ -2951,6 +2953,11 @@ class TrainingWorkerIO:
                 'adjacent_publish_stamp_ns':boundary.publish_stamp_ns,
                 'status_sequence':status.status_sequence,
                 'steady_ns':self.now()})
+            # Keep the already asserted POLICY hold and zero-only SAFE_STOP
+            # publication active during B1 commit. Freezing here can let the
+            # native 100 ms actuator watchdog expire while B1 awaits its
+            # cutoff join, even though the adjacent boundary was valid.
+            self.safety.local_training.set_stream_enabled(True)
             return cutoff_ns
         raise TimeoutError('R09b could not align an applied receipt around a B1 cutoff')
 
