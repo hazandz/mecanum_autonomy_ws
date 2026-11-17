@@ -21,6 +21,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r04c_stale_rejection_and_zero,
+    verify_r04c_stale_issuance_commit_rejected,
     verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
@@ -2487,6 +2488,8 @@ def test_r04c_delays_scan_only_after_control_policy_commit_path():
     source = textwrap.dedent(__import__('inspect').getsource(runner_module.training_child))
     assert "R04c stale scan allowed the next POLICY slot" not in source
     assert 'R04c stale scan Safety rejection and applied zero' in source
+    assert 'verify_r04c_stale_issuance_commit_rejected' in source
+    assert 'R04C_B1_STALE_ISSUANCE_COMMIT_REJECTED' in source
     assert 'fresh_recovery_step_index' in source
     assert 'policy_step_index=recovery_step' in source
 
@@ -3034,6 +3037,71 @@ def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join()
     assert result['native_zero_application']['native_application_steady_ns'] == 950
     io.events.pop()
     assert verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800) is None
+
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    io.events.insert(2, ('SAFETY_ACCEPTED', {'candidate_source':CommandEnvelope.SOURCE_POLICY,
+        'candidate_sequence':2,'steady_ns':901}))
+    with pytest.raises(RuntimeError, match='accepted the stale-scan POLICY step'):
+        verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800, step_index=2)
+    io.events.pop(2)
+    io.events.insert(2, ('NATIVE_APPLICATION_JOINED', {'step_index':2,
+        'source_sequence':2,'steady_ns':902}))
+    with pytest.raises(RuntimeError, match='applied POLICY after stale-scan callback'):
+        verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800, step_index=2)
+
+
+def test_r04c_exact_stale_b1_receipt_rejection_is_bound_to_applied_step_and_late_scan():
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+
+    receipt = FinalIssuedCommandReceipt()
+    receipt.step_index = 2
+    receipt.transition_id = 'transition-r04c-2'
+    receipt.source = FinalIssuedCommandReceipt.SOURCE_POLICY
+    receipt.sequence = 2
+    receipt.source_instance_id = 77
+    receipt.final_publisher_instance_id = 88
+    receipt.final_publish_sequence = 65
+    error = ValueError('B1 transition commit rejected: POLICY issuance receipt is stale or invalid')
+    events = [
+        ('policy_adapter_issued', {'step_index':2,'sequence':2,'source_instance_id':77,
+            'transition_id':'transition-r04c-2','steady_ns':100_000_000}),
+        ('policy_final_published', {'step_index':2,'source_sequence':2,
+            'source_instance_id':77,'transition_id':'transition-r04c-2',
+            'steady_ns':150_000_000,'receipt_cdr_hex':serialize_message(receipt).hex()}),
+        ('B1_POLICY_APPLICATION_BOUND', {'step_index':2,
+            'transition_id':'transition-r04c-2','steady_ns':200_000_000}),
+        ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04c',
+            'delivery_ns':800_000_000,'source_stamp_ns':1_000_000_000}),
+        ('b1_transition_committed', {'step_index':1}),
+    ]
+    result = verify_r04c_stale_issuance_commit_rejected(NS(events=events),
+        step_index=2, error=error, error_steady_ns=700_000_000,
+        delayed_delivery=events[3][1])
+    assert result == {
+        'blocked_step_index':2,'transition_id':'transition-r04c-2',
+        'policy_issued_ns':100_000_000,'policy_receipt_ns':150_000_000,
+        'policy_receipt_age_at_rejection_ns':550_000_000,
+        'b1_rejection_observed_ns':700_000_000,
+        'policy_application_ns':200_000_000,'scan_delivery_ns':800_000_000,
+        'scan_source_stamp_ns':1_000_000_000,
+        'b1_commit_rejected':True,'b1_transition_absent':True,
+        'policy_application_preceded_delayed_scan':True}
+
+    with pytest.raises(RuntimeError, match='not proven beyond 500 ms'):
+        verify_r04c_stale_issuance_commit_rejected(NS(events=events),
+            step_index=2, error=error, error_steady_ns=650_000_000,
+            delayed_delivery=events[3][1])
+    wrong_error = ValueError('some other B1 failure')
+    with pytest.raises(RuntimeError, match='not the exact stale-issuance rejection'):
+        verify_r04c_stale_issuance_commit_rejected(NS(events=events),
+            step_index=2, error=wrong_error, error_steady_ns=700_000_000,
+            delayed_delivery=events[3][1])
+    events.append(('b1_transition_committed', {'step_index':2}))
+    with pytest.raises(RuntimeError, match='committed the stale-issuance step'):
+        verify_r04c_stale_issuance_commit_rejected(NS(events=events),
+            step_index=2, error=error, error_steady_ns=700_000_000,
+            delayed_delivery=events[3][1])
 
 
 def test_training_worker_routes_b1_events_through_worker_event_recorder():

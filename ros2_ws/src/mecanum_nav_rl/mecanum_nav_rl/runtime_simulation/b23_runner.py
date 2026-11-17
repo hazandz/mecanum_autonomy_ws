@@ -1660,7 +1660,8 @@ def verify_r04c_next_step_blocked(io, *, step_index, delayed_delivery_ns):
         'b1_transition_absent':True,'native_zero_application':applied_zero}
 
 
-def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns):
+def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns,
+                                         step_index=None):
     """Prove a late scan was rejected and Safety's resulting zero was applied."""
     rejected = next((facts for name, facts in io.events
         if name == 'SAFETY_REJECTED'
@@ -1668,6 +1669,20 @@ def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns):
         and facts.get('steady_ns', 0) >= delayed_delivery_ns), None)
     if rejected is None:
         return None
+    if step_index is not None:
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+        if any(name == 'SAFETY_ACCEPTED'
+                and facts.get('candidate_source') == CommandEnvelope.SOURCE_POLICY
+                and facts.get('candidate_sequence') == step_index
+                and facts.get('steady_ns', 0) >= delayed_delivery_ns
+                for name, facts in io.events):
+            raise RuntimeError('R04c accepted the stale-scan POLICY step after callback delivery')
+        if any(name == 'NATIVE_APPLICATION_JOINED'
+                and facts.get('step_index') == step_index
+                and facts.get('source_sequence') == step_index
+                and facts.get('steady_ns', 0) >= delayed_delivery_ns
+                for name, facts in io.events):
+            raise RuntimeError('R04c applied POLICY after stale-scan callback delivery')
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     for name, facts in io.events:
         if (name != 'NATIVE_APPLICATION_JOINED'
@@ -1699,6 +1714,100 @@ def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns):
             'rejected_steady_ns':rejected['steady_ns'],
             'native_zero_application':applied_zero}
     return None
+
+
+def verify_r04c_stale_issuance_commit_rejected(io, *, step_index, error,
+                                               error_steady_ns, delayed_delivery):
+    """Bind R04c's stale B1 refusal to the exact applied step and late scan.
+
+    A delayed scan can arrive after a valid POLICY application. B1 must still
+    refuse to commit when the original POLICY issuance receipt has aged past
+    its existing 500 ms limit. This is distinct from a slot rejected before
+    publication; callers must separately prove Safety's later stale-scan
+    rejection and native zero application.
+    """
+    expected = 'B1 transition commit rejected: POLICY issuance receipt is stale or invalid'
+    if not isinstance(error, ValueError) or str(error) != expected:
+        raise RuntimeError('R04c B1 failure is not the exact stale-issuance rejection')
+    facts = delayed_delivery
+    if (not isinstance(facts, dict) or facts.get('case') != 'R04c'
+            or type(facts.get('delivery_ns')) is not int
+            or type(facts.get('source_stamp_ns')) is not int):
+        raise RuntimeError('R04c delayed scan evidence is incomplete')
+    issued = [row for name, row in io.events
+        if name == 'policy_adapter_issued' and row.get('step_index') == step_index]
+    if len(issued) != 1:
+        raise RuntimeError('R04c stale commit rejection lacks one exact POLICY issuance')
+    issuance = issued[0]
+    issued_ns = issuance.get('steady_ns')
+    transition_id = issuance.get('transition_id')
+    source_id = issuance.get('source_instance_id')
+    sequence = issuance.get('sequence')
+    if (type(issued_ns) is not int or not transition_id
+            or type(source_id) is not int or sequence != step_index):
+        raise RuntimeError('R04c POLICY issuance identity/timestamp is incomplete')
+    publications = [row for name, row in io.events
+        if name == 'policy_final_published'
+        and row.get('step_index') == step_index
+        and row.get('source_sequence') == sequence
+        and row.get('transition_id') == transition_id
+        and row.get('source_instance_id') == source_id]
+    if not publications:
+        raise RuntimeError('R04c stale commit rejection lacks the exact final receipt')
+    publication = min(publications, key=lambda row: row.get('steady_ns', 0))
+    published_ns = publication.get('steady_ns')
+    if type(published_ns) is not int or published_ns < issued_ns:
+        raise RuntimeError('R04c final receipt timestamp does not follow its issuance')
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    raw_hex = publication.get('receipt_cdr_hex')
+    try:
+        receipt = deserialize_message(bytes.fromhex(raw_hex), FinalIssuedCommandReceipt)
+    except (TypeError, ValueError) as decode_error:
+        raise RuntimeError('R04c final receipt bytes are missing or invalid') from decode_error
+    if (receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY
+            or receipt.sequence != sequence
+            or receipt.source_instance_id != source_id
+            or receipt.transition_id != transition_id
+            or receipt.step_index != step_index):
+        raise RuntimeError('R04c final receipt bytes differ from the pinned POLICY issuance')
+    applications = [row for name, row in io.events
+        if name == 'B1_POLICY_APPLICATION_BOUND'
+        and row.get('step_index') == step_index
+        and row.get('transition_id') == transition_id]
+    if len(applications) != 1:
+        raise RuntimeError('R04c stale commit rejection lacks one bound B1 application')
+    applied_ns = applications[0].get('steady_ns')
+    if (type(applied_ns) is not int or applied_ns < published_ns
+            or applied_ns >= facts['delivery_ns']):
+        raise RuntimeError('R04c POLICY application is not ordered before the delayed scan')
+    if type(error_steady_ns) is not int or error_steady_ns <= 0:
+        raise RuntimeError('R04c stale B1 rejection has no monotonic observation time')
+    receipt_age_ns = error_steady_ns - published_ns
+    if receipt_age_ns <= 500_000_000:
+        raise RuntimeError('R04c B1 receipt rejection is not proven beyond 500 ms')
+    if any(name == 'b1_transition_committed' and row.get('step_index') == step_index
+            for name, row in io.events):
+        raise RuntimeError('R04c B1 committed the stale-issuance step')
+    return {'blocked_step_index':step_index, 'transition_id':transition_id,
+        'policy_issued_ns':issued_ns, 'policy_receipt_ns':published_ns,
+        'policy_receipt_age_at_rejection_ns':receipt_age_ns,
+        'b1_rejection_observed_ns':error_steady_ns,
+        'policy_application_ns':applied_ns, 'scan_delivery_ns':facts['delivery_ns'],
+        'scan_source_stamp_ns':facts['source_stamp_ns'],
+        'b1_commit_rejected':True, 'b1_transition_absent':True,
+        'policy_application_preceded_delayed_scan':True}
+
+
+async def await_r04c_stale_scan_zero(io, *, delayed_delivery_ns, step_index):
+    """Resume the real Safety timer and require stale-scan rejection plus applied zero."""
+    adapter = io.safety.local_training
+    adapter.set_policy_hold(True)
+    adapter.set_stream_enabled(True)
+    return await io.until(lambda: verify_r04c_stale_rejection_and_zero(io,
+            delayed_delivery_ns=delayed_delivery_ns, step_index=step_index),
+        deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+        phase='R04c production stale-scan rejection and applied SAFE_STOP zero')
 
 
 def abort_r04a_pending_step_if_active(lifecycle, *, expected_step_index,
@@ -5877,6 +5986,7 @@ async def training_child(path):
                     elif packet['case'] == 'R04c':
                         blocked_step = transition.transition_identity.step_index + 1
                         blocked_step_timeout = None
+                        stale_commit_rejection = None
                         try:
                             await io.policy_step(b1, (0.25, 0., 0.),
                                 measurement_fault_case=followup_fault_case)
@@ -5900,6 +6010,40 @@ async def training_child(path):
                             disposition = abort_r04a_pending_step_if_active(
                                 b1.lifecycle, expected_step_index=blocked_step,
                                 reason='R04c_stale_scan_blocked_next_slot')
+                        except ValueError as error:
+                            # The command can be applied before the injected
+                            # scan arrives. B1 must nevertheless reject the
+                            # step if waiting for its exact cutoff lets the
+                            # issuance receipt exceed the fixed 500 ms age.
+                            if str(error) != (
+                                    'B1 transition commit rejected: POLICY issuance receipt is stale or invalid'):
+                                raise
+                            error_steady_ns = io.now()
+                            state = io._r04_fault_state
+                            await io.until(lambda: state if state['triggered'] == 1
+                                and state['delivered'] == 1 else None,
+                                deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
+                                phase='R04c bounded delayed scan delivery after stale B1 rejection')
+                            delayed = next((facts for name, facts in reversed(io.events)
+                                if name == 'B23_R04_DELIVERY_DELAYED_CALLBACK'
+                                and facts.get('case') == 'R04c'), None)
+                            if (state['triggered'] != 1 or state['delivered'] != 1
+                                    or delayed is None):
+                                raise RuntimeError('R04c delayed scan callback did not complete exactly once') from error
+                            stale_commit_rejection = verify_r04c_stale_issuance_commit_rejected(
+                                io, step_index=blocked_step, error=error,
+                                error_steady_ns=error_steady_ns,
+                                delayed_delivery=delayed)
+                            io.emit('R04C_B1_STALE_ISSUANCE_COMMIT_REJECTED', {
+                                **stale_commit_rejection,
+                                'error':str(error),
+                                'steady_ns':error_steady_ns})
+                            stale_zero = await await_r04c_stale_scan_zero(
+                                io, delayed_delivery_ns=delayed['delivery_ns'],
+                                step_index=blocked_step)
+                            disposition = abort_r04a_pending_step_if_active(
+                                b1.lifecycle, expected_step_index=blocked_step,
+                                reason='R04c_stale_POLICY_issuance_rejected_at_B1')
                         else:
                             # One delayed scan is an out-of-order sample, not a
                             # 650 ms sensor outage: fresh scans may legitimately
@@ -5919,7 +6063,8 @@ async def training_child(path):
                                 raise RuntimeError('R04c delayed scan callback has no evidence')
                             stale_zero = await io.until(
                                 lambda: verify_r04c_stale_rejection_and_zero(io,
-                                    delayed_delivery_ns=delayed['delivery_ns']),
+                                    delayed_delivery_ns=delayed['delivery_ns'],
+                                    step_index=blocked_step),
                                 deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                                 phase='R04c stale scan Safety rejection and applied zero')
                             recovery_step = blocked_step + 1
@@ -5948,6 +6093,15 @@ async def training_child(path):
                                 'safe_stop_applied':True,
                                 'b1_step_disposition':disposition,
                                 'blocked_step_timeout':blocked_step_timeout,
+                                'completed_ns':time.monotonic_ns()}
+                        elif stale_commit_rejection is not None:
+                            checked = verify_r04_stale_delivery(io, case='R04c')
+                            outcome = {'case':'R04c','resets_confirmed':1,
+                                'policy_steps_committed':1, **checked,
+                                **stale_commit_rejection,
+                                'stale_scan_safety_disposition':stale_zero,
+                                'safe_stop_applied':True,
+                                'b1_step_disposition':disposition,
                                 'completed_ns':time.monotonic_ns()}
                     else:
                         checked = verify_r04_stale_delivery(io, case=packet['case'],
