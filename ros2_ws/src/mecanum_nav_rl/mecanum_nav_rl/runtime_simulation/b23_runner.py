@@ -1604,6 +1604,65 @@ async def await_r04a_post_rejection_zero(io, rejection, *, deadline_ns):
     return result
 
 
+def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
+        run_id, invocation_id, policy_receipts, final_rows, applied_rows,
+        committed_rows, worker_events):
+    """Verify R04b rejected the bound candidate before final publication.
+
+    Adapter issuance records a POLICY candidate delivered to Safety; it is not
+    evidence that the candidate passed Safety or reached the actuator path.
+    This check binds the one expected candidate to the active B1 slot and then
+    requires every downstream ledger to contain no record for that slot.
+    """
+    if transition_identity is None:
+        raise RuntimeError('R04b lost the active B1 transition identity')
+    transition_id = getattr(transition_identity, 'transition_id', None)
+    step_index = getattr(transition_identity, 'step_index', None)
+    lifecycle_identity = getattr(transition_identity, 'identity', None)
+    identity = [getattr(lifecycle_identity, name, None) for name in (
+        'episode_generation', 'reset_epoch', 'runtime_generation')]
+    if (not transition_id or type(step_index) is not int
+            or any(type(value) is not int for value in identity)):
+        raise RuntimeError('R04b active B1 transition identity is incomplete')
+
+    candidates = [row for row in issued_rows
+        if row.get('event') == 'policy_adapter_issued'
+        and row.get('run_id') == run_id
+        and row.get('invocation_id') == invocation_id]
+    if len(candidates) != 1:
+        raise RuntimeError('R04b requires exactly one run-bound adapter candidate')
+    row = candidates[0]
+    facts = row.get('facts', {})
+    if (facts.get('transition_id') != transition_id
+            or facts.get('step_index') != step_index
+            or facts.get('sequence') != step_index
+            or facts.get('identity') != identity
+            or type(facts.get('source_instance_id')) is not int
+            or type(facts.get('steady_ns')) is not int):
+        raise RuntimeError('R04b adapter candidate does not match active B1 slot')
+
+    if any(getattr(receipt, 'source', None) == 1 for receipt in policy_receipts):
+        raise RuntimeError('R04b POLICY receipt reached native ingress')
+    downstream = (final_rows, applied_rows, committed_rows)
+    if any(any(item.get('facts', {}).get('transition_id') == transition_id
+            for item in ledger) for ledger in downstream):
+        raise RuntimeError('R04b rejected POLICY slot reached a downstream ledger')
+    dropped = [(name, event_facts) for name, event_facts in worker_events
+        if name == 'B23_R04_NOISY_ODOMETRY_DROPPED'
+        and event_facts.get('case') == 'R04b'
+        and type(event_facts.get('sample_sequence')) is int
+        and type(event_facts.get('steady_ns')) is int]
+    if len(dropped) != 1 or dropped[0][1]['steady_ns'] < facts['steady_ns']:
+        raise RuntimeError('R04b missing-noisy hook is not bound after the active candidate')
+    return {'step_index':step_index, 'transition_id':transition_id,
+        'source_instance_id':facts['source_instance_id'],
+        'identity':identity, 'adapter_candidates':1,
+        'native_policy_receipts':0, 'final_publications':0,
+        'backend_applications':0, 'b1_policy_commits':0,
+        'dropped_sample_sequence':dropped[0][1]['sample_sequence'],
+        'missing_admission_after_drop':True}
+
+
 async def await_r04a_delayed_callback(io, state, *, timeout_ns=1_000_000_000):
     """Wait boundedly for the injected callback after the POLICY attempt stops."""
     deadline_ns = min(io.deadline_ns, io.now() + timeout_ns)
@@ -6183,11 +6242,24 @@ async def training_child(path):
                         if isinstance(error, RuntimeError) and not str(error).startswith('native fault flags='):
                             raise
                         state = io._r04_fault_state
-                        rejection = next((facts for name, facts in io.events
-                            if name == 'SAFETY_REJECTED'
-                            and 'NOISY_OR_ADMISSION_NOT_VALID' in facts.get('reasons', ())), None)
-                        if state['triggered'] == 0 or rejection is None:
-                            raise RuntimeError('R04b timeout lacked dropped noisy inputs and Safety rejection') from error
+                        if state['triggered'] == 0:
+                            raise RuntimeError('R04b timeout lacked dropped noisy input evidence') from error
+                        run_root = Path(packet['run_root'])
+                        issued_rows = (_ledger_rows(run_root, 'policy_adapter_issued.jsonl')
+                            if (run_root/'policy_adapter_issued.jsonl').exists() else [])
+                        verify_r04b_missing_noisy_admission(
+                            issued_rows=issued_rows,
+                            transition_identity=b1.lifecycle.snapshot.active_transition_identity,
+                            run_id=packet['run_id'],
+                            invocation_id=io.descriptor['invocation_id'],
+                            policy_receipts=io.ingress.receipts,
+                            final_rows=(_ledger_rows(run_root, 'policy_final_published.jsonl')
+                                if (run_root/'policy_final_published.jsonl').exists() else []),
+                            applied_rows=(_ledger_rows(run_root, 'policy_backend_applied.jsonl')
+                                if (run_root/'policy_backend_applied.jsonl').exists() else []),
+                            committed_rows=(_ledger_rows(run_root, 'b1_transition_committed.jsonl')
+                                if (run_root/'b1_transition_committed.jsonl').exists() else []),
+                            worker_events=io.events)
                         aborted = b1.lifecycle.abort_step('R04b_noisy_odometry_dropped')
                         native_state = io.ingress.backend_state
                         if isinstance(error, RuntimeError) and (native_state is None
@@ -6208,12 +6280,10 @@ async def training_child(path):
                                 raise RuntimeError('R04b timeout lacks exact native SAFE_STOP application') from error
                         if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
                             raise RuntimeError('R04b POLICY receipt reached the native ingress')
-                        issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
-                        if issued_path.exists() and any(row.strip() for row in issued_path.read_text().splitlines()):
-                            raise RuntimeError('R04b issued POLICY despite missing noisy admission')
                         outcome = {'case':'R04b','resets_confirmed':1,'policy_steps_committed':0,
-                            'expected_rejection':True,'safety_reason':'NOISY_OR_ADMISSION_NOT_VALID',
+                            'expected_rejection':True,'failure_mode':'post-ACK noisy admission was dropped before Safety received it',
                             'dropped_policy_inputs':state['triggered'],
+                            'pre_safety_candidate_verified':True,
                             'native_fault_flags':0 if native_state is None else native_state.fault_flags,
                             'local_zero_override':False if native_state is None else native_state.local_zero_override,
                             'baseline_zero_application_sequence':(native_state.applied_final_publish_sequence

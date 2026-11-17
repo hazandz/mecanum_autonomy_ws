@@ -2467,6 +2467,41 @@ def test_r04_fault_dispatch_uses_bound_safety_callbacks(case, method_name, messa
             message.header.stamp.sec*1_000_000_000+message.header.stamp.nanosec)
 
 
+def test_r04b_accepts_only_bound_pre_safety_candidate_and_no_downstream_effect():
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity, TransitionIdentity
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r04b_missing_noisy_admission
+
+    transition = TransitionIdentity(EpisodeLifecycleIdentity(1, 1, 2), 1,
+        '31005bb2-c071-59b9-b01b-bd9b246f2d9c')
+    issued = [{'event':'policy_adapter_issued','run_id':'RUN-TEST',
+        'invocation_id':'INV-TEST','facts':{'identity':[1,1,2], 'sequence':1,
+            'step_index':1,'source_instance_id':77,'steady_ns':100,
+            'transition_id':transition.transition_id}}]
+    events = [('policy_adapter_issued', issued[0]['facts']),
+        ('B23_R04_NOISY_ODOMETRY_DROPPED', {'case':'R04b','sample_sequence':9,'steady_ns':110})]
+    result = verify_r04b_missing_noisy_admission(issued_rows=issued,
+        transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
+        policy_receipts=[], final_rows=[], applied_rows=[], committed_rows=[],
+        worker_events=events)
+    assert result['adapter_candidates'] == 1
+    assert result['native_policy_receipts'] == result['final_publications'] == 0
+    assert result['backend_applications'] == result['b1_policy_commits'] == 0
+    assert result['dropped_sample_sequence'] == 9
+    assert result['missing_admission_after_drop'] is True
+
+    with pytest.raises(RuntimeError, match='active B1 slot'):
+        verify_r04b_missing_noisy_admission(issued_rows=[{
+            **issued[0], 'facts':{**issued[0]['facts'], 'identity':[1, 9, 2]}}],
+            transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
+            policy_receipts=[], final_rows=[], applied_rows=[], committed_rows=[],
+            worker_events=events)
+    with pytest.raises(RuntimeError, match='downstream ledger'):
+        verify_r04b_missing_noisy_admission(issued_rows=issued,
+            transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
+            policy_receipts=[], final_rows=[{'facts':{'transition_id':transition.transition_id}}],
+            applied_rows=[], committed_rows=[], worker_events=events)
+
+
 def test_r04c_delays_scan_only_after_control_policy_commit_path():
     assert r04_policy_step_fault_plan('R04a') == ('R04a', None)
     assert r04_policy_step_fault_plan('R04b') == ('R04b', None)
