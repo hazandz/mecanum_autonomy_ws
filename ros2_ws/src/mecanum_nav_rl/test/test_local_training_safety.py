@@ -488,9 +488,14 @@ def test_local_safety_node_wires_only_real_local_sources_without_nav2_flags(tmp_
     import sys
     script = r'''
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 import rclpy.node
+class CallbackGroup: pass
+sys.modules['rclpy.callback_groups'] = NS(
+    MutuallyExclusiveCallbackGroup=CallbackGroup,
+    ReentrantCallbackGroup=CallbackGroup)
 class Node:
     def __init__(self, name, **kwargs):
         self.params = {'use_sim_time': True, 'navigation_mode': 'LOCAL_TRAINING'}
@@ -503,7 +508,7 @@ class Node:
     def create_subscription(self, message_type, topic, callback, qos):
         self.subscriptions.append((topic, callback, qos))
     def create_timer(self, period, callback, callback_group=None, clock=None, autostart=True):
-        timer = NS(clock=clock, period=period, callback=callback)
+        timer = NS(clock=clock, period=period, callback=callback, callback_group=callback_group)
         self.timers.append(timer)
         return timer
     def destroy_timer(self, timer): self.timers.remove(timer)
@@ -525,12 +530,15 @@ assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
+assert isinstance(node._local_training_timer_group, CallbackGroup)
+assert node.timers[0].callback_group is node._local_training_timer_group
 assert node.timers[0].callback == node._start_local_training_periodic_timer
 assert node._local_training_phase_timer is node.timers[0] and node._local_training_timer is None
 tick_now[0] = 20_000_000
 node.timers[0].callback()
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
+assert node.timers[0].callback_group is node._local_training_timer_group
 assert node.timers[0].callback == node._tick_local_training_steady
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
 phase = next(fields for event, fields in events if event == 'SAFETY_TIMER_PHASE_STARTED')
@@ -549,6 +557,30 @@ assert ticks == [0, 20_000_000, 100_000_000]
 assert len(overruns) == 1 and overruns[0][1] == {
     'clock':'steady', 'previous_tick_ns':20_000_000, 'current_tick_ns':100_000_000,
     'gap_ns':80_000_000, 'period_ns':20_000_000, 'missed_periods_lower_bound':3}
+
+# Exercise the real main() branch with fake ROS/executor boundaries. LOCAL_TRAINING
+# gets a dedicated worker for its mutually-exclusive steady timer group; NAV2 keeps
+# the existing rclpy.spin path.
+executor_calls = []
+class FakeExecutor:
+    def __init__(self, *, num_threads): executor_calls.append(('init', num_threads))
+    def add_node(self, value): executor_calls.append(('add', value.mode))
+    def spin(self): executor_calls.append(('spin',))
+    def shutdown(self): executor_calls.append(('shutdown',))
+sys.modules['rclpy.executors'] = NS(MultiThreadedExecutor=FakeExecutor)
+module.rclpy.init = lambda args=None: executor_calls.append(('ros_init',))
+module.rclpy.shutdown = lambda: executor_calls.append(('ros_shutdown',))
+module.rclpy.spin = lambda value: executor_calls.append(('single_spin', value.mode))
+class MainNode:
+    def __init__(self, mode): self.mode = mode
+    def get_parameter(self, name): return NS(value=self.mode)
+    def destroy_node(self): executor_calls.append(('destroy', self.mode))
+for mode in ('LOCAL_TRAINING', 'NAV2_BASELINE'):
+    module.SafetySupervisorNode = lambda mode=mode: MainNode(mode)
+    module.main([])
+assert ('init', 2) in executor_calls and ('add', 'LOCAL_TRAINING') in executor_calls
+assert ('single_spin', 'NAV2_BASELINE') in executor_calls
+assert executor_calls.count(('shutdown',)) == 1
 '''
     result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[4],
                             env=dict(os.environ), capture_output=True, text=True, timeout=10)

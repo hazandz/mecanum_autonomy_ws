@@ -43,6 +43,7 @@ class SafetySupervisorNode(Node):
             raise ValueError('unsupported SafetySupervisor mode')
         if mode == 'LOCAL_TRAINING':
             from rclpy.clock import Clock, ClockType
+            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
             from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput, SimulationContactState
             import time
             self._tf_buffer = Buffer()
@@ -86,12 +87,17 @@ class SafetySupervisorNode(Node):
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
             self._local_training_period_ns = period_ns
             self._local_training_steady_clock = steady_clock
+            # Keep the steady Safety timer schedulable independently from the
+            # high-rate subscription group. The adapter lock still serializes
+            # state changes and selection; this group only prevents a ready
+            # subscription queue from starving the watchdog-feeding timer.
+            self._local_training_timer_group = MutuallyExclusiveCallbackGroup()
             self._local_training_timer = None
             self._local_training_phase_started_ns = self._local_training_steady_now_ns()
             self._local_training_phase_timer = self.create_timer(
                 period_ns / 1_000_000_000,
                 self._start_local_training_periodic_timer,
-                clock=steady_clock)
+                clock=steady_clock, callback_group=self._local_training_timer_group)
             return
         for name in self._POLICY_NAMES:
             self.declare_parameter(name)
@@ -173,7 +179,8 @@ class SafetySupervisorNode(Node):
         self._local_training_timer = self.create_timer(
             self._local_training_period_ns / 1_000_000_000,
             self._tick_local_training_steady,
-            clock=self._local_training_steady_clock)
+            clock=self._local_training_steady_clock,
+            callback_group=self._local_training_timer_group)
         now_steady_ns = self._local_training_steady_now_ns()
         self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
             'initial_offset_ns': self._local_training_period_ns,
@@ -267,9 +274,18 @@ class SafetySupervisorNode(Node):
 def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = SafetySupervisorNode()
+    executor = None
     try:
-        rclpy.spin(node)
+        if node.get_parameter('navigation_mode').value == 'LOCAL_TRAINING':
+            from rclpy.executors import MultiThreadedExecutor
+            executor = MultiThreadedExecutor(num_threads=2)
+            executor.add_node(node)
+            executor.spin()
+        else:
+            rclpy.spin(node)
     finally:
+        if executor is not None:
+            executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
