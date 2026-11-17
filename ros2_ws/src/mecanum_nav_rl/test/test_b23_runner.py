@@ -4295,6 +4295,50 @@ def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_rece
     assert release_hold < stream_on < wait_receipt
 
 
+@pytest.mark.parametrize('close_after', ['safe_stop', 'admission_inhibited'])
+def test_r02_close_fault_paths_skip_scan_alignment_inside_native_watchdog(close_after):
+    from builtin_interfaces.msg import Time
+
+    value, clock = worker()
+    events = []
+    async def freeze_step_streams(*, deadline_ns):
+        events.append('fresh_applied_zero')
+        return {'zero_receipt_age_ns': 0}
+    async def align_policy_window(*, deadline_ns, zero_witness):
+        events.append('scan_alignment')
+        raise AssertionError('R02 close fault case must not spend watchdog budget on alignment')
+    value.freeze_step_streams = freeze_step_streams
+    value.align_policy_step_launch_window = align_policy_window
+    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
+        events.append(('stream_enabled', enabled))))
+    value.ingress.lifecycle = NS(barrier_stamp=Time())
+    value.ros_now = lambda: 1_000_000_000
+
+    class BindReached(Exception):
+        pass
+    class B1:
+        def begin_step(self):
+            events.append('begin_pending_step')
+            raise BindReached
+
+    with pytest.raises(BindReached):
+        asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0),
+            close_after_held_receipt=close_after))
+    assert events == ['fresh_applied_zero', ('stream_enabled', False), 'begin_pending_step']
+
+    # Ordinary POLICY retains the production scan-boundary alignment.
+    events.clear()
+    class AlignmentReached(Exception):
+        pass
+    async def observe_alignment(*, deadline_ns, zero_witness):
+        events.append('scan_alignment')
+        raise AlignmentReached
+    value.align_policy_step_launch_window = observe_alignment
+    with pytest.raises(AlignmentReached):
+        asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0)))
+    assert events == ['fresh_applied_zero', 'scan_alignment']
+
+
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','first_sample_races_candidate_delivery'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
