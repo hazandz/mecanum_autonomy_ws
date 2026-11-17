@@ -11,7 +11,8 @@ import mecanum_nav_rl.runtime_simulation.b23_runner as runner_module
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
-    verify_r02_policy_order, verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
+    verify_r02_policy_order, r02a_native_admission_row,
+    verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
     verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
@@ -3313,6 +3314,30 @@ def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     with pytest.raises(RuntimeError,match='order mismatch'):
         verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)
+
+
+def test_r02a_wait_target_binds_native_admission_to_current_sample_and_session():
+    rows=[
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{
+            'receive_ns':'101','processed_ns':'110','sample':'37',
+            'session':'session-a','backend':'8','ingress':'9'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{
+            'receive_ns':'102','processed_ns':'111','sample':'38',
+            'session':'wrong-session','backend':'8','ingress':'9'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{
+            'receive_ns':'103','processed_ns':'112','sample':'38',
+            'session':'session-a','backend':'7','ingress':'9'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{
+            'receive_ns':'104','processed_ns':'113','sample':'38',
+            'session':'session-a','backend':'8','ingress':'9'}},
+    ]
+    selected=r02a_native_admission_row(rows,sample_sequence=38,
+        session_id='session-a',backend_instance_id=8,ingress_instance_id=9,
+        step_started_ns=100)
+    assert selected==rows[3]
+    assert r02a_native_admission_row(rows,sample_sequence=39,
+        session_id='session-a',backend_instance_id=8,ingress_instance_id=9,
+        step_started_ns=100) is None
 
 
 def test_r02b_measures_held_receipt_until_native_admission(tmp_path):

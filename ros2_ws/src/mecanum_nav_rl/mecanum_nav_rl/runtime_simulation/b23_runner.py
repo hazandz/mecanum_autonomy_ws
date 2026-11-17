@@ -1364,6 +1364,29 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
         'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
 
 
+def r02a_native_admission_row(rows, *, sample_sequence, session_id,
+                              backend_instance_id, ingress_instance_id,
+                              step_started_ns):
+    """Select current-step admission accepted by the pinned native session."""
+    for row in rows:
+        if row.get('kind') != 'B23_ADMISSION_ACCEPTED':
+            continue
+        fields = row.get('fields', {})
+        try:
+            receive_ns = int(fields['receive_ns'])
+            processed_ns = int(fields['processed_ns'])
+            sample = int(fields['sample'])
+            backend = int(fields['backend'])
+            ingress = int(fields['ingress'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (sample == sample_sequence and fields.get('session') == session_id
+                and backend == backend_instance_id and ingress == ingress_instance_id
+                and receive_ns >= step_started_ns and processed_ns >= receive_ns):
+            return row
+    return None
+
+
 def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
     """Verify a real Safety rejection and matching native SAFE_STOP application."""
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
@@ -2696,6 +2719,19 @@ class TrainingWorkerIO:
                 fresh_sample_sequence=fresh_sample_sequence, pending_token=pending_token,
                 allow_pending=True),
             deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
+
+    async def wait_r02a_native_admission(self, *, sample_sequence, step_started_ns,
+                                         deadline_ns):
+        """Keep final output closed until this step's native admission is accepted."""
+        path = self.descriptor['native_events_path']
+        return await self.until(lambda: r02a_native_admission_row(
+                complete_jsonl_rows(path), sample_sequence=sample_sequence,
+                session_id=self.descriptor['session_id'],
+                backend_instance_id=self.descriptor['backend_instance_id'],
+                ingress_instance_id=self.descriptor['coordinator_ingress_instance_id'],
+                step_started_ns=step_started_ns),
+            deadline_ns=deadline_ns,
+            phase='R02a native admission accepted before POLICY receipt')
 
     async def call(self, client, request, *, timeout_s, phase,
             expected_native_fault_flags=None, before_submit=None):
@@ -4347,6 +4383,7 @@ class TrainingWorkerIO:
                           close_after_held_receipt=None, prebind_admission=False,
                           measurement_fault_case=None,
                           align_admission_after_scan_boundary=False,
+                          require_admission_before_receipt=False,
                           after_policy_applied=None,
                           before_pending_bind=None):
         """Một issuance thật qua Safety, application thật rồi transaction B1."""
@@ -4546,6 +4583,22 @@ class TrainingWorkerIO:
             and bytes(self.safety.local_training.noisy.admission_token) == bytes(ack.response.pending_admission_token)
             and self.ingress.last_published_sample_sequence == target_sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
+        if require_admission_before_receipt:
+            admission_row = await self.wait_r02a_native_admission(
+                sample_sequence=target_sample_sequence,
+                step_started_ns=started, deadline_ns=deadline)
+            native_rows = complete_jsonl_rows(self.descriptor['native_events_path'])
+            receipt_before_release = next((row for row in native_rows
+                if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
+                and row.get('fields', {}).get('step') == str(token.step_index)
+                and int(row.get('fields', {}).get('receive_ns', '0')) >= started), None)
+            if receipt_before_release is not None:
+                raise RuntimeError('R02a POLICY receipt reached native before admission was accepted')
+            self.emit('R02A_ADMISSION_ACCEPTED_BEFORE_POLICY_STREAM', {
+                'sample_sequence':target_sample_sequence,
+                'admission_receive_ns':int(admission_row['fields']['receive_ns']),
+                'admission_processed_ns':int(admission_row['fields']['processed_ns']),
+                'step_started_ns':started, 'steady_ns':self.now()})
         prebind_check = None
         if held_sample_sequence is not None:
             fresh_sample_sequence = self.ingress.last_published_sample_sequence
@@ -5656,7 +5709,8 @@ async def training_child(path):
             await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target, paused_hold_s=.250)
             step_started_ns = time.monotonic_ns()
             transition = await io.policy_step(b1, (0.4, 0., 0.),
-                align_admission_after_scan_boundary=packet['case'] == 'R02b')
+                align_admission_after_scan_boundary=packet['case'] == 'R02b',
+                require_admission_before_receipt=packet['case'] == 'R02a')
             if transition.termination.terminated or transition.termination.truncated:
                 raise RuntimeError('R02 target POLICY step terminated before order proof')
             evidence_end = min(io.deadline_ns, time.monotonic_ns()+500_000_000)
