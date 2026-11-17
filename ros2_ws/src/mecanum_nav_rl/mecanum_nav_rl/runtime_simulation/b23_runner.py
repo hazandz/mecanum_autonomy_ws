@@ -1138,7 +1138,6 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
     """Bind injected native receipt disposition to the real published POLICY."""
     import re
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
-    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     native_fault_match = (re.fullmatch(r'native fault flags=([1-9][0-9]*)', str(error))
         if isinstance(error, RuntimeError) else None)
     expected_native_flags = int(native_fault_match.group(1)) if native_fault_match else None
@@ -1158,13 +1157,42 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
         fault_source_sequence = int(fault_fields['source_sequence'])
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError('R03 native receipt hook identity is incomplete') from error
-    publications = [receipt for receipt in io.ingress.receipts
-        if receipt.source is ReceiptSource.POLICY
-        and receipt.source_sequence == step_index
-        and receipt.final_publisher_instance_id == io.final.publisher_instance_id]
+    # Bind the injected fault to the publisher's durable pre-transport record.
+    # For R03a the point of the hook is that the matching receipt never reaches
+    # io.ingress.receipts, so that receive-side collection cannot prove which
+    # final publication the native hook dropped.
+    publication_rows = _ledger_rows(io.descriptor['run_root'], 'policy_final_published.jsonl')
+    publications = [row.get('facts', {}) for row in publication_rows
+        if row.get('event') == 'policy_final_published'
+        and row.get('facts', {}).get('source_sequence') == step_index
+        and row.get('facts', {}).get('publisher_instance_id') == io.final.publisher_instance_id
+        and row.get('facts', {}).get('publish_sequence') == fault_sequence]
     if (fault_publisher != io.final.publisher_instance_id or fault_source_sequence != step_index
-            or fault_sequence not in {receipt.final_publish_sequence for receipt in publications}):
-        raise RuntimeError('R03 native hook does not bind to a retained final POLICY receipt')
+            or len(publications) != 1):
+        raise RuntimeError('R03 native hook does not bind to one exact final POLICY publication')
+    publication = publications[0]
+    if (publication.get('step_index') != step_index
+            or type(publication.get('source_instance_id')) is not int
+            or type(publication.get('steady_ns')) is not int
+            or not publication.get('transition_id')
+            or not isinstance(publication.get('receipt_cdr_hex'), str)
+            or not publication['receipt_cdr_hex']):
+        raise RuntimeError('R03 final POLICY publication evidence is incomplete')
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    try:
+        published_receipt = deserialize_message(
+            bytes.fromhex(publication['receipt_cdr_hex']), FinalIssuedCommandReceipt)
+    except (TypeError, ValueError) as decode_error:
+        raise RuntimeError('R03 final POLICY receipt bytes are invalid') from decode_error
+    if (published_receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY
+            or published_receipt.sequence != step_index
+            or published_receipt.step_index != step_index
+            or published_receipt.source_instance_id != publication['source_instance_id']
+            or published_receipt.transition_id != publication['transition_id']
+            or published_receipt.final_publisher_instance_id != fault_publisher
+            or published_receipt.final_publish_sequence != fault_sequence):
+        raise RuntimeError('R03 final publication bytes do not match the native hook identity')
     receipt_ingress = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
         and row.get('fields', {}).get('sequence') == str(fault_sequence)]
     if (case == 'R03a' and receipt_ingress) or (case == 'R03b' and len(receipt_ingress) != 1):

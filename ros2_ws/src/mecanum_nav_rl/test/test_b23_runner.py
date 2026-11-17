@@ -2447,9 +2447,26 @@ def test_r05_accepts_only_exact_native_rejection_for_fresh_revoked_query():
 ])
 def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
         tmp_path, case, mode, ingress_count):
-    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
 
     native = tmp_path/'native-events.jsonl'
+    receipt = FinalIssuedCommandReceipt()
+    receipt.source = FinalIssuedCommandReceipt.SOURCE_POLICY
+    receipt.sequence = 1
+    receipt.source_instance_id = 9
+    receipt.step_index = 1
+    receipt.transition_id = 'policy-1'
+    receipt.final_publisher_instance_id = 42
+    receipt.final_publish_sequence = 77
+    receipt_bytes = serialize_message(receipt)
+    publication = {'event':'policy_final_published','facts':{
+        'source':'POLICY','source_sequence':1,'source_instance_id':9,
+        'step_index':1,'transition_id':'policy-1','steady_ns':90,
+        'publisher_instance_id':42,'publish_sequence':77,
+        'receipt_cdr_hex':receipt_bytes.hex()}}
+    (tmp_path/'policy_final_published.jsonl').write_text(
+        json.dumps(publication,separators=(',',':'))+'\n')
     native.write_text(json.dumps({'kind':'B23_RECEIPT_FAULT','fields':{
         'mode':mode,'publisher':'42','sequence':'77','source_sequence':'1',
         'original_transition_id':'policy-1',
@@ -2460,8 +2477,7 @@ def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
                 'fields':{'sequence':'77'}})+'\n')
     io=NS(descriptor={'run_root':str(tmp_path)},
         events=[], final=NS(publisher_instance_id=42),
-        ingress=NS(receipts=[NS(source=ReceiptSource.POLICY,source_sequence=1,
-            final_publisher_instance_id=42,final_publish_sequence=77)],
+        ingress=NS(receipts=[],
             backend_state=NS(fault_flags=7,local_zero_override=True)),
         now=lambda:100, deadline_ns=200, pause=None)
     error=RuntimeError('native fault flags=7')
@@ -2473,6 +2489,8 @@ def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
     assert result['published_policy_sequence']==77
     assert result['policy_step_committed'] is False
     assert result['local_zero_override'] is True
+    if case == 'R03a':
+        assert io.ingress.receipts == []  # the faulted publication was not received
     with pytest.raises(RuntimeError,match='expected cutoff/receipt path'):
         asyncio.run(verify_r03_receipt_fault(io,case=case,step_index=1,error=RuntimeError('unexpected')))
 
