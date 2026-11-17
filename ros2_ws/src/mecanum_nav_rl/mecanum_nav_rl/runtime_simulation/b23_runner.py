@@ -4579,6 +4579,107 @@ class TrainingWorkerIO:
         # zero is proven received by native, but has not been claimed applied.
         return zero_witness
 
+    async def refresh_zero_before_pending_bind(self, *, deadline_ns):
+        """Require a newly applied SAFE_STOP immediately before binding POLICY.
+
+        The native actuator watchdog is steady-clock based. Scan-window
+        alignment can otherwise leave the last applied zero several timer
+        ticks behind the pending-step ACK and its first eligible post-ACK
+        odometry sample. Keep POLICY held, wait for the real Safety timer to
+        publish another zero, and bind only after that exact receipt has an
+        exact native application in the same session/lifecycle.
+        """
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+        adapter = self.safety.local_training
+        baseline_sequence = adapter.safe_stop_sequence
+        life = self.ingress.lifecycle
+        if life is None:
+            raise RuntimeError('cannot refresh pre-bind zero without lifecycle identity')
+        expected_lifecycle = lifecycle_identity(life)
+
+        def newly_applied_zero():
+            state = self.ingress.backend_state
+            if (state is None or state.fault_flags != 0 or state.paused
+                    or state.local_zero_override
+                    or state.session_id != self.descriptor['session_id']
+                    or state.config_hash != self.descriptor['config_hash']
+                    or state.backend_instance_id != self.descriptor['backend_instance_id']
+                    or lifecycle_identity(state) != expected_lifecycle):
+                return None
+            for receipt in reversed(tuple(self.ingress.receipts)):
+                if (receipt.source is not ReceiptSource.SAFE_STOP
+                        or receipt.source_instance_id != self.ingress.safe_stop_source_id
+                        or receipt.source_sequence <= baseline_sequence
+                        or receipt.step_index != 0 or receipt.transition_id
+                        or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                        or receipt.lifecycle != expected_lifecycle
+                        or receipt.session_id != self.descriptor['session_id']
+                        or receipt.ingress_config_hash != self.descriptor['config_hash']
+                        or receipt.frame_id != 'base_link'
+                        or not receipt.admission_valid
+                        or any(receipt.final_command)):
+                    continue
+                publication = self.final.publication_for_source_sequence(
+                    source=CommandEnvelope.SOURCE_SAFE_STOP,
+                    sequence=receipt.source_sequence)
+                if (publication is None
+                        or publication.final_publisher_instance_id != receipt.final_publisher_instance_id
+                        or publication.final_publish_sequence != receipt.final_publish_sequence
+                        or publication.source != CommandEnvelope.SOURCE_SAFE_STOP
+                        or publication.sequence != receipt.source_sequence
+                        or any((publication.final_command.linear.x,
+                            publication.final_command.linear.y, publication.final_command.angular.z))):
+                    continue
+                application = self.ingress.application_for_receipt(receipt)
+                if application is None:
+                    continue
+                applied_state = application['state']
+                if (state.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                        or state.applied_final_publish_sequence < receipt.final_publish_sequence
+                        or not state.applied_receipt_valid):
+                    continue
+                current_receipt = self.ingress.receipt_for_publication_sequence(
+                    state.applied_final_publish_sequence)
+                if (current_receipt is None
+                        or current_receipt.source is not ReceiptSource.SAFE_STOP
+                        or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                        or any(current_receipt.final_command)
+                        or applied_state.fault_flags != 0
+                        or applied_state.paused
+                        or applied_state.local_zero_override
+                        or applied_state.session_id != self.descriptor['session_id']
+                        or applied_state.config_hash != self.descriptor['config_hash']
+                        or applied_state.backend_instance_id != self.descriptor['backend_instance_id']
+                        or lifecycle_identity(applied_state) != expected_lifecycle
+                        or applied_state.applied_final_publish_sequence != receipt.final_publish_sequence
+                        or applied_state.applied_final_publisher_instance_id != self.final.publisher_instance_id):
+                    continue
+                age_ns = self.now() - receipt.received_steady_ns
+                if age_ns < 0 or age_ns > 100_000_000:
+                    continue
+                return {'receipt': receipt, 'publication': publication,
+                    'application': application, 'age_ns': age_ns}
+            return None
+
+        refreshed = await self.until(newly_applied_zero, deadline_ns=deadline_ns,
+            phase='new exact SAFE_STOP application before pending POLICY bind')
+        self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
+            'baseline_safe_stop_sequence': baseline_sequence,
+            'source_sequence': refreshed['receipt'].source_sequence,
+            'final_publish_sequence': refreshed['receipt'].final_publish_sequence,
+            'native_iteration': refreshed['application']['state'].applied_physics_iteration,
+            'native_stamp_ns': (refreshed['application']['state'].applied_sim_stamp.sec
+                * 1_000_000_000 + refreshed['application']['state'].applied_sim_stamp.nanosec),
+            'receipt_received_steady_ns': refreshed['receipt'].received_steady_ns,
+            'receipt_age_ns': refreshed['age_ns'],
+            'deadline_ns': deadline_ns,
+            'steady_ns': self.now(),
+        })
+        return refreshed
+
     async def tick_policy_after_deferred_scan_cutoff(self, *, deadline_ns,
             step_index, sample_sequence):
         """Retry the same Safety tick at the first post-cutoff physics time.
@@ -4724,6 +4825,8 @@ class TrainingWorkerIO:
             if not prebind_admission and close_after_held_receipt is None:
                 zero_witness = await self.align_policy_step_launch_window(
                     deadline_ns=deadline, zero_witness=zero_witness)
+                zero_witness = await self.refresh_zero_before_pending_bind(
+                    deadline_ns=deadline)
             self.safety.local_training.set_stream_enabled(False)
         if prebind_admission:
             # Build the held input after native has observed the closing

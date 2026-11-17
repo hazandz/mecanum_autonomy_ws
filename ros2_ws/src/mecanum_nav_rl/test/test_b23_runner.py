@@ -643,6 +643,100 @@ def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_o
         deadline_ns=2_000_000_000,zero_witness=witness)) is witness
 
 
+def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    value=object.__new__(TrainingWorkerIO)
+    value.now=lambda:1_000_000_000
+    life=NS(episode_generation=2, reset_epoch=3, runtime_generation=4)
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+    identity=lifecycle_identity(life)
+    receipt=IssuedCommandReceiptView(publish_stamp_ns=900,
+        final_publisher_instance_id=77, final_publish_sequence=101,
+        source=ReceiptSource.SAFE_STOP, source_instance_id=88,
+        source_sequence=12, step_index=0, transition_id='', lifecycle=identity,
+        session_id='session-a', ingress_config_hash='a'*64,
+        final_command=(0.0,0.0,0.0), received_steady_ns=990_000_000,
+        frame_id='base_link', admission_valid=True)
+    state=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=101, applied_physics_iteration=12,
+        applied_sim_stamp=NS(sec=0,nanosec=900))
+    publication=NS(final_publisher_instance_id=77, final_publish_sequence=101,
+        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=12,
+        final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
+            angular=NS(x=0.0,y=0.0,z=0.0)))
+    value.safety=NS(local_training=NS(safe_stop_sequence=11))
+    value.ingress=NS(lifecycle=life, safe_stop_source_id=88, receipts=[receipt],
+        backend_state=state, application_for_receipt=lambda _receipt:{'state':state,'received_ns':990_000_000},
+        receipt_for_publication_sequence=lambda seq:receipt if seq==101 else None)
+    value.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:
+            publication if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==12 else None)
+    value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    events=[]
+    value.emit=lambda name,facts:events.append((name,facts))
+    async def until(predicate, *, deadline_ns, phase):
+        assert phase=='new exact SAFE_STOP application before pending POLICY bind'
+        result=predicate()
+        assert result is not None
+        return result
+    value.until=until
+
+    result=asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000))
+    assert result['receipt'] is receipt
+    assert result['application']['state'] is state
+    assert result['age_ns']==10_000_000
+    assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
+    assert events[-1][1]['source_sequence']==12
+    assert events[-1][1]['final_publish_sequence']==101
+
+
+def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    value=object.__new__(TrainingWorkerIO)
+    value.now=lambda:1_000_000_000
+    life=NS(episode_generation=2, reset_epoch=3, runtime_generation=4)
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+    identity=lifecycle_identity(life)
+    receipt=IssuedCommandReceiptView(publish_stamp_ns=900,
+        final_publisher_instance_id=77, final_publish_sequence=101,
+        source=ReceiptSource.SAFE_STOP, source_instance_id=88,
+        source_sequence=12, step_index=0, transition_id='', lifecycle=identity,
+        session_id='wrong-session', ingress_config_hash='a'*64,
+        final_command=(0.0,0.0,0.0), received_steady_ns=880_000_000,
+        frame_id='base_link', admission_valid=True)
+    state=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=101, applied_physics_iteration=12,
+        applied_sim_stamp=NS(sec=0,nanosec=900))
+    publication=NS(final_publisher_instance_id=77, final_publish_sequence=101,
+        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=12,
+        final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
+            angular=NS(x=0.0,y=0.0,z=0.0)))
+    value.safety=NS(local_training=NS(safe_stop_sequence=11))
+    value.ingress=NS(lifecycle=life, safe_stop_source_id=88, receipts=[receipt],
+        backend_state=state, application_for_receipt=lambda _receipt:{'state':state,'received_ns':880_000_000},
+        receipt_for_publication_sequence=lambda seq:receipt if seq==101 else None)
+    value.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:
+            publication if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==12 else None)
+    value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    value.emit=lambda *_args:None
+    async def until(predicate, *, deadline_ns, phase):
+        assert predicate() is None
+        raise TimeoutError('expected stale or mismatched pre-bind zero to remain ineligible')
+    value.until=until
+
+    with pytest.raises(TimeoutError,match='remain ineligible'):
+        asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000))
+
+
 def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_fault_hooks('R01a') == []
     assert case_fault_hooks('R01b') == ['external_pause_after_w1_before_native_dispatch']
@@ -3542,6 +3636,9 @@ def worker():
     value.world_client = NS(service_is_ready=lambda: True)
     value.emit = lambda _name, _facts: None
     value.ingress = NS(fault=None, backend_state=None, backend_received_ns=clock.ns)
+    async def refresh_zero_before_pending_bind(*, deadline_ns):
+        return {'test_witness': True, 'deadline_ns': deadline_ns}
+    value.refresh_zero_before_pending_bind = refresh_zero_before_pending_bind
     return value, clock
 
 
@@ -4436,6 +4533,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     # This test isolates transaction ordering; launch-window cadence is
     # covered by test_policy_step_waits_for_applied_zero_after_cutoff... .
     value.align_policy_step_launch_window = aligned_window
+    async def refreshed_zero(*, deadline_ns):
+        history.append(('prebind_zero_refresh', deadline_ns))
+        return {'receipt':'newly applied zero'}
+    value.refresh_zero_before_pending_bind = refreshed_zero
     life = SafetyLifecycleState(); life.barrier_stamp = Time(nanosec=900_000_000)
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=2,
@@ -4642,7 +4743,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if i > issued and row[0] == 'safety_tick')
     hold_off_after_issue = next(i for i, row in enumerate(history)
         if i > issued and row == ('hold', False))
-    assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    refresh = next((i for i,row in enumerate(history) if row[0]=='prebind_zero_refresh'),None)
+    if timing == 'r09b_before_bind':
+        assert refresh is None
+        assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    else:
+        assert refresh is not None
+        assert refresh < stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
     sample_ready = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_sample_ready')
     if timing == 'first_sample_races_candidate_delivery':
