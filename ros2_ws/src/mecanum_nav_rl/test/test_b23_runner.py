@@ -191,6 +191,26 @@ def test_run_evidence_buffers_hot_path_until_explicit_sync(tmp_path):
     evidence.close()
 
 
+def test_native_control_event_is_visible_to_cross_process_reader_before_sync(tmp_path):
+    """The worker polls this index before native watchdog expiry; expose full rows promptly."""
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'parent', run_id='B23-NATIVE-FLUSH',
+        invocation_id='inv-native-flush')
+    evidence.record('owned_process_output', {
+        'process':'server', 'pid':123, 'command':['gz', 'sim'], 'stream':'stdout',
+        'text':('[Msg] B23_ADMISSION_ACCEPTED session=session-a backend=11 ingress=22 '
+            'sample=33 source_ns=44000000 receive_ns=55 processed_ns=66 iteration=7')})
+    path = tmp_path/'native-events.jsonl'
+    raw = path.read_bytes()
+    rows = [json.loads(line) for line in raw.splitlines()]
+    assert len(rows) == 1, raw
+    assert rows[0]['kind'] == 'B23_ADMISSION_ACCEPTED'
+    assert rows[0]['fields']['sample'] == '33'
+    assert rows[0]['invocation_id'] == 'inv-native-flush'
+    evidence.close()
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
