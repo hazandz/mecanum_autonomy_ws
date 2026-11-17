@@ -34,6 +34,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     pin_initial_final_publisher_identity, same_process_identity,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
+    should_emit_policy_cutoff_pending,
 )
 
 
@@ -3652,6 +3653,16 @@ def worker():
     return value, clock
 
 
+def test_policy_pending_event_dedupe_is_scoped_per_cutoff_and_reason():
+    seen = set()
+    observed = []
+    for cutoff, reason in ((10, 'waiting'), (20, 'waiting'), (10, 'waiting'),
+            (20, 'waiting'), (10, 'freshness changed'), (10, 'freshness changed')):
+        observed.append(should_emit_policy_cutoff_pending(seen, cutoff, reason))
+    assert observed == [True, True, False, False, True, False]
+    assert seen == {(10, 'waiting'), (20, 'waiting'), (10, 'freshness changed')}
+
+
 def test_until_waits_in_common_budget_and_does_not_accept_late_data():
     value, clock = worker()
     deadline = clock.ns + 5_000_000
@@ -4523,7 +4534,7 @@ def test_r02_close_fault_paths_skip_scan_alignment_inside_native_watchdog(close_
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
-    'r09b_before_bind','first_sample_races_candidate_delivery'])
+    'r09b_before_bind','first_sample_races_candidate_delivery','pending_cutoff_dedup'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -4664,7 +4675,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.backend_state.physics_iteration = 12
             value.ingress.backend_state.applied_sim_stamp = NS(sec=1, nanosec=200_000_000)
             value.ingress.backend_state.header.stamp = NS(sec=1, nanosec=200_000_000)
-        if adapter.command:
+        if adapter.command and timing != 'pending_cutoff_dedup':
             value.ingress.scans[clock.ns] = True
     value.pause = pause
     value.ingress.application_for_receipt = lambda receipt: (
@@ -4686,10 +4697,22 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert any(row[0] == 'publish' and row[1] is envelope for row in history)
         assert action_barrier_ns <= envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec
         minimum_cutoff = envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec + 100_000_000
+        if timing == 'pending_cutoff_dedup':
+            value.ingress.scans[minimum_cutoff] = True
+            value.ingress.scans[minimum_cutoff + 2_000_000] = True
+            clock.ns = minimum_cutoff + 2_000_000
     transition = object()
     minimum_cutoff = None
+    commit_attempts = {}
     def commit(cutoff):
         commit_calls.append(cutoff)
+        if timing == 'pending_cutoff_dedup':
+            commit_attempts[cutoff] = commit_attempts.get(cutoff, 0) + 1
+            if cutoff < max(value.ingress.scans):
+                raise B1SnapshotPending('application facts pending for this cutoff')
+            if commit_attempts[cutoff] < 3:
+                raise B1SnapshotPending('application facts pending for this cutoff')
+            return transition
         if minimum_cutoff is None:
             raise B1SnapshotPending('application not received yet')
         if cutoff == minimum_cutoff:
@@ -4738,8 +4761,22 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         action = (0.,0.,0.) if timing in ('r09b_callback','r09b_before_bind') else (0.,.4,0.)
         assert asyncio.run(value.policy_step(b1, action, **kwargs)) is transition
     else:
-        with pytest.raises(TimeoutError, match='step deadline'):
-            asyncio.run(value.policy_step(b1, (0., .4, 0.)))
+        if timing == 'pending_cutoff_dedup':
+            assert asyncio.run(value.policy_step(b1, (0., .4, 0.))) is transition
+        else:
+            with pytest.raises(TimeoutError, match='step deadline'):
+                asyncio.run(value.policy_step(b1, (0., .4, 0.)))
+    if timing == 'pending_cutoff_dedup':
+        pending_events = [facts for row in history
+            if isinstance(row, tuple) and len(row) == 2
+            for name, facts in (row,) if name == 'POLICY_CUTOFF_PENDING']
+        emitted = [(facts['cutoff_ns'], facts['reason']) for facts in pending_events]
+        assert len(emitted) >= 2, f'expected multiple pending cutoffs: {history!r}'
+        assert len(emitted) == len(set(emitted)), f'pending cutoff evidence was duplicated: {history!r}'
+        repeated_cutoffs = {cutoff for cutoff in commit_calls
+            if commit_calls.count(cutoff) > 1}
+        assert len(repeated_cutoffs) >= 2, (
+            f'fixture must retry multiple distinct cutoffs: {commit_calls!r}')
     tags = [row[0] for row in history]
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
@@ -4814,7 +4851,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert callback_calls == []
     assert commit_calls[-1] > expected_minimum
     assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback','r09b_before_bind',
-        'first_sample_races_candidate_delivery') else clock.ns == 3_000_000_000
+        'first_sample_races_candidate_delivery','pending_cutoff_dedup') else clock.ns == 3_000_000_000
     assert all(row[0] != 'align_policy_boundary' for row in history)
     assert ('stream', False) in history  # only pending-step freeze before bind
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))

@@ -639,6 +639,15 @@ def policy_step_identities(receipts):
         for receipt in receipts if receipt.source == ReceiptSource.POLICY)
 
 
+def should_emit_policy_cutoff_pending(seen_cutoff_reasons, cutoff_ns, reason):
+    """Emit a pending fact once per cutoff/reason, independent of other cutoffs."""
+    key = (cutoff_ns, reason)
+    if key in seen_cutoff_reasons:
+        return False
+    seen_cutoff_reasons.add(key)
+    return True
+
+
 SOAK_ACTIONS = (
     (0.40, 0.0, 0.0), (-0.40, 0.0, 0.0), (0.0, 0.40, 0.0),
     (0.0, 0.0, 0.40), (0.30, 0.30, 0.0), (0.30, -0.25, 0.30),
@@ -5159,7 +5168,7 @@ class TrainingWorkerIO:
             await self.align_r09b_application_cutoff(b1, policy_receipt=receipt,
                 minimum_cutoff_ns=minimum_cutoff, deadline_ns=deadline)
         last_pending = None
-        last_pending_key = None
+        emitted_pending_cutoff_reasons = set()
         while self.now() < deadline:
             self.check()
             for cutoff in sorted(stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff):
@@ -5167,12 +5176,11 @@ class TrainingWorkerIO:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
-                    pending_key = (cutoff, last_pending)
-                    if pending_key != last_pending_key:
+                    if should_emit_policy_cutoff_pending(
+                            emitted_pending_cutoff_reasons, cutoff, last_pending):
                         self.emit('POLICY_CUTOFF_PENDING', {'step_index': token.step_index,
                             'transition_id': token.transition_id, 'cutoff_ns': cutoff,
                             'reason': last_pending, 'steady_ns': self.now()})
-                        last_pending_key = pending_key
                     continue
                 if self.now() >= deadline:
                     self.emit('B1_STEP_COMMITTED_LATE', {'step_index':token.step_index,
