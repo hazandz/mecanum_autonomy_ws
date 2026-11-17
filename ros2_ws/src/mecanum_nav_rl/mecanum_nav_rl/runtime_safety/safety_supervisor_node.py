@@ -75,11 +75,13 @@ class SafetySupervisorNode(Node):
             # ROS timers follow the simulated clock. Under headless/loaded
             # Gazebo, simulation time can advance slower than wall time, so a
             # ROS-time Safety timer can miss the 100 ms steady receipt window.
-            # Drive this LOCAL_TRAINING loop from steady time. Offset its first
-            # periodic tick by half a period from construction so the final
-            # receipt/application pair is less likely to straddle a scan
-            # cutoff. The runner still requires exact native application at
-            # the selected cutoff; this offset never relaxes that proof.
+            # Drive this LOCAL_TRAINING loop from steady time. Start the
+            # periodic phase one complete period after construction. With the
+            # current 100 ms scan and 20 ms Safety cadence, this keeps a tick
+            # from being phase-locked 10 ms before every scan cutoff, where
+            # native application can occur only after that cutoff. The runner
+            # still requires exact native application at the selected cutoff;
+            # this scheduling phase never relaxes that proof.
             # Receipt freshness and command limits keep their existing clocks.
             steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
             self._local_training_period_ns = period_ns
@@ -87,7 +89,7 @@ class SafetySupervisorNode(Node):
             self._local_training_timer = None
             self._local_training_phase_started_ns = self._local_training_steady_now_ns()
             self._local_training_phase_timer = self.create_timer(
-                period_ns / 2 / 1_000_000_000,
+                period_ns / 1_000_000_000,
                 self._start_local_training_periodic_timer,
                 clock=steady_clock)
             return
@@ -162,7 +164,7 @@ class SafetySupervisorNode(Node):
         self.local_training.tick()
 
     def _start_local_training_periodic_timer(self) -> None:
-        """Start steady Safety ticks after the configured half-period offset."""
+        """Start steady Safety ticks after one full-period phase offset."""
         phase_timer = self._local_training_phase_timer
         if phase_timer is None or self._local_training_timer is not None:
             return
@@ -174,7 +176,7 @@ class SafetySupervisorNode(Node):
             clock=self._local_training_steady_clock)
         now_steady_ns = self._local_training_steady_now_ns()
         self.local_training.emit('SAFETY_TIMER_PHASE_STARTED', {
-            'initial_offset_ns': self._local_training_period_ns // 2,
+            'initial_offset_ns': self._local_training_period_ns,
             'actual_initial_delay_ns': now_steady_ns - self._local_training_phase_started_ns,
             'period_ns': self._local_training_period_ns,
             'started_ros_ns': self.get_clock().now().nanoseconds,

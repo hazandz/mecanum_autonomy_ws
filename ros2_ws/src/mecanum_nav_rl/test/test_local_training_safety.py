@@ -532,19 +532,19 @@ node = module.SafetySupervisorNode(local_training_context=ctx,
     evidence_sink=lambda *args: events.append(args), _steady_now_ns=lambda: tick_now[0])
 assert {s[0] for s in node.subscriptions} == {'/scan', '/mecanum/cmd_policy',
  '/mecanum/safety_lifecycle_state', '/mecanum/local_training/safety_input', '/mecanum/local_training/backend_state'}
-assert len(node.timers) == 1 and node.timers[0].period == 0.01
+assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 assert node.timers[0].callback == node._start_local_training_periodic_timer
 assert node._local_training_phase_timer is node.timers[0] and node._local_training_timer is None
-tick_now[0] = 10_000_000
+tick_now[0] = 20_000_000
 node.timers[0].callback()
 assert len(node.timers) == 1 and node.timers[0].period == 0.02
 assert node.timers[0].clock.clock_type == rclpy.clock.ClockType.STEADY_TIME
 assert node.timers[0].callback == node._tick_local_training_steady
 assert node._local_training_phase_timer is None and node._local_training_timer is node.timers[0]
 phase = next(fields for event, fields in events if event == 'SAFETY_TIMER_PHASE_STARTED')
-assert phase['initial_offset_ns'] == 10_000_000
-assert phase['actual_initial_delay_ns'] == 10_000_000
+assert phase['initial_offset_ns'] == 20_000_000
+assert phase['actual_initial_delay_ns'] == 20_000_000
 assert phase['period_ns'] == 20_000_000
 assert phase['clock'] == 'steady'
 assert node.local_training.policy_hold is True
