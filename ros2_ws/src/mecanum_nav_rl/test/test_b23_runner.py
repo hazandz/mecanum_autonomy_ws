@@ -554,7 +554,7 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
     (3_500_000_000, 3_500_000_000),
 ])
 def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too_short(
-        initial_ros_ns, target_cutoff_ns, tmp_path):
+        initial_ros_ns, target_cutoff_ns, tmp_path, monkeypatch):
     from mecanum_nav_rl.core.issued_command_cutoff import (
         IssuedCommandReceiptView, ReceiptSource,
     )
@@ -585,7 +585,11 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         publication_for_source_sequence=lambda *,source,sequence: publications.get(sequence)
             if source == FinalIssuedCommandReceipt.SOURCE_SAFE_STOP else None)
     worker.descriptor={'session_id':'session','config_hash':'a'*64,
-        'native_events_path':str(native_path)}
+        'native_events_path':str(native_path),'server_leader_pid':777,
+        'invocation_id':'inv-1'}
+    worker._native_offset, worker._native_partial = 0, b''
+    worker._native_input_watermark = 0
+    worker._native_safe_stop_ingress = {}
     worker.safety = NS(local_training=NS(scan_period_ns=100_000_000))
     worker.ros_now = lambda:clock['ros_ns']
     worker.now = lambda:clock['steady_ns']
@@ -605,6 +609,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
                 'receive_ns':str(steady+1)}
             with native_path.open('a') as stream:
                 stream.write(json.dumps({'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+                    'server_leader_pid':777,'invocation_id':'inv-1',
                     'fields':fields})+'\n')
             value=predicate()
             if value is not None:
@@ -612,6 +617,8 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         raise AssertionError('eligible native-ingress receipt was not selected')
 
     worker.until=until
+    monkeypatch.setattr(runner_module, 'complete_jsonl_rows',
+        lambda _path: pytest.fail('POLICY bind polling must not reparse the full native log'))
     witness={'receipt':old,'state':status,'received_ns':90}
     result=asyncio.run(worker.align_policy_step_launch_window(
         deadline_ns=2_000_000_000,zero_witness=witness))
@@ -628,6 +635,9 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     assert facts['prior_applied_zero_sequence']==1
     assert facts['remaining_to_next_cutoff_ns']==60_000_000
     assert facts['steady_ns']==200
+    assert worker._native_offset == native_path.stat().st_size
+    assert worker._native_safe_stop_ingress[
+        ('77','3','3','3540000000')]['fields']['receive_ns'] == '201'
 
 
 def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_open():

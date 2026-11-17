@@ -2299,6 +2299,7 @@ class TrainingWorkerIO:
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
         self._native_input_watermark = 0
+        self._native_safe_stop_ingress = {}
         self.contact_ack = None
         self.contact_start_request_sequence = None
         self._r07b_rollback_pending_before_ns = None
@@ -3452,6 +3453,9 @@ class TrainingWorkerIO:
         path = Path(self.descriptor['native_events_path'])
         if not path.exists():
             return self._native_input_watermark
+        safe_stop_ingress = getattr(self, '_native_safe_stop_ingress', None)
+        if safe_stop_ingress is None:
+            safe_stop_ingress = self._native_safe_stop_ingress = {}
         with path.open('rb') as stream:
             stream.seek(self._native_offset)
             raw = self._native_partial + stream.read(1_048_576)
@@ -3459,7 +3463,28 @@ class TrainingWorkerIO:
         lines = raw.split(b'\n'); self._native_partial = lines.pop()
         for line in lines:
             record = json.loads(line)
-            if record['kind'] not in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
+            kind = record['kind']
+            if kind == 'B23_SAFE_STOP_RECEIPT_INGRESS':
+                fields = record.get('fields')
+                names = ('publisher', 'key', 'source_sequence', 'stamp_ns', 'receive_ns')
+                valid_owner = (isinstance(fields, dict)
+                    and record.get('server_leader_pid') == self.descriptor['server_leader_pid']
+                    and record.get('invocation_id') == self.descriptor['invocation_id'])
+                valid_fields = (valid_owner and all(
+                    isinstance(fields.get(name), str) and fields[name].isdigit()
+                    and int(fields[name]) > 0 for name in names))
+                if not valid_fields:
+                    self.emit('NATIVE_SAFE_STOP_RECEIPT_RECORD_REJECTED', {
+                        'reason':('ownership_mismatch' if not valid_owner else 'incomplete_or_invalid_fields'),
+                        'record_sha256':hashlib.sha256(line).hexdigest()})
+                    continue
+                key = tuple(fields[name] for name in names[:4])
+                prior = safe_stop_ingress.get(key)
+                if prior is not None and prior != record:
+                    raise RuntimeError('native SAFE_STOP receipt evidence conflicts for exact key')
+                safe_stop_ingress[key] = record
+                continue
+            if kind not in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
                 continue
             fields = record['fields']
             try:
@@ -4540,13 +4565,11 @@ class TrainingWorkerIO:
                 # Python receipt subscription proves the publication bytes;
                 # only the backend's flushed event proves that the native
                 # receipt callback queued this exact key before the bind RPC.
-                native_rows = complete_jsonl_rows(self.descriptor['native_events_path'])
-                native_ingress = next((row for row in reversed(native_rows)
-                    if row.get('kind') == 'B23_SAFE_STOP_RECEIPT_INGRESS'
-                    and row.get('fields', {}).get('publisher') == str(receipt.final_publisher_instance_id)
-                    and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
-                    and row.get('fields', {}).get('source_sequence') == str(receipt.source_sequence)
-                    and row.get('fields', {}).get('stamp_ns') == str(receipt.publish_stamp_ns)), None)
+                self.read_native_input_watermark()
+                native_key = (str(receipt.final_publisher_instance_id),
+                    str(receipt.final_publish_sequence), str(receipt.source_sequence),
+                    str(receipt.publish_stamp_ns))
+                native_ingress = getattr(self, '_native_safe_stop_ingress', {}).get(native_key)
                 if native_ingress is None:
                     continue
                 try:
