@@ -303,6 +303,14 @@ class LocalTrainingIngress:
             self.admission_publication_enabled = True
 
     def on_ground_truth(self, msg):
+        pair_evidence = []
+        try:
+            return self._on_ground_truth(msg, pair_evidence)
+        finally:
+            for event, facts in pair_evidence:
+                self.emit(event, facts)
+
+    def _on_ground_truth(self, msg, pair_evidence):
         from nav_msgs.msg import Odometry
         if not isinstance(msg, Odometry):
             self._fail('oracle type mismatch')
@@ -344,7 +352,9 @@ class LocalTrainingIngress:
             self._last_gt_stamp, self._last_gt_bytes = stamp, raw
             self._record_receive_clock(received, received_ros)
             self._put(self._oracles, stamp, (raw, received), 'oracle')
-            self._join_physics(stamp)
+            joined = self._join_physics(stamp)
+            if joined is not None:
+                pair_evidence.append(joined)
             if not self._noise_ready or self.lifecycle is None:
                 return None
             output = self.noise_port.accept_ground_truth(GroundTruthPortSample(
@@ -406,6 +416,14 @@ class LocalTrainingIngress:
         self.emit('ADMISSION_PUBLISHED', {'sample_sequence': msg.sample_sequence, 'steady_ns': self.now()})
 
     def on_backend(self, msg):
+        pair_evidence = []
+        try:
+            return self._on_backend(msg, pair_evidence)
+        finally:
+            for event, facts in pair_evidence:
+                self.emit(event, facts)
+
+    def _on_backend(self, msg, pair_evidence):
         if not isinstance(msg, SimulationContactState):
             self._fail('backend state type mismatch')
         with self.lock:
@@ -432,7 +450,9 @@ class LocalTrainingIngress:
             if stamp in self._states:
                 self._fail('unpaused status duplicate physics stamp')
             self._put(self._states, stamp, (raw, received), 'backend')
-            self._join_physics(stamp)
+            joined = self._join_physics(stamp)
+            if joined is not None:
+                pair_evidence.append(joined)
 
     def _join_physics(self, stamp):
         from rclpy.serialization import deserialize_message
@@ -448,7 +468,7 @@ class LocalTrainingIngress:
         pair = TrustedPhysicsPair(stamp, status.physics_iteration, oracle, backend,
                                   oracle_received, backend_received)
         self.physics_pairs.append(pair)
-        self.emit('PHYSICS_PAIR', {'iteration': pair.iteration, 'stamp_ns': stamp,
+        return ('PHYSICS_PAIR', {'iteration': pair.iteration, 'stamp_ns': stamp,
             'oracle_received_ns': oracle_received, 'backend_received_ns': backend_received,
             'trusted_oracle_cdr_hex': oracle.hex(), 'backend_cdr_hex': backend.hex()})
 

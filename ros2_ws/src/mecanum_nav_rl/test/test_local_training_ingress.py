@@ -4,6 +4,7 @@ import copy
 import json
 import math
 from pathlib import Path
+import threading
 from types import SimpleNamespace as NS
 import pytest
 from builtin_interfaces.msg import Time
@@ -110,6 +111,42 @@ def test_noisy_output_has_no_ground_truth_reference_and_keeps_source_stamp(sourc
     modified = f.gt(); modified.pose.pose.position.x = 4.
     with pytest.raises(ValueError, match='same stamp changed bytes'):
         f.ingress.on_ground_truth(modified)
+
+
+@pytest.mark.parametrize('complete_on', ['backend', 'ground_truth'])
+def test_physics_pair_evidence_is_emitted_after_ingress_lock_is_released(source, complete_on):
+    f = source; ingress = f.ingress
+    pair_records = []
+
+    def emit(event, facts):
+        if event == 'PHYSICS_PAIR':
+            acquired = threading.Event()
+
+            def acquire_ingress_lock():
+                with ingress.lock:
+                    acquired.set()
+
+            observer = threading.Thread(target=acquire_ingress_lock)
+            observer.start(); observer.join(timeout=0.5)
+            assert not observer.is_alive(), 'PHYSICS_PAIR evidence blocked the ingress lock'
+            assert acquired.is_set(), 'PHYSICS_PAIR evidence ran while ingress lock was held'
+            pair_records.append(facts)
+        f.events.append((event, facts))
+
+    ingress.emit = emit
+    status = f.backend(iteration=1, sequence=1)
+    if complete_on == 'backend':
+        ingress.on_ground_truth(f.gt())
+        ingress.on_backend(status)
+    else:
+        ingress.on_backend(status)
+        ingress.on_ground_truth(f.gt())
+
+    assert len(ingress.physics_pairs) == len(pair_records) == 1
+    assert pair_records[0]['iteration'] == 1
+    assert pair_records[0]['stamp_ns'] == f.clock.ros
+    assert pair_records[0]['trusted_oracle_cdr_hex']
+    assert pair_records[0]['backend_cdr_hex']
 
 
 def test_pending_ack_requires_new_sample_before_build_and_publish(source):
