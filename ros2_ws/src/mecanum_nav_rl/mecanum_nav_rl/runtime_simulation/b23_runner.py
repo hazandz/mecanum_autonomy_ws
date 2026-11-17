@@ -4068,12 +4068,8 @@ class TrainingWorkerIO:
         if last is None:
             raise RuntimeError('step has no actual Safety publication anchor')
         def drained():
-            receipt = self.final.last_publication
-            if (receipt is None or receipt.source != CommandEnvelope.SOURCE_SAFE_STOP
-                    or receipt.source_instance_id != last.source_instance_id
-                    or receipt.sequence != last.sequence):
-                return None
-            return receipt
+            return self.final.publication_for_source_sequence(
+                source=last.source, sequence=last.sequence)
         receipt = await self.until(drained, deadline_ns=deadline_ns, phase='Final SAFE_STOP publication drain')
         def applied_and_closed():
             application = self.ingress.application_for_receipt(receipt)

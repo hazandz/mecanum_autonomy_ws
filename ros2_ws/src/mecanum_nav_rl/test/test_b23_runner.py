@@ -3822,7 +3822,11 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.read_native_input_watermark = read_watermark
     stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=source,
-        source_instance_id=44, sequence=7, final_publish_sequence=20))
+        source_instance_id=44, sequence=7, final_publish_sequence=20),
+        publication_for_source_sequence=lambda *, source, sequence: NS(
+            source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44,
+            sequence=8, final_publish_sequence=21)
+            if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 8 else None)
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=20,
         applied_final_publisher_instance_id=55, local_zero_override=False,
         applied_receipt_valid=True, paused=False)
@@ -3956,6 +3960,44 @@ def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
     assert ingress.application_for_receipt(wrong) is None
 
 
+def test_final_publication_view_selects_retained_receipt_when_latest_advances():
+    from collections import OrderedDict
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.b23_runner import FinalPublicationView
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+
+    def receipt(*, sequence, publish_sequence):
+        value = FinalIssuedCommandReceipt()
+        value.final_publisher_instance_id = 55
+        value.final_publish_sequence = publish_sequence
+        value.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+        value.sequence = sequence
+        value.source_instance_id = 44
+        return value
+
+    target, latest = receipt(sequence=8, publish_sequence=21), receipt(sequence=9, publish_sequence=22)
+    view = FinalPublicationView(55)
+    view.ingress = NS(
+        receipts=[
+            NS(source=ReceiptSource.SAFE_STOP, source_sequence=8,
+                final_publisher_instance_id=55, final_publish_sequence=21),
+            NS(source=ReceiptSource.SAFE_STOP, source_sequence=9,
+                final_publisher_instance_id=55, final_publish_sequence=22),
+        ],
+        _receipt_bytes=OrderedDict([
+            (21, serialize_message(target)),
+            (22, serialize_message(latest)),
+        ]),
+    )
+
+    assert view.last_publication.sequence == 9
+    selected = view.publication_for_source_sequence(
+        source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, sequence=8)
+    assert selected.sequence == 8
+    assert selected.final_publish_sequence == 21
+
+
 def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_advances():
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
     value, clock = worker()
@@ -3995,9 +4037,16 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
         final_command=(0.0, 0.0, 0.0)) if sequence == 22 else None
     value.ingress.lifecycle = object()
     stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
+    exact_receipt = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44,
+        sequence=8, final_publish_sequence=21)
+    later_receipt = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44,
+        sequence=9, final_publish_sequence=22)
+    selected = []
     value.final = NS(publisher_instance_id=55, last_publication=NS(
         source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
-        final_publish_sequence=20))
+        final_publish_sequence=20), publication_for_source_sequence=lambda *, source, sequence: (
+            selected.append((source, sequence)) or (exact_receipt
+                if (source, sequence) == (stop.SOURCE_SAFE_STOP, 8) else None)))
     value.last_safe_stop_publish_sequence = 20
 
     async def pause(seconds):
@@ -4007,8 +4056,9 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
             watermark[0] = 10
         adapter.safe_stop_sequence = 8
         adapter.last_output = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=8)
-        value.final.last_publication = NS(source=stop.SOURCE_SAFE_STOP,
-            source_instance_id=44, sequence=8, final_publish_sequence=21)
+        # The exact target remains retained, while the latest receipt advances
+        # before freeze_step_streams can inspect the view.
+        value.final.last_publication = later_receipt
         # The exact target receipt was applied, then a later native status
         # replaced backend_state before the coroutine could inspect it.
         value.ingress.backend_state.applied_final_publish_sequence = 22
@@ -4024,6 +4074,7 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     assert events[-1][0] == 'STEP_STREAMS_FROZEN'
     assert events[-1][1]['publish_sequence'] == 21
     assert events[-1][1]['application_iteration'] == 305
+    assert (stop.SOURCE_SAFE_STOP, 8) in selected
 
 
 def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_receipt():
@@ -4104,9 +4155,18 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     zero_policy_receipt.final_publish_sequence=4
     zero_policy_receipt.source=FinalIssuedCommandReceipt.SOURCE_POLICY
     zero_policy_receipt.sequence=1
+    safe_stop_receipt = FinalIssuedCommandReceipt()
+    safe_stop_receipt.final_publisher_instance_id=55
+    safe_stop_receipt.final_publish_sequence=3
+    safe_stop_receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    safe_stop_receipt.sequence=2
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
         source_instance_id=44, sequence=1, final_publish_sequence=2),
-        publication_for_source_sequence=lambda **kwargs: zero_policy_receipt)
+        publication_for_source_sequence=lambda *, source, sequence: (
+            safe_stop_receipt if (source, sequence) ==
+                (FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, 2) else
+            zero_policy_receipt if (source, sequence) ==
+                (FinalIssuedCommandReceipt.SOURCE_POLICY, 1) else None))
     value.ingress.lifecycle = life
     value.ingress.last_published_sample_sequence = 1
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
