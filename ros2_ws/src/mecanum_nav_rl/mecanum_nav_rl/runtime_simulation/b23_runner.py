@@ -1092,6 +1092,28 @@ def complete_jsonl_rows(path):
     return rows
 
 
+def policy_bind_launch_window_remaining_ns(ros_ns, period_ns):
+    """Return whether the next scan cutoff leaves the measured bind window."""
+    if type(ros_ns) is not int or ros_ns < 0:
+        raise ValueError('ROS time must be a non-negative integer')
+    if type(period_ns) is not int or period_ns <= 0:
+        raise ValueError('scan period must be a positive integer')
+    phase_ns = ros_ns % period_ns
+    return period_ns - phase_ns if phase_ns else 0
+
+
+def policy_bind_launch_window_ready(remaining_ns):
+    """Select the measured 40-60 ms pre-scan window for a pending bind.
+
+    Runtime evidence showed that an 80 ms window could spend about 20 ms on
+    the bind ACK, about 69 ms waiting for the first post-ACK sample, then
+    cross a deferred scan edge and exceed the unchanged 100 ms native
+    watchdog. The narrower later window leaves that sensor wait inside the
+    watchdog budget while retaining the existing post-cutoff tick check.
+    """
+    return type(remaining_ns) is int and 40_000_000 <= remaining_ns <= 60_000_000
+
+
 def r05_contact_coverage_mask_event(path):
     """Poll the delayed native event without treating its not-yet-created file as fatal."""
     try:
@@ -4458,18 +4480,15 @@ class TrainingWorkerIO:
         adapter = self.safety.local_training
         period_ns = adapter.scan_period_ns
         now_ros_ns = self.ros_now()
-        phase_ns = now_ros_ns % period_ns
         # Safety defers a normal tick stamped exactly on a cutoff. Treat that
         # instant as the closed edge of the current window, not as a fresh
         # full period; only a strictly post-cutoff tick opens the next window.
-        remaining_ns = period_ns - phase_ns if phase_ns else 0
-        # At the observed 20 ms Gazebo receipt cadence, a 90 ms window is
-        # unreachable: post-cutoff receipts leave 80, 60, 40, or 20 ms. The
-        # successful production path applied its first POLICY receipt within
-        # 42 ms after alignment, so keep the first reachable 80 ms window.
-        # This changes no freshness, scan-gap, or native 100 ms watchdog rule.
-        launch_guard_ns = 80_000_000
-        if remaining_ns >= launch_guard_ns:
+        remaining_ns = policy_bind_launch_window_remaining_ns(now_ros_ns, period_ns)
+        # Keep bind/sample processing away from the 100 ms edge: the 40-60 ms
+        # band was selected from the observed bind, post-ACK sample, and
+        # deferred-tick timings. It changes scheduling only, not any contract
+        # freshness, scan-gap, cutoff, or native watchdog limit.
+        if policy_bind_launch_window_ready(remaining_ns):
             return zero_witness
 
         target_cutoff_ns = now_ros_ns + remaining_ns
@@ -4500,12 +4519,12 @@ class TrainingWorkerIO:
                     continue
                 phase = receipt.publish_stamp_ns % period_ns
                 remaining_to_cutoff = period_ns - phase if phase else 0
-                if remaining_to_cutoff < launch_guard_ns:
+                if not policy_bind_launch_window_ready(remaining_to_cutoff):
                     continue
                 current_ros_ns = self.ros_now()
-                current_phase_ns = current_ros_ns % period_ns
-                current_remaining_ns = period_ns - current_phase_ns if current_phase_ns else 0
-                if current_remaining_ns < launch_guard_ns:
+                current_remaining_ns = policy_bind_launch_window_remaining_ns(
+                    current_ros_ns, period_ns)
+                if not policy_bind_launch_window_ready(current_remaining_ns):
                     continue
                 publication = self.final.publication_for_source_sequence(
                     source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,

@@ -10,6 +10,7 @@ import pytest
 import mecanum_nav_rl.runtime_simulation.b23_runner as runner_module
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
+    policy_bind_launch_window_remaining_ns, policy_bind_launch_window_ready,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
@@ -548,7 +549,7 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
 
 
 @pytest.mark.parametrize(('initial_ros_ns', 'target_cutoff_ns'), [
-    (3_440_000_000, 3_500_000_000),
+    (3_420_000_000, 3_500_000_000),
     # The exact boundary is closed: Safety defers a tick stamped at cutoff.
     (3_500_000_000, 3_500_000_000),
 ])
@@ -569,13 +570,13 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
             88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
     old = receipt(1,3_420_000_000)
-    too_late = receipt(2,3_540_000_000)  # Only 60 ms remains before the next cutoff.
-    aligned = receipt(3,3_620_000_000)  # First reachable 80 ms window; native has received it.
+    too_early = receipt(2,3_520_000_000)  # 80 ms remains; wait for the measured later window.
+    aligned = receipt(3,3_540_000_000)  # 60 ms remains; native has received it.
     publications = {
         sequence:NS(final_publisher_instance_id=77,final_publish_sequence=sequence,
             source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
             final_command=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))
-        for sequence in (2,3)
+    for sequence in (2,3)
     }
     native_path=tmp_path/'native-events.jsonl'
     ingress = NS(receipts=[old], backend_state=status,
@@ -591,7 +592,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     events=[]
     worker.emit=lambda name,facts:events.append((name,facts))
     waits=[]
-    samples=[(3_540_000_000,100,too_late),(3_620_000_000,200,aligned)]
+    samples=[(3_520_000_000,100,too_early),(3_540_000_000,200,aligned)]
 
     async def until(predicate, *, deadline_ns, phase):
         waits.append((deadline_ns,phase))
@@ -621,17 +622,17 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     facts=events[-1][1]
     assert facts['target_cutoff_ns']==target_cutoff_ns
     assert facts['zero_publish_sequence']==3
-    assert facts['zero_publish_stamp_ns']==3_620_000_000
+    assert facts['zero_publish_stamp_ns']==3_540_000_000
     assert facts['native_receive_ns']==201
-    assert facts['remaining_to_cutoff_ns']==80_000_000
+    assert facts['remaining_to_cutoff_ns']==60_000_000
     assert facts['prior_applied_zero_sequence']==1
-    assert facts['remaining_to_next_cutoff_ns']==80_000_000
+    assert facts['remaining_to_next_cutoff_ns']==60_000_000
     assert facts['steady_ns']==200
 
 
-def test_policy_step_keeps_current_zero_witness_when_full_scan_window_remains():
+def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_open():
     worker=object.__new__(TrainingWorkerIO)
-    worker.ros_now=lambda:3_310_000_000
+    worker.ros_now=lambda:3_340_000_000
     worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
     worker.ingress=NS(receipts=[])
     witness={'bound':'actual zero witness'}
@@ -4429,6 +4430,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.document = {'training': {'local_training': {'max_vx_mps': .25, 'max_vy_mps': .2, 'max_wz_radps': .8}}}
     value.policy_source_id = 33
     history = []
+    async def aligned_window(*, deadline_ns, zero_witness):
+        history.append(('scan_alignment', deadline_ns))
+        return zero_witness
+    # This test isolates transaction ordering; launch-window cadence is
+    # covered by test_policy_step_waits_for_applied_zero_after_cutoff... .
+    value.align_policy_step_launch_window = aligned_window
     life = SafetyLifecycleState(); life.barrier_stamp = Time(nanosec=900_000_000)
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
     value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=2,
@@ -6694,6 +6701,25 @@ def test_policy_safety_tick_retries_when_first_defer_is_already_past_boundary():
         'tick_before_retry_ros_ns':80, 'tick_after_retry_ros_ns':101,
         'retry_performed':True, 'steady_ns':100,
     }], retry
+
+
+@pytest.mark.parametrize(('phase_ns','expected_remaining_ns','ready'), [
+    (10_000_000, 90_000_000, False),
+    (40_000_000, 60_000_000, True),
+    (60_000_000, 40_000_000, True),
+    (80_000_000, 20_000_000, False),
+    (0, 0, False),
+])
+def test_policy_bind_uses_later_measured_scan_window(phase_ns, expected_remaining_ns, ready):
+    remaining = policy_bind_launch_window_remaining_ns(2_400_000_000 + phase_ns, 100_000_000)
+    assert remaining == expected_remaining_ns
+    assert policy_bind_launch_window_ready(remaining) is ready
+
+
+@pytest.mark.parametrize(('ros_ns','period_ns'), [(-1, 100), (0, 0), (True, 100)])
+def test_policy_bind_scan_window_rejects_invalid_clock_inputs(ros_ns, period_ns):
+    with pytest.raises(ValueError):
+        policy_bind_launch_window_remaining_ns(ros_ns, period_ns)
 
 
 @pytest.mark.parametrize(('case','error','extra'), [
