@@ -3056,7 +3056,8 @@ private:
               update_iteration, enter_deadline, pending.ingress_steady_ns + 1'000'000'000};
           response.result = ControlResponse::RESULT_QUEUED;
           response.reason_code = ControlResponse::REASON_NONE;
-          gzmsg << "B23_PAUSE_INTENT_ARMED request=" << request.request_sequence
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_PAUSE_INTENT_ARMED request=" << request.request_sequence
                 << " fence=" << fence << " iteration=" << update_iteration
                 << " steady_ns=" << steady_now_ns << " enter_deadline_ns=" << enter_deadline << std::endl;
             std::fflush(stdout);
