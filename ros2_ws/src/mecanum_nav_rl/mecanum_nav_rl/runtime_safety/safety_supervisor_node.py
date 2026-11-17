@@ -521,12 +521,37 @@ class LocalTrainingSafetyAdapter:
                 or noisy.observation0_final_publish_sequence == 0):
             reasons.append('NOISY_OR_ADMISSION_NOT_VALID')
         status = self.status
-        if (status is None or not 0 <= steady_ns - self.status_received <= p['backend_status_receive_age_ms'] * 1_000_000
-                or life is None or self.identity(status) != self.identity(life)
+        status_age_ns = steady_ns - self.status_received
+        status_identity_matches = (status is not None and life is not None
+                                   and self.identity(status) == self.identity(life))
+        backend_gate = {
+            'status_present': status is not None,
+            'status_age_ns': status_age_ns if status is not None else None,
+            'status_age_limit_ns': p['backend_status_receive_age_ms'] * 1_000_000,
+            'status_age_valid': (status is not None and 0 <= status_age_ns
+                                 <= p['backend_status_receive_age_ms'] * 1_000_000),
+            'identity_matches': status_identity_matches,
+            'coverage_complete': bool(status.coverage_complete) if status is not None else None,
+            'contact_source_healthy': bool(status.contact_source_healthy) if status is not None else None,
+            'required_collision_mask': int(status.required_collision_mask) if status is not None else None,
+            'observed_collision_mask': int(status.observed_collision_mask) if status is not None else None,
+            'contact_active': bool(status.contact_active) if status is not None else None,
+            'fault_flags': int(status.fault_flags) if status is not None else None,
+            'paused': bool(status.paused) if status is not None else None,
+            'status_sequence': int(status.status_sequence) if status is not None else None,
+            'backend_instance_id': int(status.backend_instance_id) if status is not None else None,
+            'status_received_ns': self.status_received if status is not None else None,
+            'identity': list(self.identity(status)) if status is not None else None,
+            'lifecycle_identity': list(self.identity(life)) if life is not None else None,
+        }
+        backend_unhealthy = (status is None or not backend_gate['status_age_valid']
+                or life is None or not status_identity_matches
                 or not status.coverage_complete or not status.contact_source_healthy
                 or status.required_collision_mask == 0
                 or status.required_collision_mask != status.observed_collision_mask
-                or status.contact_active or status.fault_flags or status.paused):
+                or status.contact_active or status.fault_flags or status.paused)
+        if backend_unhealthy:
+            self.emit('BACKEND_CONTACT_GATE_REJECTED', backend_gate)
             reasons.append('BACKEND_CONTACT_UNHEALTHY')
         scan = self.scan
         sensor = self.context['sensor']

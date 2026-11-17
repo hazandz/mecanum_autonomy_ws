@@ -423,8 +423,32 @@ def test_local_safety_backend_contact_and_identity_fail_closed(local_adapter, fi
     f = local_adapter; f.adapter.tick(); f.advance()
     setattr(f.backend, field, value); f.backend.status_sequence += 1
     f.adapter.on_backend(f.backend)
-    assert f.adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
-    assert f.state[-1].intervention_reasons
+    message = f.adapter.tick()
+    assert message.source == f.candidate.SOURCE_SAFE_STOP
+    if field == 'backend_instance_id':
+        assert 'BACKEND_IDENTITY' in f.state[-1].intervention_reasons
+        return
+    assert 'BACKEND_CONTACT_UNHEALTHY' in f.state[-1].intervention_reasons
+    evidence = [data for name, data in f.evidence if name == 'BACKEND_CONTACT_GATE_REJECTED']
+    assert evidence, f.evidence
+    gate = evidence[-1]
+    assert gate['status_present'] is True, gate
+    assert gate['status_age_valid'] is True, gate
+    assert gate['identity_matches'] is True, gate
+    assert gate[field] == value, gate
+
+
+def test_local_safety_backend_contact_gate_records_stale_receive_status(local_adapter):
+    """Expose the exact receive-age fact that made the backend gate fail."""
+    f = local_adapter; f.adapter.tick(); f.advance()
+    f.clock.steady += 200_000_001
+    message = f.adapter.tick()
+    assert message.source == message.SOURCE_SAFE_STOP
+    assert 'BACKEND_CONTACT_UNHEALTHY' in f.state[-1].intervention_reasons
+    gate = next(data for name, data in reversed(f.evidence)
+        if name == 'BACKEND_CONTACT_GATE_REJECTED')
+    assert gate['status_age_ns'] == 220_000_001, gate
+    assert gate['status_age_valid'] is False, gate
 
 
 def test_local_safety_uses_verified_base_link_scan_transform(local_adapter):
