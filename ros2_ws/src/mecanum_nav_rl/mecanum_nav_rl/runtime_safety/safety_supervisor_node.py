@@ -660,14 +660,14 @@ class LocalTrainingSafetyAdapter:
                 remaining_ros_ns = boundary - ros_ns
                 ros_delta_ns = ros_ns - previous_ros_ns
                 steady_delta_ns = now - previous
-                # The next physics update is the opportunity for native to
-                # apply this publication. Defer only when the measured
-                # ROS/steady cadence says even one pinned physics step cannot
-                # occur before the scan cutoff. A full Safety period is too
-                # conservative: it suppresses the last pre-cutoff tick when
-                # one real physics update still fits, leaving no exact-cutoff
-                # application receipt for goal-settle evidence.
-                if remaining_ros_ns * steady_delta_ns < self.physics_step_ns * ros_delta_ns:
+                # Native application evidence is reported by a post-physics
+                # status sample. A publication exactly one physics step from
+                # the cutoff can still be observed one step later (the runtime
+                # trace showed publish=1.490 s, apply=1.510 s for a 1.500 s
+                # scan cutoff). Keep the strict source/freshness contract by
+                # deferring at equality as well; do not let that late receipt
+                # become the newest receipt selected at the cutoff.
+                if remaining_ros_ns * steady_delta_ns <= self.physics_step_ns * ros_delta_ns:
                     if self._last_deferred_scan_cutoff_ns != boundary:
                         self._last_deferred_scan_cutoff_ns = boundary
                         self.emit('SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF', {
