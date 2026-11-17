@@ -12,6 +12,7 @@ import json
 import math
 from collections import deque
 from pathlib import Path
+import threading
 import time
 
 MODULE = 'mecanum_nav_rl.runtime_simulation.b23_runner'
@@ -1989,6 +1990,10 @@ class TrainingWorkerIO:
         self.context = Context()
         self.nodes, self.calls = [], []
         self.executor = None
+        self.safety_executor = None
+        self.safety_thread = None
+        self.safety_executor_error = None
+        self._emit_lock = threading.RLock()
         self.pump_task = None
         self.pump_error = None
         self.stop_requested = False
@@ -2023,6 +2028,7 @@ class TrainingWorkerIO:
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
+            self.safety_executor = SingleThreadedExecutor(context=self.context)
             base_params = [Parameter('use_sim_time', value=True)]
             mode_params = base_params + [Parameter('navigation_mode', value='LOCAL_TRAINING')]
             self.node = Node('b23_coordinator_ingress', context=self.context, parameter_overrides=base_params)
@@ -2050,6 +2056,7 @@ class TrainingWorkerIO:
             self.safety = SafetySupervisorNode(context=self.context, parameter_overrides=mode_params,
                 local_training_context=safety_context, evidence_sink=self._emit)
             self.nodes.append(self.safety)
+            self.safety_executor.add_node(self.safety)
             self.safety.local_training.set_stream_enabled(False)
             reliable = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
                 reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
@@ -2086,7 +2093,8 @@ class TrainingWorkerIO:
             self.reset_client = self.node.create_client(Trigger, '/mecanum/safety/request_reset')
             self.rearm_client = self.node.create_client(Trigger, '/mecanum/safety/rearm')
             for node in self.nodes:
-                self.executor.add_node(node)
+                if node is not self.safety:
+                    self.executor.add_node(node)
             self.emit('WORKER_SOURCES', {'policy_source_instance_id': self.policy_source_id,
                 'safe_stop_source_instance_id': self.safe_stop_source_id,
                 'final_publisher_instance_id': self.final.publisher_instance_id,
@@ -2097,24 +2105,28 @@ class TrainingWorkerIO:
             raise
 
     def _emit(self, name, facts):
-        if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
-                    'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
-                    'SAFETY_REJECTED','SAFETY_INPUT_REJECTED','b1_transition_committed',
-                    'NATIVE_APPLICATION_JOINED',
-                    'B23_R04_NOISY_ODOMETRY_DROPPED',
-                    'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
-                    'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
-                    'B23_R04_FAULT_ARMED','B23_R06A_SET_POSE_TARGET_MUTATED',
-                    'B23_R06B_PHYSICS_ITERATION_OMITTED','B23_R06B_FAULT_ARMED',
-                    'B23_R06C_FAULT_ARMED','B23_R06C_OBSERVATION0_RECEIPT_HELD'}:
-            self.events.append((name, copy.deepcopy(facts)))
-        elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
-                and type(facts.get('candidate_sequence')) is int):
-            key = (facts['candidate_source_instance_id'], facts['candidate_sequence'])
-            if key not in self._accepted_policy_event_keys:
-                self._accepted_policy_event_keys.add(key)
+        lock = getattr(self, '_emit_lock', None)
+        if lock is None:
+            lock = self._emit_lock = threading.RLock()
+        with lock:
+            if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
+                        'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
+                        'SAFETY_REJECTED','SAFETY_INPUT_REJECTED','b1_transition_committed',
+                        'NATIVE_APPLICATION_JOINED',
+                        'B23_R04_NOISY_ODOMETRY_DROPPED',
+                        'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
+                        'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
+                        'B23_R04_FAULT_ARMED','B23_R06A_SET_POSE_TARGET_MUTATED',
+                        'B23_R06B_PHYSICS_ITERATION_OMITTED','B23_R06B_FAULT_ARMED',
+                        'B23_R06C_FAULT_ARMED','B23_R06C_OBSERVATION0_RECEIPT_HELD'}:
                 self.events.append((name, copy.deepcopy(facts)))
-        self._event_sink(name, facts)
+            elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
+                    and type(facts.get('candidate_sequence')) is int):
+                key = (facts['candidate_source_instance_id'], facts['candidate_sequence'])
+                if key not in self._accepted_policy_event_keys:
+                    self._accepted_policy_event_keys.add(key)
+                    self.events.append((name, copy.deepcopy(facts)))
+            self._event_sink(name, facts)
 
     def _publish_safety_input(self, message):
         """Packet-scoped R02e transport hold for one real pre-bind producer sample."""
@@ -2394,11 +2406,36 @@ class TrainingWorkerIO:
     def start_pump(self):
         if self.pump_task is not None:
             raise RuntimeError('executor pump already started')
+        if self.safety_executor is None:
+            raise RuntimeError('LOCAL_TRAINING Safety executor is unavailable')
+        if self.safety_thread is not None:
+            raise RuntimeError('LOCAL_TRAINING Safety executor thread already started')
+        self.safety_thread = threading.Thread(
+            target=self._spin_safety_executor,
+            name='b23-safety-steady-executor',
+            daemon=False,
+        )
+        self.safety_thread.start()
         self.pump_task = asyncio.create_task(self._pump(), name='b23-owned-ros-pump')
+
+    def _spin_safety_executor(self):
+        try:
+            self.safety_executor.spin()
+            if not self.stop_requested:
+                raise RuntimeError('LOCAL_TRAINING Safety executor stopped unexpectedly')
+        except BaseException as error:
+            self.safety_executor_error = error
+            self.abort_requested = 'SAFETY_EXECUTOR_FAILED'
+            try:
+                self.emit('SAFETY_EXECUTOR_FAILED', {'error': repr(error), 'steady_ns': self.now()})
+            except BaseException:
+                pass
 
     async def _pump(self):
         try:
             while not self.stop_requested:
+                if self.safety_executor_error is not None:
+                    raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
                 for _ in range(16):
                     self.executor.spin_once(timeout_sec=0.)
                 self._deliver_future_receipts_after_clock()
@@ -3233,13 +3270,17 @@ class TrainingWorkerIO:
 
     def close_context(self):
         errors = []
-        for node in reversed(self.nodes):
+        self.stop_requested = True
+        if self.safety_executor is not None:
             try:
-                if self.executor is not None: self.executor.remove_node(node)
-                node.destroy_node()
+                if not self.safety_executor.shutdown(timeout_sec=1.0):
+                    errors.append('safety_executor_shutdown_not_joined')
             except BaseException as error:
-                errors.append(repr(error))
-        self.nodes.clear()
+                errors.append('safety_executor_shutdown:' + repr(error))
+        if self.safety_thread is not None:
+            self.safety_thread.join(timeout=1.0)
+            if self.safety_thread.is_alive():
+                errors.append('safety_executor_thread_not_joined')
         if self.executor is not None:
             try:
                 if not self.executor.shutdown(timeout_sec=0.):
@@ -3249,6 +3290,18 @@ class TrainingWorkerIO:
             if self.context.ok(): self.context.shutdown()
         except BaseException as error:
             errors.append(repr(error))
+        thread_joined = self.safety_thread is None or not self.safety_thread.is_alive()
+        if thread_joined:
+            for node in reversed(self.nodes):
+                try:
+                    owner = self.safety_executor if node is self.safety else self.executor
+                    if owner is not None: owner.remove_node(node)
+                    node.destroy_node()
+                except BaseException as error:
+                    errors.append(repr(error))
+            self.nodes.clear()
+        else:
+            errors.append('nodes_retained_until_owned_process_reap')
         if errors:
             self.emit('ROS_CONTEXT_CLEANUP_ERRORS', {'errors': errors})
         return errors
@@ -4576,68 +4629,71 @@ class RunEvidence:
     def __init__(self, root, role, *, run_id, invocation_id):
         self.root, self.role, self.run_id, self.invocation_id = Path(root), role, run_id, invocation_id
         self.streams = {}
+        self._lock = threading.RLock()
         self.errors = []
         self.closed = False
 
     def append(self, filename, record):
-        if self.closed:
-            raise RuntimeError('evidence sink already closed')
-        if filename not in self.streams:
-            self.streams[filename] = (self.root/filename).open('x', encoding='utf-8')
-        raw = json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False, default=evidence_json_value)
-        self.streams[filename].write(raw + '\n')
-        self.streams[filename].flush()
+        with self._lock:
+            if self.closed:
+                raise RuntimeError('evidence sink already closed')
+            if filename not in self.streams:
+                self.streams[filename] = (self.root/filename).open('x', encoding='utf-8')
+            raw = json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False, default=evidence_json_value)
+            self.streams[filename].write(raw + '\n')
+            self.streams[filename].flush()
 
     def record(self, event, facts):
-        record = {'event': event, 'facts': facts, 'run_id': self.run_id,
-            'invocation_id': self.invocation_id, 'role': self.role,
-            'collected_ns': time.monotonic_ns()}
-        self.append(self.role + '-events.jsonl', record)
-        if event in self.BOOKS:
-            self.append(event + '.jsonl', record)
-        if event == 'owned_process_output' and facts.get('process') == 'server':
-            import re
-            text = re.sub(r'\x1b\[[0-9;]*m', '', facts['text'])
-            messages = re.split(r'\[Msg\]\s*', text) if '[Msg]' in text else [text]
-            parsed = []
-            embedded_markers = []
-            for index, message in enumerate(messages):
-                match = re.match(r'\s*(B23_[A-Z_]+)\s+(.*)', message)
-                if match:
-                    parsed.append((index, match[1], match[2]))
-                else:
-                    embedded_markers.extend((index, found[1]) for found in
-                        re.finditer(r'\b(B23_[A-Z_]+)\b', message))
-            common = {'raw_record': record, 'server_leader_pid': facts['pid'],
-                'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
-            for index, kind, payload in parsed:
-                pairs = re.findall(r'(\w+)=([^\s]+)', payload)
-                fields = dict(pairs)
-                reason = None
-                if len(fields) != len(pairs):
-                    reason = 'duplicate_native_event_field'
-                elif kind in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
-                    required = ('session', 'backend', 'ingress', 'sample')
-                    if (any(not fields.get(key) for key in required)
-                            or any(re.fullmatch(r'[0-9]+', fields[key]) is None
-                                   for key in ('backend', 'ingress', 'sample'))):
-                        reason = 'incomplete_native_input_identity'
-                event_record = dict(common, message_index=index,
-                    message_text_sha256=hashlib.sha256(payload.encode()).hexdigest())
-                if reason is not None:
+        with self._lock:
+            record = {'event': event, 'facts': facts, 'run_id': self.run_id,
+                'invocation_id': self.invocation_id, 'role': self.role,
+                'collected_ns': time.monotonic_ns()}
+            self.append(self.role + '-events.jsonl', record)
+            if event in self.BOOKS:
+                self.append(event + '.jsonl', record)
+            if event == 'owned_process_output' and facts.get('process') == 'server':
+                import re
+                text = re.sub(r'\x1b\[[0-9;]*m', '', facts['text'])
+                messages = re.split(r'\[Msg\]\s*', text) if '[Msg]' in text else [text]
+                parsed = []
+                embedded_markers = []
+                for index, message in enumerate(messages):
+                    match = re.match(r'\s*(B23_[A-Z_]+)\s+(.*)', message)
+                    if match:
+                        parsed.append((index, match[1], match[2]))
+                    else:
+                        embedded_markers.extend((index, found[1]) for found in
+                            re.finditer(r'\b(B23_[A-Z_]+)\b', message))
+                common = {'raw_record': record, 'server_leader_pid': facts['pid'],
+                    'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
+                for index, kind, payload in parsed:
+                    pairs = re.findall(r'(\w+)=([^\s]+)', payload)
+                    fields = dict(pairs)
+                    reason = None
+                    if len(fields) != len(pairs):
+                        reason = 'duplicate_native_event_field'
+                    elif kind in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
+                        required = ('session', 'backend', 'ingress', 'sample')
+                        if (any(not fields.get(key) for key in required)
+                                or any(re.fullmatch(r'[0-9]+', fields[key]) is None
+                                       for key in ('backend', 'ingress', 'sample'))):
+                            reason = 'incomplete_native_input_identity'
+                    event_record = dict(common, message_index=index,
+                        message_text_sha256=hashlib.sha256(payload.encode()).hexdigest())
+                    if reason is not None:
+                        self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
+                            fields={'reason':reason, 'event_kind':kind,
+                                'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
+                            **event_record))
+                    else:
+                        self.append('native-events.jsonl', dict(kind=kind,
+                            fields=fields, **event_record))
+                for index, marker in embedded_markers:
                     self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
-                        fields={'reason':reason, 'event_kind':kind,
+                        fields={'reason':'event_marker_not_at_message_boundary', 'marker':marker,
                             'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
-                        **event_record))
-                else:
-                    self.append('native-events.jsonl', dict(kind=kind,
-                        fields=fields, **event_record))
-            for index, marker in embedded_markers:
-                self.append('native-events.jsonl', dict(kind='B23_NATIVE_OUTPUT_REJECTED',
-                    fields={'reason':'event_marker_not_at_message_boundary', 'marker':marker,
-                        'raw_text_sha256':hashlib.sha256(facts['text'].encode()).hexdigest()},
-                    message_index=index, raw_record=record, server_leader_pid=facts['pid'],
-                    invocation_id=self.invocation_id, collected_ns=time.monotonic_ns()))
+                        message_index=index, raw_record=record, server_leader_pid=facts['pid'],
+                        invocation_id=self.invocation_id, collected_ns=time.monotonic_ns()))
 
     async def cleanup_publisher(self, batch, deadline):
         """ACK chỉ sau batch đúng ID đã được ghi và các sổ đã flush/fsync."""
@@ -4657,16 +4713,18 @@ class RunEvidence:
 
     def sync(self):
         import os
-        for stream in self.streams.values():
-            stream.flush(); os.fsync(stream.fileno())
+        with self._lock:
+            for stream in self.streams.values():
+                stream.flush(); os.fsync(stream.fileno())
 
     def close(self):
-        try:
-            self.sync()
-        finally:
-            self.closed = True
-            for stream in self.streams.values():
-                stream.close()
+        with self._lock:
+            try:
+                self.sync()
+            finally:
+                self.closed = True
+                for stream in self.streams.values():
+                    stream.close()
 
 
 def load_child_descriptor(path, role):

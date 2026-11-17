@@ -69,6 +69,108 @@ def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
         campaign_phase('R10')
 
 
+def test_worker_safety_timer_executor_runs_independently_and_joins():
+    """Production worker keeps Safety callbacks off the ingress executor pump."""
+    import threading
+
+    safety_started = threading.Event()
+    safety_release = threading.Event()
+    observed = {}
+
+    class SafetyExecutor:
+        def spin(self):
+            observed['safety_thread'] = threading.current_thread().name
+            safety_started.set()
+            assert safety_release.wait(1.0)
+
+        def shutdown(self, timeout_sec):
+            observed['safety_shutdown_timeout'] = timeout_sec
+            safety_release.set()
+            return True
+
+        def remove_node(self, _node):
+            pass
+
+    class MainExecutor:
+        def spin_once(self, timeout_sec):
+            observed['main_thread'] = threading.current_thread().name
+            observed['main_timeout'] = timeout_sec
+            assert safety_started.wait(0.5), 'Safety executor did not start independently'
+            worker.stop_requested = True
+
+        def shutdown(self, timeout_sec):
+            observed['main_shutdown_timeout'] = timeout_sec
+            return True
+
+        def remove_node(self, _node):
+            pass
+
+    class Context:
+        def ok(self):
+            return True
+
+        def shutdown(self):
+            observed['context_shutdown'] = True
+
+    worker = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    worker.safety_executor = SafetyExecutor()
+    worker.executor = MainExecutor()
+    worker.safety_thread = None
+    worker.pump_task = None
+    worker.pump_error = None
+    worker.safety_executor_error = None
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pause = asyncio.sleep
+    worker.context = Context()
+    worker.nodes = []
+    worker.emit = lambda *_args, **_kwargs: None
+    worker._deliver_future_receipts_after_clock = lambda: None
+    worker._deliver_r04d_ingress_lifecycle_if_due = lambda: None
+
+    async def exercise():
+        worker.start_pump()
+        await asyncio.wait_for(worker.pump_task, timeout=1.0)
+
+    asyncio.run(exercise())
+    errors = worker.close_context()
+    assert errors == [], errors
+    assert observed['safety_thread'] == 'b23-safety-steady-executor'
+    assert observed['main_thread'] != observed['safety_thread']
+    assert observed['main_timeout'] == 0.0
+    assert observed['safety_shutdown_timeout'] == 1.0
+    assert observed['context_shutdown'] is True
+    assert worker.safety_thread is not None and not worker.safety_thread.is_alive()
+
+
+def test_run_evidence_serializes_concurrent_safety_and_worker_records(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'worker', run_id='B23-THREAD-TEST',
+        invocation_id='inv-thread-test')
+    failures = []
+
+    def write_events(prefix):
+        try:
+            for index in range(40):
+                evidence.record(prefix, {'index': index})
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=write_events, args=(f'event-{index}',))
+        for index in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2.0)
+    assert not failures, failures
+    assert all(not thread.is_alive() for thread in threads)
+    evidence.close()
+    records = [json.loads(line) for line in (tmp_path / 'worker-events.jsonl').read_text().splitlines()]
+    assert len(records) == 120
+    assert all(record['invocation_id'] == 'inv-thread-test' for record in records)
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
