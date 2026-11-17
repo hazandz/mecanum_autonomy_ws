@@ -4295,7 +4295,7 @@ def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_rece
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
-    'r09b_before_bind'])
+    'r09b_before_bind','first_sample_races_candidate_delivery'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -4392,11 +4392,19 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.ingress.arm_pending = arm
     def publish(envelope):
         history.append(('publish', envelope)); adapter.command = envelope
+        if timing == 'first_sample_races_candidate_delivery':
+            # This callback is after the real ACK/arm point but races with
+            # delivery of the staged POLICY candidate to Safety.
+            value.ingress.last_published_sample_sequence = 3
+            value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+            adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
+                admission_token=[7]*16, sample_sequence=3)
+            history.append(('post_ack_admission_sample_ready', clock.ns))
     value.policy_publisher = NS(publish=publish)
     async def pause(seconds):
         await clock.pause(seconds)
         adapter.last_tick_ros_ns = clock.ns
-        if armed:
+        if armed and timing != 'first_sample_races_candidate_delivery':
             value.ingress.last_published_sample_sequence = 3
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             native_watermark[0] = 3
@@ -4437,7 +4445,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         nonlocal minimum_cutoff
         issue_times.append(clock.ns)
         history.append(('issued', envelope.sequence))
-        assert history[-2][0] == 'publish'
+        assert any(row[0] == 'publish' and row[1] is envelope for row in history)
         assert action_barrier_ns <= envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec
         minimum_cutoff = envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec + 100_000_000
     transition = object()
@@ -4483,7 +4491,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         history.append(('r09b_application_cutoff_aligned',
             policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
-    if timing in ('ready','r09b_callback','r09b_before_bind'):
+    if timing in ('ready','r09b_callback','r09b_before_bind',
+            'first_sample_races_candidate_delivery'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -4509,7 +4518,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
     sample_ready = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_sample_ready')
-    assert issued < sample_ready < hold_off_after_issue < stream_on_after_issue, (
+    if timing == 'first_sample_races_candidate_delivery':
+        assert sample_ready < issued < hold_off_after_issue < stream_on_after_issue, (
+            f'earliest post-ACK sample racing candidate delivery was discarded: {history!r}')
+        assert ('freeze_admission',) in history
+        assert value.safety.local_training.noisy.sample_sequence == 3
+    else:
+        assert issued < sample_ready < hold_off_after_issue < stream_on_after_issue, (
         f'POLICY candidate must be staged after ACK while the stream is closed, then await '
         f'the fresh admission before Safety can emit it: {history!r}')
     assert stream_on_after_issue < immediate_policy_tick, (
@@ -4554,7 +4569,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert before_issue_calls[0][5] - before_issue_calls[0][4] >= 120_000_000
         assert callback_calls == []
     assert commit_calls[-1] > expected_minimum
-    assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback','r09b_before_bind') else clock.ns == 3_000_000_000
+    assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback','r09b_before_bind',
+        'first_sample_races_candidate_delivery') else clock.ns == 3_000_000_000
     assert all(row[0] != 'align_policy_boundary' for row in history)
     assert ('stream', False) in history  # only pending-step freeze before bind
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))

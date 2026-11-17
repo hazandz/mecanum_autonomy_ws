@@ -4650,6 +4650,11 @@ class TrainingWorkerIO:
             deadline_ns=deadline, pending_step_index=token.step_index,
             pending_source_sequence=token.step_index, pending_transition_id=token.transition_id,
             action_barrier_stamp=self._time_msg(barrier))
+        # Pin the producer watermark at the ACK boundary. The first valid
+        # admission can arrive while the POLICY candidate is being delivered
+        # to Safety; taking this watermark after that delivery would discard
+        # that already post-ACK sample and wait for another sensor period.
+        post_ack_floor = self.ingress.last_published_sample_sequence
         self.ingress.arm_pending(ack, publish_admission=held_prebind is None)
         # Stage the bound POLICY candidate while the stream remains closed.
         # Waiting for the first post-ACK admission sample before publishing
@@ -4705,7 +4710,6 @@ class TrainingWorkerIO:
             await self.release_r02e_prebind_input_before_admission(
                 held_sample=held_prebind, ack=ack, deadline_ns=deadline)
         if not align_admission_after_scan_boundary:
-            post_ack_floor = self.ingress.last_published_sample_sequence
             await self.until(lambda: self.ingress.last_published_sample_sequence
                 if (self.ingress.last_published_sample_sequence > post_ack_floor
                     and self.ingress.last_published_admission_state
