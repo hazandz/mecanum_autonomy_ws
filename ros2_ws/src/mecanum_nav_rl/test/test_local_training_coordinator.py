@@ -458,6 +458,73 @@ def test_goal_settle_selects_only_a_fresh_applied_zero_receipt_under_override():
     assert selected[1]['native_actuator_inhibited'] is True
 
 
+def test_goal_settle_accepts_applied_safe_stop_zero_while_inhibited():
+    """A bound SAFE_STOP zero is physical zero evidence during an inhibited gap."""
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    import threading
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    receipt = SimpleNamespace(final_publish_sequence=7, lifecycle=identity,
+        final_publisher_instance_id=11, source=ReceiptSource.SAFE_STOP,
+        session_id='bound-session', ingress_config_hash='a' * 64,
+        publish_stamp_ns=1_000_000_000, received_steady_ns=2_000_000_000,
+        final_command=(0.0, 0.0, 0.0), frame_id='base_link',
+        receipt_key='11:7', admission_valid=True)
+
+    def applied_status(stamp_ns, *, inhibited):
+        status = SimulationContactState()
+        status.header.stamp.sec, status.header.stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000)
+        status.session_id = 'bound-session'; status.config_hash = 'a' * 64
+        status.backend_instance_id = 13
+        status.episode_generation = 2; status.reset_epoch = 3
+        status.runtime_generation = 4
+        status.physics_iteration = stamp_ns // 10_000_000
+        status.actuator_inhibited = inhibited
+        status.applied_receipt_valid = True
+        status.applied_final_publisher_instance_id = 11
+        status.applied_final_publish_sequence = 7
+        status.applied_physics_iteration = status.physics_iteration
+        status.applied_sim_stamp.sec, status.applied_sim_stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000)
+        return status
+
+    applied = applied_status(1_020_000_000, inhibited=True)
+    current = applied_status(1_100_000_000, inhibited=True)
+    source = SimpleNamespace(receipts=[receipt], _receipt_views={7:receipt},
+        _application_bytes={7:serialize_message(applied)},
+        _application_received_ns={7:2_020_000_000},
+        profile={'b1_receipt_max_age_ms':500}, lock=threading.RLock(),
+        identity=SimpleNamespace(session_id='bound-session', config_hash='a'*64,
+                                 backend_instance_id=13), final_publisher_id=11)
+    adapter.ingress = source
+
+    candidate = adapter._goal_settle_zero_receipt_candidate(1_100_000_000, identity)
+    assert candidate is not None
+    assert candidate[0] is receipt
+    selected = adapter._goal_settle_zero_receipt_at_cutoff({
+        'cutoff':1_100_000_000, 'ros_now':1_100_000_000,
+        'steady_now':2_100_000_000, 'identity':identity, 'status':current,
+    }, candidate)
+    assert selected is not None
+    assert selected[0] is receipt
+    assert selected[1]['native_actuator_inhibited'] is True
+    assert selected[1]['native_zero_override'] is False
+
+    # Inhibition does not turn a POLICY receipt into a valid admitted zero.
+    policy_receipt = SimpleNamespace(**{
+        **receipt.__dict__, 'source':ReceiptSource.POLICY,
+    })
+    source.receipts = [policy_receipt]
+    source._receipt_views = {7:policy_receipt}
+    assert adapter._goal_settle_zero_receipt_candidate(
+        1_100_000_000, identity) is None
+
+
 def test_goal_settle_accepts_current_zero_state_within_fresh_receipt_age():
     """A real zero receipt may remain current across a later exact sample cutoff."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState

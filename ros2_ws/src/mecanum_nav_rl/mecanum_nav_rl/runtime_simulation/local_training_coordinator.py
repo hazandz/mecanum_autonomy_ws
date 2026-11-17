@@ -849,7 +849,8 @@ class LocalTrainingB1Adapter:
             applied_stamp = stamp_ns(applied.applied_sim_stamp)
             if (not applied.applied_receipt_valid or applied.local_zero_override
                     or applied.paused or applied.fault_flags != 0
-                    or applied.actuator_inhibited
+                    or (applied.actuator_inhibited
+                        and receipt.source is not ReceiptSource.SAFE_STOP)
                     or lifecycle_identity(applied) != identity
                     or applied.session_id != source.identity.session_id
                     or applied.config_hash != source.identity.config_hash
