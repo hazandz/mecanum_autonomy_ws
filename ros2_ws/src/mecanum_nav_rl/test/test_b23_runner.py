@@ -5746,9 +5746,12 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
         publish_stamp_ns=1_060_000_000, received_steady_ns=clock.ns,
         final_publisher_instance_id=55, final_publish_sequence=11,
         final_command=(0., 0., 0.))
+    # Receipt callbacks may coalesce sequences 12 and 13. This candidate only
+    # unblocks resynchronization; B1 must still prove its own exact adjacent
+    # pair before observation0 can be committed.
     adjacent = NS(source=ReceiptSource.SAFE_STOP, lifecycle=identity,
         publish_stamp_ns=1_120_000_000, received_steady_ns=0,
-        final_publisher_instance_id=55, final_publish_sequence=12,
+        final_publisher_instance_id=55, final_publish_sequence=14,
         final_command=(0., 0., 0.))
     suppressed = NS(_reset_boundary_suppressed_stamp_ns=None,
         _reset_scan_boundary_stamp_ns=None, policy_hold=True,
@@ -5810,16 +5813,18 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
         with pytest.raises(TimeoutError, match='exact native SAFE_STOP application before reset scan boundary'):
             asyncio.run(value.align_reset_zero_receipt_boundary(
                 failed_cutoff_ns=1_000_000_000, deadline_ns=clock.ns + 300_000_000))
-        assert not any(name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY' for name, _ in events)
+        assert not any(name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY_CANDIDATE' for name, _ in events)
         return
     result = asyncio.run(value.align_reset_zero_receipt_boundary(
         failed_cutoff_ns=1_000_000_000, deadline_ns=clock.ns + 300_000_000))
     assert result is True
     assert armed == [target]
-    boundary = next(fields for name, fields in events if name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY')
+    boundary = next(fields for name, fields in events
+        if name == 'RESET_RECEIPT_ALIGNMENT_BOUNDARY_CANDIDATE')
     assert boundary['target_scan_ns'] == target
     assert boundary['selected_receipt_sequence'] == 11
-    assert boundary['adjacent_receipt_sequence'] == 12
+    assert boundary['post_boundary_receipt_sequence'] == 14
+    assert boundary['post_boundary_receipt_stamp_ns'] > target
     assert boundary['receipt_receive_gap_ns'] <= 500_000_000
     assert scan_delivered_ns[0] < application_delivered_ns[0]
     assert application_delivered_ns[0] <= boundary['steady_ns']
@@ -5828,7 +5833,7 @@ def test_reset_zero_alignment_uses_observed_applied_receipt_not_predicted_stamp(
     assert pending['suppressed'] is True
     assert pending['target_scan_ns'] == target
     assert events.index(('RESET_RECEIPT_ALIGNMENT_BOUNDARY_PENDING', pending)) < events.index(
-        ('RESET_RECEIPT_ALIGNMENT_BOUNDARY', boundary))
+        ('RESET_RECEIPT_ALIGNMENT_BOUNDARY_CANDIDATE', boundary))
 
 
 def test_observation0_reanchors_zero_after_pause_before_b1_cutoff():

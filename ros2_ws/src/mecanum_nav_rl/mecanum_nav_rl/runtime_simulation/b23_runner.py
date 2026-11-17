@@ -3866,8 +3866,11 @@ class TrainingWorkerIO:
         The timer's observed ROS stamps need not equal target minus its nominal
         period. Pin the latest actually published/applied zero before the next
         scan, suppress only the repeated zero at that exact scan stamp, then
-        require its adjacent receipt after the cutoff. B1 still enforces the
-        unchanged 500 ms freshness rule for both receipts.
+        wait for an observed SAFE_STOP receipt after the cutoff. This is only a
+        resynchronization hint: B1 independently selects and proves its exact
+        adjacent receipt pair before committing observation0. Receipt
+        callbacks may coalesce earlier publications, so this wait must not
+        require the first post-cutoff sequence to be visible here.
         """
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
@@ -3974,33 +3977,40 @@ class TrainingWorkerIO:
                     or target_ns - receipt.publish_stamp_ns > max_gap_ns):
                 raise RuntimeError('pre-cutoff reset receipt exceeds 500 ms freshness at scan boundary')
 
-            def next_boundary_receipt():
-                matches = [item for item in self.ingress.receipts
-                    if item.final_publisher_instance_id == receipt.final_publisher_instance_id
-                    and item.final_publish_sequence == receipt.final_publish_sequence + 1]
+            def post_boundary_receipt_candidate():
+                with self.ingress.lock:
+                    matches = [item for item in self.ingress.receipts
+                        if item.final_publisher_instance_id == receipt.final_publisher_instance_id
+                        and item.final_publish_sequence > receipt.final_publish_sequence
+                        and item.publish_stamp_ns > target_ns]
                 if not matches:
                     return None
-                if (len(matches) != 1 or matches[0].lifecycle != identity
-                        or matches[0].source is not ReceiptSource.SAFE_STOP
-                        or matches[0].publish_stamp_ns <= target_ns
-                        or any(matches[0].final_command)):
-                    raise RuntimeError('post-cutoff SAFE_STOP receipt does not prove the adjacent boundary')
-                return matches[0]
+                matches.sort(key=lambda item: item.final_publish_sequence)
+                candidate = matches[0]
+                if (sum(item.final_publish_sequence == candidate.final_publish_sequence
+                        for item in matches) != 1
+                        or candidate.lifecycle != identity
+                        or candidate.source is not ReceiptSource.SAFE_STOP
+                        or any(candidate.final_command)):
+                    raise RuntimeError('post-cutoff receipt candidate is not the bound zero SAFE_STOP')
+                return candidate
 
             adjacent_deadline = min(deadline_ns, receipt.received_steady_ns + max_gap_ns)
-            adjacent = await self.until(next_boundary_receipt, deadline_ns=adjacent_deadline,
-                phase='post-cutoff reset SAFE_STOP boundary receipt')
-            receive_gap_ns = adjacent.received_steady_ns - receipt.received_steady_ns
+            candidate = await self.until(post_boundary_receipt_candidate, deadline_ns=adjacent_deadline,
+                phase='post-cutoff reset SAFE_STOP receipt candidate')
+            receive_gap_ns = candidate.received_steady_ns - receipt.received_steady_ns
             if (not 0 <= receive_gap_ns <= max_gap_ns
-                    or self.now() - adjacent.received_steady_ns > max_gap_ns):
+                    or self.now() < candidate.received_steady_ns
+                    or self.now() - candidate.received_steady_ns > max_gap_ns
+                    or candidate.publish_stamp_ns - target_ns > max_gap_ns):
                 raise RuntimeError('reset SAFE_STOP publication gap exceeded 500 ms freshness')
-            self.emit('RESET_RECEIPT_ALIGNMENT_BOUNDARY', {'target_scan_ns': target_ns,
+            self.emit('RESET_RECEIPT_ALIGNMENT_BOUNDARY_CANDIDATE', {'target_scan_ns': target_ns,
                 'selected_receipt_sequence': receipt.final_publish_sequence,
                 'selected_receipt_stamp_ns': receipt.publish_stamp_ns,
                 'selected_application_iteration': state.applied_physics_iteration,
                 'selected_application_stamp_ns': stamp_ns(state.applied_sim_stamp),
-                'adjacent_receipt_sequence': adjacent.final_publish_sequence,
-                'adjacent_receipt_stamp_ns': adjacent.publish_stamp_ns,
+                'post_boundary_receipt_sequence': candidate.final_publish_sequence,
+                'post_boundary_receipt_stamp_ns': candidate.publish_stamp_ns,
                 'receipt_receive_gap_ns': receive_gap_ns, 'steady_ns': self.now()})
             return True
         finally:
