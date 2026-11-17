@@ -4539,18 +4539,20 @@ class TrainingWorkerIO:
         adapter.tick()
         boundary_ns = getattr(adapter, '_last_deferred_scan_cutoff_ns', None)
         if (adapter.last_tick_ros_ns != previous_tick_ros_ns
-                or type(boundary_ns) is not int
-                or ready_ros_ns > boundary_ns):
+                or type(boundary_ns) is not int):
             return
 
         def crossed_boundary():
             current_ros_ns = self.ros_now()
             return current_ros_ns if current_ros_ns > boundary_ns else None
 
-        crossed_ros_ns = await self.until(
-            crossed_boundary,
-            deadline_ns=deadline_ns,
-            phase='post-cutoff physics time for immediate POLICY Safety tick')
+        if ready_ros_ns > boundary_ns:
+            crossed_ros_ns = ready_ros_ns
+        else:
+            crossed_ros_ns = await self.until(
+                crossed_boundary,
+                deadline_ns=deadline_ns,
+                phase='post-cutoff physics time for immediate POLICY Safety tick')
         with adapter.lock:
             tick_before_retry_ros_ns = adapter.last_tick_ros_ns
             if (tick_before_retry_ros_ns is None

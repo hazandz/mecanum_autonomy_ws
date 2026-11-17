@@ -6610,6 +6610,52 @@ def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
     }], retry
 
 
+def test_policy_safety_tick_retries_when_first_defer_is_already_past_boundary():
+    io = object.__new__(TrainingWorkerIO)
+    io.safety = NS(local_training=None)
+    io.events = []
+    io.deadline_ns = 1_000
+    io.now = lambda: 100
+    io.ros_now = lambda: 101
+    io.emit = lambda name, facts: io.events.append((name, facts))
+
+    class Adapter:
+        def __init__(self):
+            self.last_tick_ros_ns = 80
+            self._last_deferred_scan_cutoff_ns = None
+            self.lock = threading.RLock()
+            self.calls = 0
+
+        def tick(self):
+            self.calls += 1
+            if self.calls == 1:
+                # The first steady tick crosses the cutoff and defers, even
+                # though the runner's pre-tick ROS sample is already later.
+                self._last_deferred_scan_cutoff_ns = 100
+                return
+            self.last_tick_ros_ns = 101
+
+    adapter = Adapter()
+    io.safety.local_training = adapter
+
+    async def until(*_args, **_kwargs):
+        raise AssertionError('an already crossed cutoff must retry immediately')
+
+    io.until = until
+    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+        deadline_ns=900, step_index=8, sample_sequence=43))
+
+    assert adapter.calls == 2
+    assert adapter.last_tick_ros_ns == 101
+    retry = [facts for name, facts in io.events
+        if name == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF']
+    assert retry == [{
+        'step_index':8, 'boundary_ns':100, 'crossed_ros_ns':101,
+        'tick_before_retry_ros_ns':80, 'tick_after_retry_ros_ns':101,
+        'retry_performed':True, 'steady_ns':100,
+    }], retry
+
+
 @pytest.mark.parametrize(('case','error','extra'), [
     ('R06a', ValueError('measured XY reset error exceeds 0.01 m'),
         [('B23_R06A_SET_POSE_TARGET_MUTATED', {'actual_target':{'x_m':.25}})]),
