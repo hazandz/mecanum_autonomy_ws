@@ -10,7 +10,8 @@ from builtin_interfaces.msg import Time
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from rclpy.serialization import serialize_message
-from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState, SimulationContactState, FinalIssuedCommandReceipt
+from mecanum_nav_rl_interfaces.msg import (SafetyLifecycleState, SimulationContactState,
+    FinalIssuedCommandReceipt, LocalTrainingSafetyInput)
 from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
 from mecanum_nav_rl.core.lifecycle_types import policy_transition_identity, EpisodeLifecycleIdentity
 from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
@@ -133,6 +134,32 @@ def test_pending_ack_requires_new_sample_before_build_and_publish(source):
     assert built['sample_received_ns'] > built['ack_observed_ns']
     assert value.observation0_final_publish_sequence == 1
     assert not hasattr(value, 'pose')
+
+
+def test_pending_admission_can_remain_closed_until_runner_orders_prebind_input(source):
+    f = source; ingress = f.ingress
+    ingress.on_ground_truth(f.gt())
+    ingress.confirm_observation0(f.ack(Control.Request.OP_CONFIRM_OBSERVATION0))
+    pending = f.ack(Control.Request.OP_BIND_PENDING_STEP, 2)
+    ingress.arm_pending(pending, publish_admission=False)
+    f.advance(); held = ingress.on_ground_truth(f.gt())
+    assert held is not None and not f.sent
+    assert ingress.pending_ack is pending
+    assert ingress.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    assert ingress.admission_publication_enabled is False
+
+    ingress.resume_admission_publication()
+    f.advance(); fresh = ingress.on_ground_truth(f.gt())
+    assert fresh is not None and len(f.sent) == 1
+    assert f.sent[0].header.stamp == stamp(fresh.output.snapshot.timestamp_ns)
+    assert list(f.sent[0].measured_twist) == [fresh.output.snapshot.measurement.vx_mps,
+        fresh.output.snapshot.measurement.vy_mps, fresh.output.snapshot.measurement.wz_radps]
+    assert bytes(f.sent[0].admission_token) == bytes([7] * 16)
+
+
+def test_resume_pending_admission_requires_bound_open_step(source):
+    with pytest.raises(ValueError, match='cannot resume admission publication'):
+        source.ingress.resume_admission_publication()
 
 
 def test_pending_requires_observation0_and_real_b1_uuid(source):

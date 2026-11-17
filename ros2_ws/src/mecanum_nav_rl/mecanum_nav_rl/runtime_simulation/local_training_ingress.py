@@ -266,7 +266,9 @@ class LocalTrainingIngress:
                 self._fail('observation0 publication proof identity missing')
             self.observation0_ack = ack
 
-    def arm_pending(self, ack):
+    def arm_pending(self, ack, *, publish_admission=True):
+        if type(publish_admission) is not bool:
+            raise TypeError('publish_admission must be bool')
         with self.lock:
             req, res = self._check_ack(ack, Control.Request.OP_BIND_PENDING_STEP)
             if self.observation0_ack is None or not any(res.pending_admission_token):
@@ -280,7 +282,7 @@ class LocalTrainingIngress:
                 self._fail('pending step binding differs from B1 identity/barrier')
             self.pending_ack = ack
             self.admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
-            self.admission_publication_enabled = True
+            self.admission_publication_enabled = publish_admission
 
     def inhibit(self, *, zero_only=False):
         with self.lock:
@@ -292,6 +294,13 @@ class LocalTrainingIngress:
     def pause_admission_publication(self):
         with self.lock:
             self.admission_publication_enabled = False
+
+    def resume_admission_publication(self):
+        with self.lock:
+            if (self.pending_ack is None
+                    or self.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN):
+                self._fail('cannot resume admission publication without a bound pending POLICY step')
+            self.admission_publication_enabled = True
 
     def on_ground_truth(self, msg):
         from nav_msgs.msg import Odometry

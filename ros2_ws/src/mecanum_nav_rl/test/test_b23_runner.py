@@ -13,7 +13,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
-    verify_r02e_prebind_admission_rejected, verify_r02g_close, r02g_inhibit_operation,
+    verify_r02e_prebind_admission_rejected, verify_r02e_safety_input_enqueued,
+    verify_r02g_close, r02g_inhibit_operation,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
@@ -3589,29 +3590,45 @@ def test_r02_close_marker_remains_observable_when_expected_fault_arrives_first()
 
 def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted():
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02e_prebind_admission_rejected
-    rows = [{'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'9'}},
-        {'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'11'}}]
+    identity = {'session':'session-1','backend':'22','ingress':'11'}
+    rows = [
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'10','receive_ns':'100'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'9'}},
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'11','receive_ns':'200'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'11'}},
+    ]
     result = verify_r02e_prebind_admission_rejected(rows, held_sample_sequence=10,
-        fresh_sample_sequence=11, pending_token=bytes([1])*16)
+        fresh_sample_sequence=11, pending_token=bytes([1])*16,
+        session_id='session-1', backend_instance_id=22, ingress_instance_id=11)
     assert result == {'prebind_sample_sequence':10,'prebind_native_accept_count':0,
         'postbind_sample_sequence':11,'postbind_native_accept_count':1,
+        'prebind_enqueued_before_fresh':True,
         'pending_token_nonzero':True}
-    rows.append({'kind':'B23_ADMISSION_ACCEPTED','fields':{'sample':'10'}})
+    rows.append({'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'10'}})
     with pytest.raises(RuntimeError, match='pre-bind sample was accepted'):
         verify_r02e_prebind_admission_rejected(rows, held_sample_sequence=10,
-            fresh_sample_sequence=11, pending_token=bytes([1])*16)
+            fresh_sample_sequence=11, pending_token=bytes([1])*16,
+            session_id='session-1', backend_instance_id=22, ingress_instance_id=11)
     with pytest.raises(RuntimeError, match='fresh post-bind admission'):
-        verify_r02e_prebind_admission_rejected([], held_sample_sequence=10,
-            fresh_sample_sequence=11, pending_token=bytes([1])*16)
+        verify_r02e_prebind_admission_rejected(rows[:3], held_sample_sequence=10,
+            fresh_sample_sequence=11, pending_token=bytes([1])*16,
+            session_id='session-1', backend_instance_id=22, ingress_instance_id=11)
 
 
 def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
     value, clock = worker()
     native = tmp_path/'native-events.jsonl'
-    record = json.dumps({'kind':'B23_ADMISSION_ACCEPTED',
-        'fields':{'sample':'11'}}).encode()+b'\n'
-    native.write_bytes(b'{"kind":')
-    value.descriptor = {'native_events_path':str(native)}
+    identity = {'session':'session-1','backend':'22','ingress':'11'}
+    records = [
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'10','receive_ns':'100'}},
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'11','receive_ns':'200'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'11'}},
+    ]
+    content = b''.join((json.dumps(row).encode()+b'\n') for row in records)
+    partial = content[:9]
+    native.write_bytes(partial)
+    value.descriptor = {'native_events_path':str(native), 'session_id':'session-1',
+        'backend_instance_id':22,'coordinator_ingress_instance_id':11}
     value.ros_now = lambda: 0
     pauses = []
     async def pause(seconds):
@@ -3619,7 +3636,7 @@ def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
         pauses.append(seconds)
         if len(pauses) == 1:
             with native.open('ab') as stream:
-                stream.write(record[len(b'{"kind":'):])
+                stream.write(content[len(partial):])
     value.pause = pause
 
     result = asyncio.run(value.wait_r02e_native_admission(
@@ -3628,6 +3645,7 @@ def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
 
     assert result == {'prebind_sample_sequence':10,'prebind_native_accept_count':0,
         'postbind_sample_sequence':11,'postbind_native_accept_count':1,
+        'prebind_enqueued_before_fresh':True,
         'pending_token_nonzero':True}
     assert len(pauses) == 1
 
@@ -3637,12 +3655,81 @@ def test_r02e_wait_rejects_prebind_acceptance_while_native_log_is_pending(tmp_pa
     native = tmp_path/'native-events.jsonl'
     native.write_text(json.dumps({'kind':'B23_ADMISSION_ACCEPTED',
         'fields':{'sample':'10'}})+'\n')
-    value.descriptor = {'native_events_path':str(native)}
+    value.descriptor = {'native_events_path':str(native), 'session_id':'session-1',
+        'backend_instance_id':22,'coordinator_ingress_instance_id':11}
     value.ros_now = lambda: 0
     with pytest.raises(RuntimeError, match='pre-bind sample was accepted'):
         asyncio.run(value.wait_r02e_native_admission(
             held_sample_sequence=10, fresh_sample_sequence=11,
             pending_token=bytes([1])*16, deadline_ns=clock.ns+10_000_000))
+
+
+def test_r02e_rejects_native_enqueue_reordering_or_identity_change():
+    identity = {'session':'session-1','backend':'22','ingress':'11'}
+    rows = [
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'11','receive_ns':'100'}},
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'10','receive_ns':'200'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'11'}},
+    ]
+    with pytest.raises(RuntimeError, match='enqueued after the fresh input'):
+        verify_r02e_prebind_admission_rejected(rows, held_sample_sequence=10,
+            fresh_sample_sequence=11, pending_token=bytes([1])*16,
+            session_id='session-1', backend_instance_id=22, ingress_instance_id=11)
+    rows[0]['fields']['session'] = 'other-session'
+    with pytest.raises(RuntimeError, match='identity mismatch'):
+        verify_r02e_safety_input_enqueued(rows, sample_sequence=11,
+            session_id='session-1', backend_instance_id=22,
+            ingress_instance_id=11)
+
+
+def test_r02e_publishes_held_input_then_waits_for_bound_enqueue_before_resume(tmp_path):
+    value, clock = worker()
+    native = tmp_path/'native-events.jsonl'
+    native.write_text('')
+    value.descriptor = {'native_events_path':str(native), 'session_id':'session-1',
+        'backend_instance_id':22,'coordinator_ingress_instance_id':11}
+    value.ros_now = lambda: 0
+    history = []
+    value.emit = lambda name, fields: history.append((name, fields))
+    value.safety_publisher = NS(publish=lambda message: history.append(('publish', message.sample_sequence)))
+    value.ingress = NS(fault=None, backend_state=None,
+        backend_received_ns=clock.ns,
+        resume_admission_publication=lambda: history.append(('resume', clock.ns)))
+    identity = {'session':'session-1','backend':'22','ingress':'11'}
+    row = {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,
+        'sample':'10','receive_ns':'123456'}}
+    async def pause(seconds):
+        await clock.pause(seconds)
+        native.write_text(json.dumps(row)+'\n')
+    value.pause = pause
+    held = NS(sample_sequence=10, admission_token=[1]*16)
+    ack = NS(response=NS(pending_admission_token=[2]*16, applied_binding_revision=7),
+        request=NS(request_sequence=9))
+
+    result = asyncio.run(value.release_r02e_prebind_input_before_admission(
+        held_sample=held, ack=ack, deadline_ns=clock.ns+10_000_000))
+
+    assert result == row
+    assert [entry[0] for entry in history] == [
+        'publish', 'R02E_PREBIND_SAFETY_INPUT_RELEASED_AFTER_BIND',
+        'resume', 'R02E_PREBIND_ENQUEUED_BEFORE_FRESH_PUBLICATION']
+
+
+def test_r02e_runner_keeps_new_admission_closed_until_held_input_is_enqueued():
+    import inspect
+    import mecanum_nav_rl.runtime_simulation.b23_runner as module
+    source = textwrap.dedent(inspect.getsource(module.TrainingWorkerIO.policy_step))
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == 'arm_pending']
+    assert len(calls) == 1
+    keyword = next(item.value for item in calls[0].keywords
+        if item.arg == 'publish_admission')
+    assert ast.dump(keyword, include_attributes=False) == ast.dump(
+        ast.parse('held_prebind is None', mode='eval').body, include_attributes=False)
+    release = source.index('release_r02e_prebind_input_before_admission')
+    first_fresh = source.index('first post-ACK admission publication')
+    assert release < first_fresh
 
 
 def test_active_deadline_is_never_extended_by_predicate_budget():
@@ -4300,8 +4387,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         return BackendControlAck(serialize_message(req), serialize_message(res), clock.ns)
     value.control = NS(transact=transact)
     armed = []
-    def arm(ack):
-        history.append(('arm', ack.observed_steady_ns)); armed.append(ack)
+    def arm(ack, *, publish_admission=True):
+        history.append(('arm', ack.observed_steady_ns, publish_admission)); armed.append(ack)
     value.ingress.arm_pending = arm
     def publish(envelope):
         history.append(('publish', envelope)); adapter.command = envelope

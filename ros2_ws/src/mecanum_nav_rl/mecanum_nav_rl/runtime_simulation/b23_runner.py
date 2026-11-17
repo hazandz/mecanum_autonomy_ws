@@ -1014,22 +1014,70 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
 
 def verify_r02e_prebind_admission_rejected(rows, *, held_sample_sequence,
                                            fresh_sample_sequence, pending_token,
+                                           session_id, backend_instance_id,
+                                           ingress_instance_id,
                                            allow_pending=False):
-    """Require the pre-bind sample to stay out of the new native admission slot."""
+    """Require native enqueue order before judging stale/current slot admission."""
     accepted = [row for row in rows if row.get('kind') == 'B23_ADMISSION_ACCEPTED']
     if any(int(row.get('fields', {}).get('sample', '0')) == held_sample_sequence for row in accepted):
         raise RuntimeError('R02e pre-bind sample was accepted by the new native slot')
+    expected_identity = {'session': str(session_id),
+        'backend': str(backend_instance_id), 'ingress': str(ingress_instance_id)}
+    enqueue_rows = [(index, row) for index, row in enumerate(rows)
+        if row.get('kind') == 'B23_SAFETY_INPUT_ENQUEUED']
+    by_sample = {}
+    for sample_sequence in (held_sample_sequence, fresh_sample_sequence):
+        matching = [(index, row) for index, row in enqueue_rows
+            if int(row.get('fields', {}).get('sample', '0')) == sample_sequence]
+        if not matching:
+            if allow_pending:
+                return None
+            raise RuntimeError('R02e native SafetyInput enqueue evidence is incomplete')
+        if len(matching) != 1:
+            raise RuntimeError('R02e native SafetyInput enqueue was not unique')
+        index, row = matching[0]
+        fields = row.get('fields', {})
+        if any(fields.get(key) != value for key, value in expected_identity.items()):
+            raise RuntimeError('R02e native SafetyInput enqueue identity mismatch')
+        by_sample[sample_sequence] = index
+    if by_sample[held_sample_sequence] >= by_sample[fresh_sample_sequence]:
+        raise RuntimeError('R02e pre-bind SafetyInput was enqueued after the fresh input')
     fresh = [row for row in accepted
         if int(row.get('fields', {}).get('sample', '0')) == fresh_sample_sequence]
     if not fresh and allow_pending:
         return None
     if len(fresh) != 1 or not any(pending_token):
         raise RuntimeError('R02e fresh post-bind admission was not accepted exactly once')
+    fresh_accept_index = next(index for index, row in enumerate(rows)
+        if row.get('kind') == 'B23_ADMISSION_ACCEPTED'
+        and int(row.get('fields', {}).get('sample', '0')) == fresh_sample_sequence)
+    if fresh_accept_index <= by_sample[fresh_sample_sequence]:
+        raise RuntimeError('R02e fresh admission acceptance preceded its native enqueue')
     return {'prebind_sample_sequence': held_sample_sequence,
         'prebind_native_accept_count': 0,
         'postbind_sample_sequence': fresh_sample_sequence,
         'postbind_native_accept_count': 1,
+        'prebind_enqueued_before_fresh': True,
         'pending_token_nonzero': True}
+
+
+def verify_r02e_safety_input_enqueued(rows, *, sample_sequence, session_id,
+                                     backend_instance_id, ingress_instance_id,
+                                     allow_pending=False):
+    """Bind one native callback-queue record to this run's exact sample identity."""
+    matching = [row for row in rows if row.get('kind') == 'B23_SAFETY_INPUT_ENQUEUED'
+        and int(row.get('fields', {}).get('sample', '0')) == sample_sequence]
+    if not matching and allow_pending:
+        return None
+    if len(matching) != 1:
+        raise RuntimeError('R02e native SafetyInput enqueue evidence is missing or duplicated')
+    row = matching[0]
+    fields = row.get('fields', {})
+    if (fields.get('session') != str(session_id)
+            or fields.get('backend') != str(backend_instance_id)
+            or fields.get('ingress') != str(ingress_instance_id)):
+        raise RuntimeError('R02e native SafetyInput enqueue identity mismatch')
+    return row
 
 
 def complete_jsonl_rows(path):
@@ -2730,8 +2778,45 @@ class TrainingWorkerIO:
         return await self.until(lambda: verify_r02e_prebind_admission_rejected(
                 complete_jsonl_rows(path), held_sample_sequence=held_sample_sequence,
                 fresh_sample_sequence=fresh_sample_sequence, pending_token=pending_token,
+                session_id=self.descriptor['session_id'],
+                backend_instance_id=self.descriptor['backend_instance_id'],
+                ingress_instance_id=self.descriptor['coordinator_ingress_instance_id'],
                 allow_pending=True),
             deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
+
+    async def release_r02e_prebind_input_before_admission(self, *, held_sample,
+            ack, deadline_ns):
+        """Enqueue the old-token sample at native before allowing fresh samples."""
+        held_sequence = held_sample.sample_sequence
+        self.safety_publisher.publish(held_sample)
+        self.emit('R02E_PREBIND_SAFETY_INPUT_RELEASED_AFTER_BIND', {
+            'sample_sequence': held_sequence,
+            'prior_token_hex': bytes(held_sample.admission_token).hex(),
+            'new_token_hex': bytes(ack.response.pending_admission_token).hex(),
+            'request_sequence': ack.request.request_sequence,
+            'binding_revision': ack.response.applied_binding_revision,
+            'steady_ns': self.now()})
+        if bytes(held_sample.admission_token) == bytes(ack.response.pending_admission_token):
+            raise RuntimeError('R02e test sample unexpectedly has the current slot token')
+        native_row = await self.wait_r02e_native_input_enqueued(
+            sample_sequence=held_sequence, deadline_ns=deadline_ns)
+        self.ingress.resume_admission_publication()
+        self.emit('R02E_PREBIND_ENQUEUED_BEFORE_FRESH_PUBLICATION', {
+            'sample_sequence': held_sequence,
+            'native_receive_ns': int(native_row['fields']['receive_ns']),
+            'steady_ns': self.now()})
+        return native_row
+
+    async def wait_r02e_native_input_enqueued(self, *, sample_sequence, deadline_ns):
+        path = self.descriptor['native_events_path']
+        return await self.until(lambda: verify_r02e_safety_input_enqueued(
+                complete_jsonl_rows(path), sample_sequence=sample_sequence,
+                session_id=self.descriptor['session_id'],
+                backend_instance_id=self.descriptor['backend_instance_id'],
+                ingress_instance_id=self.descriptor['coordinator_ingress_instance_id'],
+                allow_pending=True),
+            deadline_ns=deadline_ns,
+            phase='R02e exact pre-bind SafetyInput reaches native callback queue')
 
     async def wait_r02a_native_admission(self, *, sample_sequence, step_started_ns,
                                          deadline_ns):
@@ -4565,7 +4650,7 @@ class TrainingWorkerIO:
             deadline_ns=deadline, pending_step_index=token.step_index,
             pending_source_sequence=token.step_index, pending_transition_id=token.transition_id,
             action_barrier_stamp=self._time_msg(barrier))
-        self.ingress.arm_pending(ack)
+        self.ingress.arm_pending(ack, publish_admission=held_prebind is None)
         # Stage the bound POLICY candidate while the stream remains closed.
         # Waiting for the first post-ACK admission sample before publishing
         # the candidate can consume the native 100 ms receipt watchdog window:
@@ -4617,16 +4702,8 @@ class TrainingWorkerIO:
         held_sample_sequence = None
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
-            self.safety_publisher.publish(held_prebind)
-            self.emit('R02E_PREBIND_SAFETY_INPUT_RELEASED_AFTER_BIND', {
-                'sample_sequence': held_sample_sequence,
-                'prior_token_hex': bytes(held_prebind.admission_token).hex(),
-                'new_token_hex': bytes(ack.response.pending_admission_token).hex(),
-                'request_sequence': ack.request.request_sequence,
-                'binding_revision': ack.response.applied_binding_revision,
-                'steady_ns': self.now()})
-            if bytes(held_prebind.admission_token) == bytes(ack.response.pending_admission_token):
-                raise RuntimeError('R02e test sample unexpectedly has the current slot token')
+            await self.release_r02e_prebind_input_before_admission(
+                held_sample=held_prebind, ack=ack, deadline_ns=deadline)
         if not align_admission_after_scan_boundary:
             post_ack_floor = self.ingress.last_published_sample_sequence
             await self.until(lambda: self.ingress.last_published_sample_sequence
