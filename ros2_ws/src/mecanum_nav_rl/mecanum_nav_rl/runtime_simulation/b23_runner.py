@@ -4463,10 +4463,12 @@ class TrainingWorkerIO:
         # instant as the closed edge of the current window, not as a fresh
         # full period; only a strictly post-cutoff tick opens the next window.
         remaining_ns = period_ns - phase_ns if phase_ns else 0
-        # Measured R09a path needs about 60 ms from pending bind through the
-        # first eligible final receipt. Keep a 10 ms margin to the scan
-        # boundary; this does not alter the native 100 ms watchdog.
-        launch_guard_ns = 90_000_000
+        # At the observed 20 ms Gazebo receipt cadence, a 90 ms window is
+        # unreachable: post-cutoff receipts leave 80, 60, 40, or 20 ms. The
+        # successful production path applied its first POLICY receipt within
+        # 42 ms after alignment, so keep the first reachable 80 ms window.
+        # This changes no freshness, scan-gap, or native 100 ms watchdog rule.
+        launch_guard_ns = 80_000_000
         if remaining_ns >= launch_guard_ns:
             return zero_witness
 

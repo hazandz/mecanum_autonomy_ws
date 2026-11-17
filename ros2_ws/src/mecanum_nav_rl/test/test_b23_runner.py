@@ -554,8 +554,8 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
             88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
     old = receipt(1,3_420_000_000)
-    too_late = receipt(2,3_520_000_000)  # Only 80 ms remains before the next cutoff.
-    aligned = receipt(3,3_610_000_000)  # 90 ms remains; native has received it.
+    too_late = receipt(2,3_540_000_000)  # Only 60 ms remains before the next cutoff.
+    aligned = receipt(3,3_620_000_000)  # First reachable 80 ms window; native has received it.
     publications = {
         sequence:NS(final_publisher_instance_id=77,final_publish_sequence=sequence,
             source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
@@ -576,7 +576,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     events=[]
     worker.emit=lambda name,facts:events.append((name,facts))
     waits=[]
-    samples=[(3_520_000_000,100,too_late),(3_610_000_000,200,aligned)]
+    samples=[(3_540_000_000,100,too_late),(3_620_000_000,200,aligned)]
 
     async def until(predicate, *, deadline_ns, phase):
         waits.append((deadline_ns,phase))
@@ -606,11 +606,11 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     facts=events[-1][1]
     assert facts['target_cutoff_ns']==target_cutoff_ns
     assert facts['zero_publish_sequence']==3
-    assert facts['zero_publish_stamp_ns']==3_610_000_000
+    assert facts['zero_publish_stamp_ns']==3_620_000_000
     assert facts['native_receive_ns']==201
-    assert facts['remaining_to_cutoff_ns']==90_000_000
+    assert facts['remaining_to_cutoff_ns']==80_000_000
     assert facts['prior_applied_zero_sequence']==1
-    assert facts['remaining_to_next_cutoff_ns']==90_000_000
+    assert facts['remaining_to_next_cutoff_ns']==80_000_000
     assert facts['steady_ns']==200
 
 
