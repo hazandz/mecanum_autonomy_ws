@@ -21,7 +21,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r04a_next_step_blocked,
     verify_r04a_zero_baseline, abort_r04a_pending_step_if_active,
     verify_r04c_next_step_blocked, verify_r04c_stale_rejection_and_zero,
-    verify_r04c_stale_issuance_commit_rejected,
+    verify_r04c_stale_issuance_commit_rejected, require_r04c_fault_state,
     verify_r05_contact_query_revocation,
     expected_r05_revoked_query_ack, verify_r07a_unexpected_pause, policy_receipt_count,
     verify_r07a_resumed_inhibition, policy_step_identities,
@@ -2489,6 +2489,7 @@ def test_r04c_delays_scan_only_after_control_policy_commit_path():
     assert "R04c stale scan allowed the next POLICY slot" not in source
     assert 'R04c stale scan Safety rejection and applied zero' in source
     assert 'verify_r04c_stale_issuance_commit_rejected' in source
+    assert 'require_r04c_fault_state' in source
     assert 'R04C_B1_STALE_ISSUANCE_COMMIT_REJECTED' in source
     assert 'fresh_recovery_step_index' in source
     assert 'policy_step_index=recovery_step' in source
@@ -3102,6 +3103,22 @@ def test_r04c_exact_stale_b1_receipt_rejection_is_bound_to_applied_step_and_late
         verify_r04c_stale_issuance_commit_rejected(NS(events=events),
             step_index=2, error=error, error_steady_ns=700_000_000,
             delayed_delivery=events[3][1])
+
+
+def test_r04c_failure_before_hook_arm_preserves_primary_error_and_event():
+    events = []
+    io = NS(now=lambda:1234,
+        emit=lambda name, facts:events.append((name, facts)))
+    original = TimeoutError('SAFE_STOP application timed out before hook arm')
+    with pytest.raises(RuntimeError, match='TimeoutError: SAFE_STOP application timed out') as caught:
+        require_r04c_fault_state(io, original)
+    assert caught.value.__cause__ is original
+    assert events == [('R04C_STEP_FAILED_BEFORE_FAULT_ARM', {
+        'error_type':'TimeoutError',
+        'error':'SAFE_STOP application timed out before hook arm',
+        'steady_ns':1234})]
+    io._r04_fault_state = {'case':'R04c','triggered':0,'scheduled':0,'delivered':0}
+    assert require_r04c_fault_state(io, original) is io._r04_fault_state
 
 
 def test_training_worker_routes_b1_events_through_worker_event_recorder():

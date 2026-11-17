@@ -1810,6 +1810,18 @@ async def await_r04c_stale_scan_zero(io, *, delayed_delivery_ns, step_index):
         phase='R04c production stale-scan rejection and applied SAFE_STOP zero')
 
 
+def require_r04c_fault_state(io, error):
+    """Preserve the first failure when POLICY setup failed before hook arming."""
+    state = getattr(io, '_r04_fault_state', None)
+    if isinstance(state, dict) and state.get('case') == 'R04c':
+        return state
+    facts = {'error_type':type(error).__name__, 'error':str(error),
+        'steady_ns':io.now()}
+    io.emit('R04C_STEP_FAILED_BEFORE_FAULT_ARM', facts)
+    raise RuntimeError('R04c POLICY step failed before its scan-delay hook was armed: '
+        + type(error).__name__ + ': ' + str(error)) from error
+
+
 def abort_r04a_pending_step_if_active(lifecycle, *, expected_step_index,
                                       reason='R04a_delayed_input_blocked_next_slot'):
     """Abort only an active B1 step; a pre-bind timeout has no step to abort."""
@@ -5992,7 +6004,7 @@ async def training_child(path):
                                 measurement_fault_case=followup_fault_case)
                         except (TimeoutError, RuntimeError) as error:
                             blocked_step_timeout = repr(error)
-                            state = io._r04_fault_state
+                            state = require_r04c_fault_state(io, error)
                             await io.until(lambda: state if state['triggered'] == 1
                                 and state['delivered'] == 1 else None,
                                 deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
@@ -6019,7 +6031,7 @@ async def training_child(path):
                                     'B1 transition commit rejected: POLICY issuance receipt is stale or invalid'):
                                 raise
                             error_steady_ns = io.now()
-                            state = io._r04_fault_state
+                            state = require_r04c_fault_state(io, error)
                             await io.until(lambda: state if state['triggered'] == 1
                                 and state['delivered'] == 1 else None,
                                 deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
