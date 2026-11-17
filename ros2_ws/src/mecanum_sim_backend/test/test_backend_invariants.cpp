@@ -89,6 +89,10 @@ public:
             "ROBOT_URDF_final_description")) / relative;
   }
 
+  static void EmitStructuredDiagnostic(BackendSystem &system,
+      const std::function<void()> &writer)
+  { system.EmitStructuredDiagnostic(writer); }
+
   static bool InjectCurrentTokenState(BackendSystem &system, int state)
   { return system.gate_ && ReceiptGateTestPeer::InjectCurrentTokenState(*system.gate_, state); }
 
@@ -1554,6 +1558,39 @@ Receipt SafeStopReceipt(
   return receipt;
 }
 }  // namespace
+
+TEST(BackendSystemLifecycle, StructuredDiagnosticRecordsAreNotInterleaved)
+{
+  BackendSystem system;
+  std::string captured;
+  auto write = [&](const std::string &record) {
+    BackendSystemTestPeer::EmitStructuredDiagnostic(system, [&] {
+      for (const char byte : record)
+      {
+        captured.push_back(byte);
+        std::this_thread::yield();
+      }
+    });
+  };
+  std::thread first([&] { for (int i = 0; i < 100; ++i) write("A\n"); });
+  std::thread second([&] { for (int i = 0; i < 100; ++i) write("B\n"); });
+  first.join();
+  second.join();
+
+  std::istringstream lines(captured);
+  std::string line;
+  std::uint32_t count_a = 0, count_b = 0, total = 0;
+  while (std::getline(lines, line))
+  {
+    EXPECT_TRUE(line == "A" || line == "B");
+    count_a += line == "A";
+    count_b += line == "B";
+    ++total;
+  }
+  EXPECT_EQ(count_a, 100u);
+  EXPECT_EQ(count_b, 100u);
+  EXPECT_EQ(total, 200u);
+}
 
 TEST(BackendInvariants, BodyFrameConversionPreservesVyAndMeasuredVerticalComponents)
 {

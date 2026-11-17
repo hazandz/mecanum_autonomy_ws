@@ -868,7 +868,8 @@ public:
             decision.accepted->key.publish_sequence : 0;
         const auto source = decision.accepted ?
             static_cast<unsigned>(decision.accepted->source) : 0;
-        gzmsg << "B23_RECEIPT_GATE_RESULT disposition="
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_RECEIPT_GATE_RESULT disposition="
               << static_cast<unsigned>(decision.disposition)
               << " reason=" << decision.reason
               << " sim_ns=" << now_sim
@@ -876,7 +877,8 @@ public:
               << " watermark=" << gate_->Watermark()
               << " next_safe_stop=" << gate_->ExpectedSafeStopSequence()
               << " key=" << key << " source=" << source << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
       }
       if (gate_->WatchdogExpired(timed_decision.steady_now_ns))
       {
@@ -1120,6 +1122,13 @@ public:
 private:
   friend class BackendSystemTestPeer;
 
+  template <typename Writer>
+  void EmitStructuredDiagnostic(Writer &&writer)
+  {
+    std::lock_guard<std::mutex> lock(structured_event_log_mutex_);
+    std::forward<Writer>(writer)();
+  }
+
   void ApplyContactCoverageFault(
       const gz::sim::UpdateInfo &info)
   {
@@ -1138,13 +1147,15 @@ private:
     if (contact_coverage_fault_target_iteration_ == 0)
     {
       contact_coverage_fault_target_iteration_ = info.iterations;
-      gzmsg << "B23_CONTACT_COVERAGE_FAULT_ARMED mode="
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_CONTACT_COVERAGE_FAULT_ARMED mode="
             << contact_coverage_fault_mode_
             << " iteration=" << contact_coverage_fault_target_iteration_
             << " capability_revision=" << capability_revision_
             << " query_ack_ns=" << query_ack_ns
             << " trigger_steady_ns=" << steady_now_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
     if (info.iterations < contact_coverage_fault_target_iteration_)
       return;
@@ -1177,11 +1188,13 @@ private:
     contact_coverage_fault_target_entity_ = selected;
     contact_coverage_fault_target_bit_ = bit->second;
     contact_coverage_fault_fired_ = true;
-    gzmsg << "B23_CONTACT_COVERAGE_MASKED mode="
+    EmitStructuredDiagnostic([&]() {
+      gzmsg << "B23_CONTACT_COVERAGE_MASKED mode="
           << contact_coverage_fault_mode_ << " entity=" << selected_name
           << " entity_id=" << selected << " iteration=" << info.iterations
           << " masked=1" << std::endl;
-    std::fflush(stdout);
+      std::fflush(stdout);
+    });
   }
 
   void ValidateNormalContext(const gz::sim::EntityComponentManager &ecm,
@@ -2337,9 +2350,11 @@ private:
                     !pause_ack_fault_used->exchange(true, std::memory_order_acq_rel);
                 if (inject && pause_ack_fault == "delay_1500ms_once")
                 {
-                  gzmsg << "B23_PAUSE_ACK_FAULT mode=delay_1500ms_once delay_ms=1500"
+                  EmitStructuredDiagnostic([&]() {
+                    gzmsg << "B23_PAUSE_ACK_FAULT mode=delay_1500ms_once delay_ms=1500"
                         << std::endl;
-                  std::fflush(stdout);
+                    std::fflush(stdout);
+                  });
                   pause_ack_fault_timer_ = node_->create_wall_timer(
                       std::chrono::milliseconds(1500),
                       [this, completion = std::move(completion), clock, success]() {
@@ -2350,9 +2365,11 @@ private:
                 }
                 else if (inject && pause_ack_fault == "drop_once")
                 {
-                  gzmsg << "B23_PAUSE_ACK_FAULT mode=drop_once completion=omitted"
+                  EmitStructuredDiagnostic([&]() {
+                    gzmsg << "B23_PAUSE_ACK_FAULT mode=drop_once completion=omitted"
                         << std::endl;
-                  std::fflush(stdout);
+                    std::fflush(stdout);
+                  });
                   return;
                 }
                 completion(success, clock());
@@ -2753,10 +2770,12 @@ private:
           response.pending_admission_token = token;
           applied = true;
           ++control_binding_revision_;
-          gzmsg << "B23_PENDING_BOUND request=" << request.request_sequence
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_PENDING_BOUND request=" << request.request_sequence
                 << " step=" << request.pending_step_index << " iteration=" << update_iteration
                 << " sim_ns=" << sim_stamp_ns << " steady_ns=" << steady_now_ns << std::endl;
-          std::fflush(stdout);
+            std::fflush(stdout);
+          });
         }
       }
     }
@@ -2800,7 +2819,8 @@ private:
             cutoff_ns, sim_stamp_ns);
         if (!proof.valid)
         {
-          gzerr << "B23_OBSERVATION0_PROOF_REJECT reason=" << proof.reason
+          EmitStructuredDiagnostic([&]() {
+            gzerr << "B23_OBSERVATION0_PROOF_REJECT reason=" << proof.reason
                 << " selected_sequence=" << request.selected_zero_final_publish_sequence
                 << " adjacent_sequence=" << request.adjacent_boundary_final_publish_sequence
                 << " cutoff_ns=" << cutoff_ns << " now_ns=" << sim_stamp_ns
@@ -3039,7 +3059,8 @@ private:
           gzmsg << "B23_PAUSE_INTENT_ARMED request=" << request.request_sequence
                 << " fence=" << fence << " iteration=" << update_iteration
                 << " steady_ns=" << steady_now_ns << " enter_deadline_ns=" << enter_deadline << std::endl;
-          std::fflush(stdout);
+            std::fflush(stdout);
+          });
           return;
         }
       }
@@ -3184,9 +3205,11 @@ private:
         return false;
       }
       intent.ack = ack;
-      gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_PAUSE_ACK request=" << intent.request_sequence
             << " received_ns=" << ack.received_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
     return true;
   }
@@ -3209,9 +3232,11 @@ private:
     response.applied_physics_iteration = intent.edge_iteration;
     response.applied_sim_stamp.sec = static_cast<std::int32_t>(intent.edge_sim_ns / 1'000'000'000);
     response.applied_sim_stamp.nanosec = static_cast<std::uint32_t>(intent.edge_sim_ns % 1'000'000'000);
-    gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
+    EmitStructuredDiagnostic([&]() {
+      gzmsg << "B23_PAUSE_APPLIED request=" << intent.request_sequence
           << " steady_ns=" << now_ns << " revision=" << control_binding_revision_ << std::endl;
-    std::fflush(stdout);
+      std::fflush(stdout);
+    });
     control_mutation_pending_ = false;
     pause_intent_.reset();
   }
@@ -3291,9 +3316,11 @@ private:
       current_intent.dispatched_ns = now_ns;
       const auto mailbox = pause_mailbox_;
       const auto sequence = current_intent.request_sequence;
-      gzmsg << "B23_PAUSE_REQUEST_DISPATCHED request=" << sequence
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_PAUSE_REQUEST_DISPATCHED request=" << sequence
             << " steady_ns=" << now_ns << " enter_deadline_ns=" << intent.enter_deadline_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
       try
       {
         reset_pause_dispatch_([mailbox, sequence](bool success, std::int64_t received_ns) {
@@ -3317,9 +3344,11 @@ private:
       reset_pause_hold_ = true;
       reset_hold_sim_ns_ = TimeNs(info);
       reset_hold_advance_ns_ = now_ns;
-      gzmsg << "B23_PAUSE_EDGE request=" << current_intent.request_sequence
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_PAUSE_EDGE request=" << current_intent.request_sequence
             << " steady_ns=" << now_ns << " iteration=" << info.iterations << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
     if ((current_intent.edge_ns == 0 && now_ns > current_intent.enter_deadline_ns) ||
         (!current_intent.ack && now_ns > current_intent.mutation_deadline_ns))
@@ -3346,12 +3375,14 @@ private:
     const auto receive_ns = steady_clock_now_();
     if (msg.source == Receipt::SOURCE_SAFE_STOP)
     {
-      gzmsg << "B23_SAFE_STOP_RECEIPT_INGRESS publisher="
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_SAFE_STOP_RECEIPT_INGRESS publisher="
             << msg.final_publisher_instance_id << " key="
             << msg.final_publish_sequence << " source_sequence="
             << msg.sequence << " stamp_ns=" << facts.stamp_ns
             << " receive_ns=" << receive_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
     if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
         !receipt_fault_mode_.empty())
@@ -3359,45 +3390,53 @@ private:
       receipt_fault_used_ = true;
       if (receipt_fault_mode_ == "drop_policy_once")
       {
-        gzmsg << "B23_RECEIPT_FAULT mode=drop_policy_once publisher="
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_RECEIPT_FAULT mode=drop_policy_once publisher="
               << msg.final_publisher_instance_id << " sequence="
               << msg.final_publish_sequence << " source_sequence="
               << msg.sequence << " receive_ns=" << receive_ns << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
         return;
       }
       if (receipt_fault_mode_ == "mutate_policy_transition_id_once")
       {
         const auto original_transition_id = facts.transition_id;
         facts.transition_id += ".b23-injected-mismatch";
-        gzmsg << "B23_RECEIPT_FAULT mode=mutate_policy_transition_id_once publisher="
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_RECEIPT_FAULT mode=mutate_policy_transition_id_once publisher="
               << msg.final_publisher_instance_id << " sequence="
               << msg.final_publish_sequence << " source_sequence="
               << msg.sequence << " original_transition_id="
               << original_transition_id << " mutated_transition_id="
               << facts.transition_id << " receive_ns=" << receive_ns << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
       }
       if (receipt_fault_mode_ == "hold_policy_until_safe_stop" ||
           receipt_fault_mode_ == "hold_policy_until_inhibit")
       {
         held_policy_receipt_ = std::make_pair(std::move(facts), receive_ns);
-        gzmsg << "B23_POLICY_RECEIPT_HELD mode=" << receipt_fault_mode_
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_POLICY_RECEIPT_HELD mode=" << receipt_fault_mode_
               << " publisher=" << msg.final_publisher_instance_id
               << " sequence=" << msg.final_publish_sequence
               << " source_sequence=" << msg.sequence
               << " receive_ns=" << receive_ns << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
         return;
       }
     }
     if (msg.source == Receipt::SOURCE_POLICY)
     {
-      gzmsg << "B23_POLICY_RECEIPT_INGRESS publisher="
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_POLICY_RECEIPT_INGRESS publisher="
             << msg.final_publisher_instance_id << " sequence="
             << msg.final_publish_sequence << " step=" << msg.step_index
             << " receive_ns=" << receive_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
     if (!gate_)
     {
@@ -3420,12 +3459,14 @@ private:
       held_policy_receipt_.reset();
       if (!gate_ || !gate_->Enqueue(held.first, held.second))
         RecordQueueFault(3, "receipt_gate_release_after_safe_stop", "receipt=held_policy");
-      gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=safe_stop"
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=safe_stop"
             << " publisher=" << held.first.key.publisher_instance_id
             << " sequence=" << held.first.key.publish_sequence
             << " source_sequence=" << held.first.sequence
             << " receive_ns=" << receive_ns << std::endl;
-      std::fflush(stdout);
+        std::fflush(stdout);
+      });
     }
   }
 
@@ -3437,12 +3478,14 @@ private:
     { RecordQueueFault(4, "safety_input_queue", "capacity=receipt_gate"); return; }
     const auto received_ns = steady_clock_now_();
     safety_queue_.push_back({msg, received_ns});
-    gzmsg << "B23_SAFETY_INPUT_ENQUEUED session=" << msg.session_id
+    EmitStructuredDiagnostic([&]() {
+      gzmsg << "B23_SAFETY_INPUT_ENQUEUED session=" << msg.session_id
           << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
           << " sample=" << msg.sample_sequence << " admission=" << static_cast<unsigned>(msg.admission_state)
           << " source_ns=" << TimeNs(msg.header.stamp)
           << " receive_ns=" << received_ns << std::endl;
-    std::fflush(stdout);
+      std::fflush(stdout);
+    });
   }
 
   void ProcessCallbackInputs(std::int64_t sim_now_ns,
@@ -3465,11 +3508,13 @@ private:
           const auto receipt_receive_ns = gate_->FrontPolicyReceiveSteadyNs();
           if (receipt_receive_ns && *receipt_receive_ns <= front.second)
           {
-            gzmsg << "B23_SAFETY_INPUT_CLOSE_DEFERRED_FOR_PRIOR_RECEIPT sample="
+            EmitStructuredDiagnostic([&]() {
+              gzmsg << "B23_SAFETY_INPUT_CLOSE_DEFERRED_FOR_PRIOR_RECEIPT sample="
                   << front.first.sample_sequence << " input_receive_ns="
                   << front.second << " receipt_receive_ns="
                   << *receipt_receive_ns << std::endl;
-            std::fflush(stdout);
+              std::fflush(stdout);
+            });
             break;
           }
         }
@@ -3480,10 +3525,12 @@ private:
           const auto held_ns = steady_now_ns - front.second;
           if (!policy_order_hold_reported_)
           {
-            gzmsg << "B23_POLICY_ADMISSION_HELD sample=" << front.first.sample_sequence
+            EmitStructuredDiagnostic([&]() {
+              gzmsg << "B23_POLICY_ADMISSION_HELD sample=" << front.first.sample_sequence
                   << " receive_ns=" << front.second << " held_ns=" << held_ns
                   << " limit_ns=40000000" << std::endl;
-            std::fflush(stdout);
+              std::fflush(stdout);
+            });
             policy_order_hold_reported_ = true;
           }
           if (held_ns <= 40'000'000) break;
@@ -3521,12 +3568,14 @@ private:
           steady_now_ns < received_ns ||
           steady_now_ns - received_ns > 250'000'000)
       {
-        gzmsg << "B23_SAFETY_INPUT_REJECTED_TIME session=" << msg.session_id
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_SAFETY_INPUT_REJECTED_TIME session=" << msg.session_id
               << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
               << " sample=" << msg.sample_sequence << " source_ns=" << safety_stamp_ns
               << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
               << " sim_now_ns=" << sim_now_ns << " iteration=" << physics_iteration_ << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
         safety_admission_candidate_ = false;
         policy_open_ = false;
         continue;
@@ -3549,12 +3598,14 @@ private:
           held_policy_receipt_.reset();
           if (!gate_ || !gate_->Enqueue(held.first, held.second))
             RecordQueueFault(6, "receipt_gate_release_after_inhibit", "receipt=held_policy");
-          gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=admission_inhibited"
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=admission_inhibited"
                 << " publisher=" << held.first.key.publisher_instance_id
                 << " sequence=" << held.first.key.publish_sequence
                 << " source_sequence=" << held.first.sequence
                 << " receive_ns=" << received_ns << std::endl;
-          std::fflush(stdout);
+            std::fflush(stdout);
+          });
         }
       }
       if (msg.odometry_status == SafetyInput::ODOM_VALID)
@@ -3577,14 +3628,16 @@ private:
       last_safety_sample_sequence_ = msg.sample_sequence;
       if (msg.admission_state != SafetyInput::ADMISSION_POLICY_OPEN)
       {
-        gzmsg << "B23_SAFETY_INPUT_OBSERVED session=" << session_id_
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_SAFETY_INPUT_OBSERVED session=" << session_id_
               << " backend=" << backend_instance_id_ << " ingress=" << msg.ingress_instance_id
               << " sample=" << msg.sample_sequence << " admission=" << static_cast<unsigned>(msg.admission_state)
               << " episode=" << msg.episode_generation << " reset=" << msg.reset_epoch
               << " runtime=" << msg.runtime_generation << " source_ns=" << safety_stamp_ns
               << " receive_ns=" << received_ns << " processed_ns=" << steady_now_ns
               << " iteration=" << physics_iteration_ << std::endl;
-        std::fflush(stdout);
+          std::fflush(stdout);
+        });
       }
       const auto cutoff_ns = TimeNs(msg.observation0_cutoff);
       safety_admission_candidate_ =
@@ -3603,13 +3656,15 @@ private:
             msg.admission_token, safety_stamp_ns, received_ns);
         if (safety_admission_candidate_)
         {
-          gzmsg << "B23_ADMISSION_ACCEPTED session=" << session_id_
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_ADMISSION_ACCEPTED session=" << session_id_
                 << " backend=" << backend_instance_id_
                 << " ingress=" << msg.ingress_instance_id << " sample=" << msg.sample_sequence
                 << " source_ns=" << safety_stamp_ns << " receive_ns=" << received_ns
                 << " processed_ns=" << steady_now_ns
                 << " iteration=" << physics_iteration_ << std::endl;
-          std::fflush(stdout);
+            std::fflush(stdout);
+          });
         }
       }
       if (!safety_admission_candidate_) policy_open_ = false;
@@ -3818,7 +3873,9 @@ private:
     const auto mask = std::uint32_t{1} << cause_id;
     const auto reported = queue_fault_reported_mask_.fetch_or(mask);
     if ((reported & mask) == 0)
-      gzerr << "B23_QUEUE_FAULT cause=" << cause << " " << details << std::endl;
+      EmitStructuredDiagnostic([&]() {
+        gzerr << "B23_QUEUE_FAULT cause=" << cause << " " << details << std::endl;
+      });
     callback_fault_flags_.fetch_or(BackendState::FAULT_QUEUE);
   }
 
@@ -3908,6 +3965,7 @@ private:
   hbtrace_writer *heartbeat_trace_writer_{};
   std::string heartbeat_trace_error_;
   std::mutex callback_mutex_;
+  std::mutex structured_event_log_mutex_;
   std::deque<std::pair<SafetyInput, std::int64_t>> safety_queue_;
   std::string policy_order_fault_;
   std::string receipt_fault_mode_;
