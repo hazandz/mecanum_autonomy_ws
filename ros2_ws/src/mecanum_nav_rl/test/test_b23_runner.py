@@ -3306,10 +3306,13 @@ def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     assert verify_r02_policy_order(tmp_path,case='R02a',step_started_ns=50)['order']=='admission_before_receipt'
     rows[0]['fields']['receive_ns']='150'
     rows[1]['fields']['receive_ns']='100'; rows[1]['fields']['processed_ns']='200'
-    rows.append({'kind':'B23_POLICY_ADMISSION_HELD','fields':{
-        'receive_ns':'100','limit_ns':'40000000'}})
+    rows[0]['fields']['sequence']='53'
+    rows.append({'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+        'source':'1','key':'53','disposition':'3','reason':'accepted_once','steady_ns':'208'}})
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
-    assert verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)['order']=='receipt_before_admission'
+    result=verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=50)
+    assert result['order']=='receipt_before_admission', result
+    assert result['receipt_residence_ns']==58, result
     rows[0]['fields']['receive_ns']='300'
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     with pytest.raises(RuntimeError,match='order mismatch'):
@@ -3340,33 +3343,41 @@ def test_r02a_wait_target_binds_native_admission_to_current_sample_and_session()
         step_started_ns=100) is None
 
 
-def test_r02b_measures_held_receipt_until_native_admission(tmp_path):
+def test_r02b_measures_receipt_residence_until_matching_native_gate_acceptance(tmp_path):
     import json
     path=tmp_path/'native-events.jsonl'
-    admission_ns=1_000_000_000
-    receipt_ns=admission_ns+39_500_000
-    # Admission ingress precedes the POLICY receipt, and the fault hook holds
-    # it in the backend callback queue. The 40 ms contract is the interval
-    # from POLICY receipt ingress until the gate accepts it with admission,
-    # not the time the earlier admission waited for that receipt.
+    admission_receive_ns=1_000_000_000
+    receipt_ns=admission_receive_ns+2_600_000
+    admission_processed_ns=receipt_ns+5_600_000
+    gate_accepted_ns=admission_processed_ns+175_000
+    # The receipt ingress is earlier than native admission processing; the
+    # matching gate result proves the same publication was applied after that
+    # admission, and its measured residence remains within 40 ms.
     rows=[
-        {'kind':'B23_POLICY_ADMISSION_HELD','fields':{
-            'receive_ns':str(admission_ns),'held_ns':'8_000_000','limit_ns':'40000000'}},
         {'kind':'B23_POLICY_RECEIPT_INGRESS','fields':{
-            'step':'1','receive_ns':str(receipt_ns)}},
+            'step':'1','sequence':'53','receive_ns':str(receipt_ns)}},
         {'kind':'B23_ADMISSION_ACCEPTED','fields':{
-            'receive_ns':str(admission_ns),'processed_ns':str(receipt_ns+8_000_000)}},
+            'receive_ns':str(admission_receive_ns),'processed_ns':str(admission_processed_ns)}},
+        {'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+            'source':'1','key':'53','disposition':'3','reason':'accepted_once',
+            'steady_ns':str(gate_accepted_ns)}},
     ]
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
-    result=verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
+    result=verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_receive_ns-1)
     assert result['order']=='receipt_before_admission', result
-    assert result['admission_to_receipt_ns']==39_500_000, result
-    assert result['receipt_to_admission_ns']==8_000_000, result
+    assert result['receipt_residence_ns']==5_775_000, result
+    assert result['receipt_to_admission_ns']==5_600_000, result
 
-    rows[2]['fields']['processed_ns']=str(receipt_ns+40_000_001)
+    rows[2]['fields']['steady_ns']=str(receipt_ns+40_000_001)
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     with pytest.raises(RuntimeError,match='40 ms bounded gate hold'):
-        verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_ns-1)
+        verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_receive_ns-1)
+
+    rows[2]['fields']['steady_ns']=str(gate_accepted_ns)
+    rows[2]['fields']['key']='54'
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    with pytest.raises(RuntimeError,match='lacks accepted native gate result'):
+        verify_r02_policy_order(tmp_path,case='R02b',step_started_ns=admission_receive_ns-1)
 
 
 def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():

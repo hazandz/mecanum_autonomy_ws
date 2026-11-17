@@ -1344,24 +1344,37 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
         raise RuntimeError(f'{case} native gate order mismatch: receipt={receipt_ns} admission={admission_ns}')
     admission_to_receipt_ns = receipt_ns - admission_receive_ns
     receipt_to_admission_ns = admission_ns - receipt_ns
-    if case == 'R02b':
-        # R02b holds the early Safety admission at the backend until a POLICY
-        # receipt reaches the gate. The contract's 40 ms bound applies to the
-        # receipt waiting for that admission to be accepted, not to the earlier
-        # admission callback waiting for a receipt. Compare native receipt
-        # ingress to gate acceptance so the measured interval is the held
-        # receipt's actual queue residence.
-        if not 0 <= receipt_to_admission_ns <= 40_000_000:
-            raise RuntimeError('R02b native receipt exceeded the 40 ms bounded gate hold')
-        held = [row for row in rows if row.get('kind') == 'B23_POLICY_ADMISSION_HELD'
-            and int(row.get('fields',{}).get('receive_ns','0')) == admission_receive_ns]
-        if not held or int(held[0].get('fields',{}).get('limit_ns','0')) != 40_000_000:
-            raise RuntimeError('R02b does not prove the packet-scoped 40 ms admission hold')
-    return {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
+    result = {'case':case,'receipt_ingress_ns':receipt_ns,'admission_received_ns':admission_receive_ns,
         'admission_gate_ns':admission_ns,'admission_minus_receipt_ns':admission_ns-receipt_ns,
         'admission_to_receipt_ns':admission_to_receipt_ns,
         'receipt_to_admission_ns':receipt_to_admission_ns,
         'order':'admission_before_receipt' if admission_ns < receipt_ns else 'receipt_before_admission'}
+    if case == 'R02b':
+        # R02b covers receipt-before-admission: the native receipt gate must
+        # accept this exact POLICY publication after the matching admission is
+        # processed, within the contract's 40 ms receipt residence bound.
+        receipt_sequence = int(receipts[0]['fields']['sequence'])
+        gate_acceptances = [row for row in rows
+            if row.get('kind') == 'B23_RECEIPT_GATE_RESULT'
+            and row.get('fields', {}).get('source') == '1'
+            and row.get('fields', {}).get('key') == str(receipt_sequence)
+            and row.get('fields', {}).get('reason') == 'accepted_once']
+        if not gate_acceptances:
+            raise RuntimeError('R02b lacks accepted native gate result for the observed POLICY receipt')
+        gate_accepted_ns = int(gate_acceptances[0]['fields']['steady_ns'])
+        gate_disposition = int(gate_acceptances[0]['fields']['disposition'])
+        receipt_residence_ns = gate_accepted_ns - receipt_ns
+        if gate_disposition != 3 or not (receipt_ns <= admission_ns <= gate_accepted_ns):
+            raise RuntimeError(
+                'R02b POLICY receipt was not accepted after the matching admission: '
+                f'receipt={receipt_ns} admission={admission_ns} gate={gate_accepted_ns} '
+                f'disposition={gate_disposition}')
+        if not 0 <= receipt_residence_ns <= 40_000_000:
+            raise RuntimeError('R02b native receipt exceeded the 40 ms bounded gate hold')
+        result.update({'receipt_gate_accepted_ns':gate_accepted_ns,
+            'receipt_gate_disposition':gate_disposition,
+            'receipt_residence_ns':receipt_residence_ns})
+    return result
 
 
 def r02a_native_admission_row(rows, *, sample_sequence, session_id,
