@@ -4432,6 +4432,20 @@ class TrainingWorkerIO:
                 'b1_step_aborted': True, 'transition_id': token.transition_id}
         self.safety.local_training.set_policy_hold(False)
         self.safety.local_training.set_stream_enabled(True)
+        # The pending-step bind suppresses SAFE_STOP output so it cannot
+        # revoke the admitted token. Once the exact post-ACK sample and
+        # POLICY candidate have both reached Safety, evaluate that same
+        # production selector immediately instead of waiting for its next
+        # steady timer phase. The normal tick still enforces freshness,
+        # scan-cutoff, limiter and fail-safe checks; a rejected candidate
+        # therefore remains a SAFE_STOP and cannot open motion.
+        self.emit('POLICY_READY_IMMEDIATE_SAFETY_TICK', {
+            'step_index': token.step_index,
+            'sample_sequence': target_sample_sequence,
+            'steady_ns': self.now(),
+            'ros_ns': self.ros_now(),
+        })
+        self.safety.local_training.tick()
         if after_policy_applied is not None:
             from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
             if not callable(after_policy_applied):

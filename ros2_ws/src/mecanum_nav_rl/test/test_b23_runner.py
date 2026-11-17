@@ -3902,9 +3902,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.backend_state.applied_final_publish_sequence = 4
             value.ingress.backend_state.applied_receipt_valid = True
             value.ingress.backend_received_ns = clock.ns
+    def safety_tick():
+        history.append(('safety_tick', clock.ns))
     adapter = NS(safe_stop_sequence=1, policy_hold=True,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
+        tick=safety_tick,
         set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
         scan_period_ns=100_000_000, last_tick_ros_ns=1_000_000_000)
     value.safety = NS(local_training=adapter)
@@ -4064,9 +4067,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     issued = next(i for i, row in enumerate(history) if row[0] == 'issued')
     stream_on_after_issue = next(i for i, row in enumerate(history)
         if i > issued and row == ('stream', True))
+    immediate_policy_tick = next(i for i, row in enumerate(history)
+        if i > issued and row[0] == 'safety_tick')
     hold_off_after_issue = next(i for i, row in enumerate(history)
         if i > issued and row == ('hold', False))
     assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    assert stream_on_after_issue < immediate_policy_tick, (
+        f'production POLICY path did not evaluate Safety immediately after enabling the admitted candidate: {history!r}')
     assert not any(row[0] == 'safe_stop_race_after_pending_bind' for row in history)
     envelope = next(row[1] for row in history if row[0] == 'publish')
     frozen = next(row[1] for row in history
