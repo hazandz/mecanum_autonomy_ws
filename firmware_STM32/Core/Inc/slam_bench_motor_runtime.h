@@ -16,6 +16,9 @@ typedef struct {
     float reverse_ff_u0[4], reverse_ff_kv[4];
     int8_t encoder_tick_sign[4];
     bool experimental_profile_enabled;
+    /* Bench-only exception: tracking guards diagnose but do not SAFE_STOP. */
+    bool manual_slam_bench_profile;
+    bool tracking_guard_faults_nonfatal;
 } slam_bench_motor_config_t;
 
 typedef enum {
@@ -40,12 +43,18 @@ void slam_bench_motor_runtime_stop(void);
 /* Clear a latched controller fault only after an accepted new session CONFIG. */
 bool slam_bench_motor_runtime_new_session(void);
 slam_motor_runtime_fault_t slam_bench_motor_runtime_fault(void);
+/* Last wrong-direction/stall/synchronization guard result; not an MCU fault bit. */
+slam_pid4_fault_t slam_bench_motor_runtime_tracking_diagnostic(void);
+/* Policy helper: only explicit MANUAL_SLAM bench config makes tracking nonfatal. */
+bool slam_bench_motor_tracking_guard_fault_is_fatal(
+    const slam_bench_motor_config_t *config, slam_pid4_fault_t fault);
 bool slam_bench_motor_runtime_enabled(void);
 bool slam_bench_motor_runtime_telemetry_allowed(void);
 void slam_bench_motor_runtime_step(float dt_seconds);
 
 #ifdef MECANUM_HOST_TEST
 void slam_bench_motor_runtime_test_set_fault(slam_motor_runtime_fault_t fault);
+void slam_bench_motor_runtime_test_set_tracking_diagnostic(slam_pid4_fault_t fault);
 unsigned slam_bench_motor_runtime_test_step_calls(void);
 #endif
 

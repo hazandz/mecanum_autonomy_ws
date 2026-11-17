@@ -187,6 +187,20 @@ candidate may saturate before tracking the selected wheel rate. This is a
 source-based calculation, not a measured speed or diagnosis of the reported
 motor noise; it is not operating validation.
 
+MANUAL_SLAM bench telemetry uses `DIAGNOSTIC_MOTOR_TRACKING=16384` for PID4
+wrong-direction, stall and wheel-synchronization detections. Firmware keeps
+these checks active but does not turn them into motor fault `2048` or
+SAFE_STOP in the explicitly selected bench profile; a wheel can remain
+commanded while jammed or rotating incorrectly. The bridge preserves the bit
+and warning detail and permits it as nonfatal only when both manual-bench
+selection and tracking-diagnostic policy are explicitly configured. Other
+fault bits, stale telemetry, UART/session loss, ACTIVE E-stop, hard encoder,
+configuration, control and PWM-peripheral failures remain unhealthy/stopping.
+When the warning is the only diagnostic, MANUAL_SLAM heartbeat `healthy` means
+the session and fatal-fault checks remain valid; the detail explicitly says
+wheel response is not enforced. Other/default modes still classify the bit as
+unhealthy. This does not verify tracking or motor behavior.
+
 Example form (driver launch names and measurement values are supplied by the
 Owner for the exact Pi installation; this is not an executed command):
 

@@ -60,6 +60,10 @@ def test_manual_slam_speed_candidate_and_unverified_button_indices_are_explicit(
     source = LAUNCH.read_text()
     assert '"profile_name": "pid4_candidate_2000cps"' in source
     assert '"experimental_max_wheel_target_cps": 2000.0' in source
+    bridge_node = source[source.index('executable="mecanum_uart_bridge"'):]
+    bridge_node = bridge_node[:bridge_node.index('        Node(')]
+    assert '"manual_slam_bench_selected": True' in bridge_node
+    assert '"manual_slam_tracking_diagnostic_nonfatal": True' in bridge_node
 
 
 def test_jazzy_actions_construct_with_lifecycle_namespace_and_joy_clock(monkeypatch, tmp_path):

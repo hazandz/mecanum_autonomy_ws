@@ -61,6 +61,16 @@ class UartBridgeNode(Node):
             self.declare_parameter("manual_slam_bench_unmonitored_estop", False)
             self._manual_slam_bench_unmonitored_estop = bool(
                 self.get_parameter("manual_slam_bench_unmonitored_estop").value)
+            self.declare_parameter("manual_slam_bench_selected", False)
+            self._manual_slam_bench_selected = bool(
+                self.get_parameter("manual_slam_bench_selected").value)
+            self.declare_parameter("manual_slam_tracking_diagnostic_nonfatal", False)
+            self._manual_slam_tracking_diagnostic_nonfatal = bool(
+                self.get_parameter("manual_slam_tracking_diagnostic_nonfatal").value)
+            if ((self._manual_slam_bench_unmonitored_estop or
+                 self._manual_slam_tracking_diagnostic_nonfatal)
+                    and not self._manual_slam_bench_selected):
+                raise ValueError("MANUAL_SLAM bench exceptions require explicit mode selection")
             self.declare_parameter("lifecycle_timeout_s", LIFECYCLE_TIMEOUT_S)
             if bool(self.get_parameter("use_sim_time").value):
                 raise ValueError("UART hardware adapter requires use_sim_time=false")
@@ -208,14 +218,19 @@ class UartBridgeNode(Node):
                                    or report.packet.reset_epoch != owner_epoch):
             report = None
             fresh = False
-        health = telemetry_health(self._session.state == SessionState.ACTIVE, fresh, report)
+        health = telemetry_health(
+            self._session.state == SessionState.ACTIVE, fresh, report,
+            manual_slam_tracking_diagnostic_nonfatal=getattr(
+                self, "_manual_slam_tracking_diagnostic_nonfatal", False))
         state = make_heartbeat(self._heartbeat_sequence,
             report.packet.reset_epoch if report is not None else (owner_epoch or 0),
             self._session.state == SessionState.ACTIVE, health.fresh,
             report if health.fresh else None,
             self._session.transport_healthy,
             estop_aux_monitored=not bool(getattr(
-                self, "_manual_slam_bench_unmonitored_estop", False)))
+                self, "_manual_slam_bench_unmonitored_estop", False)),
+            manual_slam_tracking_diagnostic_nonfatal=getattr(
+                self, "_manual_slam_tracking_diagnostic_nonfatal", False))
         message = Heartbeat()
         stamp = self.get_clock().now().to_msg()
         message.header.stamp = stamp

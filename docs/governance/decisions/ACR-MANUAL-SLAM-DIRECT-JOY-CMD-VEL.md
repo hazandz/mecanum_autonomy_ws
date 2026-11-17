@@ -117,19 +117,33 @@ physical E-stop and does not establish robot readiness.
   profile only when built from a manifest whose geometry, 937.2 encoder scale,
   wheel order and Owner-reported signs validate. MCU output is disabled at boot;
   movement requires a matching session CONFIG and an accepted nonzero command.
-  Zero command, transport/session failure or PID4 guard fault disables
-  output. A guard fault moves the session to SAFE_STOP and requires a new
-  accepted CONFIG before another command can be accepted. Launch does not
+  Zero command and transport/session failure disable output. Invalid profile,
+  encoder snapshot, control interval/target/PWM, and PWM peripheral-start errors
+  remain fatal and follow their existing SAFE_STOP/fault paths. Launch does not
   configure or rearm the MCU.
 - PID4's 20 ms control cadence, 1 s ramp, per-wheel/direction feedforward,
-  integral/effort caps, maximum dt, wrong-direction, stall and comparable-wheel
-  synchronization fault thresholds are carried into this manual runtime. The
+  integral/effort caps and maximum-dt guard remain in use. For this explicitly
+  selected MANUAL_SLAM bench profile only, wrong-direction, stall and
+  comparable-wheel synchronization results are nonfatal tracking diagnostics:
+  they do not set `MECANUM_FAULT_MOTOR_DRIVER` or put the session in SAFE_STOP.
+  Firmware reports them separately as diagnostic bit `16384`; the bridge keeps
+  that bit and warning detail, and treats it as nonfatal only when the explicit
+  MANUAL_SLAM bench parameter is set. The heartbeat can therefore remain
+  healthy while warning that wheel response is not enforced; `healthy` means
+  telemetry/session and fatal-fault checks passed, not that wheel tracking was
+  measured as correct. Other/default bridge configurations treat this bit as
+  unhealthy. The
   one-shot 10 s arm delay, fixed 5 s autorun, 6 s test-run timeout and 1 s
   stop-hold are omitted for continuous session-owned manual commands; the 1 s
   full-scale ramp becomes a slew limit of the larger current/requested
   magnitude per second. The 150 tick/s synchronization warning is kept
   internally but is not published as telemetry. No exact ELF/flash image or
   hardware behavior is verified by this candidate.
+- The MANUAL_SLAM tracking exception means a jammed or wrongly rotating wheel,
+  or a wheel-speed synchronization error, will not by itself stop output. PWM
+  peripheral failure, invalid configuration/encoder/control data, transport
+  and session faults remain fatal. This is a deliberate bench-only reduction
+  in automatic stopping coverage, not a safety or readiness claim.
 - At 2000 tick/s, the unchanged feedforward equations `u0 + kv × target`
   produce effort demands of approximately 476/496/487/485 permille forward
   and 486/487/502/491 permille reverse (FL/FR/RL/RR), above the unchanged

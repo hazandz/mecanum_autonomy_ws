@@ -1,0 +1,9 @@
+#ifndef MANUAL_SLAM_RUNTIME_FAKE_MAIN_H
+#define MANUAL_SLAM_RUNTIME_FAKE_MAIN_H
+
+#include "stm32f4xx_hal.h"
+
+#define MCU_MOTOR_ENABLE_GPIO_Port GPIOB
+#define MCU_MOTOR_ENABLE_Pin GPIO_PIN_10
+
+#endif

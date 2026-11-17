@@ -93,6 +93,19 @@ static bool motor_fault_enter_safe_stop(void)
     return true;
 }
 
+static void update_tracking_diagnostic_bit(void)
+{
+    slam_pid4_fault_t diagnostic = slam_bench_motor_runtime_tracking_diagnostic();
+    bool tracking = diagnostic == SLAM_PID4_FAULT_WRONG_DIRECTION ||
+                    diagnostic == SLAM_PID4_FAULT_STALL ||
+                    diagnostic == SLAM_PID4_FAULT_SYNC;
+    if (tracking && slam_bench_motor_runtime_fault() == SLAM_MOTOR_RUNTIME_FAULT_NONE) {
+        mcu_fault_bits |= MECANUM_DIAGNOSTIC_MOTOR_TRACKING;
+    } else {
+        mcu_fault_bits &= ~MECANUM_DIAGNOSTIC_MOTOR_TRACKING;
+    }
+}
+
 static void transport_failure(void)
 {
     slam_bench_motor_runtime_stop();
@@ -184,6 +197,7 @@ void control_safety_runtime_service_once(void)
     if (session.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE) {
         slam_bench_motor_runtime_step((float)CONTROL_SAFETY_RUNTIME_PERIOD_MS*0.001f);
         (void)motor_fault_enter_safe_stop();
+        update_tracking_diagnostic_bit();
     }
     while ((budget-- > 0U) && communication_runtime_take_candidate(&candidate)) {
         uint32_t now = HAL_GetTick();

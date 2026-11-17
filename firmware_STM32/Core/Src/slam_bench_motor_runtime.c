@@ -23,7 +23,22 @@ static int8_t controller_sign[MECANUM_WHEEL_COUNT];
 static uint64_t previous_time_us;
 static slam_pid4_guard_state_t pid4_guard;
 static slam_motor_runtime_fault_t runtime_fault;
+static slam_pid4_fault_t tracking_diagnostic;
 static bool initialized, enabled;
+
+static bool is_tracking_guard_fault(slam_pid4_fault_t fault)
+{
+    return fault == SLAM_PID4_FAULT_WRONG_DIRECTION ||
+           fault == SLAM_PID4_FAULT_STALL || fault == SLAM_PID4_FAULT_SYNC;
+}
+
+bool slam_bench_motor_tracking_guard_fault_is_fatal(
+    const slam_bench_motor_config_t *config, slam_pid4_fault_t fault)
+{
+    if (!is_tracking_guard_fault(fault)) return true;
+    return config == NULL || !config->manual_slam_bench_profile ||
+           !config->tracking_guard_faults_nonfatal;
+}
 
 static uint32_t pwm_channel(unsigned i)
 {
@@ -53,7 +68,8 @@ static bool valid_config(void)
         MECANUM_ENCODER_SIGNS_VALID != 1U ||
         MECANUM_MANIFEST_GEOMETRY_VALID != 1U) return false;
 #endif
-    return c->experimental_profile_enabled && c->max_pwm_permille <= 1000.0f;
+    return c->experimental_profile_enabled && c->max_pwm_permille <= 1000.0f &&
+           (!c->tracking_guard_faults_nonfatal || c->manual_slam_bench_profile);
 }
 
 bool slam_bench_motor_runtime_profile_valid(void)
@@ -76,6 +92,7 @@ bool slam_bench_motor_runtime_init(void)
     slam_pid4_guard_reset(&pid4_guard);
     enabled = false;
     runtime_fault = SLAM_MOTOR_RUNTIME_FAULT_NONE;
+    tracking_diagnostic = SLAM_PID4_FAULT_NONE;
     encoder_snapshot_t s;
     if (!encoder_snapshot(&s)) {
         initialized = false;
@@ -116,12 +133,18 @@ bool slam_bench_motor_runtime_new_session(void)
     previous_ticks[2]=s.ticks_rl; previous_ticks[3]=s.ticks_rr;
     previous_time_us=s.monotonic_time_us;
     runtime_fault = SLAM_MOTOR_RUNTIME_FAULT_NONE;
+    tracking_diagnostic = SLAM_PID4_FAULT_NONE;
     return true;
 }
 
 slam_motor_runtime_fault_t slam_bench_motor_runtime_fault(void)
 {
     return runtime_fault;
+}
+
+slam_pid4_fault_t slam_bench_motor_runtime_tracking_diagnostic(void)
+{
+    return tracking_diagnostic;
 }
 
 bool slam_bench_motor_runtime_enabled(void) { return enabled; }
@@ -216,10 +239,18 @@ void slam_bench_motor_runtime_step(float dt)
         &pid4_guard, pid4_guard.ramped_target_cps, measured, effort,
         (uint32_t)elapsed_ms);
     if (guard_fault != SLAM_PID4_FAULT_NONE) {
-        trip(guard_fault == SLAM_PID4_FAULT_WRONG_DIRECTION ||
-             guard_fault == SLAM_PID4_FAULT_STALL || guard_fault == SLAM_PID4_FAULT_SYNC
-             ? SLAM_MOTOR_RUNTIME_FAULT_DRIVER : SLAM_MOTOR_RUNTIME_FAULT_CONTROL);
-        return;
+        if (is_tracking_guard_fault(guard_fault)) {
+            tracking_diagnostic = guard_fault;
+            if (slam_bench_motor_tracking_guard_fault_is_fatal(
+                    &slam_bench_motor_config, guard_fault)) {
+                trip(SLAM_MOTOR_RUNTIME_FAULT_DRIVER);
+                return;
+            }
+            /* MANUAL_SLAM bench only: preserve diagnosis and keep command control active. */
+        } else {
+            trip(SLAM_MOTOR_RUNTIME_FAULT_CONTROL);
+            return;
+        }
     }
 
     if (!enabled) {

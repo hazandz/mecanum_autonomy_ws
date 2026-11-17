@@ -6,6 +6,7 @@ from mecanum_base_bridge.heartbeat import (
     ALLOWED_MCU_FAULTS, ESTOP_AUX_ACTIVE, ESTOP_AUX_INACTIVE,
     ESTOP_AUX_UNKNOWN, SOURCE_MCU, make_heartbeat,
 )
+from mecanum_base_bridge.bridge_session import DIAGNOSTIC_MOTOR_TRACKING
 from mecanum_base_bridge.telemetry_state import telemetry_health
 
 
@@ -69,6 +70,31 @@ def test_unmonitored_estop_unknown_is_truthful_but_mode_scoped():
     fault = make_heartbeat(8, 7, True, True, report(4096, 2), True,
                            estop_aux_monitored=False)
     assert not fault.healthy and fault.fault_bits == 4096
+
+
+def test_tracking_diagnostic_is_preserved_and_nonfatal_only_for_manual_bench():
+    from mecanum_nav_rl_interfaces.msg import Heartbeat
+    bits = DIAGNOSTIC_MOTOR_TRACKING
+    assert Heartbeat.DIAGNOSTIC_MOTOR_TRACKING == bits
+    normal = make_heartbeat(1, 3, True, True, report(bits), True)
+    assert not normal.healthy and normal.fault_bits == bits
+
+    bench = make_heartbeat(
+        2, 3, True, True, report(bits, 2), True,
+        estop_aux_monitored=False,
+        manual_slam_tracking_diagnostic_nonfatal=True)
+    assert bench.healthy and bench.fault_bits == bits
+    assert bench.estop_aux_state == ESTOP_AUX_UNKNOWN
+    assert "tracking diagnostic" in bench.detail
+    assert "not monitored" in bench.detail
+
+    mixed = make_heartbeat(
+        3, 3, True, True, report(bits | 2048, 2), True,
+        estop_aux_monitored=False,
+        manual_slam_tracking_diagnostic_nonfatal=True)
+    assert not mixed.healthy and mixed.fault_bits == bits | 2048
+    assert telemetry_health(True, True, report(bits), True).active
+    assert not telemetry_health(True, True, report(bits | 4096), True).active
 
 
 class _Clock:
@@ -167,6 +193,42 @@ def test_node_heartbeat_drops_stale_mcu_report_after_invalidation():
     UartBridgeNode._heartbeat_tick(adapter)
     message = adapter._heartbeat_pub.messages[-1]
     assert not message.healthy and message.fault_bits == 0
+
+
+def test_tracking_diagnostic_survives_real_bridge_session_and_is_bench_warning():
+    from mecanum_base_bridge.bridge_node import UartBridgeNode
+    from mecanum_base_bridge.bridge_node import SessionState
+    clock, session, accepted = _fault_report_from_real_session_path(
+        DIAGNOSTIC_MOTOR_TRACKING, estop=2, expect_disconnected=False)
+    session.state = SessionState.ACTIVE
+    assert session.state == SessionState.ACTIVE and session.transport_healthy
+    adapter = _heartbeat_adapter(clock, session, accepted, owner_epoch=1)
+    adapter._manual_slam_tracking_diagnostic_nonfatal = True
+    adapter._manual_slam_bench_unmonitored_estop = True
+    UartBridgeNode._heartbeat_tick(adapter)
+    message = adapter._heartbeat_pub.messages[-1]
+    assert message.healthy
+    assert message.fault_bits == DIAGNOSTIC_MOTOR_TRACKING
+    assert message.estop_aux_state == ESTOP_AUX_UNKNOWN
+    assert "tracking diagnostic" in message.detail
+
+
+def test_tracking_diagnostic_does_not_mask_transport_or_hard_motor_fault():
+    from mecanum_base_bridge.bridge_node import UartBridgeNode
+    from mecanum_base_bridge.bridge_node import SessionState
+    for bits, disconnected in ((DIAGNOSTIC_MOTOR_TRACKING | 1, True),
+                               (DIAGNOSTIC_MOTOR_TRACKING | 2048, False),
+                               (DIAGNOSTIC_MOTOR_TRACKING | 4096, False)):
+        clock, session, accepted = _fault_report_from_real_session_path(
+            bits, estop=2, expect_disconnected=disconnected)
+        if not disconnected:
+            session.state = SessionState.ACTIVE
+        adapter = _heartbeat_adapter(clock, session, accepted, owner_epoch=1)
+        adapter._manual_slam_tracking_diagnostic_nonfatal = True
+        adapter._manual_slam_bench_unmonitored_estop = True
+        UartBridgeNode._heartbeat_tick(adapter)
+        message = adapter._heartbeat_pub.messages[-1]
+        assert not message.healthy and message.fault_bits == bits
 
 
 def test_node_heartbeat_does_not_relabel_old_epoch_after_owner_change_and_reconnect():

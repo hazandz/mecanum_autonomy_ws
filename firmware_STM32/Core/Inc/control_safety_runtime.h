@@ -19,6 +19,8 @@
 #define MECANUM_FAULT_MCU_CONTROL_LOOP UINT32_C(1024)
 #define MECANUM_FAULT_MOTOR_DRIVER UINT32_C(2048)
 #define MECANUM_FAULT_ENCODER UINT32_C(4096)
+/* Nonfatal MANUAL_SLAM bench diagnostic; never aliases a hard motor fault. */
+#define MECANUM_DIAGNOSTIC_MOTOR_TRACKING UINT32_C(16384)
 
 typedef struct {
     control_safety_session_state_t state;

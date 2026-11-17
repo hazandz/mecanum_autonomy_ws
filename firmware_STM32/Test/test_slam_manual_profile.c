@@ -15,6 +15,8 @@ int main(void)
     assert(fabsf(slam_bench_motor_config.counts_per_revolution - 937.2f) < 1e-4f);
     assert(fabsf(slam_bench_motor_config.max_wheel_cps - 2000.0f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.max_pwm_permille - 400.0f) < 1e-6f);
+    assert(slam_bench_motor_config.manual_slam_bench_profile);
+    assert(slam_bench_motor_config.tracking_guard_faults_nonfatal);
     assert(fabsf(slam_bench_motor_config.kp - 0.084f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.ki - 1.05f) < 1e-6f);
     assert(fabsf(slam_bench_motor_config.integral_limit - 80.0f) < 1e-6f);

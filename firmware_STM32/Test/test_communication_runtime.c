@@ -525,6 +525,26 @@ static int run_pid4_guard_fault_case(bool enable_watchdog)
     fake_tick = 107U; service_control_task();
     assert(slam_bench_motor_runtime_test_step_calls() > 0U);
 
+    /* Bench tracking diagnostics alone do not move the command session to SAFE_STOP. */
+    const slam_pid4_fault_t tracking_diagnostics[] = {
+        SLAM_PID4_FAULT_WRONG_DIRECTION, SLAM_PID4_FAULT_STALL, SLAM_PID4_FAULT_SYNC
+    };
+    for (unsigned i = 0U; i < sizeof(tracking_diagnostics) / sizeof(tracking_diagnostics[0]); ++i) {
+        slam_bench_motor_runtime_test_set_tracking_diagnostic(tracking_diagnostics[i]);
+        fake_tick++;
+        service_control_task();
+        assert(control_safety_runtime_copy_snapshot(&snapshot));
+        assert(snapshot.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE);
+        assert((snapshot.mcu_fault_bits & MECANUM_FAULT_MOTOR_DRIVER) == 0U);
+        assert((snapshot.mcu_fault_bits & MECANUM_DIAGNOSTIC_MOTOR_TRACKING) != 0U);
+    }
+    slam_bench_motor_runtime_test_set_tracking_diagnostic(SLAM_PID4_FAULT_NONE);
+    fake_tick++;
+    service_control_task();
+    assert(control_safety_runtime_copy_snapshot(&snapshot));
+    assert(snapshot.state == CONTROL_SAFETY_SESSION_COMMAND_ACTIVE);
+    assert((snapshot.mcu_fault_bits & MECANUM_DIAGNOSTIC_MOTOR_TRACKING) == 0U);
+
     /* A hardware-runtime guard fault routes through session SAFE_STOP. */
     slam_bench_motor_runtime_test_set_fault(SLAM_MOTOR_RUNTIME_FAULT_DRIVER);
     fake_tick = 103U;

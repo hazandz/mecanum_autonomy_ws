@@ -43,6 +43,8 @@ const slam_bench_motor_config_t slam_bench_motor_config = {
     .encoder_tick_sign = {MANUAL_SLAM_SIGN_FL, MANUAL_SLAM_SIGN_FR,
                           MANUAL_SLAM_SIGN_RL, MANUAL_SLAM_SIGN_RR},
     .experimental_profile_enabled = true,
+    .manual_slam_bench_profile = true,
+    .tracking_guard_faults_nonfatal = true,
 };
 
 bool slam_bench_motor_profile_pid_config_for_wheel(

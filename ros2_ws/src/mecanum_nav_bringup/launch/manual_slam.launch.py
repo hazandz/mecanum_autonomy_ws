@@ -128,7 +128,9 @@ def _actions(context):
                 "hardware_manifest": manifest,
                 "heartbeat_topic": "/mcu/heartbeat",
                 "lifecycle_timeout_s": 0.6,
+                "manual_slam_bench_selected": True,
                 "manual_slam_bench_unmonitored_estop": True,
+                "manual_slam_tracking_diagnostic_nonfatal": True,
             }],
         ),
         LifecycleNode(

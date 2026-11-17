@@ -38,6 +38,16 @@ if(NOT STM32_ARM_BUILD)
     Core/Src/slam_pid4_guard.c)
   target_link_libraries(test_slam_pid4_guard PRIVATE m)
   add_test(NAME slam_pid4_guard COMMAND test_slam_pid4_guard)
+  add_executable(test_slam_bench_motor_runtime
+    Test/test_slam_bench_motor_runtime.c
+    Core/Src/slam_bench_motor_runtime.c
+    Core/Src/slam_manual_slam_profile.c
+    Core/Src/mecanum_kinematics.c
+    Core/Src/pid_controller.c
+    Core/Src/slam_pid4_guard.c)
+  target_include_directories(test_slam_bench_motor_runtime BEFORE PRIVATE Test/runtime_fakes)
+  target_link_libraries(test_slam_bench_motor_runtime PRIVATE m)
+  add_test(NAME slam_bench_motor_runtime COMMAND test_slam_bench_motor_runtime)
   add_executable(test_boot_id Test/test_boot_id.c Core/Src/boot_id.c)
   add_test(NAME boot_id COMMAND test_boot_id)
   add_executable(test_encoder Test/test_encoder.c Core/Src/encoder.c)

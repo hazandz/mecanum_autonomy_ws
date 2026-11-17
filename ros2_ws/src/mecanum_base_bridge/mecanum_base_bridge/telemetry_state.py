@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 
 from .bridge_session import ALLOWED_MCU_FAULTS
+from .bridge_session import DIAGNOSTIC_MOTOR_TRACKING
 
 
 @dataclass(frozen=True)
@@ -12,7 +13,8 @@ class TelemetryHealth:
     estop_active: bool
 
 
-def telemetry_health(active: bool, fresh: bool, report) -> TelemetryHealth:
+def telemetry_health(active: bool, fresh: bool, report,
+                     manual_slam_tracking_diagnostic_nonfatal: bool = False) -> TelemetryHealth:
     packet = None if report is None else report.packet
     trusted = bool(fresh and packet is not None
                    and type(packet.mcu_fault_bits) is int
@@ -24,5 +26,8 @@ def telemetry_health(active: bool, fresh: bool, report) -> TelemetryHealth:
     faults = packet.mcu_fault_bits
     estop = packet.estop_aux_active == 1
     unknown = packet.estop_aux_active == 2
-    healthy = bool(active and faults == 0 and not estop and not unknown)
+    tracking_only = (manual_slam_tracking_diagnostic_nonfatal
+                     and bool(faults & DIAGNOSTIC_MOTOR_TRACKING)
+                     and faults & ~DIAGNOSTIC_MOTOR_TRACKING == 0)
+    healthy = bool(active and (faults == 0 or tracking_only) and not estop and not unknown)
     return TelemetryHealth(healthy, True, faults, estop)

@@ -174,4 +174,18 @@ FL/FR/RL/RR, exceeding the unchanged PWM cap; the PID controller clamps these
 outputs to 400 permille. This is an offline source calculation, not evidence
 that 2000 tick/s is achieved or that this candidate is suitable to operate.
 
+For the explicitly selected MANUAL_SLAM bench profile only, PID4
+wrong-direction, stall and wheel-synchronization checks remain calculated and
+are retained as diagnostic bit `16384`; they do not set motor fault bit `2048`
+or trigger firmware SAFE_STOP. A jammed or wrongly rotating wheel can therefore
+continue receiving the active command. PWM peripheral start failure still sets
+the hard motor-driver fault; invalid profile, encoder snapshot, target/control
+interval/PWM and UART/session failures retain their existing stop behavior.
+The bridge preserves the diagnostic bit and warning detail, and treats it as
+nonfatal only under explicit MANUAL_SLAM bench selection. In that mode heartbeat
+`healthy` means fresh session/telemetry with no fatal fault; it does not assert
+that wheel speed follows the target. Default/other configurations treat the
+diagnostic bit as unhealthy. This exception does not change command watchdog,
+E-stop reporting, PWM cap, gains or feedforward, and is not runtime validation.
+
 U5 native gate: `cmake -S firmware_STM32 -B /tmp/wp07-u5-host -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/tmp/wp07-u4-venv/bin/python`, `cmake --build /tmp/wp07-u5-host --parallel 2` và `ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/wp07-u5-host --output-on-failure`. ARM gate giữ U4 flags/toolchain/manifest, dùng `/tmp/wp07-u5-arm`; map và ELF nằm trong build directory này. Leak detection được tắt do LeakSanitizer không chạy được trong host ptrace sandbox.

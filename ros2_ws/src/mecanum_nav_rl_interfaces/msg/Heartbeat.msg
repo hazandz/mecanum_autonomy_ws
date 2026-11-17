@@ -23,6 +23,8 @@ uint32 FAULT_MCU_CONTROL_LOOP=1024
 uint32 FAULT_MOTOR_DRIVER=2048
 uint32 FAULT_ENCODER=4096
 uint32 FAULT_IMU=8192
+# Chẩn đoán nonfatal chỉ khi cấu hình tường minh MANUAL_SLAM bench.
+uint32 DIAGNOSTIC_MOTOR_TRACKING=16384
 
 # Trạng thái E-stop phụ được sao chép trung thực từ telemetry STM32.
 uint8 ESTOP_AUX_UNKNOWN=0

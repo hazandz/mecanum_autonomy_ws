@@ -224,6 +224,20 @@ def test_constructor_initializes_with_existing_sim_time_and_no_serial_open(monke
     node.destroy_node()
 
 
+def test_manual_slam_exceptions_require_explicit_mode_selection(monkeypatch):
+    made, module, _steady = _patch_constructor_dependencies(monkeypatch)
+    original = _FaithfulNodeBase.__init__
+
+    def init_with_tracking_exception(self, name):
+        original(self, name)
+        self.overrides["manual_slam_tracking_diagnostic_nonfatal"] = True
+
+    monkeypatch.setattr(_FaithfulNodeBase, "__init__", init_with_tracking_exception)
+    with pytest.raises(ValueError, match="explicit mode selection"):
+        module.UartBridgeNode()
+    assert made["transports"] == [] and made["sessions"] == []
+
+
 def test_uart_bridge_has_one_final_command_input_and_no_joy_session_writer():
     source = inspect.getsource(UartBridgeNode)
     init = inspect.getsource(UartBridgeNode.__init__)
