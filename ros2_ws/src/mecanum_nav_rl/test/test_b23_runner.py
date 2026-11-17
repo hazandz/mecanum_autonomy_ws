@@ -3465,6 +3465,7 @@ def worker():
     value.pump_error, value.expected_paused = None, True
     value.last_clock_ns, value.last_clock_advance_ns = 0, clock.ns
     value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=0)))
+    value.world_client = NS(service_is_ready=lambda: True)
     value.emit = lambda _name, _facts: None
     value.ingress = NS(fault=None, backend_state=None, backend_received_ns=clock.ns)
     return value, clock
@@ -5202,6 +5203,58 @@ def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline
     with pytest.raises(TimeoutError,match='source graph binding'):
         asyncio.run(value.pin_graph(deadline_ns=deadline))
     assert not bound and clock.ns==deadline
+
+
+def test_graph_binding_waits_for_world_control_service_within_same_startup_deadline():
+    value, clock = worker()
+    events, bound, polls = [], [], []
+    def endpoint(name):
+        return NS(node_name=name, node_namespace='/', topic_type='actual/type',
+            endpoint_gid=bytes(range(16)))
+    groups = {
+        '/cmd_vel':[endpoint('final_twist_publisher')],
+        '/mecanum/safety_state':[endpoint('safety_supervisor')],
+        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+    }
+    value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
+    value.emit = lambda event, facts: events.append((event, facts))
+    value.ingress.bind_safety_publisher_gid = lambda gid: bound.append(gid)
+    ready = {'value':False}
+    value.world_client.service_is_ready = lambda: polls.append(clock.ns) or ready['value']
+    async def pause(seconds):
+        await clock.pause(seconds)
+        if len(polls) == 2:
+            ready['value'] = True
+    value.pause = pause
+
+    asyncio.run(value.pin_graph(deadline_ns=clock.ns + 5_000_000))
+
+    assert len(polls) == 3, polls
+    assert bound == [bytes(range(16))]
+    observations = [facts for event, facts in events if event == 'GRAPH_OBSERVATION']
+    assert [row['world_control_service_ready'] for row in observations] == [False, False, True]
+    assert events[-1][0] == 'GRAPH_BOUND'
+
+
+def test_graph_service_not_ready_at_deadline_does_not_bind_publishers():
+    value, clock = worker()
+    bound = []
+    def endpoint(name):
+        return NS(node_name=name, node_namespace='/', topic_type='actual/type',
+            endpoint_gid=bytes(range(16)))
+    groups = {
+        '/cmd_vel':[endpoint('final_twist_publisher')],
+        '/mecanum/safety_state':[endpoint('safety_supervisor')],
+        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+    }
+    value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
+    value.ingress.bind_safety_publisher_gid = lambda gid: bound.append(gid)
+    value.world_client.service_is_ready = lambda: False
+    deadline = clock.ns + 5_000_000
+    with pytest.raises(TimeoutError, match='source graph binding'):
+        asyncio.run(value.pin_graph(deadline_ns=deadline))
+    assert not bound
+    assert clock.ns == deadline
 
 
 def test_subscription_keeps_actual_wire_before_decode_and_callback_failure():
