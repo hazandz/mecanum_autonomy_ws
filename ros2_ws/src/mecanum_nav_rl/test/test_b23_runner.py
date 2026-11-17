@@ -255,6 +255,47 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
         worker.check(expected_native_fault_flags=(1, 7))
 
 
+def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import await_r02_late_receipt_close
+
+    clock = {'steady_ns':100, 'pauses':0}
+    state = NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
+        local_zero_override=False)
+    worker = object.__new__(TrainingWorkerIO)
+    worker.stop_requested = False
+    worker.abort_requested = None
+    worker.pump_error = None
+    worker.now = lambda: clock['steady_ns']
+    worker.ros_now = lambda: 50
+    worker.deadline_ns = 1_000
+    worker.last_clock_ns = 50
+    worker.last_clock_advance_ns = clock['steady_ns']
+    worker.expected_paused = False
+    worker.ingress = NS(fault=None, backend_state=state)
+    release = {'observed':False}
+
+    async def pause(_duration_s):
+        clock['pauses'] += 1
+        clock['steady_ns'] += 10
+        if clock['pauses'] == 1:
+            release['observed'] = True
+        elif clock['pauses'] == 2:
+            state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)
+            state.local_zero_override = True
+
+    worker.pause = pause
+    result = asyncio.run(await_r02_late_receipt_close(
+        worker, release_predicate=lambda: release['observed'], deadline_ns=900))
+
+    assert result is state
+    assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    assert state.local_zero_override is True
+    assert clock['pauses'] == 2
+
+
 def test_r07c_owned_server_restart_scopes_expected_clock_stall():
     worker = object.__new__(TrainingWorkerIO)
     worker.stop_requested = False

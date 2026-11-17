@@ -1876,6 +1876,24 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
         'policy_backend_applied':False, 'b1_transition_committed':False}
 
 
+async def await_r02_late_receipt_close(io, *, release_predicate, deadline_ns):
+    """Wait through the observed stale-only state, then require sequence+stale zero."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    stale = SimulationContactState.FAULT_COMMAND_STALE
+    terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE | stale)
+    allowed_transition = (stale, terminal_flags)
+    await io.until(release_predicate, deadline_ns=deadline_ns,
+        phase='held POLICY receipt released only after closing condition',
+        expected_native_fault_flags=allowed_transition)
+    return await io.until(lambda: io.ingress.backend_state
+        if io.ingress.backend_state is not None
+        and io.ingress.backend_state.fault_flags == terminal_flags
+        and io.ingress.backend_state.local_zero_override else None,
+        deadline_ns=deadline_ns,
+        phase='native rejection and local zero after late POLICY receipt',
+        expected_native_fault_flags=allowed_transition)
+
+
 def verify_guard_authority(packet, authority, packet_sha256):
     """Bind a capacity-one guard to the packet's case, phase, and run."""
     expected_phase = campaign_phase(packet['case'])
@@ -4251,24 +4269,14 @@ class TrainingWorkerIO:
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()
             expected_reason = close_after_held_receipt
-            from mecanum_nav_rl_interfaces.msg import SimulationContactState
-            expected_native_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE)
             def released_row():
                 rows = complete_jsonl_rows(self.descriptor['native_events_path'])
                 return next((row for row in rows
                     if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
                     and row.get('fields', {}).get('reason') == expected_reason
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
-            await self.until(released_row, deadline_ns=deadline,
-                phase='held POLICY receipt released only after closing condition',
-                expected_native_fault_flags=expected_native_fault_flags)
-            native_fault = await self.until(lambda: self.ingress.backend_state
-                if self.ingress.backend_state is not None
-                and self.ingress.backend_state.fault_flags == expected_native_fault_flags
-                and self.ingress.backend_state.local_zero_override else None,
-                deadline_ns=deadline, phase='native rejection and local zero after late POLICY receipt',
-                expected_native_fault_flags=expected_native_fault_flags)
+            native_fault = await await_r02_late_receipt_close(
+                self, release_predicate=released_row, deadline_ns=deadline)
             checked = verify_r02_late_receipt_rejected(self, case=(
                 'R02c' if close_after_held_receipt == 'safe_stop' else 'R02d'),
                 step_index=token.step_index, receipt=policy_receipt)
