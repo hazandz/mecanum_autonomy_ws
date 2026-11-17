@@ -6324,6 +6324,57 @@ def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
             cgroup_root=cgroup_root, proc_root=proc_root)
 
 
+def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
+    io = object.__new__(TrainingWorkerIO)
+    io.safety = NS(local_training=None)
+    io.events = []
+    io.deadline_ns = 1_000
+    io.now = lambda: 100
+    io.ros_now = lambda: 90
+    io.emit = lambda name, facts: io.events.append((name, facts))
+
+    class Adapter:
+        def __init__(self):
+            self.last_tick_ros_ns = 80
+            self._last_deferred_scan_cutoff_ns = None
+            self.lock = threading.RLock()
+            self.calls = 0
+
+        def tick(self):
+            self.calls += 1
+            if self.calls == 1:
+                self._last_deferred_scan_cutoff_ns = 100
+                return
+            self.last_tick_ros_ns = 101
+
+    adapter = Adapter()
+    io.safety.local_training = adapter
+    current_ros = {'ns':100}
+    io.ros_now = lambda: current_ros['ns']
+
+    async def until(predicate, *, deadline_ns, phase, **_kwargs):
+        assert deadline_ns == 900
+        assert phase == 'post-cutoff physics time for immediate POLICY Safety tick'
+        current_ros['ns'] = 101
+        value = predicate()
+        assert value == 101
+        return value
+
+    io.until = until
+    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+        deadline_ns=900, step_index=7, sample_sequence=42))
+
+    assert adapter.calls == 2
+    assert adapter.last_tick_ros_ns == 101
+    retry = [facts for name, facts in io.events
+        if name == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF']
+    assert retry == [{
+        'step_index':7, 'boundary_ns':100, 'crossed_ros_ns':101,
+        'tick_before_retry_ros_ns':80, 'tick_after_retry_ros_ns':101,
+        'retry_performed':True, 'steady_ns':100,
+    }], retry
+
+
 @pytest.mark.parametrize(('case','error','extra'), [
     ('R06a', ValueError('measured XY reset error exceeds 0.01 m'),
         [('B23_R06A_SET_POSE_TARGET_MUTATED', {'actual_target':{'x_m':.25}})]),

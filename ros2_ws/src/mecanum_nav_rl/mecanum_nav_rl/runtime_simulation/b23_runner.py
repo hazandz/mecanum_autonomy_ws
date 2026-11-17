@@ -4365,6 +4365,58 @@ class TrainingWorkerIO:
         return {'receipt':aligned['receipt'], 'state':aligned['state'],
             'received_ns':aligned['application']['received_ns']}
 
+    async def tick_policy_after_deferred_scan_cutoff(self, *, deadline_ns,
+            step_index, sample_sequence):
+        """Retry the same Safety tick at the first post-cutoff physics time.
+
+        A pending POLICY slot cannot be refreshed with SAFE_STOP without
+        revoking its admission. If the immediate, fully validated Safety tick
+        lands on a scan cutoff, do not wait for the next 50 ms executor timer:
+        wait for ROS time to cross that exact boundary, then invoke the same
+        production tick under its lock. The tick still owns all freshness,
+        limiter, identity, and fail-safe decisions.
+        """
+        adapter = self.safety.local_training
+        previous_tick_ros_ns = adapter.last_tick_ros_ns
+        ready_ros_ns = self.ros_now()
+        self.emit('POLICY_READY_IMMEDIATE_SAFETY_TICK', {
+            'step_index': step_index,
+            'sample_sequence': sample_sequence,
+            'steady_ns': self.now(),
+            'ros_ns': ready_ros_ns,
+        })
+        adapter.tick()
+        boundary_ns = getattr(adapter, '_last_deferred_scan_cutoff_ns', None)
+        if (adapter.last_tick_ros_ns != previous_tick_ros_ns
+                or type(boundary_ns) is not int
+                or ready_ros_ns > boundary_ns):
+            return
+
+        def crossed_boundary():
+            current_ros_ns = self.ros_now()
+            return current_ros_ns if current_ros_ns > boundary_ns else None
+
+        crossed_ros_ns = await self.until(
+            crossed_boundary,
+            deadline_ns=deadline_ns,
+            phase='post-cutoff physics time for immediate POLICY Safety tick')
+        with adapter.lock:
+            tick_before_retry_ros_ns = adapter.last_tick_ros_ns
+            if (tick_before_retry_ros_ns is None
+                    or tick_before_retry_ros_ns <= boundary_ns):
+                adapter.tick()
+            tick_after_retry_ros_ns = adapter.last_tick_ros_ns
+        self.emit('POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF', {
+            'step_index': step_index,
+            'boundary_ns': boundary_ns,
+            'crossed_ros_ns': crossed_ros_ns,
+            'tick_before_retry_ros_ns': tick_before_retry_ros_ns,
+            'tick_after_retry_ros_ns': tick_after_retry_ros_ns,
+            'retry_performed': (tick_before_retry_ros_ns is None
+                or tick_before_retry_ros_ns <= boundary_ns),
+            'steady_ns': self.now(),
+        })
+
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -4733,13 +4785,9 @@ class TrainingWorkerIO:
         # steady timer phase. The normal tick still enforces freshness,
         # scan-cutoff, limiter and fail-safe checks; a rejected candidate
         # therefore remains a SAFE_STOP and cannot open motion.
-        self.emit('POLICY_READY_IMMEDIATE_SAFETY_TICK', {
-            'step_index': token.step_index,
-            'sample_sequence': target_sample_sequence,
-            'steady_ns': self.now(),
-            'ros_ns': self.ros_now(),
-        })
-        self.safety.local_training.tick()
+        await self.tick_policy_after_deferred_scan_cutoff(
+            deadline_ns=deadline, step_index=token.step_index,
+            sample_sequence=target_sample_sequence)
         if after_policy_applied is not None:
             from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
             if not callable(after_policy_applied):
