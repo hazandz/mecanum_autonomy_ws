@@ -176,10 +176,14 @@ def test_status_cannot_supply_or_invent_oracle_iteration(source):
 
 
 def test_receipt_replay_keeps_original_bytes_receive_time_and_sequence(source):
-    f = source; one = f.ingress.on_receipt(f.receipt())
+    from rclpy.serialization import deserialize_message
+    f = source
+    first = f.receipt()
+    first_bytes = serialize_message(first)
+    one = f.ingress.on_receipt(first)
     f.advance()
     # Phát lại chính bytes cũ, không tạo receipt mới bằng thời gian hiện tại.
-    original = f.receipt(); original.header.stamp = stamp(one.publish_stamp_ns)
+    original = deserialize_message(first_bytes, FinalIssuedCommandReceipt)
     assert f.ingress.on_receipt(original) is None
     assert len(f.ingress.receipts) == 1 and f.ingress.receipts[0] is one
     changed = copy.deepcopy(original); changed.final_command.linear.x = 0.1
