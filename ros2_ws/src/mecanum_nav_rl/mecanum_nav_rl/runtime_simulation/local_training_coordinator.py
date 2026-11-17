@@ -894,6 +894,7 @@ class LocalTrainingB1Adapter:
                 or receipt.received_steady_ns > facts['steady_now']
                 or facts['steady_now'] - receipt.received_steady_ns > max_age_ns
                 or application_received_ns > facts['steady_now']
+                or facts['steady_now'] - application_received_ns > max_age_ns
                 or stamp_ns(state.header.stamp) != facts['cutoff']):
             return None
         if state.local_zero_override:
@@ -903,18 +904,31 @@ class LocalTrainingB1Adapter:
                             state.applied_physics_iteration,
                             stamp_ns(state.applied_sim_stamp)))):
                 return None
-        elif (not state.applied_receipt_valid
-                or state.applied_final_publisher_instance_id != source.final_publisher_id
-                or state.applied_final_publish_sequence != receipt.final_publish_sequence
-                or stamp_ns(state.applied_sim_stamp) != facts['cutoff']):
+        elif state.applied_receipt_valid:
+            if (state.applied_final_publisher_instance_id != source.final_publisher_id
+                    or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or stamp_ns(state.applied_sim_stamp) != facts['cutoff']):
+                return None
+        elif any((state.applied_final_publisher_instance_id,
+                  state.applied_final_publish_sequence,
+                  state.applied_physics_iteration,
+                  stamp_ns(state.applied_sim_stamp))):
+            # An invalid one-tick application record must not carry partial proof.
             return None
-        # The exact backend status at this measurement cutoff proves that the
-        # same zero receipt is still applied. Its first application timestamp
-        # can be earlier than the sample cutoff; receipt age is bounded above
-        # and the status key must still match at this exact cutoff.
+        # BackendState publishes application proof only on the physics update
+        # that consumes a receipt, then clears those fields on the next update.
+        # The retained receipt-keyed application ledger above proves that this
+        # zero command really was applied. _goal_settle_zero_receipt_candidate
+        # also rejects any later nonzero receipt; together with the bounded
+        # receipt/application ages this is the current held zero command at
+        # this exact, independently sourced backend cutoff. Requiring the
+        # one-tick proof fields to repeat at every scan cutoff incorrectly
+        # dropped otherwise valid 10 Hz samples between receipt applications.
         return receipt, {
             'application_stamp_ns': applied_stamp,
             'application_received_steady_ns': application_received_ns,
+            'application_proof': ('current_tick' if state.applied_receipt_valid
+                                  else 'retained_applied_zero_no_later_nonzero'),
             'native_zero_override': bool(state.local_zero_override),
             'native_actuator_inhibited': bool(state.actuator_inhibited),
         }

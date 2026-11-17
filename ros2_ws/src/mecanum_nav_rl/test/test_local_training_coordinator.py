@@ -497,6 +497,31 @@ def test_goal_settle_accepts_current_zero_state_within_fresh_receipt_age():
     assert selected is not None
     assert selected[0] is receipt
     assert selected[1]['application_stamp_ns'] == 1_080_000_000
+    assert selected[1]['application_proof'] == 'current_tick'
+
+    # Native publishes applied-receipt fields for the consuming physics tick
+    # only. At the next exact scan cutoff the fields are zeroed, while the
+    # latest receipt-keyed application remains the real current zero command.
+    current.applied_receipt_valid = False
+    current.applied_final_publisher_instance_id = 0
+    current.applied_final_publish_sequence = 0
+    current.applied_physics_iteration = 0
+    current.applied_sim_stamp.sec = 0
+    current.applied_sim_stamp.nanosec = 0
+    retained = adapter._goal_settle_zero_receipt_at_cutoff({
+        'cutoff':1_100_000_000, 'ros_now':1_100_000_000,
+        'steady_now':2_100_000_000, 'identity':identity, 'status':current,
+    }, (receipt, 1_080_000_000, 2_080_000_000))
+    assert retained is not None
+    assert retained[0] is receipt
+    assert retained[1]['application_proof'] == 'retained_applied_zero_no_later_nonzero'
+    received_receipt = SimpleNamespace(**{
+        **receipt.__dict__, 'received_steady_ns': 2_100_000_000})
+    stale = adapter._goal_settle_zero_receipt_at_cutoff({
+        'cutoff':1_100_000_000, 'ros_now':1_100_000_000,
+        'steady_now':2_590_000_000, 'identity':identity, 'status':current,
+    }, (received_receipt, 1_080_000_000, 2_080_000_000))
+    assert stale is None
 
 
 def test_goal_settle_sequence_uses_current_zero_across_dense_scan_cutoffs():
