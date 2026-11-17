@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 import copy
+import hashlib
 import json
 from dataclasses import dataclass
 import math
@@ -509,6 +510,9 @@ class LocalTrainingIngress:
                     'missing_count': msg.final_publish_sequence - previous_sequence - 1,
                     'publisher_instance_id': msg.final_publisher_instance_id,
                     'steady_ns': self.now()})
+            self._retire_unjoinable_applications(
+                accepted_receipt_sequence=msg.final_publish_sequence,
+                publisher_instance_id=msg.final_publisher_instance_id)
             receipt = IssuedCommandReceiptView(stamp_ns(msg.header.stamp), msg.final_publisher_instance_id,
                 msg.final_publish_sequence, ReceiptSource.POLICY if is_policy else ReceiptSource.SAFE_STOP,
                 source, msg.sequence, msg.step_index, msg.transition_id, lifecycle_identity(self.lifecycle),
@@ -529,6 +533,32 @@ class LocalTrainingIngress:
                 'received_ns': receipt.received_steady_ns, 'accepted_ns': self.now(),
                 'message_cdr_hex': raw.hex()})
             return receipt
+
+    def _retire_unjoinable_applications(self, *, accepted_receipt_sequence, publisher_instance_id):
+        """Close native applications whose exact receipt is now unobservable.
+
+        A later monotonic receipt proves that any still-unmatched lower key can
+        no longer arrive through this ordered ingress. Keep the native status
+        bytes and record the missing join explicitly, but do not create an
+        application fact or let impossible joins fill the bounded pending map.
+        B1 still requires the exact accepted receipt and native application.
+        """
+        stale_keys = [key for key in self._unresolved_applications
+                      if key < accepted_receipt_sequence]
+        for key in stale_keys:
+            raw, received = self._unresolved_applications.pop(key)
+            status_bytes = bytes(raw)
+            self.emit('NATIVE_APPLICATION_UNJOINABLE_RECEIPT_COALESCED', {
+                'unmatched_final_publish_sequence': key,
+                'accepted_receipt_sequence': accepted_receipt_sequence,
+                'publisher_instance_id': publisher_instance_id,
+                'status_received_ns': received,
+                'retired_steady_ns': self.now(),
+                'reason': 'monotonic receipt sequence advanced beyond application key',
+                'counted_as_joined': False,
+                'status_cdr_sha256': hashlib.sha256(status_bytes).hexdigest(),
+                'status_cdr_hex': status_bytes.hex(),
+            })
 
     def bind_safety_publisher_gid(self, gid):
         """Pin endpoint DDS thực sau khi runner kiểm đúng một Safety publisher."""

@@ -223,6 +223,51 @@ def test_receipt_coalesced_gap_is_recorded_and_latest_receipt_is_accepted(source
                     'publisher_instance_id': 55, 'steady_ns': f.clock.steady}]
 
 
+def test_coalesced_receipt_gap_retires_unjoinable_applications_without_counting_them(source):
+    f = source
+    f.ingress.on_receipt(f.receipt(1))
+    status = f.backend(iteration=2, sequence=2)
+    status.applied_receipt_valid = True
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 2
+    status.applied_physics_iteration = 2
+    status.applied_sim_stamp = stamp(f.clock.ros)
+    f.ingress.on_backend(status)
+    assert list(f.ingress._unresolved_applications) == [2]
+
+    accepted = f.ingress.on_receipt(f.receipt(3))
+
+    assert accepted.final_publish_sequence == 3
+    assert not f.ingress._unresolved_applications
+    unjoinable = [data for name, data in f.events
+                  if name == 'NATIVE_APPLICATION_UNJOINABLE_RECEIPT_COALESCED']
+    assert len(unjoinable) == 1, f.events
+    assert unjoinable[0]['unmatched_final_publish_sequence'] == 2
+    assert unjoinable[0]['accepted_receipt_sequence'] == 3
+    assert unjoinable[0]['status_cdr_hex']
+    assert not [name for name, _ in f.events if name == 'NATIVE_APPLICATION_JOINED']
+    assert not [name for name, _ in f.events if name == 'policy_backend_applied']
+    assert f.ingress.application_for_receipt(accepted) is None
+
+
+def test_b1_does_not_commit_when_exact_policy_receipt_was_not_observed(source):
+    from collections import deque
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
+    f = source; chain = b1_runtime_chain(f)
+    policy_receipt = next(item for item in f.ingress.receipts
+                          if item.final_publish_sequence == 3)
+    f.ingress.receipts = deque(item for item in f.ingress.receipts
+                               if item.final_publish_sequence != policy_receipt.final_publish_sequence)
+    f.ingress._receipt_views.pop(policy_receipt.final_publish_sequence)
+    f.ingress._receipt_bytes.pop(policy_receipt.final_publish_sequence)
+
+    with pytest.raises((ValueError, B1SnapshotPending)):
+        chain.b1.commit_step(chain.cutoff)
+
+    assert not chain.b1.committer.committed
+    assert not [name for name, _ in f.events if name == 'b1_transition_committed']
+
+
 def test_receipt_non_monotonic_sequence_still_fails_closed(source):
     f = source
     f.ingress.on_receipt(f.receipt(2))
