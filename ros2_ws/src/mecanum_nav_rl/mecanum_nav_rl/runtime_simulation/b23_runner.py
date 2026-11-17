@@ -4078,8 +4078,37 @@ class TrainingWorkerIO:
         if last is None:
             raise RuntimeError('step has no actual Safety publication anchor')
         def drained():
-            return self.final.publication_for_source_sequence(
+            exact = self.final.publication_for_source_sequence(
                 source=last.source, sequence=last.sequence)
+            if exact is not None:
+                return exact
+            # The receipt callback can coalesce the exact publication selected
+            # above while later SAFE_STOP receipts continue to arrive. Rebind
+            # only to an actually retained zero SAFE_STOP receipt from this
+            # publisher and lifecycle, issued after the closing SAFE_STOP
+            # watermark. The exact native application and current closed state
+            # are still required below; this does not infer a receipt from a
+            # sequence gap or from the latest backend watermark.
+            from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+            from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+            life = self.ingress.lifecycle
+            if life is None:
+                return None
+            identity = lifecycle_identity(life)
+            with self.ingress.lock:
+                views = tuple(self.ingress.receipts)
+            for view in reversed(views):
+                if (view.source is not ReceiptSource.SAFE_STOP
+                        or view.final_publisher_instance_id != self.final.publisher_instance_id
+                        or view.source_sequence <= previous_safe_stop
+                        or view.lifecycle != identity
+                        or any(view.final_command)):
+                    continue
+                candidate = self.final.publication_for_source_sequence(
+                    source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=view.source_sequence)
+                if candidate is not None:
+                    return candidate
+            return None
         receipt = await self.until(drained, deadline_ns=deadline_ns, phase='Final SAFE_STOP publication drain')
         def applied_and_closed():
             application = self.ingress.application_for_receipt(receipt)
@@ -4108,7 +4137,7 @@ class TrainingWorkerIO:
         application = await self.until(applied_and_closed,
             deadline_ns=deadline_ns, phase='SAFE_STOP application before pending step')
         applied_state = application['state']
-        self.emit('STEP_STREAMS_FROZEN', {'source': last.source, 'source_sequence': last.sequence,
+        self.emit('STEP_STREAMS_FROZEN', {'source': receipt.source, 'source_sequence': receipt.sequence,
             'publish_sequence': receipt.final_publish_sequence, 'watchdog_zero_stream_active': True,
             'application_iteration': applied_state.applied_physics_iteration,
             'application_stamp_ns': (applied_state.applied_sim_stamp.sec * 1_000_000_000

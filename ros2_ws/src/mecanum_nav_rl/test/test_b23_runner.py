@@ -3875,6 +3875,70 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert events[-1][1]['publish_sequence'] == 21
 
 
+def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
+    import threading
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
+
+    value, clock = worker()
+    life = EpisodeLifecycleIdentity(1, 1, 1)
+    candidate_view = NS(source=ReceiptSource.SAFE_STOP, lifecycle=life,
+        final_publisher_instance_id=55, final_publish_sequence=22,
+        source_sequence=10, final_command=(0.0, 0.0, 0.0))
+    candidate = NS(source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=10,
+        final_publish_sequence=22, final_publisher_instance_id=55)
+    state = NS(fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=55,
+        applied_final_publish_sequence=22, applied_physics_iteration=305,
+        physics_iteration=305, applied_sim_stamp=NS(sec=3, nanosec=50_000_000),
+        header=NS(stamp=NS(sec=3, nanosec=50_000_000)))
+    calls, events, watermark = [], [], [9]
+    adapter = NS(safe_stop_sequence=7,
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
+        set_policy_hold=lambda hold: calls.append(('hold', hold)),
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+    value.safety = NS(local_training=adapter)
+    value.ingress = NS(fault=None, backend_state=state, lifecycle=life,
+        last_published_sample_sequence=9,
+        last_published_admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
+        receipts=[candidate_view], lock=threading.RLock())
+    def inhibit(*, zero_only=False):
+        calls.append(('inhibit', zero_only))
+        value.ingress.last_published_admission_state = (
+            LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY if zero_only
+            else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+    value.ingress.inhibit = inhibit
+    value.ingress.pause_admission_publication = lambda: calls.append(('pause_admission',))
+    value.ingress.application_for_receipt = lambda receipt: (
+        {'state':state,'received_ns':clock.ns}
+        if receipt.final_publish_sequence == candidate.final_publish_sequence else None)
+    value.ingress.receipt_for_publication_sequence = lambda sequence: (
+        candidate_view if sequence == candidate.final_publish_sequence else None)
+    value.read_native_input_watermark = lambda: watermark[0]
+    value._native_input_watermark = 9
+    value.final = NS(publisher_instance_id=55, last_publication=None,
+        publication_for_source_sequence=lambda *, source, sequence: (
+            candidate if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 10 else None))
+    async def pause(seconds):
+        await clock.pause(seconds)
+        value.ingress.last_published_sample_sequence = 10
+        watermark[0] = 10
+        adapter.safe_stop_sequence = 8
+        adapter.last_output = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
+            source_instance_id=44, sequence=8)
+    value.pause = pause
+    value.emit = lambda name, fields: events.append((name, fields))
+
+    asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns + 20_000_000))
+
+    frozen = next(fields for name, fields in events if name == 'STEP_STREAMS_FROZEN')
+    assert frozen['source'] == CommandEnvelope.SOURCE_SAFE_STOP
+    assert frozen['source_sequence'] == 10
+    assert frozen['publish_sequence'] == 22
+    assert frozen['application_iteration'] == 305
+
+
 def test_ingress_retains_valid_application_by_exact_safe_stop_receipt_key():
     import threading
     from rclpy.serialization import serialize_message
