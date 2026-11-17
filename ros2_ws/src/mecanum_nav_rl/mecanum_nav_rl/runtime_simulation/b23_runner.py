@@ -3926,6 +3926,100 @@ class TrainingWorkerIO:
         return {'receipt': receipt, 'state': applied_state,
             'received_ns': application['received_ns']}
 
+    async def wait_r09b_restored_scan_zero_before_bind(self, *, deadline_ns):
+        """Wait for a post-restore clear scan and drain its applied SAFE_STOP.
+
+        Moving the task fixture can leave a real obstacle return in one or more
+        lidar samples after the covered-empty contact status arrives. Binding a
+        POLICY slot during that interval lets Safety correctly publish zero;
+        that zero revokes the pending admission. Wait for Safety's own tick to
+        evaluate a newer clear scan, then join its exact zero receipt before
+        freezing the output stream and binding the slot.
+        """
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+
+        adapter = self.safety.local_training
+        restored = self.ingress.backend_state
+        if (restored is None or restored.fault_flags != 0 or restored.paused
+                or restored.contact_active or not restored.coverage_complete
+                or not restored.contact_source_healthy
+                or restored.backend_instance_id != self.descriptor['backend_instance_id']
+                or restored.session_id != self.descriptor['session_id']
+                or restored.config_hash != self.descriptor['config_hash']):
+            raise RuntimeError('R09b restored fixture status is not a healthy bound observation')
+        restored_sequence = int(restored.status_sequence)
+        restored_stamp_ns = stamp_ns(restored.header.stamp)
+        event_floor = len(self.events)
+        allowed_wait_reasons = {
+            'COMMAND_MISSING', 'POLICY_HELD', 'NOISY_OR_ADMISSION_NOT_VALID',
+            'LIMITER_PRIMED',
+        }
+
+        def clear_safety_tick():
+            status = self.ingress.backend_state
+            scan = adapter.scan
+            life = adapter.life
+            if (status is None or status.status_sequence <= restored_sequence
+                    or status.fault_flags != 0 or status.paused or status.contact_active
+                    or not status.coverage_complete or not status.contact_source_healthy
+                    or status.backend_instance_id != self.descriptor['backend_instance_id']
+                    or status.session_id != self.descriptor['session_id']
+                    or status.config_hash != self.descriptor['config_hash']
+                    or scan is None or adapter.stamp(scan.header.stamp) <= restored_stamp_ns
+                    or life is None or adapter.identity(status) != adapter.identity(life)):
+                return None
+            event = next((facts for name, facts in reversed(self.events[event_floor:])
+                if name == 'SAFETY_REJECTED'
+                and facts.get('source') == 4
+                and facts.get('ros_ns', 0) >= adapter.stamp(scan.header.stamp)
+                and not (set(facts.get('reasons', ())) - allowed_wait_reasons)), None)
+            if event is None:
+                return None
+            return event, scan, status
+
+        event, scan, status = await self.until(clear_safety_tick,
+            deadline_ns=deadline_ns,
+            phase='R09b post-restore scan clear and Safety zero tick')
+        receipt = await self.until(lambda: self.final.publication_for_source_sequence(
+            source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+            sequence=event['sequence']), deadline_ns=deadline_ns,
+            phase='R09b exact post-clear SAFE_STOP receipt')
+        if (receipt is None or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                    receipt.final_command.angular.z))):
+            raise RuntimeError('R09b post-clear Safety tick lacks its exact zero receipt')
+
+        def exact_application():
+            application = self.ingress.application_for_receipt(receipt)
+            if application is None:
+                return None
+            applied = application.get('state')
+            if (applied is None or applied.fault_flags != 0 or applied.paused
+                    or applied.local_zero_override or not applied.applied_receipt_valid
+                    or applied.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                    or applied.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or applied.backend_instance_id != self.descriptor['backend_instance_id']
+                    or applied.session_id != self.descriptor['session_id']
+                    or applied.config_hash != self.descriptor['config_hash']):
+                return None
+            return application
+
+        application = await self.until(exact_application, deadline_ns=deadline_ns,
+            phase='R09b exact post-clear zero application')
+        self.emit('R09B_STOPPING_ENVELOPE_CLEAR_ZERO_APPLIED', {
+            'restored_status_sequence': restored_sequence,
+            'restored_stamp_ns': restored_stamp_ns,
+            'clear_scan_stamp_ns': adapter.stamp(scan.header.stamp),
+            'clear_scan_received_ns': int(adapter.scan_received),
+            'safe_stop_sequence': int(event['sequence']),
+            'publish_sequence': int(receipt.final_publish_sequence),
+            'application_iteration': int(application['state'].applied_physics_iteration),
+            'application_stamp_ns': stamp_ns(application['state'].applied_sim_stamp),
+            'application_received_ns': int(application['received_ns']),
+            'steady_ns': self.now()})
+        return receipt, application['state'], application['received_ns']
+
     async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness):
         """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
 
@@ -4142,6 +4236,7 @@ class TrainingWorkerIO:
             # exist; contact remains in this transition's exact physics history.
             await before_pending_bind(deadline, token, barrier, zero_witness)
         if before_pending_bind is not None:
+            await self.wait_r09b_restored_scan_zero_before_bind(deadline_ns=deadline)
             self.safety.local_training.set_stream_enabled(False)
         ack = await self.control.transact(Control.Request.OP_BIND_PENDING_STEP,
             deadline_ns=deadline, pending_step_index=token.step_index,

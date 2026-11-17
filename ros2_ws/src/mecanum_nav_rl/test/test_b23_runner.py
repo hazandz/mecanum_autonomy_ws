@@ -754,6 +754,79 @@ def test_r09b_pending_step_uses_exact_zero_application_not_latest_physics_iterat
     assert result==(receipt,applied,950_000_000)
 
 
+def test_r09b_waits_for_post_restore_clear_scan_and_applied_zero_before_pending_bind():
+    import asyncio
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    def stamp(value):
+        return value.sec * 1_000_000_000 + value.nanosec
+    def state(sequence, sim_ns):
+        return NS(status_sequence=sequence, fault_flags=0, paused=False,
+            contact_active=False, coverage_complete=True, contact_source_healthy=True,
+            episode_generation=1, reset_epoch=2, runtime_generation=3,
+            backend_instance_id=12, session_id='session-r09b', config_hash='c'*64,
+            applied_receipt_valid=True, local_zero_override=False,
+            applied_final_publisher_instance_id=34, applied_final_publish_sequence=99,
+            applied_physics_iteration=123,
+            applied_sim_stamp=NS(sec=sim_ns//1_000_000_000,
+                nanosec=sim_ns%1_000_000_000),
+            header=NS(stamp=NS(sec=sim_ns//1_000_000_000,
+                nanosec=sim_ns%1_000_000_000)))
+
+    restored=state(10,1_000_000_000)
+    applied=state(13,1_130_000_000)
+    scan=NS(header=NS(stamp=NS(sec=1,nanosec=120_000_000)))
+    life=NS(episode_generation=1,reset_epoch=2,runtime_generation=3)
+    events=[]
+    adapter=NS(scan=None,scan_received=0,life=life,
+        stamp=lambda value: stamp(value), identity=lambda value: (
+            value.episode_generation,value.reset_epoch,value.runtime_generation))
+    receipt=NS(final_publisher_instance_id=34,final_publish_sequence=99,
+        final_command=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))
+    application={'state':applied,'received_ns':900}
+    io=object.__new__(TrainingWorkerIO)
+    io.descriptor={'backend_instance_id':12,'session_id':'session-r09b','config_hash':'c'*64}
+    io.safety=NS(local_training=adapter)
+    io.ingress=NS(backend_state=restored,application_for_receipt=lambda found:
+        application if found is receipt else None)
+    io.final=NS(publisher_instance_id=34,publication_for_source_sequence=lambda **kwargs:
+        receipt if kwargs=={'source':4,'sequence':7} else None)
+    io.events=events
+    io.now=lambda:1_500
+    emitted=[]
+    io.emit=lambda name,facts:emitted.append((name,facts))
+    waits=[]
+
+    async def until(predicate,*,deadline_ns,phase):
+        assert deadline_ns==2_000
+        waits.append(phase)
+        if phase=='R09b post-restore scan clear and Safety zero tick':
+            io.ingress.backend_state=state(11,1_110_000_000)
+            adapter.scan=NS(header=NS(stamp=NS(sec=1,nanosec=100_000_000)))
+            assert predicate() is None, 'pre-restore scan must not qualify'
+            adapter.scan=scan; adapter.scan_received=1_400
+            events.append(('SAFETY_REJECTED', {'source':4,'sequence':7,
+                'ros_ns':1_120_000_000,'reasons':['POLICY_HELD','STOPPING_ENVELOPE_OCCUPIED']}))
+            assert predicate() is None, 'occupied stopping envelope must keep waiting'
+            events.append(('SAFETY_REJECTED', {'source':4,'sequence':7,
+                'ros_ns':1_120_000_000,'reasons':['POLICY_HELD']}))
+            return predicate()
+        value=predicate()
+        assert value is not None, f'expected evidence missing at {phase}'
+        return value
+    io.until=until
+
+    result=asyncio.run(io.wait_r09b_restored_scan_zero_before_bind(deadline_ns=2_000))
+    assert result==(receipt,applied,900)
+    assert waits==[
+        'R09b post-restore scan clear and Safety zero tick',
+        'R09b exact post-clear SAFE_STOP receipt',
+        'R09b exact post-clear zero application']
+    assert emitted[0][0]=='R09B_STOPPING_ENVELOPE_CLEAR_ZERO_APPLIED'
+    assert emitted[0][1]['restored_status_sequence']==10
+    assert emitted[0][1]['clear_scan_stamp_ns']==1_120_000_000
+
+
 def test_r09b_fixture_pose_waits_for_current_receipt_keyed_zero_application():
     import asyncio
     from mecanum_nav_rl.runtime_simulation.b23_runner import R09B_TASK_FIXTURE, TrainingWorkerIO
@@ -3963,6 +4036,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             zero_witness['state'].applied_final_publish_sequence, clock.ns))
         before_issue_calls.append((deadline_ns, token, barrier_ns, zero_witness,
             callback_started_ns, clock.ns))
+    async def wait_r09b_clear_zero(*, deadline_ns):
+        history.append(('r09b_clear_scan_zero_applied', deadline_ns))
+    if timing == 'r09b_before_bind':
+        value.wait_r09b_restored_scan_zero_before_bind = wait_r09b_clear_zero
     async def align_r09b_application_cutoff(b1_adapter, *, policy_receipt,
             minimum_cutoff_ns, deadline_ns):
         history.append(('r09b_application_cutoff_aligned',
@@ -4020,7 +4097,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing == 'r09b_before_bind':
         assert len(before_issue_calls) == 1
         callback_index=tags.index('r09b_fixture_before_pending_bind')
-        assert tags.index('b1_begin_step') < callback_index < stream_off < bind
+        clear_zero_index=tags.index('r09b_clear_scan_zero_applied')
+        assert tags.index('b1_begin_step') < callback_index < clear_zero_index < stream_off < bind
         assert ('stream', True) in history[:callback_index]
         witness = before_issue_calls[0][3]
         assert witness['receipt'].source == CommandEnvelope.SOURCE_SAFE_STOP
