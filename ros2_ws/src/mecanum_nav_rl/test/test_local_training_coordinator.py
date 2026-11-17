@@ -458,8 +458,49 @@ def test_goal_settle_selects_only_a_fresh_applied_zero_receipt_under_override():
     assert selected[1]['native_actuator_inhibited'] is True
 
 
-def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipts():
-    """The production sample sequence retains dense actual cutoffs during native zero hold."""
+def test_goal_settle_accepts_current_zero_state_within_fresh_receipt_age():
+    """A real zero receipt may remain current across a later exact sample cutoff."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    receipt = SimpleNamespace(final_publish_sequence=7, lifecycle=identity,
+        final_publisher_instance_id=11, source=ReceiptSource.POLICY,
+        session_id='bound-session', ingress_config_hash='a' * 64,
+        publish_stamp_ns=1_080_000_000, received_steady_ns=2_080_000_000,
+        final_command=(0.0, 0.0, 0.0), frame_id='base_link',
+        receipt_key='11:7', admission_valid=True)
+    current = SimulationContactState()
+    current.header.stamp.sec = 1; current.header.stamp.nanosec = 100_000_000
+    current.session_id = 'bound-session'; current.config_hash = 'a' * 64
+    current.backend_instance_id = 13
+    current.episode_generation = 2; current.reset_epoch = 3
+    current.runtime_generation = 4; current.physics_iteration = 110
+    current.applied_receipt_valid = True
+    current.applied_final_publisher_instance_id = 11
+    current.applied_final_publish_sequence = 7
+    current.applied_physics_iteration = 110
+    current.applied_sim_stamp.sec = 1
+    current.applied_sim_stamp.nanosec = 100_000_000
+    source = SimpleNamespace(profile={'b1_receipt_max_age_ms':500},
+        identity=SimpleNamespace(session_id='bound-session', config_hash='a' * 64,
+            backend_instance_id=13), final_publisher_id=11)
+    adapter.ingress = source
+
+    selected = adapter._goal_settle_zero_receipt_at_cutoff({
+        'cutoff':1_100_000_000, 'ros_now':1_100_000_000,
+        'steady_now':2_100_000_000, 'identity':identity, 'status':current,
+    }, (receipt, 1_080_000_000, 2_080_000_000))
+
+    assert selected is not None
+    assert selected[0] is receipt
+    assert selected[1]['application_stamp_ns'] == 1_080_000_000
+
+
+def test_goal_settle_sequence_uses_current_zero_across_dense_scan_cutoffs():
+    """The production sequence retains actual 100 ms cutoffs under one fresh zero receipt."""
     from rclpy.serialization import serialize_message
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
@@ -498,8 +539,7 @@ def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipt
     rows = []
     scans, noisy, pairs, safety = {}, {}, [], []
     for stamp in (1_100_000_000, 1_200_000_000):
-        current = applied if stamp == 1_100_000_000 else status(
-            stamp, applied=False, override=True)
+        current = applied if stamp == 1_100_000_000 else status(stamp, applied=True)
         scans[stamp] = SimpleNamespace(received_steady_ns=2_095_000_000 + stamp - 1_100_000_000)
         noisy[stamp] = SimpleNamespace(received_steady_ns=2_096_000_000 + stamp - 1_100_000_000)
         pairs.append(SimpleNamespace(stamp_ns=stamp,
@@ -568,7 +608,7 @@ def test_goal_settle_sequence_uses_fresh_zero_application_between_native_receipt
         1_100_000_000, 1_200_000_000, 1_300_000_000]
     selected = [facts for name, facts in events if name == 'GOAL_SETTLE_ZERO_RECEIPT_SELECTED']
     assert [item['cutoff_ns'] for item in selected] == [1_100_000_000, 1_200_000_000]
-    assert selected[1]['native_zero_override'] is True
+    assert selected[1]['native_zero_override'] is False
     assert evaluation_times[1_100_000_000] == (1_300_000_000, 2_100_000_000)
     assert evaluation_times[1_200_000_000] == (1_300_000_000, 2_199_000_000)
 

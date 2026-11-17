@@ -906,9 +906,12 @@ class LocalTrainingB1Adapter:
         elif (not state.applied_receipt_valid
                 or state.applied_final_publisher_instance_id != source.final_publisher_id
                 or state.applied_final_publish_sequence != receipt.final_publish_sequence
-                or stamp_ns(state.applied_sim_stamp) != facts['cutoff']
-                or applied_stamp != facts['cutoff']):
+                or stamp_ns(state.applied_sim_stamp) != facts['cutoff']):
             return None
+        # The exact backend status at this measurement cutoff proves that the
+        # same zero receipt is still applied. Its first application timestamp
+        # can be earlier than the sample cutoff; receipt age is bounded above
+        # and the status key must still match at this exact cutoff.
         return receipt, {
             'application_stamp_ns': applied_stamp,
             'application_received_steady_ns': application_received_ns,
