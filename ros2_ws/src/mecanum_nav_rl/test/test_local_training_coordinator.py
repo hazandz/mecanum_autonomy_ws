@@ -682,8 +682,12 @@ def test_goal_settle_sequence_checks_freshness_at_each_actual_collection_clock()
             now_steady_ns=2_115_000_000, max_age_ns=100_000_000)
     assert samples[0].health.evaluation_steady_now_ns < ingress.now()
     gaps = [facts for name, facts in events if name == 'GOAL_SETTLE_SAMPLE_GAP']
-    assert any(item['cutoff_ns']==1_200_000_000
-        and item['reason']=='joined backend state receive age expired' for item in gaps)
+    expired_backend = next(item for item in gaps if item['cutoff_ns'] == 1_200_000_000
+        and item['reason'] == 'joined backend state receive age expired')
+    assert expired_backend['backend_receive_age_ns'] > expired_backend['backend_receive_age_limit_ns']
+    assert expired_backend['evaluation_steady_ns'] >= expired_backend['backend_received_steady_ns']
+    assert expired_backend['sample_source_receive_ns']['backend'] == expired_backend[
+        'backend_received_steady_ns']
     assert any(name=='GOAL_SETTLE_ZERO_RECEIPT_SELECTED'
         and facts['sample_collection_steady_ns'] < facts['sample_decision_steady_ns']
         for name, facts in events)

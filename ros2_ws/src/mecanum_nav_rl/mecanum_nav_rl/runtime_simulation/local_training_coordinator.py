@@ -1015,9 +1015,28 @@ class LocalTrainingB1Adapter:
                         evaluation_ros_now_ns=evaluation_ros_ns,
                         evaluation_steady_now_ns=evaluation_steady_ns)
                 except B1SnapshotPending as error:
-                    self.emit('GOAL_SETTLE_SAMPLE_GAP', {
-                        'cutoff_ns': sample_cutoff, 'reason': str(error),
-                        'steady_ns': source.now()})
+                    gap_facts = {'cutoff_ns': sample_cutoff, 'reason': str(error),
+                                 'steady_ns': source.now()}
+                    if str(error) == 'joined backend state receive age expired':
+                        gap_facts.update(
+                            evaluation_steady_ns=evaluation_steady_ns,
+                            backend_received_steady_ns=pair.backend_received_steady_ns,
+                            backend_receive_age_ns=(evaluation_steady_ns
+                                - pair.backend_received_steady_ns),
+                            backend_receive_age_limit_ns=(
+                                source.profile['backend_status_receive_age_ms']
+                                * 1_000_000),
+                            sample_source_receive_ns={
+                                'scan': scan.received_steady_ns,
+                                'noisy_odometry': noisy.received_steady_ns,
+                                'oracle': pair.oracle_received_steady_ns,
+                                'backend': pair.backend_received_steady_ns,
+                                'lifecycle': source.lifecycle_received_ns,
+                                'receipt': receipt.received_steady_ns,
+                                'application': candidate[2],
+                                'safety': safety_received_ns,
+                            })
+                    self.emit('GOAL_SETTLE_SAMPLE_GAP', gap_facts)
                     continue
                 selected = self._goal_settle_zero_receipt_at_cutoff(facts, candidate)
                 if selected is None:
