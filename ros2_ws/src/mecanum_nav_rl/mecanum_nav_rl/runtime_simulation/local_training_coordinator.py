@@ -513,6 +513,32 @@ class LocalTrainingB1Adapter:
             raise B1SnapshotPending('selected receipt lacks native application at/before cutoff')
         return status
 
+    def _applied_policy_receipt_at_cutoff(self, token, cutoff_ns):
+        """Choose the freshest applied publication for this one POLICY slot.
+
+        The publisher may repeat an already-issued envelope while the runner
+        waits for the exact observation cutoff. All repeats retain the same
+        source sequence and transition identity; B1 freshness is measured from
+        the receipt selected here, while adapter issuance remains exactly once.
+        """
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+
+        policies = [receipt for receipt in self.ingress.receipts
+            if receipt.source is ReceiptSource.POLICY
+            and receipt.lifecycle == token.identity
+            and receipt.transition_id == token.transition_id
+            and receipt.source_instance_id == self.ingress.policy_source_id
+            and receipt.source_sequence == token.step_index
+            and receipt.publish_stamp_ns <= cutoff_ns]
+        for receipt in sorted(
+                policies, key=lambda value: value.final_publish_sequence,
+                reverse=True):
+            try:
+                return receipt, self._prove_application(receipt, cutoff_ns)
+            except B1SnapshotPending:
+                continue
+        return None
+
     def _goal_fact(self, facts, transition=None):
         from mecanum_nav_rl.core.goal_facts import GoalFactProvenance, GoalFactJoinMode
         from mecanum_nav_rl.core.lifecycle_types import ExactObservationProvenance
@@ -1146,16 +1172,8 @@ class LocalTrainingB1Adapter:
             facts = self._joined(cutoff_ns)
             selection = self._selection(facts, reset=False)
             self._prove_application(selection.receipt, cutoff_ns)
-            policies = [receipt for receipt in self.ingress.receipts if receipt.source is ReceiptSource.POLICY
-                and receipt.lifecycle == token.identity and receipt.transition_id == token.transition_id
-                and receipt.source_instance_id == self.ingress.policy_source_id and receipt.source_sequence == token.step_index
-                and receipt.publish_stamp_ns <= cutoff_ns]
-            applied_policy = None
-            for receipt in policies:
-                try:
-                    applied_policy = (receipt, self._prove_application(receipt, cutoff_ns)); break
-                except B1SnapshotPending:
-                    continue
+            applied_policy = self._applied_policy_receipt_at_cutoff(
+                token, cutoff_ns)
             if applied_policy is None:
                 raise B1SnapshotPending('issued POLICY has no native application before cutoff')
             self._observe_contact(cutoff_ns)

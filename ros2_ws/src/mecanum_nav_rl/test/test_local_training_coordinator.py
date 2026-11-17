@@ -11,6 +11,7 @@ from mecanum_nav_rl.runtime_simulation.local_training_coordinator import (
     BackendSessionIdentity, BackendControlSession, BackendControlError,
     LocalTrainingB1Adapter, B1SnapshotPending, lifecycle_request_fields,
 )
+from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
 from mecanum_nav_rl.runtime_safety.safety_contract import SafetyLifecycleCore
 
 
@@ -26,6 +27,71 @@ class Client:
         self.raw.append(serialize_message(request))
         response = self.respond(request, len(self.raw))
         return SimpleNamespace(done=lambda: True, result=lambda: response)
+
+
+def test_policy_commit_uses_freshest_applied_repeat_for_same_issuance():
+    """Repeated publication refreshes receipt age without another issuance."""
+    identity = SimpleNamespace(episode_generation=2, reset_epoch=3,
+        runtime_generation=4)
+    token = SimpleNamespace(identity=identity, transition_id='step-1',
+        step_index=1)
+    older = SimpleNamespace(source=ReceiptSource.POLICY, lifecycle=identity,
+        transition_id='step-1', source_instance_id=77, source_sequence=1,
+        step_index=1, publish_stamp_ns=1_000_000_000,
+        final_publish_sequence=10)
+    refreshed = SimpleNamespace(source=ReceiptSource.POLICY,
+        lifecycle=identity, transition_id='step-1', source_instance_id=77,
+        source_sequence=1, step_index=1, publish_stamp_ns=1_400_000_000,
+        final_publish_sequence=20)
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    adapter.ingress = SimpleNamespace(policy_source_id=77,
+        # Deliberately reverse callback order; final sequence is authoritative.
+        receipts=[refreshed, older])
+    proved = []
+
+    def prove(receipt, cutoff_ns):
+        proved.append((receipt.final_publish_sequence, cutoff_ns))
+        return {'applied_sequence':receipt.final_publish_sequence}
+
+    adapter._prove_application = prove
+
+    selected = adapter._applied_policy_receipt_at_cutoff(token, 1_450_000_000)
+
+    assert selected == (refreshed, {'applied_sequence':20})
+    assert proved == [(20, 1_450_000_000)]
+
+
+def test_policy_commit_falls_back_only_when_newest_repeat_lacks_application():
+    """A later unapplied repeat cannot hide an earlier applied publication."""
+    identity = SimpleNamespace(episode_generation=2, reset_epoch=3,
+        runtime_generation=4)
+    token = SimpleNamespace(identity=identity, transition_id='step-1',
+        step_index=1)
+    older = SimpleNamespace(source=ReceiptSource.POLICY, lifecycle=identity,
+        transition_id='step-1', source_instance_id=77, source_sequence=1,
+        step_index=1, publish_stamp_ns=1_000_000_000,
+        final_publish_sequence=10)
+    newer = SimpleNamespace(source=ReceiptSource.POLICY, lifecycle=identity,
+        transition_id='step-1', source_instance_id=77, source_sequence=1,
+        step_index=1, publish_stamp_ns=1_100_000_000,
+        final_publish_sequence=11)
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    adapter.ingress = SimpleNamespace(policy_source_id=77,
+        receipts=[older, newer])
+    proved = []
+
+    def prove(receipt, cutoff_ns):
+        proved.append(receipt.final_publish_sequence)
+        if receipt is newer:
+            raise B1SnapshotPending('native application not observed')
+        return {'applied_sequence':receipt.final_publish_sequence}
+
+    adapter._prove_application = prove
+
+    selected = adapter._applied_policy_receipt_at_cutoff(token, 1_150_000_000)
+
+    assert selected == (older, {'applied_sequence':10})
+    assert proved == [11, 10]
 
 
 def response(request, result=None):

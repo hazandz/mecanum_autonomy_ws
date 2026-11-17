@@ -24,6 +24,7 @@ from mecanum_nav_rl.core.goal_facts import (
     TaskOracleStatus,
 )
 from mecanum_nav_rl.core.issued_command_cutoff import (
+    CutoffStatus,
     IssuedCommandReceiptView,
     PolicyActionIssuance,
     ReceiptSource,
@@ -2086,6 +2087,83 @@ def test_policy_issuance_proof_must_match_cutoff_publication_and_barrier(
     assert contact.state == contact_before
     assert lifecycle.snapshot.goal_settle_state is None
     assert lifecycle.snapshot.task_history == ()
+
+
+def test_fresh_repeat_for_same_policy_issuance_preserves_500ms_b1_bound():
+    """A fresh same-slot receipt is valid; the 500 ms bound remains strict."""
+    from dataclasses import replace
+
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.POLICY, reason=None, final_sequence=11)
+    cutoff = value.cutoff_selection.cutoff_ros_ns
+    eval_steady = value.cutoff_selection.evaluation_steady_now_ns
+    original = value.policy_issuance_receipt
+    repeated = replace(original, final_publish_sequence=10,
+        publish_stamp_ns=cutoff - 10_000_000,
+        received_steady_ns=eval_steady - 10_000_000)
+    selected = value.cutoff_selection.receipt
+    trailing = value.cutoff_selection.adjacent_receipt
+    selection = select_final_issued_at_cutoff(
+        (repeated, selected, trailing),
+        binding=value.cutoff_selection.stream_binding,
+        issuance=value.policy_issuance,
+        cutoff_ros_ns=cutoff,
+        evaluation_ros_now_ns=value.cutoff_selection.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=eval_steady,
+        reset_barrier_ros_ns=value.cutoff_selection.reset_barrier_ros_ns,
+        action_barrier_ros_ns=value.cutoff_selection.action_barrier_ros_ns,
+        physical_scales=value.cutoff_selection.physical_scales,
+    )
+    assert selection.status is CutoffStatus.READY
+    assert selection.receipt == selected
+    value = replace(value, cutoff_selection=selection,
+        policy_issuance_receipt=repeated)
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert result.committed
+    assert result.transition.transition_identity == token
+
+
+def test_same_policy_issuance_receipt_still_rejects_after_500ms():
+    """A republished identity does not weaken B1's receipt freshness cap."""
+    from dataclasses import replace
+
+    lifecycle, identity, token, candidate = ready_lifecycle()
+    contact = ContactLatch()
+    contact.reset(identity)
+    value = context(lifecycle, identity, token, candidate, None, contact,
+        selected_source=ReceiptSource.POLICY, reason=None, final_sequence=11)
+    cutoff = value.cutoff_selection.cutoff_ros_ns
+    eval_steady = value.cutoff_selection.evaluation_steady_now_ns
+    stale = replace(value.policy_issuance_receipt,
+        final_publish_sequence=10,
+        publish_stamp_ns=cutoff - 500_000_001,
+        received_steady_ns=eval_steady - 500_000_001)
+    with_stale_selection = select_final_issued_at_cutoff(
+        (stale, value.cutoff_selection.receipt,
+         value.cutoff_selection.adjacent_receipt),
+        binding=value.cutoff_selection.stream_binding,
+        issuance=value.policy_issuance,
+        cutoff_ros_ns=cutoff,
+        evaluation_ros_now_ns=value.cutoff_selection.evaluation_ros_now_ns,
+        evaluation_steady_now_ns=eval_steady,
+        reset_barrier_ros_ns=value.cutoff_selection.reset_barrier_ros_ns,
+        action_barrier_ros_ns=value.cutoff_selection.action_barrier_ros_ns,
+        physical_scales=value.cutoff_selection.physical_scales,
+    )
+    value = replace(value, cutoff_selection=with_stale_selection,
+        policy_issuance_receipt=stale)
+    before = lifecycle.snapshot
+
+    result = RLTransitionCommitter(lifecycle).commit(value)
+
+    assert not result.committed
+    assert result.reason == 'POLICY issuance receipt is stale or invalid'
+    assert lifecycle.snapshot == before
 
 
 def test_wrong_v3_final_command_tail_rejects_without_mutation():
