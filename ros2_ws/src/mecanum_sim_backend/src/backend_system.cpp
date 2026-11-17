@@ -2828,6 +2828,7 @@ private:
                 << " publications=" << accepted_receipt_history_.size()
                 << " applications=" << application_history_.size()
                 << " contacts=" << contact_history_.size() << std::endl;
+          });
           reason = ControlResponse::REASON_OBSERVATION0_PROOF_MISMATCH;
         }
         else
@@ -2956,7 +2957,6 @@ private:
           control_queue_.begin(), control_queue_.end(),
           [](const PendingControl &queued) {
             return queued.request.operation == ControlRequest::OP_INHIBIT;
-          });
       if (!control_session_bound_ || !gate_ ||
           (request.motion_permitted && request.barrier_state != ControlRequest::BARRIER_READY) ||
           policy_open_ || interrupted_by_inhibit || probe_running_ ||
