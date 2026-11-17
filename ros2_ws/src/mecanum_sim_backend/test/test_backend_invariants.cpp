@@ -867,6 +867,62 @@ public:
       std::int64_t source_ns, std::int64_t received_ns)
   { return system.gate_ && system.gate_->RecordPolicyAdmission(token, source_ns, received_ns); }
 
+  static void SeedPolicyAdmissionGateForOrdering(BackendSystem &system)
+  {
+    GateBinding binding;
+    binding.session_id = "test-session";
+    binding.config_hash = std::string(64, 'a');
+    binding.final_publisher_instance_id = 11;
+    binding.barrier_stamp_ns = 90;
+    binding.episode_generation = 2;
+    binding.reset_epoch = 3;
+    binding.runtime_generation = 4;
+    binding.safe_stop_source_instance_id = 33;
+    binding.next_safe_stop_sequence = 1;
+    binding.policy_source_instance_id = 22;
+    binding.next_policy_sequence = 1;
+    binding.expected_step_index = 0;
+    binding.require_policy_admission = true;
+    system.gate_ = std::make_shared<ReceiptGate>(binding);
+    ReceiptFacts anchor;
+    anchor.session_id = binding.session_id;
+    anchor.config_hash = binding.config_hash;
+    anchor.key = {11, 1};
+    anchor.episode_generation = 2;
+    anchor.reset_epoch = 3;
+    anchor.runtime_generation = 4;
+    anchor.source = 4;
+    anchor.sequence = 1;
+    anchor.source_instance_id = 33;
+    anchor.stamp_ns = 100;
+    anchor.frame_id = "base_link";
+    if (!system.gate_->Enqueue(anchor, 2'000'000'000) ||
+        system.gate_->ConsumeNext(100, 2'000'000'000).disposition !=
+            GateDisposition::Anchored)
+      throw std::runtime_error("test policy-order anchor failed");
+    AdmissionToken token{};
+    token.fill(7);
+    if (!system.gate_->SetExpectedPolicyStep(1, 1, "policy-step-1", 110,
+            token, 110, 2'000'000'000) ||
+        !system.gate_->RecordPolicyAdmission(token, 120, 2'000'000'001))
+      throw std::runtime_error("test policy-order admission failed");
+    system.episode_generation_ = 2;
+    system.reset_epoch_ = 3;
+    system.runtime_generation_ = 4;
+    system.last_safety_sample_sequence_ = 0;
+  }
+
+  static void ProcessCallbackInputs(
+      BackendSystem &system, std::int64_t sim_ns, std::int64_t steady_ns)
+  { system.ProcessCallbackInputs(sim_ns, steady_ns); }
+
+  static std::size_t SafetyQueueSize(const BackendSystem &system)
+  { return system.safety_queue_.size(); }
+
+  static GateResult ConsumeNextGateReceipt(
+      BackendSystem &system, std::int64_t sim_ns, std::int64_t steady_ns)
+  { return system.gate_->ConsumeNext(sim_ns, steady_ns); }
+
   static std::uint64_t GateWatermark(const BackendSystem &system)
   {
     return system.gate_ ? system.gate_->Watermark() : 0;
@@ -3027,6 +3083,64 @@ TEST(BackendSystemControlReceiver,
   const auto after = run_receipt(111);
   EXPECT_EQ(after.first, GateDisposition::Applied);
   EXPECT_EQ(after.second, 2u);
+}
+
+TEST(BackendSystemControlReceiver,
+     PriorPolicyReceiptIsConsumedBeforeClosingAdmissionInput)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::SeedPolicyAdmissionGateForOrdering(system);
+  AdmissionToken token{};
+  token.fill(7);
+
+  mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt receipt;
+  SetStamp(receipt.header.stamp, 130);
+  receipt.header.frame_id = "base_link";
+  receipt.episode_generation = 2;
+  receipt.reset_epoch = 3;
+  receipt.runtime_generation = 4;
+  receipt.step_index = 1;
+  receipt.transition_id = "policy-step-1";
+  receipt.source = receipt.SOURCE_POLICY;
+  receipt.sequence = 1;
+  receipt.source_instance_id = 22;
+  receipt.final_publisher_instance_id = 11;
+  receipt.final_publish_sequence = 2;
+  receipt.final_command.linear.x = 0.05;
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'010);
+  BackendSystemTestPeer::EarlyReceipt(system, receipt);
+
+  SafetyInput close;
+  SetStamp(close.header.stamp, 140);
+  close.header.frame_id = "base_link";
+  close.schema_version = SafetyInput::SCHEMA_VERSION;
+  close.session_id = "test-session";
+  close.config_hash = std::string(64, 'a');
+  close.ingress_instance_id = 7;
+  close.sample_sequence = 1;
+  close.episode_generation = 2;
+  close.reset_epoch = 3;
+  close.runtime_generation = 4;
+  close.admission_state = SafetyInput::ADMISSION_INHIBITED;
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'020);
+  BackendSystemTestPeer::ReceiveSafetyInput(system, close);
+
+  BackendSystemTestPeer::ProcessCallbackInputs(
+      system, 150, 2'000'000'030);
+  EXPECT_EQ(BackendSystemTestPeer::SafetyQueueSize(system), 1u);
+  const auto receipt_result = BackendSystemTestPeer::ConsumeNextGateReceipt(
+      system, 150, 2'000'000'030);
+  ASSERT_EQ(receipt_result.disposition, GateDisposition::Applied)
+      << receipt_result.reason;
+  EXPECT_EQ(receipt_result.accepted->key.publish_sequence, 2u);
+
+  BackendSystemTestPeer::ProcessCallbackInputs(
+      system, 150, 2'000'000'040);
+  EXPECT_EQ(BackendSystemTestPeer::SafetyQueueSize(system), 0u);
+  EXPECT_FALSE(BackendSystemTestPeer::AdmitGateSample(
+      system, token, 150, 2'000'000'040));
+  EXPECT_TRUE(BackendSystemTestPeer::ReceiptGateFaultReason(system).empty());
 }
 
 TEST(BackendSystemControlReceiver, MutationDeadlineStartsAtReceiverIngress)

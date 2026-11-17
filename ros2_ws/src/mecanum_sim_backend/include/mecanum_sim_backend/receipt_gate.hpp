@@ -104,6 +104,7 @@ public:
   bool PinResetFence(std::uint64_t sequence);
   bool ResetFenceHeld() const;
   bool QueueEmpty() const;
+  std::optional<std::int64_t> FrontPolicyReceiveSteadyNs() const;
   bool BindResetContext(std::int64_t barrier_stamp_ns,
                         std::uint64_t episode_generation,
                         std::uint32_t reset_epoch,

@@ -3454,6 +3454,25 @@ private:
       while (!safety_queue_.empty() && safety_queue_.front().second <= steady_now_ns)
       {
         const auto &front = safety_queue_.front();
+        // A closing input must not revoke a slot before a receipt that had
+        // already reached the callback queue. Process one such receipt in
+        // the normal gate path first; the close remains queued for the next
+        // physics update. Receipts received after the close still see the
+        // revoked token and fail closed.
+        if (gate_ &&
+            front.first.admission_state != SafetyInput::ADMISSION_POLICY_OPEN)
+        {
+          const auto receipt_receive_ns = gate_->FrontPolicyReceiveSteadyNs();
+          if (receipt_receive_ns && *receipt_receive_ns <= front.second)
+          {
+            gzmsg << "B23_SAFETY_INPUT_CLOSE_DEFERRED_FOR_PRIOR_RECEIPT sample="
+                  << front.first.sample_sequence << " input_receive_ns="
+                  << front.second << " receipt_receive_ns="
+                  << *receipt_receive_ns << std::endl;
+            std::fflush(stdout);
+            break;
+          }
+        }
         if (policy_order_fault_ == "receipt_before_admission" && gate_ &&
             front.first.admission_state == SafetyInput::ADMISSION_POLICY_OPEN &&
             gate_->QueueEmpty())

@@ -420,4 +420,9 @@ bool ReceiptGate::PinResetFence(std::uint64_t sequence)
 }
 bool ReceiptGate::ResetFenceHeld() const { return reset_fence_.has_value(); }
 bool ReceiptGate::QueueEmpty() const { return queue_.empty(); }
+std::optional<std::int64_t> ReceiptGate::FrontPolicyReceiveSteadyNs() const
+{
+  if (queue_.empty() || queue_.front().facts.source != 1) return std::nullopt;
+  return queue_.front().receive_steady_ns;
+}
 }  // namespace mecanum_sim_backend
