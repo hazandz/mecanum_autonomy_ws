@@ -4250,8 +4250,8 @@ class TrainingWorkerIO:
             # during bind/sample delivery so no SAFE_STOP can revoke it. Now
             # allow the real timer to publish POLICY; native captures that
             # receipt before the case-specific close condition is injected.
-            self.safety.local_training.set_stream_enabled(True)
             self.safety.local_training.set_policy_hold(False)
+            self.safety.local_training.set_stream_enabled(True)
             policy_receipt = await self.until(lambda: self.final.publication_for_source_sequence(
                 source=CommandEnvelope.SOURCE_POLICY, sequence=token.step_index),
                 deadline_ns=deadline, phase='actual held POLICY publication receipt')
@@ -4335,8 +4335,8 @@ class TrainingWorkerIO:
                 'b1_abort_status': str(aborted.status), 'steady_ns': self.now()})
             return {'expected_rejection': True, 'policy_issued': True, **checked,
                 'b1_step_aborted': True, 'transition_id': token.transition_id}
-        self.safety.local_training.set_stream_enabled(True)
         self.safety.local_training.set_policy_hold(False)
+        self.safety.local_training.set_stream_enabled(True)
         if after_policy_applied is not None:
             from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
             if not callable(after_policy_applied):

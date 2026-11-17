@@ -3787,13 +3787,13 @@ def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_rece
                     and call.args[0].value is value for call in calls):
                 return index
         raise AssertionError(f'{method}({value}) is missing in held-receipt path')
-    stream_on = call_index('set_stream_enabled', True)
     release_hold = call_index('set_policy_hold', False)
+    stream_on = call_index('set_stream_enabled', True)
     wait_receipt = next(index for index, statement in enumerate(body)
         if any(isinstance(node, ast.Constant) and node.value == 'actual held POLICY publication receipt'
             for node in ast.walk(statement)))
-    assert stream_on < wait_receipt
     assert release_hold < wait_receipt
+    assert release_hold < stream_on < wait_receipt
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
@@ -3820,14 +3820,19 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         applied_sim_stamp=NS(sec=0, nanosec=0), header=NS(stamp=NS(sec=0, nanosec=0)))
     def set_stream_enabled(enabled):
         history.append(('stream', enabled))
+        if enabled and bind_times and adapter.policy_hold:
+            # Model the real Safety timer running between stream enable and
+            # hold release: it emits a SAFE_STOP after OP_BIND_PENDING_STEP,
+            # which revokes the pending native admission token.
+            history.append(('safe_stop_race_after_pending_bind', clock.ns))
         if enabled and timing == 'r09b_callback' and adapter.command is not None:
             value.ingress.backend_state.applied_final_publish_sequence = 4
             value.ingress.backend_state.applied_receipt_valid = True
             value.ingress.backend_received_ns = clock.ns
-    adapter = NS(safe_stop_sequence=1,
+    adapter = NS(safe_stop_sequence=1, policy_hold=True,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
-        set_policy_hold=lambda state: history.append(('hold', state)),
+        set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
         scan_period_ns=100_000_000, last_tick_ros_ns=1_000_000_000)
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
@@ -3984,7 +3989,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if i > issued and row == ('stream', True))
     hold_off_after_issue = next(i for i, row in enumerate(history)
         if i > issued and row == ('hold', False))
-    assert stream_off < bind < issued < stream_on_after_issue < hold_off_after_issue
+    assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    assert not any(row[0] == 'safe_stop_race_after_pending_bind' for row in history)
     envelope = next(row[1] for row in history if row[0] == 'publish')
     frozen = next(row[1] for row in history
         if isinstance(row, tuple) and len(row) == 2 and row[0] == 'STEP_STREAMS_FROZEN')
