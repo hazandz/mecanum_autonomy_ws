@@ -5129,7 +5129,6 @@ class RunEvidence:
                 self.streams[filename] = (self.root/filename).open('x', encoding='utf-8')
             raw = json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False, default=evidence_json_value)
             self.streams[filename].write(raw + '\n')
-            self.streams[filename].flush()
 
     def record(self, event, facts):
         with self._lock:

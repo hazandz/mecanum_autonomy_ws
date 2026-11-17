@@ -174,6 +174,21 @@ def test_run_evidence_serializes_concurrent_safety_and_worker_records(tmp_path):
     assert all(record['invocation_id'] == 'inv-thread-test' for record in records)
 
 
+def test_run_evidence_buffers_hot_path_until_explicit_sync(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'worker', run_id='B23-BUFFER-TEST',
+        invocation_id='inv-buffer-test')
+    evidence.record('PHYSICS_PAIR', {'iteration': 1, 'stamp_ns': 10})
+    events_path = tmp_path/'worker-events.jsonl'
+    assert events_path.read_bytes() == b'', 'hot-path append must not flush synchronously'
+
+    evidence.sync()
+    rows = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]['facts'] == {'iteration': 1, 'stamp_ns': 10}
+    evidence.close()
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
@@ -3932,6 +3947,7 @@ def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_waterma
                 'ingress=11 sample=28[Msg] admission=0 episode='
                 'B23_SAFE_STOP_RECEIPT_INGRESS publisher=B23_SAFE_STOP_RECEIPT_INGRESS '
                 'publisher=1')})
+        sink.sync()
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         safety = [row for row in rows if row['kind'] == 'B23_SAFETY_INPUT_OBSERVED']
         assert len(safety) == 1
@@ -3947,6 +3963,7 @@ def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_waterma
             'text':('[Msg] B23_SAFETY_INPUT_OBSERVED session=own-session backend='
                 '[Msg] B23_SAFE_STOP_RECEIPT_INGRESS publisher=33 admission=0 '
                 'backend=22 ingress=11 sample=28')})
+        sink.sync()
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         assert [row for row in rows if row['kind'] == 'B23_SAFETY_INPUT_OBSERVED'] == safety
         assert any(row['kind'] == 'B23_NATIVE_OUTPUT_REJECTED'
