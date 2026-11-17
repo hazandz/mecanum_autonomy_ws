@@ -599,6 +599,34 @@ class LocalTrainingSafetyAdapter:
             if previous is None:
                 reasons += ('LIMITER_PRIMED',)
             previous_ros_ns = self.last_tick_ros_ns
+            if (not reasons and previous is not None and previous_ros_ns is not None
+                    and now > previous and ros_ns > previous_ros_ns and ros_ns > 0):
+                period = self.scan_period_ns
+                boundary = (ros_ns // period + 1) * period
+                remaining_ros_ns = boundary - ros_ns
+                ros_delta_ns = ros_ns - previous_ros_ns
+                steady_delta_ns = now - previous
+                # The receipt is applied by a later physics update. Avoid
+                # issuing a normal command when the observed steady/ROS
+                # cadence leaves no full Safety period before the next scan
+                # cutoff. This keeps B1's latest pre-cutoff receipt eligible
+                # for native application at that cutoff without changing the
+                # cutoff, receipt freshness, or watchdog limits. A bad/stalled
+                # clock does not use this estimate; existing Safety checks
+                # remain responsible for fail-closed output.
+                if remaining_ros_ns * steady_delta_ns < self.safety_period_ns * ros_delta_ns:
+                    if self._last_deferred_scan_cutoff_ns != boundary:
+                        self._last_deferred_scan_cutoff_ns = boundary
+                        self.emit('SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF', {
+                            'boundary_ns': boundary, 'ros_ns': ros_ns,
+                            'steady_ns': now, 'remaining_ros_ns': remaining_ros_ns,
+                            'projected_remaining_steady_ns': (
+                                remaining_ros_ns * steady_delta_ns // ros_delta_ns),
+                            'safety_period_ns': self.safety_period_ns,
+                            'observed_ros_delta_ns': ros_delta_ns,
+                            'observed_steady_delta_ns': steady_delta_ns,
+                        })
+                    return None
             if not reasons and previous_ros_ns is not None and ros_ns > 0:
                 period = self.scan_period_ns
                 prior_boundary = (previous_ros_ns // period) * period

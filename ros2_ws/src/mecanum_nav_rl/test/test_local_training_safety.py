@@ -147,6 +147,82 @@ def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapt
     assert len(f.published) == published_count + 1
 
 
+def test_local_safety_defers_normal_output_inside_applied_receipt_margin(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.advance()
+        assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert f.clock.ros == 1_080_000_000
+    previous_tick = adapter.last_tick_ns
+    published_count = len(f.published)
+
+    # With measured 1:1 ROS/steady cadence, a normal publication 10 ms before
+    # the 1.100 s scan cutoff has less than one pinned 20 ms Safety period for
+    # its native application. Defer that tick; the prior applied receipt
+    # remains the latest eligible command at the cutoff.
+    f.advance(10_000_000)
+    assert f.clock.ros == 1_090_000_000
+    assert adapter.tick() is None
+    assert adapter.last_tick_ns == previous_tick
+    assert len(f.published) == published_count
+    before = [data for name, data in f.evidence
+        if name == 'SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF']
+    assert before == [{'boundary_ns':1_100_000_000,
+        'ros_ns':1_090_000_000,'steady_ns':2_090_000_000,
+        'remaining_ros_ns':10_000_000,'projected_remaining_steady_ns':10_000_000,
+        'safety_period_ns':20_000_000,'observed_ros_delta_ns':10_000_000,
+        'observed_steady_delta_ns':10_000_000}]
+
+    # Exact-cutoff suppression and recovery after the boundary remain in force.
+    f.advance(10_000_000)
+    assert adapter.tick() is None
+    f.advance(20_000_000)
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+    assert f.clock.ros == 1_120_000_000
+    assert len(f.published) == published_count + 1
+    assert f.clock.steady - previous_tick == 40_000_000
+
+
+def test_local_safety_fault_stop_is_not_deferred_before_scan_cutoff(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.advance()
+        adapter.tick()
+    f.advance(10_000_000)
+    adapter.command_received = f.clock.steady - 250_000_000
+    output = adapter.tick()
+    assert output.source == output.SOURCE_SAFE_STOP
+    assert 'COMMAND_STALE_OR_FUTURE' in f.state[-1].intervention_reasons
+    assert not any(name == 'SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF'
+        for name, _ in f.evidence)
+
+
+def test_local_safety_uses_observed_ros_steady_rate_for_cutoff_margin(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    for _ in range(4):
+        f.clock.ros += 10_000_000
+        f.clock.steady += 20_000_000
+        output = adapter.tick()
+        assert output is not None and output.source == output.SOURCE_POLICY
+    assert f.clock.ros == 1_040_000_000
+
+    # At RTF 0.5, 20 ms of ROS time to the cutoff is 40 ms steady time,
+    # leaving more than one 20 ms Safety period for application.
+    f.clock.ros = 1_080_000_000
+    f.clock.steady += 80_000_000
+    output = adapter.tick()
+    assert output is not None and output.source == output.SOURCE_POLICY
+    f.clock.ros = 1_090_000_000
+    f.clock.steady += 20_000_000
+    output = adapter.tick()
+    assert output is not None and output.source == output.SOURCE_POLICY
+    assert not any(name == 'SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF'
+        for name, _ in f.evidence)
+
+
 def test_local_safety_keeps_deferring_repeated_steady_ticks_at_exact_ros_cutoff(local_adapter):
     f = local_adapter; adapter = f.adapter
     assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
