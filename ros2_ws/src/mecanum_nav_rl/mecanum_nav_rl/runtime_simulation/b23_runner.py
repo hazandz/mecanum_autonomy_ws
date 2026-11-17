@@ -4429,6 +4429,30 @@ class TrainingWorkerIO:
             pending_source_sequence=token.step_index, pending_transition_id=token.transition_id,
             action_barrier_stamp=self._time_msg(barrier))
         self.ingress.arm_pending(ack)
+        # Stage the bound POLICY candidate while the stream remains closed.
+        # Waiting for the first post-ACK admission sample before publishing
+        # the candidate can consume the native 100 ms receipt watchdog window:
+        # the sample is valid only after ACK, but the command itself is already
+        # authorized by the applied pending-step binding. Safety still cannot
+        # publish it until the matching fresh admission arrives and the stream
+        # is enabled below.
+        life = self.ingress.lifecycle
+        envelope = CommandEnvelope()
+        envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
+        envelope.source, envelope.source_instance_id, envelope.sequence = (
+            envelope.SOURCE_POLICY, self.policy_source_id, token.step_index)
+        envelope.episode_generation, envelope.reset_epoch, envelope.runtime_generation = (
+            life.episode_generation, life.reset_epoch, life.runtime_generation)
+        scales = self.document['training']['local_training']
+        envelope.twist.linear.x = float(action[0]) * scales['max_vx_mps']
+        envelope.twist.linear.y = float(action[1]) * scales['max_vy_mps']
+        envelope.twist.angular.z = float(action[2]) * scales['max_wz_radps']
+        self.policy_publisher.publish(envelope)
+        b1.record_issuance(envelope, action_barrier_ns=barrier)
+        await self.until(lambda: self.safety.local_training.command if self.safety.local_training.command is not None
+            and self.safety.local_training.command.sequence == token.step_index
+            and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
+            deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
         if align_admission_after_scan_boundary:
             # Safety already consumed the upcoming scan cutoff while no new
             # slot was bound. Now hold only the native admission delivery
@@ -4507,23 +4531,6 @@ class TrainingWorkerIO:
                 'pending_token_sha256': hashlib.sha256(bytes(ack.response.pending_admission_token)).hexdigest(),
                 'steady_ns': self.now()})
             self._last_prebind_check = prebind_check
-        life = self.ingress.lifecycle
-        envelope = CommandEnvelope()
-        envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
-        envelope.source, envelope.source_instance_id, envelope.sequence = (
-            envelope.SOURCE_POLICY, self.policy_source_id, token.step_index)
-        envelope.episode_generation, envelope.reset_epoch, envelope.runtime_generation = (
-            life.episode_generation, life.reset_epoch, life.runtime_generation)
-        scales = self.document['training']['local_training']
-        envelope.twist.linear.x = float(action[0]) * scales['max_vx_mps']
-        envelope.twist.linear.y = float(action[1]) * scales['max_vy_mps']
-        envelope.twist.angular.z = float(action[2]) * scales['max_wz_radps']
-        self.policy_publisher.publish(envelope)
-        b1.record_issuance(envelope, action_barrier_ns=barrier)
-        await self.until(lambda: self.safety.local_training.command if self.safety.local_training.command is not None
-            and self.safety.local_training.command.sequence == token.step_index
-            and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
-            deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
         if close_after_held_receipt is not None:
             if close_after_held_receipt not in ('safe_stop', 'admission_inhibited'):
                 raise ValueError('unsupported R02 close trigger')

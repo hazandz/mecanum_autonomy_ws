@@ -4155,6 +4155,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             native_watermark[0] = 3
             adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
                 admission_token=[7]*16, sample_sequence=3)
+            history.append(('post_ack_admission_sample_ready', clock.ns))
         else:
             value.ingress.last_published_sample_sequence = 2
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
@@ -4259,6 +4260,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     hold_off_after_issue = next(i for i, row in enumerate(history)
         if i > issued and row == ('hold', False))
     assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    sample_ready = next(i for i, row in enumerate(history)
+        if row[0] == 'post_ack_admission_sample_ready')
+    assert issued < sample_ready < hold_off_after_issue < stream_on_after_issue, (
+        f'POLICY candidate must be staged after ACK while the stream is closed, then await '
+        f'the fresh admission before Safety can emit it: {history!r}')
     assert stream_on_after_issue < immediate_policy_tick, (
         f'production POLICY path did not evaluate Safety immediately after enabling the admitted candidate: {history!r}')
     assert not any(row[0] == 'safe_stop_race_after_pending_bind' for row in history)
