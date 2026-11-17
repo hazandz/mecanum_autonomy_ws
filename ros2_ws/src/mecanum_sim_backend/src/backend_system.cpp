@@ -2957,6 +2957,7 @@ private:
           control_queue_.begin(), control_queue_.end(),
           [](const PendingControl &queued) {
             return queued.request.operation == ControlRequest::OP_INHIBIT;
+          });
       if (!control_session_bound_ || !gate_ ||
           (request.motion_permitted && request.barrier_state != ControlRequest::BARRIER_READY) ||
           policy_open_ || interrupted_by_inhibit || probe_running_ ||
