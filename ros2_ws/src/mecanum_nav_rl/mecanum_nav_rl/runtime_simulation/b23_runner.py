@@ -4447,10 +4447,14 @@ class TrainingWorkerIO:
         Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
         chuyển sang BIND_PENDING_STEP ở một cửa sổ còn đủ thời gian cho ACK,
         mẫu admission và receipt POLICY trước scan cutoff kế tiếp. Nếu đang
-        sát cutoff, chờ một SAFE_STOP receipt đã được native apply sau cutoff
-        trong khi stream vẫn inhibit, rồi mới đóng stream và bind.
+        sát cutoff, chờ SAFE_STOP post-cutoff có đủ cửa sổ và xác nhận receipt
+        đã vào native trước khi bind. `zero_witness` tiếp tục là bằng chứng
+        riêng về SAFE_STOP đã được apply; receipt mới được xếp trước bind để
+        native drain nó mà không thu hồi slot mới.
         """
         from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
         adapter = self.safety.local_training
         period_ns = adapter.scan_period_ns
         now_ros_ns = self.ros_now()
@@ -4459,8 +4463,8 @@ class TrainingWorkerIO:
         # instant as the closed edge of the current window, not as a fresh
         # full period; only a strictly post-cutoff tick opens the next window.
         remaining_ns = period_ns - phase_ns if phase_ns else 0
-        # Measured R09a path needed about 60 ms from pending bind through the
-        # first eligible final receipt. Keep a 10 ms margin to the 100 ms scan
+        # Measured R09a path needs about 60 ms from pending bind through the
+        # first eligible final receipt. Keep a 10 ms margin to the scan
         # boundary; this does not alter the native 100 ms watchdog.
         launch_guard_ns = 90_000_000
         if remaining_ns >= launch_guard_ns:
@@ -4471,7 +4475,12 @@ class TrainingWorkerIO:
             if receipt.final_publisher_instance_id == self.final.publisher_instance_id
             and receipt.source is ReceiptSource.SAFE_STOP), default=0)
 
-        def fresh_applied_zero_after_cutoff():
+        life = self.ingress.lifecycle
+        if life is None:
+            raise RuntimeError('cannot align POLICY bind without a current lifecycle identity')
+        expected_lifecycle = lifecycle_identity(life)
+
+        def fresh_received_zero_after_cutoff_with_window():
             state = self.ingress.backend_state
             if state is None or state.fault_flags != 0 or state.paused:
                 return None
@@ -4479,42 +4488,75 @@ class TrainingWorkerIO:
                 if (receipt.final_publish_sequence <= baseline
                         or receipt.source is not ReceiptSource.SAFE_STOP
                         or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                        or receipt.lifecycle != expected_lifecycle
+                        or receipt.session_id != self.descriptor['session_id']
+                        or receipt.ingress_config_hash != self.descriptor['config_hash']
+                        or receipt.frame_id != 'base_link'
+                        or not receipt.admission_valid
                         or receipt.publish_stamp_ns <= target_cutoff_ns
                         or any(receipt.final_command)):
                     continue
-                application = self.ingress.application_for_receipt(receipt)
-                if application is None:
+                phase = receipt.publish_stamp_ns % period_ns
+                remaining_to_cutoff = period_ns - phase if phase else 0
+                if remaining_to_cutoff < launch_guard_ns:
                     continue
-                if (not state.applied_receipt_valid
-                        or state.applied_final_publisher_instance_id != self.final.publisher_instance_id
-                        or state.applied_final_publish_sequence < receipt.final_publish_sequence):
+                current_ros_ns = self.ros_now()
+                current_phase_ns = current_ros_ns % period_ns
+                current_remaining_ns = period_ns - current_phase_ns if current_phase_ns else 0
+                if current_remaining_ns < launch_guard_ns:
                     continue
-                current = self.ingress.receipt_for_publication_sequence(
-                    state.applied_final_publish_sequence)
-                if (current is None or current.source is not ReceiptSource.SAFE_STOP
-                        or current.final_publisher_instance_id != self.final.publisher_instance_id
-                        or any(current.final_command)):
+                publication = self.final.publication_for_source_sequence(
+                    source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+                    sequence=receipt.source_sequence)
+                if (publication is None
+                        or publication.final_publisher_instance_id != receipt.final_publisher_instance_id
+                        or publication.final_publish_sequence != receipt.final_publish_sequence
+                        or publication.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+                        or any((publication.final_command.linear.x,
+                            publication.final_command.linear.y, publication.final_command.angular.z))):
                     continue
-                return {'receipt':receipt, 'state':state,
-                    'application':application, 'target_cutoff_ns':target_cutoff_ns}
+
+                # Python receipt subscription proves the publication bytes;
+                # only the backend's flushed event proves that the native
+                # receipt callback queued this exact key before the bind RPC.
+                native_rows = complete_jsonl_rows(self.descriptor['native_events_path'])
+                native_ingress = next((row for row in reversed(native_rows)
+                    if row.get('kind') == 'B23_SAFE_STOP_RECEIPT_INGRESS'
+                    and row.get('fields', {}).get('publisher') == str(receipt.final_publisher_instance_id)
+                    and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
+                    and row.get('fields', {}).get('source_sequence') == str(receipt.source_sequence)
+                    and row.get('fields', {}).get('stamp_ns') == str(receipt.publish_stamp_ns)), None)
+                if native_ingress is None:
+                    continue
+                try:
+                    native_receive_ns = int(native_ingress['fields']['receive_ns'])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if native_receive_ns <= 0:
+                    continue
+                return {'receipt':receipt, 'publication':publication,
+                    'native_ingress':native_ingress, 'native_receive_ns':native_receive_ns,
+                    'remaining_to_cutoff_ns':current_remaining_ns}
             return None
 
-        aligned = await self.until(fresh_applied_zero_after_cutoff,
+        aligned = await self.until(fresh_received_zero_after_cutoff_with_window,
             deadline_ns=deadline_ns,
-            phase='post-cutoff applied SAFE_STOP before pending policy bind')
+            phase='post-cutoff native SAFE_STOP ingress with POLICY bind window')
         self.emit('POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF', {
             'target_cutoff_ns':target_cutoff_ns,
             'zero_publish_sequence':aligned['receipt'].final_publish_sequence,
             'zero_publish_stamp_ns':aligned['receipt'].publish_stamp_ns,
-            'zero_application_iteration':aligned['application']['state'].applied_physics_iteration,
-            'zero_application_stamp_ns':(
-                aligned['application']['state'].applied_sim_stamp.sec * 1_000_000_000
-                + aligned['application']['state'].applied_sim_stamp.nanosec),
-            'zero_application_received_ns':aligned['application']['received_ns'],
+            'zero_received_steady_ns':aligned['receipt'].received_steady_ns,
+            'native_receive_ns':aligned['native_receive_ns'],
+            'native_ingress_event':aligned['native_ingress'],
+            'prior_applied_zero_sequence':zero_witness['receipt'].final_publish_sequence,
+            'prior_applied_zero_received_ns':zero_witness['received_ns'],
+            'remaining_to_cutoff_ns':aligned['remaining_to_cutoff_ns'],
             'remaining_to_next_cutoff_ns':period_ns - (self.ros_now() % period_ns),
             'steady_ns':self.now()})
-        return {'receipt':aligned['receipt'], 'state':aligned['state'],
-            'received_ns':aligned['application']['received_ns']}
+        # Keep the earlier exact application witness. The staged post-cutoff
+        # zero is proven received by native, but has not been claimed applied.
+        return zero_witness
 
     async def tick_policy_after_deferred_scan_cutoff(self, *, deadline_ns,
             step_index, sample_sequence):

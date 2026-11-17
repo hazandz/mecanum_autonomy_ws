@@ -538,11 +538,12 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
     (3_500_000_000, 3_500_000_000),
 ])
 def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too_short(
-        initial_ros_ns, target_cutoff_ns):
+        initial_ros_ns, target_cutoff_ns, tmp_path):
     from mecanum_nav_rl.core.issued_command_cutoff import (
         IssuedCommandReceiptView, ReceiptSource,
     )
     from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
 
     worker = object.__new__(TrainingWorkerIO)
     clock = {'ros_ns':initial_ros_ns, 'steady_ns':50}
@@ -553,42 +554,64 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
             88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
     old = receipt(1,3_420_000_000)
-    new = receipt(2,3_520_000_000)
-    application = {'state':NS(applied_physics_iteration=352,
-        applied_sim_stamp=NS(sec=3,nanosec=520_000_000)), 'received_ns':101}
+    too_late = receipt(2,3_520_000_000)  # Only 80 ms remains before the next cutoff.
+    aligned = receipt(3,3_610_000_000)  # 90 ms remains; native has received it.
+    publications = {
+        sequence:NS(final_publisher_instance_id=77,final_publish_sequence=sequence,
+            source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+            final_command=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))
+        for sequence in (2,3)
+    }
+    native_path=tmp_path/'native-events.jsonl'
     ingress = NS(receipts=[old], backend_state=status,
-        application_for_receipt=lambda receipt: application if receipt is new else None,
-        receipt_for_publication_sequence=lambda sequence: new if sequence == 2 else None)
-    worker.ingress, worker.final = ingress, NS(publisher_instance_id=77)
+        lifecycle=life)
+    worker.ingress, worker.final = ingress, NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence: publications.get(sequence)
+            if source == FinalIssuedCommandReceipt.SOURCE_SAFE_STOP else None)
+    worker.descriptor={'session_id':'session','config_hash':'a'*64,
+        'native_events_path':str(native_path)}
     worker.safety = NS(local_training=NS(scan_period_ns=100_000_000))
     worker.ros_now = lambda:clock['ros_ns']
     worker.now = lambda:clock['steady_ns']
     events=[]
     worker.emit=lambda name,facts:events.append((name,facts))
     waits=[]
+    samples=[(3_520_000_000,100,too_late),(3_610_000_000,200,aligned)]
 
     async def until(predicate, *, deadline_ns, phase):
         waits.append((deadline_ns,phase))
-        clock.update(ros_ns=3_520_000_000,steady_ns=100)
-        ingress.receipts.append(new)
-        value=predicate()
-        assert value is not None
-        return value
+        assert phase == 'post-cutoff native SAFE_STOP ingress with POLICY bind window'
+        for stamp,steady,view in samples:
+            clock.update(ros_ns=stamp,steady_ns=steady)
+            ingress.receipts.append(view)
+            fields={'publisher':'77','key':str(view.final_publish_sequence),
+                'source_sequence':str(view.source_sequence),'stamp_ns':str(view.publish_stamp_ns),
+                'receive_ns':str(steady+1)}
+            with native_path.open('a') as stream:
+                stream.write(json.dumps({'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+                    'fields':fields})+'\n')
+            value=predicate()
+            if value is not None:
+                return value
+        raise AssertionError('eligible native-ingress receipt was not selected')
 
     worker.until=until
     witness={'receipt':old,'state':status,'received_ns':90}
     result=asyncio.run(worker.align_policy_step_launch_window(
         deadline_ns=2_000_000_000,zero_witness=witness))
     assert len(waits)==1
-    assert waits[0][1]=='post-cutoff applied SAFE_STOP before pending policy bind'
-    assert result['receipt'] is new
-    assert result['state'] is status
-    assert result['received_ns']==101
-    assert events==[('POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF',{
-        'target_cutoff_ns':target_cutoff_ns,'zero_publish_sequence':2,
-        'zero_publish_stamp_ns':3_520_000_000,'zero_application_iteration':352,
-        'zero_application_stamp_ns':3_520_000_000,'zero_application_received_ns':101,
-        'remaining_to_next_cutoff_ns':80_000_000,'steady_ns':100})]
+    assert result is witness  # The earlier applied zero remains the application witness.
+    assert [view.final_publish_sequence for view in ingress.receipts[-2:]] == [2,3]
+    assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF'
+    facts=events[-1][1]
+    assert facts['target_cutoff_ns']==target_cutoff_ns
+    assert facts['zero_publish_sequence']==3
+    assert facts['zero_publish_stamp_ns']==3_610_000_000
+    assert facts['native_receive_ns']==201
+    assert facts['remaining_to_cutoff_ns']==90_000_000
+    assert facts['prior_applied_zero_sequence']==1
+    assert facts['remaining_to_next_cutoff_ns']==90_000_000
+    assert facts['steady_ns']==200
 
 
 def test_policy_step_keeps_current_zero_witness_when_full_scan_window_remains():
