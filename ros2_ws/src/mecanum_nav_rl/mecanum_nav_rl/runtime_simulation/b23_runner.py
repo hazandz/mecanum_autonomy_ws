@@ -5317,13 +5317,12 @@ class RunEvidence:
                 self.streams[filename] = (self.root/filename).open('x', encoding='utf-8')
             raw = json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False, default=evidence_json_value)
             self.streams[filename].write(raw + '\n')
-            # The worker polls native-events.jsonl while the parent decodes
-            # Gazebo stdout. These records are also a live cross-process
-            # control signal (for example, admission accepted before POLICY
-            # receipt), so a user-space buffered write can outlive the native
-            # watchdog window. Flush this small indexed stream without fsync;
-            # the complete raw evidence is still synchronized at finalization.
-            if filename == 'native-events.jsonl':
+            # These ledgers are read live by another owned process: the worker
+            # polls native-events.jsonl while the parent decodes Gazebo stdout,
+            # and the worker verifies a dropped POLICY receipt while the final
+            # publisher is still alive. Flush these small indexed streams
+            # without fsync; complete raw evidence is synchronized at teardown.
+            if filename in {'native-events.jsonl', 'policy_final_published.jsonl'}:
                 self.streams[filename].flush()
 
     def record(self, event, facts):

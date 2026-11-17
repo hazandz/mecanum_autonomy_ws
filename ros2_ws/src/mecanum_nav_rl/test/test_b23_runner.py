@@ -211,6 +211,24 @@ def test_native_control_event_is_visible_to_cross_process_reader_before_sync(tmp
     evidence.close()
 
 
+def test_published_policy_receipt_is_visible_to_cross_process_reader_before_close(tmp_path):
+    """R03 verifies a dropped receipt before the separate publisher exits."""
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'final', run_id='B23-POLICY-RECEIPT-FLUSH',
+        invocation_id='inv-policy-receipt-flush')
+    evidence.record('policy_final_published', {
+        'source_sequence':1, 'step_index':1, 'publisher_instance_id':42,
+        'publish_sequence':77, 'receipt_cdr_hex':'0102'})
+    path = tmp_path/'policy_final_published.jsonl'
+    rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]['event'] == 'policy_final_published'
+    assert rows[0]['facts']['publish_sequence'] == 77
+    assert rows[0]['invocation_id'] == 'inv-policy-receipt-flush'
+    evidence.close()
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
