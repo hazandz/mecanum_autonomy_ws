@@ -2344,18 +2344,30 @@ class TrainingWorkerIO:
                     source_stamp_ns = (int(message.header.stamp.sec) * 1_000_000_000
                         + int(message.header.stamp.nanosec))
                     ros_now_ns = self.ros_now()
-                    if source_stamp_ns > ros_now_ns:
+                    # Once a receipt is waiting for its source ROS timestamp,
+                    # keep every later receipt behind it even if the ROS clock
+                    # has caught up by the time that callback is dispatched.
+                    # Otherwise a newer zero receipt can advance ingress state
+                    # before the older deferred receipt, turning a normal
+                    # clock-catch-up race into a false sequence regression.
+                    pending_receipts = getattr(self, '_pending_future_receipts', None)
+                    queue_behind_pending = bool(pending_receipts)
+                    if source_stamp_ns > ros_now_ns or queue_behind_pending:
                         if received_ns > self.now():
                             raise ValueError('receipt receive timestamp moved backward')
-                        if len(self._pending_future_receipts) >= 128:
+                        if pending_receipts is None:
+                            raise RuntimeError('receipt deferral queue is unavailable')
+                        if len(pending_receipts) >= 128:
                             raise ValueError('future receipt deferral queue capacity exceeded')
-                        self._pending_future_receipts.append(
+                        pending_receipts.append(
                             (source_stamp_ns, received_ns, process, message, wire))
                         self.emit('RECEIPT_CLOCK_CATCHUP_DEFERRED', {
                             'source_stamp_ns':source_stamp_ns, 'observed_ros_now_ns':ros_now_ns,
                             'received_steady_ns':received_ns, 'deferred_steady_ns':self.now(),
                             'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                            'queue_size':len(self._pending_future_receipts),
+                            'reason':('behind_prior_future_receipt' if queue_behind_pending
+                                and source_stamp_ns <= ros_now_ns else 'source_stamp_in_future'),
+                            'queue_size':len(pending_receipts),
                             'max_original_receive_age_ns':self._receipt_max_age_ns})
                         return None
             except BaseException as error:

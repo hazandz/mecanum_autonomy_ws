@@ -4909,6 +4909,53 @@ def test_future_receipt_waits_for_owned_ros_clock_and_keeps_original_receive_age
     assert not value._pending_future_receipts
 
 
+def test_receipt_after_future_receipt_stays_behind_it_until_fifo_drain():
+    """A caught-up newer receipt cannot overtake an older clock-deferred one."""
+    from collections import deque
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    value._pending_future_receipts = deque()
+    value._receipt_max_age_ns = 500_000_000
+    value.fault_hooks = ()
+    ros_now = [1_000_000_000]
+    value.ros_now = lambda: ros_now[0]
+    events, delivered = [], []
+    value.emit = lambda name, facts: events.append((name, facts))
+
+    def receipt(sequence, stamp_ns):
+        message = FinalIssuedCommandReceipt()
+        message.header.frame_id = 'base_link'
+        message.header.stamp.sec, message.header.stamp.nanosec = divmod(stamp_ns, 1_000_000_000)
+        message.final_publish_sequence = sequence
+        return message
+
+    def consume(message, *, received_ns):
+        delivered.append((message.final_publish_sequence, received_ns))
+        return message.final_publish_sequence
+
+    receive = value.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command', consume)
+    first = receipt(29, 1_010_000_000)
+    first_received_ns = clock.ns
+    assert receive(serialize_message(first), {}) is None
+    assert delivered == [] and len(value._pending_future_receipts) == 1
+
+    # The source clock catches up past receipt 30 before the pump drains 29.
+    ros_now[0] = 1_020_000_000
+    second = receipt(30, 1_020_000_000)
+    second_received_ns = clock.ns
+    assert receive(serialize_message(second), {}) is None
+    assert delivered == [] and len(value._pending_future_receipts) == 2
+    assert events[-1][0] == 'RECEIPT_CLOCK_CATCHUP_DEFERRED'
+    assert events[-1][1]['reason'] == 'behind_prior_future_receipt'
+
+    value._deliver_future_receipts_after_clock()
+    assert delivered == [(29, first_received_ns), (30, second_received_ns)]
+    assert not value._pending_future_receipts
+
+
 def test_future_receipt_deferral_expires_at_original_freshness_budget():
     from collections import deque
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
