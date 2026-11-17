@@ -147,7 +147,7 @@ def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapt
     assert len(f.published) == published_count + 1
 
 
-def test_local_safety_defers_normal_output_inside_applied_receipt_margin(local_adapter):
+def test_local_safety_keeps_last_tick_that_allows_one_physics_application(local_adapter):
     f = local_adapter; adapter = f.adapter
     assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
     for _ in range(4):
@@ -157,30 +157,39 @@ def test_local_safety_defers_normal_output_inside_applied_receipt_margin(local_a
     previous_tick = adapter.last_tick_ns
     published_count = len(f.published)
 
-    # With measured 1:1 ROS/steady cadence, a normal publication 10 ms before
-    # the 1.100 s scan cutoff has less than one pinned 20 ms Safety period for
-    # its native application. Defer that tick; the prior applied receipt
-    # remains the latest eligible command at the cutoff.
+    # At 1:1 cadence, the 10 ms physics step still fits before the cutoff.
+    # Keep this production Safety tick so its receipt can be applied by that
+    # physics update; requiring a full 20 ms Safety period would suppress it.
     f.advance(10_000_000)
     assert f.clock.ros == 1_090_000_000
+    output = adapter.tick()
+    assert output.source == output.SOURCE_POLICY
+    assert adapter.last_tick_ns == f.clock.steady
+    assert len(f.published) == published_count + 1
+
+    # Once less than one pinned physics step remains, the normal output is
+    # deferred. Safety/fault outputs are covered separately and remain urgent.
+    f.clock.ros = 1_091_000_000
+    f.clock.steady += 1_000_000
+    before_defer_tick = adapter.last_tick_ns
     assert adapter.tick() is None
-    assert adapter.last_tick_ns == previous_tick
-    assert len(f.published) == published_count
+    assert adapter.last_tick_ns == before_defer_tick
+    assert len(f.published) == published_count + 1
     before = [data for name, data in f.evidence
         if name == 'SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF']
     assert before == [{'boundary_ns':1_100_000_000,
-        'ros_ns':1_090_000_000,'steady_ns':2_090_000_000,
-        'remaining_ros_ns':10_000_000,'projected_remaining_steady_ns':10_000_000,
-        'safety_period_ns':20_000_000,'observed_ros_delta_ns':10_000_000,
-        'observed_steady_delta_ns':10_000_000}]
+        'ros_ns':1_091_000_000,'steady_ns':2_091_000_000,
+        'remaining_ros_ns':9_000_000,'projected_remaining_steady_ns':9_000_000,
+        'physics_step_ns':10_000_000,'observed_ros_delta_ns':1_000_000,
+        'observed_steady_delta_ns':1_000_000}]
 
     # Exact-cutoff suppression and recovery after the boundary remain in force.
-    f.advance(10_000_000)
+    f.advance(9_000_000)
     assert adapter.tick() is None
     f.advance(20_000_000)
     assert adapter.tick().source == f.candidate.SOURCE_POLICY
     assert f.clock.ros == 1_120_000_000
-    assert len(f.published) == published_count + 1
+    assert len(f.published) == published_count + 2
     assert f.clock.steady - previous_tick == 40_000_000
 
 

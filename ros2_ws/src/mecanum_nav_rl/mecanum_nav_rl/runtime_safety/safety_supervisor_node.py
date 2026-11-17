@@ -291,6 +291,14 @@ class LocalTrainingSafetyAdapter:
         if type(safety_period_ms) is not int or safety_period_ms <= 0:
             raise ValueError('LOCAL_TRAINING requires a positive pinned Safety period')
         self.safety_period_ns = safety_period_ms * 1_000_000
+        physics_step_s = p['physics_step_s']
+        if (type(physics_step_s) not in (int, float) or not math.isfinite(physics_step_s)
+                or physics_step_s <= 0):
+            raise ValueError('LOCAL_TRAINING requires a positive pinned physics step')
+        self.physics_step_ns = round(physics_step_s * 1_000_000_000)
+        if (self.physics_step_ns <= 0
+                or abs(self.physics_step_ns - physics_step_s * 1_000_000_000) > 1e-6):
+            raise ValueError('LOCAL_TRAINING physics step must map to integer nanoseconds')
         scan_rate_hz = p['lidar_rate_hz']
         if (type(scan_rate_hz) not in (int, float) or not math.isfinite(scan_rate_hz)
                 or scan_rate_hz <= 0):
@@ -606,15 +614,14 @@ class LocalTrainingSafetyAdapter:
                 remaining_ros_ns = boundary - ros_ns
                 ros_delta_ns = ros_ns - previous_ros_ns
                 steady_delta_ns = now - previous
-                # The receipt is applied by a later physics update. Avoid
-                # issuing a normal command when the observed steady/ROS
-                # cadence leaves no full Safety period before the next scan
-                # cutoff. This keeps B1's latest pre-cutoff receipt eligible
-                # for native application at that cutoff without changing the
-                # cutoff, receipt freshness, or watchdog limits. A bad/stalled
-                # clock does not use this estimate; existing Safety checks
-                # remain responsible for fail-closed output.
-                if remaining_ros_ns * steady_delta_ns < self.safety_period_ns * ros_delta_ns:
+                # The next physics update is the opportunity for native to
+                # apply this publication. Defer only when the measured
+                # ROS/steady cadence says even one pinned physics step cannot
+                # occur before the scan cutoff. A full Safety period is too
+                # conservative: it suppresses the last pre-cutoff tick when
+                # one real physics update still fits, leaving no exact-cutoff
+                # application receipt for goal-settle evidence.
+                if remaining_ros_ns * steady_delta_ns < self.physics_step_ns * ros_delta_ns:
                     if self._last_deferred_scan_cutoff_ns != boundary:
                         self._last_deferred_scan_cutoff_ns = boundary
                         self.emit('SAFETY_OUTPUT_DEFERRED_BEFORE_SCAN_CUTOFF', {
@@ -622,7 +629,7 @@ class LocalTrainingSafetyAdapter:
                             'steady_ns': now, 'remaining_ros_ns': remaining_ros_ns,
                             'projected_remaining_steady_ns': (
                                 remaining_ros_ns * steady_delta_ns // ros_delta_ns),
-                            'safety_period_ns': self.safety_period_ns,
+                            'physics_step_ns': self.physics_step_ns,
                             'observed_ros_delta_ns': ros_delta_ns,
                             'observed_steady_delta_ns': steady_delta_ns,
                         })
