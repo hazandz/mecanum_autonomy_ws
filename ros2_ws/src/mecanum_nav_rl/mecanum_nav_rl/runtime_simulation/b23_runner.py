@@ -5171,7 +5171,14 @@ class TrainingWorkerIO:
         emitted_pending_cutoff_reasons = set()
         while self.now() < deadline:
             self.check()
-            for cutoff in sorted(stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff):
+            # Try the newest retained cutoff first. Older cutoffs remain
+            # available as fallback, but evaluating them first can consume
+            # the step budget and let their exact scan/noisy/backend facts
+            # expire before a fresh cutoff with its adjacent receipt is
+            # considered.
+            for cutoff in sorted(
+                    (stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff),
+                    reverse=True):
                 try:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:

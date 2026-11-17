@@ -4700,7 +4700,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if timing == 'pending_cutoff_dedup':
             value.ingress.scans[minimum_cutoff] = True
             value.ingress.scans[minimum_cutoff + 2_000_000] = True
-            clock.ns = minimum_cutoff + 2_000_000
+            value.ingress.scans[minimum_cutoff + 4_000_000] = True
+            clock.ns = minimum_cutoff + 4_000_000
     transition = object()
     minimum_cutoff = None
     commit_attempts = {}
@@ -4708,8 +4709,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         commit_calls.append(cutoff)
         if timing == 'pending_cutoff_dedup':
             commit_attempts[cutoff] = commit_attempts.get(cutoff, 0) + 1
-            if cutoff < max(value.ingress.scans):
-                raise B1SnapshotPending('application facts pending for this cutoff')
+            if cutoff == max(value.ingress.scans):
+                raise B1SnapshotPending('newest cutoff awaits its adjacent receipt')
+            if cutoff == min(value.ingress.scans):
+                raise B1SnapshotPending('old cutoff is retained only as stale fallback')
             if commit_attempts[cutoff] < 3:
                 raise B1SnapshotPending('application facts pending for this cutoff')
             return transition
@@ -4773,6 +4776,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         emitted = [(facts['cutoff_ns'], facts['reason']) for facts in pending_events]
         assert len(emitted) >= 2, f'expected multiple pending cutoffs: {history!r}'
         assert len(emitted) == len(set(emitted)), f'pending cutoff evidence was duplicated: {history!r}'
+        assert commit_calls[:3] == sorted(value.ingress.scans, reverse=True), (
+            f'policy step must try freshest cutoff first: {commit_calls!r}')
         repeated_cutoffs = {cutoff for cutoff in commit_calls
             if commit_calls.count(cutoff) > 1}
         assert len(repeated_cutoffs) >= 2, (
