@@ -828,6 +828,70 @@ def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
     assert events[-1][1]['reused_exact_scan_window_application'] is True
 
 
+def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view():
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+    value=object.__new__(TrainingWorkerIO)
+    value.now=lambda:1_000_000_000
+    life=NS(episode_generation=2, reset_epoch=3, runtime_generation=4)
+    identity=lifecycle_identity(life)
+    retained=IssuedCommandReceiptView(publish_stamp_ns=900,
+        final_publisher_instance_id=77, final_publish_sequence=101,
+        source=ReceiptSource.SAFE_STOP, source_instance_id=88,
+        source_sequence=12, step_index=0, transition_id='', lifecycle=identity,
+        session_id='session-a', ingress_config_hash='a'*64,
+        final_command=(0.0,0.0,0.0), received_steady_ns=990_000_000,
+        frame_id='base_link', admission_valid=True)
+    generated=FinalIssuedCommandReceipt()
+    generated.header.frame_id='base_link'
+    generated.header.stamp.sec=0
+    generated.header.stamp.nanosec=900
+    generated.episode_generation=2
+    generated.reset_epoch=3
+    generated.runtime_generation=4
+    generated.step_index=0
+    generated.transition_id=''
+    generated.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    generated.sequence=12
+    generated.source_instance_id=88
+    generated.final_publisher_instance_id=77
+    generated.final_publish_sequence=101
+    state=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=101, applied_physics_iteration=12,
+        applied_sim_stamp=NS(sec=0,nanosec=900))
+    value.safety=NS(local_training=NS(safe_stop_sequence=11))
+    value.ingress=NS(lifecycle=life, safe_stop_source_id=88,
+        backend_state=state,
+        receipt_for_publication_sequence=lambda seq:retained if seq==101 else None)
+    value.final=NS(publisher_instance_id=77)
+    value.descriptor={'session_id':'session-a','config_hash':'a'*64,
+        'backend_instance_id':99}
+    events=[]
+    value.emit=lambda name,facts:events.append((name,facts))
+    async def until(predicate, *, deadline_ns, phase):
+        assert phase=='new exact SAFE_STOP application before pending POLICY bind'
+        result=predicate()
+        assert result is not None
+        return result
+    value.until=until
+
+    result=asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000,
+        zero_witness={'receipt':generated,'state':state,'received_ns':990_000_000,
+            'application':{'state':state,'received_ns':990_000_000}}))
+    assert result['receipt'] is retained
+    assert result['application']['state'] is state
+    assert result['age_ns']==10_000_000
+    assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
+    assert events[-1][1]['source_sequence']==12
+    assert events[-1][1]['final_publish_sequence']==101
+    assert events[-1][1]['reused_exact_scan_window_application'] is True
+
+
 def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
     from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope

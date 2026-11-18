@@ -4803,15 +4803,45 @@ class TrainingWorkerIO:
         publish another zero, and bind only after that exact receipt has an
         exact native application in the same session/lifecycle.
         """
-        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
-        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+        from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
 
         adapter = self.safety.local_training
         if zero_witness is not None:
             receipt = zero_witness.get('receipt') if isinstance(zero_witness, dict) else None
             state = zero_witness.get('state') if isinstance(zero_witness, dict) else None
             received_ns = zero_witness.get('received_ns') if isinstance(zero_witness, dict) else None
+            if isinstance(receipt, FinalIssuedCommandReceipt):
+                # freeze_step_streams retains the exact generated ROS receipt,
+                # while scan-window alignment returns the immutable view made
+                # from those same ingress bytes. Normalize the former only by
+                # joining its complete identity back to that retained view.
+                retained = self.ingress.receipt_for_publication_sequence(
+                    receipt.final_publish_sequence)
+                receipt_source = {
+                    FinalIssuedCommandReceipt.SOURCE_POLICY: ReceiptSource.POLICY,
+                    FinalIssuedCommandReceipt.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP,
+                }.get(receipt.source)
+                command = (receipt.final_command.linear.x, receipt.final_command.linear.y,
+                    receipt.final_command.angular.z)
+                if (retained is None or receipt_source is not retained.source
+                        or receipt.final_publisher_instance_id != retained.final_publisher_instance_id
+                        or receipt.final_publish_sequence != retained.final_publish_sequence
+                        or receipt.source_instance_id != retained.source_instance_id
+                        or receipt.sequence != retained.source_sequence
+                        or receipt.step_index != retained.step_index
+                        or receipt.transition_id != retained.transition_id
+                        or lifecycle_identity(receipt) != retained.lifecycle
+                        or stamp_ns(receipt.header.stamp) != retained.publish_stamp_ns
+                        or receipt.header.frame_id != retained.frame_id
+                        or command != retained.final_command
+                        or any((receipt.final_command.linear.z, receipt.final_command.angular.x,
+                            receipt.final_command.angular.y))):
+                    raise RuntimeError('pre-bind generated receipt does not match retained ingress identity')
+                receipt = retained
+            elif receipt is not None and not isinstance(receipt, IssuedCommandReceiptView):
+                raise RuntimeError('pre-bind receipt has an unsupported representation')
             latest = self.ingress.backend_state
             life = self.ingress.lifecycle
             if (receipt is None or state is None or type(received_ns) is not int or latest is None
