@@ -68,8 +68,8 @@ def test_bound_world_rejects_missing_identity_or_backend():
         )
 
 
-def test_bridge_contains_exact_fixture_service_mappings():
-    """The bridge contract pins clock, scan, ground truth, and services."""
+def test_bridge_contains_motion_and_exact_fixture_service_mappings():
+    """The bridge pins motion, sensors, ground truth, and services."""
     root = Path(__file__).resolve().parents[4]
     config = yaml.safe_load((
         root / 'ros2_ws/src/mecanum_nav_bringup/config/bridge/'
@@ -86,9 +86,14 @@ def test_bridge_contains_exact_fixture_service_mappings():
         item['ros_topic_name']: item
         for item in config if 'ros_topic_name' in item
     }
-    assert len(topics) == 3
+    assert len(topics) == 4
     assert topics['/clock']['gz_topic_name'] == '/clock'
     assert topics['/clock']['qos_profile'] == 'CLOCK'
+    command = topics['/cmd_vel']
+    assert command['gz_topic_name'] == '/cmd_vel'
+    assert command['ros_type_name'] == 'geometry_msgs/msg/Twist'
+    assert command['gz_type_name'] == 'gz.msgs.Twist'
+    assert command['direction'] == 'ROS_TO_GZ'
     assert topics['/scan']['gz_topic_name'] == '/b2/scan'
     assert topics['/scan']['qos_profile'] == 'SENSOR_DATA'
     ground_truth = topics['/mecanum/internal/ground_truth/odom']

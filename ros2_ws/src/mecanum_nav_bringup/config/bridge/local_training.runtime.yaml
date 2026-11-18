@@ -4,6 +4,11 @@
   gz_type_name: gz.msgs.Clock
   direction: GZ_TO_ROS
   qos_profile: CLOCK
+- ros_topic_name: /cmd_vel
+  gz_topic_name: /cmd_vel
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
 - ros_topic_name: /scan
   gz_topic_name: /b2/scan
   frame_id: lidar_frame
