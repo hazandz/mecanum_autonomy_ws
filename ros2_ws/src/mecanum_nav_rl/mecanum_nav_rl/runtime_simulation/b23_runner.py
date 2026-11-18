@@ -4862,49 +4862,66 @@ class TrainingWorkerIO:
                     or state.session_id != self.descriptor['session_id']
                     or state.config_hash != self.descriptor['config_hash']
                     or lifecycle_identity(state) != lifecycle_identity(life)
-                    or latest.fault_flags != 0 or latest.paused or latest.local_zero_override
+                    or latest.fault_flags != 0 or latest.paused
                     or latest.backend_instance_id != self.descriptor['backend_instance_id']
                     or latest.session_id != self.descriptor['session_id']
                     or latest.config_hash != self.descriptor['config_hash']
                     or lifecycle_identity(latest) != lifecycle_identity(life)
                     or latest.physics_iteration < state.applied_physics_iteration):
                 raise RuntimeError('pre-bind zero witness expired or mismatched after scan-window alignment')
-            if latest.applied_receipt_valid:
-                if (latest.applied_final_publisher_instance_id != self.final.publisher_instance_id
-                        or latest.applied_final_publish_sequence < receipt.final_publish_sequence):
-                    raise RuntimeError('pre-bind latest native application conflicts with zero witness')
-                current_receipt = self.ingress.receipt_for_publication_sequence(
-                    latest.applied_final_publish_sequence)
+            if latest.local_zero_override:
+                # The exact previous application is no longer current when
+                # native has entered its local-zero override. Keep POLICY
+                # closed and wait below for a newer, exact SAFE_STOP
+                # application under this same identity and deadline.
+                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
+                    'reason':'latest_native_local_zero_override',
+                    'prior_source_sequence':receipt.source_sequence,
+                    'prior_publish_sequence':receipt.final_publish_sequence,
+                    'latest_physics_iteration':latest.physics_iteration,
+                    'lifecycle':{'episode_generation':lifecycle_identity(life).episode_generation,
+                        'reset_epoch':lifecycle_identity(life).reset_epoch,
+                        'runtime_generation':lifecycle_identity(life).runtime_generation},
+                    'deadline_ns':deadline_ns,'steady_ns':self.now(),
+                })
+                zero_witness = None
             else:
-                if any((latest.applied_final_publisher_instance_id,
-                        latest.applied_final_publish_sequence,
-                        latest.applied_physics_iteration, stamp_ns(latest.applied_sim_stamp))):
-                    raise RuntimeError('pre-bind latest status omits application validity but carries proof fields')
-                # Backend application is reported for its physics iteration
-                # only. A later healthy status can omit that one-iteration
-                # fact while the exact, fresh SAFE_STOP application remains
-                # the current retained witness.
-                current_receipt = self.ingress.receipt_for_publication_sequence(
-                    receipt.final_publish_sequence)
-            if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
-                    or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
-                    or any(current_receipt.final_command)):
-                raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
-            age_ns = self.now() - received_ns
-            refreshed = {'receipt':receipt,
-                'application':zero_witness.get('application', {'state':state,'received_ns':received_ns}),
-                'age_ns':age_ns, 'state':state, 'received_ns':received_ns}
-            self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
-                'baseline_safe_stop_sequence':adapter.safe_stop_sequence,
-                'source_sequence':receipt.source_sequence,
-                'final_publish_sequence':receipt.final_publish_sequence,
-                'native_iteration':state.applied_physics_iteration,
-                'native_stamp_ns':(state.applied_sim_stamp.sec * 1_000_000_000
-                    + state.applied_sim_stamp.nanosec),
-                'receipt_received_steady_ns':received_ns,'receipt_age_ns':age_ns,
-                'deadline_ns':deadline_ns,'steady_ns':self.now(),
-                'reused_exact_scan_window_application':True})
-            return refreshed
+                if latest.applied_receipt_valid:
+                    if (latest.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                            or latest.applied_final_publish_sequence < receipt.final_publish_sequence):
+                        raise RuntimeError('pre-bind latest native application conflicts with zero witness')
+                    current_receipt = self.ingress.receipt_for_publication_sequence(
+                        latest.applied_final_publish_sequence)
+                else:
+                    if any((latest.applied_final_publisher_instance_id,
+                            latest.applied_final_publish_sequence,
+                            latest.applied_physics_iteration, stamp_ns(latest.applied_sim_stamp))):
+                        raise RuntimeError('pre-bind latest status omits application validity but carries proof fields')
+                    # Backend application is reported for its physics iteration
+                    # only. A later healthy status can omit that one-iteration
+                    # fact while the exact, fresh SAFE_STOP application remains
+                    # the current retained witness.
+                    current_receipt = self.ingress.receipt_for_publication_sequence(
+                        receipt.final_publish_sequence)
+                if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
+                        or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                        or any(current_receipt.final_command)):
+                    raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
+                age_ns = self.now() - received_ns
+                refreshed = {'receipt':receipt,
+                    'application':zero_witness.get('application', {'state':state,'received_ns':received_ns}),
+                    'age_ns':age_ns, 'state':state, 'received_ns':received_ns}
+                self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
+                    'baseline_safe_stop_sequence':adapter.safe_stop_sequence,
+                    'source_sequence':receipt.source_sequence,
+                    'final_publish_sequence':receipt.final_publish_sequence,
+                    'native_iteration':state.applied_physics_iteration,
+                    'native_stamp_ns':(state.applied_sim_stamp.sec * 1_000_000_000
+                        + state.applied_sim_stamp.nanosec),
+                    'receipt_received_steady_ns':received_ns,'receipt_age_ns':age_ns,
+                    'deadline_ns':deadline_ns,'steady_ns':self.now(),
+                    'reused_exact_scan_window_application':True})
+                return refreshed
         baseline_sequence = adapter.safe_stop_sequence
         life = self.ingress.lifecycle
         if life is None:

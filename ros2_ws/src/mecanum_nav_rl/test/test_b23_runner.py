@@ -917,6 +917,87 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
                 'application':{'state':state,'received_ns':990_000_000}}))
 
 
+def test_prebind_zero_override_waits_for_new_exact_safe_stop_application():
+    import asyncio
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+    value=object.__new__(TrainingWorkerIO)
+    value.now=lambda:1_010_000_000
+    life=NS(episode_generation=2, reset_epoch=3, runtime_generation=4)
+    identity=lifecycle_identity(life)
+    def receipt(pub, source_seq):
+        return IssuedCommandReceiptView(publish_stamp_ns=1_000+pub,
+            final_publisher_instance_id=77, final_publish_sequence=pub,
+            source=ReceiptSource.SAFE_STOP, source_instance_id=88,
+            source_sequence=source_seq, step_index=0, transition_id='', lifecycle=identity,
+            session_id='session-a', ingress_config_hash='a'*64,
+            final_command=(0.0,0.0,0.0), received_steady_ns=1_000_000_000+pub,
+            frame_id='base_link', admission_valid=True)
+    old=receipt(101,12)
+    fresh=receipt(102,13)
+    old_state=NS(session_id='session-a',config_hash='a'*64,backend_instance_id=99,
+        episode_generation=2,reset_epoch=3,runtime_generation=4,fault_flags=0,
+        paused=False,local_zero_override=False,applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=101,applied_physics_iteration=12,
+        applied_sim_stamp=NS(sec=1,nanosec=101))
+    invalidated=NS(session_id='session-a',config_hash='a'*64,backend_instance_id=99,
+        episode_generation=2,reset_epoch=3,runtime_generation=4,fault_flags=0,
+        paused=False,local_zero_override=True,applied_receipt_valid=False,
+        applied_final_publisher_instance_id=0,applied_final_publish_sequence=0,
+        applied_physics_iteration=0,applied_sim_stamp=NS(sec=0,nanosec=0),
+        physics_iteration=13)
+    fresh_state=NS(session_id='session-a',config_hash='a'*64,backend_instance_id=99,
+        episode_generation=2,reset_epoch=3,runtime_generation=4,fault_flags=0,
+        paused=False,local_zero_override=False,applied_receipt_valid=True,
+        applied_final_publisher_instance_id=77,applied_final_publish_sequence=102,
+        applied_physics_iteration=14,applied_sim_stamp=NS(sec=1,nanosec=102),
+        physics_iteration=14)
+    publication=NS(final_publisher_instance_id=77,final_publish_sequence=102,
+        source=CommandEnvelope.SOURCE_SAFE_STOP,sequence=13,
+        final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
+            angular=NS(x=0.0,y=0.0,z=0.0)))
+    values={101:old,102:fresh}
+    value.safety=NS(local_training=NS(safe_stop_sequence=12))
+    value.ingress=NS(lifecycle=life,safe_stop_source_id=88,backend_state=invalidated,
+        receipts=[old,fresh],
+        receipt_for_publication_sequence=lambda seq:values.get(seq),
+        application_for_receipt=lambda current:{'state':fresh_state,'received_ns':1_005_000_000}
+            if current is fresh else None)
+    value.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:publication
+            if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==13 else None)
+    value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    events=[]; waits=[]
+    value.emit=lambda name,facts:events.append((name,facts))
+    async def until(predicate, *, deadline_ns, phase):
+        waits.append((deadline_ns,phase))
+        assert phase=='new exact SAFE_STOP application before pending POLICY bind'
+        value.ingress.backend_state=fresh_state
+        result=predicate()
+        assert result is not None
+        return result
+    value.until=until
+
+    result=asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000,
+        zero_witness={'receipt':old,'state':old_state,'received_ns':1_000_000_000,
+            'application':{'state':old_state,'received_ns':1_000_000_000}}))
+
+    assert len(waits)==1 and waits[0][1]=='new exact SAFE_STOP application before pending POLICY bind'
+    assert result['receipt'] is fresh
+    assert result['state'] is fresh_state
+    assert result['received_ns']==fresh.received_steady_ns
+    assert result['age_ns']==value.now()-fresh.received_steady_ns
+    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED'
+    assert events[0][1]['reason']=='latest_native_local_zero_override'
+    assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
+    assert events[-1][1]['source_sequence']==13
+    assert events[-1][1]['final_publish_sequence']==102
+    assert 'reused_exact_scan_window_application' not in events[-1][1]
+
+
 def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
     from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
