@@ -35,8 +35,26 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     pin_initial_final_publisher_identity, same_process_identity,
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
-    should_emit_policy_cutoff_pending,
+    should_emit_policy_cutoff_pending, worker_latency_diagnostic,
 )
+
+
+def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
+    assert worker_latency_diagnostic(started_ns=100, completed_ns=20_000_101,
+        thread_cpu_started_ns=40, thread_cpu_completed_ns=60) == {
+            'wall_ns':20_000_001, 'thread_cpu_ns':20,
+            'non_cpu_wait_lower_bound_ns':19_999_981,
+            'threshold_ns':20_000_000}
+    assert worker_latency_diagnostic(started_ns=100, completed_ns=20_000_101,
+        thread_cpu_started_ns=40, thread_cpu_completed_ns=20_000_040) == {
+            'wall_ns':20_000_001, 'thread_cpu_ns':20_000_000,
+            'non_cpu_wait_lower_bound_ns':1,
+            'threshold_ns':20_000_000}
+    assert worker_latency_diagnostic(started_ns=1, completed_ns=2,
+        thread_cpu_started_ns=1, thread_cpu_completed_ns=2) is None
+    with pytest.raises(ValueError, match='moved backward'):
+        worker_latency_diagnostic(started_ns=2, completed_ns=1,
+            thread_cpu_started_ns=1, thread_cpu_completed_ns=2)
 
 
 def test_case_phase_is_bound_in_packet_and_capacity_one_guard():

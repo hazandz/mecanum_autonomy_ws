@@ -100,6 +100,24 @@ def bind_install_ament_prefix(environment, install_prefix):
     return bound
 
 
+def worker_latency_diagnostic(*, started_ns, completed_ns,
+        thread_cpu_started_ns, thread_cpu_completed_ns, threshold_ns=20_000_000):
+    """Đo wall/CPU của worker; số đo này không tham gia verdict hay acceptance."""
+    values = (started_ns, completed_ns, thread_cpu_started_ns,
+        thread_cpu_completed_ns, threshold_ns)
+    if any(type(value) is not int or value < 0 for value in values):
+        raise ValueError('worker latency timestamps and threshold must be nonnegative integers')
+    wall_ns = completed_ns - started_ns
+    cpu_ns = thread_cpu_completed_ns - thread_cpu_started_ns
+    if wall_ns < 0 or cpu_ns < 0 or threshold_ns <= 0:
+        raise ValueError('worker latency clock moved backward or threshold invalid')
+    if wall_ns <= threshold_ns:
+        return None
+    return {'wall_ns':wall_ns, 'thread_cpu_ns':cpu_ns,
+        'non_cpu_wait_lower_bound_ns':max(0, wall_ns-cpu_ns),
+        'threshold_ns':threshold_ns}
+
+
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -2703,7 +2721,7 @@ class TrainingWorkerIO:
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
                 raise
 
-        def receive(raw, info):
+        def receive_unmeasured(raw, info):
             if not isinstance(raw,(bytes,bytearray,memoryview)):
                 raise TypeError('raw subscription did not return serialized bytes')
             wire=bytes(raw)
@@ -2770,6 +2788,18 @@ class TrainingWorkerIO:
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
                 raise
             return process(message, wire, received_ns)
+        def receive(raw, info):
+            started_ns, cpu_started_ns = time.monotonic_ns(), time.thread_time_ns()
+            try:
+                return receive_unmeasured(raw, info)
+            finally:
+                diagnostic = worker_latency_diagnostic(
+                    started_ns=started_ns, completed_ns=time.monotonic_ns(),
+                    thread_cpu_started_ns=cpu_started_ns,
+                    thread_cpu_completed_ns=time.thread_time_ns())
+                if diagnostic is not None:
+                    self.emit('B23_INGRESS_CALLBACK_SLOW', {
+                        'topic':topic, **diagnostic, 'observed_ns':self.now()})
         return receive
 
     def _deliver_future_receipts_after_clock(self):
@@ -2840,7 +2870,18 @@ class TrainingWorkerIO:
 
     async def _pump(self):
         try:
+            previous_wall_ns, previous_cpu_ns = time.monotonic_ns(), time.thread_time_ns()
             while not self.stop_requested:
+                started_wall_ns, started_cpu_ns = time.monotonic_ns(), time.thread_time_ns()
+                diagnostic = worker_latency_diagnostic(
+                    started_ns=previous_wall_ns, completed_ns=started_wall_ns,
+                    thread_cpu_started_ns=previous_cpu_ns,
+                    thread_cpu_completed_ns=started_cpu_ns)
+                if diagnostic is not None:
+                    self.emit('B23_WORKER_PUMP_GAP', {
+                        **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
+                        'turn_started_ns':started_wall_ns, 'observed_ns':self.now()})
+                previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 if self.safety_executor_error is not None:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
                 for _ in range(16):
