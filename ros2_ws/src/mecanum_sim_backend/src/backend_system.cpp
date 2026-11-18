@@ -3459,8 +3459,29 @@ private:
     {
       const auto held = std::move(*held_policy_receipt_);
       held_policy_receipt_.reset();
-      if (!gate_ || !gate_->Enqueue(held.first, held.second))
+      if (!gate_)
         RecordQueueFault(3, "receipt_gate_release_after_safe_stop", "receipt=held_policy");
+      else if (!gate_->Enqueue(held.first, held.second))
+      {
+        // Hook lỗi cố ý chỉ thả POLICY receipt bị giữ sau SAFE_STOP. Nếu gate
+        // đã vô hiệu hóa luồng (ví dụ thiếu publication sequence hoặc watchdog),
+        // việc từ chối receipt là kết quả fail-closed dự kiến, không phải một
+        // lỗi hạ tầng hàng đợi thứ hai.
+        if (gate_->Faulted())
+        {
+          const auto gate_reason = gate_->FaultReason();
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_POLICY_RECEIPT_RELEASE_REJECTED_AFTER_CLOSE reason=gate_faulted"
+                << " gate_reason=" << gate_reason
+                << " publisher=" << held.first.key.publisher_instance_id
+                << " sequence=" << held.first.key.publish_sequence
+                << " source_sequence=" << held.first.sequence << std::endl;
+            std::fflush(stdout);
+          });
+        }
+        else
+          RecordQueueFault(3, "receipt_gate_release_after_safe_stop", "receipt=held_policy");
+      }
       EmitStructuredDiagnostic([&]() {
         gzmsg << "B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE reason=safe_stop"
             << " publisher=" << held.first.key.publisher_instance_id

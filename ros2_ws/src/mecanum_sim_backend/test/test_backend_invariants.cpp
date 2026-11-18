@@ -745,6 +745,24 @@ public:
     system.OnReceipt(receipt);
   }
 
+  static void HoldPolicyReceiptUntilSafeStop(BackendSystem &system)
+  {
+    system.receipt_fault_mode_ = "hold_policy_until_safe_stop";
+    if (!system.gate_) throw std::runtime_error("test receipt gate missing");
+  }
+
+  static void InvalidateReceiptGate(BackendSystem &system, const std::string &reason)
+  {
+    if (!system.gate_) throw std::runtime_error("test receipt gate missing");
+    system.gate_->Invalidate(reason);
+  }
+
+  static bool ReceiptGateFaulted(const BackendSystem &system)
+  { return system.gate_ && system.gate_->Faulted(); }
+
+  static bool HeldPolicyReceipt(const BackendSystem &system)
+  { return system.held_policy_receipt_.has_value(); }
+
   static std::uint32_t CallbackFaultFlags(const BackendSystem &system)
   {
     return system.callback_fault_flags_.load();
@@ -3779,6 +3797,41 @@ TEST(BackendSystemControlReceiver, ExactDuplicateConflictGapAndQueueOverflow)
       full_system, overflow);
   EXPECT_EQ(overflow_response.reason_code, ControlResponse::REASON_QUEUE_OVERFLOW);
   EXPECT_EQ(BackendSystemTestPeer::QueueSize(full_system), 8u);
+}
+
+TEST(BackendSystemReceiptFault, LateHeldPolicyReceiptDoesNotAddQueueFault)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::SeedPolicyAdmissionGateForOrdering(system);
+  BackendSystemTestPeer::HoldPolicyReceiptUntilSafeStop(system);
+
+  Receipt policy;
+  policy.header.frame_id = "base_link";
+  SetStamp(policy.header.stamp, 130);
+  policy.final_publisher_instance_id = 11;
+  policy.final_publish_sequence = 2;
+  policy.episode_generation = 2;
+  policy.reset_epoch = 3;
+  policy.runtime_generation = 4;
+  policy.step_index = 1;
+  policy.transition_id = "policy-step-1";
+  policy.source = Receipt::SOURCE_POLICY;
+  policy.sequence = 1;
+  policy.source_instance_id = 22;
+  BackendSystemTestPeer::EarlyReceipt(system, policy);
+  ASSERT_TRUE(BackendSystemTestPeer::HeldPolicyReceipt(system));
+
+  BackendSystemTestPeer::InvalidateReceiptGate(system, "actuator_watchdog_expired");
+  BackendSystemTestPeer::EarlyReceipt(
+      system, SafeStopReceipt(3, 2, 2, 3, 140));
+
+  EXPECT_FALSE(BackendSystemTestPeer::HeldPolicyReceipt(system));
+  EXPECT_TRUE(BackendSystemTestPeer::ReceiptGateFaulted(system));
+  EXPECT_EQ(BackendSystemTestPeer::ReceiptGateFaultReason(system),
+            "actuator_watchdog_expired");
+  EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
+      << "từ chối receipt muộn dự kiến không được nâng thành FAULT_QUEUE";
 }
 
 TEST(BackendSystemControlReceiver, ProbeStartUsesReceiverUpdateAndInjectedTransport)
