@@ -57,6 +57,35 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2)
 
 
+def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():
+    class SlowLock:
+        def __enter__(self):
+            threading.Event().wait(.03)
+        def __exit__(self, *args):
+            return False
+
+    for lock, delay_sink in ((SlowLock(), False), (threading.RLock(), True)):
+        calls = []
+        def sink(name, facts):
+            calls.append((name, facts))
+            if name == 'SLOW_EVENT' and delay_sink:
+                threading.Event().wait(.03)
+        worker = object.__new__(TrainingWorkerIO)
+        worker._emit_lock = lock
+        worker.events = []
+        worker._accepted_policy_event_keys = set()
+        worker._event_sink = sink
+        worker._emit('SLOW_EVENT', {'source':'fake'})
+        assert calls[0] == ('SLOW_EVENT', {'source':'fake'})
+        assert calls[1][0] == 'B23_WORKER_EVENT_BLOCK'
+        assert calls[1][1]['event_name'] == 'SLOW_EVENT'
+        assert calls[1][1]['threshold_ns'] == 20_000_000
+        if delay_sink:
+            assert calls[1][1]['sink_wall_ns'] > 20_000_000
+        else:
+            assert calls[1][1]['lock_wait_ns'] > 20_000_000
+
+
 def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
     from mecanum_nav_rl.runtime_simulation.b23_runner import campaign_phase, verify_guard_authority
     assert campaign_phase('R01a') == 'smoke'

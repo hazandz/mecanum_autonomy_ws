@@ -2521,25 +2521,57 @@ class TrainingWorkerIO:
         lock = getattr(self, '_emit_lock', None)
         if lock is None:
             lock = self._emit_lock = threading.RLock()
-        with lock:
-            if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
-                        'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
-                        'SAFETY_REJECTED','SAFETY_INPUT_REJECTED','b1_transition_committed',
-                        'NATIVE_APPLICATION_JOINED',
-                        'B23_R04_NOISY_ODOMETRY_DROPPED',
-                        'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
-                        'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
-                        'B23_R04_FAULT_ARMED','B23_R06A_SET_POSE_TARGET_MUTATED',
-                        'B23_R06B_PHYSICS_ITERATION_OMITTED','B23_R06B_FAULT_ARMED',
-                        'B23_R06C_FAULT_ARMED','B23_R06C_OBSERVATION0_RECEIPT_HELD'}:
-                self.events.append((name, copy.deepcopy(facts)))
-            elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
-                    and type(facts.get('candidate_sequence')) is int):
-                key = (facts['candidate_source_instance_id'], facts['candidate_sequence'])
-                if key not in self._accepted_policy_event_keys:
-                    self._accepted_policy_event_keys.add(key)
+        lock_started_ns, lock_cpu_started_ns = time.monotonic_ns(), time.thread_time_ns()
+        lock_acquired_ns = lock_cpu_acquired_ns = sink_started_ns = None
+        sink_completed_ns = sink_cpu_completed_ns = None
+        sink_succeeded = False
+        try:
+            with lock:
+                lock_acquired_ns, lock_cpu_acquired_ns = time.monotonic_ns(), time.thread_time_ns()
+                if name in {'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1','RESET_POSE_MUTATION_ARMED',
+                            'B1_RESET_STARTED','B1_RESET_COMMITTED','RESET_COMPLETE',
+                            'SAFETY_REJECTED','SAFETY_INPUT_REJECTED','b1_transition_committed',
+                            'NATIVE_APPLICATION_JOINED',
+                            'B23_R04_NOISY_ODOMETRY_DROPPED',
+                            'B23_R04_DELIVERY_DELAY_SCHEDULED','B23_R04_DELIVERY_DELAYED_CALLBACK',
+                            'B23_R04_INGRESS_DELIVERY_SCHEDULED','B23_R04_INGRESS_DELIVERY_COMPLETED',
+                            'B23_R04_FAULT_ARMED','B23_R06A_SET_POSE_TARGET_MUTATED',
+                            'B23_R06B_PHYSICS_ITERATION_OMITTED','B23_R06B_FAULT_ARMED',
+                            'B23_R06C_FAULT_ARMED','B23_R06C_OBSERVATION0_RECEIPT_HELD'}:
                     self.events.append((name, copy.deepcopy(facts)))
-            self._event_sink(name, facts)
+                elif (name == 'SAFETY_ACCEPTED' and facts.get('candidate_source') == 1
+                        and type(facts.get('candidate_sequence')) is int):
+                    key = (facts['candidate_source_instance_id'], facts['candidate_sequence'])
+                    if key not in self._accepted_policy_event_keys:
+                        self._accepted_policy_event_keys.add(key)
+                        self.events.append((name, copy.deepcopy(facts)))
+                sink_started_ns, sink_cpu_started_ns = time.monotonic_ns(), time.thread_time_ns()
+                try:
+                    self._event_sink(name, facts)
+                    sink_succeeded = True
+                finally:
+                    sink_completed_ns, sink_cpu_completed_ns = time.monotonic_ns(), time.thread_time_ns()
+        finally:
+            if sink_succeeded:
+                sink_wall_ns = sink_completed_ns - sink_started_ns
+                lock_wait_ns = lock_acquired_ns - lock_started_ns
+                if max(sink_wall_ns, lock_wait_ns) > 20_000_000:
+                    # Write outside _emit_lock so the diagnostic does not extend
+                    # the same critical section it is measuring.
+                    try:
+                        self._event_sink('B23_WORKER_EVENT_BLOCK', {
+                            'event_name':name, 'lock_wait_ns':lock_wait_ns,
+                            'lock_wait_thread_cpu_ns':lock_cpu_acquired_ns-lock_cpu_started_ns,
+                            'sink_wall_ns':sink_wall_ns,
+                            'sink_thread_cpu_ns':sink_cpu_completed_ns-sink_cpu_started_ns,
+                            'sink_non_cpu_wait_lower_bound_ns':max(0, sink_wall_ns-
+                                (sink_cpu_completed_ns-sink_cpu_started_ns)),
+                            'threshold_ns':20_000_000,
+                            'observed_ns':time.monotonic_ns()})
+                    except BaseException:
+                        # A diagnostic write must not replace the event's
+                        # original sink result or alter control flow.
+                        pass
 
     def _publish_safety_input(self, message):
         """Packet-scoped R02e transport hold for one real pre-bind producer sample."""
