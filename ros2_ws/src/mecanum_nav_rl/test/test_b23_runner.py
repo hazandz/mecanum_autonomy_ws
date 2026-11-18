@@ -4117,6 +4117,64 @@ def worker():
     return value, clock
 
 
+def test_freeze_zero_keeps_safe_stop_stream_live_until_native_applies_exact_receipt(monkeypatch):
+    """Do not let a locally observed zero receipt age while native awaits it."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+
+    value, clock = worker()
+    stream = {'enabled': True}
+    stream_states = []
+    adapter = NS(safe_stop_sequence=0)
+    adapter.set_policy_hold = lambda _held: None
+    def set_stream_enabled(enabled):
+        stream['enabled'] = enabled
+        stream_states.append(bool(enabled))
+    adapter.set_stream_enabled = set_stream_enabled
+    value.safety = NS(local_training=adapter)
+    lifecycle = NS(episode_generation=0, barrier_stamp=NS(sec=0, nanosec=0))
+    value.ingress = NS(lifecycle=lifecycle, _noise_ready=False,
+        observation0_ack=None, last_published_sample_sequence=0,
+        pause_admission_publication=lambda: None, physics_pairs=[])
+    receipt = NS(
+        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=1,
+        final_publisher_instance_id=77, final_publish_sequence=9,
+        source_instance_id=88, episode_generation=0, reset_epoch=0,
+        runtime_generation=0, step_index=0, transition_id='',
+        final_command=NS(linear=NS(x=0., y=0., z=0.),
+            angular=NS(x=0., y=0., z=0.)),
+        header=NS(stamp=NS(sec=0, nanosec=10_000_000)))
+    value.final = NS(publication_for_source_sequence=lambda *, source, sequence:
+        receipt if (source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 1) else None)
+    value.descriptor = {'session_id':'session-1', 'config_hash':'a'*64,
+        'backend_instance_id':99}
+    state = NS(applied_receipt_valid=True, local_zero_override=False,
+        applied_final_publisher_instance_id=77, applied_final_publish_sequence=9,
+        applied_physics_iteration=1, applied_sim_stamp=NS(sec=0, nanosec=10_000_000))
+    monkeypatch.setattr('rclpy.serialization.deserialize_message', lambda _raw, _type: state)
+    phases = []
+    async def until(predicate, *, deadline_ns, phase):
+        phases.append(phase)
+        if phase == 'SAFE_STOP tick':
+            adapter.safe_stop_sequence = 1
+        elif phase == 'native applied SAFE_STOP':
+            assert stream['enabled'] is True, 'Safety stream stopped before native zero application'
+            value.ingress.physics_pairs[:] = [NS(backend_bytes=b'fake-status',
+                backend_received_steady_ns=clock.ns)]
+        result = predicate()
+        assert result is not None, phase
+        return result
+    value.until = until
+    value.now = clock.now
+    value.emit = lambda _name, _facts: None
+
+    result = asyncio.run(value.freeze_zero(deadline_ns=clock.ns + 5_000_000_000))
+
+    assert result.final_publish_sequence == 9
+    assert phases == ['SAFE_STOP tick', 'final SAFE_STOP drain', 'native applied SAFE_STOP']
+    assert stream_states == [False]
+    assert stream['enabled'] is False
+
+
 def test_policy_pending_event_dedupe_is_scoped_per_cutoff_and_reason():
     seen = set()
     observed = []
