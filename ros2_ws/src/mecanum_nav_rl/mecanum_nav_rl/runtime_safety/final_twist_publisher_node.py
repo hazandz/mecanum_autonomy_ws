@@ -19,6 +19,7 @@ class FinalTwistPublisherNode(Node):
             raise ValueError("SIM_EVAL_USE_SIM_TIME_MUST_BE_TRUE")
         self.declare_parameter('navigation_mode', 'NAV2_BASELINE')
         self.declare_parameter('scan_period_ns', 0)
+        self.declare_parameter('physics_step_ns', 0)
         self.declare_parameter('session_id', '')
         self.declare_parameter('policy_source_instance_id', 0)
         self.declare_parameter('safe_stop_source_instance_id', 0)
@@ -27,9 +28,14 @@ class FinalTwistPublisherNode(Node):
             raise ValueError('unsupported FinalTwistPublisher mode')
         self._local_training = mode == 'LOCAL_TRAINING'
         scan_period_ns = self.get_parameter('scan_period_ns').value
+        physics_step_ns = self.get_parameter('physics_step_ns').value
         if self._local_training and (type(scan_period_ns) is not int or scan_period_ns <= 0):
             raise ValueError('LOCAL_TRAINING publisher requires pinned scan period')
+        if (self._local_training and (type(physics_step_ns) is not int
+                or physics_step_ns <= 0 or physics_step_ns >= scan_period_ns)):
+            raise ValueError('LOCAL_TRAINING publisher requires pinned physics step')
         self._scan_period_ns = scan_period_ns if self._local_training else 0
+        self._physics_step_ns = physics_step_ns if self._local_training else 0
         self._session_id = self.get_parameter('session_id').value
         self._policy_source = self.get_parameter('policy_source_instance_id').value
         self._safe_stop_source = self.get_parameter('safe_stop_source_instance_id').value
@@ -205,6 +211,18 @@ class FinalTwistPublisherNode(Node):
                         'scan_period_ns':self._scan_period_ns,
                         'reason':'accepted envelope crossed or landed on scan cutoff'})
                     return
+                if identity_fresh:
+                    remaining_ns = self._scan_period_ns - (now_ns % self._scan_period_ns)
+                    if remaining_ns <= self._physics_step_ns:
+                        boundary_ns = now_ns + remaining_ns
+                        self._emit('FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF', {
+                            'source_stamp_ns':source_ns, 'publisher_stamp_ns':now_ns,
+                            'boundary_ns':boundary_ns,
+                            'remaining_ros_ns':remaining_ns,
+                            'scan_period_ns':self._scan_period_ns,
+                            'physics_step_ns':self._physics_step_ns,
+                            'reason':'native application could land after the next scan cutoff'})
+                        return
             if not identity.motion_permitted or not identity_fresh:
                 self.get_logger().error("NAV2_COMMAND_LIFECYCLE_BARRIER_NOT_READY_OR_STALE")
                 return

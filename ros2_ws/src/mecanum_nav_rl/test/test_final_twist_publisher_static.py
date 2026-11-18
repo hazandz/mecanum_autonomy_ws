@@ -159,7 +159,7 @@ def test_local_training_publisher_preserves_policy_key_and_safe_stop_counter(mon
     life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
     node = NS(_local_training=True, _local_admitted=True, _session_id='b23-test', _policy_source=123,
         _safe_stop_source=456, _identity=life, _identity_received_ns=1_900_000_000,
-        _scan_period_ns=100_000_000,
+        _scan_period_ns=100_000_000, _physics_step_ns=10_000_000,
               _final_publish_sequence=0, _publisher_instance_id=789,
               _cmd_pub=NS(publish=publish_cmd), _receipt_pub=NS(publish=publish_receipt),
               _emit=lambda name, record: evidence.append((name, record)),
@@ -218,6 +218,7 @@ def test_local_final_publisher_drops_queued_policy_crossing_scan_cutoff(monkeypa
     node = NS(_local_training=True, _local_admitted=True, _session_id='b23-cutoff',
         _policy_source=11, _safe_stop_source=12, _identity=life,
         _identity_received_ns=1_900_000_000, _scan_period_ns=100_000_000,
+        _physics_step_ns=10_000_000,
         _final_publish_sequence=0, _publisher_instance_id=13,
         _cmd_pub=NS(publish=published.append), _receipt_pub=NS(publish=receipts.append),
         _emit=lambda name, facts:evidence.append((name, facts)),
@@ -243,6 +244,63 @@ def test_local_final_publisher_drops_queued_policy_crossing_scan_cutoff(monkeypa
     module.FinalTwistPublisherNode._on_accepted(node, command)
     assert len(published) == len(receipts) == 1
     assert receipts[0].header.stamp == Time(sec=1, nanosec=420_000_000)
+
+
+def test_local_final_publisher_defers_policy_with_one_physics_step_before_cutoff(monkeypatch):
+    from types import SimpleNamespace as NS
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState
+    from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: 2_000_000_000)
+    now = {'ns':1_190_000_000}
+    published, receipts, evidence = [], [], []
+    life = SafetyLifecycleState()
+    life.header.stamp = Time(sec=1, nanosec=100_000_000)
+    life.primary_state, life.barrier_state, life.motion_permitted = (
+        life.PRIMARY_ACTIVE, life.BARRIER_READY, True)
+    life.episode_generation, life.reset_epoch, life.runtime_generation = 1, 2, 3
+    node = NS(_local_training=True, _local_admitted=True, _session_id='b23-lead',
+        _policy_source=11, _safe_stop_source=12, _identity=life,
+        _identity_received_ns=1_900_000_000, _scan_period_ns=100_000_000,
+        _physics_step_ns=10_000_000, _final_publish_sequence=0,
+        _publisher_instance_id=13, _cmd_pub=NS(publish=published.append),
+        _receipt_pub=NS(publish=receipts.append),
+        _emit=lambda name, facts:evidence.append((name, facts)),
+        get_clock=lambda:NS(now=lambda:NS(nanoseconds=now['ns'], to_msg=lambda:
+            Time(sec=now['ns']//10**9,nanosec=now['ns']%10**9))),
+        get_logger=lambda:NS(error=lambda _:None))
+    command = CommandEnvelope()
+    command.header.frame_id = 'base_link'
+    command.header.stamp = Time(sec=1, nanosec=170_000_000)
+    command.source, command.source_instance_id, command.sequence = command.SOURCE_POLICY, 11, 1
+    command.episode_generation, command.reset_epoch, command.runtime_generation = 1, 2, 3
+    command.twist.linear.x = .1
+
+    module.FinalTwistPublisherNode._on_accepted(node, command)
+    assert not published and not receipts
+    assert evidence[-1] == ('FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF', {
+        'source_stamp_ns':1_170_000_000, 'publisher_stamp_ns':1_190_000_000,
+        'boundary_ns':1_200_000_000, 'remaining_ros_ns':10_000_000,
+        'scan_period_ns':100_000_000, 'physics_step_ns':10_000_000,
+        'reason':'native application could land after the next scan cutoff'})
+
+    # SAFE_STOP giữ đường đóng tức thời trong cùng cửa sổ lead.
+    stop = CommandEnvelope()
+    stop.header.frame_id = 'base_link'
+    stop.source, stop.source_instance_id, stop.sequence = stop.SOURCE_SAFE_STOP, 12, 1
+    module.FinalTwistPublisherNode._on_accepted(node, stop)
+    assert len(published) == len(receipts) == 1
+    assert receipts[0].source == receipts[0].SOURCE_SAFE_STOP
+
+    # Callback POLICY cũ đến sau cutoff vẫn bị loại bởi kiểm tra crossing;
+    # một command mới sau boundary có thể phát và tạo receipt bình thường.
+    now['ns'] = 1_210_000_000
+    module.FinalTwistPublisherNode._on_accepted(node, command)
+    assert len(published) == len(receipts) == 1
+    command.header.stamp = Time(sec=1, nanosec=210_000_000)
+    module.FinalTwistPublisherNode._on_accepted(node, command)
+    assert len(published) == len(receipts) == 2
+    assert receipts[-1].source == receipts[-1].SOURCE_POLICY
 
 
 def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):

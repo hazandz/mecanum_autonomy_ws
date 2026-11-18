@@ -5570,7 +5570,8 @@ def final_child(path):
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
             Parameter('session_id', value=descriptor['session_id']),
-            Parameter('scan_period_ns', value=descriptor['scan_period_ns'])], evidence_sink=sink.record)
+            Parameter('scan_period_ns', value=descriptor['scan_period_ns']),
+            Parameter('physics_step_ns', value=packet_physics_step_ns(packet))], evidence_sink=sink.record)
         if packet['case'] == 'R04d':
             node._b23_r04d_run_id = descriptor['run_id']
             node._b23_r04d_invocation_id = descriptor['invocation_id']
@@ -6947,6 +6948,26 @@ def packet_scan_period_ns(packet):
             or not math.isfinite(rate_hz) or rate_hz <= 0):
         raise ValueError('packet-pinned LiDAR rate is invalid')
     return round(1_000_000_000 / rate_hz)
+
+
+def packet_physics_step_ns(packet):
+    """Resolve the native application lead from the packet-pinned config."""
+    import math
+    from mecanum_nav_bringup.local_training_launch_contract import load_bound_config
+
+    document, config_hash, asset_hash, _scenario_id = load_bound_config(
+        Path(packet['resolved_config']))
+    if (config_hash != packet['config_hash']
+            or asset_hash != packet['asset_manifest_sha256']):
+        raise ValueError('physics step config/asset binding mismatch')
+    step_s = document['training']['local_training']['physics_step_s']
+    if (isinstance(step_s, bool) or not isinstance(step_s, (int, float))
+            or not math.isfinite(step_s) or step_s <= 0):
+        raise ValueError('packet-pinned physics step is invalid')
+    step_ns = round(step_s * 1_000_000_000)
+    if step_ns <= 0 or abs(step_ns - step_s * 1_000_000_000) > 1e-6:
+        raise ValueError('packet-pinned physics step is not integral nanoseconds')
+    return step_ns
 
 
 def verify_postmortem_residue_attestation(attestation_path, *, run_id, packet_sha256,
