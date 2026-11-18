@@ -60,6 +60,8 @@ class SafetySupervisorNode(Node):
             self.local_training = LocalTrainingSafetyAdapter(self, local_training_context, emit=evidence_sink)
             self._local_training_steady_now_ns = _steady_now_ns or time.monotonic_ns
             self._local_training_last_timer_ns = None
+            self._local_training_last_callback_wall_ns = None
+            self._local_training_last_callback_cpu_ns = None
             for message_type, topic, callback, qos in (
                 (CommandEnvelope, '/mecanum/cmd_policy', self.local_training.on_command, reliable),
                 (LaserScan, '/scan', self.local_training.on_scan, sensor),
@@ -154,6 +156,7 @@ class SafetySupervisorNode(Node):
 
     def _tick_local_training_steady(self) -> None:
         """Record timer lateness without changing watchdog or Safety decisions."""
+        import time
         now_ns = self._local_training_steady_now_ns()
         previous_ns = self._local_training_last_timer_ns
         self._local_training_last_timer_ns = now_ns
@@ -165,9 +168,25 @@ class SafetySupervisorNode(Node):
                     'clock': 'steady', 'previous_tick_ns': previous_ns,
                     'current_tick_ns': now_ns, 'gap_ns': gap_ns,
                     'period_ns': period_ns,
+                    'previous_callback_wall_ns': self._local_training_last_callback_wall_ns,
+                    'previous_callback_cpu_ns': self._local_training_last_callback_cpu_ns,
                     'missed_periods_lower_bound': max(1, gap_ns // period_ns - 1),
                 })
+        callback_started_ns = self._local_training_steady_now_ns()
+        callback_cpu_started_ns = time.thread_time_ns()
         self.local_training.tick()
+        callback_cpu_ns = time.thread_time_ns() - callback_cpu_started_ns
+        callback_wall_ns = self._local_training_steady_now_ns() - callback_started_ns
+        self._local_training_last_callback_wall_ns = callback_wall_ns
+        self._local_training_last_callback_cpu_ns = callback_cpu_ns
+        if callback_wall_ns > self.local_training.safety_period_ns:
+            self.local_training.emit('SAFETY_TIMER_CALLBACK_SLOW', {
+                'clock': 'steady', 'started_ns': callback_started_ns,
+                'completed_ns': callback_started_ns + callback_wall_ns,
+                'callback_wall_ns': callback_wall_ns,
+                'callback_thread_cpu_ns': callback_cpu_ns,
+                'period_ns': self.local_training.safety_period_ns,
+            })
 
     def _start_local_training_periodic_timer(self) -> None:
         """Start steady Safety ticks after one full-period phase offset."""

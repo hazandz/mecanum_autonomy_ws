@@ -1449,6 +1449,13 @@ private:
       {
         probe_spawn_inflight_ = false;
         const auto completed = probe_machine_.SpawnCompleted(result.success);
+        gzmsg << "B23_CONTACT_SPAWN_RESULT session=" << session_id_
+              << " backend=" << backend_instance_id_
+              << " request_sequence=" << result.start_sequence
+              << " success=" << result.success
+              << " accepted=" << completed
+              << " phase=" << static_cast<int>(probe_machine_.Phase())
+              << std::endl;
         if (!completed && result.success &&
             (probe_machine_.Phase() == ProbePhase::Cancelled ||
              probe_machine_.Phase() == ProbePhase::Failed))
@@ -1545,6 +1552,10 @@ private:
         gz::sim::entityTypeId(*models.begin(), ecm) !=
             gz::sim::components::Model::typeId)
     {
+      probe_reason_ = "probe_fixture_model_identity_invalid";
+      gzerr << "B23_CONTACT_FIXTURE_BINDING_FAILED session=" << session_id_
+            << " backend=" << backend_instance_id_ << " reason="
+            << probe_reason_ << " model_count=" << models.size() << std::endl;
       probe_machine_.Invalidate();
       return false;
     }
@@ -1575,6 +1586,12 @@ private:
     if (collisions.size() != 1 ||
         sensors.size() != 1)
     {
+      probe_reason_ = "probe_fixture_collision_or_sensor_cardinality_invalid";
+      gzerr << "B23_CONTACT_FIXTURE_BINDING_FAILED session=" << session_id_
+            << " backend=" << backend_instance_id_ << " reason="
+            << probe_reason_ << " model_count=" << models.size()
+            << " collision_count=" << collisions.size()
+            << " sensor_count=" << sensors.size() << std::endl;
       probe_machine_.Invalidate();
       return false;
     }
@@ -1598,6 +1615,16 @@ private:
         sensor_parent->Data() != link_entity || !link_component ||
         !link_parent || link_parent->Data() != *models.begin())
     {
+      probe_reason_ = "probe_fixture_sensor_collision_binding_invalid";
+      gzerr << "B23_CONTACT_FIXTURE_BINDING_FAILED session=" << session_id_
+            << " backend=" << backend_instance_id_ << " reason="
+            << probe_reason_ << " sensor_data=" << (sensor_sdf != nullptr)
+            << " contact_element="
+            << (sensor_sdf && sensor_sdf->HasElement("contact"))
+            << " collision_parent=" << (collision_parent != nullptr)
+            << " sensor_parent=" << (sensor_parent != nullptr)
+            << " link_component=" << (link_component != nullptr)
+            << " link_parent=" << (link_parent != nullptr) << std::endl;
       probe_machine_.Invalidate();
       return false;
     }
@@ -2125,11 +2152,17 @@ private:
       probe_running_ = false;
       ClearContactCapability();
       probe_reason_ = "probe_contact_coverage_or_identity_invalid";
-      if (contact_probe_only_)
-        gzerr << "B22_CONTACT_FAILED iteration=" << info.iterations
-              << " component=" << observation.component_present
-              << " coverage=" << observation.coverage_complete
-              << " reason=" << probe_reason_ << std::endl;
+      gzerr << "B23_CONTACT_OBSERVATION_FAILED session=" << session_id_
+            << " backend=" << backend_instance_id_ << " iteration="
+            << info.iterations << " stamp_ns=" << sim_stamp_ns << " phase="
+            << static_cast<int>(phase) << " component="
+            << observation.component_present << " coverage="
+            << observation.coverage_complete << " floor_pair="
+            << observation.exact_fixture_floor_pair << " robot_pair="
+            << observation.exact_fixture_robot_pair << " normal_depth_valid="
+            << observation.normal_depth_valid << " separated="
+            << observation.fixture_measured_separated << " reason="
+            << probe_reason_ << std::endl;
     }
   }
 

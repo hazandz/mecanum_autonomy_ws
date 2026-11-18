@@ -550,13 +550,30 @@ assert node.local_training.policy_hold is True
 assert not hasattr(node, '_core')
 ticks = []
 node.local_training.tick = lambda: ticks.append(tick_now[0])
+import time
+thread_cpu = [0]
+def fake_thread_time_ns():
+    thread_cpu[0] += 1000
+    return thread_cpu[0]
+time.thread_time_ns = fake_thread_time_ns
 for tick_now[0] in (0, 20_000_000, 100_000_000):
     node._tick_local_training_steady()
 overruns = [(event, fields) for event, fields in events if event == 'SAFETY_TIMER_OVERRUN']
 assert ticks == [0, 20_000_000, 100_000_000]
 assert len(overruns) == 1 and overruns[0][1] == {
     'clock':'steady', 'previous_tick_ns':20_000_000, 'current_tick_ns':100_000_000,
-    'gap_ns':80_000_000, 'period_ns':20_000_000, 'missed_periods_lower_bound':3}
+    'gap_ns':80_000_000, 'period_ns':20_000_000,
+    'previous_callback_wall_ns':0, 'previous_callback_cpu_ns':1000,
+    'missed_periods_lower_bound':3}
+node._local_training_last_timer_ns = None
+tick_now[0] = 200_000_000
+node.local_training.tick = lambda: tick_now.__setitem__(0, tick_now[0] + 25_000_000)
+node._tick_local_training_steady()
+slow = [(event, fields) for event, fields in events if event == 'SAFETY_TIMER_CALLBACK_SLOW']
+assert len(slow) == 1 and slow[0][1] == {
+    'clock':'steady', 'started_ns':200_000_000, 'completed_ns':225_000_000,
+    'callback_wall_ns':25_000_000, 'callback_thread_cpu_ns':1000,
+    'period_ns':20_000_000}
 
 # Exercise the real main() branch with fake ROS/executor boundaries. LOCAL_TRAINING
 # gets a dedicated worker for its mutually-exclusive steady timer group; NAV2 keeps
