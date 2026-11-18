@@ -4779,7 +4779,23 @@ class TrainingWorkerIO:
         remaining_after_application = policy_bind_launch_window_remaining_ns(
             self.ros_now(), period_ns)
         if not policy_bind_launch_window_ready(remaining_after_application):
-            raise TimeoutError('exact post-cutoff SAFE_STOP application missed the measured POLICY bind window')
+            self.emit('POLICY_STEP_BIND_WINDOW_APPLICATION_OBSERVED_LATE', {
+                'source_sequence': aligned_receipt.source_sequence,
+                'final_publish_sequence': aligned_receipt.final_publish_sequence,
+                'application_iteration': applied_zero['state'].applied_physics_iteration,
+                'application_stamp_ns': (applied_zero['state'].applied_sim_stamp.sec
+                    * 1_000_000_000 + applied_zero['state'].applied_sim_stamp.nanosec),
+                'remaining_to_cutoff_ns': remaining_after_application,
+                'deadline_ns': deadline_ns,
+                'steady_ns': self.now(),
+            })
+            # The proof is valid, but the asynchronous observation arrived too
+            # late to begin a bind in the measured window. Keep it only as the
+            # previous zero witness and align to a newer post-cutoff receipt
+            # under the same preparation deadline; never bind from this stale
+            # window or extend the deadline.
+            return await self.align_policy_step_launch_window(
+                deadline_ns=deadline_ns, zero_witness=applied_zero)
         self.emit('POLICY_STEP_BIND_WINDOW_ZERO_APPLIED', {
             'source_sequence': aligned_receipt.source_sequence,
             'final_publish_sequence': aligned_receipt.final_publish_sequence,

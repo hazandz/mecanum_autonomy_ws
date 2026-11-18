@@ -772,6 +772,117 @@ def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_o
         deadline_ns=2_000_000_000,zero_witness=witness)) is witness
 
 
+def test_policy_bind_realigns_after_exact_zero_application_is_observed_late(
+        tmp_path):
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+
+    worker=object.__new__(TrainingWorkerIO)
+    clock={'ros_ns':3_420_000_000,'steady_ns':100}
+    life=EpisodeLifecycleIdentity(1,2,3)
+    def receipt(sequence,stamp):
+        return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
+            88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
+    old,first,second=receipt(1,3_420_000_000),receipt(2,3_540_000_000),receipt(3,3_640_000_000)
+    def state(sequence,stamp,iteration):
+        return NS(fault_flags=0,paused=False,local_zero_override=False,
+            applied_receipt_valid=True,applied_final_publisher_instance_id=77,
+            applied_final_publish_sequence=sequence,backend_instance_id=99,
+            session_id='session',config_hash='a'*64,episode_generation=1,
+            reset_epoch=2,runtime_generation=3,applied_physics_iteration=iteration,
+            applied_sim_stamp=NS(sec=stamp//1_000_000_000,
+                nanosec=stamp%1_000_000_000),physics_iteration=iteration)
+    first_state=state(2,3_550_000_000,355)
+    second_state=state(3,3_650_000_000,365)
+    applications={
+        2:{'state':first_state,'received_ns':250},
+        3:{'state':second_state,'received_ns':550},
+    }
+    publications={sequence:NS(final_publisher_instance_id=77,
+        final_publish_sequence=sequence,source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+        final_command=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.))) for sequence in (2,3)}
+    ingress=NS(receipts=[old],backend_state=first_state,lifecycle=life,
+        application_for_receipt=lambda view:applications.get(view.final_publish_sequence),
+        receipt_for_publication_sequence=lambda sequence:{2:first,3:second}.get(sequence))
+    worker.ingress=ingress
+    worker.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:publications.get(sequence)
+            if source==FinalIssuedCommandReceipt.SOURCE_SAFE_STOP else None)
+    native_path=tmp_path/'native-events.jsonl'
+    worker.descriptor={'session_id':'session','config_hash':'a'*64,
+        'backend_instance_id':99,'native_events_path':str(native_path),
+        'server_leader_pid':777,'invocation_id':'inv-1'}
+    worker._native_offset=0; worker._native_partial=b''
+    worker._native_input_watermark=0; worker._native_safe_stop_ingress={}
+    worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
+    worker.ros_now=lambda:clock['ros_ns']; worker.now=lambda:clock['steady_ns']
+    events=[]; worker.emit=lambda name,facts:events.append((name,facts))
+    waits=[]; deadline=2_000_000_000
+
+    def write_native(view,receive_ns):
+        row={'kind':'B23_SAFE_STOP_RECEIPT_INGRESS','server_leader_pid':777,
+            'invocation_id':'inv-1','fields':{'publisher':'77',
+                'key':str(view.final_publish_sequence),
+                'source_sequence':str(view.source_sequence),
+                'stamp_ns':str(view.publish_stamp_ns),'receive_ns':str(receive_ns)}}
+        with native_path.open('ab') as stream:
+            stream.write((json.dumps(row)+'\n').encode())
+
+    async def until(predicate,*,deadline_ns,phase):
+        waits.append((deadline_ns,phase))
+        assert deadline_ns==deadline
+        if phase=='post-cutoff native SAFE_STOP ingress with POLICY bind window':
+            if len(waits)==1:
+                clock.update(ros_ns=3_540_000_000,steady_ns=200)
+                ingress.receipts.append(first); ingress.backend_state=first_state
+                write_native(first,201)
+            else:
+                assert len(waits)==3
+                clock.update(ros_ns=3_640_000_000,steady_ns=500)
+                ingress.receipts.append(second); ingress.backend_state=second_state
+                write_native(second,501)
+            value=predicate()
+            assert value is not None
+            return value
+        assert phase=='exact post-cutoff SAFE_STOP application in POLICY bind window'
+        if len(waits)==2:
+            # Exact receipt 2 was applied at 3.55 s, but the worker observes
+            # the application at 3.57 s, outside the unchanged 40-60 ms band.
+            clock.update(ros_ns=3_570_000_000,steady_ns=300)
+            return predicate()
+        assert len(waits)==4
+        clock.update(ros_ns=3_650_000_000,steady_ns=600)
+        return predicate()
+
+    worker.until=until
+    witness={'receipt':old,'state':state(1,3_420_000_000,342),'received_ns':90}
+    result=asyncio.run(worker.align_policy_step_launch_window(
+        deadline_ns=deadline,zero_witness=witness))
+    assert result['receipt'] is second
+    assert result['state'] is second_state
+    assert result['received_ns']==550
+    assert [phase for _,phase in waits]==[
+        'post-cutoff native SAFE_STOP ingress with POLICY bind window',
+        'exact post-cutoff SAFE_STOP application in POLICY bind window',
+        'post-cutoff native SAFE_STOP ingress with POLICY bind window',
+        'exact post-cutoff SAFE_STOP application in POLICY bind window']
+    assert all(bound==deadline for bound,_ in waits)
+    assert [name for name,_ in events]==[
+        'POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF',
+        'POLICY_STEP_BIND_WINDOW_APPLICATION_OBSERVED_LATE',
+        'POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF',
+        'POLICY_STEP_BIND_WINDOW_ZERO_APPLIED']
+    assert events[1][1]['remaining_to_cutoff_ns']==30_000_000
+    assert events[1][1]['final_publish_sequence']==2
+    assert events[3][1]['remaining_to_cutoff_ns']==50_000_000
+    assert events[3][1]['final_publish_sequence']==3
+    assert worker._native_safe_stop_ingress[('77','2','2','3540000000')]['fields']['receive_ns']=='201'
+    assert worker._native_safe_stop_ingress[('77','3','3','3640000000')]['fields']['receive_ns']=='501'
+
+
 def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
     from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
