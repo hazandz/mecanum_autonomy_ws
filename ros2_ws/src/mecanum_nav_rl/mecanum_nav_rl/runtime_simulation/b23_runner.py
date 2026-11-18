@@ -5320,9 +5320,12 @@ class RunEvidence:
             # These ledgers are read live by another owned process: the worker
             # polls native-events.jsonl while the parent decodes Gazebo stdout,
             # and the worker verifies a dropped POLICY receipt while the final
-            # publisher is still alive. Flush these small indexed streams
-            # without fsync; complete raw evidence is synchronized at teardown.
-            if filename in {'native-events.jsonl', 'policy_final_published.jsonl'}:
+            # publisher is still alive. The worker also reads adapter issuance
+            # from its own separate ledger handle before the evidence sink closes.
+            # Flush these indexed streams without fsync; complete raw evidence
+            # is synchronized at teardown.
+            if filename in {'native-events.jsonl', 'policy_final_published.jsonl',
+                            'policy_adapter_issued.jsonl'}:
                 self.streams[filename].flush()
 
     def record(self, event, facts):

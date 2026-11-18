@@ -229,6 +229,24 @@ def test_published_policy_receipt_is_visible_to_cross_process_reader_before_clos
     evidence.close()
 
 
+def test_policy_adapter_issuance_is_visible_to_live_verifier_before_sync(tmp_path):
+    """R04b checks the issued candidate before the worker evidence sink closes."""
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'worker', run_id='B23-ADAPTER-ISSUANCE-FLUSH',
+        invocation_id='inv-adapter-issuance-flush')
+    evidence.record('policy_adapter_issued', {
+        'step_index':1, 'sequence':1, 'source_instance_id':42,
+        'transition_id':'policy-1', 'steady_ns':90})
+    path = tmp_path/'policy_adapter_issued.jsonl'
+    rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]['event'] == 'policy_adapter_issued'
+    assert rows[0]['facts']['transition_id'] == 'policy-1'
+    assert rows[0]['invocation_id'] == 'inv-adapter-issuance-flush'
+    evidence.close()
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
