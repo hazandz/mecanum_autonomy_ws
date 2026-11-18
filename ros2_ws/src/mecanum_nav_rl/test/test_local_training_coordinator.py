@@ -988,6 +988,44 @@ def test_b1_reset_cutoff_does_not_fallback_when_required_zero_receipt_is_stale()
         adapter._selection(facts, reset=True)
 
 
+def test_policy_cutoff_before_final_policy_receipt_is_pending_then_later_cutoff_is_ready():
+    """An early scan cutoff waits for the real POLICY receipt; a later one commits normally."""
+    from builtin_interfaces.msg import Time
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, PolicyActionIssuance,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    lifecycle = EpisodeLifecycleIdentity(1, 1, 2)
+    policy = IssuedCommandReceiptView(
+        1_510_000_000, 77, 57, ReceiptSource.POLICY, 88, 1, 1, 'step-1',
+        lifecycle, 'session', 'a' * 64, (0.1, 0.0, 0.0), 9_990_000_000,
+        'base_link', True)
+    adjacent = IssuedCommandReceiptView(
+        1_530_000_000, 77, 58, ReceiptSource.SAFE_STOP, 99, 2, 0, '',
+        lifecycle, 'session', 'a' * 64, (0.0, 0.0, 0.0), 10_010_000_000,
+        'base_link', True)
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    adapter.ingress = SimpleNamespace(
+        final_publisher_id=77,
+        identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
+        lifecycle=SimpleNamespace(barrier_stamp=Time(sec=1, nanosec=0)),
+        receipts=(policy, adjacent))
+    adapter.scales = (0.25, 0.2, 0.8)
+    adapter.action_barrier_ns = 1_490_000_000
+    adapter.issuance = PolicyActionIssuance(88, 1, lifecycle, 1, 'step-1')
+    early = {'identity':lifecycle, 'cutoff':1_500_000_000,
+        'ros_now':1_540_000_000, 'steady_now':10_050_000_000}
+    later = {**early, 'cutoff':1_520_000_000}
+
+    with pytest.raises(B1SnapshotPending, match='POLICY receipt follows observation cutoff'):
+        adapter._selection(early, reset=False)
+    selected = adapter._selection(later, reset=False)
+    assert selected.status.value == 'ready'
+    assert selected.receipt.final_publish_sequence == 57
+    assert selected.adjacent_receipt.final_publish_sequence == 58
+
+
 def test_evidence_sink_failure_preserves_original_error_and_faults_sequence():
     session, client, clock, _ = setup()
     def fail_sink(name, facts):
