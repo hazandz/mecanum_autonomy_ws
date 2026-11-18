@@ -4641,7 +4641,8 @@ def test_r02_close_fault_paths_skip_scan_alignment_inside_native_watchdog(close_
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
-    'r09b_before_bind','first_sample_races_candidate_delivery','pending_cutoff_dedup'])
+    'r09b_before_bind','first_sample_races_candidate_delivery','pending_cutoff_dedup',
+    'nominal_issued_cutoff'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -4797,13 +4798,18 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     pending = NS(step_index=1, transition_id='actual-b1-token')
     commit_calls = []
     issue_times = []
+    nominal_cutoff = None
     def record(envelope, *, action_barrier_ns):
-        nonlocal minimum_cutoff
+        nonlocal minimum_cutoff, nominal_cutoff
         issue_times.append(clock.ns)
         history.append(('issued', envelope.sequence))
         assert any(row[0] == 'publish' and row[1] is envelope for row in history)
         assert action_barrier_ns <= envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec
-        minimum_cutoff = envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec + 100_000_000
+        issued_stamp = envelope.header.stamp.sec*10**9+envelope.header.stamp.nanosec
+        minimum_cutoff = issued_stamp + (1 if timing == 'nominal_issued_cutoff' else 100_000_000)
+        if timing == 'nominal_issued_cutoff':
+            nominal_cutoff = issued_stamp + 90_000_000
+            value.ingress.scans[nominal_cutoff] = True
         if timing == 'pending_cutoff_dedup':
             value.ingress.scans[minimum_cutoff] = True
             value.ingress.scans[minimum_cutoff + 2_000_000] = True
@@ -4814,6 +4820,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     commit_attempts = {}
     def commit(cutoff):
         commit_calls.append(cutoff)
+        if timing == 'nominal_issued_cutoff':
+            if cutoff == nominal_cutoff:
+                return transition
+            raise B1SnapshotPending('waiting for the exact nominal-period sample cutoff')
         if timing == 'pending_cutoff_dedup':
             commit_attempts[cutoff] = commit_attempts.get(cutoff, 0) + 1
             if cutoff == max(value.ingress.scans):
@@ -4863,7 +4873,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','r09b_callback','r09b_before_bind',
-            'first_sample_races_candidate_delivery'):
+            'first_sample_races_candidate_delivery','nominal_issued_cutoff'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -4889,6 +4899,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             if commit_calls.count(cutoff) > 1}
         assert len(repeated_cutoffs) >= 2, (
             f'fixture must retry multiple distinct cutoffs: {commit_calls!r}')
+    if timing == 'nominal_issued_cutoff':
+        assert commit_calls == [nominal_cutoff], (
+            f'production runner skipped the actual post-issuance cutoff within the nominal 100 ms period: {commit_calls!r}')
     tags = [row[0] for row in history]
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
@@ -4939,9 +4952,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing in ('r09b_callback','r09b_before_bind') else .08)
     assert len([row for row in history if row[0] == 'publish']) == 1
-    assert len(commit_calls) >= 2
-    expected_minimum = envelope.header.stamp.sec*10**9 + envelope.header.stamp.nanosec + 100_000_000
-    assert min(commit_calls) == expected_minimum
+    assert len(commit_calls) >= 1
+    issued_stamp = envelope.header.stamp.sec*10**9 + envelope.header.stamp.nanosec
+    expected_delay = (100_000_000 if timing in (
+        'r09b_callback','r09b_before_bind','pending_cutoff_dedup') else 1)
+    expected_minimum = issued_stamp + expected_delay
+    assert min(commit_calls) >= expected_minimum
     if timing == 'r09b_callback':
         assert len(callback_calls)==1
         callback_index=tags.index('r09b_fixture_after_exact_zero_application')
@@ -4961,9 +4977,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert bind < tags.index('arm') < tags.index('publish') < tags.index('issued')
         assert before_issue_calls[0][5] - before_issue_calls[0][4] >= 120_000_000
         assert callback_calls == []
-    assert commit_calls[-1] > expected_minimum
+    assert commit_calls[-1] >= expected_minimum
     assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback','r09b_before_bind',
-        'first_sample_races_candidate_delivery','pending_cutoff_dedup') else clock.ns == 3_000_000_000
+        'first_sample_races_candidate_delivery','pending_cutoff_dedup','nominal_issued_cutoff') else clock.ns == 3_000_000_000
     assert all(row[0] != 'align_policy_boundary' for row in history)
     assert ('stream', False) in history  # only pending-step freeze before bind
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))

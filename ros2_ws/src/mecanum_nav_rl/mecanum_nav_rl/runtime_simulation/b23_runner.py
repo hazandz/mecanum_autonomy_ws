@@ -5200,7 +5200,15 @@ class TrainingWorkerIO:
                 deadline_ns=deadline, phase='R09b exact zero POLICY native application before fixture pose')
             applied_received_ns = self.ingress.backend_received_ns
             await after_policy_applied(receipt, applied, deadline, applied_received_ns)
-        minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
+        # The approved 0.10 s cadence is nominal; B1 computes reward from the
+        # actual sim-time interval. Do not impose a second 100 ms minimum after
+        # issuance: with a 10 Hz scan this can skip the first valid cutoff and
+        # land on a receipt stamped at the cutoff but applied on the next tick.
+        minimum_cutoff = stamp_ns(envelope.header.stamp) + 1
+        if after_policy_applied is not None or before_pending_bind is not None:
+            # R09b aligns its isolated fixture operation to a full nominal
+            # interval after its exact zero POLICY application.
+            minimum_cutoff = stamp_ns(envelope.header.stamp) + 100_000_000
         if after_policy_applied is not None:
             await self.align_r09b_application_cutoff(b1, policy_receipt=receipt,
                 minimum_cutoff_ns=minimum_cutoff, deadline_ns=deadline)
