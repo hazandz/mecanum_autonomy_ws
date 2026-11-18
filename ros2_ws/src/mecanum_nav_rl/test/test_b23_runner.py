@@ -346,6 +346,14 @@ def test_r08_unfinished_scheduled_slots_are_collection_cutoffs_and_continue(tmp_
     run_root.mkdir()
     _write_complete_soak_ledgers(run_root)
     events = []
+    sink_state = {'synced':False}
+    original_read_counts = runner_module._soak_ledger_counts
+
+    def read_counts_after_sync(root):
+        assert sink_state['synced'], 'soak ledgers read before evidence sink sync'
+        return original_read_counts(root)
+
+    monkeypatch.setattr(runner_module, '_soak_ledger_counts', read_counts_after_sync)
 
     class FakeIO:
         deadline_ns = 10**30
@@ -369,10 +377,17 @@ def test_r08_unfinished_scheduled_slots_are_collection_cutoffs_and_continue(tmp_
 
     io = FakeIO()
     monkeypatch.setattr(runner_module.time, 'monotonic_ns', lambda: 0)
+    class FakeSink:
+        def record(self, name, facts):
+            events.append((name, facts))
+
+        def sync(self):
+            sink_state['synced'] = True
+
     result = asyncio.run(_run_b2_soak(io, object(), {
         'reset_target':{'x_m':0.,'y_m':0.,'z_m':0.,'yaw_rad':0.},
         'episode_seeds':[2026102900 + index for index in range(30)],
-        'run_root':str(run_root)}, NS(record=lambda name, facts: events.append((name, facts)))))
+        'run_root':str(run_root)}, FakeSink()))
 
     cutoffs = [facts for name, facts in events if name == 'COLLECTION_CUTOFF']
     assert len(io.resets) == 30

@@ -5984,6 +5984,10 @@ async def _run_b2_soak(io, b1, packet, sink):
                 'reason':'final_slot_unfinished' if episode_index == 29 else 'scheduled_slot_unfinished'}
             sink.record('COLLECTION_CUTOFF', cutoff)
             cutoff_records.append(cutoff)
+    # The event sink is still open here. Flush/fsync its buffered book streams
+    # before reading the files, otherwise the final in-memory B1/application
+    # records can be omitted from the acceptance count until teardown.
+    sink.sync()
     counts = _soak_ledger_counts(packet['run_root'])
     expected = 1000
     if resets != 30 or committed_steps != expected:
