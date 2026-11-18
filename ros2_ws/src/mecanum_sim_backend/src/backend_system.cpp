@@ -2958,7 +2958,8 @@ private:
           [](const PendingControl &queued) {
             return queued.request.operation == ControlRequest::OP_INHIBIT;
           });
-      if (!control_session_bound_ || !gate_ ||
+      const bool reset_context_rejected =
+          !control_session_bound_ || !gate_ ||
           (request.motion_permitted && request.barrier_state != ControlRequest::BARRIER_READY) ||
           policy_open_ || interrupted_by_inhibit || probe_running_ ||
           probe_machine_.Running() || probe_machine_.NeedsCleanup() ||
@@ -2982,8 +2983,47 @@ private:
               bound_policy_source_instance_id_ ||
           request.safe_stop_source_instance_id !=
               bound_safe_stop_source_instance_id_ ||
-          request.next_safe_stop_sequence == 0)
+          request.next_safe_stop_sequence == 0;
+      if (reset_context_rejected)
       {
+        gzerr << "B23_BIND_RESET_CONTEXT_REJECT stage=backend_predicate"
+              << " bound=" << control_session_bound_
+              << " gate=" << static_cast<bool>(gate_)
+              << " policy_open=" << policy_open_
+              << " inhibit_queued=" << interrupted_by_inhibit
+              << " probe_running=" << probe_running_
+              << " probe_machine_running=" << probe_machine_.Running()
+              << " probe_needs_cleanup=" << probe_machine_.NeedsCleanup()
+              << " primary=" << request.primary_state
+              << " barrier_state=" << request.barrier_state
+              << " world_paused=" << world_paused
+              << " pause_failed=" << reset_pause_failed_
+              << " pause_hold=" << reset_pause_hold_
+              << " lifecycle_seq=" << request.lifecycle_sequence
+              << " current_lifecycle_seq=" << lifecycle_sequence_
+              << " lifecycle_ns=" << lifecycle_ns
+              << " current_lifecycle_ns=" << lifecycle_header_stamp_ns_
+              << " sim_ns=" << sim_stamp_ns
+              << " barrier_ns=" << barrier_ns
+              << " current_barrier_ns=" << barrier_stamp_ns_
+              << " lifecycle_frame=" << request.lifecycle_frame_id
+              << " world=" << world_name_
+              << " context_forward=" << context_forward
+              << " episode_generation=" << request.episode_generation
+              << " current_episode_generation=" << episode_generation_
+              << " reset_epoch=" << request.reset_epoch
+              << " current_reset_epoch=" << reset_epoch_
+              << " runtime_generation=" << request.runtime_generation
+              << " current_runtime_generation=" << runtime_generation_
+              << " final_publisher=" << request.final_publisher_instance_id
+              << " expected_final_publisher=" << bound_final_publisher_instance_id_
+              << " policy_source=" << request.policy_source_instance_id
+              << " expected_policy_source=" << bound_policy_source_instance_id_
+              << " safe_stop_source=" << request.safe_stop_source_instance_id
+              << " expected_safe_stop_source=" << bound_safe_stop_source_instance_id_
+              << " next_safe_stop=" << request.next_safe_stop_sequence
+              << " expected_next_safe_stop=" << (gate_ ? gate_->ExpectedSafeStopSequence() : 0)
+              << std::endl;
         reason = ControlResponse::REASON_CONTEXT_NOT_NEW;
       }
       else if (!gate_->BindResetContext(
@@ -2991,6 +3031,18 @@ private:
                    request.reset_epoch, request.runtime_generation,
                    request.next_safe_stop_sequence))
       {
+        gzerr << "B23_BIND_RESET_CONTEXT_REJECT stage=receipt_gate"
+              << " barrier_ns=" << barrier_ns
+              << " current_barrier_ns=" << barrier_stamp_ns_
+              << " episode_generation=" << request.episode_generation
+              << " current_episode_generation=" << episode_generation_
+              << " reset_epoch=" << request.reset_epoch
+              << " current_reset_epoch=" << reset_epoch_
+              << " runtime_generation=" << request.runtime_generation
+              << " current_runtime_generation=" << runtime_generation_
+              << " next_safe_stop=" << request.next_safe_stop_sequence
+              << " expected_next_safe_stop=" << gate_->ExpectedSafeStopSequence()
+              << std::endl;
         reason = ControlResponse::REASON_CONTEXT_NOT_NEW;
       }
       else
