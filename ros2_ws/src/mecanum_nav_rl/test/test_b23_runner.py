@@ -247,6 +247,23 @@ def test_policy_adapter_issuance_is_visible_to_live_verifier_before_sync(tmp_pat
     evidence.close()
 
 
+def test_final_lifecycle_delivery_is_visible_to_live_r04d_verifier_before_sync(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+
+    evidence = RunEvidence(tmp_path, 'final', run_id='B23-R04D-FINAL-FLUSH',
+        invocation_id='inv-r04d-final-flush')
+    evidence.record('R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED', {
+        'sequence':6, 'identity':[2,2,2], 'delivery_ns':700,
+        'source_stamp_ns':1_190_000_000})
+    path = tmp_path/'final-events.jsonl'
+    rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]['event'] == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
+    assert rows[0]['facts']['delivery_ns'] == 700
+    assert rows[0]['invocation_id'] == 'inv-r04d-final-flush'
+    evidence.close()
+
+
 def test_parent_scan_period_comes_from_verified_packet_config(monkeypatch):
     from mecanum_nav_bringup import local_training_launch_contract as contract
     from mecanum_nav_rl.runtime_simulation.b23_runner import packet_scan_period_ns
@@ -2869,21 +2886,37 @@ def test_r04d_safety_lifecycle_repeats_stay_held_until_original_delivers():
 def test_r04d_stale_safety_observation_must_follow_delayed_lifecycle_delivery():
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_stale_safety_rejection_after_delivery
 
-    before_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
-        'steady_ns':500, 'ros_ns':1_600_000_001})
-    delivered = ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'delivery_ns':650})
-    after_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
-        'steady_ns':700, 'ros_ns':1_650_000_001})
+    before_final_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+        'steady_ns':660, 'ros_ns':1_850_000_001})
+    final_delivery_ns = 700
+    after_final_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+        'steady_ns':720, 'ros_ns':1_850_000_001})
     assert r04d_stale_safety_rejection_after_delivery(
-        [before_delivery, delivered, after_delivery], delivery_ns=650,
-        source_stamp_ns=1_050_000_000) is after_delivery[1]
+        [before_final_delivery, after_final_delivery], delivery_ns=final_delivery_ns,
+        source_stamp_ns=1_050_000_000) is after_final_delivery[1]
     assert r04d_stale_safety_rejection_after_delivery(
-        [before_delivery, delivered], delivery_ns=650,
+        [before_final_delivery], delivery_ns=final_delivery_ns,
         source_stamp_ns=1_050_000_000) is None
     not_stale_enough = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
         'steady_ns':700, 'ros_ns':1_550_000_000})
     assert r04d_stale_safety_rejection_after_delivery(
-        [not_stale_enough], delivery_ns=650, source_stamp_ns=1_050_000_000) is None
+        [not_stale_enough], delivery_ns=final_delivery_ns,
+        source_stamp_ns=1_050_000_000) is None
+
+
+def test_r04d_final_lifecycle_delivery_is_pinned_to_sequence_and_identity():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_lifecycle_delivery
+
+    expected = {'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+        'sequence':6, 'identity':[2,2,2], 'delivery_ns':700}}
+    wrong_sequence = {'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+        'sequence':5, 'identity':[2,2,2], 'delivery_ns':690}}
+    wrong_identity = {'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+        'sequence':6, 'identity':[2,2,1], 'delivery_ns':695}}
+    assert r04d_final_lifecycle_delivery(
+        [wrong_sequence, wrong_identity, expected], sequence=6, identity=[2,2,2]) == expected['facts']
+    assert r04d_final_lifecycle_delivery(
+        [wrong_sequence, wrong_identity], sequence=6, identity=[2,2,2]) is None
 
 
 def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():

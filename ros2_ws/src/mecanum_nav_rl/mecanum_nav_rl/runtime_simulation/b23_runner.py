@@ -958,6 +958,15 @@ def r04d_stale_safety_rejection_after_delivery(events, *, delivery_ns, source_st
     return None
 
 
+def r04d_final_lifecycle_delivery(rows, *, sequence, identity):
+    """Find the exact live final-publisher lifecycle delivery for this reset."""
+    return next((row.get('facts', {}) for row in rows
+        if row.get('event') == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
+        and row.get('facts', {}).get('sequence') == sequence
+        and row.get('facts', {}).get('identity') == identity
+        and type(row.get('facts', {}).get('delivery_ns')) is int), None)
+
+
 def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
     """Keep ingress bound until after both lifecycle consumers can switch."""
     if (type(safety_lifecycle_delay_s) not in (int, float)
@@ -5325,7 +5334,7 @@ class RunEvidence:
             # Flush these indexed streams without fsync; complete raw evidence
             # is synchronized at teardown.
             if filename in {'native-events.jsonl', 'policy_final_published.jsonl',
-                            'policy_adapter_issued.jsonl'}:
+                            'policy_adapter_issued.jsonl', 'final-events.jsonl'}:
                 self.streams[filename].flush()
 
     def record(self, event, facts):
@@ -6380,23 +6389,28 @@ async def training_child(path):
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or type(delayed.get('delivery_ns')) is not int):
                     raise RuntimeError('R04d delayed lifecycle callback evidence is incomplete')
-                rejected = await io.until(lambda: r04d_stale_safety_rejection_after_delivery(
-                    io.events, delivery_ns=delayed['delivery_ns'],
-                    source_stamp_ns=scheduled['source_stamp_ns']),
-                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
-                    phase='R04d delivered stale lifecycle rejected by actual Safety')
-                ingress_scheduled = next((facts for name, facts in io.events
-                    if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
-                ingress_delivered = next((facts for name, facts in io.events
-                    if name == 'B23_R04_INGRESS_DELIVERY_COMPLETED' and facts.get('case') == 'R04d'), None)
-                final_path = Path(packet['run_root'])/'final-events.jsonl'
-                final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
+                verification_deadline_ns = min(io.deadline_ns, io.now() + 2_000_000_000)
                 expected_lifecycle_identity = [int(fault_lifecycle.episode_generation),
                     int(fault_lifecycle.reset_epoch), int(fault_lifecycle.runtime_generation)]
-                final_lifecycle_delivery = next((row.get('facts', {}) for row in final_rows
-                    if row.get('event') == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
-                    and row.get('facts', {}).get('sequence') == fault_lifecycle.sequence
-                    and row.get('facts', {}).get('identity') == expected_lifecycle_identity), None)
+                final_path = Path(packet['run_root'])/'final-events.jsonl'
+                final_lifecycle_delivery = await io.until(lambda:
+                    r04d_final_lifecycle_delivery(
+                        _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else [],
+                        sequence=fault_lifecycle.sequence, identity=expected_lifecycle_identity),
+                    deadline_ns=verification_deadline_ns,
+                    phase='R04d exact final-publisher lifecycle delivery')
+                ingress_scheduled = next((facts for name, facts in io.events
+                    if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
+                ingress_delivered = await io.until(lambda: next((facts for name, facts in io.events
+                    if name == 'B23_R04_INGRESS_DELIVERY_COMPLETED' and facts.get('case') == 'R04d'), None),
+                    deadline_ns=verification_deadline_ns,
+                    phase='R04d exact ingress lifecycle delivery')
+                rejected = await io.until(lambda: r04d_stale_safety_rejection_after_delivery(
+                    io.events, delivery_ns=final_lifecycle_delivery['delivery_ns'],
+                    source_stamp_ns=scheduled['source_stamp_ns']),
+                    deadline_ns=verification_deadline_ns,
+                    phase='R04d delivered stale lifecycle rejected by actual Safety')
+                final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
                 held_zero = [row['facts'] for row in final_rows
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
                     and row.get('facts', {}).get('identity') == expected_lifecycle_identity]
@@ -6407,7 +6421,7 @@ async def training_child(path):
                         int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)]]
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
-                        or rejected['steady_ns'] < delayed['delivery_ns']
+                        or rejected['steady_ns'] < final_lifecycle_delivery['delivery_ns']
                         or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000
                         or ingress_scheduled is None or ingress_delivered is None
                         or ingress_scheduled.get('source_stamp_ns') != scheduled.get('source_stamp_ns')
