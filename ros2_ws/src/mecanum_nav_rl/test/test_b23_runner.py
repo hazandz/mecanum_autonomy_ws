@@ -16,6 +16,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
     verify_r02e_prebind_admission_rejected, verify_r02e_safety_input_enqueued,
     verify_r02g_close, r02g_inhibit_operation,
+    await_r02g_exact_safe_stop_application,
     r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
@@ -2667,6 +2668,32 @@ def test_r02g_close_accepts_production_deque_and_rejects_late_policy_receipt():
 def test_r02g_op_inhibit_resolves_installed_control_operation():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     assert r02g_inhibit_operation() == Control.Request.OP_INHIBIT
+
+
+def test_r02g_waits_for_exact_receipt_application_not_latest_status():
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    receipt=FinalIssuedCommandReceipt()
+    receipt.source=receipt.SOURCE_SAFE_STOP
+    receipt.final_publisher_instance_id=17
+    receipt.final_publish_sequence=42
+    latest=NS(applied_final_publish_sequence=44,local_zero_override=False)
+    exact_state=NS(applied_final_publisher_instance_id=17,
+        applied_final_publish_sequence=42,applied_receipt_valid=True,
+        local_zero_override=False,fault_flags=0)
+    application={'state':exact_state,'received_ns':1234}
+    lookups=[]; waits=[]
+    io=NS(ingress=NS(backend_state=latest,
+        application_for_receipt=lambda selected:(lookups.append(selected),application)[1]))
+    async def until(predicate,*,deadline_ns,phase):
+        waits.append((deadline_ns,phase))
+        return predicate()
+    io.until=until
+    result=asyncio.run(await_r02g_exact_safe_stop_application(
+        io,receipt=receipt,deadline_ns=5678,route='admission_inhibited'))
+    assert result is application
+    assert lookups == [receipt]
+    assert waits == [(5678,'R02g exact native SAFE_STOP application: admission_inhibited')]
+    assert result['state'].applied_final_publish_sequence == receipt.final_publish_sequence
 
 
 @pytest.mark.parametrize('zero_only', [False, True])

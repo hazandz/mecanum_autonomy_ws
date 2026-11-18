@@ -2170,6 +2170,30 @@ def r02g_close_admission(io, adapter, *, zero_only):
     adapter.set_stream_enabled(True)
 
 
+async def await_r02g_exact_safe_stop_application(io, *, receipt, deadline_ns, route):
+    """Wait for application evidence keyed to the selected SAFE_STOP receipt.
+
+    The backend-state subscription is a latest-value view and can advance to
+    the next periodic SAFE_STOP before the asyncio poll observes the selected
+    receipt. The ingress retains immutable native status bytes by publication
+    key, so use that exact join rather than requiring the transient latest
+    status to remain on one sequence.
+    """
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    if (receipt is None or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+            or receipt.final_publish_sequence <= 0
+            or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                receipt.final_command.angular.z))):
+        raise RuntimeError('R02g exact application requires a zero SAFE_STOP receipt')
+    application = await io.until(
+        lambda: io.ingress.application_for_receipt(receipt),
+        deadline_ns=deadline_ns,
+        phase='R02g exact native SAFE_STOP application: ' + route)
+    if not isinstance(application, dict) or application.get('state') is None:
+        raise RuntimeError('R02g exact native SAFE_STOP application record is incomplete')
+    return application
+
+
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -6361,14 +6385,11 @@ async def training_child(path):
                     source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence),
                     deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                     phase='R02g closing SAFE_STOP receipt: ' + route)
-                state = await io.until(lambda: io.ingress.backend_state
-                    if io.ingress.backend_state is not None
-                    and io.ingress.backend_state.applied_receipt_valid
-                    and not io.ingress.backend_state.local_zero_override
-                    and io.ingress.backend_state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id
-                    and io.ingress.backend_state.applied_final_publish_sequence == receipt.final_publish_sequence else None,
+                application = await await_r02g_exact_safe_stop_application(
+                    io, receipt=receipt,
                     deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
-                    phase='R02g native SAFE_STOP application: ' + route)
+                    route=route)
+                state = application['state']
                 result = verify_r02g_close(io, route=route,
                     policy_receipt_count=len(io.ingress.receipts), zero_receipt=receipt,
                     backend_state=state)
