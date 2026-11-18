@@ -101,7 +101,9 @@ def bind_install_ament_prefix(environment, install_prefix):
 
 
 def worker_latency_diagnostic(*, started_ns, completed_ns,
-        thread_cpu_started_ns, thread_cpu_completed_ns, threshold_ns=20_000_000):
+        thread_cpu_started_ns, thread_cpu_completed_ns,
+        process_cpu_started_ns=None, process_cpu_completed_ns=None,
+        threshold_ns=20_000_000):
     """Đo wall/CPU của worker; số đo này không tham gia verdict hay acceptance."""
     values = (started_ns, completed_ns, thread_cpu_started_ns,
         thread_cpu_completed_ns, threshold_ns)
@@ -111,11 +113,23 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     cpu_ns = thread_cpu_completed_ns - thread_cpu_started_ns
     if wall_ns < 0 or cpu_ns < 0 or threshold_ns <= 0:
         raise ValueError('worker latency clock moved backward or threshold invalid')
+    process_cpu_ns = None
+    if process_cpu_started_ns is not None or process_cpu_completed_ns is not None:
+        process_values = (process_cpu_started_ns, process_cpu_completed_ns)
+        if any(type(value) is not int or value < 0 for value in process_values):
+            raise ValueError('worker process CPU timestamps must be a nonnegative pair')
+        process_cpu_ns = process_cpu_completed_ns-process_cpu_started_ns
+        if process_cpu_ns < 0:
+            raise ValueError('worker process CPU clock moved backward')
     if wall_ns <= threshold_ns:
         return None
-    return {'wall_ns':wall_ns, 'thread_cpu_ns':cpu_ns,
+    result = {'wall_ns':wall_ns, 'thread_cpu_ns':cpu_ns,
         'non_cpu_wait_lower_bound_ns':max(0, wall_ns-cpu_ns),
         'threshold_ns':threshold_ns}
+    if process_cpu_ns is not None:
+        result.update(process_cpu_ns=process_cpu_ns,
+            process_non_cpu_wait_lower_bound_ns=max(0, wall_ns-process_cpu_ns))
+    return result
 
 
 def verify_r09a_goal_settle(transition):
@@ -2822,14 +2836,17 @@ class TrainingWorkerIO:
                 raise
             return process(message, wire, received_ns)
         def receive(raw, info):
-            started_ns, cpu_started_ns = time.monotonic_ns(), time.thread_time_ns()
+            started_ns = time.monotonic_ns()
+            cpu_started_ns, process_cpu_started_ns = time.thread_time_ns(), time.process_time_ns()
             try:
                 return receive_unmeasured(raw, info)
             finally:
                 diagnostic = worker_latency_diagnostic(
                     started_ns=started_ns, completed_ns=time.monotonic_ns(),
                     thread_cpu_started_ns=cpu_started_ns,
-                    thread_cpu_completed_ns=time.thread_time_ns())
+                    thread_cpu_completed_ns=time.thread_time_ns(),
+                    process_cpu_started_ns=process_cpu_started_ns,
+                    process_cpu_completed_ns=time.process_time_ns())
                 if diagnostic is not None:
                     self.emit('B23_INGRESS_CALLBACK_SLOW', {
                         'topic':topic, **diagnostic, 'observed_ns':self.now()})
@@ -2903,29 +2920,58 @@ class TrainingWorkerIO:
 
     async def _pump(self):
         try:
-            previous_wall_ns, previous_cpu_ns = time.monotonic_ns(), time.thread_time_ns()
+            previous_wall_ns = time.monotonic_ns()
+            previous_cpu_ns, previous_process_cpu_ns = time.thread_time_ns(), time.process_time_ns()
             while not self.stop_requested:
-                started_wall_ns, started_cpu_ns = time.monotonic_ns(), time.thread_time_ns()
+                started_wall_ns = time.monotonic_ns()
+                started_cpu_ns, started_process_cpu_ns = time.thread_time_ns(), time.process_time_ns()
                 diagnostic = worker_latency_diagnostic(
                     started_ns=previous_wall_ns, completed_ns=started_wall_ns,
                     thread_cpu_started_ns=previous_cpu_ns,
-                    thread_cpu_completed_ns=started_cpu_ns)
+                    thread_cpu_completed_ns=started_cpu_ns,
+                    process_cpu_started_ns=previous_process_cpu_ns,
+                    process_cpu_completed_ns=started_process_cpu_ns)
                 if diagnostic is not None:
                     self.emit('B23_WORKER_PUMP_GAP', {
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now()})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
+                previous_process_cpu_ns = started_process_cpu_ns
                 sink_owner = getattr(self, '_event_sink_owner', None)
                 check_sink = getattr(sink_owner, 'raise_if_error', None)
                 if check_sink is not None:
                     check_sink()
                 if self.safety_executor_error is not None:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
+                spin_started_ns = time.monotonic_ns()
+                spin_thread_started_ns, spin_process_started_ns = time.thread_time_ns(), time.process_time_ns()
                 for _ in range(16):
                     self.executor.spin_once(timeout_sec=0.)
+                spin_ended_ns = time.monotonic_ns()
+                spin_diagnostic = worker_latency_diagnostic(
+                    started_ns=spin_started_ns, completed_ns=spin_ended_ns,
+                    thread_cpu_started_ns=spin_thread_started_ns,
+                    thread_cpu_completed_ns=time.thread_time_ns(),
+                    process_cpu_started_ns=spin_process_started_ns,
+                    process_cpu_completed_ns=time.process_time_ns())
+                if spin_diagnostic is not None:
+                    self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
+                        **spin_diagnostic, 'spin_once_count':16, 'observed_ns':self.now()})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
+                pause_started_ns = time.monotonic_ns()
+                pause_thread_started_ns, pause_process_started_ns = time.thread_time_ns(), time.process_time_ns()
                 await self.pause(0.001)
+                pause_diagnostic = worker_latency_diagnostic(
+                    started_ns=pause_started_ns, completed_ns=time.monotonic_ns(),
+                    thread_cpu_started_ns=pause_thread_started_ns,
+                    thread_cpu_completed_ns=time.thread_time_ns(),
+                    process_cpu_started_ns=pause_process_started_ns,
+                    process_cpu_completed_ns=time.process_time_ns())
+                if pause_diagnostic is not None:
+                    self.emit('B23_WORKER_PAUSE_OVERRUN', {
+                        **pause_diagnostic, 'requested_sleep_ns':1_000_000,
+                        'observed_ns':self.now()})
         except asyncio.CancelledError:
             raise
         except BaseException as error:

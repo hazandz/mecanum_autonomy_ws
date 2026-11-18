@@ -53,9 +53,20 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
             'threshold_ns':20_000_000}
     assert worker_latency_diagnostic(started_ns=1, completed_ns=2,
         thread_cpu_started_ns=1, thread_cpu_completed_ns=2) is None
+    assert worker_latency_diagnostic(started_ns=100, completed_ns=20_000_101,
+        thread_cpu_started_ns=40, thread_cpu_completed_ns=60,
+        process_cpu_started_ns=50, process_cpu_completed_ns=10_000_050) == {
+            'wall_ns':20_000_001, 'thread_cpu_ns':20,
+            'non_cpu_wait_lower_bound_ns':19_999_981,
+            'threshold_ns':20_000_000, 'process_cpu_ns':10_000_000,
+            'process_non_cpu_wait_lower_bound_ns':10_000_001}
     with pytest.raises(ValueError, match='moved backward'):
         worker_latency_diagnostic(started_ns=2, completed_ns=1,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2)
+    with pytest.raises(ValueError, match='process CPU timestamps'):
+        worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
+            thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
+            process_cpu_started_ns=1)
 
 
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():
