@@ -792,7 +792,7 @@ def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
         fault_flags=0, paused=False, local_zero_override=False,
         applied_receipt_valid=True, applied_final_publisher_instance_id=77,
         applied_final_publish_sequence=101, applied_physics_iteration=12,
-        applied_sim_stamp=NS(sec=0,nanosec=900))
+        applied_sim_stamp=NS(sec=0,nanosec=900), physics_iteration=12)
     publication=NS(final_publisher_instance_id=77, final_publish_sequence=101,
         source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=12,
         final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
@@ -864,9 +864,15 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
         applied_receipt_valid=True, applied_final_publisher_instance_id=77,
         applied_final_publish_sequence=101, applied_physics_iteration=12,
         applied_sim_stamp=NS(sec=0,nanosec=900))
+    latest=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=False, applied_final_publisher_instance_id=0,
+        applied_final_publish_sequence=0, applied_physics_iteration=0,
+        applied_sim_stamp=NS(sec=0,nanosec=0), physics_iteration=13)
     value.safety=NS(local_training=NS(safe_stop_sequence=11))
     value.ingress=NS(lifecycle=life, safe_stop_source_id=88,
-        backend_state=state,
+        backend_state=latest,
         receipt_for_publication_sequence=lambda seq:retained if seq==101 else None)
     value.final=NS(publisher_instance_id=77)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,
@@ -890,6 +896,25 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
     assert events[-1][1]['source_sequence']==12
     assert events[-1][1]['final_publish_sequence']==101
     assert events[-1][1]['reused_exact_scan_window_application'] is True
+
+    newer_policy=IssuedCommandReceiptView(publish_stamp_ns=1_000,
+        final_publisher_instance_id=77, final_publish_sequence=102,
+        source=ReceiptSource.POLICY, source_instance_id=90,
+        source_sequence=1, step_index=1, transition_id='step-1', lifecycle=identity,
+        session_id='session-a', ingress_config_hash='a'*64,
+        final_command=(0.1,0.0,0.0), received_steady_ns=995_000_000,
+        frame_id='base_link', admission_valid=True)
+    latest.applied_receipt_valid=True
+    latest.applied_final_publisher_instance_id=77
+    latest.applied_final_publish_sequence=102
+    latest.applied_physics_iteration=14
+    latest.applied_sim_stamp=NS(sec=0,nanosec=1_000)
+    value.ingress.receipt_for_publication_sequence=lambda seq: {
+        101:retained,102:newer_policy}.get(seq)
+    with pytest.raises(RuntimeError,match='not a SAFE_STOP zero'):
+        asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000,
+            zero_witness={'receipt':generated,'state':state,'received_ns':990_000_000,
+                'application':{'state':state,'received_ns':990_000_000}}))
 
 
 def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
