@@ -4927,8 +4927,8 @@ class TrainingWorkerIO:
         if (not isinstance(action, (tuple, list)) or len(action) != 3
                 or any(type(v) not in (float, int) or not math.isfinite(v) or not -1 <= v <= 1 for v in action)):
             raise ValueError('action requires three finite normalized values in [-1, 1]')
-        started = self.now()
-        deadline = min(self.deadline_ns, started + 2_000_000_000)
+        preparation_started_ns = self.now()
+        deadline = min(self.deadline_ns, preparation_started_ns + 2_000_000_000)
         held_prebind = None
         previous_pending_ack = None
         if prebind_admission:
@@ -5025,6 +5025,21 @@ class TrainingWorkerIO:
         # applied, so stop emitting zero while this single slot is bound; native
         # zero remains in force until Safety publishes the admitted POLICY.
         token = b1.begin_step()
+        # The B1 step does not exist during SAFE_STOP window alignment and
+        # the exact zero refresh above. Keep those operations bounded by their
+        # preparation deadline, then start the unchanged two-second step
+        # budget when B1 creates the transaction that will receive POLICY.
+        started = self.now()
+        deadline = min(self.deadline_ns, started + 2_000_000_000)
+        self.emit('POLICY_STEP_DEADLINE_ARMED', {
+            'step_index': token.step_index,
+            'transition_id': token.transition_id,
+            'preparation_started_ns': preparation_started_ns,
+            'preparation_deadline_ns': min(
+                self.deadline_ns, preparation_started_ns + 2_000_000_000),
+            'started_ns': started,
+            'deadline_ns': deadline,
+        })
         barrier = self.ros_now()
         if barrier <= stamp_ns(self.ingress.lifecycle.barrier_stamp):
             raise RuntimeError('action barrier is not after authoritative lifecycle barrier')

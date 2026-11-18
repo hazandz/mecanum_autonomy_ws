@@ -4701,7 +4701,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','first_sample_races_candidate_delivery','pending_cutoff_dedup',
-    'nominal_issued_cutoff'])
+    'nominal_issued_cutoff','prebind_elapsed_deadline'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -4715,14 +4715,20 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.document = {'training': {'local_training': {'max_vx_mps': .25, 'max_vy_mps': .2, 'max_wz_radps': .8}}}
     value.policy_source_id = 33
     history = []
+    prebind_refresh_times = []
     async def aligned_window(*, deadline_ns, zero_witness):
         history.append(('scan_alignment', deadline_ns))
+        if timing == 'prebind_elapsed_deadline':
+            await clock.pause(.150)
         return zero_witness
     # This test isolates transaction ordering; launch-window cadence is
     # covered by test_policy_step_waits_for_applied_zero_after_cutoff... .
     value.align_policy_step_launch_window = aligned_window
     async def refreshed_zero(*, deadline_ns):
         history.append(('prebind_zero_refresh', deadline_ns))
+        if timing == 'prebind_elapsed_deadline':
+            await clock.pause(.150)
+        prebind_refresh_times.append(clock.ns)
         return {'receipt':'newly applied zero'}
     value.refresh_zero_before_pending_bind = refreshed_zero
     life = SafetyLifecycleState(); life.barrier_stamp = Time(nanosec=900_000_000)
@@ -4750,7 +4756,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
         tick=safety_tick,
         set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
-        scan_period_ns=100_000_000, last_tick_ros_ns=1_000_000_000)
+        scan_period_ns=(1_000_000_000 if timing == 'prebind_elapsed_deadline'
+            else 100_000_000), last_tick_ros_ns=1_000_000_000)
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     zero_policy_receipt = FinalIssuedCommandReceipt()
@@ -4790,11 +4797,14 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.read_native_input_watermark = read_watermark
     def emit(event, facts):
         history.append((event, facts))
-        if event == 'POLICY_STEP_COMPLETE' and timing == 'late_publish': clock.ns = 3_000_000_000
+        if event == 'POLICY_STEP_COMPLETE' and timing == 'late_publish':
+            clock.ns = b1_begin_times[0] + 2_000_000_001
     value.emit = emit
     bind_times = []
+    bind_deadlines = []
     async def transact(operation, **fields):
         bind_times.append(clock.ns)
+        bind_deadlines.append(fields.get('deadline_ns'))
         history.append(('bind', operation))
         req, res = Control.Request(), Control.Response()
         req.operation = operation; req.pending_step_index = fields['pending_step_index']
@@ -4855,6 +4865,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         source=ReceiptSource.SAFE_STOP, final_publish_sequence=sequence,
         final_publisher_instance_id=55, final_command=(0.,0.,0.)) if sequence == 3 else None
     pending = NS(step_index=1, transition_id='actual-b1-token')
+    b1_begin_times = []
     commit_calls = []
     issue_times = []
     nominal_cutoff = None
@@ -4896,10 +4907,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             raise B1SnapshotPending('application not received yet')
         if cutoff == minimum_cutoff:
             raise B1SnapshotPending('receipt boundary at cutoff is not applied')
-        if timing == 'late_commit': clock.ns = 3_000_000_000
+        if timing == 'late_commit': clock.ns = b1_begin_times[0] + 2_000_000_001
         return transition
     def begin_step():
         history.append(('b1_begin_step',))
+        b1_begin_times.append(clock.ns)
         return pending
     b1 = NS(begin_step=begin_step, record_issuance=record, commit_step=commit)
     callback_calls=[]
@@ -4932,7 +4944,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','r09b_callback','r09b_before_bind',
-            'first_sample_races_candidate_delivery','nominal_issued_cutoff'):
+            'first_sample_races_candidate_delivery','nominal_issued_cutoff',
+            'prebind_elapsed_deadline'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -4961,6 +4974,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing == 'nominal_issued_cutoff':
         assert commit_calls == [nominal_cutoff], (
             f'production runner skipped the actual post-issuance cutoff within the nominal 100 ms period: {commit_calls!r}')
+    if timing == 'prebind_elapsed_deadline':
+        assert bind_deadlines == [b1_begin_times[0] + 2_000_000_000], (
+            f'B1 step deadline must start at the actual B1 slot, after pre-bind safety preparation; '
+            f'begin={b1_begin_times!r}, bind_deadline={bind_deadlines!r}')
     tags = [row[0] for row in history]
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
@@ -4998,8 +5015,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     envelope = next(row[1] for row in history if row[0] == 'publish')
     frozen = next(row[1] for row in history
         if isinstance(row, tuple) and len(row) == 2 and row[0] == 'STEP_STREAMS_FROZEN')
-    next_scan_boundary = ((frozen['application_stamp_ns'] // 100_000_000) + 1) * 100_000_000
+    scan_period_ns = value.safety.local_training.scan_period_ns
+    next_scan_boundary = ((frozen['application_stamp_ns'] // scan_period_ns) + 1) * scan_period_ns
     watchdog_reference_ns = (before_issue_calls[0][5] if timing == 'r09b_before_bind'
+        else prebind_refresh_times[0] if timing == 'prebind_elapsed_deadline'
         else frozen['steady_ns'])
     assert bind_times and bind_times[0] - watchdog_reference_ns < 100_000_000, (
         f'pending bind waited through an unnecessary scan phase and consumed the native zero watchdog budget: {history!r}')
@@ -5037,8 +5056,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert before_issue_calls[0][5] - before_issue_calls[0][4] >= 120_000_000
         assert callback_calls == []
     assert commit_calls[-1] >= expected_minimum
-    assert clock.ns < 3_000_000_000 if timing in ('ready','r09b_callback','r09b_before_bind',
-        'first_sample_races_candidate_delivery','pending_cutoff_dedup','nominal_issued_cutoff') else clock.ns == 3_000_000_000
+    if timing in ('late_commit', 'late_publish'):
+        assert clock.ns >= bind_deadlines[0], (
+            f'late completion must be rejected at the B1 transaction deadline: {history!r}')
+    else:
+        assert clock.ns < value.deadline_ns, (
+            f'normal completion unexpectedly reached the campaign deadline: {history!r}')
     assert all(row[0] != 'align_policy_boundary' for row in history)
     assert ('stream', False) in history  # only pending-step freeze before bind
     assert not any(i > issued and row == ('stream', False) for i, row in enumerate(history))
