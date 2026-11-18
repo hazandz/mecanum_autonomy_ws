@@ -4943,13 +4943,14 @@ class TrainingWorkerIO:
         # 100 ms command watchdog continues to run. The publisher and Safety
         # keep their existing scan-cutoff and freshness checks.
         if before_pending_bind is None:
-            # R02c/R02d deliberately hold the first POLICY receipt until a
-            # closing input reaches native. Their bounded fault window must
-            # start from the fresh zero already proven above; an additional
-            # scan-boundary alignment here can consume the remaining 100 ms
-            # native watchdog budget before the held receipt can be released.
-            # Normal POLICY transactions retain the launch-window alignment.
-            if not prebind_admission and close_after_held_receipt is None:
+            # All transactions, including R02c/R02d, need a POLICY publication
+            # window with more than one physics step before the scan cutoff.
+            # Otherwise the final publisher correctly defers the POLICY
+            # receipt, while the 100 ms native watchdog continues to run and
+            # the receipt-hold fault never reaches its intended path. The
+            # alignment keeps real SAFE_STOP receipts flowing until the
+            # pending slot is bound; it does not extend either deadline.
+            if not prebind_admission:
                 zero_witness = await self.align_policy_step_launch_window(
                     deadline_ns=deadline, zero_witness=zero_witness)
                 zero_witness = await self.refresh_zero_before_pending_bind(
