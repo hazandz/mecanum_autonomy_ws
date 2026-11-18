@@ -3163,6 +3163,21 @@ private:
   // callback_mutex_ phải được giữ khi ghi terminal cache/mutation state.
   void FailPauseLocked(std::uint16_t reason, const std::string &detail)
   {
+    const auto request_sequence = pause_intent_ ? pause_intent_->request_sequence : 0;
+    const auto dispatched_ns = pause_intent_ ? pause_intent_->dispatched_ns : 0;
+    const auto edge_ns = pause_intent_ ? pause_intent_->edge_ns : 0;
+    const auto intent_revision = pause_intent_ ? pause_intent_->revision : 0;
+    const auto enter_deadline_ns = pause_intent_ ? pause_intent_->enter_deadline_ns : 0;
+    const auto mutation_deadline_ns = pause_intent_ ? pause_intent_->mutation_deadline_ns : 0;
+    gzerr << "B23_PAUSE_FAILURE detail=" << detail
+        << " reason=" << reason << " request=" << request_sequence
+        << " dispatched_ns=" << dispatched_ns << " edge_ns=" << edge_ns
+        << " intent_revision=" << intent_revision
+        << " binding_revision=" << control_binding_revision_
+        << " fault_flags=" << fault_flags_
+        << " enter_deadline_ns=" << enter_deadline_ns
+        << " mutation_deadline_ns=" << mutation_deadline_ns << std::endl;
+    std::fflush(stderr);
     if (pause_intent_)
     {
       const auto found = control_cache_.find(pause_intent_->request_sequence);
