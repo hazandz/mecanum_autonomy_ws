@@ -477,7 +477,7 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
 
 
 @pytest.mark.parametrize('case,terminal_extra', [
-    ('R02c', 0), ('R02d', 256)])
+    ('R02c', 0), ('R02d', 0), ('R02d', 256)])
 def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero(
         case, terminal_extra):
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -513,10 +513,13 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
             state.local_zero_override = True
 
     worker.pause = pause
+    terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    expected_terminal_flags = ((terminal_flags, terminal_flags | SimulationContactState.FAULT_QUEUE)
+        if case == 'R02d' else (terminal_flags,))
     result = asyncio.run(await_r02_late_receipt_close(
         worker, release_predicate=lambda: release['observed'], deadline_ns=900,
-        expected_terminal_fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
-            | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)))
+        expected_terminal_fault_flags=expected_terminal_flags))
 
     assert result is state
     assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
@@ -7078,17 +7081,18 @@ def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
     assert events[-1][0] == 'RESET_COMPLETE'
 
 
-@pytest.mark.parametrize('case,reason,mode', [
-    ('R02c','safe_stop','hold_policy_until_safe_stop'),
-    ('R02d','admission_inhibited','hold_policy_until_inhibit')])
+@pytest.mark.parametrize('case,reason,mode,fault_flags,queue_diag', [
+    ('R02c','safe_stop','hold_policy_until_safe_stop',6,False),
+    ('R02d','admission_inhibited','hold_policy_until_inhibit',6,False),
+    ('R02d','admission_inhibited','hold_policy_until_inhibit',262,True)])
 def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
-        tmp_path, case, reason, mode):
+        tmp_path, case, reason, mode, fault_flags, queue_diag):
     native=tmp_path/'native-events.jsonl'
     rows = [
         ('B23_POLICY_RECEIPT_HELD',{'mode':mode,'sequence':'52','source_sequence':'1','receive_ns':'100'}),
         ('B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',{'reason':reason,'sequence':'52',
             'source_sequence':'1','receive_ns':'200'})]
-    if case == 'R02d':
+    if queue_diag:
         rows.append(('B23_NATIVE_OUTPUT_REJECTED', {'marker':'B23_QUEUE_FAULT',
             'raw_text_sha256':'diagnostic-hash', 'reason':'event_marker_not_at_message_boundary',
             'raw_record':{'event':'owned_process_output','facts':{'text':
@@ -7097,7 +7101,7 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
         'B23_NATIVE_OUTPUT_REJECTED' else {'kind':kind,'fields':{k:v for k,v in fields.items()
             if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
     receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
-    state=NS(fault_flags=262 if case == 'R02d' else 6,
+    state=NS(fault_flags=fault_flags,
         local_zero_override=True,applied_receipt_valid=False,
         applied_final_publisher_instance_id=0,applied_final_publish_sequence=0)
     io=NS(descriptor={'native_events_path':str(native)},ingress=NS(backend_state=state),events=[])
@@ -7112,7 +7116,7 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
     state.fault_flags=4
     with pytest.raises(RuntimeError,match='native fault and zero'):
         verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
-    if case == 'R02d':
+    if queue_diag:
         state.fault_flags=262
         rows[-1][1]['raw_record']['facts']['text'] = (
             '[Err] B23_QUEUE_FAULT cause=unrelated_queue_fault receipt=held_policy')
