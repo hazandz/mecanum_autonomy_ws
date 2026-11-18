@@ -329,6 +329,12 @@ class BackendControlSession:
 class B1SnapshotPending(ValueError):
     """Chưa đủ facts trong budget; caller không được tạo transition thay thế."""
 
+    def __init__(self, message, *, diagnostic=None):
+        super().__init__(message)
+        if diagnostic is not None and type(diagnostic) is not dict:
+            raise TypeError('pending diagnostic must be a dict of observed facts')
+        self.diagnostic = None if diagnostic is None else dict(diagnostic)
+
 
 class LocalTrainingB1Adapter:
     """Ghép facts runtime thật rồi gọi transaction owner B1 không sửa core.
@@ -400,7 +406,34 @@ class LocalTrainingB1Adapter:
         if identity != self.binding.lifecycle_identity:
             raise ValueError('B1 lifecycle changed before transaction')
         if cutoff_ns not in source.scans or cutoff_ns not in source.noisy_samples:
-            raise B1SnapshotPending('exact scan/noisy pair is not available')
+            nearest_noisy_stamp = min(
+                source.noisy_samples,
+                key=lambda stamp: (abs(stamp - cutoff_ns), stamp),
+                default=None,
+            )
+            nearest_noisy = (None if nearest_noisy_stamp is None
+                else source.noisy_samples[nearest_noisy_stamp])
+            scan = source.scans.get(cutoff_ns)
+            noisy = source.noisy_samples.get(cutoff_ns)
+            raise B1SnapshotPending('exact scan/noisy pair is not available', diagnostic={
+                'cutoff_ns': cutoff_ns,
+                'scan_exact_present': scan is not None,
+                'scan_received_steady_ns': (None if scan is None
+                    else scan.received_steady_ns),
+                'noisy_exact_present': noisy is not None,
+                'noisy_exact_received_steady_ns': (None if noisy is None
+                    else noisy.received_steady_ns),
+                'nearest_noisy_stamp_ns': nearest_noisy_stamp,
+                'nearest_noisy_offset_ns': (None if nearest_noisy_stamp is None
+                    else nearest_noisy_stamp - cutoff_ns),
+                'nearest_noisy_received_steady_ns': (None if nearest_noisy is None
+                    else nearest_noisy.received_steady_ns),
+                'noisy_buffer_count': len(source.noisy_samples),
+                'noisy_buffer_min_stamp_ns': (None if not source.noisy_samples
+                    else next(iter(source.noisy_samples))),
+                'noisy_buffer_max_stamp_ns': (None if not source.noisy_samples
+                    else next(reversed(source.noisy_samples))),
+            })
         scan, noisy = source.scans[cutoff_ns], source.noisy_samples[cutoff_ns]
         pairs = [pair for pair in source.physics_pairs if pair.stamp_ns == cutoff_ns]
         if len(pairs) != 1:

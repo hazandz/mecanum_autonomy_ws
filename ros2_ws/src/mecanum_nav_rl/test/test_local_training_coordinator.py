@@ -94,6 +94,42 @@ def test_policy_commit_falls_back_only_when_newest_repeat_lacks_application():
     assert proved == [11, 10]
 
 
+def test_missing_exact_scan_noisy_pair_reports_only_observed_timestamps():
+    from collections import OrderedDict
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    cutoff = 5_000_000_000
+    scan = SimpleNamespace(received_steady_ns=700)
+    nearest = SimpleNamespace(received_steady_ns=650)
+    ingress = SimpleNamespace(fault=None,
+        lifecycle=identity,
+        scans=OrderedDict(((cutoff, scan),)),
+        noisy_samples=OrderedDict(((cutoff + 10_000_000, nearest),)),
+        physics_pairs=())
+    adapter = object.__new__(LocalTrainingB1Adapter)
+    adapter.ingress = ingress
+    adapter.binding = SimpleNamespace(lifecycle_identity=identity)
+
+    with pytest.raises(B1SnapshotPending,
+            match='exact scan/noisy pair is not available') as caught:
+        adapter._joined(cutoff)
+
+    assert caught.value.diagnostic == {
+        'cutoff_ns': cutoff,
+        'scan_exact_present': True,
+        'scan_received_steady_ns': 700,
+        'noisy_exact_present': False,
+        'noisy_exact_received_steady_ns': None,
+        'nearest_noisy_stamp_ns': cutoff + 10_000_000,
+        'nearest_noisy_offset_ns': 10_000_000,
+        'nearest_noisy_received_steady_ns': 650,
+        'noisy_buffer_count': 1,
+        'noisy_buffer_min_stamp_ns': cutoff + 10_000_000,
+        'noisy_buffer_max_stamp_ns': cutoff + 10_000_000,
+    }
+
+
 def response(request, result=None):
     out = Control.Response()
     out.schema_version = out.RESPONSE_SCHEMA_VERSION

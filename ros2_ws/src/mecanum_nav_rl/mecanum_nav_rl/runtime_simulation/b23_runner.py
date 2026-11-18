@@ -5288,9 +5288,13 @@ class TrainingWorkerIO:
                     last_pending = str(error)
                     if should_emit_policy_cutoff_pending(
                             emitted_pending_cutoff_reasons, cutoff, last_pending):
-                        self.emit('POLICY_CUTOFF_PENDING', {'step_index': token.step_index,
+                        pending_facts = {'step_index': token.step_index,
                             'transition_id': token.transition_id, 'cutoff_ns': cutoff,
-                            'reason': last_pending, 'steady_ns': self.now()})
+                            'reason': last_pending, 'steady_ns': self.now()}
+                        diagnostic = getattr(error, 'diagnostic', None)
+                        if diagnostic is not None:
+                            pending_facts['source_diagnostic'] = diagnostic
+                        self.emit('POLICY_CUTOFF_PENDING', pending_facts)
                     continue
                 if self.now() >= deadline:
                     self.emit('B1_STEP_COMMITTED_LATE', {'step_index':token.step_index,
