@@ -7004,6 +7004,107 @@ def test_policy_bind_scan_window_rejects_invalid_clock_inputs(ros_ns, period_ns)
         policy_bind_launch_window_remaining_ns(ros_ns, period_ns)
 
 
+@pytest.mark.parametrize('trigger_success', [True, False])
+def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_success):
+    """Reset binding starts on the observed L1 event, while Trigger ACK stays mandatory."""
+    from std_srvs.srv import Trigger
+    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
+
+    io, clock = worker()
+    io.deadline_ns = clock.ns + 1_000_000_000
+    io.calls = []
+    old = SafetyLifecycleState()
+    old.sequence = 4
+    io.ingress.lifecycle = old
+    next_state = SafetyLifecycleState()
+    next_state.sequence = 5
+    next_state.episode_generation = 2
+    next_state.reset_epoch = 3
+    next_state.runtime_generation = 4
+    next_state.primary_state = next_state.PRIMARY_ACTIVE
+    next_state.barrier_state = next_state.BARRIER_NON_READY
+    next_state.motion_permitted = False
+    next_state.header.frame_id = 'map'
+    next_state.barrier_stamp.sec = 1
+    next_state.barrier_stamp.nanosec = 100
+
+    events = []
+    io.events = events
+    io.trigger_type = Trigger
+    trigger_future = None
+    pause_count = 0
+
+    class TriggerClient:
+        def service_is_ready(self):
+            return True
+
+        def call_async(self, _request):
+            nonlocal trigger_future
+            trigger_future = asyncio.get_running_loop().create_future()
+            events.append(('trigger_submitted', clock.now()))
+            return trigger_future
+
+    io.reset_client = TriggerClient()
+    io.final = NS(publisher_instance_id=61)
+    io.policy_source_id = 62
+    io.safe_stop_source_id = 63
+    io.safety = NS(local_training=NS(safe_stop_sequence=17))
+
+    class Control:
+        async def transact(self, operation, *, deadline_ns, **fields):
+            assert operation == 6  # OP_BIND_RESET_CONTEXT in the pinned interface.
+            assert fields['lifecycle_sequence'] == 5
+            assert fields['episode_generation'] == 2
+            assert fields['reset_epoch'] == 3
+            assert fields['runtime_generation'] == 4
+            assert deadline_ns > clock.now()
+            events.append(('bind_started', clock.now()))
+            await asyncio.sleep(0)
+            events.append(('bind_ack', clock.now()))
+            return NS(request=NS(request_sequence=18), response_bytes=b'bind-ack')
+
+    io.control = Control()
+
+    async def pause(seconds):
+        nonlocal pause_count
+        await clock.pause(seconds)
+        pause_count += 1
+        if pause_count == 2:
+            io.ingress.lifecycle = next_state
+            events.append(('lifecycle_event', clock.now()))
+        if pause_count == 7:
+            events.append(('trigger_response', clock.now()))
+            trigger_future.set_result(Trigger.Response(success=trigger_success, message='recorded'))
+
+    io.pause = pause
+    original_emit = io.emit
+    io.emit = lambda name, fields: events.append((name, dict(fields)))
+
+    async def exercise():
+        if trigger_success:
+            state, ack = await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
+            assert state.sequence == 5
+            assert ack.request.request_sequence == 18
+        else:
+            with pytest.raises(RuntimeError, match='late/negative actual ACK'):
+                await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
+
+    try:
+        asyncio.run(asyncio.wait_for(exercise(), timeout=1.0))
+    finally:
+        io.emit = original_emit
+
+    names = [item[0] for item in events]
+    assert names.index('trigger_submitted') < names.index('lifecycle_event')
+    assert names.index('lifecycle_event') < names.index('bind_started')
+    assert names.index('bind_started') < names.index('trigger_response')
+    if trigger_success:
+        assert names.index('trigger_response') < names.index('bind_ack') or names.index('bind_ack') < names.index('trigger_response')
+        assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' in names
+    else:
+        assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' not in names
+
+
 @pytest.mark.parametrize(('case','error','extra'), [
     ('R06a', ValueError('measured XY reset error exceeds 0.01 m'),
         [('B23_R06A_SET_POSE_TARGET_MUTATED', {'actual_target':{'x_m':.25}})]),

@@ -2960,10 +2960,15 @@ class TrainingWorkerIO:
             phase='R02a native admission accepted before POLICY receipt')
 
     async def call(self, client, request, *, timeout_s, phase,
-            expected_native_fault_flags=None, before_submit=None):
+            expected_native_fault_flags=None, before_submit=None,
+            deadline_ns_override=None):
         from rclpy.serialization import serialize_message
         started = self.now()
         deadline = min(self.deadline_ns, started + int(timeout_s * 1e9))
+        if deadline_ns_override is not None:
+            if type(deadline_ns_override) is not int:
+                raise TypeError('RPC absolute deadline must be monotonic integer nanoseconds')
+            deadline = min(deadline, deadline_ns_override)
         await self.until(client.service_is_ready, deadline_ns=deadline,
             phase=phase + ' service ready',
             expected_native_fault_flags=expected_native_fault_flags)
@@ -3449,6 +3454,64 @@ class TrainingWorkerIO:
             raise RuntimeError('actual lifecycle event did not reach requested barrier')
         return copy.deepcopy(state)
 
+    async def reset_lifecycle_and_bind(self, *, deadline_ns):
+        """Bind L1 as soon as its actual event arrives, without waiting for RPC ACK first."""
+        from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields
+
+        old = self.ingress.lifecycle
+        previous = old.sequence if old is not None else 0
+        lifecycle_deadline = min(deadline_ns, self.now() + 1_000_000_000)
+        if lifecycle_deadline <= self.now():
+            raise TimeoutError('lifecycle reset/bind has no remaining budget')
+
+        submitted = asyncio.Event()
+        trigger_task = asyncio.create_task(self.call(
+            self.reset_client, self.trigger_type.Request(), timeout_s=1.0,
+            phase='lifecycle_reset', deadline_ns_override=lifecycle_deadline,
+            before_submit=lambda _now: submitted.set()))
+        bind_task = None
+        try:
+            # Do not accept a newer lifecycle message until the reset request has
+            # actually been handed to its service client.
+            await self.until(submitted.is_set, deadline_ns=lifecycle_deadline,
+                phase='lifecycle_reset submit')
+            state = await self.until(
+                lambda: self.ingress.lifecycle if self.ingress.lifecycle is not None
+                    and self.ingress.lifecycle.sequence > previous else None,
+                deadline_ns=lifecycle_deadline, phase='lifecycle source event')
+            if state.barrier_state != state.BARRIER_NON_READY:
+                raise RuntimeError('actual reset lifecycle event did not reach non-ready barrier')
+
+            # Start the exact L1 bind before awaiting the Trigger response. The
+            # event is the lifecycle fact; the response remains mandatory and
+            # is awaited together with the backend APPLIED acknowledgement.
+            bind_task = asyncio.create_task(self.control.transact(
+                Control.Request.OP_BIND_RESET_CONTEXT,
+                deadline_ns=min(deadline_ns, self.now() + 1_000_000_000),
+                **lifecycle_request_fields(state),
+                final_publisher_instance_id=self.final.publisher_instance_id,
+                policy_source_instance_id=self.policy_source_id,
+                safe_stop_source_instance_id=self.safe_stop_source_id,
+                next_safe_stop_sequence=self.safety.local_training.safe_stop_sequence + 1))
+            _trigger_ack, bind_ack = await asyncio.gather(trigger_task, bind_task)
+            self.emit('RESET_L1_EVENT_BIND_CONCURRENT_ACKS', {
+                'lifecycle_sequence':state.sequence,
+                'trigger_ack_received_ns':self.now(),
+                'bind_request_sequence':bind_ack.request.request_sequence,
+                'bind_response_cdr_hex':bind_ack.response_bytes.hex(),
+                'steady_ns':self.now()})
+            return copy.deepcopy(state), bind_ack
+        except BaseException:
+            tasks = [trigger_task]
+            if bind_task is not None:
+                tasks.append(bind_task)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
     async def pin_graph(self, *, deadline_ns):
         def endpoints():
             cmd = self.node.get_publishers_info_by_topic('/cmd_vel')
@@ -3926,12 +3989,7 @@ class TrainingWorkerIO:
         w0 = await self.freeze_zero(deadline_ns=min(deadline, started + 5_000_000_000))
         self.emit('RESET_W0', {'publish_sequence': w0.final_publish_sequence,
             'safe_stop_sequence': w0.source_sequence, 'steady_ns': self.now(), 'reset_deadline_ns': deadline})
-        l1 = await self.lifecycle_event(rearm=False, deadline_ns=min(deadline, self.now() + 1_000_000_000))
-        await self.control.transact(Control.Request.OP_BIND_RESET_CONTEXT,
-            deadline_ns=min(deadline, self.now() + 1_000_000_000), **lifecycle_request_fields(l1),
-            final_publisher_instance_id=self.final.publisher_instance_id, policy_source_instance_id=self.policy_source_id,
-            safe_stop_source_instance_id=self.safe_stop_source_id,
-            next_safe_stop_sequence=self.safety.local_training.safe_stop_sequence + 1)
+        l1, _bind_ack = await self.reset_lifecycle_and_bind(deadline_ns=deadline)
         if not self.ingress._noise_ready:
             self.ingress.reset_noise(seed)
         self.ingress.inhibit()
