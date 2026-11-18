@@ -4117,8 +4117,8 @@ def worker():
     return value, clock
 
 
-def test_freeze_zero_keeps_safe_stop_stream_live_until_native_applies_exact_receipt(monkeypatch):
-    """Do not let a locally observed zero receipt age while native awaits it."""
+def test_freeze_zero_closes_safe_stop_stream_before_waiting_for_pinned_receipt(monkeypatch):
+    """No later SAFE_STOP may move native application beyond the reset fence."""
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
 
     value, clock = worker()
@@ -4156,8 +4156,12 @@ def test_freeze_zero_keeps_safe_stop_stream_live_until_native_applies_exact_rece
         phases.append(phase)
         if phase == 'SAFE_STOP tick':
             adapter.safe_stop_sequence = 1
+        elif phase == 'final SAFE_STOP drain':
+            assert stream['enabled'] is False, 'Safety stream remained open after pinning W1'
+            # A delayed timer callback must not mint another sequence after W1.
+            assert adapter.safe_stop_sequence == 1
         elif phase == 'native applied SAFE_STOP':
-            assert stream['enabled'] is True, 'Safety stream stopped before native zero application'
+            assert stream['enabled'] is False, 'Safety stream reopened before native zero application'
             value.ingress.physics_pairs[:] = [NS(backend_bytes=b'fake-status',
                 backend_received_steady_ns=clock.ns)]
         result = predicate()

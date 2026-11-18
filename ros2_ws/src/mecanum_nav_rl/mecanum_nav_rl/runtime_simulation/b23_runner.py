@@ -3691,10 +3691,11 @@ class TrainingWorkerIO:
         await self.until(lambda: adapter.safe_stop_sequence > previous, deadline_ns=deadline_ns, phase='SAFE_STOP tick')
         await self.freeze_admission(deadline_ns=deadline_ns)
         target = adapter.safe_stop_sequence
-        # Keep publishing held SAFE_STOP zeros until native confirms application.
-        # The final receipt callback can arrive well after the local publisher
-        # reports it; stopping the stream here lets simulation time advance past
-        # the unchanged receipt freshness budget before the backend sees zero.
+        # Close the producer immediately after pinning the final SAFE_STOP
+        # source sequence. A timer tick already queued behind the native
+        # application wait could otherwise publish a later zero receipt and
+        # move the backend's selected receipt past the reset fence.
+        adapter.set_stream_enabled(False)
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope
         receipt = await self.until(lambda: self.final.publication_for_source_sequence(
             source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=target),
@@ -3710,7 +3711,6 @@ class TrainingWorkerIO:
                     return pair, state
             return None
         pair, state = await self.until(applied, deadline_ns=deadline_ns, phase='native applied SAFE_STOP')
-        adapter.set_stream_enabled(False)
         identity = self.ingress.lifecycle
         fact = AppliedZeroReceiptFact(self.descriptor['session_id'], self.descriptor['config_hash'],
             self.descriptor['backend_instance_id'], receipt.episode_generation, receipt.reset_epoch,
