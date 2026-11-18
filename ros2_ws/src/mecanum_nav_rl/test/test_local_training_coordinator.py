@@ -1018,6 +1018,15 @@ def test_policy_cutoff_before_final_policy_receipt_is_pending_then_later_cutoff_
         'ros_now':1_540_000_000, 'steady_now':10_050_000_000}
     later = {**early, 'cutoff':1_520_000_000}
 
+    # Adapter issuance can precede its first successful final publication.
+    # The coordinator must keep polling within the existing step deadline.
+    adapter.ingress.receipts = ()
+    with pytest.raises(B1SnapshotPending, match='POLICY receipt not yet observed'):
+        adapter._selection(early, reset=False)
+
+    # Once a real receipt is observed, an earlier exact observation cutoff
+    # still cannot select it; the following cutoff may select the same bytes.
+    adapter.ingress.receipts = (policy, adjacent)
     with pytest.raises(B1SnapshotPending, match='POLICY receipt follows observation cutoff'):
         adapter._selection(early, reset=False)
     selected = adapter._selection(later, reset=False)

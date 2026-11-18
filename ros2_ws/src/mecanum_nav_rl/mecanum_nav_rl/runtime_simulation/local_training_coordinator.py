@@ -472,6 +472,13 @@ class LocalTrainingB1Adapter:
             raise B1SnapshotPending('B1 cutoff pending: ' + str(selection.reason))
         if selection.status is not CutoffStatus.READY:
             if (not reset and selection.reason ==
+                    'the step has no matching successfully issued POLICY receipt'):
+                # Safety may still be evaluating the already-issued slot, or
+                # may reject it. Keep the current B1 attempt pending within
+                # its existing step deadline; only a real matching receipt can
+                # make a later exact cutoff ready.
+                raise B1SnapshotPending('POLICY receipt not yet observed')
+            if (not reset and selection.reason ==
                     'POLICY issuance is after this observation cutoff'):
                 # A scan cutoff can precede the final publication receipt for
                 # the already-issued step. Let the runner advance to a later
