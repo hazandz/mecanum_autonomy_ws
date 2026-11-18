@@ -504,7 +504,10 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
         clock['steady_ns'] += 10
         if clock['pauses'] == 1:
             release['observed'] = True
-        elif clock['pauses'] == 2:
+        elif clock['pauses'] == 2 and terminal_extra:
+            state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+                | SimulationContactState.FAULT_COMMAND_STALE)
+        elif clock['pauses'] == (3 if terminal_extra else 2):
             state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
                 | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
             state.local_zero_override = True
@@ -519,7 +522,7 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
     assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
         | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
     assert state.local_zero_override is True
-    assert clock['pauses'] == 2
+    assert clock['pauses'] == (3 if terminal_extra else 2)
 
 
 def test_r07c_owned_server_restart_scopes_expected_clock_stall():
