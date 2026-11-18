@@ -2395,6 +2395,7 @@ class TrainingWorkerIO:
         self.events = []
         self._accepted_policy_event_keys = set()
         self._event_sink = emit
+        self._event_sink_owner = getattr(emit, '__self__', None)
         self.emit = self._emit
         self.fault_hooks = set()
         self.now, self.pause = time.monotonic_ns, asyncio.sleep
@@ -2914,6 +2915,10 @@ class TrainingWorkerIO:
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now()})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
+                sink_owner = getattr(self, '_event_sink_owner', None)
+                check_sink = getattr(sink_owner, 'raise_if_error', None)
+                if check_sink is not None:
+                    check_sink()
                 if self.safety_executor_error is not None:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
                 for _ in range(16):
@@ -5784,11 +5789,11 @@ class RunEvidence:
                             'policy_adapter_issued.jsonl', 'final-events.jsonl'}:
                 self.streams[filename].flush()
 
-    def record(self, event, facts):
+    def record(self, event, facts, *, collected_ns=None):
         with self._lock:
             record = {'event': event, 'facts': facts, 'run_id': self.run_id,
                 'invocation_id': self.invocation_id, 'role': self.role,
-                'collected_ns': time.monotonic_ns()}
+                'collected_ns':time.monotonic_ns() if collected_ns is None else collected_ns}
             self.append(self.role + '-events.jsonl', record)
             if event in self.BOOKS:
                 self.append(event + '.jsonl', record)
@@ -5866,6 +5871,114 @@ class RunEvidence:
                 self.closed = True
                 for stream in self.streams.values():
                     stream.close()
+
+
+class QueuedRunEvidence:
+    """Queue worker evidence writes away from ROS callbacks; overflow fails closed."""
+    def __init__(self, evidence, *, capacity=4096):
+        import queue
+        if type(capacity) is not int or capacity <= 0:
+            raise ValueError('evidence queue capacity must be a positive integer')
+        self.evidence = evidence
+        self._queue = queue.Queue(maxsize=capacity)
+        self._condition = threading.Condition()
+        self._pending = 0
+        self._closed = False
+        self._error = None
+        self._sink_error = None
+        self._thread = threading.Thread(target=self._write, name='b23-worker-evidence-writer', daemon=True)
+        self._thread.start()
+
+    @property
+    def error(self):
+        return self._error or self._sink_error
+
+    def raise_if_error(self):
+        error = self.error
+        if error is not None:
+            raise RuntimeError('queued worker evidence writer failed') from error
+
+    def record(self, event, facts):
+        import queue
+        collected_ns = time.monotonic_ns()
+        snapshot = copy.deepcopy(facts)
+        with self._condition:
+            if self._closed:
+                raise RuntimeError('queued worker evidence writer is closed')
+            self.raise_if_error()
+            self._pending += 1
+            try:
+                self._queue.put_nowait((collected_ns, event, snapshot))
+            except queue.Full as error:
+                self._pending -= 1
+                self._error = RuntimeError('queued worker evidence capacity exceeded')
+                self._condition.notify_all()
+                raise self._error from error
+
+    def _write(self):
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                collected_ns, event, facts = item
+                if self._sink_error is None:
+                    try:
+                        self.evidence.record(event, facts, collected_ns=collected_ns)
+                    except BaseException as error:
+                        self._sink_error = error
+            finally:
+                self._queue.task_done()
+                if item is not None:
+                    with self._condition:
+                        self._pending -= 1
+                        self._condition.notify_all()
+
+    def _wait_drained(self, *, deadline_ns):
+        with self._condition:
+            while self._pending:
+                remaining_ns = deadline_ns-time.monotonic_ns()
+                if remaining_ns <= 0:
+                    raise TimeoutError('queued worker evidence drain exceeded cleanup deadline')
+                self._condition.wait(remaining_ns/1_000_000_000)
+
+    def sync(self, *, deadline_ns):
+        self._wait_drained(deadline_ns=deadline_ns)
+        self.raise_if_error()
+        self.evidence.sync()
+        self.raise_if_error()
+
+    async def async_sync(self, *, deadline_ns):
+        # Keep the ROS/asyncio pump schedulable while the evidence writer drains
+        # and fsyncs its ledgers at a completed soak boundary.
+        import asyncio
+        await asyncio.to_thread(self.sync, deadline_ns=deadline_ns)
+
+    def close(self, *, deadline_ns):
+        import queue
+        with self._condition:
+            if self._closed:
+                self.raise_if_error()
+                return
+            self._closed = True
+        while True:
+            remaining_ns = deadline_ns-time.monotonic_ns()
+            if remaining_ns <= 0:
+                raise TimeoutError('queued worker evidence close exceeded cleanup deadline')
+            try:
+                self._queue.put(None, timeout=remaining_ns/1_000_000_000)
+                break
+            except queue.Full:
+                continue
+        self._wait_drained(deadline_ns=deadline_ns)
+        remaining_ns = deadline_ns-time.monotonic_ns()
+        self._thread.join(max(0., remaining_ns/1_000_000_000))
+        if self._thread.is_alive():
+            raise TimeoutError('queued worker evidence thread did not stop before cleanup deadline')
+        try:
+            self.evidence.close()
+        finally:
+            self.raise_if_error()
 
 
 def load_child_descriptor(path, role):
@@ -6066,7 +6179,11 @@ async def _run_b2_soak(io, b1, packet, sink):
     # The event sink is still open here. Flush/fsync its buffered book streams
     # before reading the files, otherwise the final in-memory B1/application
     # records can be omitted from the acceptance count until teardown.
-    sink.sync()
+    async_sync = getattr(sink, 'async_sync', None)
+    if async_sync is None:
+        sink.sync()
+    else:
+        await async_sync(deadline_ns=io.deadline_ns)
     counts = _soak_ledger_counts(packet['run_root'])
     expected = 1000
     if resets != 30 or committed_steps != expected:
@@ -6088,8 +6205,8 @@ async def training_child(path):
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import LocalTrainingB1Adapter
     from mecanum_nav_rl.simulation.local_training_reset import ResetTarget
     descriptor, packet = load_child_descriptor(path, 'worker')
-    sink = RunEvidence(descriptor['run_root'], 'worker', run_id=descriptor['run_id'],
-        invocation_id=descriptor['invocation_id'])
+    sink = QueuedRunEvidence(RunEvidence(descriptor['run_root'], 'worker',
+        run_id=descriptor['run_id'], invocation_id=descriptor['invocation_id']))
     io = None
     primary, cleanup_errors, outcome = None, [], None
     try:
@@ -7216,12 +7333,15 @@ async def training_child(path):
             except BaseException as exc:
                 cleanup_errors.append(repr(exc))
                 cleanup_errors.extend(io.close_context())
+        try:
+            sink.close(deadline_ns=cleanup_deadline)
+        except BaseException as exc:
+            cleanup_errors.append('queued_evidence_close_error:' + repr(exc))
         result = {'primary_error': primary, 'cleanup_errors': cleanup_errors, 'outcome': outcome,
             'cleanup_started_ns': cleanup_started, 'cleanup_deadline_ns': cleanup_deadline,
             'completed_ns': time.monotonic_ns(), 'run_id': descriptor['run_id'],
             'invocation_id': descriptor['invocation_id']}
         write_record_once(Path(descriptor['run_root'])/'worker-result.json', result)
-        sink.close()
     return 0 if primary is None and not cleanup_errors and outcome is not None else 1
 
 

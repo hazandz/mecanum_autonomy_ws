@@ -10,6 +10,7 @@ import pytest
 import mecanum_nav_rl.runtime_simulation.b23_runner as runner_module
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
+    QueuedRunEvidence, RunEvidence,
     policy_bind_launch_window_remaining_ns, policy_bind_launch_window_ready,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
@@ -84,6 +85,62 @@ def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():
             assert calls[1][1]['sink_wall_ns'] > 20_000_000
         else:
             assert calls[1][1]['lock_wait_ns'] > 20_000_000
+
+
+def test_queued_run_evidence_preserves_order_and_does_not_wait_for_blocked_sink():
+    entered, release, producer_done = threading.Event(), threading.Event(), threading.Event()
+    rows = []
+    class Sink:
+        def record(self, event, facts, *, collected_ns=None):
+            if event == 'first':
+                entered.set()
+                assert release.wait(2.)
+            rows.append((event, facts, collected_ns))
+        def sync(self):
+            return None
+        def close(self):
+            return None
+    sink = QueuedRunEvidence(Sink(), capacity=4)
+    sink.record('first', {'value':1})
+    assert entered.wait(1.)
+    producer = threading.Thread(target=lambda: (sink.record('second', {'value':2}), producer_done.set()))
+    producer.start()
+    try:
+        assert producer_done.wait(.1), 'callback-side record blocked behind the evidence sink'
+    finally:
+        release.set()
+        producer.join(1.)
+    sink.close(deadline_ns=runner_module.time.monotonic_ns()+2_000_000_000)
+    assert [row[0] for row in rows] == ['first','second']
+    assert all(type(row[2]) is int and row[2] > 0 for row in rows)
+
+
+def test_queued_run_evidence_records_original_monotonic_collection_time(tmp_path):
+    underlying = RunEvidence(tmp_path, 'worker', run_id='B23_TEST', invocation_id='test-invocation')
+    sink = QueuedRunEvidence(underlying)
+    before = runner_module.time.monotonic_ns()
+    sink.record('QUEUED_SAMPLE', {'identity':'pinned'})
+    after = runner_module.time.monotonic_ns()
+    sink.close(deadline_ns=runner_module.time.monotonic_ns()+2_000_000_000)
+    import json
+    record = json.loads((tmp_path/'worker-events.jsonl').read_text().strip())
+    assert record['event'] == 'QUEUED_SAMPLE'
+    assert record['facts'] == {'identity':'pinned'}
+    assert before <= record['collected_ns'] <= after
+
+
+def test_queued_run_evidence_sink_failure_is_retained_and_fails_close():
+    class BrokenSink:
+        def record(self, event, facts, *, collected_ns=None):
+            raise OSError('injected evidence write failure')
+        def sync(self):
+            return None
+        def close(self):
+            return None
+    sink = QueuedRunEvidence(BrokenSink())
+    sink.record('SAMPLE', {})
+    with pytest.raises(RuntimeError, match='queued worker evidence writer failed'):
+        sink.close(deadline_ns=runner_module.time.monotonic_ns()+2_000_000_000)
 
 
 def test_case_phase_is_bound_in_packet_and_capacity_one_guard():
