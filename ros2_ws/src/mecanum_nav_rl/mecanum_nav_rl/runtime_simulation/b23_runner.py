@@ -4726,11 +4726,74 @@ class TrainingWorkerIO:
             'remaining_to_cutoff_ns':aligned['remaining_to_cutoff_ns'],
             'remaining_to_next_cutoff_ns':period_ns - (self.ros_now() % period_ns),
             'steady_ns':self.now()})
-        # Keep the earlier exact application witness. The staged post-cutoff
-        # zero is proven received by native, but has not been claimed applied.
-        return zero_witness
+        # Join the selected post-cutoff SAFE_STOP to its exact native
+        # application while the measured launch window is still open. Waiting
+        # for a later periodic SAFE_STOP here can cross the next scan cutoff
+        # and leave the first post-ACK admission too late for the unchanged
+        # native actuator watchdog.
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        aligned_receipt = aligned['receipt']
 
-    async def refresh_zero_before_pending_bind(self, *, deadline_ns):
+        def exact_aligned_zero_application():
+            application = self.ingress.application_for_receipt(aligned_receipt)
+            if not isinstance(application, dict):
+                return None
+            applied = application.get('state')
+            received_ns = application.get('received_ns')
+            latest = self.ingress.backend_state
+            if (applied is None or type(received_ns) is not int or latest is None
+                    or self.now() < received_ns or self.now() - received_ns > 100_000_000
+                    or aligned_receipt.source is not ReceiptSource.SAFE_STOP
+                    or aligned_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or any(aligned_receipt.final_command)
+                    or aligned_receipt.session_id != self.descriptor['session_id']
+                    or aligned_receipt.ingress_config_hash != self.descriptor['config_hash']
+                    or applied.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                    or applied.applied_final_publish_sequence != aligned_receipt.final_publish_sequence
+                    or applied.fault_flags != 0 or applied.paused or applied.local_zero_override
+                    or applied.backend_instance_id != self.descriptor['backend_instance_id']
+                    or applied.session_id != self.descriptor['session_id']
+                    or applied.config_hash != self.descriptor['config_hash']
+                    or lifecycle_identity(applied) != aligned_receipt.lifecycle
+                    or latest.fault_flags != 0 or latest.paused or latest.local_zero_override
+                    or not latest.applied_receipt_valid
+                    or latest.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                    or latest.applied_final_publish_sequence < aligned_receipt.final_publish_sequence
+                    or latest.backend_instance_id != self.descriptor['backend_instance_id']
+                    or latest.session_id != self.descriptor['session_id']
+                    or latest.config_hash != self.descriptor['config_hash']
+                    or lifecycle_identity(latest) != aligned_receipt.lifecycle):
+                return None
+            current_receipt = self.ingress.receipt_for_publication_sequence(
+                latest.applied_final_publish_sequence)
+            if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
+                    or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or any(current_receipt.final_command)):
+                return None
+            return {'receipt': aligned_receipt, 'state': applied,
+                'received_ns': received_ns, 'application': application}
+
+        applied_zero = await self.until(exact_aligned_zero_application,
+            deadline_ns=deadline_ns,
+            phase='exact post-cutoff SAFE_STOP application in POLICY bind window')
+        remaining_after_application = policy_bind_launch_window_remaining_ns(
+            self.ros_now(), period_ns)
+        if not policy_bind_launch_window_ready(remaining_after_application):
+            raise TimeoutError('exact post-cutoff SAFE_STOP application missed the measured POLICY bind window')
+        self.emit('POLICY_STEP_BIND_WINDOW_ZERO_APPLIED', {
+            'source_sequence': aligned_receipt.source_sequence,
+            'final_publish_sequence': aligned_receipt.final_publish_sequence,
+            'application_iteration': applied_zero['state'].applied_physics_iteration,
+            'application_stamp_ns': (applied_zero['state'].applied_sim_stamp.sec
+                * 1_000_000_000 + applied_zero['state'].applied_sim_stamp.nanosec),
+            'application_received_ns': applied_zero['received_ns'],
+            'remaining_to_cutoff_ns': remaining_after_application,
+            'deadline_ns': deadline_ns,
+            'steady_ns': self.now(),
+        })
+        return applied_zero
+
+    async def refresh_zero_before_pending_bind(self, *, deadline_ns, zero_witness=None):
         """Require a newly applied SAFE_STOP immediately before binding POLICY.
 
         The native actuator watchdog is steady-clock based. Scan-window
@@ -4745,6 +4808,60 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
 
         adapter = self.safety.local_training
+        if zero_witness is not None:
+            receipt = zero_witness.get('receipt') if isinstance(zero_witness, dict) else None
+            state = zero_witness.get('state') if isinstance(zero_witness, dict) else None
+            received_ns = zero_witness.get('received_ns') if isinstance(zero_witness, dict) else None
+            latest = self.ingress.backend_state
+            life = self.ingress.lifecycle
+            if (receipt is None or state is None or type(received_ns) is not int or latest is None
+                    or life is None or self.now() < received_ns
+                    or self.now() - received_ns > 100_000_000
+                    or receipt.source is not ReceiptSource.SAFE_STOP
+                    or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or receipt.source_instance_id != self.ingress.safe_stop_source_id
+                    or receipt.lifecycle != lifecycle_identity(life)
+                    or receipt.session_id != self.descriptor['session_id']
+                    or receipt.ingress_config_hash != self.descriptor['config_hash']
+                    or receipt.frame_id != 'base_link' or not receipt.admission_valid
+                    or any(receipt.final_command)
+                    or state.fault_flags != 0 or state.paused or state.local_zero_override
+                    or state.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                    or state.applied_final_publish_sequence != receipt.final_publish_sequence
+                    or state.backend_instance_id != self.descriptor['backend_instance_id']
+                    or state.session_id != self.descriptor['session_id']
+                    or state.config_hash != self.descriptor['config_hash']
+                    or lifecycle_identity(state) != lifecycle_identity(life)
+                    or latest.fault_flags != 0 or latest.paused or latest.local_zero_override
+                    or not latest.applied_receipt_valid
+                    or latest.applied_final_publisher_instance_id != self.final.publisher_instance_id
+                    or latest.applied_final_publish_sequence < receipt.final_publish_sequence
+                    or latest.backend_instance_id != self.descriptor['backend_instance_id']
+                    or latest.session_id != self.descriptor['session_id']
+                    or latest.config_hash != self.descriptor['config_hash']
+                    or lifecycle_identity(latest) != lifecycle_identity(life)):
+                raise RuntimeError('pre-bind zero witness expired or mismatched after scan-window alignment')
+            current_receipt = self.ingress.receipt_for_publication_sequence(
+                latest.applied_final_publish_sequence)
+            if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
+                    or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or any(current_receipt.final_command)):
+                raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
+            age_ns = self.now() - received_ns
+            refreshed = {'receipt':receipt,
+                'application':zero_witness.get('application', {'state':state,'received_ns':received_ns}),
+                'age_ns':age_ns, 'state':state, 'received_ns':received_ns}
+            self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
+                'baseline_safe_stop_sequence':adapter.safe_stop_sequence,
+                'source_sequence':receipt.source_sequence,
+                'final_publish_sequence':receipt.final_publish_sequence,
+                'native_iteration':state.applied_physics_iteration,
+                'native_stamp_ns':(state.applied_sim_stamp.sec * 1_000_000_000
+                    + state.applied_sim_stamp.nanosec),
+                'receipt_received_steady_ns':received_ns,'receipt_age_ns':age_ns,
+                'deadline_ns':deadline_ns,'steady_ns':self.now(),
+                'reused_exact_scan_window_application':True})
+            return refreshed
         baseline_sequence = adapter.safe_stop_sequence
         life = self.ingress.lifecycle
         if life is None:
@@ -4812,7 +4929,8 @@ class TrainingWorkerIO:
                 if age_ns < 0 or age_ns > 100_000_000:
                     continue
                 return {'receipt': receipt, 'publication': publication,
-                    'application': application, 'age_ns': age_ns}
+                    'application': application, 'state':applied_state,
+                    'received_ns':receipt.received_steady_ns, 'age_ns': age_ns}
             return None
 
         refreshed = await self.until(newly_applied_zero, deadline_ns=deadline_ns,
@@ -4978,7 +5096,7 @@ class TrainingWorkerIO:
                 zero_witness = await self.align_policy_step_launch_window(
                     deadline_ns=deadline, zero_witness=zero_witness)
                 zero_witness = await self.refresh_zero_before_pending_bind(
-                    deadline_ns=deadline)
+                    deadline_ns=deadline, zero_witness=zero_witness)
             self.safety.local_training.set_stream_enabled(False)
         if prebind_admission:
             # Build the held input after native has observed the closing

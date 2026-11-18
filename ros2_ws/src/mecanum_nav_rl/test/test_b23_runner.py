@@ -663,8 +663,11 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
 
     worker = object.__new__(TrainingWorkerIO)
     clock = {'ros_ns':initial_ros_ns, 'steady_ns':50}
-    status = NS(fault_flags=0, paused=False, applied_receipt_valid=True,
-        applied_final_publisher_instance_id=77, applied_final_publish_sequence=2)
+    status = NS(fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=3, backend_instance_id=99,
+        session_id='session', config_hash='a'*64,
+        episode_generation=1, reset_epoch=2, runtime_generation=3)
     life = EpisodeLifecycleIdentity(1, 2, 3)
     def receipt(sequence, stamp):
         return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
@@ -679,12 +682,20 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     for sequence in (2,3)
     }
     native_path=tmp_path/'native-events.jsonl'
-    ingress = NS(receipts=[old], backend_state=status,
-        lifecycle=life)
+    applied_state = NS(fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=3, backend_instance_id=99,
+        session_id='session', config_hash='a'*64,
+        episode_generation=1, reset_epoch=2, runtime_generation=3,
+        applied_physics_iteration=354, applied_sim_stamp=NS(sec=3,nanosec=540_000_000))
+    ingress = NS(receipts=[old], backend_state=status, lifecycle=life,
+        application_for_receipt=lambda receipt: ({'state':applied_state,'received_ns':195}
+            if receipt.final_publish_sequence == 3 else None),
+        receipt_for_publication_sequence=lambda sequence: aligned if sequence == 3 else None)
     worker.ingress, worker.final = ingress, NS(publisher_instance_id=77,
         publication_for_source_sequence=lambda *,source,sequence: publications.get(sequence)
             if source == FinalIssuedCommandReceipt.SOURCE_SAFE_STOP else None)
-    worker.descriptor={'session_id':'session','config_hash':'a'*64,
+    worker.descriptor={'session_id':'session','config_hash':'a'*64,'backend_instance_id':99,
         'native_events_path':str(native_path),'server_leader_pid':777,
         'invocation_id':'inv-1'}
     worker._native_offset, worker._native_partial = 0, b''
@@ -700,21 +711,24 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
 
     async def until(predicate, *, deadline_ns, phase):
         waits.append((deadline_ns,phase))
-        assert phase == 'post-cutoff native SAFE_STOP ingress with POLICY bind window'
-        for stamp,steady,view in samples:
-            clock.update(ros_ns=stamp,steady_ns=steady)
-            ingress.receipts.append(view)
-            fields={'publisher':'77','key':str(view.final_publish_sequence),
-                'source_sequence':str(view.source_sequence),'stamp_ns':str(view.publish_stamp_ns),
-                'receive_ns':str(steady+1)}
-            with native_path.open('a') as stream:
-                stream.write(json.dumps({'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
-                    'server_leader_pid':777,'invocation_id':'inv-1',
-                    'fields':fields})+'\n')
-            value=predicate()
-            if value is not None:
-                return value
-        raise AssertionError('eligible native-ingress receipt was not selected')
+        if phase == 'post-cutoff native SAFE_STOP ingress with POLICY bind window':
+            for stamp,steady,view in samples:
+                clock.update(ros_ns=stamp,steady_ns=steady)
+                ingress.receipts.append(view)
+                fields={'publisher':'77','key':str(view.final_publish_sequence),
+                    'source_sequence':str(view.source_sequence),'stamp_ns':str(view.publish_stamp_ns),
+                    'receive_ns':str(steady+1)}
+                with native_path.open('a') as stream:
+                    stream.write(json.dumps({'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+                        'server_leader_pid':777,'invocation_id':'inv-1',
+                        'fields':fields})+'\n')
+                value=predicate()
+                if value is not None:
+                    return value
+            raise AssertionError('eligible native-ingress receipt was not selected')
+        assert phase == 'exact post-cutoff SAFE_STOP application in POLICY bind window'
+        clock['steady_ns']=200
+        return predicate()
 
     worker.until=until
     monkeypatch.setattr(runner_module, 'complete_jsonl_rows',
@@ -722,11 +736,15 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     witness={'receipt':old,'state':status,'received_ns':90}
     result=asyncio.run(worker.align_policy_step_launch_window(
         deadline_ns=2_000_000_000,zero_witness=witness))
-    assert len(waits)==1
-    assert result is witness  # The earlier applied zero remains the application witness.
+    assert [phase for _,phase in waits] == [
+        'post-cutoff native SAFE_STOP ingress with POLICY bind window',
+        'exact post-cutoff SAFE_STOP application in POLICY bind window']
+    assert result['receipt'] is aligned
+    assert result['state'] is applied_state
+    assert result['received_ns'] == 195
     assert [view.final_publish_sequence for view in ingress.receipts[-2:]] == [2,3]
-    assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF'
-    facts=events[-1][1]
+    assert events[-2][0]=='POLICY_STEP_BIND_WINDOW_ALIGNED_AFTER_SCAN_CUTOFF'
+    facts=events[-2][1]
     assert facts['target_cutoff_ns']==target_cutoff_ns
     assert facts['zero_publish_sequence']==3
     assert facts['zero_publish_stamp_ns']==3_540_000_000
@@ -735,6 +753,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     assert facts['prior_applied_zero_sequence']==1
     assert facts['remaining_to_next_cutoff_ns']==60_000_000
     assert facts['steady_ns']==200
+    assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ZERO_APPLIED'
     assert worker._native_offset == native_path.stat().st_size
     assert worker._native_safe_stop_ingress[
         ('77','3','3','3540000000')]['fields']['receive_ns'] == '201'
@@ -802,6 +821,11 @@ def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
     assert events[-1][1]['source_sequence']==12
     assert events[-1][1]['final_publish_sequence']==101
+    reused=asyncio.run(value.refresh_zero_before_pending_bind(
+        deadline_ns=2_000_000_000,zero_witness=result))
+    assert reused['receipt'] is receipt
+    assert reused['age_ns']==10_000_000
+    assert events[-1][1]['reused_exact_scan_window_application'] is True
 
 
 def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
@@ -4661,8 +4685,9 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
         events.append('scan_alignment')
         assert zero_witness == {'zero_receipt_age_ns': 0}
         return zero_witness
-    async def refresh_zero(*, deadline_ns):
+    async def refresh_zero(*, deadline_ns, zero_witness=None):
         events.append('refresh_zero')
+        assert zero_witness is not None
         return {'zero_receipt_age_ns': 0, 'refreshed': True}
     value.freeze_step_streams = freeze_step_streams
     value.align_policy_step_launch_window = align_policy_window
@@ -4724,8 +4749,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     # This test isolates transaction ordering; launch-window cadence is
     # covered by test_policy_step_waits_for_applied_zero_after_cutoff... .
     value.align_policy_step_launch_window = aligned_window
-    async def refreshed_zero(*, deadline_ns):
+    async def refreshed_zero(*, deadline_ns, zero_witness=None):
         history.append(('prebind_zero_refresh', deadline_ns))
+        assert zero_witness is not None
         if timing == 'prebind_elapsed_deadline':
             await clock.pause(.150)
         prebind_refresh_times.append(clock.ns)
