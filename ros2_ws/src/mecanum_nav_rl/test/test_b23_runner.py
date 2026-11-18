@@ -3081,7 +3081,8 @@ def test_r04b_accepts_only_bound_pre_safety_candidate_and_no_downstream_effect()
             'step_index':1,'source_instance_id':77,'steady_ns':100,
             'transition_id':transition.transition_id}}]
     events = [('policy_adapter_issued', issued[0]['facts']),
-        ('B23_R04_NOISY_ODOMETRY_DROPPED', {'case':'R04b','sample_sequence':9,'steady_ns':110})]
+        ('B23_R04_NOISY_ODOMETRY_DROPPED', {'case':'R04b','sample_sequence':9,'steady_ns':110}),
+        ('B23_R04_NOISY_ODOMETRY_DROPPED', {'case':'R04b','sample_sequence':10,'steady_ns':120})]
     result = verify_r04b_missing_noisy_admission(issued_rows=issued,
         transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
         policy_receipts=[], final_rows=[], applied_rows=[], committed_rows=[],
@@ -3090,6 +3091,7 @@ def test_r04b_accepts_only_bound_pre_safety_candidate_and_no_downstream_effect()
     assert result['native_policy_receipts'] == result['final_publications'] == 0
     assert result['backend_applications'] == result['b1_policy_commits'] == 0
     assert result['dropped_sample_sequence'] == 9
+    assert result['dropped_sample_sequences'] == [9, 10]
     assert result['missing_admission_after_drop'] is True
 
     with pytest.raises(RuntimeError, match='active B1 slot'):
@@ -3103,6 +3105,12 @@ def test_r04b_accepts_only_bound_pre_safety_candidate_and_no_downstream_effect()
             transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
             policy_receipts=[], final_rows=[{'facts':{'transition_id':transition.transition_id}}],
             applied_rows=[], committed_rows=[], worker_events=events)
+    with pytest.raises(RuntimeError, match='not bound after the active candidate'):
+        verify_r04b_missing_noisy_admission(issued_rows=issued,
+            transition_identity=transition, run_id='RUN-TEST', invocation_id='INV-TEST',
+            policy_receipts=[], final_rows=[], applied_rows=[], committed_rows=[],
+            worker_events=[('B23_R04_NOISY_ODOMETRY_DROPPED',
+                {'case':'R04b','sample_sequence':9,'steady_ns':99})])
 
 
 def test_r04c_delays_scan_only_after_control_policy_commit_path():

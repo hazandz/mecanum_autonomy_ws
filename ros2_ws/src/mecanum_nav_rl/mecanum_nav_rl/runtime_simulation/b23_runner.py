@@ -1720,7 +1720,8 @@ def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
         and event_facts.get('case') == 'R04b'
         and type(event_facts.get('sample_sequence')) is int
         and type(event_facts.get('steady_ns')) is int]
-    if len(dropped) != 1 or dropped[0][1]['steady_ns'] < facts['steady_ns']:
+    if not dropped or any(event_facts['steady_ns'] < facts['steady_ns']
+            for _, event_facts in dropped):
         raise RuntimeError('R04b missing-noisy hook is not bound after the active candidate')
     return {'step_index':step_index, 'transition_id':transition_id,
         'source_instance_id':facts['source_instance_id'],
@@ -1728,6 +1729,8 @@ def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
         'native_policy_receipts':0, 'final_publications':0,
         'backend_applications':0, 'b1_policy_commits':0,
         'dropped_sample_sequence':dropped[0][1]['sample_sequence'],
+        'dropped_sample_sequences':[event_facts['sample_sequence']
+            for _, event_facts in dropped],
         'missing_admission_after_drop':True}
 
 
