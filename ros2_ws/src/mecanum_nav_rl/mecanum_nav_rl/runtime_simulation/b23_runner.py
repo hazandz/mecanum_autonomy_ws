@@ -2338,6 +2338,12 @@ class FinalPublicationView:
         return None
 
 
+def _new_local_training_safety_executor(context):
+    """Keep the steady Safety timer schedulable beside subscription callbacks."""
+    from rclpy.executors import MultiThreadedExecutor
+    return MultiThreadedExecutor(num_threads=2, context=context)
+
+
 class TrainingWorkerIO:
     """ROS I/O của một worker sở hữu riêng context, nodes, executor và RPC."""
 
@@ -2417,7 +2423,7 @@ class TrainingWorkerIO:
         try:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
-            self.safety_executor = SingleThreadedExecutor(context=self.context)
+            self.safety_executor = _new_local_training_safety_executor(self.context)
             base_params = [Parameter('use_sim_time', value=True)]
             mode_params = base_params + [Parameter('navigation_mode', value='LOCAL_TRAINING')]
             self.node = Node('b23_coordinator_ingress', context=self.context, parameter_overrides=base_params)

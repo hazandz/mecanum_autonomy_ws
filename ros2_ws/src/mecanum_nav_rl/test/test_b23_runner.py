@@ -149,6 +149,23 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     assert worker.safety_thread is not None and not worker.safety_thread.is_alive()
 
 
+def test_local_training_safety_executor_uses_two_workers_for_isolated_timer_group(monkeypatch):
+    import sys
+    calls = []
+    context = object()
+
+    class MultiThreadedExecutorFake:
+        def __init__(self, *, num_threads, context):
+            calls.append((num_threads, context))
+
+    monkeypatch.setitem(sys.modules, 'rclpy.executors',
+        NS(MultiThreadedExecutor=MultiThreadedExecutorFake))
+    result = runner_module._new_local_training_safety_executor(context)
+
+    assert isinstance(result, MultiThreadedExecutorFake)
+    assert calls == [(2, context)]
+
+
 def test_run_evidence_serializes_concurrent_safety_and_worker_records(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
 
