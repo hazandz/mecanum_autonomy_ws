@@ -2217,6 +2217,22 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     state = io.ingress.backend_state
     expected_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
         | SimulationContactState.FAULT_COMMAND_STALE)
+    if case == 'R02d':
+        # This hook deliberately re-enqueues its held receipt after INHIBIT.
+        # The backend records that exact rejected release as FAULT_QUEUE in
+        # addition to the sequence/stale close fault. Bind the extra bit to
+        # the structured native diagnostic; never accept an arbitrary queue
+        # fault as the expected result.
+        expected_fault_flags |= SimulationContactState.FAULT_QUEUE
+        queue_fault_rows = [row for row in rows
+            if row.get('kind') == 'B23_NATIVE_OUTPUT_REJECTED'
+            and row.get('fields', {}).get('marker') == 'B23_QUEUE_FAULT'
+            and 'receipt_gate_release_after_inhibit' in str(
+                row.get('raw_record', {}).get('facts', {}).get('text', ''))
+            and 'receipt=held_policy' in str(
+                row.get('raw_record', {}).get('facts', {}).get('text', ''))]
+        if len(queue_fault_rows) != 1:
+            raise RuntimeError('R02d lacks exact native held-receipt queue-fault evidence')
     if (state is None or state.fault_flags != expected_fault_flags
             or not state.local_zero_override):
         raise RuntimeError(f'{case} late POLICY receipt did not produce native fault and zero')
@@ -2233,11 +2249,13 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
         'policy_backend_applied':False, 'b1_transition_committed':False}
 
 
-async def await_r02_late_receipt_close(io, *, release_predicate, deadline_ns):
+async def await_r02_late_receipt_close(io, *, release_predicate, deadline_ns,
+        expected_terminal_fault_flags=None):
     """Wait through the observed stale-only state, then require sequence+stale zero."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     stale = SimulationContactState.FAULT_COMMAND_STALE
-    terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE | stale)
+    terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE | stale
+        if expected_terminal_fault_flags is None else expected_terminal_fault_flags)
     allowed_transition = (stale, terminal_flags)
     await io.until(release_predicate, deadline_ns=deadline_ns,
         phase='held POLICY receipt released only after closing condition',
@@ -5395,6 +5413,7 @@ class TrainingWorkerIO:
             self.safety.local_training.set_policy_hold(True)
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()
+            from mecanum_nav_rl_interfaces.msg import SimulationContactState
             expected_reason = close_after_held_receipt
             def released_row():
                 rows = complete_jsonl_rows(self.descriptor['native_events_path'])
@@ -5403,7 +5422,12 @@ class TrainingWorkerIO:
                     and row.get('fields', {}).get('reason') == expected_reason
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
             native_fault = await await_r02_late_receipt_close(
-                self, release_predicate=released_row, deadline_ns=deadline)
+                self, release_predicate=released_row, deadline_ns=deadline,
+                expected_terminal_fault_flags=(
+                    SimulationContactState.FAULT_COMMAND_SEQUENCE
+                    | SimulationContactState.FAULT_COMMAND_STALE
+                    | (SimulationContactState.FAULT_QUEUE
+                        if close_after_held_receipt == 'admission_inhibited' else 0)))
             checked = verify_r02_late_receipt_rejected(self, case=(
                 'R02c' if close_after_held_receipt == 'safe_stop' else 'R02d'),
                 step_index=token.step_index, receipt=policy_receipt)

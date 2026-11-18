@@ -476,7 +476,10 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
         worker.check(expected_native_fault_flags=(1, 7))
 
 
-def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero():
+@pytest.mark.parametrize('case,terminal_extra', [
+    ('R02c', 0), ('R02d', 256)])
+def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero(
+        case, terminal_extra):
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     from mecanum_nav_rl.runtime_simulation.b23_runner import await_r02_late_receipt_close
 
@@ -503,16 +506,18 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
             release['observed'] = True
         elif clock['pauses'] == 2:
             state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE)
+                | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
             state.local_zero_override = True
 
     worker.pause = pause
     result = asyncio.run(await_r02_late_receipt_close(
-        worker, release_predicate=lambda: release['observed'], deadline_ns=900))
+        worker, release_predicate=lambda: release['observed'], deadline_ns=900,
+        expected_terminal_fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
+            | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)))
 
     assert result is state
     assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
-        | SimulationContactState.FAULT_COMMAND_STALE)
+        | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
     assert state.local_zero_override is True
     assert clock['pauses'] == 2
 
@@ -7076,12 +7081,21 @@ def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
 def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
         tmp_path, case, reason, mode):
     native=tmp_path/'native-events.jsonl'
-    native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields}) for kind,fields in [
+    rows = [
         ('B23_POLICY_RECEIPT_HELD',{'mode':mode,'sequence':'52','source_sequence':'1','receive_ns':'100'}),
         ('B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',{'reason':reason,'sequence':'52',
-            'source_sequence':'1','receive_ns':'200'})])+'\n')
+            'source_sequence':'1','receive_ns':'200'})]
+    if case == 'R02d':
+        rows.append(('B23_NATIVE_OUTPUT_REJECTED', {'marker':'B23_QUEUE_FAULT',
+            'raw_text_sha256':'diagnostic-hash', 'reason':'event_marker_not_at_message_boundary',
+            'raw_record':{'event':'owned_process_output','facts':{'text':
+                '[Err] B23_QUEUE_FAULT cause=receipt_gate_release_after_inhibit receipt=held_policy'}}}))
+    native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields} if kind !=
+        'B23_NATIVE_OUTPUT_REJECTED' else {'kind':kind,'fields':{k:v for k,v in fields.items()
+            if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
     receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
-    state=NS(fault_flags=6,local_zero_override=True,applied_receipt_valid=False,
+    state=NS(fault_flags=262 if case == 'R02d' else 6,
+        local_zero_override=True,applied_receipt_valid=False,
         applied_final_publisher_instance_id=0,applied_final_publish_sequence=0)
     io=NS(descriptor={'native_events_path':str(native)},ingress=NS(backend_state=state),events=[])
     checked=verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
@@ -7095,6 +7109,15 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
     state.fault_flags=4
     with pytest.raises(RuntimeError,match='native fault and zero'):
         verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+    if case == 'R02d':
+        state.fault_flags=262
+        rows[-1][1]['raw_record']['facts']['text'] = (
+            '[Err] B23_QUEUE_FAULT cause=unrelated_queue_fault receipt=held_policy')
+        native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields} if kind !=
+            'B23_NATIVE_OUTPUT_REJECTED' else {'kind':kind,'fields':{k:v for k,v in fields.items()
+                if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
+        with pytest.raises(RuntimeError,match='exact native held-receipt queue-fault evidence'):
+            verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
 
 
 def _postmortem_residue_fixture(tmp_path):
