@@ -684,8 +684,8 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
             88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
     old = receipt(1,3_420_000_000)
-    too_early = receipt(2,3_520_000_000)  # 80 ms remains; wait for the measured later window.
-    aligned = receipt(3,3_540_000_000)  # 60 ms remains; native has received it.
+    prior_window_same_phase = receipt(2,3_550_000_000)
+    aligned = receipt(3,3_640_000_000)
     publications = {
         sequence:NS(final_publisher_instance_id=77,final_publish_sequence=sequence,
             source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
@@ -698,7 +698,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         applied_final_publish_sequence=3, backend_instance_id=99,
         session_id='session', config_hash='a'*64,
         episode_generation=1, reset_epoch=2, runtime_generation=3,
-        applied_physics_iteration=354, applied_sim_stamp=NS(sec=3,nanosec=540_000_000))
+        applied_physics_iteration=365, applied_sim_stamp=NS(sec=3,nanosec=650_000_000))
     ingress = NS(receipts=[old], backend_state=status, lifecycle=life,
         application_for_receipt=lambda receipt: ({'state':applied_state,'received_ns':195}
             if receipt.final_publish_sequence == 3 else None),
@@ -718,7 +718,11 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     events=[]
     worker.emit=lambda name,facts:events.append((name,facts))
     waits=[]
-    samples=[(3_520_000_000,100,too_early),(3_540_000_000,200,aligned)]
+    samples=[
+        # Same modulo phase as the current clock, but one scan interval old.
+        (3_650_000_000,100,prior_window_same_phase),
+        (3_650_000_000,200,aligned),
+    ]
 
     async def until(predicate, *, deadline_ns, phase):
         waits.append((deadline_ns,phase))
@@ -758,16 +762,18 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     facts=events[-2][1]
     assert facts['target_cutoff_ns']==target_cutoff_ns
     assert facts['zero_publish_sequence']==3
-    assert facts['zero_publish_stamp_ns']==3_540_000_000
+    assert facts['zero_publish_stamp_ns']==3_640_000_000
     assert facts['native_receive_ns']==201
-    assert facts['remaining_to_cutoff_ns']==60_000_000
+    assert facts['remaining_to_cutoff_ns']==50_000_000
     assert facts['prior_applied_zero_sequence']==1
-    assert facts['remaining_to_next_cutoff_ns']==60_000_000
+    assert facts['remaining_to_next_cutoff_ns']==50_000_000
+    assert facts['receipt_scan_window']==36
+    assert facts['current_scan_window']==36
     assert facts['steady_ns']==200
     assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ZERO_APPLIED'
     assert worker._native_offset == native_path.stat().st_size
     assert worker._native_safe_stop_ingress[
-        ('77','3','3','3540000000')]['fields']['receive_ns'] == '201'
+        ('77','3','3','3640000000')]['fields']['receive_ns'] == '201'
 
 
 def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_open():

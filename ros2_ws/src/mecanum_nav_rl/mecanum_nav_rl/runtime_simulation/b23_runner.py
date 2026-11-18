@@ -4711,6 +4711,15 @@ class TrainingWorkerIO:
                 if not policy_bind_launch_window_ready(remaining_to_cutoff):
                     continue
                 current_ros_ns = self.ros_now()
+                # A matching phase modulo ``period_ns`` is not enough: a
+                # SAFE_STOP from the preceding scan interval can have the
+                # same 40-60 ms phase as the current clock while its exact
+                # application witness is already near the 100 ms freshness
+                # limit. Bind the receipt to the interval that is open now.
+                receipt_window = receipt.publish_stamp_ns // period_ns
+                current_window = current_ros_ns // period_ns
+                if receipt_window != current_window:
+                    continue
                 current_remaining_ns = policy_bind_launch_window_remaining_ns(
                     current_ros_ns, period_ns)
                 if not policy_bind_launch_window_ready(current_remaining_ns):
@@ -4761,6 +4770,8 @@ class TrainingWorkerIO:
             'prior_applied_zero_received_ns':zero_witness['received_ns'],
             'remaining_to_cutoff_ns':aligned['remaining_to_cutoff_ns'],
             'remaining_to_next_cutoff_ns':period_ns - (self.ros_now() % period_ns),
+            'receipt_scan_window':aligned['receipt'].publish_stamp_ns // period_ns,
+            'current_scan_window':self.ros_now() // period_ns,
             'steady_ns':self.now()})
         # Join the selected post-cutoff SAFE_STOP to its exact native
         # application while the measured launch window is still open. Waiting
