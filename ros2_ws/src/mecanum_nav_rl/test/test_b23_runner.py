@@ -39,7 +39,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
-    spin_ready_callback_batch,
+    spin_ready_callback_batch, instrument_executor_waits,
 )
 
 
@@ -122,6 +122,37 @@ def test_worker_thread_identity_snapshot_can_capture_bounded_python_stacks(monke
     assert len(snapshot[0]['python_stack']) <= 24
     assert any(frame['function'] == 'test_worker_thread_identity_snapshot_can_capture_bounded_python_stacks'
         for frame in snapshot[0]['python_stack'])
+
+
+def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
+    class FakeExecutor:
+        def __init__(self):
+            self.calls = 0
+            self.results = []
+        def wait_for_ready_callbacks(self, *args, **kwargs):
+            self.calls += 1
+            result = ('handler', NS(topic_name='/safety/input'), NS(name='safety_supervisor'))
+            self.results.append(result)
+            return result
+
+    executor = FakeExecutor()
+    wall = iter((10, 40, 50, 100))
+    cpu = iter((3, 8, 11, 21))
+    take_snapshot = instrument_executor_waits(executor,
+        now_ns=lambda: next(wall), thread_time_ns=lambda: next(cpu))
+
+    first = executor.wait_for_ready_callbacks('timeout')
+    second = executor.wait_for_ready_callbacks()
+    assert first is executor.results[0]
+    assert second is executor.results[1]
+    assert executor.calls == 2
+    assert take_snapshot() == {
+        'calls':2, 'returned':2, 'wall_ns':80, 'thread_cpu_ns':15,
+        'max_wall_ns':50, 'max_thread_cpu_ns':10,
+        'entities':{'SimpleNamespace|/safety/input|safety_supervisor':2},
+        'errors':0, 'last_error':None,
+    }
+    assert take_snapshot()['calls'] == 0
 
 
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():

@@ -2543,6 +2543,80 @@ def _new_local_training_safety_executor(context):
     return MultiThreadedExecutor(num_threads=2, context=context)
 
 
+def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
+                             thread_time_ns=time.thread_time_ns):
+    """Collect bounded per-wait CPU/wall and returned-entity counts.
+
+    This wraps the executor's existing public wait method and returns its
+    original result/exception unchanged. The caller snapshots and resets the
+    counters only when an existing worker latency diagnostic is emitted.
+    """
+    original_wait = executor.wait_for_ready_callbacks
+    state = {
+        'lock': threading.Lock(), 'calls': 0, 'returned': 0,
+        'wall_ns': 0, 'thread_cpu_ns': 0,
+        'max_wall_ns': 0, 'max_thread_cpu_ns': 0,
+        'entities': {}, 'errors': 0, 'last_error': None,
+    }
+
+    def observed_wait(*args, **kwargs):
+        wall_started = now_ns()
+        cpu_started = thread_time_ns()
+        error = None
+        result = None
+        try:
+            result = original_wait(*args, **kwargs)
+            return result
+        except BaseException as caught:
+            error = caught
+            raise
+        finally:
+            wall_elapsed = max(0, now_ns() - wall_started)
+            cpu_elapsed = max(0, thread_time_ns() - cpu_started)
+            entity_key = None
+            if result is not None:
+                try:
+                    _, entity, node = result
+                    entity_type = type(entity).__name__
+                    entity_name = getattr(entity, 'topic_name', None)
+                    if not entity_name:
+                        entity_name = getattr(entity, 'name', None)
+                    node_name = getattr(node, 'name', None) if node is not None else None
+                    entity_key = '|'.join(str(value or '-') for value in
+                        (entity_type, entity_name, node_name))[:192]
+                except BaseException:
+                    entity_key = 'unidentified_entity'
+            with state['lock']:
+                state['calls'] += 1
+                state['wall_ns'] += wall_elapsed
+                state['thread_cpu_ns'] += cpu_elapsed
+                state['max_wall_ns'] = max(state['max_wall_ns'], wall_elapsed)
+                state['max_thread_cpu_ns'] = max(state['max_thread_cpu_ns'], cpu_elapsed)
+                if error is not None:
+                    state['errors'] += 1
+                    state['last_error'] = repr(error)[:256]
+                elif entity_key is not None:
+                    state['returned'] += 1
+                    if entity_key in state['entities'] or len(state['entities']) < 32:
+                        state['entities'][entity_key] = state['entities'].get(entity_key, 0) + 1
+                    else:
+                        state['entities']['other_bounded_entities'] = (
+                            state['entities'].get('other_bounded_entities', 0) + 1)
+
+    executor.wait_for_ready_callbacks = observed_wait
+
+    def take_snapshot():
+        with state['lock']:
+            snapshot = {key: value for key, value in state.items() if key != 'lock'}
+            snapshot['entities'] = dict(state['entities'])
+            state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
+                max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
+                last_error=None)
+        return snapshot
+
+    return take_snapshot
+
+
 # Limit continuous ingress dispatch to 10% of the 20 ms Safety timer period.
 # A bounded batch avoids leaving reliable DDS samples queued behind a 1 ms
 # sleep after every callback, while preserving regular opportunities for the
@@ -2687,6 +2761,7 @@ class TrainingWorkerIO:
             rclpy.init(context=self.context)
             self.executor = SingleThreadedExecutor(context=self.context)
             self.safety_executor = _new_local_training_safety_executor(self.context)
+            self.safety_executor_wait_snapshot = instrument_executor_waits(self.safety_executor)
             base_params = [Parameter('use_sim_time', value=True)]
             mode_params = base_params + [Parameter('navigation_mode', value='LOCAL_TRAINING')]
             self.node = Node('b23_coordinator_ingress', context=self.context, parameter_overrides=base_params)
@@ -3204,6 +3279,7 @@ class TrainingWorkerIO:
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now(),
                         'scheduler':worker_scheduler_snapshot(),
+                        'safety_executor_waits':self.safety_executor_wait_snapshot(),
                         'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 previous_process_cpu_ns = started_process_cpu_ns
