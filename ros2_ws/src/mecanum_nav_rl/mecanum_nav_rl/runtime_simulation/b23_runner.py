@@ -267,9 +267,16 @@ def worker_scheduler_snapshot():
     return normalized
 
 
-def worker_thread_identity_snapshot():
-    """Map live native thread IDs to names and CPU clocks after a delay."""
+def worker_thread_identity_snapshot(*, capture_python_stacks=False):
+    """Map live native thread IDs to names/CPU clocks after a delay.
+
+    Optional bounded Python frames are collected only at the already-delayed
+    diagnostic sites. They identify a busy executor/dispatch path without
+    changing callback scheduling or sending a signal to the worker.
+    """
+    import sys
     rows = []
+    frames = sys._current_frames() if capture_python_stacks else {}
     for thread in threading.enumerate():
         row = {'native_id':thread.native_id, 'name':thread.name,
                'ident':thread.ident, 'daemon':thread.daemon,
@@ -279,6 +286,14 @@ def worker_thread_identity_snapshot():
             row['thread_cpu_ns'] = time.clock_gettime_ns(clock_id)
         except (OSError, OverflowError, ValueError, AttributeError) as error:
             row['thread_cpu_error'] = repr(error)
+        if capture_python_stacks:
+            frame = frames.get(thread.ident)
+            stack = []
+            while frame is not None and len(stack) < 24:
+                stack.append({'file':frame.f_code.co_filename,
+                    'line':frame.f_lineno, 'function':frame.f_code.co_name})
+                frame = frame.f_back
+            row['python_stack'] = stack
         rows.append(row)
     return sorted(rows,
         key=lambda item: (-1 if item['native_id'] is None else item['native_id']))
@@ -3189,7 +3204,7 @@ class TrainingWorkerIO:
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now(),
                         'scheduler':worker_scheduler_snapshot(),
-                        'thread_identities':worker_thread_identity_snapshot()})
+                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 previous_process_cpu_ns = started_process_cpu_ns
                 sink_owner = getattr(self, '_event_sink_owner', None)
@@ -3218,7 +3233,7 @@ class TrainingWorkerIO:
                         **spin_diagnostic, **spin_details, 'spin_once_count':spin_once_count,
                         'observed_ns':self.now(),
                         'scheduler':worker_scheduler_snapshot(),
-                        'thread_identities':worker_thread_identity_snapshot()})
+                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 pause_started_ns = time.monotonic_ns()
@@ -3234,7 +3249,7 @@ class TrainingWorkerIO:
                     self.emit('B23_WORKER_PAUSE_OVERRUN', {
                         **pause_diagnostic, 'requested_sleep_ns':1_000_000,
                         'observed_ns':self.now(),
-                        'thread_identities':worker_thread_identity_snapshot()})
+                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
         except asyncio.CancelledError:
             raise
         except BaseException as error:

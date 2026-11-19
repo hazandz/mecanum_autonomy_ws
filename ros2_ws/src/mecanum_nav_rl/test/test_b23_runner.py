@@ -109,6 +109,21 @@ def test_worker_thread_identity_snapshot_maps_native_ids_to_python_threads(monke
     ]
 
 
+def test_worker_thread_identity_snapshot_can_capture_bounded_python_stacks(monkeypatch):
+    import sys
+    current = threading.current_thread()
+    frames = sys._current_frames()
+    monkeypatch.setattr(runner_module.threading, 'enumerate', lambda: [current])
+    monkeypatch.setattr(sys, '_current_frames', lambda: frames)
+    snapshot = worker_thread_identity_snapshot(capture_python_stacks=True)
+    assert len(snapshot) == 1
+    assert snapshot[0]['native_id'] == current.native_id
+    assert snapshot[0]['python_stack']
+    assert len(snapshot[0]['python_stack']) <= 24
+    assert any(frame['function'] == 'test_worker_thread_identity_snapshot_can_capture_bounded_python_stacks'
+        for frame in snapshot[0]['python_stack'])
+
+
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():
     class SlowLock:
         def __enter__(self):
