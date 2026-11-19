@@ -339,8 +339,9 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     observed = {}
 
     class SafetyExecutor:
-        def spin(self):
+        def spin_once(self, *, timeout_sec):
             observed['safety_thread'] = threading.current_thread().name
+            observed['safety_timeout'] = timeout_sec
             safety_started.set()
             assert safety_release.wait(1.0)
 
@@ -410,6 +411,7 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     assert observed['safety_thread'] == 'b23-safety-steady-executor'
     assert observed['main_thread'] != observed['safety_thread']
     assert observed['main_timeout'] == 0.0
+    assert observed['safety_timeout'] == 0.001
     assert observed['safety_shutdown_timeout'] == 1.0
     assert observed['context_shutdown'] is True
     assert worker.safety_thread is not None and not worker.safety_thread.is_alive()

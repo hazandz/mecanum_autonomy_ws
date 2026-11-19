@@ -2559,6 +2559,10 @@ def _new_local_training_safety_executor(context):
     return MultiThreadedExecutor(num_threads=2, context=context)
 
 
+SAFETY_EXECUTOR_WAIT_S = 0.001
+SAFETY_EXECUTOR_GIL_YIELD_S = 0.001
+
+
 def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                              thread_time_ns=time.thread_time_ns):
     """Collect low-overhead CPU/wall and returned-entity counts.
@@ -3273,7 +3277,17 @@ class TrainingWorkerIO:
 
     def _spin_safety_executor(self):
         try:
-            self.safety_executor.spin()
+            # ``Executor.spin()`` immediately loops while reliable status
+            # callbacks remain ready. Under a burst this Python polling loop
+            # can retain the GIL long enough to starve the separate ingress
+            # pump, which must join every trusted physics iteration. Keep
+            # processing through the same executor, but bound each wait and
+            # yield between callbacks; the dedicated steady-timer callback
+            # group and all existing Safety freshness/watchdog checks remain
+            # unchanged.
+            while not self.stop_requested:
+                self.safety_executor.spin_once(timeout_sec=SAFETY_EXECUTOR_WAIT_S)
+                time.sleep(SAFETY_EXECUTOR_GIL_YIELD_S)
             if not self.stop_requested:
                 raise RuntimeError('LOCAL_TRAINING Safety executor stopped unexpectedly')
         except BaseException as error:
