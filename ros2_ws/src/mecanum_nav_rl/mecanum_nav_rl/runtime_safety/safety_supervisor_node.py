@@ -64,6 +64,8 @@ class SafetySupervisorNode(Node):
             self._local_training_last_timer_ns = None
             self._local_training_last_callback_wall_ns = None
             self._local_training_last_callback_cpu_ns = None
+            self._local_training_callback_stats_lock = threading.Lock()
+            self._local_training_callback_stats = {}
             for message_type, topic, callback, qos in (
                 (CommandEnvelope, '/mecanum/cmd_policy', self.local_training.on_command, reliable),
                 (LaserScan, '/scan', self.local_training.on_scan, sensor),
@@ -168,6 +170,17 @@ class SafetySupervisorNode(Node):
                 completed_ns = time.monotonic_ns()
                 thread_cpu_ns = time.thread_time_ns() - thread_started_ns
                 wall_ns = completed_ns - started_ns
+                lock = getattr(self, '_local_training_callback_stats_lock', None)
+                stats = getattr(self, '_local_training_callback_stats', None)
+                if lock is not None and stats is not None:
+                    with lock:
+                        item = stats.setdefault(topic, {'count': 0, 'wall_ns': 0,
+                            'thread_cpu_ns': 0, 'max_wall_ns': 0, 'max_thread_cpu_ns': 0})
+                        item['count'] += 1
+                        item['wall_ns'] += wall_ns
+                        item['thread_cpu_ns'] += thread_cpu_ns
+                        item['max_wall_ns'] = max(item['max_wall_ns'], wall_ns)
+                        item['max_thread_cpu_ns'] = max(item['max_thread_cpu_ns'], thread_cpu_ns)
                 if max(wall_ns, thread_cpu_ns) > 5_000_000:
                     facts = {'topic':topic, 'thread_name':threading.current_thread().name,
                         'thread_native_id':threading.get_native_id(),
@@ -182,6 +195,17 @@ class SafetySupervisorNode(Node):
                         # Diagnostic delivery must not replace callback behavior.
                         pass
         return measured
+
+    def _take_local_training_callback_stats(self):
+        """Return bounded per-topic callback work since the previous Safety tick."""
+        lock = getattr(self, '_local_training_callback_stats_lock', None)
+        stats = getattr(self, '_local_training_callback_stats', None)
+        if lock is None or stats is None:
+            return {}
+        with lock:
+            snapshot = {topic: dict(values) for topic, values in stats.items()}
+            stats.clear()
+        return snapshot
 
     def _tick_local_training_steady(self) -> None:
         """Record timer lateness without changing watchdog or Safety decisions."""
@@ -200,7 +224,11 @@ class SafetySupervisorNode(Node):
                     'previous_callback_wall_ns': self._local_training_last_callback_wall_ns,
                     'previous_callback_cpu_ns': self._local_training_last_callback_cpu_ns,
                     'missed_periods_lower_bound': max(1, gap_ns // period_ns - 1),
+                    'subscription_callback_work_since_previous_tick':
+                        self._take_local_training_callback_stats(),
                 })
+            else:
+                self._take_local_training_callback_stats()
         callback_started_ns = self._local_training_steady_now_ns()
         callback_cpu_started_ns = time.thread_time_ns()
         self.local_training.tick()

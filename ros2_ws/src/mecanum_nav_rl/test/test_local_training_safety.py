@@ -72,6 +72,29 @@ def test_safety_subscription_profiler_records_slow_input_without_changing_result
     assert len(events) == 2
 
 
+def test_safety_subscription_profiler_aggregates_bounded_callback_work(monkeypatch):
+    import threading
+    import mecanum_nav_rl.runtime_safety.safety_supervisor_node as module
+    from mecanum_nav_rl.runtime_safety.safety_supervisor_node import SafetySupervisorNode
+
+    node = object.__new__(SafetySupervisorNode)
+    node.local_training = NS(emit=lambda *_args: None)
+    node._local_training_callback_stats_lock = threading.Lock()
+    node._local_training_callback_stats = {}
+    wall = iter((100, 1100, 2000, 5000))
+    cpu = iter((200, 700, 900, 1400))
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: next(wall))
+    monkeypatch.setattr(module.time, 'thread_time_ns', lambda: next(cpu))
+
+    callback = node._profile_local_training_callback('/scan', lambda msg: msg)
+    assert callback('one') == 'one'
+    assert callback('two') == 'two'
+    assert node._take_local_training_callback_stats() == {
+        '/scan': {'count': 2, 'wall_ns': 4000, 'thread_cpu_ns': 1000,
+                  'max_wall_ns': 3000, 'max_thread_cpu_ns': 500}}
+    assert node._take_local_training_callback_stats() == {}
+
+
 @pytest.fixture
 def local_adapter():
     """Message ROS generated qua biên I/O giả, không tạo ROS context."""
@@ -597,7 +620,8 @@ assert len(overruns) == 1 and overruns[0][1] == {
     'clock':'steady', 'previous_tick_ns':20_000_000, 'current_tick_ns':100_000_000,
     'gap_ns':80_000_000, 'period_ns':20_000_000,
     'previous_callback_wall_ns':0, 'previous_callback_cpu_ns':1000,
-    'missed_periods_lower_bound':3}
+    'missed_periods_lower_bound':3,
+    'subscription_callback_work_since_previous_tick':{}}
 node._local_training_last_timer_ns = None
 tick_now[0] = 200_000_000
 node.local_training.tick = lambda: tick_now.__setitem__(0, tick_now[0] + 25_000_000)
