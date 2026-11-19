@@ -2396,7 +2396,7 @@ class TrainingWorkerIO:
             LocalTrainingSafetyInput, CommandEnvelope,
         )
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
-        from ros_gz_interfaces.srv import ControlWorld, SetEntityPose
+        from ros_gz_interfaces.srv import ControlWorld, DeleteEntity, SetEntityPose, SpawnEntity
         from std_srvs.srv import Trigger
         from mecanum_nav_rl.runtime_safety.safety_lifecycle_node import SafetyLifecycleNode
         from mecanum_nav_rl.runtime_safety.safety_supervisor_node import (
@@ -2517,7 +2517,11 @@ class TrainingWorkerIO:
             self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
             self.control_world_type, self.pose_type, self.trigger_type = ControlWorld, SetEntityPose, Trigger
             self.world_client = self.node.create_client(ControlWorld, '/world/b2_training_arena/control')
+            self.probe_spawn_client = self.node.create_client(
+                SpawnEntity, '/world/b2_training_arena/create')
             self.pose_client = self.node.create_client(SetEntityPose, '/world/b2_training_arena/set_pose')
+            self.probe_remove_client = self.node.create_client(
+                DeleteEntity, '/world/b2_training_arena/remove')
             self.reset_client = self.node.create_client(Trigger, '/mecanum/safety/request_reset')
             self.rearm_client = self.node.create_client(Trigger, '/mecanum/safety/rearm')
             for node in self.nodes:
@@ -3083,6 +3087,29 @@ class TrainingWorkerIO:
         deadline = min(self.deadline_ns, self.now() + timeout_ns)
         await self.until(ready, deadline_ns=deadline, phase=phase)
         self.emit('BACKEND_CONTROL_SERVICE_READY', {'phase':phase,'steady_ns':self.now()})
+        return self.now()
+
+    async def wait_contact_probe_services_ready(self, *, deadline_ns):
+        """Wait for every Gazebo service the native contact probe will call."""
+        clients = {
+            'create': self.probe_spawn_client,
+            'set_pose': self.pose_client,
+            'remove': self.probe_remove_client,
+        }
+        readiness = {}
+        for name, client in clients.items():
+            ready = getattr(client, 'service_is_ready', None)
+            if not callable(ready):
+                raise RuntimeError('contact probe service readiness API unavailable: ' + name)
+            readiness[name] = ready
+
+        self.emit('CONTACT_PROBE_SERVICE_READINESS_WAIT', {
+            'services': sorted(clients), 'deadline_ns': deadline_ns,
+            'steady_ns': self.now()})
+        await self.until(lambda: all(is_ready() for is_ready in readiness.values()),
+            deadline_ns=deadline_ns, phase='contact probe Gazebo services readiness')
+        self.emit('CONTACT_PROBE_SERVICES_READY', {
+            'services': sorted(clients), 'steady_ns': self.now()})
         return self.now()
 
     async def wait_r02e_native_admission(self, *, held_sample_sequence,
@@ -4015,6 +4042,7 @@ class TrainingWorkerIO:
         started, last = self.now(), None
         deadline = min(self.deadline_ns, started + 5_000_000_000)
         work_deadline = deadline - 1_000_000_000
+        await self.wait_contact_probe_services_ready(deadline_ns=work_deadline)
         start_ack = await self.control.transact(Control.Request.OP_VERIFY_CONTACT_CAPABILITY,
             deadline_ns=min(work_deadline, self.now() + 1_000_000_000),
             probe_action=Control.Request.PROBE_ACTION_START,

@@ -2477,6 +2477,58 @@ def test_worker_waits_for_backend_service_before_control_rpc():
             NS(_port=object()), timeout_ns=5_000_000, phase='missing API'))
 
 
+def test_contact_start_waits_for_all_native_probe_services_within_contact_budget():
+    import asyncio
+    import inspect
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    clock = {'ns':100}
+    events = []
+    class Client:
+        def __init__(self, ready_after): self.calls, self.ready_after = 0, ready_after
+        def service_is_ready(self):
+            self.calls += 1
+            return self.ready_after is not None and self.calls >= self.ready_after
+    class PauseControl:
+        async def __call__(self, seconds): clock['ns'] += int(seconds * 1e9)
+
+    io = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    io.deadline_ns = 100_000_000
+    io.now = lambda: clock['ns']
+    io.pause = PauseControl()
+    io.check = lambda **_kwargs: None
+    io.emit = lambda name, facts: events.append((name, facts))
+    io.probe_spawn_client = Client(1)
+    io.pose_client = Client(2)
+    io.probe_remove_client = Client(3)
+
+    reached = asyncio.run(io.wait_contact_probe_services_ready(deadline_ns=20_000_000))
+    assert reached == clock['ns']
+    assert [io.probe_spawn_client.calls, io.pose_client.calls,
+        io.probe_remove_client.calls] == [4, 4, 3]
+    assert events[0][0] == 'CONTACT_PROBE_SERVICE_READINESS_WAIT'
+    assert events[-1] == ('CONTACT_PROBE_SERVICES_READY', {'services':[
+        'create','remove','set_pose'], 'steady_ns':clock['ns']})
+
+    clock['ns'] = 100
+    io.probe_remove_client = Client(None)
+    with pytest.raises(TimeoutError, match='contact probe Gazebo services readiness: deadline expired'):
+        asyncio.run(io.wait_contact_probe_services_ready(deadline_ns=5_000_000))
+
+    method = ast.parse(textwrap.dedent(inspect.getsource(TrainingWorkerIO.contact_capability)))
+    calls = sorted((node for node in ast.walk(method) if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)), key=lambda node: node.lineno)
+    wait_index = next(i for i, node in enumerate(calls)
+        if isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == 'wait_contact_probe_services_ready')
+    start_index = next(i for i, node in enumerate(calls)
+        if isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == 'transact'
+        and any(isinstance(arg, ast.Attribute) and arg.attr == 'OP_VERIFY_CONTACT_CAPABILITY'
+            for arg in node.value.args))
+    assert wait_index < start_index
+
+
 def test_r07d_final_restart_requires_reaped_old_and_unbound_zero_replacement():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
