@@ -4417,10 +4417,16 @@ def test_ready_callback_batch_drains_until_empty_or_monotonic_budget():
         if ready: return ready.pop(0), None, None
         raise TimeoutException()
     executor = NS(wait_for_ready_callbacks=wait_for_ready_callbacks)
+    diagnostics = {'wait_calls':0, 'wait_wall_ns':0, 'wait_max_wall_ns':0,
+        'callback_wall_ns':0, 'callback_max_wall_ns':0,
+        'last_entity_type':None, 'last_entity_topic':None, 'last_node_name':None}
     assert spin_ready_callback_batch(executor, now_ns=lambda:now['ns'],
-        budget_ns=2_000_000, max_callbacks=64) == 3
+        budget_ns=2_000_000, max_callbacks=64, diagnostics=diagnostics) == 3
     assert calls == [1, 2, 3]
     assert len(ready) == 7
+    assert diagnostics['wait_calls'] == 3
+    assert diagnostics['callback_wall_ns'] == 2_100_000
+    assert diagnostics['callback_max_wall_ns'] == 700_000
 
 
 def test_ready_callback_batch_returns_when_no_callback_is_ready():

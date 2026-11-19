@@ -2521,7 +2521,8 @@ WORKER_CALLBACK_BATCH_MAX = 64
 
 def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
                               budget_ns=WORKER_CALLBACK_BATCH_BUDGET_NS,
-                              max_callbacks=WORKER_CALLBACK_BATCH_MAX):
+                              max_callbacks=WORKER_CALLBACK_BATCH_MAX,
+                              diagnostics=None):
     """Run ready callbacks through rclpy's public custom-executor seam.
 
     The one-callback pump could not keep up with the concurrent 100 Hz backend
@@ -2538,14 +2539,36 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
     while count < max_callbacks:
         if count and now_ns() - started_ns >= budget_ns:
             break
+        wait_started_ns = now_ns()
         try:
-            handler, _entity, _node = executor.wait_for_ready_callbacks(timeout_sec=0.)
+            handler, entity, node = executor.wait_for_ready_callbacks(timeout_sec=0.)
         except TimeoutException:
+            if diagnostics is not None:
+                elapsed = now_ns() - wait_started_ns
+                diagnostics['wait_calls'] += 1
+                diagnostics['wait_wall_ns'] += elapsed
+                diagnostics['wait_max_wall_ns'] = max(diagnostics['wait_max_wall_ns'], elapsed)
             break
-        handler()
-        if handler.exception() is not None:
-            raise handler.exception()
-        handler.result()
+        if diagnostics is not None:
+            elapsed = now_ns() - wait_started_ns
+            diagnostics['wait_calls'] += 1
+            diagnostics['wait_wall_ns'] += elapsed
+            diagnostics['wait_max_wall_ns'] = max(diagnostics['wait_max_wall_ns'], elapsed)
+        callback_started_ns = now_ns()
+        try:
+            handler()
+            if handler.exception() is not None:
+                raise handler.exception()
+            handler.result()
+        finally:
+            if diagnostics is not None:
+                elapsed = now_ns() - callback_started_ns
+                diagnostics['callback_wall_ns'] += elapsed
+                diagnostics['callback_max_wall_ns'] = max(
+                    diagnostics['callback_max_wall_ns'], elapsed)
+                diagnostics['last_entity_type'] = type(entity).__name__
+                diagnostics['last_entity_topic'] = getattr(entity, 'topic_name', None)
+                diagnostics['last_node_name'] = getattr(node, 'get_name', lambda: None)()
         count += 1
     return count
 
@@ -3161,7 +3184,10 @@ class TrainingWorkerIO:
                 spin_thread_started_ns, spin_process_started_ns = time.thread_time_ns(), time.process_time_ns()
                 # Drain only a short, bounded batch. The old one-callback plus
                 # fixed sleep cadence fell behind the reliable backend stream.
-                spin_once_count = spin_ready_callback_batch(self.executor)
+                spin_details = {'wait_calls':0, 'wait_wall_ns':0, 'wait_max_wall_ns':0,
+                    'callback_wall_ns':0, 'callback_max_wall_ns':0,
+                    'last_entity_type':None, 'last_entity_topic':None, 'last_node_name':None}
+                spin_once_count = spin_ready_callback_batch(self.executor, diagnostics=spin_details)
                 spin_ended_ns = time.monotonic_ns()
                 spin_diagnostic = worker_latency_diagnostic(
                     started_ns=spin_started_ns, completed_ns=spin_ended_ns,
@@ -3171,7 +3197,8 @@ class TrainingWorkerIO:
                     process_cpu_completed_ns=time.process_time_ns())
                 if spin_diagnostic is not None:
                     self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
-                        **spin_diagnostic, 'spin_once_count':spin_once_count, 'observed_ns':self.now(),
+                        **spin_diagnostic, **spin_details, 'spin_once_count':spin_once_count,
+                        'observed_ns':self.now(),
                         'scheduler':worker_scheduler_snapshot()})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
