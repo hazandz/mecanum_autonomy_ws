@@ -732,6 +732,39 @@ def test_async_reset_runs_same_d03_validators_and_only_native_pauses():
     assert services.calls[-1][1]['pause'] is False
 
 
+def test_async_reset_keeps_standstill_tail_fresh_during_delayed_w1():
+    import asyncio
+    clock, services, pauses = ResetStreamClock(), Services(), []
+    adapter, _ = async_reset_fixture(clock, services, pauses)
+    tail_ready = asyncio.Event()
+
+    async def measured_samples():
+        for sample in clock.stream(1, 300_000_000):
+            await asyncio.sleep(0)
+            yield sample
+        for sample in clock.stream(22, 510_000_000):
+            await asyncio.sleep(0)
+            yield sample
+            if sample.iteration == 42:
+                tail_ready.set()
+
+    async def delayed_zero():
+        await tail_ready.wait()
+        await asyncio.sleep(0)
+        return _applied_zero_fact(receive_steady_ns=clock.ns,
+            receipt_stamp_ns=clock.ros_ns, applied_sim_stamp_ns=clock.ros_ns,
+            applied_physics_iteration=42)
+
+    result = asyncio.run(adapter.execute_async(target=ResetTarget(0, 0, 0.1, 0),
+        measured_standstill=measured_samples(), applied_zero_receipt=delayed_zero,
+        reset_emulator_and_buffers=lambda: None, reset_deadline=clock.now() + 15))
+
+    assert len(pauses) == 1
+    assert pauses[0][0].applied_physics_iteration == 42
+    assert result.applied_zero_receipt.applied_sim_stamp_ns == 710_000_000
+    assert result.measurement.iteration == 70
+
+
 def test_async_reset_late_true_ack_does_not_reopen_expired_phase():
     import asyncio
     clock, services, pauses = ResetStreamClock(), Services(), []

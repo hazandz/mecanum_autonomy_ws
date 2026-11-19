@@ -773,14 +773,103 @@ class LocalTrainingResetAdapter:
                 or braking_start_stamp_ns is not None and (type(braking_start_stamp_ns) is not int or braking_start_stamp_ns < 0)):
             raise ValueError('stop deadline/braking source stamp invalid')
         stop_end = min(deadline, start+5., stop_deadline if stop_deadline is not None else start+5.)
-        measured = await self._collect_window_async(measured_standstill,
+        import asyncio
+        measurement_iterator = measured_standstill.__aiter__()
+        measured = await self._collect_window_async(measurement_iterator,
             deadline=stop_end, after_steady_s=start - 5.,
             braking_start_stamp_ns=braking_start_stamp_ns, enforce_braking=True)
-        if callable(applied_zero_receipt):
-            applied_zero_receipt = await self._await_bounded(applied_zero_receipt,
-                deadline=stop_end, cap_s=5., phase='W1 acquisition')
-        self._validate_applied_zero_receipt(applied_zero_receipt)
-        self._validate_identity_and_freshness((measured[-1],), after_steady_s=start - 5.)
+        # W1 may take longer than the receive-age budget while Gazebo catches
+        # up. Continue joining the same real measurement stream during that
+        # wait; the decision still requires a fresh tail and the original
+        # zero-proof age, with no renewed deadline or relaxed threshold.
+        window = list(measured)
+        changed = asyncio.Event()
+        monitor_error = []
+        braking_origin = (braking_start_stamp_ns if braking_start_stamp_ns is not None
+                          else measured[0].stamp_ns)
+
+        async def monitor_standstill_tail():
+            previous = window[-1]
+            try:
+                while self._monotonic() < stop_end:
+                    sample = await self._await_bounded(
+                        lambda: anext(measurement_iterator), deadline=stop_end,
+                        cap_s=self.TOTAL_DEADLINE_S, phase='standstill freshness monitor')
+                    self._validate_async_measurement_fields(sample)
+                    self._validate_identity_and_freshness(
+                        (sample,), after_steady_s=start - 5.)
+                    if sample.iteration != previous.iteration + 1:
+                        raise ValueError('standstill measurement has a missing physics iteration')
+                    if sample.stamp_ns - previous.stamp_ns != 10_000_000:
+                        raise ValueError('standstill samples must be consecutive 100 Hz ROS measurements')
+                    previous = sample
+                    moving = (math.sqrt(sum(v * v for v in sample.linear_xyz_mps)) > 0.01
+                        or math.sqrt(sum(v * v for v in sample.angular_xyz_radps)) > 0.02)
+                    if moving:
+                        window.clear()
+                        if sample.stamp_ns - braking_origin > 2_000_000_000:
+                            raise TimeoutError('braking exceeded 2 s ROS before continuous standstill')
+                    else:
+                        window.append(sample)
+                        if len(window) > 21:
+                            del window[0]
+                        if len(window) == 21:
+                            self.validate_standstill_window(window)
+                    changed.set()
+            except StopAsyncIteration:
+                return
+            except BaseException as error:
+                monitor_error.append(error)
+                changed.set()
+
+        monitor_task = asyncio.create_task(monitor_standstill_tail(),
+            name='b23-reset-standstill-freshness-monitor')
+        try:
+            if callable(applied_zero_receipt):
+                applied_zero_receipt = await self._await_bounded(applied_zero_receipt,
+                    deadline=stop_end, cap_s=5., phase='W1 acquisition')
+            self._validate_applied_zero_receipt(applied_zero_receipt)
+            while True:
+                if monitor_error:
+                    raise monitor_error[0]
+                if (len(window) == 21
+                        and window[-1].stamp_ns >= applied_zero_receipt.applied_sim_stamp_ns
+                        and window[-1].iteration >= applied_zero_receipt.applied_physics_iteration):
+                    break
+                if monitor_task.done():
+                    if len(window) < 21:
+                        raise ValueError('standstill window was lost before W1 decision')
+                    if (window[-1].stamp_ns < applied_zero_receipt.applied_sim_stamp_ns
+                            or window[-1].iteration < applied_zero_receipt.applied_physics_iteration):
+                        raise ValueError('fresh standstill sample does not reach W1 application')
+                    break
+                self._validate_applied_zero_receipt(applied_zero_receipt)
+                if len(window) == 21:
+                    self._validate_identity_and_freshness(
+                        (window[-1],), after_steady_s=start - 5.)
+                remaining = min(stop_end - self._monotonic(),
+                    0.1 - max(0., self._monotonic()
+                        - applied_zero_receipt.receive_steady_ns / 1_000_000_000))
+                if remaining <= 0:
+                    raise TimeoutError('fresh standstill window did not reach W1 within zero-proof freshness')
+                changed.clear()
+                if monitor_error or (len(window) == 21
+                        and window[-1].stamp_ns >= applied_zero_receipt.applied_sim_stamp_ns
+                        and window[-1].iteration >= applied_zero_receipt.applied_physics_iteration):
+                    continue
+                try:
+                    await asyncio.wait_for(changed.wait(), timeout=remaining)
+                except asyncio.TimeoutError as error:
+                    raise TimeoutError('fresh standstill window did not reach W1 within zero-proof freshness') from error
+            measured = tuple(window)
+            self.validate_standstill_window(measured)
+            self._validate_identity_and_freshness(
+                (measured[-1],), after_steady_s=start - 5.)
+            self._validate_applied_zero_receipt(applied_zero_receipt)
+        finally:
+            if not monitor_task.done():
+                monitor_task.cancel()
+            await asyncio.gather(monitor_task, return_exceptions=True)
         self._remaining(stop_end, 5., 'standstill/W1 proof')
         pre_reset_stamp = max(measured[-1].stamp_ns, applied_zero_receipt.applied_sim_stamp_ns)
         pause_budget = self._remaining(deadline, self.SERVICE_TIMEOUT_S, 'pause service')
