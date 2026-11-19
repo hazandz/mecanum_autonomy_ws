@@ -168,6 +168,105 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     return result
 
 
+def parse_worker_scheduler_snapshot(*, cgroup_text, schedstat_text,
+        cpu_stat_text, cpu_max_text, cpu_pressure_text):
+    """Normalize read-only scheduler counters for a worker latency finding."""
+    result = {'errors':{}}
+    cgroup_path = None
+    try:
+        entries = [line.split(':', 2) for line in cgroup_text.splitlines()]
+        matches = [parts[2] for parts in entries
+            if len(parts) == 3 and parts[0] == '0' and parts[1] == '']
+        if len(matches) != 1 or not matches[0].startswith('/') or '..' in Path(matches[0]).parts:
+            raise ValueError('unambiguous cgroup-v2 membership unavailable')
+        cgroup_path = matches[0]
+    except (AttributeError, ValueError) as error:
+        result['errors']['cgroup'] = repr(error)
+    result['cgroup_path'] = cgroup_path
+    try:
+        values = [int(value) for value in schedstat_text.split()]
+        if len(values) < 3 or any(value < 0 for value in values[:3]):
+            raise ValueError('schedstat requires three nonnegative counters')
+        result['schedstat'] = {'runtime_ns':values[0], 'runqueue_wait_ns':values[1],
+            'timeslices':values[2]}
+    except (AttributeError, TypeError, ValueError) as error:
+        result['errors']['schedstat'] = repr(error)
+    try:
+        counters = {}
+        for line in cpu_stat_text.splitlines():
+            name, separator, value = line.partition(' ')
+            if not separator or not name or name in counters:
+                raise ValueError('malformed or duplicate cpu.stat field')
+            parsed = int(value.strip())
+            if parsed < 0:
+                raise ValueError('negative cpu.stat counter')
+            counters[name] = parsed
+        if not counters:
+            raise ValueError('empty cpu.stat')
+        result['cpu_stat'] = counters
+    except (AttributeError, TypeError, ValueError) as error:
+        result['errors']['cpu_stat'] = repr(error)
+    try:
+        fields = cpu_max_text.split()
+        if len(fields) != 2 or int(fields[1]) <= 0:
+            raise ValueError('cpu.max must contain quota and positive period')
+        result['cpu_max'] = {'quota_us':None if fields[0] == 'max' else int(fields[0]),
+            'period_us':int(fields[1])}
+        if result['cpu_max']['quota_us'] is not None and result['cpu_max']['quota_us'] <= 0:
+            raise ValueError('cpu.max quota must be positive or max')
+    except (AttributeError, TypeError, ValueError) as error:
+        result['errors']['cpu_max'] = repr(error)
+    try:
+        pressure = next(line for line in cpu_pressure_text.splitlines()
+            if line.startswith('some '))
+        fields = dict(item.split('=', 1) for item in pressure.split()[1:])
+        if set(fields) != {'avg10','avg60','avg300','total'}:
+            raise ValueError('cpu.pressure some fields incomplete')
+        result['cpu_pressure_some'] = {'avg10':float(fields['avg10']),
+            'avg60':float(fields['avg60']), 'avg300':float(fields['avg300']),
+            'total_us':int(fields['total'])}
+        if any(not math.isfinite(value) or value < 0 for key,value in result['cpu_pressure_some'].items()
+                if key != 'total_us') or result['cpu_pressure_some']['total_us'] < 0:
+            raise ValueError('cpu.pressure contains invalid counters')
+    except (AttributeError, StopIteration, TypeError, ValueError) as error:
+        result['errors']['cpu_pressure'] = repr(error)
+    return result
+
+
+def worker_scheduler_snapshot():
+    """Read scheduler/cgroup counters only when a measured worker delay occurs."""
+    import os
+    def read(path, key):
+        try:
+            return Path(path).read_text(), None
+        except OSError as error:
+            return '', repr(error)
+    cgroup_text, cgroup_read_error = read('/proc/self/cgroup', 'cgroup')
+    cgroup_path = None
+    try:
+        matches = [parts[2] for parts in (line.split(':', 2) for line in cgroup_text.splitlines())
+            if len(parts) == 3 and parts[0] == '0' and parts[1] == '']
+        if len(matches) == 1 and matches[0].startswith('/') and '..' not in Path(matches[0]).parts:
+            cgroup_path = matches[0]
+    except (IndexError, ValueError):
+        pass
+    base = Path('/sys/fs/cgroup')/cgroup_path.lstrip('/') if cgroup_path else Path('/__unbound_cgroup__')
+    schedstat, schedstat_error = read('/proc/self/schedstat', 'schedstat')
+    cpu_stat, cpu_stat_error = read(base/'cpu.stat', 'cpu_stat')
+    cpu_max, cpu_max_error = read(base/'cpu.max', 'cpu_max')
+    cpu_pressure, cpu_pressure_error = read('/proc/pressure/cpu', 'cpu_pressure')
+    normalized = parse_worker_scheduler_snapshot(cgroup_text=cgroup_text,
+        schedstat_text=schedstat, cpu_stat_text=cpu_stat, cpu_max_text=cpu_max,
+        cpu_pressure_text=cpu_pressure)
+    read_errors = {key:value for key,value in (('cgroup',cgroup_read_error),
+        ('schedstat',schedstat_error),('cpu_stat',cpu_stat_error),
+        ('cpu_max',cpu_max_error),('cpu_pressure',cpu_pressure_error)) if value is not None}
+    if read_errors:
+        normalized['read_errors'] = read_errors
+    normalized['pid'] = os.getpid()
+    return normalized
+
+
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -3009,7 +3108,8 @@ class TrainingWorkerIO:
                 if diagnostic is not None:
                     self.emit('B23_WORKER_PUMP_GAP', {
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
-                        'turn_started_ns':started_wall_ns, 'observed_ns':self.now()})
+                        'turn_started_ns':started_wall_ns, 'observed_ns':self.now(),
+                        'scheduler':worker_scheduler_snapshot()})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 previous_process_cpu_ns = started_process_cpu_ns
                 sink_owner = getattr(self, '_event_sink_owner', None)
@@ -3034,7 +3134,8 @@ class TrainingWorkerIO:
                     process_cpu_completed_ns=time.process_time_ns())
                 if spin_diagnostic is not None:
                     self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
-                        **spin_diagnostic, 'spin_once_count':1, 'observed_ns':self.now()})
+                        **spin_diagnostic, 'spin_once_count':1, 'observed_ns':self.now(),
+                        'scheduler':worker_scheduler_snapshot()})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 pause_started_ns = time.monotonic_ns()

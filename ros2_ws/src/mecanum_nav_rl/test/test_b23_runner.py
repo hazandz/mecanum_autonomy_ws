@@ -37,6 +37,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
+    parse_worker_scheduler_snapshot,
 )
 
 
@@ -67,6 +68,27 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
             process_cpu_started_ns=1)
+
+
+def test_worker_scheduler_snapshot_binds_cgroup_and_normalizes_cpu_pressure():
+    snapshot = parse_worker_scheduler_snapshot(
+        cgroup_text='0::/user.slice/user-1000.slice/user@1000.service/test.service\n',
+        schedstat_text='1234 5678 9\n',
+        cpu_stat_text='usage_usec 500\nnr_periods 10\nnr_throttled 2\nthrottled_usec 700\n',
+        cpu_max_text='200000 100000\n',
+        cpu_pressure_text='some avg10=1.25 avg60=0.50 avg300=0.25 total=900\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n')
+    assert snapshot == {
+        'cgroup_path':'/user.slice/user-1000.slice/user@1000.service/test.service',
+        'schedstat':{'runtime_ns':1234,'runqueue_wait_ns':5678,'timeslices':9},
+        'cpu_stat':{'usage_usec':500,'nr_periods':10,'nr_throttled':2,'throttled_usec':700},
+        'cpu_max':{'quota_us':200000,'period_us':100000},
+        'cpu_pressure_some':{'avg10':1.25,'avg60':0.5,'avg300':0.25,'total_us':900},
+        'errors':{},
+    }
+    incomplete = parse_worker_scheduler_snapshot(cgroup_text='0::/../../other\n',
+        schedstat_text='',cpu_stat_text='',cpu_max_text='bad',cpu_pressure_text='')
+    assert incomplete['cgroup_path'] is None
+    assert set(incomplete['errors']) == {'cgroup','schedstat','cpu_stat','cpu_max','cpu_pressure'}
 
 
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():
