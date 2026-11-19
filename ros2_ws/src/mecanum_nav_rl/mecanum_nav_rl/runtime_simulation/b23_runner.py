@@ -2559,6 +2559,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
         'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
         'wait_set_returns_under_1ms': 0,
+        'wait_timeout_values': {}, 'event_ready_errors': 0,
         'no_yield_cycles': 0, 'ready_set_totals': {},
         'ready_guard_kinds': {},
         'dispatch_candidates': {}, 'dispatchable': {},
@@ -2576,6 +2577,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             'ready_guard_kinds': {},
             'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
             'wait_set_returns_under_1ms': 0, 'wait_started_ns': None,
+            'wait_timeout_values': {}, 'event_ready_errors': 0,
             'dispatch_candidates': {}, 'dispatchable': {},
         }
         # A generator frame may keep its local trace function after it yields.
@@ -2598,6 +2600,12 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 if active is not None:
                     active['wait_set_wait_calls'] += 1
                     active['wait_started_ns'] = now_ns()
+                    timeout_nsec = frame.f_locals.get('timeout_nsec')
+                    label = ('none' if timeout_nsec is None else
+                        'zero' if timeout_nsec == 0 else
+                        'negative' if timeout_nsec < 0 else 'positive')
+                    values = active['wait_timeout_values']
+                    values[label] = values.get(label, 0) + 1
             elif frame.f_lineno == 782:
                 active = state.get('active_wait_trace')
                 if active is not None and active['wait_started_ns'] is not None:
@@ -2620,6 +2628,11 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                     'clients': len(local.get('clients_ready', ())),
                     'services': len(local.get('services_ready', ())),
                 }
+                try:
+                    ready['events'] = len(local['wait_set'].get_ready_entities('event'))
+                except BaseException:
+                    active['event_ready_errors'] += 1
+                    ready['events'] = -1
                 active['ready_set_cycles'] += 1
                 for name, count in ready.items():
                     active['ready_set_totals'][name] = (
@@ -2709,6 +2722,10 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['max_wait_set_elapsed_ns'] = max(
                     state['max_wait_set_elapsed_ns'], wait_trace['max_wait_set_elapsed_ns'])
                 state['wait_set_returns_under_1ms'] += wait_trace['wait_set_returns_under_1ms']
+                state['event_ready_errors'] += wait_trace['event_ready_errors']
+                for name, count in wait_trace['wait_timeout_values'].items():
+                    state['wait_timeout_values'][name] = (
+                        state['wait_timeout_values'].get(name, 0) + count)
                 for name, count in wait_trace['ready_set_totals'].items():
                     state['ready_set_totals'][name] = (
                         state['ready_set_totals'].get(name, 0) + count)
@@ -2742,11 +2759,13 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             snapshot['ready_guard_kinds'] = dict(state['ready_guard_kinds'])
             snapshot['dispatch_candidates'] = dict(state['dispatch_candidates'])
             snapshot['dispatchable'] = dict(state['dispatchable'])
+            snapshot['wait_timeout_values'] = dict(state['wait_timeout_values'])
             state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
                 max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
                 wait_set_wait_calls=0, ready_set_cycles=0,
                 wait_set_elapsed_ns=0, max_wait_set_elapsed_ns=0,
                 wait_set_returns_under_1ms=0, no_yield_cycles=0,
+                wait_timeout_values={}, event_ready_errors=0,
                 ready_set_totals={}, ready_guard_kinds={},
                 dispatch_candidates={}, dispatchable={}, max_no_yield_cycles_per_wait=0,
                 last_error=None)

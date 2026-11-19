@@ -152,6 +152,7 @@ def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
         'wait_set_wait_calls':0, 'ready_set_cycles':0, 'no_yield_cycles':0,
         'wait_set_elapsed_ns':0, 'max_wait_set_elapsed_ns':0,
         'wait_set_returns_under_1ms':0,
+        'wait_timeout_values':{}, 'event_ready_errors':0,
         'ready_set_totals':{}, 'ready_guard_kinds':{},
         'dispatch_candidates':{}, 'dispatchable':{},
         'max_no_yield_cycles_per_wait':0,
@@ -167,6 +168,8 @@ def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
             self.calls = 0
         def wait(self):
             self.calls += 1
+        def get_ready_entities(self, _kind):
+            return ()
 
     class FakeGuard:
         def __init__(self, pointer):
@@ -185,6 +188,8 @@ def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
     source_lines = [
         'def _wait_for_ready_callbacks(self):',
         '    guards = [self.node_guard]',
+        '    wait_set = self.wait_set',
+        '    timeout_nsec = None',
         '    waitables = self.waitables',
         '    nodes_to_use = self.nodes_to_use',
         '    while True:',
@@ -232,6 +237,9 @@ def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
     assert snapshot['ready_set_cycles'] == 2
     assert snapshot['wait_set_elapsed_ns'] == 20
     assert snapshot['wait_set_returns_under_1ms'] == 2
+    assert snapshot['wait_timeout_values'] == {'none':2}
+    assert snapshot['event_ready_errors'] == 0
+    assert snapshot['ready_set_totals']['events'] == 0
     assert snapshot['no_yield_cycles'] == 1
     assert snapshot['ready_guard_kinds'] == {'executor_wake':1}
     assert snapshot['dispatch_candidates'] == {'waitable':2}
