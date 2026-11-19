@@ -4341,6 +4341,27 @@ def worker():
     return value, clock
 
 
+def test_worker_pump_dispatches_one_ros_callback_before_yielding():
+    value, _clock = worker()
+    calls = []
+    value.executor = NS(spin_once=lambda *, timeout_sec: calls.append(timeout_sec))
+    value.safety_executor_error = None
+    value._event_sink_owner = None
+    value._pending_future_receipts = []
+    value._deliver_future_receipts_after_clock = lambda: None
+    value._deliver_r04d_ingress_lifecycle_if_due = lambda: None
+    value.pause = lambda _seconds: stop_after_one_turn(value)
+    asyncio.run(value._pump())
+    assert calls == [0.]
+    assert value.stop_requested is True
+    assert value.pump_error is None
+
+
+async def stop_after_one_turn(value):
+    value.stop_requested = True
+    await asyncio.sleep(0)
+
+
 def test_freeze_zero_closes_safe_stop_stream_before_waiting_for_pinned_receipt(monkeypatch):
     """No later SAFE_STOP may move native application beyond the reset fence."""
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope

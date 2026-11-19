@@ -3020,8 +3020,11 @@ class TrainingWorkerIO:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
                 spin_started_ns = time.monotonic_ns()
                 spin_thread_started_ns, spin_process_started_ns = time.thread_time_ns(), time.process_time_ns()
-                for _ in range(16):
-                    self.executor.spin_once(timeout_sec=0.)
+                # Chỉ dispatch một callback mỗi lượt pump. Các subscription
+                # có thể nối tiếp hàng đợi lớn; drain nhiều callback liên tục
+                # đã làm chậm steady Safety executor cùng process. Vòng pump
+                # nhường lại sau callback này rồi tiếp tục ở lượt kế tiếp.
+                self.executor.spin_once(timeout_sec=0.)
                 spin_ended_ns = time.monotonic_ns()
                 spin_diagnostic = worker_latency_diagnostic(
                     started_ns=spin_started_ns, completed_ns=spin_ended_ns,
@@ -3031,7 +3034,7 @@ class TrainingWorkerIO:
                     process_cpu_completed_ns=time.process_time_ns())
                 if spin_diagnostic is not None:
                     self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
-                        **spin_diagnostic, 'spin_once_count':16, 'observed_ns':self.now()})
+                        **spin_diagnostic, 'spin_once_count':1, 'observed_ns':self.now()})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 pause_started_ns = time.monotonic_ns()
