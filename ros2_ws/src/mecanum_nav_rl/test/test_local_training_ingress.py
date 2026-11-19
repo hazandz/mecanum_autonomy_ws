@@ -217,6 +217,50 @@ def test_closing_input_needs_no_admission_token_or_observation0(source, zero_onl
     assert value.header.stamp == stamp(f.clock.ros)
 
 
+def test_stale_sensor_admission_is_dropped_while_inhibited_then_fresh_sample_publishes(source):
+    f = source
+    stale = f.ingress.on_ground_truth(f.gt())
+    f.ingress.inhibit()
+    max_age_ns = f.ingress.profile['odometry_max_age_ms'] * 1_000_000
+    f.advance(max_age_ns + 1)
+
+    f.ingress._publish_safety(stale)
+
+    assert not f.sent
+    assert f.ingress.fault is None
+    rejected = [(name, facts) for name, facts in f.events
+                if name == 'ADMISSION_SAMPLE_REJECTED'
+                and facts.get('reason') == 'stale dual-clock freshness while admission is closed']
+    assert len(rejected) == 1, rejected
+    facts = rejected[0][1]
+    assert facts['ros_age_ns'] == max_age_ns + 1
+    assert facts['steady_age_ns'] == max_age_ns + 1
+    assert facts['max_age_ns'] == max_age_ns
+
+    fresh = f.ingress.on_ground_truth(f.gt())
+    assert fresh is not None
+    assert len(f.sent) == 1
+    assert f.sent[0].admission_state == f.sent[0].ADMISSION_INHIBITED
+
+
+def test_stale_sensor_still_fails_closed_while_policy_is_open(source):
+    f = source
+    f.ingress.on_ground_truth(f.gt())
+    f.ingress.confirm_observation0(f.ack(Control.Request.OP_CONFIRM_OBSERVATION0))
+    f.ingress.arm_pending(f.ack(Control.Request.OP_BIND_PENDING_STEP, 2), publish_admission=False)
+    f.advance()
+    stale = f.ingress.on_ground_truth(f.gt())
+    f.ingress.resume_admission_publication()
+    f.advance(f.ingress.profile['odometry_max_age_ms'] * 1_000_000 + 1)
+
+    with pytest.raises(ValueError, match='input exceeds ROS or local steady receive age'):
+        f.ingress._publish_safety(stale)
+
+    assert not f.sent
+    assert f.ingress.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    assert f.ingress.fault is None
+
+
 @pytest.mark.parametrize('order', ['oracle_first', 'status_first'])
 def test_physics_pair_uses_exact_source_stamp_and_real_status_iteration(source, order):
     f = source

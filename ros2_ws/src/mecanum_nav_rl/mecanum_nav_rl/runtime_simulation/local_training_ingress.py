@@ -382,9 +382,33 @@ class LocalTrainingIngress:
                 self.emit('ADMISSION_SAMPLE_REJECTED', {'reason': 'sample not received/generated after ACK',
                     'stamp_ns': source_ns, 'received_ns': sample.received_steady_ns})
                 return
-        validate_dual_clock_freshness(source_ros_ns=source_ns, now_ros_ns=self.ros_now(),
-            receive_steady_ns=sample.received_steady_ns, now_steady_ns=self.now(),
-            max_age_ns=self.profile['odometry_max_age_ms'] * 1_000_000)
+        now_ros_ns, now_steady_ns = self.ros_now(), self.now()
+        max_age_ns = self.profile['odometry_max_age_ms'] * 1_000_000
+        try:
+            validate_dual_clock_freshness(source_ros_ns=source_ns, now_ros_ns=now_ros_ns,
+                receive_steady_ns=sample.received_steady_ns, now_steady_ns=now_steady_ns,
+                max_age_ns=max_age_ns)
+        except ValueError as error:
+            closed_states = (LocalTrainingSafetyInput.ADMISSION_INHIBITED,
+                LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY)
+            if (str(error) == 'input exceeds ROS or local steady receive age'
+                    and self.admission_state in closed_states):
+                # Old sensor samples can arrive while reset is still inhibited.
+                # Drop them without publishing or tearing down the executor;
+                # the native admission remains closed and B1 independently
+                # applies its exact-cutoff freshness checks. POLICY_OPEN keeps
+                # the fail-closed exception path below.
+                self.emit('ADMISSION_SAMPLE_REJECTED', {
+                    'reason':'stale dual-clock freshness while admission is closed',
+                    'admission_state':self.admission_state,
+                    'source_ros_ns':source_ns, 'now_ros_ns':now_ros_ns,
+                    'ros_age_ns':now_ros_ns-source_ns,
+                    'received_steady_ns':sample.received_steady_ns,
+                    'now_steady_ns':now_steady_ns,
+                    'steady_age_ns':now_steady_ns-sample.received_steady_ns,
+                    'max_age_ns':max_age_ns})
+                return
+            raise
         msg = LocalTrainingSafetyInput()
         msg.schema_version = msg.SCHEMA_VERSION
         msg.header.frame_id = 'base_link'
