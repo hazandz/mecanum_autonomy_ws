@@ -3257,6 +3257,8 @@ private:
     {
       backend_state_sink_(msg);
       last_backend_state_ = msg;
+      last_backend_state_publish_steady_ns_ = steady_clock_now_();
+      last_backend_state_publish_paused_ = msg.paused;
       return;
     }
     if (!state_pub_) return;
@@ -3275,6 +3277,8 @@ private:
     if (heartbeat_trace_writer_)
       RecordHeartbeatTrace(2, msg.status_sequence);
     last_backend_state_ = msg;
+    last_backend_state_publish_steady_ns_ = steady_clock_now_();
+    last_backend_state_publish_paused_ = msg.paused;
   }
 
   bool ProcessPauseAcksLocked(std::int64_t now_ns)
@@ -3927,6 +3931,20 @@ private:
   void PublishBackendState(const gz::sim::UpdateInfo &info, std::int64_t stamp_ns)
   {
     std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
+    const auto publish_steady_ns = steady_clock_now_();
+    // Gazebo continues to call PostUpdate while paused. In that state sim
+    // time and physics iteration are unchanged, so publishing every callback
+    // only floods reliable readers with duplicate status. Keep the paused
+    // heartbeat bounded to the existing 10 ms physics-step cadence, while
+    // publishing the pause/resume edge immediately. This does not advance
+    // contact coverage or relax any consumer freshness limit.
+    constexpr std::int64_t kPausedStatusPeriodNs = 10'000'000;
+    if (info.paused && last_backend_state_publish_paused_ &&
+        publish_steady_ns - last_backend_state_publish_steady_ns_ <
+            kPausedStatusPeriodNs)
+    {
+      return;
+    }
     BackendState msg;
     msg.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     msg.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
@@ -3991,6 +4009,8 @@ private:
       last_accepted_key_ = pending_applied_receipt_->key;
     pending_applied_receipt_.reset();
     last_backend_state_ = msg;
+    last_backend_state_publish_steady_ns_ = publish_steady_ns;
+    last_backend_state_publish_paused_ = info.paused;
   }
 
   void RecordQueueFault(std::uint32_t cause_id, const char *cause,
@@ -4056,6 +4076,8 @@ private:
   std::function<void(const BackendState &)> backend_state_sink_;
   std::mutex status_publish_mutex_;
   std::optional<BackendState> last_backend_state_;
+  std::int64_t last_backend_state_publish_steady_ns_{};
+  bool last_backend_state_publish_paused_{};
   std::function<void(const gz::msgs::Odometry &)> ground_truth_sink_;
   std::function<void(gz::sim::EntityComponentManager &,
                      const BodyCommand3D &)> actuator_apply_;

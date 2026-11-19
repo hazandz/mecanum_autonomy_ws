@@ -5166,6 +5166,44 @@ TEST(BackendLifecycleFacts, StatusReportsAppliedBindingBeforeFirstSafetyInput)
   EXPECT_FALSE(io->statuses.back().applied_receipt_valid);
 }
 
+TEST(BackendLifecycleFacts, PausedStatusIsRateBoundedAndPauseResumeEdgesPublishImmediately)
+{
+  BackendSystem system;
+  gz::sim::EntityComponentManager ecm;
+  const auto io = std::make_shared<NativeResetChainIo>();
+  std::int64_t now_ns = 2'000'000'000;
+  BackendSystemTestPeer::SetSteadyClockNow(system, now_ns);
+  ASSERT_TRUE(BackendSystemTestPeer::ConfigureForNativeResetChain(system, ecm, io));
+
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 0, true);
+  ASSERT_EQ(io->statuses.size(), 1u);
+  EXPECT_TRUE(io->statuses.back().paused);
+
+  now_ns += 9'999'999;
+  BackendSystemTestPeer::SetSteadyClockNow(system, now_ns);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 0, true);
+  EXPECT_EQ(io->statuses.size(), 1u);
+
+  ++now_ns;
+  BackendSystemTestPeer::SetSteadyClockNow(system, now_ns);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 0, true);
+  ASSERT_EQ(io->statuses.size(), 2u);
+  EXPECT_TRUE(io->statuses.back().paused);
+
+  ++now_ns;
+  BackendSystemTestPeer::SetSteadyClockNow(system, now_ns);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 10'000'000, false);
+  ASSERT_EQ(io->statuses.size(), 3u);
+  EXPECT_FALSE(io->statuses.back().paused);
+  EXPECT_EQ(io->statuses.back().physics_iteration, 1u);
+
+  ++now_ns;
+  BackendSystemTestPeer::SetSteadyClockNow(system, now_ns);
+  BackendSystemTestPeer::RunProductionTick(system, ecm, 1, 10'000'000, true);
+  ASSERT_EQ(io->statuses.size(), 4u);
+  EXPECT_TRUE(io->statuses.back().paused);
+}
+
 TEST(BackendSystemControlReceiver, InhibitReplayPreservesAppliedAckAfterProofRevoked)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, false,
