@@ -299,6 +299,22 @@ def worker_thread_identity_snapshot(*, capture_python_stacks=False):
         key=lambda item: (-1 if item['native_id'] is None else item['native_id']))
 
 
+def worker_async_task_snapshot(loop=None):
+    """Capture bounded asyncio task stacks when a worker pump gap is detected."""
+    import asyncio
+    loop = asyncio.get_running_loop() if loop is None else loop
+    rows = []
+    for task in asyncio.all_tasks(loop):
+        coroutine = task.get_coro()
+        stack = []
+        for frame in task.get_stack(limit=12):
+            stack.append({'file':frame.f_code.co_filename,
+                'line':frame.f_lineno, 'function':frame.f_code.co_name})
+        rows.append({'name':task.get_name(), 'coroutine':getattr(coroutine, '__qualname__', type(coroutine).__name__),
+            'done':task.done(), 'cancelled':task.cancelled(), 'stack':stack})
+    return sorted(rows, key=lambda item:(item['name'], item['coroutine']))
+
+
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -3281,7 +3297,8 @@ class TrainingWorkerIO:
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now(),
                         'scheduler':worker_scheduler_snapshot(),
                         'safety_executor_waits':self.safety_executor_wait_snapshot(),
-                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
+                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True),
+                        'asyncio_tasks':worker_async_task_snapshot()})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 previous_process_cpu_ns = started_process_cpu_ns
                 sink_owner = getattr(self, '_event_sink_owner', None)

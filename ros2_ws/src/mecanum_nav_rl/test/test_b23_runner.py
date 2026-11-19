@@ -39,7 +39,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
-    spin_ready_callback_batch, instrument_executor_waits,
+    worker_async_task_snapshot, spin_ready_callback_batch, instrument_executor_waits,
 )
 
 
@@ -70,6 +70,28 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
             process_cpu_started_ns=1)
+
+
+def test_worker_async_task_snapshot_captures_suspended_production_task():
+    async def blocked_worker():
+        release = asyncio.Event()
+        await release.wait()
+
+    async def inspect():
+        task = asyncio.create_task(blocked_worker(), name='b23-test-worker')
+        await asyncio.sleep(0)
+        rows = worker_async_task_snapshot()
+        target = next(row for row in rows if row['name'] == 'b23-test-worker')
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return target
+
+    snapshot = asyncio.run(inspect())
+    assert snapshot['coroutine'] == 'test_worker_async_task_snapshot_captures_suspended_production_task.<locals>.blocked_worker'
+    assert snapshot['done'] is False
+    assert snapshot['cancelled'] is False
+    assert snapshot['stack']
+    assert snapshot['stack'][0]['function'] == 'blocked_worker'
 
 
 def test_worker_scheduler_snapshot_binds_cgroup_and_normalizes_cpu_pressure():
