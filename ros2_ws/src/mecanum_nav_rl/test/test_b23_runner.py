@@ -149,99 +149,38 @@ def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
     assert take_snapshot() == {
         'calls':2, 'returned':2, 'wall_ns':80, 'thread_cpu_ns':15,
         'max_wall_ns':50, 'max_thread_cpu_ns':10,
-        'wait_set_wait_calls':0, 'ready_set_cycles':0, 'no_yield_cycles':0,
-        'wait_set_elapsed_ns':0, 'max_wait_set_elapsed_ns':0,
-        'wait_set_returns_under_1ms':0,
-        'wait_timeout_values':{},
-        'ready_set_totals':{}, 'ready_guard_kinds':{},
-        'dispatch_candidates':{}, 'dispatchable':{},
-        'max_no_yield_cycles_per_wait':0,
         'entities':{'SimpleNamespace|/safety/input|safety_supervisor':2},
         'errors':0, 'last_error':None,
     }
     assert take_snapshot()['calls'] == 0
 
 
-def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
-    class FakeWaitSet:
-        def __init__(self):
-            self.calls = 0
-        def wait(self):
-            self.calls += 1
+def test_executor_wait_diagnostics_do_not_trace_rclpy_internals(monkeypatch):
+    import sys
+    result = ('handler', NS(topic_name='/clock'), NS(name='safety_supervisor'))
 
-    class FakeGuard:
-        def __init__(self, pointer):
-            self.handle = NS(pointer=pointer)
+    class FakeExecutor:
+        def wait_for_ready_callbacks(self, *args, **kwargs):
+            return result
 
-    wait_set = FakeWaitSet()
-    executor = NS(wait_set=wait_set, _guard=FakeGuard(17),
-        _sigint_gc=FakeGuard(23), node_guard=FakeGuard(31))
-    class FakeWaitable:
-        callback_group = NS(can_execute=lambda _entity: False)
-        def is_ready(self, _wait_set):
-            return True
-    waitable = FakeWaitable()
-    executor.waitables = [waitable]
-    executor.nodes_to_use = [NS(waitables=[waitable])]
-    source_lines = [
-        'def _wait_for_ready_callbacks(self):',
-        '    guards = [self.node_guard]',
-        '    wait_set = self.wait_set',
-        '    timeout_nsec = None',
-        '    waitables = self.waitables',
-        '    nodes_to_use = self.nodes_to_use',
-        '    while True:',
-    ]
-    source_lines.extend([''] * (780 - len(source_lines)))
-    source_lines.extend([
-        '        self.wait_set.wait()',  # line 781 in the installed Jazzy executor
-        '        subs_ready = ()',
-        '        guards_ready = self.ready_guards()',
-        '        timers_ready = ()',
-        '        clients_ready = ()',
-        '        services_ready = ()',
-    ])
-    source_lines.extend([''] * (791 - len(source_lines)))
-    source_lines.extend([
-        '        pass',  # line 792: after all ready sets are collected
-    ])
-    source_lines.extend([''] * (799 - len(source_lines)))
-    source_lines.extend([
-        '        for node in nodes_to_use:',  # line 800 in the installed Jazzy executor
-        '            for wt in node.waitables:',
-        '                # ready waitable condition',
-        '                if wt in waitables and wt.is_ready(self.wait_set):',
-        '                    if wt.callback_group.can_execute(wt):',
-        "                        return ('handler', wt, node)",
-        '',
-        '',
-        "        if self.wait_set.calls == 2: return ('handler', NS(name='observed'), None)",
-    ])
-    namespace = {'NS':NS}
-    exec(compile('\n'.join(source_lines),
-        '/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py', 'exec'),
-        namespace)
-    executor.ready_guards = lambda: (17,) if wait_set.calls == 2 else ()
-    executor.wait_for_ready_callbacks = lambda *args, **kwargs: (
-        namespace['_wait_for_ready_callbacks'](executor))
-    clock = iter(range(0, 100, 10)).__next__
-    take_snapshot = instrument_executor_waits(executor,
-        now_ns=clock, thread_time_ns=iter((3, 4)).__next__)
+    def reject_trace(*_args, **_kwargs):
+        raise AssertionError('executor diagnostic must not install a line trace')
 
-    result = executor.wait_for_ready_callbacks(timeout_sec=0.1)
-    assert result[1].name == 'observed'
+    monkeypatch.setattr(sys, 'settrace', reject_trace)
+    executor = FakeExecutor()
+    clock = iter((10, 20)).__next__
+    cpu = iter((2, 5)).__next__
+    take_snapshot = instrument_executor_waits(
+        executor, now_ns=clock, thread_time_ns=cpu)
+
+    assert executor.wait_for_ready_callbacks(timeout_sec=0.1) is result
     snapshot = take_snapshot()
-    assert snapshot['wait_set_wait_calls'] == 2
-    assert snapshot['ready_set_cycles'] == 2
-    assert snapshot['wait_set_elapsed_ns'] == 20
-    assert snapshot['wait_set_returns_under_1ms'] == 2
-    assert snapshot['wait_timeout_values'] == {'none':2}
-    assert 'event_ready_errors' not in snapshot
-    assert 'events' not in snapshot['ready_set_totals']
-    assert snapshot['no_yield_cycles'] == 1
-    assert snapshot['ready_guard_kinds'] == {'executor_wake':1}
-    assert snapshot['dispatch_candidates'] == {'waitable':2}
-    assert snapshot['dispatchable'] == {}
+    assert snapshot == {
+        'calls':1, 'returned':1, 'wall_ns':10, 'thread_cpu_ns':3,
+        'max_wall_ns':10, 'max_thread_cpu_ns':3,
+        'entities':{'SimpleNamespace|/clock|safety_supervisor':1},
+        'errors':0, 'last_error':None,
+    }
 
 
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():

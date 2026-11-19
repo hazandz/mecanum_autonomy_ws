@@ -2545,151 +2545,33 @@ def _new_local_training_safety_executor(context):
 
 def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                              thread_time_ns=time.thread_time_ns):
-    """Collect bounded per-wait CPU/wall and returned-entity counts.
+    """Collect low-overhead CPU/wall and returned-entity counts.
 
-    This wraps the executor's existing public wait method and returns its
-    original result/exception unchanged. The caller snapshots and resets the
-    counters only when an existing worker latency diagnostic is emitted.
+    This wraps the executor's public wait method and returns its original
+    result/exception unchanged. It deliberately does not trace rclpy internals:
+    line tracing the executor generator adds work to the Safety thread and
+    depends on source line numbers from a particular rclpy build.
     """
     original_wait = executor.wait_for_ready_callbacks
     state = {
         'lock': threading.Lock(), 'calls': 0, 'returned': 0,
         'wall_ns': 0, 'thread_cpu_ns': 0,
         'max_wall_ns': 0, 'max_thread_cpu_ns': 0,
-        'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
-        'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
-        'wait_set_returns_under_1ms': 0,
-        'wait_timeout_values': {},
-        'no_yield_cycles': 0, 'ready_set_totals': {},
-        'ready_guard_kinds': {},
-        'dispatch_candidates': {}, 'dispatchable': {},
-        'max_no_yield_cycles_per_wait': 0,
         'entities': {}, 'errors': 0, 'last_error': None,
     }
 
     def observed_wait(*args, **kwargs):
-        import sys
         wall_started = now_ns()
         cpu_started = thread_time_ns()
-        wait_trace = {
-            'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
-            'no_yield_cycles': 0, 'ready_set_totals': {},
-            'ready_guard_kinds': {},
-            'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
-            'wait_set_returns_under_1ms': 0, 'wait_started_ns': None,
-            'wait_timeout_values': {},
-            'dispatch_candidates': {}, 'dispatchable': {},
-        }
-        # A generator frame may keep its local trace function after it yields.
-        # Attribute its later line events to the currently wrapped public wait,
-        # rather than to the closure from the first time that generator ran.
-        state['active_wait_trace'] = wait_trace
-        previous_trace = sys.gettrace()
-
-        def executor_trace(frame, event, arg):
-            code = frame.f_code
-            if (code.co_name != '_wait_for_ready_callbacks'
-                    or not code.co_filename.endswith('/rclpy/executors.py')):
-                return None
-            if event == 'call':
-                return executor_trace
-            if event != 'line':
-                return executor_trace
-            if frame.f_lineno == 781:
-                active = state.get('active_wait_trace')
-                if active is not None:
-                    active['wait_set_wait_calls'] += 1
-                    active['wait_started_ns'] = now_ns()
-                    timeout_nsec = frame.f_locals.get('timeout_nsec')
-                    label = ('none' if timeout_nsec is None else
-                        'zero' if timeout_nsec == 0 else
-                        'negative' if timeout_nsec < 0 else 'positive')
-                    values = active['wait_timeout_values']
-                    values[label] = values.get(label, 0) + 1
-            elif frame.f_lineno == 782:
-                active = state.get('active_wait_trace')
-                if active is not None and active['wait_started_ns'] is not None:
-                    elapsed = max(0, now_ns() - active['wait_started_ns'])
-                    active['wait_set_elapsed_ns'] += elapsed
-                    active['max_wait_set_elapsed_ns'] = max(
-                        active['max_wait_set_elapsed_ns'], elapsed)
-                    if elapsed < 1_000_000:
-                        active['wait_set_returns_under_1ms'] += 1
-                    active['wait_started_ns'] = None
-            elif frame.f_lineno == 792:
-                active = state.get('active_wait_trace')
-                if active is None:
-                    return executor_trace
-                local = frame.f_locals
-                ready = {
-                    'subscriptions': len(local.get('subs_ready', ())),
-                    'guards': len(local.get('guards_ready', ())),
-                    'timers': len(local.get('timers_ready', ())),
-                    'clients': len(local.get('clients_ready', ())),
-                    'services': len(local.get('services_ready', ())),
-                }
-                active['ready_set_cycles'] += 1
-                for name, count in ready.items():
-                    active['ready_set_totals'][name] = (
-                        active['ready_set_totals'].get(name, 0) + count)
-                executor = local.get('self')
-                guards_ready = local.get('guards_ready', ())
-                guards = local.get('guards', ())
-                known_guards = {}
-                for attribute, label in (('_guard', 'executor_wake'),
-                                         ('_sigint_gc', 'sigint')):
-                    guard = getattr(executor, attribute, None)
-                    handle = getattr(guard, 'handle', None)
-                    pointer = getattr(handle, 'pointer', None)
-                    if pointer is not None:
-                        known_guards[pointer] = label
-                node_guard_pointers = {
-                    getattr(getattr(guard, 'handle', None), 'pointer', None): guard
-                    for guard in guards
-                }
-                kinds = active['ready_guard_kinds']
-                for pointer in guards_ready:
-                    label = known_guards.get(pointer)
-                    if label is None:
-                        guard = node_guard_pointers.get(pointer)
-                        label = ('node_guard' if guard is not None else 'unclassified')
-                    kinds[label] = kinds.get(label, 0) + 1
-            elif frame.f_lineno in (804, 813, 822, 829, 836, 843):
-                active = state.get('active_wait_trace')
-                if active is not None:
-                    category = {
-                        804:'waitable', 813:'timer', 822:'subscription',
-                        829:'guard', 836:'client', 843:'service',
-                    }[frame.f_lineno]
-                    counts = active['dispatch_candidates']
-                    counts[category] = counts.get(category, 0) + 1
-            elif frame.f_lineno in (805, 816, 823, 830, 837, 844):
-                active = state.get('active_wait_trace')
-                if active is not None:
-                    category = {
-                        805:'waitable', 816:'timer', 823:'subscription',
-                        830:'guard', 837:'client', 844:'service',
-                    }[frame.f_lineno]
-                    counts = active['dispatchable']
-                    counts[category] = counts.get(category, 0) + 1
-            return executor_trace
-
         error = None
         result = None
         try:
-            sys.settrace(executor_trace)
             result = original_wait(*args, **kwargs)
-            wait_trace['no_yield_cycles'] = max(
-                0, wait_trace['wait_set_wait_calls'] -
-                (1 if result is not None else 0))
             return result
         except BaseException as caught:
             error = caught
-            wait_trace['no_yield_cycles'] = wait_trace['wait_set_wait_calls']
             raise
         finally:
-            sys.settrace(previous_trace)
-            state['active_wait_trace'] = None
             wall_elapsed = max(0, now_ns() - wall_started)
             cpu_elapsed = max(0, thread_time_ns() - cpu_started)
             entity_key = None
@@ -2711,26 +2593,6 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['thread_cpu_ns'] += cpu_elapsed
                 state['max_wall_ns'] = max(state['max_wall_ns'], wall_elapsed)
                 state['max_thread_cpu_ns'] = max(state['max_thread_cpu_ns'], cpu_elapsed)
-                for key in ('wait_set_wait_calls', 'ready_set_cycles', 'no_yield_cycles'):
-                    state[key] += wait_trace[key]
-                state['wait_set_elapsed_ns'] += wait_trace['wait_set_elapsed_ns']
-                state['max_wait_set_elapsed_ns'] = max(
-                    state['max_wait_set_elapsed_ns'], wait_trace['max_wait_set_elapsed_ns'])
-                state['wait_set_returns_under_1ms'] += wait_trace['wait_set_returns_under_1ms']
-                for name, count in wait_trace['wait_timeout_values'].items():
-                    state['wait_timeout_values'][name] = (
-                        state['wait_timeout_values'].get(name, 0) + count)
-                for name, count in wait_trace['ready_set_totals'].items():
-                    state['ready_set_totals'][name] = (
-                        state['ready_set_totals'].get(name, 0) + count)
-                for name, count in wait_trace['ready_guard_kinds'].items():
-                    state['ready_guard_kinds'][name] = (
-                        state['ready_guard_kinds'].get(name, 0) + count)
-                for field in ('dispatch_candidates', 'dispatchable'):
-                    for name, count in wait_trace[field].items():
-                        state[field][name] = state[field].get(name, 0) + count
-                state['max_no_yield_cycles_per_wait'] = max(
-                    state['max_no_yield_cycles_per_wait'], wait_trace['no_yield_cycles'])
                 if error is not None:
                     state['errors'] += 1
                     state['last_error'] = repr(error)[:256]
@@ -2746,22 +2608,10 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
 
     def take_snapshot():
         with state['lock']:
-            snapshot = {key: value for key, value in state.items()
-                if key not in ('lock', 'active_wait_trace')}
+            snapshot = {key: value for key, value in state.items() if key != 'lock'}
             snapshot['entities'] = dict(state['entities'])
-            snapshot['ready_set_totals'] = dict(state['ready_set_totals'])
-            snapshot['ready_guard_kinds'] = dict(state['ready_guard_kinds'])
-            snapshot['dispatch_candidates'] = dict(state['dispatch_candidates'])
-            snapshot['dispatchable'] = dict(state['dispatchable'])
-            snapshot['wait_timeout_values'] = dict(state['wait_timeout_values'])
             state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
                 max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
-                wait_set_wait_calls=0, ready_set_cycles=0,
-                wait_set_elapsed_ns=0, max_wait_set_elapsed_ns=0,
-                wait_set_returns_under_1ms=0, no_yield_cycles=0,
-                wait_timeout_values={},
-                ready_set_totals={}, ready_guard_kinds={},
-                dispatch_candidates={}, dispatchable={}, max_no_yield_cycles_per_wait=0,
                 last_error=None)
         return snapshot
 
