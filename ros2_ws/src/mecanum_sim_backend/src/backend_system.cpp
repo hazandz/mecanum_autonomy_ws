@@ -1022,6 +1022,7 @@ public:
     {
       return;
     }
+    const auto post_update_started_ns = steady_clock_now_();
     {
       std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
       ++status_sequence_;
@@ -1085,14 +1086,17 @@ public:
     }
     if (!paused_sample)
       measurement_healthy_ = pose && velocity_components_valid && measured_twist.has_value();
+    std::int64_t ground_truth_publish_elapsed_ns = 0;
     if (paused_sample)
     {
       // Keep the last valid post-physics oracle sample across a pause.
     }
     else if (measurement_healthy_)
     {
+      const auto ground_truth_publish_started_ns = steady_clock_now_();
       PublishGroundTruth(*pose, measured_twist->linear,
                          measured_twist->angular, sim_ns);
+      ground_truth_publish_elapsed_ns = steady_clock_now_() - ground_truth_publish_started_ns;
     }
     else SetFault(BackendState::FAULT_CONTEXT, "ground_truth_measurement_missing_or_non_finite");
 
@@ -1116,7 +1120,25 @@ public:
       probe_running_ = false;
     }
     if (state_pub_ || backend_state_sink_)
+    {
+      const auto backend_publish_started_ns = steady_clock_now_();
       PublishBackendState(info, sim_ns);
+      const auto backend_publish_elapsed_ns =
+          steady_clock_now_() - backend_publish_started_ns;
+      const auto post_update_elapsed_ns = steady_clock_now_() - post_update_started_ns;
+      constexpr std::int64_t kSlowPostUpdateDiagnosticNs = 20'000'000;
+      if (post_update_elapsed_ns >= kSlowPostUpdateDiagnosticNs)
+      {
+        EmitStructuredDiagnostic([&]() {
+          gzmsg << "B23_POST_UPDATE_SLOW iteration=" << info.iterations
+              << " sim_ns=" << sim_ns
+              << " ground_truth_publish_ns=" << ground_truth_publish_elapsed_ns
+              << " backend_status_publish_ns=" << backend_publish_elapsed_ns
+              << " total_ns=" << post_update_elapsed_ns << std::endl;
+          std::fflush(stdout);
+        });
+      }
+    }
   }
 
 private:
