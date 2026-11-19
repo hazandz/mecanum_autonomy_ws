@@ -2557,8 +2557,11 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         'wall_ns': 0, 'thread_cpu_ns': 0,
         'max_wall_ns': 0, 'max_thread_cpu_ns': 0,
         'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
+        'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
+        'wait_set_returns_under_1ms': 0,
         'no_yield_cycles': 0, 'ready_set_totals': {},
         'ready_guard_kinds': {},
+        'dispatch_candidates': {}, 'dispatchable': {},
         'max_no_yield_cycles_per_wait': 0,
         'entities': {}, 'errors': 0, 'last_error': None,
     }
@@ -2571,6 +2574,9 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
             'no_yield_cycles': 0, 'ready_set_totals': {},
             'ready_guard_kinds': {},
+            'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
+            'wait_set_returns_under_1ms': 0, 'wait_started_ns': None,
+            'dispatch_candidates': {}, 'dispatchable': {},
         }
         # A generator frame may keep its local trace function after it yields.
         # Attribute its later line events to the currently wrapped public wait,
@@ -2591,6 +2597,17 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 active = state.get('active_wait_trace')
                 if active is not None:
                     active['wait_set_wait_calls'] += 1
+                    active['wait_started_ns'] = now_ns()
+            elif frame.f_lineno == 782:
+                active = state.get('active_wait_trace')
+                if active is not None and active['wait_started_ns'] is not None:
+                    elapsed = max(0, now_ns() - active['wait_started_ns'])
+                    active['wait_set_elapsed_ns'] += elapsed
+                    active['max_wait_set_elapsed_ns'] = max(
+                        active['max_wait_set_elapsed_ns'], elapsed)
+                    if elapsed < 1_000_000:
+                        active['wait_set_returns_under_1ms'] += 1
+                    active['wait_started_ns'] = None
             elif frame.f_lineno == 792:
                 active = state.get('active_wait_trace')
                 if active is None:
@@ -2629,6 +2646,24 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                         guard = node_guard_pointers.get(pointer)
                         label = ('node_guard' if guard is not None else 'unclassified')
                     kinds[label] = kinds.get(label, 0) + 1
+            elif frame.f_lineno in (804, 813, 822, 829, 836, 843):
+                active = state.get('active_wait_trace')
+                if active is not None:
+                    category = {
+                        804:'waitable', 813:'timer', 822:'subscription',
+                        829:'guard', 836:'client', 843:'service',
+                    }[frame.f_lineno]
+                    counts = active['dispatch_candidates']
+                    counts[category] = counts.get(category, 0) + 1
+            elif frame.f_lineno in (805, 816, 823, 830, 837, 844):
+                active = state.get('active_wait_trace')
+                if active is not None:
+                    category = {
+                        805:'waitable', 816:'timer', 823:'subscription',
+                        830:'guard', 837:'client', 844:'service',
+                    }[frame.f_lineno]
+                    counts = active['dispatchable']
+                    counts[category] = counts.get(category, 0) + 1
             return executor_trace
 
         error = None
@@ -2670,12 +2705,19 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['max_thread_cpu_ns'] = max(state['max_thread_cpu_ns'], cpu_elapsed)
                 for key in ('wait_set_wait_calls', 'ready_set_cycles', 'no_yield_cycles'):
                     state[key] += wait_trace[key]
+                state['wait_set_elapsed_ns'] += wait_trace['wait_set_elapsed_ns']
+                state['max_wait_set_elapsed_ns'] = max(
+                    state['max_wait_set_elapsed_ns'], wait_trace['max_wait_set_elapsed_ns'])
+                state['wait_set_returns_under_1ms'] += wait_trace['wait_set_returns_under_1ms']
                 for name, count in wait_trace['ready_set_totals'].items():
                     state['ready_set_totals'][name] = (
                         state['ready_set_totals'].get(name, 0) + count)
                 for name, count in wait_trace['ready_guard_kinds'].items():
                     state['ready_guard_kinds'][name] = (
                         state['ready_guard_kinds'].get(name, 0) + count)
+                for field in ('dispatch_candidates', 'dispatchable'):
+                    for name, count in wait_trace[field].items():
+                        state[field][name] = state[field].get(name, 0) + count
                 state['max_no_yield_cycles_per_wait'] = max(
                     state['max_no_yield_cycles_per_wait'], wait_trace['no_yield_cycles'])
                 if error is not None:
@@ -2698,10 +2740,15 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             snapshot['entities'] = dict(state['entities'])
             snapshot['ready_set_totals'] = dict(state['ready_set_totals'])
             snapshot['ready_guard_kinds'] = dict(state['ready_guard_kinds'])
+            snapshot['dispatch_candidates'] = dict(state['dispatch_candidates'])
+            snapshot['dispatchable'] = dict(state['dispatchable'])
             state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
                 max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
-                wait_set_wait_calls=0, ready_set_cycles=0, no_yield_cycles=0,
-                ready_set_totals={}, ready_guard_kinds={}, max_no_yield_cycles_per_wait=0,
+                wait_set_wait_calls=0, ready_set_cycles=0,
+                wait_set_elapsed_ns=0, max_wait_set_elapsed_ns=0,
+                wait_set_returns_under_1ms=0, no_yield_cycles=0,
+                ready_set_totals={}, ready_guard_kinds={},
+                dispatch_candidates={}, dispatchable={}, max_no_yield_cycles_per_wait=0,
                 last_error=None)
         return snapshot
 
