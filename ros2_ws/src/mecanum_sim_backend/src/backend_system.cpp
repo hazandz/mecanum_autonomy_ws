@@ -3284,7 +3284,8 @@ private:
   // callback_mutex_ phải được giữ khi ghi terminal cache/mutation state.
   void FailPauseLocked(std::uint16_t reason, const std::string &detail)
   {
-    if (!reset_pause_failed_)
+    const bool first_failure = !reset_pause_failed_;
+    if (first_failure)
     {
       const auto request_sequence = pause_intent_ ? pause_intent_->request_sequence : 0;
       const auto dispatched_ns = pause_intent_ ? pause_intent_->dispatched_ns : 0;
@@ -3317,7 +3318,7 @@ private:
     local_zero_override_ = true;
     if (gate_) gate_->Invalidate(detail);
     SetFault(BackendState::FAULT_CONTEXT, detail);
-    if (detail == "UNEXPECTED_PAUSE")
+    if (first_failure && detail == "UNEXPECTED_PAUSE")
     {
       // This post-latch record is consumed by the bounded R01b evidence path.
       // Gazebo prefixes stderr diagnostics with [Err] and source location, so

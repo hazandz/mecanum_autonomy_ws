@@ -1640,6 +1640,16 @@ def r01b_unexpected_pause_latch_rows(path):
         and row.get('fields', {}).get('detail') == 'UNEXPECTED_PAUSE']
 
 
+async def await_r01b_unexpected_pause_latch(io, path):
+    """Wait boundedly for the exact expected native fault while preserving zero checks."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    return await io.until(lambda: (
+        rows[0] if len(rows := r01b_unexpected_pause_latch_rows(path)) == 1 else None),
+        deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+        phase='R01b native unexpected-pause latch with zero override',
+        expected_native_fault_flags=SimulationContactState.FAULT_CONTEXT)
+
+
 def verify_r01b_external_pause_rejection(io, error, native_latch):
     """Validate rejection and a run-bound native post-latch zero/fault record."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -7816,11 +7826,8 @@ async def training_child(path):
                 await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                     paused_hold_s=.250)
             except Exception as exc:
-                native_latch = await io.until(lambda: (
-                    rows[-1] if len(rows := r01b_unexpected_pause_latch_rows(
-                        descriptor['native_events_path'])) == 1 else None),
-                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                    phase='R01b native unexpected-pause latch with zero override')
+                native_latch = await await_r01b_unexpected_pause_latch(
+                    io, descriptor['native_events_path'])
                 checked = verify_r01b_external_pause_rejection(io, exc, native_latch)
                 outcome = {'case':'R01b', 'expected_rejection':True, **checked,
                     'completed_ns':time.monotonic_ns()}

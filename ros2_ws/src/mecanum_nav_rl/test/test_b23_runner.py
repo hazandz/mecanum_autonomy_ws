@@ -4436,6 +4436,27 @@ def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
         verify_r01b_external_pause_rejection(io, error, native_latch)
 
 
+def test_r01b_latch_wait_allows_only_the_expected_native_context_fault(tmp_path):
+    import asyncio, json
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import await_r01b_unexpected_pause_latch
+    value, _clock = worker()
+    value.deadline_ns = value.now() + 20_000_000
+    value.ingress.backend_state = NS(
+        fault_flags=SimulationContactState.FAULT_CONTEXT, local_zero_override=True)
+    path = tmp_path/'native-events.jsonl'
+    path.write_text(json.dumps({'kind':'B23_PAUSE_FAILURE_LATCHED',
+        'fields':{'detail':'UNEXPECTED_PAUSE'}})+'\n')
+    result = asyncio.run(await_r01b_unexpected_pause_latch(value, path))
+    assert result['kind'] == 'B23_PAUSE_FAILURE_LATCHED'
+
+    value, _clock = worker()
+    value.ingress.backend_state = NS(fault_flags=SimulationContactState.FAULT_CLOCK,
+        local_zero_override=True)
+    with pytest.raises(RuntimeError, match='native fault flags='):
+        asyncio.run(await_r01b_unexpected_pause_latch(value, path))
+
+
 def test_r01c_d_wait_bounded_for_native_fault_status_after_expired_ack():
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
