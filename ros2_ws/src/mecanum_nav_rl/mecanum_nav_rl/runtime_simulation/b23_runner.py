@@ -2422,7 +2422,7 @@ class TrainingWorkerIO:
         from rclpy.parameter import Parameter
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.event_handler import SubscriptionEventCallbacks, UnsupportedEventTypeError
-        from rclpy.clock import JumpThreshold
+        from rclpy.clock import Clock, JumpThreshold
         from rclpy.clock_type import ClockType
         from rclpy.duration import Duration
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy

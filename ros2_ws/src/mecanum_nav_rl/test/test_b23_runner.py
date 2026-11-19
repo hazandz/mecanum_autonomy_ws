@@ -6286,6 +6286,20 @@ def test_ros_endpoint_qos_evidence_keeps_observed_profile_values():
         'stamp_sec':17, 'stamp_nanosec':29, 'received_steady_ns':987654}
 
 
+def test_worker_imports_clock_for_world_control_service_introspection():
+    tree = ast.parse(Path(runner_module.__file__).read_text())
+    worker = next(node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == 'TrainingWorkerIO')
+    initializer = next(node for node in worker.body
+        if isinstance(node, ast.FunctionDef) and node.name == '__init__')
+    imports_clock = any(isinstance(node, ast.ImportFrom) and node.module == 'rclpy.clock'
+        and any(alias.name == 'Clock' for alias in node.names)
+        for node in ast.walk(initializer))
+    creates_clock = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == 'Clock' for node in ast.walk(initializer))
+    assert imports_clock and creates_clock
+
+
 def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline():
     value,clock=worker();events=[];bound=[]
     def endpoint(name):return NS(node_name=name,node_namespace='/',topic_type='actual/type',endpoint_gid=bytes(range(16)))
