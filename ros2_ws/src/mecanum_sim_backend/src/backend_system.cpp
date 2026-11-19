@@ -2616,6 +2616,16 @@ private:
     }
     if (request.request_sequence != next_control_request_sequence_)
     {
+      EmitStructuredDiagnostic([&]() {
+        gzerr << "B23_CONTROL_SEQUENCE_GAP request="
+            << request.request_sequence
+            << " expected=" << next_control_request_sequence_
+            << " operation=" << static_cast<unsigned>(request.operation)
+            << " backend=" << backend_instance_id_
+            << " ingress=" << request.coordinator_ingress_instance_id
+            << " session=" << request.session_id << std::endl;
+        std::fflush(stderr);
+      });
       callback_fault_flags_.fetch_or(BackendState::FAULT_COMMAND_SEQUENCE);
       response.result = ControlResponse::RESULT_FAULTED;
       response.reason_code = ControlResponse::REASON_REQUEST_GAP;
