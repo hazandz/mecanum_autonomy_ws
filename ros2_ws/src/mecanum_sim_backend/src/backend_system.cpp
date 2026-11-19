@@ -813,7 +813,7 @@ public:
     ProcessBackendControlRequests(
         ecm, TimeNs(info), info.iterations, steady_now_ns, info.paused);
     ProgressResetPause(info, steady_now_ns);
-    ProcessProbeServiceResults();
+    ProcessProbeServiceResults(info, steady_now_ns);
     AdvanceContactProbe(info, ecm, steady_now_ns);
     ApplyContactCoverageFault(info);
     ProcessCallbackInputs(TimeNs(info), steady_now_ns);
@@ -1430,7 +1430,9 @@ private:
              << "residue_possible\n";
   }
 
-  void ProcessProbeServiceResults()
+  void ProcessProbeServiceResults(
+      const gz::sim::UpdateInfo &info,
+      std::int64_t steady_now_ns)
   {
     std::deque<ProbeServiceResult> results;
     {
@@ -1445,6 +1447,7 @@ private:
     for (const auto &result : results)
     {
       if (result.start_sequence != probe_machine_.StartSequence()) continue;
+      const auto phase_before = probe_machine_.Phase();
       if (result.kind == ProbeServiceKind::Spawn)
       {
         probe_spawn_inflight_ = false;
@@ -1475,6 +1478,19 @@ private:
         ClearContactCapability();
         probe_reason_ = "probe_world_service_failed";
       }
+      const char *kind = result.kind == ProbeServiceKind::Spawn ? "spawn" :
+          result.kind == ProbeServiceKind::Lift ? "lift" : "remove";
+      gzmsg << "B23_CONTACT_SERVICE_RESULT session=" << session_id_
+            << " backend=" << backend_instance_id_
+            << " request_sequence=" << result.start_sequence
+            << " kind=" << kind << " success=" << result.success
+            << " phase_before=" << static_cast<int>(phase_before)
+            << " phase_after=" << static_cast<int>(probe_machine_.Phase())
+            << " iteration=" << info.iterations
+            << " stamp_ns=" << TimeNs(info)
+            << " steady_ns=" << steady_now_ns
+            << " reason=" << (result.success ? "none" : "probe_world_service_failed")
+            << std::endl;
     }
   }
 

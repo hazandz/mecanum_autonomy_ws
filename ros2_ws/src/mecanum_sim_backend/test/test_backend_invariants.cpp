@@ -1080,7 +1080,9 @@ public:
       BackendSystem &system, std::uint64_t iteration = 0)
   {
     if (iteration != 0) system.physics_iteration_ = iteration;
-    system.ProcessProbeServiceResults();
+    gz::sim::UpdateInfo info;
+    info.iterations = system.physics_iteration_;
+    system.ProcessProbeServiceResults(info, 0);
   }
 
   static ProbePhase CurrentProbePhase(const BackendSystem &system)
