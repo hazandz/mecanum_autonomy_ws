@@ -39,7 +39,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
-    worker_async_task_snapshot, spin_ready_callback_batch, instrument_executor_waits,
+    worker_async_task_snapshot, start_worker_stack_trace_capture,
+    stop_worker_stack_trace_capture, spin_ready_callback_batch, instrument_executor_waits,
 )
 
 
@@ -92,6 +93,25 @@ def test_worker_async_task_snapshot_captures_suspended_production_task():
     assert snapshot['cancelled'] is False
     assert snapshot['stack']
     assert snapshot['stack'][0]['function'] == 'blocked_worker'
+
+
+def test_worker_stack_trace_capture_is_opt_in_and_cancelled(tmp_path):
+    calls = []
+    fake = NS(
+        dump_traceback_later=lambda *args, **kwargs: calls.append(('start', args, kwargs)),
+        cancel_dump_traceback_later=lambda: calls.append(('cancel',)),
+    )
+    assert start_worker_stack_trace_capture(tmp_path, False,
+        faulthandler_module=fake) is None
+    capture = start_worker_stack_trace_capture(tmp_path, True,
+        faulthandler_module=fake)
+    assert capture['path'] == str(tmp_path / 'worker-thread-stacks.log')
+    assert capture['interval_s'] == 0.05
+    assert calls == [('start', (0.05,), {
+        'repeat':True, 'file':capture['stream'], 'exit':False})]
+    stop_worker_stack_trace_capture(capture)
+    assert calls[-1] == ('cancel',)
+    assert capture['stream'].closed
 
 
 def test_worker_scheduler_snapshot_binds_cgroup_and_normalizes_cpu_pressure():
