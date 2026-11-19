@@ -171,6 +171,8 @@ def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
     assert take_snapshot() == {
         'calls':2, 'returned':2, 'wall_ns':80, 'thread_cpu_ns':15,
         'max_wall_ns':50, 'max_thread_cpu_ns':10,
+        'max_wait_wall_entity':'SimpleNamespace|/safety/input|safety_supervisor',
+        'max_wait_thread_cpu_entity':'SimpleNamespace|/safety/input|safety_supervisor',
         'entities':{'SimpleNamespace|/safety/input|safety_supervisor':2},
         'errors':0, 'last_error':None,
     }
@@ -200,6 +202,8 @@ def test_executor_wait_diagnostics_do_not_trace_rclpy_internals(monkeypatch):
     assert snapshot == {
         'calls':1, 'returned':1, 'wall_ns':10, 'thread_cpu_ns':3,
         'max_wall_ns':10, 'max_thread_cpu_ns':3,
+        'max_wait_wall_entity':'SimpleNamespace|/clock|safety_supervisor',
+        'max_wait_thread_cpu_entity':'SimpleNamespace|/clock|safety_supervisor',
         'entities':{'SimpleNamespace|/clock|safety_supervisor':1},
         'errors':0, 'last_error':None,
     }

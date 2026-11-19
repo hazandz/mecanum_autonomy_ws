@@ -2573,6 +2573,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         'lock': threading.Lock(), 'calls': 0, 'returned': 0,
         'wall_ns': 0, 'thread_cpu_ns': 0,
         'max_wall_ns': 0, 'max_thread_cpu_ns': 0,
+        'max_wait_wall_entity': None, 'max_wait_thread_cpu_entity': None,
         'entities': {}, 'errors': 0, 'last_error': None,
     }
 
@@ -2607,8 +2608,12 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['calls'] += 1
                 state['wall_ns'] += wall_elapsed
                 state['thread_cpu_ns'] += cpu_elapsed
-                state['max_wall_ns'] = max(state['max_wall_ns'], wall_elapsed)
-                state['max_thread_cpu_ns'] = max(state['max_thread_cpu_ns'], cpu_elapsed)
+                if wall_elapsed > state['max_wall_ns']:
+                    state['max_wall_ns'] = wall_elapsed
+                    state['max_wait_wall_entity'] = entity_key
+                if cpu_elapsed > state['max_thread_cpu_ns']:
+                    state['max_thread_cpu_ns'] = cpu_elapsed
+                    state['max_wait_thread_cpu_entity'] = entity_key
                 if error is not None:
                     state['errors'] += 1
                     state['last_error'] = repr(error)[:256]
@@ -2628,6 +2633,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             snapshot['entities'] = dict(state['entities'])
             state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
                 max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
+                max_wait_wall_entity=None, max_wait_thread_cpu_entity=None,
                 last_error=None)
         return snapshot
 
