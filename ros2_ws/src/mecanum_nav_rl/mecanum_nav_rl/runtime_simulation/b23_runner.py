@@ -123,6 +123,19 @@ def ros_message_lost_evidence(topic, info, received_steady_ns):
         'received_steady_ns':int(received_steady_ns)}
 
 
+def ros_service_event_evidence(event, received_steady_ns):
+    """Record ROS client introspection metadata without changing service behavior."""
+    info = event.info
+    event_type = int(info.event_type)
+    return {'service_event_type':event_type,
+        'service_event_name':{0:'REQUEST_SENT', 1:'REQUEST_RECEIVED',
+            2:'RESPONSE_SENT', 3:'RESPONSE_RECEIVED'}.get(event_type, 'UNKNOWN'),
+        'sequence_number':int(info.sequence_number),
+        'client_gid_hex':bytes(info.client_gid).hex(),
+        'stamp_sec':int(info.stamp.sec), 'stamp_nanosec':int(info.stamp.nanosec),
+        'received_steady_ns':int(received_steady_ns)}
+
+
 def worker_latency_diagnostic(*, started_ns, completed_ns,
         thread_cpu_started_ns, thread_cpu_completed_ns,
         process_cpu_started_ns=None, process_cpu_completed_ns=None,
@@ -2557,6 +2570,24 @@ class TrainingWorkerIO:
             self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
             self.control_world_type, self.pose_type, self.trigger_type = ControlWorld, SetEntityPose, Trigger
             self.world_client = self.node.create_client(ControlWorld, '/world/b2_training_arena/control')
+            # Capture the ROS service-client boundary separately from the
+            # world-control ACK. This is diagnostic metadata only and does
+            # not retry or alter the one-second service deadline.
+            from rclpy.service_introspection import ServiceIntrospectionState
+            self._world_introspection_clock = Clock(clock_type=ClockType.STEADY_TIME)
+            world_event_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=20,
+                reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
+            try:
+                self.world_client.configure_introspection(self._world_introspection_clock,
+                    world_event_qos, ServiceIntrospectionState.METADATA)
+                self.world_service_event_subscription = self.node.create_subscription(
+                    ControlWorld.Event, '/world/b2_training_arena/control/_service_event',
+                    lambda event: self.emit('WORLD_CONTROL_SERVICE_EVENT',
+                        ros_service_event_evidence(event, self.now())), world_event_qos)
+                self.subscriptions.append(self.world_service_event_subscription)
+            except Exception as error:
+                self.emit('WORLD_CONTROL_INTROSPECTION_UNAVAILABLE', {
+                    'error':repr(error), 'steady_ns':self.now()})
             self.probe_spawn_client = self.node.create_client(
                 SpawnEntity, '/world/b2_training_arena/create')
             self.pose_client = self.node.create_client(SetEntityPose, '/world/b2_training_arena/set_pose')

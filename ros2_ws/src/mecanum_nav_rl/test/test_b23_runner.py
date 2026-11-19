@@ -6278,6 +6278,12 @@ def test_ros_endpoint_qos_evidence_keeps_observed_profile_values():
         NS(total_count=5, total_count_change=3), 123456) == {
             'topic':'/backend','total_count':5,'total_count_change':3,
             'received_steady_ns':123456}
+    service_event = NS(info=NS(event_type=3, sequence_number=42,
+        client_gid=bytes(range(16)), stamp=NS(sec=17, nanosec=29)))
+    assert runner_module.ros_service_event_evidence(service_event, 987654) == {
+        'service_event_type':3, 'service_event_name':'RESPONSE_RECEIVED',
+        'sequence_number':42, 'client_gid_hex':bytes(range(16)).hex(),
+        'stamp_sec':17, 'stamp_nanosec':29, 'received_steady_ns':987654}
 
 
 def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline():
