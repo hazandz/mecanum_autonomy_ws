@@ -152,7 +152,7 @@ def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
         'wait_set_wait_calls':0, 'ready_set_cycles':0, 'no_yield_cycles':0,
         'wait_set_elapsed_ns':0, 'max_wait_set_elapsed_ns':0,
         'wait_set_returns_under_1ms':0,
-        'wait_timeout_values':{}, 'event_ready_errors':0,
+        'wait_timeout_values':{},
         'ready_set_totals':{}, 'ready_guard_kinds':{},
         'dispatch_candidates':{}, 'dispatchable':{},
         'max_no_yield_cycles_per_wait':0,
@@ -168,8 +168,6 @@ def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
             self.calls = 0
         def wait(self):
             self.calls += 1
-        def get_ready_entities(self, _kind):
-            return ()
 
     class FakeGuard:
         def __init__(self, pointer):
@@ -238,8 +236,8 @@ def test_executor_wait_diagnostics_count_each_internal_wait_cycle_once():
     assert snapshot['wait_set_elapsed_ns'] == 20
     assert snapshot['wait_set_returns_under_1ms'] == 2
     assert snapshot['wait_timeout_values'] == {'none':2}
-    assert snapshot['event_ready_errors'] == 0
-    assert snapshot['ready_set_totals']['events'] == 0
+    assert 'event_ready_errors' not in snapshot
+    assert 'events' not in snapshot['ready_set_totals']
     assert snapshot['no_yield_cycles'] == 1
     assert snapshot['ready_guard_kinds'] == {'executor_wake':1}
     assert snapshot['dispatch_candidates'] == {'waitable':2}
@@ -4520,6 +4518,7 @@ def worker():
     value.pump_error, value.expected_paused = None, True
     value.last_clock_ns, value.last_clock_advance_ns = 0, clock.ns
     value.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=0)))
+    value.node.get_service_names_and_types = lambda: []
     value.world_client = NS(service_is_ready=lambda: True)
     value.emit = lambda _name, _facts: None
     value.ingress = NS(fault=None, backend_state=None, backend_received_ns=clock.ns)
@@ -6614,6 +6613,9 @@ def test_graph_binding_waits_for_world_control_service_within_same_startup_deadl
         '/mecanum/local_training/backend_state':[],
     }
     value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
+    value.node.get_service_names_and_types = lambda: (
+        [('/world/b2_training_arena/control', ['ros_gz_interfaces/srv/ControlWorld'])]
+        if ready['value'] else [])
     value.emit = lambda event, facts: events.append((event, facts))
     value.ingress.bind_safety_publisher_gid = lambda gid: bound.append(gid)
     ready = {'value':False}
@@ -6630,6 +6632,9 @@ def test_graph_binding_waits_for_world_control_service_within_same_startup_deadl
     assert bound == [bytes(range(16))]
     observations = [facts for event, facts in events if event == 'GRAPH_OBSERVATION']
     assert [row['world_control_service_ready'] for row in observations] == [False, False, True]
+    assert [row['world_control_service_discovery'] for row in observations] == [[], [], [
+        {'name':'/world/b2_training_arena/control',
+         'types':['ros_gz_interfaces/srv/ControlWorld']}]]
     assert events[-1][0] == 'GRAPH_BOUND'
 
 
@@ -6646,6 +6651,7 @@ def test_graph_service_not_ready_at_deadline_does_not_bind_publishers():
         '/mecanum/local_training/backend_state':[],
     }
     value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
+    value.node.get_service_names_and_types = lambda: []
     value.ingress.bind_safety_publisher_gid = lambda gid: bound.append(gid)
     value.world_client.service_is_ready = lambda: False
     deadline = clock.ns + 5_000_000

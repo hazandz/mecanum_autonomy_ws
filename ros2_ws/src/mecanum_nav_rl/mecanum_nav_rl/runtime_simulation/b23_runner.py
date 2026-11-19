@@ -2559,7 +2559,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
         'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
         'wait_set_returns_under_1ms': 0,
-        'wait_timeout_values': {}, 'event_ready_errors': 0,
+        'wait_timeout_values': {},
         'no_yield_cycles': 0, 'ready_set_totals': {},
         'ready_guard_kinds': {},
         'dispatch_candidates': {}, 'dispatchable': {},
@@ -2577,7 +2577,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
             'ready_guard_kinds': {},
             'wait_set_elapsed_ns': 0, 'max_wait_set_elapsed_ns': 0,
             'wait_set_returns_under_1ms': 0, 'wait_started_ns': None,
-            'wait_timeout_values': {}, 'event_ready_errors': 0,
+            'wait_timeout_values': {},
             'dispatch_candidates': {}, 'dispatchable': {},
         }
         # A generator frame may keep its local trace function after it yields.
@@ -2628,11 +2628,6 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                     'clients': len(local.get('clients_ready', ())),
                     'services': len(local.get('services_ready', ())),
                 }
-                try:
-                    ready['events'] = len(local['wait_set'].get_ready_entities('event'))
-                except BaseException:
-                    active['event_ready_errors'] += 1
-                    ready['events'] = -1
                 active['ready_set_cycles'] += 1
                 for name, count in ready.items():
                     active['ready_set_totals'][name] = (
@@ -2722,7 +2717,6 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['max_wait_set_elapsed_ns'] = max(
                     state['max_wait_set_elapsed_ns'], wait_trace['max_wait_set_elapsed_ns'])
                 state['wait_set_returns_under_1ms'] += wait_trace['wait_set_returns_under_1ms']
-                state['event_ready_errors'] += wait_trace['event_ready_errors']
                 for name, count in wait_trace['wait_timeout_values'].items():
                     state['wait_timeout_values'][name] = (
                         state['wait_timeout_values'].get(name, 0) + count)
@@ -2765,7 +2759,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 wait_set_wait_calls=0, ready_set_cycles=0,
                 wait_set_elapsed_ns=0, max_wait_set_elapsed_ns=0,
                 wait_set_returns_under_1ms=0, no_yield_cycles=0,
-                wait_timeout_values={}, event_ready_errors=0,
+                wait_timeout_values={},
                 ready_set_totals={}, ready_guard_kinds={},
                 dispatch_candidates={}, dispatchable={}, max_no_yield_cycles_per_wait=0,
                 last_error=None)
@@ -4246,6 +4240,11 @@ class TrainingWorkerIO:
             if not callable(world_ready):
                 raise RuntimeError('world control service readiness API unavailable')
             world_control_ready = bool(world_ready())
+            service_names = self.node.get_service_names_and_types()
+            world_control_services = [
+                {'name':name, 'types':sorted(types)}
+                for name, types in service_names
+                if name == '/world/b2_training_arena/control']
             self.emit('GRAPH_OBSERVATION', {name: [{'node': item.node_name,
                 'namespace': item.node_namespace, 'type': item.topic_type,
                 'gid_hex': bytes(item.endpoint_gid).hex(),
@@ -4261,7 +4260,8 @@ class TrainingWorkerIO:
                         'qos':ros_endpoint_qos_evidence(item)}
                      for item in backend_state_subscriptions]),
                  'backend_state_subscription_query_available':callable(get_subscriptions)} |
-                {'world_control_service_ready':world_control_ready})
+                {'world_control_service_ready':world_control_ready,
+                 'world_control_service_discovery':world_control_services})
             if not (len(cmd) == len(safety) == len(ingress) == 1):
                 return None
             # RMW DDS 3.1.1 trả sentinel khi endpoint đã thấy nhưng node chưa discovery.
