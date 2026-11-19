@@ -3057,6 +3057,31 @@ private:
     {
       const auto barrier_ns = TimeNs(request.barrier_stamp);
       const auto lifecycle_ns = TimeNs(request.lifecycle_header_stamp);
+      // A reset intentionally freezes the command stream after its applied
+      // W0 zero. If lifecycle delivery takes longer than the unchanged
+      // receipt watchdog, the gate may latch only actuator_watchdog_expired
+      // while that exact applied zero remains selected. A new reset context
+      // may re-anchor that case; never clear a stale fault from motion, an
+      // unverified receipt, or any other fault source.
+      const bool recover_zero_watchdog = fault_flags_ == BackendState::FAULT_COMMAND_STALE &&
+          gate_ && gate_->Faulted() &&
+          gate_->FaultReason() == "actuator_watchdog_expired" &&
+          !policy_open_ && selected_receipt_ && IsZeroSafeStop(*selected_receipt_) &&
+          selected_receipt_->session_id == session_id_ &&
+          selected_receipt_->config_hash == config_hash_ &&
+          selected_receipt_->key.publisher_instance_id == bound_final_publisher_instance_id_ &&
+          selected_receipt_->source_instance_id == bound_safe_stop_source_instance_id_ &&
+          selected_receipt_->episode_generation == episode_generation_ &&
+          selected_receipt_->reset_epoch == reset_epoch_ &&
+          selected_receipt_->runtime_generation == runtime_generation_ &&
+          !application_history_.empty() &&
+          application_history_.back().publisher_instance_id == bound_final_publisher_instance_id_ &&
+          application_history_.back().publish_sequence == selected_receipt_->key.publish_sequence &&
+          application_history_.back().physics_iteration != 0 &&
+          application_history_.back().sim_stamp_ns >= selected_receipt_->stamp_ns &&
+          application_history_.back().sim_stamp_ns <= sim_stamp_ns &&
+          application_history_.back().receipt_valid &&
+          !application_history_.back().local_zero_override;
       const bool context_forward = gate_ && IsForwardResetContext(
           lifecycle_sequence_, request.lifecycle_sequence,
           barrier_stamp_ns_, barrier_ns, episode_generation_,
@@ -3175,6 +3200,22 @@ private:
         reset_epoch_ = request.reset_epoch;
         runtime_generation_ = request.runtime_generation;
         local_zero_override_ = true;
+        if (recover_zero_watchdog)
+        {
+          fault_flags_ &= ~BackendState::FAULT_COMMAND_STALE;
+          EmitStructuredDiagnostic([&]() {
+            gzmsg << "B23_RESET_ZERO_WATCHDOG_REANCHORED request="
+                << request.request_sequence
+                << " prior_zero_publish_sequence="
+                << application_history_.back().publish_sequence
+                << " prior_zero_iteration="
+                << application_history_.back().physics_iteration
+                << " prior_zero_stamp_ns="
+                << application_history_.back().sim_stamp_ns
+                << " steady_ns=" << steady_now_ns << std::endl;
+            std::fflush(stdout);
+          });
+        }
         applied = true;
         ++control_binding_revision_;
       }

@@ -174,6 +174,46 @@ public:
     system.steady_clock_now_ = [now_ns] { return now_ns; };
   }
 
+  static void SeedExpiredZeroWatchdogForReset(
+      BackendSystem &system, bool applied_zero, const std::string &fault_reason,
+      bool selected_zero = true)
+  {
+    SeedPolicyAdmissionGateForOrdering(system);
+    ReceiptFacts zero;
+    zero.session_id = "test-session";
+    zero.config_hash = std::string(64, 'a');
+    zero.key = {11, 1};
+    zero.episode_generation = 2;
+    zero.reset_epoch = 3;
+    zero.runtime_generation = 4;
+    zero.source = 4;
+    zero.sequence = 1;
+    zero.source_instance_id = 33;
+    zero.stamp_ns = 100;
+    zero.frame_id = "base_link";
+    zero.twist = selected_zero ? std::array<double, 6>{0, 0, 0, 0, 0, 0} :
+        std::array<double, 6>{0.01, 0, 0, 0, 0, 0};
+    system.control_session_bound_ = true;
+    system.control_binding_revision_ = 1;
+    system.next_control_request_sequence_ = 2;
+    system.lifecycle_sequence_ = 1;
+    system.lifecycle_header_stamp_ns_ = 100;
+    system.barrier_stamp_ns_ = 90;
+    system.bound_barrier_state_ = ControlRequest::BARRIER_READY;
+    system.episode_generation_ = 2;
+    system.reset_epoch_ = 3;
+    system.runtime_generation_ = 4;
+    system.bound_final_publisher_instance_id_ = 11;
+    system.bound_policy_source_instance_id_ = 22;
+    system.bound_safe_stop_source_instance_id_ = 33;
+    system.selected_receipt_ = zero;
+    if (applied_zero)
+      system.application_history_ = {{11, 1, 47, 110, true, false}};
+    system.gate_->Invalidate(fault_reason);
+    system.fault_flags_ = BackendState::FAULT_COMMAND_STALE;
+    system.local_zero_override_ = true;
+  }
+
   static void ExpireOrCompleteResetPause(BackendSystem &system)
   {
     system.ExpireOrCompleteResetPause(system.steady_clock_now_());
@@ -3856,6 +3896,42 @@ TEST(BackendSystemReceiptFault, LateHeldPolicyReceiptDoesNotAddQueueFault)
             "actuator_watchdog_expired");
   EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
       << "từ chối receipt muộn dự kiến không được nâng thành FAULT_QUEUE";
+}
+
+TEST(BackendSystemControlReceiver, ResetBindReanchorsOnlyAppliedZeroWatchdogFault)
+{
+  const auto exercise = [](bool applied_zero, const std::string &fault_reason,
+                           bool selected_zero = true) {
+    BackendSystem system;
+    gz::sim::EntityComponentManager ecm;
+    BackendSystemTestPeer::SeedRunDescriptor(system);
+    BackendSystemTestPeer::SeedExpiredZeroWatchdogForReset(
+        system, applied_zero, fault_reason, selected_zero);
+
+    const auto queued = BackendSystemTestPeer::Receive(
+        system, ResetContextRequest());
+    EXPECT_EQ(queued.result, ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::Tick(system, ecm, 200, 20, 2'100'000'000);
+    EXPECT_EQ(BackendSystemTestPeer::Cached(system, 2).result,
+        ControlResponse::RESULT_APPLIED);
+    const auto flags = BackendSystemTestPeer::FaultFlags(system);
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+    return flags;
+  };
+
+  EXPECT_EQ(exercise(true, "actuator_watchdog_expired"), 0u)
+      << "a bound reset may clear only the stale watchdog caused after the "
+         "exact applied W0 zero; the new gate remains unanchored and inhibited";
+  EXPECT_EQ(exercise(false, "actuator_watchdog_expired"),
+      BackendState::FAULT_COMMAND_STALE)
+      << "missing native application evidence must retain the fault";
+  EXPECT_EQ(exercise(true, "other_fault_source"),
+      BackendState::FAULT_COMMAND_STALE)
+      << "reset binding must not clear a different gate fault";
+  EXPECT_EQ(exercise(true, "actuator_watchdog_expired", false),
+      BackendState::FAULT_COMMAND_STALE)
+      << "a selected nonzero receipt cannot be re-anchored as reset W0";
 }
 
 TEST(BackendSystemControlReceiver, ProbeStartUsesReceiverUpdateAndInjectedTransport)
