@@ -100,6 +100,29 @@ def bind_install_ament_prefix(environment, install_prefix):
     return bound
 
 
+def ros_endpoint_qos_evidence(endpoint):
+    """Serialize the QoS actually reported by one discovered RMW endpoint."""
+    qos = getattr(endpoint, 'qos_profile', None)
+    if qos is None:
+        return {'qos_available':False}
+    result = {'qos_available':True}
+    for name in ('history', 'depth', 'reliability', 'durability', 'liveliness'):
+        value = getattr(qos, name, None)
+        result[name] = None if value is None else int(value)
+    for name in ('deadline', 'lifespan', 'liveliness_lease_duration'):
+        value = getattr(qos, name, None)
+        result[name + '_ns'] = (None if value is None else
+            int(getattr(value, 'nanoseconds', 0)))
+    return result
+
+
+def ros_message_lost_evidence(topic, info, received_steady_ns):
+    """Keep the middleware loss counters tied to the exact received topic."""
+    return {'topic':topic, 'total_count':int(info.total_count),
+        'total_count_change':int(info.total_count_change),
+        'received_steady_ns':int(received_steady_ns)}
+
+
 def worker_latency_diagnostic(*, started_ns, completed_ns,
         thread_cpu_started_ns, thread_cpu_completed_ns,
         process_cpu_started_ns=None, process_cpu_completed_ns=None,
@@ -2385,6 +2408,7 @@ class TrainingWorkerIO:
         from rclpy.node import Node
         from rclpy.parameter import Parameter
         from rclpy.executors import SingleThreadedExecutor
+        from rclpy.event_handler import SubscriptionEventCallbacks, UnsupportedEventTypeError
         from rclpy.clock import JumpThreshold
         from rclpy.clock_type import ClockType
         from rclpy.duration import Duration
@@ -2510,8 +2534,24 @@ class TrainingWorkerIO:
                 (FinalIssuedCommandReceipt, '/mecanum/final_issued_command', self.ingress.on_receipt, receipt_qos),
                 (SafetyState, '/mecanum/safety_state', self.ingress.on_safety_state, reliable),
             ):
-                self.subscriptions.append(self.node.create_subscription(message, topic,
-                    self.observed_callback(message, topic, callback), qos, raw=True))
+                observed = self.observed_callback(message, topic, callback)
+                if topic == '/mecanum/local_training/backend_state':
+                    def message_lost(info, *, observed_topic=topic):
+                        self.emit('RMW_SUBSCRIPTION_MESSAGE_LOST',
+                            ros_message_lost_evidence(observed_topic, info, self.now()))
+                    callbacks = SubscriptionEventCallbacks(message_lost=message_lost)
+                    try:
+                        subscription = self.node.create_subscription(message, topic,
+                            observed, qos, raw=True, event_callbacks=callbacks)
+                    except UnsupportedEventTypeError as error:
+                        self.emit('RMW_MESSAGE_LOST_EVENT_UNSUPPORTED', {
+                            'topic':topic,'error':repr(error),'steady_ns':self.now()})
+                        subscription = self.node.create_subscription(message, topic,
+                            observed, qos, raw=True)
+                else:
+                    subscription = self.node.create_subscription(message, topic,
+                        observed, qos, raw=True)
+                self.subscriptions.append(subscription)
             self.safety.local_training.state_observer = lambda state: self.ingress.register_safety_publication(
                 state, source_instance_id=self.safe_stop_source_id)
             self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
@@ -3730,14 +3770,30 @@ class TrainingWorkerIO:
             cmd = self.node.get_publishers_info_by_topic('/cmd_vel')
             safety = self.node.get_publishers_info_by_topic('/mecanum/safety_state')
             ingress = self.node.get_publishers_info_by_topic('/mecanum/local_training/safety_input')
+            backend_state = self.node.get_publishers_info_by_topic(
+                '/mecanum/local_training/backend_state')
+            get_subscriptions = getattr(self.node, 'get_subscriptions_info_by_topic', None)
+            backend_state_subscriptions = (None if not callable(get_subscriptions) else
+                get_subscriptions('/mecanum/local_training/backend_state'))
             world_ready = getattr(self.world_client, 'service_is_ready', None)
             if not callable(world_ready):
                 raise RuntimeError('world control service readiness API unavailable')
             world_control_ready = bool(world_ready())
             self.emit('GRAPH_OBSERVATION', {name: [{'node': item.node_name,
                 'namespace': item.node_namespace, 'type': item.topic_type,
-                'gid_hex': bytes(item.endpoint_gid).hex()} for item in values]
+                'gid_hex': bytes(item.endpoint_gid).hex(),
+                'qos':ros_endpoint_qos_evidence(item)} for item in values]
                 for name, values in [('cmd_vel',cmd),('safety',safety),('ingress',ingress)]} |
+                {'backend_state_publishers':[{'node':item.node_name,
+                    'namespace':item.node_namespace,'type':item.topic_type,
+                    'gid_hex':bytes(item.endpoint_gid).hex(),
+                    'qos':ros_endpoint_qos_evidence(item)} for item in backend_state],
+                 'backend_state_subscriptions':(None if backend_state_subscriptions is None else
+                    [{'node':item.node_name,'namespace':item.node_namespace,
+                        'type':item.topic_type,'gid_hex':bytes(item.endpoint_gid).hex(),
+                        'qos':ros_endpoint_qos_evidence(item)}
+                     for item in backend_state_subscriptions]),
+                 'backend_state_subscription_query_available':callable(get_subscriptions)} |
                 {'world_control_service_ready':world_control_ready})
             if not (len(cmd) == len(safety) == len(ingress) == 1):
                 return None

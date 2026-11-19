@@ -6253,14 +6253,31 @@ def test_graph_failure_preserves_observed_endpoint_identity_without_binding():
     value,clock=worker();events=[];bound=[]
     def endpoint(name):return NS(node_name=name,node_namespace='/',topic_type='actual/type',endpoint_gid=bytes(range(16)))
     groups={'/cmd_vel':[endpoint('unexpected')],'/mecanum/safety_state':[endpoint('safety_supervisor')],
-        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')]}
+        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+        '/mecanum/local_training/backend_state':[]}
     value.node.get_publishers_info_by_topic=lambda topic:groups[topic]
     value.emit=lambda event,facts:events.append((event,facts))
     value.ingress.bind_safety_publisher_gid=lambda gid:bound.append(gid)
     with pytest.raises(RuntimeError,match='unexpected graph publisher ownership'):
         asyncio.run(value.pin_graph(deadline_ns=clock.ns+10_000_000))
     assert not bound and [event for event,_ in events]==['GRAPH_OBSERVATION']
-    assert events[0][1]['cmd_vel'][0]==dict(node='unexpected',namespace='/',type='actual/type',gid_hex=bytes(range(16)).hex())
+    assert events[0][1]['cmd_vel'][0]==dict(node='unexpected',namespace='/',type='actual/type',
+        gid_hex=bytes(range(16)).hex(),qos={'qos_available':False})
+
+
+def test_ros_endpoint_qos_evidence_keeps_observed_profile_values():
+    endpoint = NS(qos_profile=NS(history=1, depth=50, reliability=2, durability=2,
+        liveliness=1, deadline=NS(nanoseconds=0), lifespan=NS(nanoseconds=0),
+        liveliness_lease_duration=NS(nanoseconds=0)))
+    assert runner_module.ros_endpoint_qos_evidence(endpoint) == {
+        'qos_available':True, 'history':1, 'depth':50, 'reliability':2,
+        'durability':2, 'liveliness':1, 'deadline_ns':0, 'lifespan_ns':0,
+        'liveliness_lease_duration_ns':0}
+    assert runner_module.ros_endpoint_qos_evidence(NS()) == {'qos_available':False}
+    assert runner_module.ros_message_lost_evidence('/backend',
+        NS(total_count=5, total_count_change=3), 123456) == {
+            'topic':'/backend','total_count':5,'total_count_change':3,
+            'received_steady_ns':123456}
 
 
 def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline():
@@ -6268,7 +6285,8 @@ def test_graph_undiscovered_ros_node_waits_without_binding_or_extending_deadline
     def endpoint(name):return NS(node_name=name,node_namespace='/',topic_type='actual/type',endpoint_gid=bytes(range(16)))
     cmd=endpoint('_NODE_NAME_UNKNOWN_');cmd.node_namespace='_NODE_NAMESPACE_UNKNOWN_'
     groups={'/cmd_vel':[cmd],'/mecanum/safety_state':[endpoint('safety_supervisor')],
-        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')]}
+        '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+        '/mecanum/local_training/backend_state':[]}
     value.node.get_publishers_info_by_topic=lambda topic:groups[topic]
     value.emit=lambda event,facts:events.append((event,facts))
     value.ingress.bind_safety_publisher_gid=lambda gid:bound.append(gid)
@@ -6298,6 +6316,7 @@ def test_graph_binding_waits_for_world_control_service_within_same_startup_deadl
         '/cmd_vel':[endpoint('final_twist_publisher')],
         '/mecanum/safety_state':[endpoint('safety_supervisor')],
         '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+        '/mecanum/local_training/backend_state':[],
     }
     value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
     value.emit = lambda event, facts: events.append((event, facts))
@@ -6329,6 +6348,7 @@ def test_graph_service_not_ready_at_deadline_does_not_bind_publishers():
         '/cmd_vel':[endpoint('final_twist_publisher')],
         '/mecanum/safety_state':[endpoint('safety_supervisor')],
         '/mecanum/local_training/safety_input':[endpoint('b23_coordinator_ingress')],
+        '/mecanum/local_training/backend_state':[],
     }
     value.node.get_publishers_info_by_topic = lambda topic: groups[topic]
     value.ingress.bind_safety_publisher_gid = lambda gid: bound.append(gid)
