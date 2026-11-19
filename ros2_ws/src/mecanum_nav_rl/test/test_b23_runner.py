@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import textwrap
+import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 import pytest
@@ -37,7 +38,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
-    parse_worker_scheduler_snapshot,
+    parse_worker_scheduler_snapshot, spin_ready_callback_batch,
 )
 
 
@@ -235,11 +236,21 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
             pass
 
     class MainExecutor:
-        def spin_once(self, timeout_sec):
-            observed['main_thread'] = threading.current_thread().name
-            observed['main_timeout'] = timeout_sec
-            assert safety_started.wait(0.5), 'Safety executor did not start independently'
-            worker.stop_requested = True
+        def wait_for_ready_callbacks(self, timeout_sec):
+            from rclpy.executors import TimeoutException
+            assert timeout_sec == 0.
+            if observed.get('main_thread') is not None:
+                raise TimeoutException()
+            def run_ready_callback():
+                observed['main_thread'] = threading.current_thread().name
+                observed['main_timeout'] = timeout_sec
+                assert safety_started.wait(0.5), 'Safety executor did not start independently'
+                worker.stop_requested = True
+            class Handler:
+                def __call__(self): run_ready_callback()
+                def exception(self): return None
+                def result(self): return None
+            return Handler(), None, None
 
         def shutdown(self, timeout_sec):
             observed['main_shutdown_timeout'] = timeout_sec
@@ -264,6 +275,7 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     worker.safety_executor_error = None
     worker.stop_requested = False
     worker.abort_requested = None
+    worker.now = time.monotonic_ns
     worker.pause = asyncio.sleep
     worker.context = Context()
     worker.nodes = []
@@ -4363,10 +4375,20 @@ def worker():
     return value, clock
 
 
-def test_worker_pump_dispatches_one_ros_callback_before_yielding():
+def test_worker_pump_dispatches_bounded_ready_batch_before_yielding():
     value, _clock = worker()
     calls = []
-    value.executor = NS(spin_once=lambda *, timeout_sec: calls.append(timeout_sec))
+    from rclpy.executors import TimeoutException
+    class Handler:
+        def __call__(self): calls.append('callback')
+        def exception(self): return None
+        def result(self): return None
+    ready = [Handler()]
+    def wait_for_ready_callbacks(*, timeout_sec):
+        assert timeout_sec == 0.
+        if ready: return ready.pop(0), None, None
+        raise TimeoutException()
+    value.executor = NS(wait_for_ready_callbacks=wait_for_ready_callbacks)
     value.safety_executor_error = None
     value._event_sink_owner = None
     value._pending_future_receipts = []
@@ -4374,9 +4396,40 @@ def test_worker_pump_dispatches_one_ros_callback_before_yielding():
     value._deliver_r04d_ingress_lifecycle_if_due = lambda: None
     value.pause = lambda _seconds: stop_after_one_turn(value)
     asyncio.run(value._pump())
-    assert calls == [0.]
+    assert calls == ['callback']
     assert value.stop_requested is True
     assert value.pump_error is None
+
+
+def test_ready_callback_batch_drains_until_empty_or_monotonic_budget():
+    from rclpy.executors import TimeoutException
+    now = {'ns':0}
+    calls = []
+    class Handler:
+        def __call__(self):
+            calls.append(len(calls) + 1)
+            now['ns'] += 700_000
+        def exception(self): return None
+        def result(self): return None
+    ready = [Handler() for _ in range(10)]
+    def wait_for_ready_callbacks(*, timeout_sec):
+        assert timeout_sec == 0.
+        if ready: return ready.pop(0), None, None
+        raise TimeoutException()
+    executor = NS(wait_for_ready_callbacks=wait_for_ready_callbacks)
+    assert spin_ready_callback_batch(executor, now_ns=lambda:now['ns'],
+        budget_ns=2_000_000, max_callbacks=64) == 3
+    assert calls == [1, 2, 3]
+    assert len(ready) == 7
+
+
+def test_ready_callback_batch_returns_when_no_callback_is_ready():
+    from rclpy.executors import TimeoutException
+    def wait_for_ready_callbacks(*, timeout_sec):
+        assert timeout_sec == 0.
+        raise TimeoutException()
+    assert spin_ready_callback_batch(NS(wait_for_ready_callbacks=wait_for_ready_callbacks),
+        now_ns=lambda:0, budget_ns=2_000_000, max_callbacks=64) == 0
 
 
 async def stop_after_one_turn(value):
