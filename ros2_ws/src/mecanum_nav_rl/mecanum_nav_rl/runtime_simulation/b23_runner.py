@@ -2548,12 +2548,32 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
                 diagnostics['wait_calls'] += 1
                 diagnostics['wait_wall_ns'] += elapsed
                 diagnostics['wait_max_wall_ns'] = max(diagnostics['wait_max_wall_ns'], elapsed)
+                if elapsed > 20_000_000:
+                    import sys
+                    import threading
+                    import traceback
+                    names = {thread.ident:thread.name for thread in threading.enumerate()}
+                    diagnostics['slow_wait_thread_stacks'] = {
+                        str(ident):{'name':names.get(ident), 'frames':[
+                            f'{frame.filename}:{frame.lineno}:{frame.name}'
+                            for frame in traceback.extract_stack(frame)[-16:]]}
+                        for ident, frame in sys._current_frames().items()}
             break
         if diagnostics is not None:
             elapsed = now_ns() - wait_started_ns
             diagnostics['wait_calls'] += 1
             diagnostics['wait_wall_ns'] += elapsed
             diagnostics['wait_max_wall_ns'] = max(diagnostics['wait_max_wall_ns'], elapsed)
+            if elapsed > 20_000_000:
+                import sys
+                import threading
+                import traceback
+                names = {thread.ident:thread.name for thread in threading.enumerate()}
+                diagnostics['slow_wait_thread_stacks'] = {
+                    str(ident):{'name':names.get(ident), 'frames':[
+                        f'{frame.filename}:{frame.lineno}:{frame.name}'
+                        for frame in traceback.extract_stack(frame)[-16:]]}
+                    for ident, frame in sys._current_frames().items()}
         callback_started_ns = now_ns()
         try:
             handler()

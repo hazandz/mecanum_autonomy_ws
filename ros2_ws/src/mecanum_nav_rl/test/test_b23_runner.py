@@ -4438,6 +4438,25 @@ def test_ready_callback_batch_returns_when_no_callback_is_ready():
         now_ns=lambda:0, budget_ns=2_000_000, max_callbacks=64) == 0
 
 
+def test_slow_executor_wait_captures_thread_stacks_for_diagnosis():
+    from rclpy.executors import TimeoutException
+    now = {'ns':0}
+    def wait_for_ready_callbacks(*, timeout_sec):
+        assert timeout_sec == 0.
+        now['ns'] += 25_000_000
+        raise TimeoutException()
+    diagnostics = {'wait_calls':0, 'wait_wall_ns':0, 'wait_max_wall_ns':0,
+        'callback_wall_ns':0, 'callback_max_wall_ns':0,
+        'last_entity_type':None, 'last_entity_topic':None, 'last_node_name':None}
+    assert spin_ready_callback_batch(
+        NS(wait_for_ready_callbacks=wait_for_ready_callbacks), now_ns=lambda:now['ns'],
+        budget_ns=2_000_000, max_callbacks=64, diagnostics=diagnostics) == 0
+    assert diagnostics['wait_max_wall_ns'] == 25_000_000
+    assert diagnostics['slow_wait_thread_stacks']
+    assert any(item['name'] == 'MainThread'
+        for item in diagnostics['slow_wait_thread_stacks'].values())
+
+
 async def stop_after_one_turn(value):
     value.stop_requested = True
     await asyncio.sleep(0)
