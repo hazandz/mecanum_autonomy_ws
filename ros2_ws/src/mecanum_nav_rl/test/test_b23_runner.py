@@ -149,6 +149,8 @@ def test_executor_wait_diagnostics_preserve_result_and_bound_entity_counts():
     assert take_snapshot() == {
         'calls':2, 'returned':2, 'wall_ns':80, 'thread_cpu_ns':15,
         'max_wall_ns':50, 'max_thread_cpu_ns':10,
+        'wait_set_wait_calls':0, 'ready_set_cycles':0, 'no_yield_cycles':0,
+        'ready_set_totals':{}, 'max_no_yield_cycles_per_wait':0,
         'entities':{'SimpleNamespace|/safety/input|safety_supervisor':2},
         'errors':0, 'last_error':None,
     }

@@ -2556,21 +2556,61 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         'lock': threading.Lock(), 'calls': 0, 'returned': 0,
         'wall_ns': 0, 'thread_cpu_ns': 0,
         'max_wall_ns': 0, 'max_thread_cpu_ns': 0,
+        'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
+        'no_yield_cycles': 0, 'ready_set_totals': {},
+        'max_no_yield_cycles_per_wait': 0,
         'entities': {}, 'errors': 0, 'last_error': None,
     }
 
     def observed_wait(*args, **kwargs):
+        import sys
         wall_started = now_ns()
         cpu_started = thread_time_ns()
+        wait_trace = {
+            'wait_set_wait_calls': 0, 'ready_set_cycles': 0,
+            'no_yield_cycles': 0, 'ready_set_totals': {},
+        }
+        previous_trace = sys.gettrace()
+
+        def executor_trace(frame, event, arg):
+            code = frame.f_code
+            if (code.co_name != '_wait_for_ready_callbacks'
+                    or not code.co_filename.endswith('/rclpy/executors.py')):
+                return None
+            if event == 'call':
+                return executor_trace
+            if event != 'line':
+                return executor_trace
+            if frame.f_lineno == 781:
+                wait_trace['wait_set_wait_calls'] += 1
+            elif frame.f_lineno == 795:
+                local = frame.f_locals
+                ready = {
+                    'subscriptions': len(local.get('subs_ready', ())),
+                    'guards': len(local.get('guards_ready', ())),
+                    'timers': len(local.get('timers_ready', ())),
+                    'clients': len(local.get('clients_ready', ())),
+                    'services': len(local.get('services_ready', ())),
+                }
+                wait_trace['ready_set_cycles'] += 1
+                for name, count in ready.items():
+                    wait_trace['ready_set_totals'][name] = (
+                        wait_trace['ready_set_totals'].get(name, 0) + count)
+            elif frame.f_lineno == 849 and not frame.f_locals.get('yielded_work', False):
+                wait_trace['no_yield_cycles'] += 1
+            return executor_trace
+
         error = None
         result = None
         try:
+            sys.settrace(executor_trace)
             result = original_wait(*args, **kwargs)
             return result
         except BaseException as caught:
             error = caught
             raise
         finally:
+            sys.settrace(previous_trace)
             wall_elapsed = max(0, now_ns() - wall_started)
             cpu_elapsed = max(0, thread_time_ns() - cpu_started)
             entity_key = None
@@ -2592,6 +2632,13 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
                 state['thread_cpu_ns'] += cpu_elapsed
                 state['max_wall_ns'] = max(state['max_wall_ns'], wall_elapsed)
                 state['max_thread_cpu_ns'] = max(state['max_thread_cpu_ns'], cpu_elapsed)
+                for key in ('wait_set_wait_calls', 'ready_set_cycles', 'no_yield_cycles'):
+                    state[key] += wait_trace[key]
+                for name, count in wait_trace['ready_set_totals'].items():
+                    state['ready_set_totals'][name] = (
+                        state['ready_set_totals'].get(name, 0) + count)
+                state['max_no_yield_cycles_per_wait'] = max(
+                    state['max_no_yield_cycles_per_wait'], wait_trace['no_yield_cycles'])
                 if error is not None:
                     state['errors'] += 1
                     state['last_error'] = repr(error)[:256]
@@ -2609,8 +2656,11 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
         with state['lock']:
             snapshot = {key: value for key, value in state.items() if key != 'lock'}
             snapshot['entities'] = dict(state['entities'])
+            snapshot['ready_set_totals'] = dict(state['ready_set_totals'])
             state.update(calls=0, returned=0, wall_ns=0, thread_cpu_ns=0,
                 max_wall_ns=0, max_thread_cpu_ns=0, entities={}, errors=0,
+                wait_set_wait_calls=0, ready_set_cycles=0, no_yield_cycles=0,
+                ready_set_totals={}, max_no_yield_cycles_per_wait=0,
                 last_error=None)
         return snapshot
 
