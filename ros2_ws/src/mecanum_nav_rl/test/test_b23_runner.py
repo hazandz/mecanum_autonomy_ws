@@ -99,9 +99,13 @@ def test_worker_thread_identity_snapshot_maps_native_ids_to_python_threads(monke
         NS(native_id=44110, name='executor', ident=9910, daemon=False),
     ]
     monkeypatch.setattr(runner_module.threading, 'enumerate', lambda: threads)
+    monkeypatch.setattr(runner_module.time, 'pthread_getcpuclockid', lambda ident: ident + 1000)
+    monkeypatch.setattr(runner_module.time, 'clock_gettime_ns', lambda clock_id: clock_id * 10)
     assert worker_thread_identity_snapshot() == [
-        {'native_id':44110,'name':'executor','ident':9910,'daemon':False},
-        {'native_id':44133,'name':'policy_timer','ident':9933,'daemon':True},
+        {'native_id':44110,'name':'executor','ident':9910,'daemon':False,
+         'thread_cpu_ns':109100,'thread_cpu_error':None},
+        {'native_id':44133,'name':'policy_timer','ident':9933,'daemon':True,
+         'thread_cpu_ns':109330,'thread_cpu_error':None},
     ]
 
 

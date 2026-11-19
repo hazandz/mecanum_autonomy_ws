@@ -268,10 +268,19 @@ def worker_scheduler_snapshot():
 
 
 def worker_thread_identity_snapshot():
-    """Map live native thread IDs to Python names after a measured delay."""
-    return sorted(({'native_id':thread.native_id, 'name':thread.name,
-                    'ident':thread.ident, 'daemon':thread.daemon}
-        for thread in threading.enumerate()),
+    """Map live native thread IDs to names and CPU clocks after a delay."""
+    rows = []
+    for thread in threading.enumerate():
+        row = {'native_id':thread.native_id, 'name':thread.name,
+               'ident':thread.ident, 'daemon':thread.daemon,
+               'thread_cpu_ns':None, 'thread_cpu_error':None}
+        try:
+            clock_id = time.pthread_getcpuclockid(thread.ident)
+            row['thread_cpu_ns'] = time.clock_gettime_ns(clock_id)
+        except (OSError, OverflowError, ValueError, AttributeError) as error:
+            row['thread_cpu_error'] = repr(error)
+        rows.append(row)
+    return sorted(rows,
         key=lambda item: (-1 if item['native_id'] is None else item['native_id']))
 
 
