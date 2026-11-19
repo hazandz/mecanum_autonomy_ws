@@ -315,30 +315,6 @@ def worker_async_task_snapshot(loop=None):
     return sorted(rows, key=lambda item:(item['name'], item['coroutine']))
 
 
-def start_worker_stack_trace_capture(run_root, enabled, *, faulthandler_module=None):
-    """Opt-in bounded-period raw Python stack samples for an owned worker."""
-    if enabled is not True:
-        return None
-    import faulthandler
-    module = faulthandler if faulthandler_module is None else faulthandler_module
-    path = Path(run_root) / 'worker-thread-stacks.log'
-    stream = path.open('xb', buffering=0)
-    try:
-        module.dump_traceback_later(0.05, repeat=True, file=stream, exit=False)
-    except BaseException:
-        stream.close()
-        raise
-    return {'path':str(path), 'stream':stream, 'faulthandler':module,
-        'interval_s':0.05}
-
-
-def stop_worker_stack_trace_capture(capture):
-    if capture is None:
-        return
-    capture['faulthandler'].cancel_dump_traceback_later()
-    capture['stream'].close()
-
-
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -6696,18 +6672,11 @@ async def training_child(path):
     sink = QueuedRunEvidence(RunEvidence(descriptor['run_root'], 'worker',
         run_id=descriptor['run_id'], invocation_id=descriptor['invocation_id']))
     io = None
-    stack_capture = None
     primary, cleanup_errors, outcome = None, [], None
     try:
         document = json.loads(Path(packet['resolved_config']).read_bytes())
         asset = json.loads(Path(packet['asset_manifest']).read_bytes())
         io = TrainingWorkerIO(descriptor, document, asset, sink.record)
-        stack_capture = start_worker_stack_trace_capture(
-            descriptor['run_root'], packet['environment'].get('B23_CAPTURE_WORKER_STACKS') == '1')
-        if stack_capture is not None:
-            io.emit('WORKER_STACK_TRACE_CAPTURE_STARTED', {
-                'path':stack_capture['path'], 'interval_s':stack_capture['interval_s'],
-                'steady_ns':time.monotonic_ns()})
         io.fault_hooks = set(packet['fault_hooks'])
         loop = asyncio.get_running_loop()
         import signal
@@ -7829,10 +7798,6 @@ async def training_child(path):
                 cleanup_errors.append(repr(exc))
                 cleanup_errors.extend(io.close_context())
         try:
-            stop_worker_stack_trace_capture(stack_capture)
-        except BaseException as exc:
-            cleanup_errors.append('worker_stack_trace_close_error:' + repr(exc))
-        try:
             sink.close(deadline_ns=cleanup_deadline)
         except BaseException as exc:
             cleanup_errors.append('queued_evidence_close_error:' + repr(exc))
@@ -8798,13 +8763,10 @@ def prepare_packet(args):
         str(engine_file): hashlib.sha256(engine_file.read_bytes()).hexdigest()})
     environment_keys = ('HOME','USER','LOGNAME','PATH','LANG','LC_ALL','LD_LIBRARY_PATH','PYTHONPATH',
         'AMENT_PREFIX_PATH','CMAKE_PREFIX_PATH','COLCON_PREFIX_PATH','ROS_DISTRO','ROS_VERSION','ROS_PYTHON_VERSION',
-        'RMW_IMPLEMENTATION','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS','LIBGL_ALWAYS_SOFTWARE','GZ_CONFIG_PATH',
-        'B23_CAPTURE_WORKER_STACKS')
+        'RMW_IMPLEMENTATION','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS','LIBGL_ALWAYS_SOFTWARE','GZ_CONFIG_PATH')
     environment = bind_install_ament_prefix(
         {k: os.environ[k] for k in environment_keys if k in os.environ}, prefix,
     )
-    if environment.get('B23_CAPTURE_WORKER_STACKS') not in (None, '1'):
-        raise ValueError('B23_CAPTURE_WORKER_STACKS must be absent or exactly 1')
     environment.update(ROS_DOMAIN_ID='84', ROS_HOME=str(root/'ros-home'), ROS_LOG_DIR=str(root/'ros-log'),
         PYTHONPYCACHEPREFIX=str(root/'pycache'))
     values = launch_plan_record(plan)
