@@ -108,6 +108,28 @@ public:
   { return system.gate_ ? system.gate_->LastAcceptedSteadyNs() : -1; }
   static bool PauseHeld(const BackendSystem &system) { return system.reset_pause_hold_; }
 
+  static BackendState TriggerUnexpectedPause(BackendSystem &system)
+  {
+    BackendState published;
+    system.last_backend_state_ = BackendState{};
+    system.last_backend_state_->status_sequence = 9;
+    system.status_sequence_ = 9;
+    system.local_zero_override_ = false;
+    system.policy_open_ = true;
+    system.backend_state_sink_ = [&published](const BackendState &state) {
+      published = state;
+    };
+    {
+      std::lock_guard<std::mutex> lock(system.callback_mutex_);
+      system.FailPauseLocked(ControlResponse::REASON_BARRIER_INVALID, "UNEXPECTED_PAUSE");
+    }
+    return published;
+  }
+
+  static bool PauseFailureLatched(const BackendSystem &system)
+  { return system.reset_pause_failed_ && !system.policy_open_ &&
+      system.local_zero_override_ && (system.fault_flags_ & BackendState::FAULT_CONTEXT) != 0; }
+
   static void SeedRunDescriptor(BackendSystem &system)
   {
     // Isolated control-path tests start after the runtime resources boundary.
@@ -5233,4 +5255,18 @@ TEST(BackendSystemControlReceiver, CallbackAfterTickSampleWaitsForNextTickWithou
   BackendSystemTestPeer::Tick(system, ecm, 210, 21, 2'000'000'002);
   EXPECT_EQ(BackendSystemTestPeer::Cached(system, 1).result,
             ControlResponse::RESULT_APPLIED);
+}
+
+TEST(BackendSystemControlReceiver, UnexpectedPausePublishesPostLatchFaultAndZero)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  const auto status = BackendSystemTestPeer::TriggerUnexpectedPause(system);
+
+  EXPECT_TRUE(BackendSystemTestPeer::PauseFailureLatched(system));
+  EXPECT_EQ(status.status_sequence, 10u);
+  EXPECT_NE(status.fault_flags & BackendState::FAULT_CONTEXT, 0u);
+  EXPECT_TRUE(status.local_zero_override);
+  EXPECT_TRUE(status.actuator_inhibited);
+  EXPECT_FALSE(status.applied_receipt_valid);
 }

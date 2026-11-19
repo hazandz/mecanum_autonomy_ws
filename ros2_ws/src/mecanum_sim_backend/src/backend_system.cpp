@@ -3317,6 +3317,21 @@ private:
     local_zero_override_ = true;
     if (gate_) gate_->Invalidate(detail);
     SetFault(BackendState::FAULT_CONTEXT, detail);
+    if (detail == "UNEXPECTED_PAUSE")
+    {
+      // This post-latch record is consumed by the bounded R01b evidence path.
+      // Gazebo prefixes stderr diagnostics with [Err] and source location, so
+      // the runner recognizes only this exact marker and validates its fields.
+      gzerr << "B23_PAUSE_FAILURE_LATCHED detail=UNEXPECTED_PAUSE"
+          << " reason=" << reason
+          << " fault_flags=" << fault_flags_
+          << " local_zero_override=" << (local_zero_override_ ? 1 : 0)
+          << " policy_open=" << (policy_open_ ? 1 : 0)
+          << " reset_pause_failed=" << (reset_pause_failed_ ? 1 : 0)
+          << " binding_revision=" << control_binding_revision_
+          << " steady_ns=" << steady_clock_now_() << std::endl;
+      std::fflush(stderr);
+    }
     PublishPauseFaultStatusLocked();
   }
 

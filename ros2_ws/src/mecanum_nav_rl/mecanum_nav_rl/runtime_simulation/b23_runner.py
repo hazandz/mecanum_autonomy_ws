@@ -1633,27 +1633,54 @@ def verify_r06_reset_fault(io, *, case, error, anchor_sequence=None):
     return detail
 
 
-def verify_r01b_external_pause_rejection(io, error):
-    """Validate the expected production rejection and fail-closed reset stop."""
+def r01b_unexpected_pause_latch_rows(path):
+    """Read only complete structured native latch records for R01b."""
+    return [row for row in complete_jsonl_rows(path)
+        if row.get('kind') == 'B23_PAUSE_FAILURE_LATCHED'
+        and row.get('fields', {}).get('detail') == 'UNEXPECTED_PAUSE']
+
+
+def verify_r01b_external_pause_rejection(io, error, native_latch):
+    """Validate rejection and a run-bound native post-latch zero/fault record."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlError
     if not isinstance(error, BackendControlError):
         raise RuntimeError('R01b did not fail through the backend control response')
     ack = error.ack
-    state = io.ingress.backend_state
     if (ack is None or ack.response.result != ack.response.RESULT_REJECTED
             or ack.response.reason_code != Control.Response.REASON_BARRIER_INVALID):
         raise RuntimeError('R01b rejection response does not match unexpected-pause contract')
     if not any(name == 'FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1' for name, _ in io.events):
         raise RuntimeError('R01b external pause hook was not observed')
-    if state is None or state.fault_flags == 0 or not state.local_zero_override:
-        raise RuntimeError('R01b did not observe native fault with zero override')
+    if not isinstance(native_latch, dict):
+        raise RuntimeError('R01b did not observe structured native unexpected-pause latch')
+    fields = native_latch.get('fields', {})
+    raw = native_latch.get('raw_record', {})
+    raw_facts = raw.get('facts', {})
+    descriptor = io.descriptor
+    expected_fault = Control.Response.REASON_BARRIER_INVALID
+    if (native_latch.get('kind') != 'B23_PAUSE_FAILURE_LATCHED'
+            or native_latch.get('run_id') != descriptor.get('run_id')
+            or native_latch.get('invocation_id') != descriptor.get('invocation_id')
+            or raw.get('event') != 'owned_process_output'
+            or raw_facts.get('process') != 'server'
+            or raw_facts.get('pid') != native_latch.get('server_leader_pid')
+            or raw_facts.get('command', [])[:2] != ['gz', 'sim']
+            or fields.get('detail') != 'UNEXPECTED_PAUSE'
+            or int(fields.get('reason', -1)) != expected_fault
+            or int(fields.get('fault_flags', 0)) & 1 == 0
+            or fields.get('local_zero_override') != '1'
+            or fields.get('policy_open') != '0'
+            or fields.get('reset_pause_failed') != '1'):
+        raise RuntimeError('R01b native pause latch identity/state evidence mismatch')
     if any(name in {'RESET_POSE_MUTATION_ARMED','B1_RESET_STARTED','B1_RESET_COMMITTED',
                     'RESET_COMPLETE'} for name, _ in io.events):
         raise RuntimeError('R01b continued reset after unexpected pause')
     return {'reason_code':ack.response.reason_code,
         'request_sequence':ack.request.request_sequence,
-        'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+        'native_fault_flags':int(fields['fault_flags']), 'local_zero_override':True,
+        'native_latch_steady_ns':int(fields['steady_ns']),
+        'native_latch_server_pid':native_latch['server_leader_pid'],
         'no_pose_mutation':True, 'no_observation0_commit':True}
 
 
@@ -6289,13 +6316,20 @@ class RunEvidence:
                 embedded_markers = []
                 for index, message in enumerate(messages):
                     match = re.match(r'\s*(B23_[A-Z_]+)\s+(.*)', message)
+                    if match is None:
+                        # Parse one allowlisted Gazebo stderr record only. Other
+                        # markers embedded in logger text remain rejected below.
+                        match = re.match(
+                            r'\s*\[Err\]\s+\[backend_system\.cpp:\d+\]\s+'
+                            r'(B23_PAUSE_FAILURE_LATCHED)\s+(.*)', message)
                     if match:
                         parsed.append((index, match[1], match[2]))
                     else:
                         embedded_markers.extend((index, found[1]) for found in
                             re.finditer(r'\b(B23_[A-Z_]+)\b', message))
                 common = {'raw_record': record, 'server_leader_pid': facts['pid'],
-                    'invocation_id': self.invocation_id, 'collected_ns': time.monotonic_ns()}
+                    'run_id': self.run_id, 'invocation_id': self.invocation_id,
+                    'collected_ns': time.monotonic_ns()}
                 for index, kind, payload in parsed:
                     pairs = re.findall(r'(\w+)=([^\s]+)', payload)
                     fields = dict(pairs)
@@ -6308,6 +6342,18 @@ class RunEvidence:
                                 or any(re.fullmatch(r'[0-9]+', fields[key]) is None
                                        for key in ('backend', 'ingress', 'sample'))):
                             reason = 'incomplete_native_input_identity'
+                    elif kind == 'B23_PAUSE_FAILURE_LATCHED':
+                        required = ('detail', 'reason', 'fault_flags',
+                            'local_zero_override', 'policy_open',
+                            'reset_pause_failed', 'binding_revision', 'steady_ns')
+                        numeric = ('reason', 'fault_flags', 'local_zero_override',
+                            'policy_open', 'reset_pause_failed',
+                            'binding_revision', 'steady_ns')
+                        if (any(not fields.get(key) for key in required)
+                                or fields.get('detail') != 'UNEXPECTED_PAUSE'
+                                or any(re.fullmatch(r'[0-9]+', fields[key]) is None
+                                       for key in numeric)):
+                            reason = 'incomplete_unexpected_pause_latch'
                     event_record = dict(common, message_index=index,
                         message_text_sha256=hashlib.sha256(payload.encode()).hexdigest())
                     if reason is not None:
@@ -7770,7 +7816,12 @@ async def training_child(path):
                 await io.reset_episode(b1, seed=packet['episode_seeds'][0], target=target,
                     paused_hold_s=.250)
             except Exception as exc:
-                checked = verify_r01b_external_pause_rejection(io, exc)
+                native_latch = await io.until(lambda: (
+                    rows[-1] if len(rows := r01b_unexpected_pause_latch_rows(
+                        descriptor['native_events_path'])) == 1 else None),
+                    deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
+                    phase='R01b native unexpected-pause latch with zero override')
+                checked = verify_r01b_external_pause_rejection(io, exc, native_latch)
                 outcome = {'case':'R01b', 'expected_rejection':True, **checked,
                     'completed_ns':time.monotonic_ns()}
             if outcome is None:

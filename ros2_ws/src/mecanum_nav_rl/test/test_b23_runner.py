@@ -4409,19 +4409,31 @@ def test_r01b_requires_native_unexpected_pause_and_zero_without_reset_commit():
     response.reason_code = response.REASON_BARRIER_INVALID
     ack = NS(response=response, request=NS(request_sequence=24))
     error = BackendControlError('backend rejected pause', ack)
+    native_latch = {'kind':'B23_PAUSE_FAILURE_LATCHED', 'run_id':'B23_TEST_R01B',
+        'invocation_id':'inv-1', 'server_leader_pid':777,
+        'raw_record':{'event':'owned_process_output', 'facts':{
+            'process':'server', 'pid':777, 'command':['gz','sim','-v','3']}},
+        'fields':{'detail':'UNEXPECTED_PAUSE','reason':str(response.REASON_BARRIER_INVALID),
+            'fault_flags':'1','local_zero_override':'1','policy_open':'0',
+            'reset_pause_failed':'1','binding_revision':'2','steady_ns':'900'}}
     io = NS(events=[('FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1', {'sequence': 11})],
-        ingress=NS(backend_state=NS(fault_flags=1, local_zero_override=True)))
-    result = verify_r01b_external_pause_rejection(io, error)
+        descriptor={'run_id':'B23_TEST_R01B','invocation_id':'inv-1'})
+    result = verify_r01b_external_pause_rejection(io, error, native_latch)
     assert result == {'reason_code': response.REASON_BARRIER_INVALID,
         'request_sequence': 24, 'native_fault_flags': 1, 'local_zero_override': True,
+        'native_latch_steady_ns':900, 'native_latch_server_pid':777,
         'no_pose_mutation': True, 'no_observation0_commit': True}
     io.events.append(('B1_RESET_COMMITTED', {}))
     with pytest.raises(RuntimeError, match='continued reset'):
-        verify_r01b_external_pause_rejection(io, error)
+        verify_r01b_external_pause_rejection(io, error, native_latch)
     io.events = [('FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1', {})]
-    io.ingress.backend_state.local_zero_override = False
-    with pytest.raises(RuntimeError, match='zero override'):
-        verify_r01b_external_pause_rejection(io, error)
+    native_latch['fields']['local_zero_override'] = '0'
+    with pytest.raises(RuntimeError, match='state evidence mismatch'):
+        verify_r01b_external_pause_rejection(io, error, native_latch)
+    native_latch['fields']['local_zero_override'] = '1'
+    native_latch['invocation_id'] = 'different-invocation'
+    with pytest.raises(RuntimeError, match='state evidence mismatch'):
+        verify_r01b_external_pause_rejection(io, error, native_latch)
 
 
 def test_r01c_d_wait_bounded_for_native_fault_status_after_expired_ack():
@@ -5096,6 +5108,37 @@ def test_interleaved_gazebo_stdout_is_preserved_but_cannot_poison_native_waterma
     with path.open('a') as stream:
         stream.write(json.dumps(valid) + '\n')
     assert value.read_native_input_watermark() == 29
+
+
+def test_gazebo_error_prefix_parses_only_allowlisted_pause_latch_record(tmp_path):
+    import json
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+    sink = RunEvidence(tmp_path, 'parent', run_id='B23_TEST_R01B', invocation_id='inv-1')
+    try:
+        sink.record('owned_process_output', {'process':'server','pid':777,
+            'text':('\x1b[1;31m[Err]\x1b[0m [backend_system.cpp:3330] '
+                '\x1b[1;31mB23_PAUSE_FAILURE_LATCHED detail=UNEXPECTED_PAUSE '
+                'reason=6 fault_flags=1 local_zero_override=1 policy_open=0 '
+                'reset_pause_failed=1 binding_revision=2 steady_ns=900\x1b[0m')})
+        sink.record('owned_process_output', {'process':'server','pid':777,
+            'text':'[Err] [other_system.cpp:1] B23_PAUSE_FAILURE_LATCHED detail=UNEXPECTED_PAUSE '
+                'reason=6 fault_flags=1 local_zero_override=1 policy_open=0 '
+                'reset_pause_failed=1 binding_revision=2 steady_ns=901'})
+        sink.sync()
+        rows = [json.loads(line) for line in (tmp_path/'native-events.jsonl').read_text().splitlines()]
+        accepted = [row for row in rows if row['kind']=='B23_PAUSE_FAILURE_LATCHED']
+        assert len(accepted) == 1
+        assert accepted[0]['fields'] == {'detail':'UNEXPECTED_PAUSE','reason':'6',
+            'fault_flags':'1','local_zero_override':'1','policy_open':'0',
+            'reset_pause_failed':'1','binding_revision':'2','steady_ns':'900'}
+        assert accepted[0]['run_id']=='B23_TEST_R01B'
+        assert accepted[0]['invocation_id']=='inv-1'
+        assert accepted[0]['server_leader_pid']==777
+        assert any(row['kind']=='B23_NATIVE_OUTPUT_REJECTED'
+            and row['fields'].get('reason')=='event_marker_not_at_message_boundary'
+            for row in rows)
+    finally:
+        sink.close()
 
 
 def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader):
