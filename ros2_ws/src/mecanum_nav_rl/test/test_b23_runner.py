@@ -38,7 +38,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
-    parse_worker_scheduler_snapshot, spin_ready_callback_batch,
+    parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
+    spin_ready_callback_batch,
 )
 
 
@@ -90,6 +91,18 @@ def test_worker_scheduler_snapshot_binds_cgroup_and_normalizes_cpu_pressure():
         schedstat_text='',cpu_stat_text='',cpu_max_text='bad',cpu_pressure_text='')
     assert incomplete['cgroup_path'] is None
     assert set(incomplete['errors']) == {'cgroup','schedstat','cpu_stat','cpu_max','cpu_pressure'}
+
+
+def test_worker_thread_identity_snapshot_maps_native_ids_to_python_threads(monkeypatch):
+    threads = [
+        NS(native_id=44133, name='policy_timer', ident=9933, daemon=True),
+        NS(native_id=44110, name='executor', ident=9910, daemon=False),
+    ]
+    monkeypatch.setattr(runner_module.threading, 'enumerate', lambda: threads)
+    assert worker_thread_identity_snapshot() == [
+        {'native_id':44110,'name':'executor','ident':9910,'daemon':False},
+        {'native_id':44133,'name':'policy_timer','ident':9933,'daemon':True},
+    ]
 
 
 def test_worker_emit_reports_lock_wait_and_sink_delay_without_changing_event():

@@ -267,6 +267,14 @@ def worker_scheduler_snapshot():
     return normalized
 
 
+def worker_thread_identity_snapshot():
+    """Map live native thread IDs to Python names after a measured delay."""
+    return sorted(({'native_id':thread.native_id, 'name':thread.name,
+                    'ident':thread.ident, 'daemon':thread.daemon}
+        for thread in threading.enumerate()),
+        key=lambda item: (-1 if item['native_id'] is None else item['native_id']))
+
+
 def verify_r09a_goal_settle(transition):
     """Require a committed, healthy B1 GOAL terminal under zero command."""
     from mecanum_nav_rl.termination.manager import TerminationReason
@@ -3171,7 +3179,8 @@ class TrainingWorkerIO:
                     self.emit('B23_WORKER_PUMP_GAP', {
                         **diagnostic, 'previous_turn_started_ns':previous_wall_ns,
                         'turn_started_ns':started_wall_ns, 'observed_ns':self.now(),
-                        'scheduler':worker_scheduler_snapshot()})
+                        'scheduler':worker_scheduler_snapshot(),
+                        'thread_identities':worker_thread_identity_snapshot()})
                 previous_wall_ns, previous_cpu_ns = started_wall_ns, started_cpu_ns
                 previous_process_cpu_ns = started_process_cpu_ns
                 sink_owner = getattr(self, '_event_sink_owner', None)
@@ -3199,7 +3208,8 @@ class TrainingWorkerIO:
                     self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
                         **spin_diagnostic, **spin_details, 'spin_once_count':spin_once_count,
                         'observed_ns':self.now(),
-                        'scheduler':worker_scheduler_snapshot()})
+                        'scheduler':worker_scheduler_snapshot(),
+                        'thread_identities':worker_thread_identity_snapshot()})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 pause_started_ns = time.monotonic_ns()
@@ -3214,7 +3224,8 @@ class TrainingWorkerIO:
                 if pause_diagnostic is not None:
                     self.emit('B23_WORKER_PAUSE_OVERRUN', {
                         **pause_diagnostic, 'requested_sleep_ns':1_000_000,
-                        'observed_ns':self.now()})
+                        'observed_ns':self.now(),
+                        'thread_identities':worker_thread_identity_snapshot()})
         except asyncio.CancelledError:
             raise
         except BaseException as error:
