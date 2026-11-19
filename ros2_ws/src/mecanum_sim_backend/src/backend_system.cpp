@@ -2489,6 +2489,29 @@ private:
       const ControlRequest &request, ControlResponse &response)
   {
     const auto ingress_steady_ns = steady_clock_now_();
+    const bool trace_contact_query =
+        request.operation == ControlRequest::OP_VERIFY_CONTACT_CAPABILITY &&
+        request.probe_action == ControlRequest::PROBE_ACTION_QUERY;
+    std::int64_t callback_mutex_acquired_ns = 0;
+    auto trace_contact_query_done = [&, ingress_steady_ns](void *) {
+      if (!trace_contact_query) return;
+      const auto completed_ns = steady_clock_now_();
+      const auto elapsed_ns = completed_ns - ingress_steady_ns;
+      if (elapsed_ns < 10'000'000) return;
+      gzmsg << "B23_CONTACT_QUERY_CALLBACK_SLOW request="
+            << request.request_sequence << " result=" << response.result
+            << " reason=" << response.reason_code
+            << " capability=" << response.contact_capability_state
+            << " lock_wait_ns="
+            << (callback_mutex_acquired_ns == 0 ? -1 :
+                callback_mutex_acquired_ns - ingress_steady_ns)
+            << " callback_ns=" << elapsed_ns
+            << " completed_ns=" << completed_ns << std::endl;
+    };
+    std::unique_ptr<void, decltype(trace_contact_query_done)>
+        trace_contact_query_guard(
+            trace_contact_query ? reinterpret_cast<void *>(1) : nullptr,
+            trace_contact_query_done);
     response = NewControlResponse(request.request_sequence);
     if (shutdown_started_.load())
     {
@@ -2516,6 +2539,7 @@ private:
     }
     const auto request_bytes = SerializeControlRequest(request);
     std::lock_guard<std::mutex> lock(callback_mutex_);
+    callback_mutex_acquired_ns = steady_clock_now_();
     response.binding_revision = control_binding_revision_;
     const auto cached = control_cache_.find(request.request_sequence);
     if (cached != control_cache_.end())
@@ -2722,6 +2746,11 @@ private:
     response.result = ControlResponse::RESULT_QUEUED;
     response.reason_code = ControlResponse::REASON_NONE;
     CacheControlResponse(request.request_sequence, request_bytes, response);
+    if (trace_contact_query)
+      gzmsg << "B23_CONTACT_QUERY_ENQUEUED request="
+            << request.request_sequence << " ingress_ns="
+            << ingress_steady_ns << " queue_size=" << control_queue_.size()
+            << " mutation_pending=" << control_mutation_pending_ << std::endl;
   }
 
   void ProcessBackendControlRequests(
@@ -3238,6 +3267,17 @@ private:
         (request.operation == ControlRequest::OP_VERIFY_CONTACT_CAPABILITY &&
          request.probe_action == ControlRequest::PROBE_ACTION_START))
       control_mutation_pending_ = false;
+    if (request.operation == ControlRequest::OP_VERIFY_CONTACT_CAPABILITY &&
+        request.probe_action == ControlRequest::PROBE_ACTION_QUERY)
+      gzmsg << "B23_CONTACT_QUERY_PROCESSED request="
+            << request.request_sequence << " result=" << response.result
+            << " reason=" << response.reason_code
+            << " capability=" << response.contact_capability_state
+            << " contact_samples=" << response.contact_sample_count
+            << " empty_samples=" << response.covered_empty_sample_count
+            << " phase=" << static_cast<unsigned>(probe_machine_.Phase())
+            << " queue_size=" << control_queue_.size()
+            << " processed_ns=" << steady_now_ns << std::endl;
     (void)steady_now_ns;
   }
 
