@@ -8,6 +8,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
+import threading
+import time
 from tf2_ros import Buffer, TransformListener
 from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState, SafetyState
 
@@ -69,7 +71,8 @@ class SafetySupervisorNode(Node):
                 (LocalTrainingSafetyInput, '/mecanum/local_training/safety_input', self.local_training.on_safety_input, reliable),
                 (SimulationContactState, '/mecanum/local_training/backend_state', self.local_training.on_backend, backend),
             ):
-                self.create_subscription(message_type, topic, callback, qos)
+                self.create_subscription(message_type, topic,
+                    self._profile_local_training_callback(topic, callback), qos)
             period_ns = int(local_training_context['profile']['safety_period_ms']) * 1_000_000
             if period_ns <= 0 or period_ns % 2:
                 raise ValueError('LOCAL_TRAINING Safety period must be a positive even nanosecond value')
@@ -153,6 +156,32 @@ class SafetySupervisorNode(Node):
         self.create_subscription(Odometry, "/odometry/filtered", self._on_odometry, reliable_volatile)
         self.create_subscription(SafetyLifecycleState, "/mecanum/safety_lifecycle_state", self._on_barrier, reliable_volatile)
         self.create_timer(0.05, self._evaluate_and_publish)
+
+    def _profile_local_training_callback(self, topic, callback):
+        """Record only slow Safety input callbacks; preserve callback result/errors."""
+        def measured(message):
+            started_ns = time.monotonic_ns()
+            thread_started_ns = time.thread_time_ns()
+            try:
+                return callback(message)
+            finally:
+                completed_ns = time.monotonic_ns()
+                thread_cpu_ns = time.thread_time_ns() - thread_started_ns
+                wall_ns = completed_ns - started_ns
+                if max(wall_ns, thread_cpu_ns) > 5_000_000:
+                    facts = {'topic':topic, 'thread_name':threading.current_thread().name,
+                        'thread_native_id':threading.get_native_id(),
+                        'started_ns':started_ns, 'completed_ns':completed_ns,
+                        'wall_ns':wall_ns, 'thread_cpu_ns':thread_cpu_ns,
+                        'threshold_ns':5_000_000}
+                    if hasattr(message, 'ranges'):
+                        facts['range_count'] = len(message.ranges)
+                    try:
+                        self.local_training.emit('SAFETY_INPUT_CALLBACK_SLOW', facts)
+                    except BaseException:
+                        # Diagnostic delivery must not replace callback behavior.
+                        pass
+        return measured
 
     def _tick_local_training_steady(self) -> None:
         """Record timer lateness without changing watchdog or Safety decisions."""

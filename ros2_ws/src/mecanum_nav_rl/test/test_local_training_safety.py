@@ -39,6 +39,39 @@ from types import SimpleNamespace as NS
 import pytest
 
 
+def test_safety_subscription_profiler_records_slow_input_without_changing_result(monkeypatch):
+    import mecanum_nav_rl.runtime_safety.safety_supervisor_node as module
+    from mecanum_nav_rl.runtime_safety.safety_supervisor_node import SafetySupervisorNode
+
+    events = []
+    node = object.__new__(SafetySupervisorNode)
+    node.local_training = NS(emit=lambda event, facts: events.append((event, facts)))
+    wall = iter((100, 10_000_101))
+    cpu = iter((200, 6_000_201))
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: next(wall))
+    monkeypatch.setattr(module.time, 'thread_time_ns', lambda: next(cpu))
+    scan = NS(ranges=[1.0] * 500)
+    callback = node._profile_local_training_callback('/scan', lambda msg: msg)
+    assert callback(scan) is scan
+    assert len(events) == 1
+    event, facts = events[0]
+    assert event == 'SAFETY_INPUT_CALLBACK_SLOW'
+    assert facts['topic'] == '/scan'
+    assert facts['wall_ns'] == 10_000_001
+    assert facts['thread_cpu_ns'] == 6_000_001
+    assert facts['range_count'] == 500
+    assert facts['thread_native_id'] > 0
+
+    wall = iter((20, 10_000_030))
+    cpu = iter((40, 6_000_050))
+    failed = node._profile_local_training_callback(
+        '/mecanum/local_training/backend_state',
+        lambda _msg: (_ for _ in ()).throw(ValueError('callback error')))
+    with pytest.raises(ValueError, match='callback error'):
+        failed(NS())
+    assert len(events) == 2
+
+
 @pytest.fixture
 def local_adapter():
     """Message ROS generated qua biên I/O giả, không tạo ROS context."""
