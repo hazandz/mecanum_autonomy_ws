@@ -3464,7 +3464,7 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
         set_stream_enabled=lambda enabled:calls.append(('stream',enabled)))
     io = NS(final=NS(publication_for_source_sequence=lambda **kw:(
             calls.append(('receipt',kw)),receipt)[1]),
-        ingress=NS(application_for_receipt=lambda selected:(
+        ingress=NS(policy_application_for_receipt=lambda selected:(
             calls.append(('application',selected)),application)[1]),
         now=lambda:100,
         emit=lambda name,facts:calls.append((name,facts)))

@@ -2435,11 +2435,13 @@ async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
     receipt = await io.until(lambda: io.final.publication_for_source_sequence(
         source=output.source, sequence=output.sequence),
         deadline_ns=deadline_ns, phase='R02g last Safety output receipt before close')
-    application = await await_r02g_exact_safe_stop_application(
-        io, receipt=receipt, deadline_ns=deadline_ns, route='pre-close') if (
-            receipt.source == CommandEnvelope.SOURCE_SAFE_STOP) else await io.until(
-                lambda: io.ingress.application_for_receipt(receipt),
-                deadline_ns=deadline_ns, phase='R02g last POLICY application before close')
+    if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
+        application = await await_r02g_exact_safe_stop_application(
+            io, receipt=receipt, deadline_ns=deadline_ns, route='pre-close')
+    else:
+        application = await io.until(
+            lambda: io.ingress.policy_application_for_receipt(receipt),
+            deadline_ns=deadline_ns, phase='R02g last POLICY application before close')
     if not isinstance(application, dict) or application.get('state') is None:
         raise RuntimeError('R02g last Safety output lacks exact native application evidence')
     state = application['state']

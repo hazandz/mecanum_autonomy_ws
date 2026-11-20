@@ -793,6 +793,79 @@ class LocalTrainingIngress:
             return None
         return {'state': state, 'received_ns': received}
 
+    def policy_application_for_receipt(self, receipt):
+        """Return exact native application evidence for a POLICY publication.
+
+        This stays separate from ``application_for_receipt``, which proves a
+        SAFE_STOP zero application for reset and cleanup paths. R02g must also
+        drain the last POLICY output before testing its close routes; that
+        lookup joins the POLICY receipt and retained native status bytes
+        without weakening the SAFE_STOP validator.
+        """
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt, SimulationContactState
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+
+        if not isinstance(receipt, FinalIssuedCommandReceipt):
+            return None
+        key = receipt.final_publish_sequence
+        with self.lock:
+            retained_view = self._receipt_views.get(key)
+            retained_raw = self._receipt_bytes.get(key)
+        if retained_raw is None or retained_view is None:
+            return None
+        try:
+            identity = lifecycle_identity(receipt)
+            values = (receipt.final_command.linear.x, receipt.final_command.linear.y,
+                receipt.final_command.angular.z)
+            matches = (stamp_ns(receipt.header.stamp) == retained_view.publish_stamp_ns
+                and receipt.final_publisher_instance_id == retained_view.final_publisher_instance_id
+                and receipt.final_publish_sequence == retained_view.final_publish_sequence
+                and receipt.source == FinalIssuedCommandReceipt.SOURCE_POLICY
+                and retained_view.source is ReceiptSource.POLICY
+                and receipt.source_instance_id == retained_view.source_instance_id
+                and receipt.sequence == retained_view.source_sequence
+                and receipt.step_index == retained_view.step_index
+                and receipt.transition_id == retained_view.transition_id
+                and identity == retained_view.lifecycle
+                and receipt.header.frame_id == retained_view.frame_id
+                and values == retained_view.final_command
+                and receipt.final_command.linear.z == 0.0
+                and receipt.final_command.angular.x == 0.0
+                and receipt.final_command.angular.y == 0.0)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if (not matches or receipt.source_instance_id != self.policy_source_id
+                or receipt.step_index <= 0 or not receipt.transition_id
+                or receipt.header.frame_id != 'base_link'):
+            return None
+        with self.lock:
+            raw = self._application_bytes.get(key)
+            received = self._application_received_ns.get(key)
+            lifecycle = self.lifecycle
+        if raw is None or type(received) is not int or lifecycle is None:
+            return None
+        state = deserialize_message(raw, SimulationContactState)
+        receipt_stamp = retained_view.publish_stamp_ns
+        state_stamp = stamp_ns(state.header.stamp)
+        applied_stamp = stamp_ns(state.applied_sim_stamp)
+        if (lifecycle_identity(state) != retained_view.lifecycle
+                or retained_view.lifecycle != lifecycle_identity(lifecycle)
+                or retained_view.session_id != self.identity.session_id
+                or retained_view.ingress_config_hash != self.identity.config_hash
+                or state.session_id != self.identity.session_id
+                or state.config_hash != self.identity.config_hash
+                or state.backend_instance_id != self.identity.backend_instance_id
+                or not state.applied_receipt_valid or state.local_zero_override
+                or state.fault_flags != 0 or state.paused
+                or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+                or state.applied_final_publish_sequence != key
+                or state.applied_physics_iteration == 0
+                or state.applied_physics_iteration != state.physics_iteration
+                or applied_stamp != state_stamp or applied_stamp < receipt_stamp):
+            return None
+        return {'state': state, 'received_ns': received}
+
     def receipt_for_publication_sequence(self, sequence):
         """Return the exact immutable ingress receipt view for a publication key."""
         with self.lock:

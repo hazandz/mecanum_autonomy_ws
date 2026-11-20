@@ -705,6 +705,48 @@ def test_b1_application_proof_survives_physics_pair_window_eviction(source):
         chain.b1._prove_application(receipt, applied_stamp_ns - 1)
 
 
+def test_policy_application_lookup_joins_exact_receipt_and_native_status(source):
+    from copy import deepcopy
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+
+    f = source
+    receipt = FinalIssuedCommandReceipt()
+    receipt.header.frame_id, receipt.header.stamp = 'base_link', stamp(f.clock.ros)
+    receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation = 1, 2, 3
+    receipt.source, receipt.source_instance_id, receipt.sequence = receipt.SOURCE_POLICY, 33, 1
+    receipt.step_index = 1
+    receipt.transition_id = policy_transition_identity(
+        identity=EpisodeLifecycleIdentity(1, 2, 3), session_id='b23-test',
+        source_instance_id=33, source_sequence=1, step_index=1).transition_id
+    receipt.final_publisher_instance_id, receipt.final_publish_sequence = 55, 7
+    receipt.final_command.linear.x = 0.25
+    retained = f.ingress.on_receipt(receipt, received_ns=f.clock.steady)
+
+    status = f.backend(iteration=7, sequence=7)
+    status.applied_receipt_valid = True
+    status.applied_final_publisher_instance_id = 55
+    status.applied_final_publish_sequence = 7
+    status.applied_physics_iteration = 7
+    status.applied_sim_stamp = stamp(f.clock.ros)
+    f.ingress.on_backend(status)
+
+    application = f.ingress.policy_application_for_receipt(receipt)
+    assert retained.source.name == 'POLICY'
+    assert application is not None
+    assert application['received_ns'] == f.clock.steady
+    assert application['state'].applied_final_publisher_instance_id == 55
+    assert application['state'].applied_final_publish_sequence == 7
+    assert application['state'].applied_physics_iteration == 7
+    assert f.ingress.application_for_receipt(receipt) is None  # SAFE_STOP-only proof stays strict.
+
+    wrong_identity = deepcopy(receipt)
+    wrong_identity.runtime_generation += 1
+    assert f.ingress.policy_application_for_receipt(wrong_identity) is None
+    wrong_key = deepcopy(receipt)
+    wrong_key.final_publish_sequence += 1
+    assert f.ingress.policy_application_for_receipt(wrong_key) is None
+
+
 def test_b1_contact_continuity_survives_cutoff_after_more_than_old_pair_window(source):
     """Reset-to-cutoff continuity remains available across a delayed cutoff."""
     f = source; chain = b1_runtime_chain(f)
