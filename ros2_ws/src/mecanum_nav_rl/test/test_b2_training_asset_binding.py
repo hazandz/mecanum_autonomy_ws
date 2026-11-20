@@ -50,6 +50,28 @@ def test_manifest_scenarios_and_resolved_outputs_bind_real_assets() -> None:
         )
 
 
+def test_fixed_wheels_do_not_friction_lock_the_body_motion_surrogate() -> None:
+    """B2 body-velocity actuation keeps wheel contact without lateral grip."""
+    import xml.etree.ElementTree as ET
+
+    model_path = _ROOT / (
+        'ros2_ws/src/ROBOT_URDF_final_description/models/'
+        'mecanum_b2/model.sdf'
+    )
+    root = ET.parse(model_path).getroot()
+    for name in ('LF', 'RF', 'RB', 'LB'):
+        collision = root.find(
+            f".//link[@name='Wheel_{name}_1']/collision"
+        )
+        assert collision is not None
+        mu = collision.findtext('surface/friction/ode/mu')
+        mu2 = collision.findtext('surface/friction/ode/mu2')
+        assert mu == '0' and mu2 == '0', (
+            f'fixed wheel {name} must not constrain the body-motion surrogate'
+        )
+        assert collision.find('geometry/cylinder') is not None
+
+
 def test_scenario_outputs_follow_exact_b1_ids_and_contact_selection() -> None:
     """Manifest records the B1 scenario IDs and probe selection."""
     bundle = build_training_asset_bundle(_ROOT)

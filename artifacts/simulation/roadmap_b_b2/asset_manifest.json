@@ -39,8 +39,8 @@
     "wall_thickness_m": 0.2
   },
   "backend_contract": {
-    "fingerprint_sha256": "932bd238b27f5099602e088a23c3583ef14f2006c9c10c38c34f0ae1831a1815",
-    "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "c734ba307ed8f017cfd562b541b335791d7893f269782bb364a008a863155b6a",
+    "fingerprint_sha256": "2998bfb6293c075e78f345fa4bcd836a1a04f934117e58a72703af28981ad60a",
+    "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "fa9205af3a5c55460fbe46addb9813b169336ba797da1592b33f31286fe81adb",
     "mecanum_nav_rl_interfaces/CMakeLists.txt": "34dd61114b01846adf78328e9c6b7b72c3c4b1273f08337e2809f5c074c06859",
     "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
     "mecanum_nav_rl_interfaces/msg/LocalTrainingSafetyInput.msg": "16ba2a8fe0dafa4e5647938fb2c5d633ab950eb6a0c97c0dd2e8b1ddd07afbc8",
@@ -49,13 +49,13 @@
     "mecanum_nav_rl_interfaces/srv/LocalTrainingBackendControl.srv": "ce7b2c169adb85a1c93d4eae241c6f669ed72c6cd9323bf75c9658f2b5100534",
     "mecanum_sim_backend/CMakeLists.txt": "7e02d9f43cf4071208cc9ca424a69d77dde9c13d5611bef66da5a85bddafd434",
     "mecanum_sim_backend/env-hooks/mecanum_sim_backend.dsv.in": "777d044a3a3d3751f77abe96cc461d03fbbb59e8b80c6921338cda4f74dcfbf3",
-    "mecanum_sim_backend/include/mecanum_sim_backend/backend_system.hpp": "42390be366b9a169d554454ca85da337708ded8fdf19397893c599244ad961ba",
+    "mecanum_sim_backend/include/mecanum_sim_backend/backend_system.hpp": "bc428bf22faeb1ec73e2ca8d4150d4dd7d6712b805961e5e4c626f93c1e4f1d2",
     "mecanum_sim_backend/include/mecanum_sim_backend/contact_coverage.hpp": "a5b4bf4323cb2739fda9c47d2f9ec3e7abe9e2aa41bccc654670b3e67f72506d",
-    "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "e9338877cd665accf90b4d1ce5a0e24397a3da77a88a1dba39822733db856831",
+    "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "e70ccc2130c0b174263672f44e872ac6fae5627d6bfe8f365ffe8c4d64efd4a0",
     "mecanum_sim_backend/package.xml": "97b144b11c483e38689439fc47bb1d62286aaac137f54cb5989199228b9ffaad",
-    "mecanum_sim_backend/src/backend_system.cpp": "55a52782c257bad1ffdfe885699898d19b743a8752d46fa65a6918b93146531f",
+    "mecanum_sim_backend/src/backend_system.cpp": "bf8096c2a31df21e0dc7eeb062f7fb60d6f83ee95408c0edd64acb148b0ca101",
     "mecanum_sim_backend/src/contact_coverage.cpp": "840a38cb229a0487ccb358abefc403ba58848c613b5faf054bb7a5db5988c07a",
-    "mecanum_sim_backend/src/receipt_gate.cpp": "c92ebd38c4d0694f331a32b9fe6dcf5eced32d3824f3ea1ac7a3ddddf6d84009"
+    "mecanum_sim_backend/src/receipt_gate.cpp": "012cd6f500ddd1136322089f572c9660b8b40cf8a0f6dd0dac5e84eae116f402"
   },
   "backend_id": "NATIVE_B2_BACKEND_V1",
   "collision_registry": {
@@ -159,7 +159,7 @@
     "ROBOT_URDF_final_description/models/b2_contact_probe/model.config": "bf7f4dc0fb00367736c1148742715b3efd6e5c146ea63e2edb29f2c23595be4d",
     "ROBOT_URDF_final_description/models/b2_contact_probe/model.sdf": "d8c54c9cea8d34e720cd9515583ba86a377b94e98d6c93b7f23e4c9c79ce6b84",
     "ROBOT_URDF_final_description/models/mecanum_b2/model.config": "270cf64e6e0c7e8ab946035050038be13088b55ce44853fc93145e19f6451b29",
-    "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "c99626191563ad7e5949cc5fb8b83fcb1a65681d90ffe8b365bd5791264e8e06",
+    "ROBOT_URDF_final_description/models/mecanum_b2/model.sdf": "27644ad729c3116d292da79c93b3d8d0cb62f4567d900894e2d445f2425424a6",
     "ROBOT_URDF_final_description/urdf/ROBOT_URDF_final.xacro": "d80f46f3b5f273257072d800b9ba0b34c763128bfeefc32959363babf106cc0d",
     "ROBOT_URDF_final_description/urdf/mecanum_b2_static.urdf": "1800ceb4abcc80e9db21460bcc99bba95821028cc7053f3dd6e004e599190243",
     "ROBOT_URDF_final_description/worlds/b2_training_arena.sdf": "059cb35022941dc6d3ec7ce65efbedc6acce60984b3e86b848a19c37278d1525"
