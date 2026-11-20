@@ -5847,6 +5847,43 @@ class TrainingWorkerIO:
             'steady_ns': self.now(),
         })
 
+    async def wait_for_policy_issue_window(self, *, deadline_ns, step_index):
+        """Wait until a newly issued POLICY has room before both scan edges.
+
+        The pending-step slot cannot accept a SAFE_STOP refresh. Stage POLICY
+        only after its exact post-ACK admission sample is in Safety, and avoid
+        stamping it on the closed cutoff edge or within one physics step of
+        the next cutoff. This preserves the native watchdog and publisher
+        freshness limits; it changes only when the one authorized issuance is
+        made.
+        """
+        adapter = self.safety.local_training
+        period_ns = adapter.scan_period_ns
+        physics_step_ns = adapter.physics_step_ns
+        if (type(period_ns) is not int or period_ns <= 0
+                or type(physics_step_ns) is not int or physics_step_ns <= 0
+                or physics_step_ns >= period_ns):
+            raise RuntimeError('POLICY issue window requires pinned scan and physics periods')
+
+        def usable_window():
+            ros_ns = self.ros_now()
+            phase_ns = ros_ns % period_ns
+            remaining_ns = period_ns - phase_ns if phase_ns else 0
+            if (phase_ns > physics_step_ns
+                    and remaining_ns > physics_step_ns):
+                return {'ros_ns': ros_ns, 'phase_ns': phase_ns,
+                    'remaining_to_cutoff_ns': remaining_ns}
+            return None
+
+        window = await self.until(usable_window, deadline_ns=deadline_ns,
+            phase='post-admission POLICY issue window away from scan cutoff')
+        self.emit('POLICY_ISSUE_WINDOW_READY', {
+            'step_index': step_index, **window, 'scan_period_ns': period_ns,
+            'physics_step_ns': physics_step_ns, 'deadline_ns': deadline_ns,
+            'steady_ns': self.now(),
+        })
+        return window
+
     async def replay_pause_intent_after_terminal(self):
         """Gửi lại đúng bytes pause đã APPLIED sau reset terminal; không tạo request mới."""
         if self.pause_ack is None:
@@ -6026,13 +6063,11 @@ class TrainingWorkerIO:
         post_ack_floor = self.ingress.last_published_sample_sequence
         self.ingress.arm_pending(ack, publish_admission=(
             held_prebind is None and not align_admission_after_scan_boundary))
-        # Stage the bound POLICY candidate while the stream remains closed.
-        # Waiting for the first post-ACK admission sample before publishing
-        # the candidate can consume the native 100 ms receipt watchdog window:
-        # the sample is valid only after ACK, but the command itself is already
-        # authorized by the applied pending-step binding. Safety still cannot
-        # publish it until the matching fresh admission arrives and the stream
-        # is enabled below.
+        # Prepare the one POLICY candidate, but do not publish it until the
+        # exact post-ACK admission reaches Safety and a scan-safe issue window
+        # is available. Publishing earlier can stamp the command just before a
+        # cutoff; FinalTwistPublisher then correctly rejects it after the edge
+        # while the pending slot prevents SAFE_STOP watchdog refresh.
         life = self.ingress.lifecycle
         envelope = CommandEnvelope()
         envelope.header.frame_id, envelope.header.stamp = 'base_link', self._time_msg(self.ros_now())
@@ -6058,8 +6093,6 @@ class TrainingWorkerIO:
                 and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
                 deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
 
-        if not align_admission_after_scan_boundary:
-            await publish_policy_candidate(refresh_stamp=False)
         if align_admission_after_scan_boundary:
             # Hold native admission until one actual post-ACK producer sample
             # is released to Safety. Native observes it through the existing
@@ -6075,6 +6108,8 @@ class TrainingWorkerIO:
                 phase='R02b actual post-ACK noisy sample ready for bounded release')
             target_sample_sequence = await self.publish_r02b_post_ack_admission(
                 aligned_sample, deadline_ns=deadline)
+            await self.wait_for_policy_issue_window(deadline_ns=deadline,
+                step_index=token.step_index)
             await publish_policy_candidate(refresh_stamp=True)
             await self.until(lambda: adapter.noisy
                 if adapter.noisy is not None
@@ -6115,6 +6150,10 @@ class TrainingWorkerIO:
             and bytes(self.safety.local_training.noisy.admission_token) == bytes(ack.response.pending_admission_token)
             and self.ingress.last_published_sample_sequence == target_sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
+        if not align_admission_after_scan_boundary:
+            await self.wait_for_policy_issue_window(deadline_ns=deadline,
+                step_index=token.step_index)
+            await publish_policy_candidate(refresh_stamp=True)
         if require_admission_before_receipt:
             admission_row = await self.wait_r02a_native_admission(
                 sample_sequence=target_sample_sequence,

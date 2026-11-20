@@ -5776,7 +5776,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
 
 
 @pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
-    'r09b_before_bind','first_sample_races_candidate_delivery','pending_cutoff_dedup',
+    'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
     'nominal_issued_cutoff','prebind_elapsed_deadline'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
@@ -5834,7 +5834,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         tick=safety_tick,
         set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
         scan_period_ns=(1_000_000_000 if timing == 'prebind_elapsed_deadline'
-            else 100_000_000), last_tick_ros_ns=1_000_000_000)
+            else 100_000_000), physics_step_ns=10_000_000,
+        last_tick_ros_ns=1_000_000_000)
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     zero_policy_receipt = FinalIssuedCommandReceipt()
@@ -5895,19 +5896,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.ingress.arm_pending = arm
     def publish(envelope):
         history.append(('publish', envelope)); adapter.command = envelope
-        if timing == 'first_sample_races_candidate_delivery':
-            # This callback is after the real ACK/arm point but races with
-            # delivery of the staged POLICY candidate to Safety.
-            value.ingress.last_published_sample_sequence = 3
-            value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
-            adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
-                admission_token=[7]*16, sample_sequence=3)
-            history.append(('post_ack_admission_sample_ready', clock.ns))
     value.policy_publisher = NS(publish=publish)
     async def pause(seconds):
         await clock.pause(seconds)
         adapter.last_tick_ros_ns = clock.ns
-        if armed and timing != 'first_sample_races_candidate_delivery':
+        if armed:
             value.ingress.last_published_sample_sequence = 3
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             native_watermark[0] = 3
@@ -6021,7 +6014,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','r09b_callback','r09b_before_bind',
-            'first_sample_races_candidate_delivery','nominal_issued_cutoff',
+            'candidate_after_admission','nominal_issued_cutoff',
             'prebind_elapsed_deadline'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
@@ -6077,15 +6070,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert refresh < stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
     sample_ready = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_sample_ready')
-    if timing == 'first_sample_races_candidate_delivery':
-        assert sample_ready < issued < hold_off_after_issue < stream_on_after_issue, (
-            f'earliest post-ACK sample racing candidate delivery was discarded: {history!r}')
-        assert ('freeze_admission',) in history
-        assert value.safety.local_training.noisy.sample_sequence == 3
-    else:
-        assert issued < sample_ready < hold_off_after_issue < stream_on_after_issue, (
-        f'POLICY candidate must be staged after ACK while the stream is closed, then await '
-        f'the fresh admission before Safety can emit it: {history!r}')
+    assert sample_ready < issued < hold_off_after_issue < stream_on_after_issue, (
+        f'the single POLICY issuance must follow the exact post-ACK admission: {history!r}')
+    assert ('freeze_admission',) in history
+    assert value.safety.local_training.noisy.sample_sequence == 3
     assert stream_on_after_issue < immediate_policy_tick, (
         f'production POLICY path did not evaluate Safety immediately after enabling the admitted candidate: {history!r}')
     assert not any(row[0] == 'safe_stop_race_after_pending_bind' for row in history)
@@ -6093,7 +6081,6 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     frozen = next(row[1] for row in history
         if isinstance(row, tuple) and len(row) == 2 and row[0] == 'STEP_STREAMS_FROZEN')
     scan_period_ns = value.safety.local_training.scan_period_ns
-    next_scan_boundary = ((frozen['application_stamp_ns'] // scan_period_ns) + 1) * scan_period_ns
     watchdog_reference_ns = (before_issue_calls[0][5] if timing == 'r09b_before_bind'
         else prebind_refresh_times[0] if timing == 'prebind_elapsed_deadline'
         else frozen['steady_ns'])
@@ -6102,8 +6089,15 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert issue_times and issue_times[0] - watchdog_reference_ns < 100_000_000, (
         f'POLICY issuance exceeded the unchanged native zero watchdog budget: {history!r}')
     issued_ros_ns = envelope.header.stamp.sec * 10**9 + envelope.header.stamp.nanosec
-    assert issued_ros_ns < next_scan_boundary, (
-        f'POLICY was not staged before the next scan cutoff: {history!r}')
+    phase_ns = issued_ros_ns % scan_period_ns
+    assert phase_ns > value.safety.local_training.physics_step_ns, (
+        f'POLICY issue stamp must be strictly after a scan edge: {history!r}')
+    issue_window = next(facts for row in history
+        if isinstance(row, tuple) and len(row) == 2
+        for name, facts in (row,) if name == 'POLICY_ISSUE_WINDOW_READY')
+    assert issue_window['ros_ns'] == issued_ros_ns
+    assert issue_window['remaining_to_cutoff_ns'] > value.safety.local_training.physics_step_ns, (
+        f'POLICY issue stamp must leave a full physics step before the next cutoff: {history!r}')
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing in ('r09b_callback','r09b_before_bind') else .08)
     assert len([row for row in history if row[0] == 'publish']) == 1
