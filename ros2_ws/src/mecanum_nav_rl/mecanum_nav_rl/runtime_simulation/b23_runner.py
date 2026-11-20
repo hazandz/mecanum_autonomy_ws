@@ -2694,6 +2694,21 @@ WORKER_CALLBACK_BATCH_BUDGET_NS = 2_000_000
 WORKER_CALLBACK_BATCH_MAX = 64
 
 
+def spin_receipt_executor_until_stopped(executor, stop_event, *, timeout_s=0.01):
+    """Pump the receipt-only executor independently of high-rate sensor ingress."""
+    if not callable(getattr(executor, 'spin_once', None)):
+        raise TypeError('receipt executor must provide spin_once')
+    if not callable(getattr(stop_event, 'is_set', None)):
+        raise TypeError('receipt executor stop event is invalid')
+    if type(timeout_s) not in (int, float) or not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ValueError('receipt executor timeout must be finite and positive')
+    while not stop_event.is_set():
+        executor.spin_once(timeout_sec=float(timeout_s))
+        # Yield the GIL between callbacks so the worker pump and Safety executor
+        # can keep their own deadlines under sustained receipt traffic.
+        time.sleep(0)
+
+
 def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
                               budget_ns=WORKER_CALLBACK_BATCH_BUDGET_NS,
                               max_callbacks=WORKER_CALLBACK_BATCH_MAX,
@@ -2790,6 +2805,11 @@ class TrainingWorkerIO:
         self.context = Context()
         self.nodes, self.calls = [], []
         self.executor = None
+        self.receipt_executor = None
+        self.receipt_executor_node = None
+        self.receipt_executor_thread = None
+        self.receipt_executor_stop = threading.Event()
+        self.receipt_executor_error = None
         self.safety_executor = None
         self.safety_thread = None
         self.safety_executor_error = None
@@ -2809,6 +2829,7 @@ class TrainingWorkerIO:
         self._pending_future_receipts = deque()
         self._receipt_max_age_ns = int(
             document['training']['local_training']['b1_receipt_max_age_ms']) * 1_000_000
+        self._pending_future_receipts_lock = threading.Lock()
         self.expected_paused = True
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
@@ -2881,7 +2902,6 @@ class TrainingWorkerIO:
                 (LaserScan, '/scan', self.ingress.on_scan, sensor_qos),
                 (SafetyLifecycleState, '/mecanum/safety_lifecycle_state', self.ingress.bind_lifecycle, reliable),
                 (SimulationContactState, '/mecanum/local_training/backend_state', self.ingress.on_backend, backend_qos),
-                (FinalIssuedCommandReceipt, '/mecanum/final_issued_command', self.ingress.on_receipt, receipt_qos),
                 (SafetyState, '/mecanum/safety_state', self.ingress.on_safety_state, reliable),
             ):
                 observed = self.observed_callback(message, topic, callback)
@@ -2902,6 +2922,27 @@ class TrainingWorkerIO:
                     subscription = self.node.create_subscription(message, topic,
                         observed, qos, raw=True)
                 self.subscriptions.append(subscription)
+            # Keep the receipt topic's approved KEEP_LAST(1) QoS unchanged, but
+            # service it on its own executor. The worker's bounded batch handles
+            # high-rate sensor/status topics and can otherwise leave the single
+            # retained receipt behind a callback burst. A separate node/executor
+            # prevents that ingress backlog from delaying the cutoff proof.
+            self.receipt_executor_node = Node(
+                'b23_receipt_ingress', context=self.context,
+                parameter_overrides=base_params)
+            self.nodes.append(self.receipt_executor_node)
+            receipt_observed = self.observed_callback(
+                FinalIssuedCommandReceipt, '/mecanum/final_issued_command',
+                self.ingress.on_receipt)
+            self.receipt_subscription = self.receipt_executor_node.create_subscription(
+                FinalIssuedCommandReceipt, '/mecanum/final_issued_command',
+                receipt_observed, receipt_qos, raw=True)
+            self.receipt_executor = SingleThreadedExecutor(context=self.context)
+            self.receipt_executor.add_node(self.receipt_executor_node)
+            self.receipt_executor_thread = threading.Thread(
+                target=self._spin_receipt_executor,
+                name='b23-receipt-ingress', daemon=False)
+            self.receipt_executor_thread.start()
             self.safety.local_training.state_observer = lambda state: self.ingress.register_safety_publication(
                 state, source_instance_id=self.safe_stop_source_id)
             self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
@@ -3223,25 +3264,26 @@ class TrainingWorkerIO:
                     # before the older deferred receipt, turning a normal
                     # clock-catch-up race into a false sequence regression.
                     pending_receipts = getattr(self, '_pending_future_receipts', None)
-                    queue_behind_pending = bool(pending_receipts)
-                    if source_stamp_ns > ros_now_ns or queue_behind_pending:
-                        if received_ns > self.now():
-                            raise ValueError('receipt receive timestamp moved backward')
-                        if pending_receipts is None:
-                            raise RuntimeError('receipt deferral queue is unavailable')
-                        if len(pending_receipts) >= 128:
-                            raise ValueError('future receipt deferral queue capacity exceeded')
-                        pending_receipts.append(
-                            (source_stamp_ns, received_ns, process, message, wire))
-                        self.emit('RECEIPT_CLOCK_CATCHUP_DEFERRED', {
-                            'source_stamp_ns':source_stamp_ns, 'observed_ros_now_ns':ros_now_ns,
-                            'received_steady_ns':received_ns, 'deferred_steady_ns':self.now(),
-                            'wire_sha256':hashlib.sha256(wire).hexdigest(),
-                            'reason':('behind_prior_future_receipt' if queue_behind_pending
-                                and source_stamp_ns <= ros_now_ns else 'source_stamp_in_future'),
-                            'queue_size':len(pending_receipts),
-                            'max_original_receive_age_ns':self._receipt_max_age_ns})
-                        return None
+                    if pending_receipts is None:
+                        raise RuntimeError('receipt deferral queue is unavailable')
+                    with self._pending_future_receipts_lock:
+                        queue_behind_pending = bool(pending_receipts)
+                        if source_stamp_ns > ros_now_ns or queue_behind_pending:
+                            if received_ns > self.now():
+                                raise ValueError('receipt receive timestamp moved backward')
+                            if len(pending_receipts) >= 128:
+                                raise ValueError('future receipt deferral queue capacity exceeded')
+                            pending_receipts.append(
+                                (source_stamp_ns, received_ns, process, message, wire))
+                            self.emit('RECEIPT_CLOCK_CATCHUP_DEFERRED', {
+                                'source_stamp_ns':source_stamp_ns, 'observed_ros_now_ns':ros_now_ns,
+                                'received_steady_ns':received_ns, 'deferred_steady_ns':self.now(),
+                                'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                                'reason':('behind_prior_future_receipt' if queue_behind_pending
+                                    and source_stamp_ns <= ros_now_ns else 'source_stamp_in_future'),
+                                'queue_size':len(pending_receipts),
+                                'max_original_receive_age_ns':self._receipt_max_age_ns})
+                            return None
             except BaseException as error:
                 self.emit('INGRESS_CALLBACK_ERROR', {'topic':topic,'error':repr(error),
                     'wire_sha256':hashlib.sha256(wire).hexdigest(),'detected_ns':self.now()})
@@ -3266,25 +3308,26 @@ class TrainingWorkerIO:
 
     def _deliver_future_receipts_after_clock(self):
         """Process only after the owned ROS clock catches up, retaining DDS receive age."""
-        while self._pending_future_receipts:
-            source_stamp_ns, received_ns, process, message, wire = self._pending_future_receipts[0]
-            now_ns = self.now()
-            ros_now_ns = self.ros_now()
-            if type(now_ns) is not int or now_ns < received_ns:
-                raise RuntimeError('steady clock invalid while receipt waits for ROS clock')
-            age_ns = now_ns - received_ns
-            if age_ns > self._receipt_max_age_ns:
-                self.emit('RECEIPT_CLOCK_CATCHUP_EXPIRED', {
-                    'source_stamp_ns':source_stamp_ns, 'ros_now_ns':ros_now_ns,
-                    'received_steady_ns':received_ns, 'checked_steady_ns':now_ns,
-                    'original_receive_age_ns':age_ns,
-                    'max_original_receive_age_ns':self._receipt_max_age_ns,
-                    'wire_sha256':hashlib.sha256(wire).hexdigest()})
-                raise TimeoutError('receipt clock catch-up exceeded original B1 receipt freshness age')
-            if source_stamp_ns > ros_now_ns:
-                return
-            self._pending_future_receipts.popleft()
-            process(message, wire, received_ns)
+        with self._pending_future_receipts_lock:
+            while self._pending_future_receipts:
+                source_stamp_ns, received_ns, process, message, wire = self._pending_future_receipts[0]
+                now_ns = self.now()
+                ros_now_ns = self.ros_now()
+                if type(now_ns) is not int or now_ns < received_ns:
+                    raise RuntimeError('steady clock invalid while receipt waits for ROS clock')
+                age_ns = now_ns - received_ns
+                if age_ns > self._receipt_max_age_ns:
+                    self.emit('RECEIPT_CLOCK_CATCHUP_EXPIRED', {
+                        'source_stamp_ns':source_stamp_ns, 'ros_now_ns':ros_now_ns,
+                        'received_steady_ns':received_ns, 'checked_steady_ns':now_ns,
+                        'original_receive_age_ns':age_ns,
+                        'max_original_receive_age_ns':self._receipt_max_age_ns,
+                        'wire_sha256':hashlib.sha256(wire).hexdigest()})
+                    raise TimeoutError('receipt clock catch-up exceeded original B1 receipt freshness age')
+                if source_stamp_ns > ros_now_ns:
+                    return
+                self._pending_future_receipts.popleft()
+                process(message, wire, received_ns)
 
     def ros_now(self):
         return self.node.get_clock().now().nanoseconds
@@ -3369,6 +3412,8 @@ class TrainingWorkerIO:
                     check_sink()
                 if self.safety_executor_error is not None:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
+                if getattr(self, 'receipt_executor_error', None) is not None:
+                    raise RuntimeError('LOCAL_TRAINING receipt executor failed') from self.receipt_executor_error
                 spin_started_ns = time.monotonic_ns()
                 spin_thread_started_ns, spin_process_started_ns = time.thread_time_ns(), time.process_time_ns()
                 # Drain only a short, bounded batch. The old one-callback plus
@@ -4468,6 +4513,21 @@ class TrainingWorkerIO:
     def close_context(self):
         errors = []
         self.stop_requested = True
+        receipt_executor_stop = getattr(self, 'receipt_executor_stop', None)
+        if receipt_executor_stop is not None:
+            receipt_executor_stop.set()
+        receipt_executor = getattr(self, 'receipt_executor', None)
+        if receipt_executor is not None:
+            try:
+                if not receipt_executor.shutdown(timeout_sec=1.0):
+                    errors.append('receipt_executor_shutdown_not_joined')
+            except BaseException as error:
+                errors.append('receipt_executor_shutdown:' + repr(error))
+        receipt_executor_thread = getattr(self, 'receipt_executor_thread', None)
+        if receipt_executor_thread is not None:
+            receipt_executor_thread.join(timeout=1.0)
+            if receipt_executor_thread.is_alive():
+                errors.append('receipt_executor_thread_not_joined')
         if self.safety_executor is not None:
             try:
                 if not self.safety_executor.shutdown(timeout_sec=1.0):
@@ -4487,11 +4547,15 @@ class TrainingWorkerIO:
             if self.context.ok(): self.context.shutdown()
         except BaseException as error:
             errors.append(repr(error))
-        thread_joined = self.safety_thread is None or not self.safety_thread.is_alive()
-        if thread_joined:
+        owned_threads_joined = (
+            (self.safety_thread is None or not self.safety_thread.is_alive())
+            and (receipt_executor_thread is None or not receipt_executor_thread.is_alive()))
+        if owned_threads_joined:
             for node in reversed(self.nodes):
                 try:
-                    owner = self.safety_executor if node is self.safety else self.executor
+                    owner = (self.safety_executor if node is self.safety else
+                        self.receipt_executor if node is getattr(self, 'receipt_executor_node', None)
+                        else self.executor)
                     if owner is not None: owner.remove_node(node)
                     node.destroy_node()
                 except BaseException as error:
@@ -4502,6 +4566,14 @@ class TrainingWorkerIO:
         if errors:
             self.emit('ROS_CONTEXT_CLEANUP_ERRORS', {'errors': errors})
         return errors
+
+    def _spin_receipt_executor(self):
+        try:
+            spin_receipt_executor_until_stopped(
+                self.receipt_executor, self.receipt_executor_stop)
+        except BaseException as error:
+            if not self.receipt_executor_stop.is_set():
+                self.receipt_executor_error = error
 
     async def startup(self):
         from rclpy.lifecycle import TransitionCallbackReturn

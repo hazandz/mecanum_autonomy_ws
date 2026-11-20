@@ -39,7 +39,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
-    worker_async_task_snapshot, spin_ready_callback_batch, instrument_executor_waits,
+    worker_async_task_snapshot, spin_ready_callback_batch,
+    spin_receipt_executor_until_stopped, instrument_executor_waits,
 )
 
 
@@ -391,6 +392,7 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     worker.pump_task = None
     worker.pump_error = None
     worker.safety_executor_error = None
+    worker.receipt_executor_error = None
     worker.stop_requested = False
     worker.abort_requested = None
     worker.now = time.monotonic_ns
@@ -3073,6 +3075,9 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     worker._r07b_rollback_observed = {'delta_ns':-1}
     worker._r07b_replacement_backend_statuses = []
     worker.ros_now = lambda: 50
+    from collections import deque
+    worker._pending_future_receipts = deque()
+    worker._pending_future_receipts_lock = threading.Lock()
     worker.ingress = NS(lock=threading.RLock(), _last_receipt_stamp_ns=100,
         _last_gt_stamp=100, _last_gt_bytes=b'old-oracle', scans={}, fault=None)
     worker.now = lambda: 777
@@ -4585,9 +4590,12 @@ class Clock:
 
 
 def worker():
+    from collections import deque
     value = TrainingWorkerIO.__new__(TrainingWorkerIO)
     clock = Clock()
     value.now, value.pause = clock.now, clock.pause
+    value._pending_future_receipts_lock = threading.Lock()
+    value._pending_future_receipts = deque()
     value.deadline_ns = clock.ns + 100_000_000
     value.stop_requested, value.abort_requested = False, None
     value.pump_error, value.expected_paused = None, True
@@ -4664,6 +4672,101 @@ def test_ready_callback_batch_returns_when_no_callback_is_ready():
         raise TimeoutException()
     assert spin_ready_callback_batch(NS(wait_for_ready_callbacks=wait_for_ready_callbacks),
         now_ns=lambda:0, budget_ns=2_000_000, max_callbacks=64) == 0
+
+
+def test_receipt_executor_pump_runs_until_owned_stop_and_propagates_failure():
+    import threading
+    stop = threading.Event()
+    calls = []
+
+    class FakeExecutor:
+        def spin_once(self, *, timeout_sec):
+            calls.append(timeout_sec)
+            if len(calls) == 3:
+                stop.set()
+
+    spin_receipt_executor_until_stopped(FakeExecutor(), stop)
+    assert calls == [0.01, 0.01, 0.01]
+
+    class FailedExecutor:
+        def spin_once(self, *, timeout_sec):
+            raise RuntimeError('receipt pump fake failure')
+
+    with pytest.raises(RuntimeError, match='receipt pump fake failure'):
+        spin_receipt_executor_until_stopped(FailedExecutor(), threading.Event())
+
+
+def test_receipt_executor_cleanup_joins_before_destroying_its_node():
+    import threading
+
+    order = []
+    stop = threading.Event()
+
+    class Executor:
+        def spin_once(self, *, timeout_sec):
+            assert timeout_sec == 0.01
+            stop.wait(0.005)
+
+        def shutdown(self, timeout_sec):
+            order.append(('shutdown', timeout_sec))
+            return True
+
+        def remove_node(self, node):
+            order.append(('remove', node))
+
+    class Node:
+        def destroy_node(self):
+            order.append(('destroy', self))
+
+    node = Node()
+    worker = TrainingWorkerIO.__new__(TrainingWorkerIO)
+    worker.receipt_executor_stop = stop
+    worker.receipt_executor = Executor()
+    worker.receipt_executor_node = node
+    worker.receipt_executor_thread = threading.Thread(
+        target=spin_receipt_executor_until_stopped,
+        args=(worker.receipt_executor, stop), daemon=False)
+    worker.receipt_executor_thread.start()
+    worker.safety_executor = None
+    worker.safety_thread = None
+    worker.executor = None
+    worker.context = NS(ok=lambda: False)
+    worker.nodes = [node]
+    worker.safety = None
+    worker.emit = lambda *_args, **_kwargs: None
+
+    errors = worker.close_context()
+    assert errors == [], errors
+    assert not worker.receipt_executor_thread.is_alive()
+    assert order[0] == ('shutdown', 1.0)
+    assert order[1:] == [('remove', node), ('destroy', node)]
+
+
+def test_receipt_subscription_isolated_without_changing_approved_qos():
+    import ast
+    import inspect
+
+    source = textwrap.dedent(inspect.getsource(TrainingWorkerIO.__init__))
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    receipt_subscription = next(node for node in calls
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'create_subscription'
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == 'receipt_executor_node')
+    assert any(isinstance(arg, ast.Name) and arg.id == 'receipt_qos'
+        for arg in receipt_subscription.args)
+    executor_creation = next(node for node in calls
+        if isinstance(node.func, ast.Name) and node.func.id == 'SingleThreadedExecutor'
+        and any(keyword.arg == 'context' and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == 'context' for keyword in node.keywords))
+    assert executor_creation is not None
+    typed_receipt_calls = [node for node in calls
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'create_subscription'
+        and node.args and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == 'FinalIssuedCommandReceipt']
+    assert len(typed_receipt_calls) == 1
+    assert isinstance(typed_receipt_calls[0].func.value, ast.Attribute)
+    assert typed_receipt_calls[0].func.value.attr == 'receipt_executor_node'
 
 
 def test_slow_executor_wait_records_timing_without_stack_introspection():
