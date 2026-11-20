@@ -530,8 +530,10 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
             or fresh_ack.response.proof_asset_manifest_sha256):
         raise RuntimeError('R07b replacement QUERY returned stale or unverifiable proof')
     status = replacement_status
-    expected_restart_faults = (SimulationContactState.FAULT_CONTACT_COVERAGE
-                               | SimulationContactState.FAULT_QUEUE)
+    # A fresh replacement backend has no expected queue-overflow fault. Its
+    # initial contact coverage fault is the fail-closed state observed until
+    # coverage is re-established; keep the mask exact so unrelated faults fail.
+    expected_restart_faults = SimulationContactState.FAULT_CONTACT_COVERAGE
     if (status['backend_instance_id'] != new_id
             or status['session_id'] != original_proof.request.session_id
             or status['config_hash'] != stale.request.config_hash
