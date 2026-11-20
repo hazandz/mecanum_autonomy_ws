@@ -5777,7 +5777,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     assert events == ['fresh_applied_zero', 'scan_alignment']
 
 
-@pytest.mark.parametrize('timing', ['ready','late_commit','late_publish','r09b_callback',
+@pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
     'nominal_issued_cutoff','prebind_elapsed_deadline'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
@@ -5787,6 +5787,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, B1SnapshotPending
     from rclpy.serialization import serialize_message
     value, clock = worker()
+    clock.ns += 20_000_000
     value.deadline_ns = clock.ns + 3_000_000_000
     ros = lambda: clock.ns
     value.ros_now = ros
@@ -5796,6 +5797,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     prebind_refresh_times = []
     async def aligned_window(*, deadline_ns, zero_witness):
         history.append(('scan_alignment', deadline_ns))
+        if timing == 'near_scan_cutoff':
+            clock.ns = 1_070_000_000
         if timing == 'prebind_elapsed_deadline':
             await clock.pause(.150)
         return zero_witness
@@ -5830,6 +5833,16 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.backend_received_ns = clock.ns
     def safety_tick():
         history.append(('safety_tick', clock.ns))
+        if timing == 'near_scan_cutoff':
+            if adapter._last_deferred_scan_cutoff_ns is None:
+                adapter._last_deferred_scan_cutoff_ns = 1_100_000_000
+            else:
+                adapter.last_tick_ros_ns = clock.ns
+                # Model the production selector accepting the held candidate
+                # at the first post-cutoff tick and the publisher receipt
+                # becoming observable at that tick.
+                value.final.publication_for_source_sequence(
+                    source=FinalIssuedCommandReceipt.SOURCE_POLICY, sequence=1)
     adapter = NS(safe_stop_sequence=1, policy_hold=True,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
@@ -5837,7 +5850,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
         scan_period_ns=(1_000_000_000 if timing == 'prebind_elapsed_deadline'
             else 100_000_000), physics_step_ns=10_000_000,
-        last_tick_ros_ns=1_000_000_000)
+        last_tick_ros_ns=1_000_000_000,
+        _last_deferred_scan_cutoff_ns=None,
+        lock=threading.RLock())
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     zero_policy_receipt = FinalIssuedCommandReceipt()
@@ -5850,13 +5865,17 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     safe_stop_receipt.final_publish_sequence=3
     safe_stop_receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
     safe_stop_receipt.sequence=2
+    policy_receipt_observed_ns = []
+    def publication_for_source_sequence(*, source, sequence):
+        if (source, sequence) == (FinalIssuedCommandReceipt.SOURCE_POLICY, 1):
+            policy_receipt_observed_ns.append(clock.ns)
+            return zero_policy_receipt
+        if (source, sequence) == (FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, 2):
+            return safe_stop_receipt
+        return None
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
         source_instance_id=44, sequence=1, final_publish_sequence=2),
-        publication_for_source_sequence=lambda *, source, sequence: (
-            safe_stop_receipt if (source, sequence) ==
-                (FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, 2) else
-            zero_policy_receipt if (source, sequence) ==
-                (FinalIssuedCommandReceipt.SOURCE_POLICY, 1) else None))
+        publication_for_source_sequence=publication_for_source_sequence)
     value.ingress.lifecycle = life
     value.ingress.last_published_sample_sequence = 1
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -5901,7 +5920,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.policy_publisher = NS(publish=publish)
     async def pause(seconds):
         await clock.pause(seconds)
-        adapter.last_tick_ros_ns = clock.ns
+        if not (timing == 'near_scan_cutoff'
+                and adapter._last_deferred_scan_cutoff_ns is not None):
+            adapter.last_tick_ros_ns = clock.ns
         if armed:
             value.ingress.last_published_sample_sequence = 3
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -6015,7 +6036,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         history.append(('r09b_application_cutoff_aligned',
             policy_receipt.final_publish_sequence, minimum_cutoff_ns, deadline_ns))
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
-    if timing in ('ready','r09b_callback','r09b_before_bind',
+    if timing in ('ready','near_scan_cutoff','r09b_callback','r09b_before_bind',
             'candidate_after_admission','nominal_issued_cutoff',
             'prebind_elapsed_deadline'):
         kwargs = ({'after_policy_applied':after_policy_applied}
@@ -6084,7 +6105,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         if isinstance(row, tuple) and len(row) == 2 and row[0] == 'STEP_STREAMS_FROZEN')
     scan_period_ns = value.safety.local_training.scan_period_ns
     watchdog_reference_ns = (before_issue_calls[0][5] if timing == 'r09b_before_bind'
-        else prebind_refresh_times[0] if timing == 'prebind_elapsed_deadline'
+        else prebind_refresh_times[0] if timing in ('prebind_elapsed_deadline','near_scan_cutoff')
         else frozen['steady_ns'])
     assert bind_times and bind_times[0] - watchdog_reference_ns < 100_000_000, (
         f'pending bind waited through an unnecessary scan phase and consumed the native zero watchdog budget: {history!r}')
@@ -6094,12 +6115,16 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     phase_ns = issued_ros_ns % scan_period_ns
     assert phase_ns > value.safety.local_training.physics_step_ns, (
         f'POLICY issue stamp must be strictly after a scan edge: {history!r}')
-    issue_window = next(facts for row in history
-        if isinstance(row, tuple) and len(row) == 2
-        for name, facts in (row,) if name == 'POLICY_ISSUE_WINDOW_READY')
-    assert issue_window['ros_ns'] == issued_ros_ns
-    assert issue_window['remaining_to_cutoff_ns'] > value.safety.local_training.physics_step_ns, (
+    assert scan_period_ns - phase_ns > value.safety.local_training.physics_step_ns, (
         f'POLICY issue stamp must leave a full physics step before the next cutoff: {history!r}')
+    assert not any(row[0] == 'POLICY_ISSUE_WINDOW_READY' for row in history), (
+        f'normal POLICY flow must not wait through another scan issue window: {history!r}')
+    if timing == 'near_scan_cutoff':
+        assert any(row[0] == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF'
+            for row in history), f'near-cutoff candidate did not use production retry: {history!r}'
+        assert policy_receipt_observed_ns
+        assert policy_receipt_observed_ns[0] - watchdog_reference_ns < 100_000_000, (
+            f'POLICY receipt exceeded the unchanged native zero-watchdog window: {history!r}')
     assert envelope.twist.linear.y == pytest.approx(
         0. if timing in ('r09b_callback','r09b_before_bind') else .08)
     assert len([row for row in history if row[0] == 'publish']) == 1

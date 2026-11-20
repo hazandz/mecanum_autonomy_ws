@@ -6195,8 +6195,13 @@ class TrainingWorkerIO:
             and self.ingress.last_published_sample_sequence == target_sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
         if not align_admission_after_scan_boundary:
-            await self.wait_for_policy_issue_window(deadline_ns=deadline,
-                step_index=token.step_index)
+            # The exact post-ACK admission is now in Safety. Issue at this
+            # observed ROS time instead of waiting for another scan phase while
+            # the native 100 ms receipt watchdog is running with the stream
+            # frozen. The immediate production Safety tick below still applies
+            # the unchanged freshness and scan-cutoff checks; when that tick
+            # defers at a cutoff, tick_policy_after_deferred_scan_cutoff waits
+            # for post-cutoff physics time and retries the same selector.
             await publish_policy_candidate(refresh_stamp=True)
         if require_admission_before_receipt:
             admission_row = await self.wait_r02a_native_admission(
