@@ -13,6 +13,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     QueuedRunEvidence, RunEvidence,
     policy_bind_launch_window_remaining_ns, policy_bind_launch_window_ready,
+    r02b_sample_release_boundary_ns,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
@@ -959,6 +960,61 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
     assert r02b_admission_release_target_ns(now_ns, period_ns) == expected_ns
     with pytest.raises(ValueError, match='scan release phase'):
         r02b_admission_release_target_ns(now_ns, 0)
+
+
+def test_r02b_native_admission_is_not_published_until_sample_cutoff_passes():
+    from builtin_interfaces.msg import Time
+
+    value, clock = worker()
+    value.ros_now = clock.now
+    value.deadline_ns = clock.ns + 200_000_000
+    value.emit = lambda name, facts: events.append((name, facts))
+    events = []
+    published_at = []
+    applied_stamp = Time(sec=0, nanosec=900_000_000)
+    value.ingress = NS(pending_ack=NS(observed_steady_ns=clock.ns - 1,
+        response=NS(applied_sim_stamp=applied_stamp)),
+        last_published_sample_sequence=4, last_published_admission_state=1,
+        admission_state=1, fault=None, backend_state=None)
+    value.ingress._publish_safety = lambda sample: (
+        published_at.append((clock.ns, value.ros_now(), sample.output.snapshot.timestamp_ns)),
+        setattr(value.ingress, 'last_published_sample_sequence', 5))
+    value.safety = NS(local_training=NS(scan_period_ns=100_000_000))
+    sample = NS(output=NS(snapshot=NS(timestamp_ns=1_050_000_000)),
+        received_steady_ns=clock.ns, lifecycle='bound-life')
+
+    sequence = asyncio.run(value.publish_r02b_admission_after_scan_boundary(
+        sample, deadline_ns=clock.ns + 200_000_000))
+
+    assert sequence == 5
+    assert r02b_sample_release_boundary_ns(1_050_000_000, 100_000_000) == 1_100_000_000
+    assert len(published_at) == 1
+    assert published_at[0][1] > 1_100_000_000
+    assert published_at[0][0] == published_at[0][1]
+    event = next(facts for name, facts in events
+        if name == 'R02B_ADMISSION_RELEASED_AFTER_SAMPLE_BOUNDARY')
+    assert event['release_boundary_ns'] == 1_100_000_000
+    assert event['sample_stamp_ns'] == 1_050_000_000
+
+
+def test_r02b_production_path_releases_sample_before_refreshing_policy_issue():
+    import inspect
+
+    source = textwrap.dedent(inspect.getsource(TrainingWorkerIO.policy_step))
+    tree = ast.parse(source)
+    arm_pending = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == 'arm_pending')
+    admission_gate = next(item.value for item in arm_pending.keywords
+        if item.arg == 'publish_admission')
+    expected_gate = ast.parse(
+        'held_prebind is None and not align_admission_after_scan_boundary',
+        mode='eval').body
+    assert ast.dump(admission_gate, include_attributes=False) == ast.dump(
+        expected_gate, include_attributes=False)
+    release_at = source.index('publish_r02b_admission_after_scan_boundary')
+    refreshed_issue_at = source.index('publish_policy_candidate(refresh_stamp=True)')
+    safety_receive_at = source.index('R02b released admission delivered to Safety')
+    assert release_at < refreshed_issue_at < safety_receive_at
 
 
 @pytest.mark.parametrize(('initial_ros_ns', 'target_cutoff_ns'), [
@@ -4945,7 +5001,8 @@ def test_r02e_runner_keeps_new_admission_closed_until_held_input_is_enqueued():
     keyword = next(item.value for item in calls[0].keywords
         if item.arg == 'publish_admission')
     assert ast.dump(keyword, include_attributes=False) == ast.dump(
-        ast.parse('held_prebind is None', mode='eval').body, include_attributes=False)
+        ast.parse('held_prebind is None and not align_admission_after_scan_boundary',
+            mode='eval').body, include_attributes=False)
     release = source.index('release_r02e_prebind_input_before_admission')
     first_fresh = source.index('first post-ACK admission publication')
     assert release < first_fresh

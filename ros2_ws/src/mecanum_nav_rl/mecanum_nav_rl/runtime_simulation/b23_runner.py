@@ -894,6 +894,14 @@ def r02b_admission_release_target_ns(now_ros_ns, scan_period_ns):
     return next_boundary
 
 
+def r02b_sample_release_boundary_ns(sample_stamp_ns, scan_period_ns):
+    """Return the first scan boundary strictly after an actual sample."""
+    if (type(sample_stamp_ns) is not int or sample_stamp_ns <= 0
+            or type(scan_period_ns) is not int or scan_period_ns <= 0):
+        raise ValueError('R02b sample release requires a positive stamp and scan period')
+    return (sample_stamp_ns // scan_period_ns + 1) * scan_period_ns
+
+
 def case_environment(case, hooks):
     """Bind the single native ACK fault hook to its case-scoped child env."""
     if case == 'R02b' and hooks == ['native_hold_admission_until_receipt']:
@@ -3514,6 +3522,47 @@ class TrainingWorkerIO:
         self.emit('BACKEND_CONTROL_SERVICE_READY', {'phase':phase,'steady_ns':self.now()})
         return self.now()
 
+    async def publish_r02b_admission_after_scan_boundary(self, sample, *, deadline_ns):
+        """Publish one real post-ACK sample only after its next scan cutoff.
+
+        R02b deliberately holds native admission until a matching POLICY
+        receipt reaches the gate. Releasing the input at the end of its scan
+        window can leave too little time for the real Safety/publisher path
+        to produce that receipt before the unchanged 40 ms native bound.
+        """
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+
+        ingress = self.ingress
+        pending = ingress.pending_ack
+        if pending is None:
+            raise RuntimeError('R02b release requires the applied pending-step ACK')
+        source_ns = sample.output.snapshot.timestamp_ns
+        received_ns = sample.received_steady_ns
+        if (type(source_ns) is not int or type(received_ns) is not int
+                or received_ns <= pending.observed_steady_ns
+                or source_ns <= stamp_ns(pending.response.applied_sim_stamp)):
+            raise RuntimeError('R02b sample is not generated and received after the pending ACK')
+        adapter = self.safety.local_training
+        boundary_ns = r02b_sample_release_boundary_ns(source_ns, adapter.scan_period_ns)
+        await self.until(lambda: self.ros_now() if self.ros_now() > boundary_ns else None,
+            deadline_ns=deadline_ns, phase='R02b sample scan boundary passed before native admission')
+        before_sequence = ingress.last_published_sample_sequence
+        release_ros_ns = self.ros_now()
+        ingress._publish_safety(sample)
+        after_sequence = ingress.last_published_sample_sequence
+        if (after_sequence <= before_sequence
+                or ingress.last_published_admission_state != ingress.admission_state):
+            raise RuntimeError('R02b production ingress did not publish the held admission sample')
+        self.emit('R02B_ADMISSION_RELEASED_AFTER_SAMPLE_BOUNDARY', {
+            'sample_stamp_ns': source_ns,
+            'sample_received_steady_ns': received_ns,
+            'release_boundary_ns': boundary_ns,
+            'release_ros_ns': release_ros_ns,
+            'release_steady_ns': self.now(),
+            'sample_sequence': after_sequence,
+        })
+        return after_sequence
+
     async def wait_contact_probe_services_ready(self, *, deadline_ns):
         """Wait for every Gazebo service the native contact probe will call."""
         clients = {
@@ -4310,7 +4359,7 @@ class TrainingWorkerIO:
 
     async def freeze_zero(self, *, deadline_ns):
         from mecanum_nav_rl.simulation.local_training_reset import AppliedZeroReceiptFact
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
         adapter = self.safety.local_training
         adapter.set_policy_hold(True)
         initial_unarmed = (self.ingress.lifecycle is not None
@@ -5769,7 +5818,7 @@ class TrainingWorkerIO:
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import B1SnapshotPending
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
         if (not isinstance(action, (tuple, list)) or len(action) != 3
                 or any(type(v) not in (float, int) or not math.isfinite(v) or not -1 <= v <= 1 for v in action)):
             raise ValueError('action requires three finite normalized values in [-1, 1]')
@@ -5908,7 +5957,8 @@ class TrainingWorkerIO:
         # to Safety; taking this watermark after that delivery would discard
         # that already post-ACK sample and wait for another sensor period.
         post_ack_floor = self.ingress.last_published_sample_sequence
-        self.ingress.arm_pending(ack, publish_admission=held_prebind is None)
+        self.ingress.arm_pending(ack, publish_admission=(
+            held_prebind is None and not align_admission_after_scan_boundary))
         # Stage the bound POLICY candidate while the stream remains closed.
         # Waiting for the first post-ACK admission sample before publishing
         # the candidate can consume the native 100 ms receipt watchdog window:
@@ -5927,36 +5977,52 @@ class TrainingWorkerIO:
         envelope.twist.linear.x = float(action[0]) * scales['max_vx_mps']
         envelope.twist.linear.y = float(action[1]) * scales['max_vy_mps']
         envelope.twist.angular.z = float(action[2]) * scales['max_wz_radps']
-        self.policy_publisher.publish(envelope)
-        b1.record_issuance(envelope, action_barrier_ns=barrier)
-        await self.until(lambda: self.safety.local_training.command if self.safety.local_training.command is not None
-            and self.safety.local_training.command.sequence == token.step_index
-            and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
-            deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
+        async def publish_policy_candidate(*, refresh_stamp):
+            if refresh_stamp:
+                issue_stamp_ns = self.ros_now()
+                if issue_stamp_ns <= barrier:
+                    raise RuntimeError('R02b refreshed POLICY issue stamp is not after its action barrier')
+                envelope.header.stamp = self._time_msg(issue_stamp_ns)
+            self.policy_publisher.publish(envelope)
+            b1.record_issuance(envelope, action_barrier_ns=barrier)
+            await self.until(lambda: self.safety.local_training.command
+                if self.safety.local_training.command is not None
+                and self.safety.local_training.command.sequence == token.step_index
+                and self.safety.local_training.command.source_instance_id == self.policy_source_id else None,
+                deadline_ns=deadline, phase='actual adapter issuance delivered to Safety')
+
+        if not align_admission_after_scan_boundary:
+            await publish_policy_candidate(refresh_stamp=False)
         if align_admission_after_scan_boundary:
-            # Safety already consumed the upcoming scan cutoff while no new
-            # slot was bound. Now hold only the native admission delivery
-            # until the actual post-ACK sample reaches Safety.
+            # Hold native admission until one actual post-ACK producer sample
+            # has crossed its next cutoff. This gives the real Safety and
+            # publisher path a complete interval before the next scan cutoff.
             self.ingress.pause_admission_publication()
             adapter = self.safety.local_training
-            prior_sample_sequence = self.ingress.last_published_sample_sequence
-            self.ingress.admission_publication_enabled = True
-            aligned_sample = await self.until(lambda: adapter.noisy
+            aligned_sample = await self.until(lambda: next((sample for sample in reversed(
+                tuple(self.ingress.noisy_samples.values()))
+                if sample.received_steady_ns > ack.observed_steady_ns
+                and sample.output.snapshot.timestamp_ns > stamp_ns(ack.response.applied_sim_stamp)
+                and sample.lifecycle == lifecycle_identity(self.ingress.lifecycle)), None),
+                deadline_ns=deadline,
+                phase='R02b actual post-ACK noisy sample ready for bounded release')
+            target_sample_sequence = await self.publish_r02b_admission_after_scan_boundary(
+                aligned_sample, deadline_ns=deadline)
+            await publish_policy_candidate(refresh_stamp=True)
+            await self.until(lambda: adapter.noisy
                 if adapter.noisy is not None
-                and adapter.noisy.sample_sequence > prior_sample_sequence
+                and adapter.noisy.sample_sequence == target_sample_sequence
                 and adapter.noisy.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
                 and bytes(adapter.noisy.admission_token) == bytes(ack.response.pending_admission_token)
                 and self.ingress.last_published_sample_sequence == adapter.noisy.sample_sequence
                 else None,
-                deadline_ns=deadline,
-                phase='R02b aligned post-cutoff admission reaches Safety')
+                deadline_ns=deadline, phase='R02b released admission delivered to Safety')
             self.emit('R02B_ADMISSION_RELEASE_ALIGNED', {
                 **r02b_cutoff_evidence,
-                'sample_sequence': aligned_sample.sample_sequence,
-                'sample_stamp_ns': self.safety.local_training.stamp(aligned_sample.header.stamp),
+                'sample_sequence': target_sample_sequence,
+                'sample_stamp_ns': aligned_sample.output.snapshot.timestamp_ns,
                 'admission_ready_steady_ns': self.now()})
             self.ingress.pause_admission_publication()
-            target_sample_sequence = aligned_sample.sample_sequence
         held_sample_sequence = None
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
