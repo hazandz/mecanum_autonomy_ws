@@ -5142,6 +5142,16 @@ TEST(NativeAdmissionToken, ReceiptWaitsWithoutPromotionUntilMatchingAdmission)
   RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 1);
 }
 
+TEST(NativeAdmissionOrderFault, CutoffDeferredReceiptFitsBoundedTestHook)
+{
+  using mecanum_sim_backend::backend_detail::AdmissionOrderFaultHoldExpired;
+  using mecanum_sim_backend::backend_detail::kAdmissionOrderFaultHoldLimitNs;
+  EXPECT_EQ(kAdmissionOrderFaultHoldLimitNs, 60'000'000);
+  EXPECT_FALSE(AdmissionOrderFaultHoldExpired(40'000'000));
+  EXPECT_FALSE(AdmissionOrderFaultHoldExpired(60'000'000));
+  EXPECT_TRUE(AdmissionOrderFaultHoldExpired(60'000'001));
+}
+
 TEST(NativeAdmissionToken, AdmissionBeforeReceiptAppliesOnceWithStableReplayToken)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, true, 0, 0, 2);

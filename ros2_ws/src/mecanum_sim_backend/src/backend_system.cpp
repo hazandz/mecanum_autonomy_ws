@@ -80,6 +80,15 @@ using SetEntityPose = ros_gz_interfaces::srv::SetEntityPose;
 using DeleteEntity = ros_gz_interfaces::srv::DeleteEntity;
 using ControlWorld = ros_gz_interfaces::srv::ControlWorld;
 
+// R02b is a test-only ordering hook. It must survive the real Safety tick
+// deferred at a scan cutoff; the production ReceiptGate still enforces its
+// independent 40 ms receipt-to-admission window.
+constexpr std::int64_t kAdmissionOrderFaultHoldLimitNs = 60'000'000;
+constexpr bool AdmissionOrderFaultHoldExpired(std::int64_t held_ns) noexcept
+{
+  return held_ns > kAdmissionOrderFaultHoldLimitNs;
+}
+
 enum class ProbeServiceKind { Spawn, Lift, Remove };
 enum class RuntimeResourceKind
 {
@@ -3822,14 +3831,16 @@ private:
             EmitStructuredDiagnostic([&]() {
               gzmsg << "B23_POLICY_ADMISSION_HELD sample=" << front.first.sample_sequence
                   << " receive_ns=" << front.second << " held_ns=" << held_ns
-                  << " limit_ns=40000000" << std::endl;
+                  << " limit_ns=" << backend_detail::kAdmissionOrderFaultHoldLimitNs
+                  << std::endl;
               std::fflush(stdout);
             });
             policy_order_hold_reported_ = true;
           }
-          if (held_ns <= 40'000'000) break;
+          if (!backend_detail::AdmissionOrderFaultHoldExpired(held_ns)) break;
           // The fault hook never turns an expired admission into a success.
-          RecordQueueFault(5, "policy_order_admission_hold_expired", "limit_ns=40000000");
+          RecordQueueFault(5, "policy_order_admission_hold_expired",
+              "limit_ns=60000000");
           break;
         }
         pending.push_back(std::move(safety_queue_.front()));
