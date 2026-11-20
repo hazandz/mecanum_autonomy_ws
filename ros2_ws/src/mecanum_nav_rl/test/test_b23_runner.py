@@ -2916,7 +2916,19 @@ def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_pr
     assert result['replacement_backend_zero_status_confirmed'] is True
     assert result['new_backend_instance_id'] == new_id
     assert result['replacement_backend_fault_flags'] == 16
-    assert result['replacement_backend_fault_flags_expected'] == 16
+    assert result['replacement_backend_fault_flags_expected'] == (16, 272)
+
+    # A SAFE_STOP receipt may cross the replacement's unbound interval. The
+    # native backend rejects it with gate=missing, keeps local zero/inhibit,
+    # and reports the additional queue fault. Both observed fail-closed masks
+    # are valid; other fault bits remain rejected below.
+    queue_fault_status = dict(status, fault_flags=272)
+    queue_fault_result = verify_r07b_backend_restart(original_proof=original,
+        sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
+        replay_identity_ack=None, replacement_ack=old_rejection,
+        inhibit_ack=inhibit, fresh_ack=fresh_query,
+        replacement_status=queue_fault_status, old_backend_instance_id=old_id)
+    assert queue_fault_result['replacement_backend_fault_flags'] == 272
 
     stale_query = NS(**{**fresh_query.__dict__, 'response':NS(
         **{**fresh_query.response.__dict__,
@@ -2948,6 +2960,14 @@ def test_r07b_backend_restart_requires_old_identity_rejection_new_inhibit_and_pr
             sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
             replay_identity_ack=None, replacement_ack=old_rejection, inhibit_ack=inhibit,
             fresh_ack=fresh_query, replacement_status=unexpected_fault,
+            old_backend_instance_id=old_id)
+
+    unqualified_status = dict(status, fault_flags=0)
+    with pytest.raises(RuntimeError, match='expected fail-closed zero'):
+        verify_r07b_backend_restart(original_proof=original,
+            sim_time_jump_delta_ns=-350_000_000, replay_error=TimeoutError('service vanished'),
+            replay_identity_ack=None, replacement_ack=old_rejection, inhibit_ack=inhibit,
+            fresh_ack=fresh_query, replacement_status=unqualified_status,
             old_backend_instance_id=old_id)
 
 

@@ -530,17 +530,20 @@ def verify_r07b_backend_restart(*, original_proof, sim_time_jump_delta_ns,
             or fresh_ack.response.proof_asset_manifest_sha256):
         raise RuntimeError('R07b replacement QUERY returned stale or unverifiable proof')
     status = replacement_status
-    # A fresh replacement backend has no expected queue-overflow fault. Its
-    # initial contact coverage fault is the fail-closed state observed until
-    # coverage is re-established; keep the mask exact so unrelated faults fail.
-    expected_restart_faults = SimulationContactState.FAULT_CONTACT_COVERAGE
+    # Replacement startup can observe either just the initial contact-coverage
+    # fault, or that fault plus the bounded receipt-gate-missing fault when an
+    # old SAFE_STOP arrives before the replacement binds. Both retain zero and
+    # inhibit; keep the accepted masks exact so every other fault fails.
+    expected_restart_faults = (
+        SimulationContactState.FAULT_CONTACT_COVERAGE,
+        SimulationContactState.FAULT_CONTACT_COVERAGE | SimulationContactState.FAULT_QUEUE)
     if (status['backend_instance_id'] != new_id
             or status['session_id'] != original_proof.request.session_id
             or status['config_hash'] != stale.request.config_hash
             or type(status['status_sequence']) is not int or status['status_sequence'] <= 0
             or type(status['physics_iteration']) is not int or status['physics_iteration'] <= 0
             or status['received_ns'] <= inhibit_ack.observed_steady_ns
-            or status['fault_flags'] != expected_restart_faults
+            or status['fault_flags'] not in expected_restart_faults
             or not status['local_zero_override'] or not status['actuator_inhibited']):
         raise RuntimeError('R07b replacement backend status did not prove expected fail-closed zero after ACK')
     return {'clock_rollback_observed':True, 'backend_restarted':True,
