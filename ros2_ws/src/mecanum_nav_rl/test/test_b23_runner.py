@@ -8223,11 +8223,13 @@ def test_policy_bind_scan_window_rejects_invalid_clock_inputs(ros_ns, period_ns)
         policy_bind_launch_window_remaining_ns(ros_ns, period_ns)
 
 
-@pytest.mark.parametrize('trigger_success', [True, False])
-def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_success):
-    """Reset binding starts on the observed L1 event, while Trigger ACK stays mandatory."""
+@pytest.mark.parametrize(('trigger_success','reanchor'), [
+    (True, True), (False, True), (True, False),
+])
+def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_success, reanchor):
+    """Reset binding starts on L1; stale W0 watchdog is tolerated only until exact status recovery."""
     from std_srvs.srv import Trigger
-    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
+    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState, SimulationContactState
 
     io, clock = worker()
     io.deadline_ns = clock.ns + 1_000_000_000
@@ -8235,6 +8237,12 @@ def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_suc
     old = SafetyLifecycleState()
     old.sequence = 4
     io.ingress.lifecycle = old
+    io.descriptor = {'session_id':'session', 'config_hash':'a' * 64,
+        'backend_instance_id':77}
+    io.ingress.backend_state = NS(status_sequence=20, fault_flags=0,
+        session_id='session', config_hash='a' * 64, backend_instance_id=77,
+        episode_generation=1, reset_epoch=2, runtime_generation=4,
+        physics_iteration=4, local_zero_override=True, actuator_inhibited=True)
     next_state = SafetyLifecycleState()
     next_state.sequence = 5
     next_state.episode_generation = 2
@@ -8280,7 +8288,13 @@ def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_suc
             events.append(('bind_started', clock.now()))
             await asyncio.sleep(0)
             events.append(('bind_ack', clock.now()))
-            return NS(request=NS(request_sequence=18), response_bytes=b'bind-ack')
+            io.ingress.backend_state = NS(status_sequence=21,
+                fault_flags=(0 if reanchor else SimulationContactState.FAULT_COMMAND_STALE),
+                session_id='session', config_hash='a' * 64, backend_instance_id=77,
+                episode_generation=2, reset_epoch=3, runtime_generation=4,
+                physics_iteration=7, local_zero_override=True, actuator_inhibited=True)
+            return NS(request=NS(request_sequence=18), response_bytes=b'bind-ack',
+                response=NS(applied_physics_iteration=7, applied_binding_revision=2))
 
     io.control = Control()
 
@@ -8290,6 +8304,11 @@ def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_suc
         pause_count += 1
         if pause_count == 2:
             io.ingress.lifecycle = next_state
+            io.ingress.backend_state = NS(status_sequence=20, fault_flags=
+                SimulationContactState.FAULT_COMMAND_STALE,
+                session_id='session', config_hash='a' * 64, backend_instance_id=77,
+                episode_generation=1, reset_epoch=2, runtime_generation=4,
+                physics_iteration=5, local_zero_override=True, actuator_inhibited=True)
             events.append(('lifecycle_event', clock.now()))
         if pause_count == 7:
             events.append(('trigger_response', clock.now()))
@@ -8301,9 +8320,13 @@ def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_suc
 
     async def exercise():
         if trigger_success:
-            state, ack = await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
-            assert state.sequence == 5
-            assert ack.request.request_sequence == 18
+            if reanchor:
+                state, ack = await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
+                assert state.sequence == 5
+                assert ack.request.request_sequence == 18
+            else:
+                with pytest.raises(TimeoutError, match='native reset bind zero-watchdog re-anchor'):
+                    await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
         else:
             with pytest.raises(RuntimeError, match='late/negative actual ACK'):
                 await io.reset_lifecycle_and_bind(deadline_ns=io.deadline_ns)
@@ -8319,7 +8342,13 @@ def test_reset_l1_bind_dispatches_on_actual_event_before_trigger_ack(trigger_suc
     assert names.index('bind_started') < names.index('trigger_response')
     if trigger_success:
         assert names.index('trigger_response') < names.index('bind_ack') or names.index('bind_ack') < names.index('trigger_response')
-        assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' in names
+        if reanchor:
+            assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' in names
+            assert 'RESET_L1_ZERO_WATCHDOG_REANCHORED' in names
+            assert events[names.index('RESET_L1_ZERO_WATCHDOG_REANCHORED')][1]['fault_flags'] == 0
+        else:
+            assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' in names
+            assert 'RESET_L1_ZERO_WATCHDOG_REANCHORED' not in names
     else:
         assert 'RESET_L1_EVENT_BIND_CONCURRENT_ACKS' not in names
 

@@ -4184,10 +4184,14 @@ class TrainingWorkerIO:
     async def reset_lifecycle_and_bind(self, *, deadline_ns):
         """Bind L1 as soon as its actual event arrives, without waiting for RPC ACK first."""
         from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
         from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields
 
         old = self.ingress.lifecycle
         previous = old.sequence if old is not None else 0
+        prior_backend_status = self.ingress.backend_state
+        previous_status_sequence = (prior_backend_status.status_sequence
+            if prior_backend_status is not None else 0)
         lifecycle_deadline = min(deadline_ns, self.now() + 1_000_000_000)
         if lifecycle_deadline <= self.now():
             raise TimeoutError('lifecycle reset/bind has no remaining budget')
@@ -4196,6 +4200,7 @@ class TrainingWorkerIO:
         trigger_task = asyncio.create_task(self.call(
             self.reset_client, self.trigger_type.Request(), timeout_s=1.0,
             phase='lifecycle_reset', deadline_ns_override=lifecycle_deadline,
+            expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
             before_submit=lambda _now: submitted.set()))
         bind_task = None
         try:
@@ -4206,7 +4211,14 @@ class TrainingWorkerIO:
             state = await self.until(
                 lambda: self.ingress.lifecycle if self.ingress.lifecycle is not None
                     and self.ingress.lifecycle.sequence > previous else None,
-                deadline_ns=lifecycle_deadline, phase='lifecycle source event')
+                deadline_ns=lifecycle_deadline, phase='lifecycle source event',
+                # W0 is the exact applied zero already pinned by freeze_zero.
+                # The native gate may expire its unchanged 100 ms receipt
+                # watchdog while the reset lifecycle event is in flight. The
+                # backend has a narrowly guarded re-anchor for that exact
+                # applied zero; tolerate only this flag until the L1 bind is
+                # APPLIED and a fresh status proves it was cleared.
+                expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
             if state.barrier_state != state.BARRIER_NON_READY:
                 raise RuntimeError('actual reset lifecycle event did not reach non-ready barrier')
 
@@ -4227,6 +4239,38 @@ class TrainingWorkerIO:
                 'trigger_ack_received_ns':self.now(),
                 'bind_request_sequence':bind_ack.request.request_sequence,
                 'bind_response_cdr_hex':bind_ack.response_bytes.hex(),
+                'steady_ns':self.now()})
+            applied_iteration = bind_ack.response.applied_physics_iteration
+            def reset_bind_reanchored():
+                status = self.ingress.backend_state
+                if status is None:
+                    return None
+                if (status.status_sequence <= previous_status_sequence
+                        or status.session_id != self.descriptor['session_id']
+                        or status.config_hash != self.descriptor['config_hash']
+                        or status.backend_instance_id != self.descriptor['backend_instance_id']
+                        or (status.episode_generation, status.reset_epoch, status.runtime_generation)
+                            != (state.episode_generation, state.reset_epoch, state.runtime_generation)
+                        or status.physics_iteration < applied_iteration
+                        or status.fault_flags != 0
+                        or not status.local_zero_override
+                        or not status.actuator_inhibited):
+                    return None
+                return status
+            status = await self.until(reset_bind_reanchored,
+                deadline_ns=lifecycle_deadline,
+                phase='native reset bind zero-watchdog re-anchor',
+                expected_native_fault_flags=SimulationContactState.FAULT_COMMAND_STALE)
+            self.emit('RESET_L1_ZERO_WATCHDOG_REANCHORED', {
+                'lifecycle_sequence':state.sequence,
+                'bind_request_sequence':bind_ack.request.request_sequence,
+                'applied_binding_revision':bind_ack.response.applied_binding_revision,
+                'applied_physics_iteration':applied_iteration,
+                'status_sequence':status.status_sequence,
+                'status_physics_iteration':status.physics_iteration,
+                'fault_flags':status.fault_flags,
+                'local_zero_override':status.local_zero_override,
+                'actuator_inhibited':status.actuator_inhibited,
                 'steady_ns':self.now()})
             return copy.deepcopy(state), bind_ack
         except BaseException:
