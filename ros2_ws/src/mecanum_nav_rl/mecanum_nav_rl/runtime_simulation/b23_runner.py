@@ -894,14 +894,6 @@ def r02b_admission_release_target_ns(now_ros_ns, scan_period_ns):
     return next_boundary
 
 
-def r02b_sample_release_boundary_ns(sample_stamp_ns, scan_period_ns):
-    """Return the first scan boundary strictly after an actual sample."""
-    if (type(sample_stamp_ns) is not int or sample_stamp_ns <= 0
-            or type(scan_period_ns) is not int or scan_period_ns <= 0):
-        raise ValueError('R02b sample release requires a positive stamp and scan period')
-    return (sample_stamp_ns // scan_period_ns + 1) * scan_period_ns
-
-
 def case_environment(case, hooks):
     """Bind the single native ACK fault hook to its case-scoped child env."""
     if case == 'R02b' and hooks == ['native_hold_admission_until_receipt']:
@@ -3522,13 +3514,13 @@ class TrainingWorkerIO:
         self.emit('BACKEND_CONTROL_SERVICE_READY', {'phase':phase,'steady_ns':self.now()})
         return self.now()
 
-    async def publish_r02b_admission_after_scan_boundary(self, sample, *, deadline_ns):
-        """Publish one real post-ACK sample only after its next scan cutoff.
+    async def publish_r02b_post_ack_admission(self, sample, *, deadline_ns):
+        """Publish the first real fresh sample after the applied step ACK.
 
-        R02b deliberately holds native admission until a matching POLICY
-        receipt reaches the gate. Releasing the input at the end of its scan
-        window can leave too little time for the real Safety/publisher path
-        to produce that receipt before the unchanged 40 ms native bound.
+        The native R02b hook holds this admission at the backend boundary while
+        the real Safety and final publisher produce the matching POLICY
+        receipt. Do not wait for another simulated scan period here: at low
+        real-time factor that wait can outlive the unchanged native watchdog.
         """
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
 
@@ -3542,10 +3534,8 @@ class TrainingWorkerIO:
                 or received_ns <= pending.observed_steady_ns
                 or source_ns <= stamp_ns(pending.response.applied_sim_stamp)):
             raise RuntimeError('R02b sample is not generated and received after the pending ACK')
-        adapter = self.safety.local_training
-        boundary_ns = r02b_sample_release_boundary_ns(source_ns, adapter.scan_period_ns)
-        await self.until(lambda: self.ros_now() if self.ros_now() > boundary_ns else None,
-            deadline_ns=deadline_ns, phase='R02b sample scan boundary passed before native admission')
+        if self.now() >= deadline_ns:
+            raise TimeoutError('R02b post-ACK admission release exceeded step deadline')
         before_sequence = ingress.last_published_sample_sequence
         release_ros_ns = self.ros_now()
         ingress._publish_safety(sample)
@@ -3553,10 +3543,10 @@ class TrainingWorkerIO:
         if (after_sequence <= before_sequence
                 or ingress.last_published_admission_state != ingress.admission_state):
             raise RuntimeError('R02b production ingress did not publish the held admission sample')
-        self.emit('R02B_ADMISSION_RELEASED_AFTER_SAMPLE_BOUNDARY', {
+        self.emit('R02B_ADMISSION_RELEASED_AFTER_ACK', {
             'sample_stamp_ns': source_ns,
             'sample_received_steady_ns': received_ns,
-            'release_boundary_ns': boundary_ns,
+            'applied_sim_stamp_ns': stamp_ns(pending.response.applied_sim_stamp),
             'release_ros_ns': release_ros_ns,
             'release_steady_ns': self.now(),
             'sample_sequence': after_sequence,
@@ -5995,8 +5985,8 @@ class TrainingWorkerIO:
             await publish_policy_candidate(refresh_stamp=False)
         if align_admission_after_scan_boundary:
             # Hold native admission until one actual post-ACK producer sample
-            # has crossed its next cutoff. This gives the real Safety and
-            # publisher path a complete interval before the next scan cutoff.
+            # is released to Safety. Native observes it through the existing
+            # bounded hook while the production selector and final publisher run.
             self.ingress.pause_admission_publication()
             adapter = self.safety.local_training
             aligned_sample = await self.until(lambda: next((sample for sample in reversed(
@@ -6006,7 +5996,7 @@ class TrainingWorkerIO:
                 and sample.lifecycle == lifecycle_identity(self.ingress.lifecycle)), None),
                 deadline_ns=deadline,
                 phase='R02b actual post-ACK noisy sample ready for bounded release')
-            target_sample_sequence = await self.publish_r02b_admission_after_scan_boundary(
+            target_sample_sequence = await self.publish_r02b_post_ack_admission(
                 aligned_sample, deadline_ns=deadline)
             await publish_policy_candidate(refresh_stamp=True)
             await self.until(lambda: adapter.noisy

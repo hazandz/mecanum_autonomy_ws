@@ -13,7 +13,6 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     QueuedRunEvidence, RunEvidence,
     policy_bind_launch_window_remaining_ns, policy_bind_launch_window_ready,
-    r02b_sample_release_boundary_ns,
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
@@ -962,7 +961,7 @@ def test_r02b_waits_for_next_scan_cutoff_before_binding(now_ns, period_ns, expec
         r02b_admission_release_target_ns(now_ns, 0)
 
 
-def test_r02b_native_admission_is_not_published_until_sample_cutoff_passes():
+def test_r02b_releases_real_post_ack_admission_without_waiting_a_scan_period():
     from builtin_interfaces.msg import Time
 
     value, clock = worker()
@@ -979,21 +978,19 @@ def test_r02b_native_admission_is_not_published_until_sample_cutoff_passes():
     value.ingress._publish_safety = lambda sample: (
         published_at.append((clock.ns, value.ros_now(), sample.output.snapshot.timestamp_ns)),
         setattr(value.ingress, 'last_published_sample_sequence', 5))
-    value.safety = NS(local_training=NS(scan_period_ns=100_000_000))
     sample = NS(output=NS(snapshot=NS(timestamp_ns=1_050_000_000)),
         received_steady_ns=clock.ns, lifecycle='bound-life')
 
-    sequence = asyncio.run(value.publish_r02b_admission_after_scan_boundary(
+    sequence = asyncio.run(value.publish_r02b_post_ack_admission(
         sample, deadline_ns=clock.ns + 200_000_000))
 
     assert sequence == 5
-    assert r02b_sample_release_boundary_ns(1_050_000_000, 100_000_000) == 1_100_000_000
     assert len(published_at) == 1
-    assert published_at[0][1] > 1_100_000_000
-    assert published_at[0][0] == published_at[0][1]
+    assert published_at[0] == (clock.ns, clock.ns, 1_050_000_000)
     event = next(facts for name, facts in events
-        if name == 'R02B_ADMISSION_RELEASED_AFTER_SAMPLE_BOUNDARY')
-    assert event['release_boundary_ns'] == 1_100_000_000
+        if name == 'R02B_ADMISSION_RELEASED_AFTER_ACK')
+    assert event['applied_sim_stamp_ns'] == 900_000_000
+    assert event['release_ros_ns'] == clock.ns
     assert event['sample_stamp_ns'] == 1_050_000_000
 
 
@@ -1011,7 +1008,7 @@ def test_r02b_production_path_releases_sample_before_refreshing_policy_issue():
         mode='eval').body
     assert ast.dump(admission_gate, include_attributes=False) == ast.dump(
         expected_gate, include_attributes=False)
-    release_at = source.index('publish_r02b_admission_after_scan_boundary')
+    release_at = source.index('publish_r02b_post_ack_admission')
     refreshed_issue_at = source.index('publish_policy_candidate(refresh_stamp=True)')
     safety_receive_at = source.index('R02b released admission delivered to Safety')
     assert release_at < refreshed_issue_at < safety_receive_at
