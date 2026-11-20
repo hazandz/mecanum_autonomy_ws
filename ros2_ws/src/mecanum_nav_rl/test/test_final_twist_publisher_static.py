@@ -236,6 +236,9 @@ def test_local_final_publisher_drops_queued_policy_crossing_scan_cutoff(monkeypa
     assert not published and not receipts
     assert evidence[-1] == ('FINAL_POLICY_PUBLICATION_DEFERRED_AT_SCAN_CUTOFF', {
         'source_stamp_ns':1_390_000_000, 'publisher_stamp_ns':1_400_000_000,
+        'boundary_ns':1_400_000_000, 'source_sequence':1,
+        'source_instance_id':11, 'identity':[1, 2, 3],
+        'session_id':'b23-cutoff', 'publisher_instance_id':13,
         'scan_period_ns':100_000_000,
         'reason':'accepted envelope crossed or landed on scan cutoff'})
 
@@ -280,7 +283,10 @@ def test_local_final_publisher_defers_policy_with_one_physics_step_before_cutoff
     assert not published and not receipts
     assert evidence[-1] == ('FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF', {
         'source_stamp_ns':1_170_000_000, 'publisher_stamp_ns':1_190_000_000,
-        'boundary_ns':1_200_000_000, 'remaining_ros_ns':10_000_000,
+        'boundary_ns':1_200_000_000, 'source_sequence':1,
+        'source_instance_id':11, 'identity':[1, 2, 3],
+        'session_id':'b23-lead', 'publisher_instance_id':13,
+        'remaining_ros_ns':10_000_000,
         'scan_period_ns':100_000_000, 'physics_step_ns':10_000_000,
         'reason':'native application could land after the next scan cutoff'})
 

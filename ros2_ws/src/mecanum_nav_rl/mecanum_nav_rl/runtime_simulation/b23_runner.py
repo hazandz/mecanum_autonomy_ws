@@ -2835,6 +2835,10 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ports import LocalTrainingBackendControlPort
         import secrets
         self.descriptor, self.document, self.asset = copy.deepcopy(descriptor), document, asset_manifest
+        final_events_path = Path(self.descriptor['run_root'])/'final-events.jsonl'
+        self._final_events_offset = final_events_path.stat().st_size if final_events_path.exists() else 0
+        self._final_events_partial = b''
+        self._final_policy_deferral_events = []
         self.events = []
         self._accepted_policy_event_keys = set()
         self._event_sink = emit
@@ -5878,6 +5882,51 @@ class TrainingWorkerIO:
         })
         return refreshed
 
+    def _refresh_final_policy_deferral_events(self):
+        """Read only newly appended final-publisher records for this run."""
+        path = Path(self.descriptor['run_root'])/'final-events.jsonl'
+        if not path.exists():
+            return
+        try:
+            size = path.stat().st_size
+            if size < self._final_events_offset:
+                raise RuntimeError('final-publisher evidence file shrank during a POLICY step')
+            with path.open('rb') as stream:
+                stream.seek(self._final_events_offset)
+                raw = stream.read()
+        except OSError as error:
+            raise RuntimeError('cannot read live final-publisher evidence: ' + repr(error)) from error
+        self._final_events_offset += len(raw)
+        rows = (self._final_events_partial + raw).split(b'\n')
+        self._final_events_partial = rows.pop()
+        for line in rows:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RuntimeError('malformed live final-publisher evidence: ' + repr(error)) from error
+            if row.get('event') in {
+                    'FINAL_POLICY_PUBLICATION_DEFERRED_AT_SCAN_CUTOFF',
+                    'FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF'}:
+                self._final_policy_deferral_events.append(row)
+
+    def _final_policy_deferral_for(self, *, step_index, identity):
+        self._refresh_final_policy_deferral_events()
+        for row in reversed(self._final_policy_deferral_events):
+            facts = row.get('facts', {})
+            if (row.get('run_id') == self.descriptor.get('run_id')
+                    and facts.get('source_sequence') == step_index
+                    and facts.get('source_instance_id') == self.policy_source_id
+                    and facts.get('identity') == list(identity)
+                    and facts.get('session_id') == self.descriptor['session_id']
+                    and facts.get('publisher_instance_id') == self.final.publisher_instance_id):
+                boundary_ns = facts.get('boundary_ns')
+                if type(boundary_ns) is not int or boundary_ns <= 0:
+                    raise RuntimeError('pinned final-publisher cutoff record lacks a valid boundary')
+                return row
+        return None
+
     async def tick_policy_after_deferred_scan_cutoff(self, *, deadline_ns,
             step_index, sample_sequence):
         """Retry the same Safety tick at the first post-cutoff physics time.
@@ -5889,8 +5938,28 @@ class TrainingWorkerIO:
         production tick under its lock. The tick still owns all freshness,
         limiter, identity, and fail-safe decisions.
         """
+        from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
         adapter = self.safety.local_training
+        life = self.ingress.lifecycle
+        identity = (int(life.episode_generation), int(life.reset_epoch),
+            int(life.runtime_generation))
+
+        def exact_policy_receipt():
+            receipt = self.final.publication_for_source_sequence(
+                source=FinalIssuedCommandReceipt.SOURCE_POLICY,
+                sequence=step_index)
+            if receipt is not None and (
+                    receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY
+                    or receipt.sequence != step_index
+                    or receipt.source_instance_id != self.policy_source_id
+                    or receipt.final_publisher_instance_id != self.final.publisher_instance_id
+                    or [receipt.episode_generation, receipt.reset_epoch,
+                        receipt.runtime_generation] != list(identity)):
+                raise RuntimeError('POLICY receipt identity differs from active step')
+            return receipt
+
         previous_tick_ros_ns = adapter.last_tick_ros_ns
+        previous_boundary_ns = getattr(adapter, '_last_deferred_scan_cutoff_ns', None)
         ready_ros_ns = self.ros_now()
         self.emit('POLICY_READY_IMMEDIATE_SAFETY_TICK', {
             'step_index': step_index,
@@ -5900,37 +5969,66 @@ class TrainingWorkerIO:
         })
         adapter.tick()
         boundary_ns = getattr(adapter, '_last_deferred_scan_cutoff_ns', None)
-        if (adapter.last_tick_ros_ns != previous_tick_ros_ns
-                or type(boundary_ns) is not int):
-            return
+        internal_defer = (adapter.last_tick_ros_ns == previous_tick_ros_ns
+            and type(boundary_ns) is int and boundary_ns != previous_boundary_ns)
 
-        def crossed_boundary():
+        while self.now() < deadline_ns:
+            if internal_defer:
+                outcome = {'boundary_ns':boundary_ns, 'event':'SAFETY_INTERNAL_SCAN_CUTOFF'}
+            else:
+                def published_or_deferred():
+                    receipt = exact_policy_receipt()
+                    if receipt is not None:
+                        return {'receipt':receipt}
+                    row = self._final_policy_deferral_for(
+                        step_index=step_index, identity=identity)
+                    return {'deferred':row} if row is not None else None
+
+                outcome = await self.until(published_or_deferred,
+                    deadline_ns=deadline_ns,
+                    phase='exact POLICY receipt or pinned publisher cutoff evidence')
+                if 'receipt' in outcome:
+                    return
+                boundary_ns = outcome['deferred']['facts']['boundary_ns']
+
+            def crossed_boundary():
+                current_ros_ns = self.ros_now()
+                return current_ros_ns if current_ros_ns > boundary_ns else None
+
             current_ros_ns = self.ros_now()
-            return current_ros_ns if current_ros_ns > boundary_ns else None
-
-        if ready_ros_ns > boundary_ns:
-            crossed_ros_ns = ready_ros_ns
-        else:
-            crossed_ros_ns = await self.until(
-                crossed_boundary,
-                deadline_ns=deadline_ns,
-                phase='post-cutoff physics time for immediate POLICY Safety tick')
-        with adapter.lock:
-            tick_before_retry_ros_ns = adapter.last_tick_ros_ns
-            if (tick_before_retry_ros_ns is None
-                    or tick_before_retry_ros_ns <= boundary_ns):
-                adapter.tick()
-            tick_after_retry_ros_ns = adapter.last_tick_ros_ns
-        self.emit('POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF', {
-            'step_index': step_index,
-            'boundary_ns': boundary_ns,
-            'crossed_ros_ns': crossed_ros_ns,
-            'tick_before_retry_ros_ns': tick_before_retry_ros_ns,
-            'tick_after_retry_ros_ns': tick_after_retry_ros_ns,
-            'retry_performed': (tick_before_retry_ros_ns is None
-                or tick_before_retry_ros_ns <= boundary_ns),
-            'steady_ns': self.now(),
-        })
+            crossed_ros_ns = (current_ros_ns if current_ros_ns > boundary_ns else
+                await self.until(crossed_boundary, deadline_ns=deadline_ns,
+                    phase='post-cutoff physics time for immediate POLICY Safety tick'))
+            with adapter.lock:
+                raced_receipt = exact_policy_receipt()
+                tick_before_retry_ros_ns = adapter.last_tick_ros_ns
+                retry_boundary_before_ns = getattr(
+                    adapter, '_last_deferred_scan_cutoff_ns', None)
+                if raced_receipt is None and (tick_before_retry_ros_ns is None
+                        or tick_before_retry_ros_ns <= boundary_ns):
+                    adapter.tick()
+                tick_after_retry_ros_ns = adapter.last_tick_ros_ns
+                retry_boundary_after_ns = getattr(
+                    adapter, '_last_deferred_scan_cutoff_ns', None)
+            retry_performed = raced_receipt is None and (
+                tick_before_retry_ros_ns is None or tick_before_retry_ros_ns <= boundary_ns)
+            self.emit('POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF', {
+                'step_index': step_index,
+                'boundary_ns': boundary_ns,
+                'crossed_ros_ns': crossed_ros_ns,
+                'tick_before_retry_ros_ns': tick_before_retry_ros_ns,
+                'tick_after_retry_ros_ns': tick_after_retry_ros_ns,
+                'retry_performed': retry_performed,
+                'retry_suppressed_by_receipt': raced_receipt is not None,
+                'steady_ns': self.now(),
+            })
+            if raced_receipt is not None:
+                return
+            internal_defer = (tick_after_retry_ros_ns == tick_before_retry_ros_ns
+                and type(retry_boundary_after_ns) is int
+                and retry_boundary_after_ns != retry_boundary_before_ns)
+            if internal_defer:
+                boundary_ns = retry_boundary_after_ns
 
     async def wait_for_policy_issue_window(self, *, deadline_ns, step_index):
         """Wait until a newly issued POLICY has room before both scan edges.

@@ -5896,6 +5896,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     zero_policy_receipt.final_publish_sequence=4
     zero_policy_receipt.source=FinalIssuedCommandReceipt.SOURCE_POLICY
     zero_policy_receipt.sequence=1
+    zero_policy_receipt.final_publisher_instance_id=55
+    zero_policy_receipt.source_instance_id=33
+    zero_policy_receipt.episode_generation=1
+    zero_policy_receipt.reset_epoch=2
+    zero_policy_receipt.runtime_generation=3
     safe_stop_receipt = FinalIssuedCommandReceipt()
     safe_stop_receipt.final_publisher_instance_id=55
     safe_stop_receipt.final_publish_sequence=3
@@ -8178,6 +8183,10 @@ def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
     io.now = lambda: 100
     io.ros_now = lambda: 90
     io.emit = lambda name, facts: io.events.append((name, facts))
+    io.descriptor = {'run_id':'test-retry-internal', 'session_id':'session-retry',
+        'run_root':'/unused'}
+    io.policy_source_id = 31
+    io.ingress = NS(lifecycle=NS(episode_generation=1, reset_epoch=2, runtime_generation=3))
 
     class Adapter:
         def __init__(self):
@@ -8197,13 +8206,22 @@ def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
     io.safety.local_training = adapter
     current_ros = {'ns':100}
     io.ros_now = lambda: current_ros['ns']
+    receipt = NS(source=1, sequence=7, source_instance_id=31,
+        final_publisher_instance_id=34, episode_generation=1, reset_epoch=2,
+        runtime_generation=3)
+    io.final = NS(publisher_instance_id=34,
+        publication_for_source_sequence=lambda **kwargs: receipt if adapter.calls >= 2 else None)
 
     async def until(predicate, *, deadline_ns, phase, **_kwargs):
         assert deadline_ns == 900
-        assert phase == 'post-cutoff physics time for immediate POLICY Safety tick'
-        current_ros['ns'] = 101
+        if phase == 'post-cutoff physics time for immediate POLICY Safety tick':
+            current_ros['ns'] = 101
+            value = predicate()
+            assert value == 101
+            return value
+        assert phase == 'exact POLICY receipt or pinned publisher cutoff evidence'
         value = predicate()
-        assert value == 101
+        assert value['receipt'] is receipt
         return value
 
     io.until = until
@@ -8217,7 +8235,8 @@ def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
     assert retry == [{
         'step_index':7, 'boundary_ns':100, 'crossed_ros_ns':101,
         'tick_before_retry_ros_ns':80, 'tick_after_retry_ros_ns':101,
-        'retry_performed':True, 'steady_ns':100,
+        'retry_performed':True, 'retry_suppressed_by_receipt':False,
+        'steady_ns':100,
     }], retry
 
 
@@ -8229,6 +8248,10 @@ def test_policy_safety_tick_retries_when_first_defer_is_already_past_boundary():
     io.now = lambda: 100
     io.ros_now = lambda: 101
     io.emit = lambda name, facts: io.events.append((name, facts))
+    io.descriptor = {'run_id':'test-retry-past', 'session_id':'session-retry',
+        'run_root':'/unused'}
+    io.policy_source_id = 32
+    io.ingress = NS(lifecycle=NS(episode_generation=1, reset_epoch=2, runtime_generation=3))
 
     class Adapter:
         def __init__(self):
@@ -8248,8 +8271,18 @@ def test_policy_safety_tick_retries_when_first_defer_is_already_past_boundary():
 
     adapter = Adapter()
     io.safety.local_training = adapter
+    receipt = NS(source=1, sequence=8, source_instance_id=32,
+        final_publisher_instance_id=35, episode_generation=1, reset_epoch=2,
+        runtime_generation=3)
+    io.final = NS(publisher_instance_id=35,
+        publication_for_source_sequence=lambda **kwargs: receipt if adapter.calls >= 2 else None)
 
     async def until(*_args, **_kwargs):
+        predicate = _args[0]
+        if _kwargs.get('phase') == 'exact POLICY receipt or pinned publisher cutoff evidence':
+            value = predicate()
+            assert value['receipt'] is receipt
+            return value
         raise AssertionError('an already crossed cutoff must retry immediately')
 
     io.until = until
@@ -8263,7 +8296,156 @@ def test_policy_safety_tick_retries_when_first_defer_is_already_past_boundary():
     assert retry == [{
         'step_index':8, 'boundary_ns':100, 'crossed_ros_ns':101,
         'tick_before_retry_ros_ns':80, 'tick_after_retry_ros_ns':101,
-        'retry_performed':True, 'steady_ns':100,
+        'retry_performed':True, 'retry_suppressed_by_receipt':False,
+        'steady_ns':100,
+    }], retry
+
+
+def test_policy_safety_tick_retries_after_exact_final_publisher_deferral(tmp_path):
+    io = object.__new__(TrainingWorkerIO)
+    io.events = []
+    io.deadline_ns = 1_000
+    io.now = lambda: 100
+    io.ros_now = lambda: 100
+    io.emit = lambda name, facts: io.events.append((name, facts))
+    io.descriptor = {'run_id':'test-publisher-deferral', 'session_id':'session-deferral',
+        'run_root':str(tmp_path)}
+    io.policy_source_id = 41
+    io.final = NS(publisher_instance_id=42,
+        publication_for_source_sequence=lambda **_kwargs: receipt if adapter.calls >= 2 else None)
+    identity = [5, 6, 7]
+    io.ingress = NS(lifecycle=NS(episode_generation=5, reset_epoch=6, runtime_generation=7))
+    io._final_events_offset = 0
+    io._final_events_partial = b''
+    io._final_policy_deferral_events = []
+
+    class Adapter:
+        def __init__(self):
+            self.last_tick_ros_ns = 90
+            self._last_deferred_scan_cutoff_ns = None
+            self.lock = threading.RLock()
+            self.calls = 0
+
+        def tick(self):
+            self.calls += 1
+            # Reproduce R08: Safety accepted the candidate and advanced its
+            # tick timestamp, but the separate publisher deferred its output.
+            self.last_tick_ros_ns = 100 if self.calls == 1 else 101
+
+    adapter = Adapter()
+    io.safety = NS(local_training=adapter)
+    receipt = NS(source=1, sequence=9, source_instance_id=41,
+        final_publisher_instance_id=42, episode_generation=5, reset_epoch=6,
+        runtime_generation=7)
+    current_ros = {'ns':100}
+    io.ros_now = lambda: current_ros['ns']
+    publisher_event_path = Path(io.descriptor['run_root'])/'final-events.jsonl'
+    raw_event = json.dumps({'run_id':io.descriptor['run_id'],
+        'event':'FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF',
+        'facts':{'source_sequence':9, 'source_instance_id':41, 'identity':identity,
+            'session_id':'session-deferral', 'publisher_instance_id':42,
+            'boundary_ns':200, 'source_stamp_ns':190}}).encode() + b'\n'
+
+    async def until(predicate, *, deadline_ns, phase, **_kwargs):
+        assert deadline_ns == 900
+        if phase == 'exact POLICY receipt or pinned publisher cutoff evidence':
+            value = predicate()
+            if value is not None and 'receipt' in value:
+                return value
+            publisher_event_path.parent.mkdir(parents=True, exist_ok=True)
+            with publisher_event_path.open('ab') as stream:
+                stream.write(raw_event)
+            value = predicate()
+            assert value['deferred']['facts']['source_sequence'] == 9
+            return value
+        assert phase == 'post-cutoff physics time for immediate POLICY Safety tick'
+        current_ros['ns'] = 201
+        value = predicate()
+        assert value == 201
+        return value
+
+    io.until = until
+    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+        deadline_ns=900, step_index=9, sample_sequence=52))
+
+    assert adapter.calls == 2
+    retry = [facts for name, facts in io.events
+        if name == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF']
+    assert retry == [{
+        'step_index':9, 'boundary_ns':200, 'crossed_ros_ns':201,
+        'tick_before_retry_ros_ns':100, 'tick_after_retry_ros_ns':101,
+        'retry_performed':True, 'retry_suppressed_by_receipt':False,
+        'steady_ns':100,
+    }], retry
+
+
+def test_policy_safety_tick_does_not_retry_if_exact_receipt_arrives_at_cutoff():
+    io = object.__new__(TrainingWorkerIO)
+    io.events = []
+    io.deadline_ns = 1_000
+    io.now = lambda: 100
+    io.ros_now = lambda: clock['ns']
+    io.emit = lambda name, facts: io.events.append((name, facts))
+    io.descriptor = {'run_id':'test-receipt-race', 'session_id':'session-race',
+        'run_root':'/unused'}
+    io.policy_source_id = 51
+    io.ingress = NS(lifecycle=NS(episode_generation=8, reset_epoch=9, runtime_generation=10))
+    clock = {'ns':100}
+
+    class Adapter:
+        def __init__(self):
+            self.last_tick_ros_ns = 90
+            self._last_deferred_scan_cutoff_ns = None
+            self.lock = threading.RLock()
+            self.calls = 0
+
+        def tick(self):
+            self.calls += 1
+            self.last_tick_ros_ns = 100
+
+    adapter = Adapter()
+    io.safety = NS(local_training=adapter)
+    receipt = NS(source=1, sequence=4, source_instance_id=51,
+        final_publisher_instance_id=52, episode_generation=8, reset_epoch=9,
+        runtime_generation=10)
+    io.final = NS(publisher_instance_id=52,
+        publication_for_source_sequence=lambda **_kwargs: receipt if clock['ns'] > 200 else None)
+
+    async def until(predicate, *, deadline_ns, phase, **_kwargs):
+        assert deadline_ns == 900
+        if phase == 'exact POLICY receipt or pinned publisher cutoff evidence':
+            value = predicate()
+            assert value['deferred']['facts']['source_sequence'] == 4
+            return value
+        assert phase == 'post-cutoff physics time for immediate POLICY Safety tick'
+        clock['ns'] = 201
+        value = predicate()
+        assert value == 201
+        return value
+
+    io.until = until
+    # The first tick succeeded at the Safety layer. Model the publisher's
+    # exact deferral record already in its live file before the runner waits.
+    io._final_events_offset = 0
+    io._final_events_partial = b''
+    io._final_policy_deferral_events = [{
+        'run_id':'test-receipt-race',
+        'event':'FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF',
+        'facts':{'source_sequence':4, 'source_instance_id':51,
+            'identity':[8,9,10], 'session_id':'session-race',
+            'publisher_instance_id':52, 'boundary_ns':200}}]
+    io._refresh_final_policy_deferral_events = lambda: None
+
+    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+        deadline_ns=900, step_index=4, sample_sequence=61))
+    assert adapter.calls == 1
+    retry = [facts for name, facts in io.events
+        if name == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF']
+    assert retry == [{
+        'step_index':4, 'boundary_ns':200, 'crossed_ros_ns':201,
+        'tick_before_retry_ros_ns':100, 'tick_after_retry_ros_ns':100,
+        'retry_performed':False, 'retry_suppressed_by_receipt':True,
+        'steady_ns':100,
     }], retry
 
 

@@ -206,8 +206,17 @@ class FinalTwistPublisherNode(Node):
                     and source_ns > 0 and 0 <= now_ns - source_ns <= 200_000_000)
                 if (identity_fresh and FinalTwistPublisherNode._crossed_scan_boundary(
                         source_ns, now_ns, self._scan_period_ns)):
+                    boundary_ns = (source_ns if source_ns % self._scan_period_ns == 0
+                        else (source_ns // self._scan_period_ns + 1) * self._scan_period_ns)
                     self._emit('FINAL_POLICY_PUBLICATION_DEFERRED_AT_SCAN_CUTOFF', {
                         'source_stamp_ns':source_ns, 'publisher_stamp_ns':now_ns,
+                        'boundary_ns':boundary_ns,
+                        'source_sequence':envelope.sequence,
+                        'source_instance_id':envelope.source_instance_id,
+                        'identity':[envelope.episode_generation, envelope.reset_epoch,
+                            envelope.runtime_generation],
+                        'session_id':self._session_id,
+                        'publisher_instance_id':self._publisher_instance_id,
                         'scan_period_ns':self._scan_period_ns,
                         'reason':'accepted envelope crossed or landed on scan cutoff'})
                     return
@@ -218,6 +227,12 @@ class FinalTwistPublisherNode(Node):
                         self._emit('FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF', {
                             'source_stamp_ns':source_ns, 'publisher_stamp_ns':now_ns,
                             'boundary_ns':boundary_ns,
+                            'source_sequence':envelope.sequence,
+                            'source_instance_id':envelope.source_instance_id,
+                            'identity':[envelope.episode_generation, envelope.reset_epoch,
+                                envelope.runtime_generation],
+                            'session_id':self._session_id,
+                            'publisher_instance_id':self._publisher_instance_id,
                             'remaining_ros_ns':remaining_ns,
                             'scan_period_ns':self._scan_period_ns,
                             'physics_step_ns':self._physics_step_ns,
