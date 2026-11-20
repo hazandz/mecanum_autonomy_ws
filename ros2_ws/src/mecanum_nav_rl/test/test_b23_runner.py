@@ -19,7 +19,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02e_prebind_admission_rejected, verify_r02e_safety_input_enqueued,
     verify_r02g_close, r02g_inhibit_operation,
     await_r02g_exact_safe_stop_application,
-    r02g_close_admission, verify_r03_receipt_fault, install_r04_delivery_fault,
+    drain_r02g_final_publication, r02g_close_admission,
+    verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
     await_r04a_production_rejection, await_r04a_post_rejection_zero,
@@ -3448,6 +3449,41 @@ def test_r02g_waits_for_exact_receipt_application_not_latest_status():
     assert lookups == [receipt]
     assert waits == [(5678,'R02g exact native SAFE_STOP application: admission_inhibited')]
     assert result['state'].applied_final_publish_sequence == receipt.final_publish_sequence
+
+
+def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    receipt = NS(source=CommandEnvelope.SOURCE_POLICY, sequence=3,
+        final_publish_sequence=82, final_publisher_instance_id=17)
+    state = NS(applied_receipt_valid=True, local_zero_override=False,
+        fault_flags=0, applied_final_publisher_instance_id=17,
+        applied_final_publish_sequence=82)
+    application = {'state':state,'received_ns':123}
+    calls = []
+    adapter = NS(last_output=NS(source=CommandEnvelope.SOURCE_POLICY, sequence=3),
+        set_stream_enabled=lambda enabled:calls.append(('stream',enabled)))
+    io = NS(final=NS(publication_for_source_sequence=lambda **kw:(
+            calls.append(('receipt',kw)),receipt)[1]),
+        ingress=NS(application_for_receipt=lambda selected:(
+            calls.append(('application',selected)),application)[1]),
+        now=lambda:100,
+        emit=lambda name,facts:calls.append((name,facts)))
+
+    async def until(predicate, *, deadline_ns, phase):
+        calls.append(('until',phase,deadline_ns))
+        return predicate()
+
+    io.until = until
+    result = asyncio.run(drain_r02g_final_publication(
+        io,adapter,deadline_ns=150))
+
+    assert result is receipt
+    assert calls[0] == ('stream',False)
+    assert calls[1] == ('until','R02g last Safety output receipt before close',150)
+    assert calls[2] == ('receipt',{'source':CommandEnvelope.SOURCE_POLICY,'sequence':3})
+    assert calls[3] == ('until','R02g last POLICY application before close',150)
+    assert calls[4] == ('application',receipt)
+    assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
 
 @pytest.mark.parametrize('zero_only', [False, True])

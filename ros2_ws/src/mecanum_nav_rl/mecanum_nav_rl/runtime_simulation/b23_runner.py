@@ -2417,6 +2417,45 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
         'native_local_zero_override':bool(backend_state.local_zero_override)}
 
 
+async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
+    """Quiesce Safety and join its final output before starting a close route.
+
+    A POLICY output already selected by the steady Safety timer can still be
+    in transit after B1 commits. Starting a SAFE_STOP at that moment lets the
+    native gate correctly cancel the queued POLICY and fault closed. Stop the
+    selector first, then prove the last output reached native before asking
+    the route under test to close it.
+    """
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    adapter.set_stream_enabled(False)
+    output = adapter.last_output
+    if output is None or output.source not in (
+            CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
+        raise RuntimeError('R02g cannot bind the last Safety output before close')
+    receipt = await io.until(lambda: io.final.publication_for_source_sequence(
+        source=output.source, sequence=output.sequence),
+        deadline_ns=deadline_ns, phase='R02g last Safety output receipt before close')
+    application = await await_r02g_exact_safe_stop_application(
+        io, receipt=receipt, deadline_ns=deadline_ns, route='pre-close') if (
+            receipt.source == CommandEnvelope.SOURCE_SAFE_STOP) else await io.until(
+                lambda: io.ingress.application_for_receipt(receipt),
+                deadline_ns=deadline_ns, phase='R02g last POLICY application before close')
+    if not isinstance(application, dict) or application.get('state') is None:
+        raise RuntimeError('R02g last Safety output lacks exact native application evidence')
+    state = application['state']
+    if (not state.applied_receipt_valid or state.local_zero_override
+            or state.fault_flags != 0
+            or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
+            or state.applied_final_publish_sequence != receipt.final_publish_sequence):
+        raise RuntimeError('R02g last Safety output was not applied cleanly before close')
+    io.emit('R02G_PRE_CLOSE_OUTPUT_DRAINED', {
+        'source': receipt.source, 'source_sequence': receipt.sequence,
+        'final_publish_sequence': receipt.final_publish_sequence,
+        'application_received_ns': application.get('received_ns'),
+        'steady_ns': io.now()})
+    return receipt
+
+
 def r02g_inhibit_operation():
     """Resolve the production service operation used by the R02g OP_INHIBIT route."""
     from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
@@ -7820,6 +7859,8 @@ async def training_child(path):
                 if transition.termination.terminated or transition.termination.truncated:
                     raise RuntimeError('R02g POLICY step terminated before closing-path check: ' + route)
                 adapter = io.safety.local_training
+                await drain_r02g_final_publication(io, adapter,
+                    deadline_ns=min(io.deadline_ns, io.now() + 50_000_000))
                 safe_stop_before = adapter.safe_stop_sequence
                 if route == 'safe_stop':
                     adapter.set_policy_hold(True)
