@@ -6682,6 +6682,249 @@ def _soak_ledger_counts(root):
         'b1_transition_committed':len(rows[3]), 'unique_transition_ids':[len(items) for items in ids]}
 
 
+def _r08_motion_coverage(root, *, run_id, invocation_id, session_id,
+                         config_hash, backend_instance_id):
+    """Audit measured motion against exact POLICY receipt and Physics samples.
+
+    The fixed soak schedule asks for a 100 ms ROS window containing 11
+    consecutive 100 Hz Physics samples for each of six action families. A
+    publication or backend ledger count alone cannot establish this evidence;
+    the raw trusted-oracle and backend CDRs are decoded and joined here.
+    """
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt, SimulationContactState
+
+    root = Path(root)
+    issued = _ledger_rows(root, 'policy_adapter_issued.jsonl')
+    published = _ledger_rows(root, 'policy_final_published.jsonl')
+    applied = _ledger_rows(root, 'policy_backend_applied.jsonl')
+    expected_steps = [34] * 10 + [33] * 20
+    episode_ids = []
+    issue_by_identity_step = {}
+    for record in issued:
+        facts = record.get('facts', {})
+        identity = tuple(facts.get('identity', ()))
+        step = facts.get('step_index')
+        if (record.get('event') != 'policy_adapter_issued'
+                or record.get('role') != 'worker' or record.get('run_id') != run_id
+                or record.get('invocation_id') != invocation_id or len(identity) != 3
+                or type(step) is not int or facts.get('sequence') != step
+                or not facts.get('transition_id')):
+            raise RuntimeError('R08 adapter issuance ledger has malformed identity/step')
+        if identity not in episode_ids:
+            episode_ids.append(identity)
+        key = (identity, step)
+        if key in issue_by_identity_step:
+            raise RuntimeError('R08 adapter issuance ledger duplicates an identity/step')
+        issue_by_identity_step[key] = facts
+    if len(episode_ids) != 30:
+        raise RuntimeError(f'R08 motion audit expected 30 episode identities, got {len(episode_ids)}')
+    for index, identity in enumerate(episode_ids):
+        steps = sorted(step for current, step in issue_by_identity_step if current == identity)
+        if steps != list(range(1, expected_steps[index] + 1)):
+            raise RuntimeError(f'R08 adapter issuance steps do not match slot {index}')
+    episode_index = {identity: index for index, identity in enumerate(episode_ids)}
+
+    receipt_by_key = {}
+    for record in published:
+        facts = record.get('facts', {})
+        if (record.get('event') != 'policy_final_published'
+                or record.get('role') != 'final' or record.get('run_id') != run_id
+                or record.get('invocation_id') != invocation_id):
+            raise RuntimeError('R08 final publication ledger has foreign provenance')
+        try:
+            receipt = deserialize_message(bytes.fromhex(facts['receipt_cdr_hex']),
+                                          FinalIssuedCommandReceipt)
+        except (KeyError, ValueError, TypeError) as error:
+            raise RuntimeError('R08 final receipt CDR is incomplete or invalid') from error
+        identity = tuple(facts.get('identity', ()))
+        key = (identity, receipt.final_publisher_instance_id,
+               receipt.final_publish_sequence)
+        issue = issue_by_identity_step.get((identity, receipt.sequence))
+        if (len(identity) != 3
+                or receipt.source != receipt.SOURCE_POLICY or issue is None
+                or receipt.step_index != issue['step_index']
+                or receipt.transition_id != issue['transition_id']
+                or facts.get('transition_id') != issue['transition_id']
+                or facts.get('source_sequence') != receipt.sequence
+                or facts.get('publisher_instance_id') != receipt.final_publisher_instance_id
+                or facts.get('publish_sequence') != receipt.final_publish_sequence):
+            continue
+        value = {'identity': identity, 'step_index': receipt.step_index,
+                 'transition_id': receipt.transition_id,
+                 'source_sequence': receipt.sequence,
+                 'publisher_instance_id': receipt.final_publisher_instance_id,
+                 'publish_sequence': receipt.final_publish_sequence,
+                 'command': (receipt.final_command.linear.x,
+                             receipt.final_command.linear.y,
+                             receipt.final_command.angular.z)}
+        if key in receipt_by_key and receipt_by_key[key] != value:
+            raise RuntimeError('R08 final receipt key has conflicting evidence')
+        receipt_by_key[key] = value
+
+    applied_by_key = {}
+    for record in applied:
+        facts = record.get('facts', {})
+        if (record.get('event') != 'policy_backend_applied'
+                or record.get('role') != 'worker' or record.get('run_id') != run_id
+                or record.get('invocation_id') != invocation_id):
+            raise RuntimeError('R08 backend application ledger has foreign provenance')
+        try:
+            status = deserialize_message(bytes.fromhex(facts['status_cdr_hex']),
+                                         SimulationContactState)
+        except (KeyError, ValueError, TypeError) as error:
+            raise RuntimeError('R08 applied status CDR is incomplete or invalid') from error
+        identity = tuple(facts.get('identity', ()))
+        key = (identity, status.applied_final_publisher_instance_id,
+               status.applied_final_publish_sequence)
+        receipt = receipt_by_key.get(key)
+        if (receipt is None
+                or facts.get('transition_id') != receipt['transition_id']
+                or status.session_id != session_id or status.config_hash != config_hash
+                or status.backend_instance_id != backend_instance_id
+                or not status.applied_receipt_valid
+                or status.applied_physics_iteration != facts.get('iteration')
+                or status.applied_sim_stamp.sec * 1_000_000_000
+                   + status.applied_sim_stamp.nanosec != facts.get('stamp_ns')):
+            continue
+        prior = applied_by_key.get(key)
+        value = (status.applied_physics_iteration, facts.get('stamp_ns'),
+                 receipt['transition_id'])
+        if prior is not None and prior != value:
+            raise RuntimeError('R08 backend application key has conflicting evidence')
+        applied_by_key[key] = value
+
+    thresholds = (
+        ('forward', lambda x, y, w: x >= 0.02,
+         lambda x, y, w: x > 0.0),
+        ('reverse', lambda x, y, w: x <= -0.02,
+         lambda x, y, w: x < 0.0),
+        ('lateral', lambda x, y, w: y >= 0.02,
+         lambda x, y, w: y > 0.0),
+        ('rotation', lambda x, y, w: w >= 0.05,
+         lambda x, y, w: w > 0.0),
+        ('diagonal', lambda x, y, w: x >= 0.02 and y >= 0.02,
+         lambda x, y, w: x > 0.0 and y > 0.0),
+        ('mixed', lambda x, y, w: x >= 0.02 and y <= -0.02 and w >= 0.05,
+         lambda x, y, w: x > 0.0 and y < 0.0 and w > 0.0),
+    )
+    selected_windows = {}
+    maxima = {name: [float('-inf')] * 3 for name, _, _ in thresholds}
+    window = []
+    previous_iteration = previous_stamp = None
+    events_path = root / 'worker-events.jsonl'
+    try:
+        event_stream = events_path.open()
+    except OSError as error:
+        raise RuntimeError(f'R08 worker Physics evidence unavailable: {events_path}') from error
+    with event_stream as stream:
+        for line_number, line in enumerate(stream, 1):
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise RuntimeError(f'R08 worker event JSON invalid at line {line_number}') from error
+            if event.get('event') != 'PHYSICS_PAIR':
+                continue
+            if (event.get('run_id') != run_id or event.get('invocation_id') != invocation_id
+                    or event.get('role') != 'worker'):
+                raise RuntimeError('R08 Physics sample has a foreign run or invocation identity')
+            facts = event.get('facts', {})
+            try:
+                status = deserialize_message(bytes.fromhex(facts['backend_cdr_hex']),
+                                             SimulationContactState)
+                oracle = deserialize_message(bytes.fromhex(facts['trusted_oracle_cdr_hex']),
+                                             Odometry)
+            except (KeyError, ValueError, TypeError) as error:
+                raise RuntimeError(f'R08 Physics CDR invalid at line {line_number}') from error
+            stamp = facts.get('stamp_ns')
+            iteration = facts.get('iteration')
+            status_stamp = (status.header.stamp.sec * 1_000_000_000
+                            + status.header.stamp.nanosec)
+            oracle_stamp = (oracle.header.stamp.sec * 1_000_000_000
+                            + oracle.header.stamp.nanosec)
+            if (type(stamp) is not int or type(iteration) is not int
+                    or status.physics_iteration != iteration or status_stamp != stamp
+                    or oracle_stamp != stamp or oracle.header.frame_id != 'world'
+                    or oracle.child_frame_id != 'base_link'):
+                raise RuntimeError(f'R08 Physics sample identity/stamp mismatch at line {line_number}')
+            continuity = (previous_iteration is None or
+                          (iteration == previous_iteration + 1
+                           and stamp == previous_stamp + 10_000_000))
+            previous_iteration, previous_stamp = iteration, stamp
+            identity = (status.episode_generation, status.reset_epoch,
+                        status.runtime_generation)
+            key = (identity, status.applied_final_publisher_instance_id,
+                   status.applied_final_publish_sequence)
+            receipt = receipt_by_key.get(key)
+            application = applied_by_key.get(key)
+            qualifying = (identity in episode_index and receipt is not None
+                and application is not None
+                and receipt['transition_id'] == application[2]
+                and status.session_id == session_id
+                and status.config_hash == config_hash
+                and status.backend_instance_id == backend_instance_id
+                and status.applied_receipt_valid and not status.actuator_inhibited
+                and not status.local_zero_override and not status.paused
+                and not status.contact_active and status.fault_flags == 0
+                and status.applied_physics_iteration == application[0]
+                and status.applied_sim_stamp.sec * 1_000_000_000
+                    + status.applied_sim_stamp.nanosec == application[1])
+            episode = episode_index.get(identity)
+            if qualifying:
+                issue = issue_by_identity_step.get((identity, receipt['source_sequence']))
+                qualifying = (issue is not None
+                    and issue['transition_id'] == receipt['transition_id']
+                    and 6 <= receipt['step_index'] <= 25)
+            if not qualifying:
+                window.clear()
+                continue
+            kind_index = episode % 6
+            kind, measured, command_direction = thresholds[kind_index]
+            x, y, wz = (oracle.twist.twist.linear.x,
+                        oracle.twist.twist.linear.y,
+                        oracle.twist.twist.angular.z)
+            command = receipt['command']
+            if not command_direction(*command):
+                window.clear()
+                continue
+            current = {'kind': kind, 'identity': identity,
+                       'iteration': iteration, 'stamp_ns': stamp,
+                       'step_index': receipt['step_index'],
+                       'transition_id': receipt['transition_id'],
+                       'twist': (x, y, wz)}
+            if not continuity or (window and (window[-1]['kind'] != kind
+                    or window[-1]['identity'] != identity)):
+                window.clear()
+            if window and (iteration != window[-1]['iteration'] + 1
+                           or stamp != window[-1]['stamp_ns'] + 10_000_000):
+                window.clear()
+            window.append(current)
+            if len(window) > 11:
+                del window[:-11]
+            for axis, value in enumerate((x, y, wz)):
+                maxima[kind][axis] = max(maxima[kind][axis], value)
+            if (len(window) == 11 and window[-1]['stamp_ns'] - window[0]['stamp_ns']
+                    == 100_000_000 and all(measured(*sample['twist']) for sample in window)):
+                selected_windows.setdefault(kind, {
+                    'identity': list(identity),
+                    'first_stamp_ns': window[0]['stamp_ns'],
+                    'last_stamp_ns': window[-1]['stamp_ns'],
+                    'first_iteration': window[0]['iteration'],
+                    'last_iteration': window[-1]['iteration'],
+                    'transition_ids': list(dict.fromkeys(
+                        sample['transition_id'] for sample in window)),
+                    'sample_count': 11,
+                })
+    missing = [name for name, _, _ in thresholds if name not in selected_windows]
+    if missing:
+        diagnostics = {name: [None if value == float('-inf') else value
+                              for value in maxima[name]] for name in missing}
+        raise RuntimeError(f'R08 motion coverage missing {missing}; max_body_twist={diagnostics}')
+    return {'sample_period_ns': 10_000_000, 'window_sample_count': 11,
+            'window_duration_ns': 100_000_000, 'motion_windows': selected_windows}
+
+
 async def _run_b2_soak(io, b1, packet, sink):
     """Run the immutable 30-episode D04 schedule through the production path."""
     from mecanum_nav_rl.simulation.local_training_reset import ResetTarget
@@ -6732,9 +6975,14 @@ async def _run_b2_soak(io, b1, packet, sink):
             or counts['b1_transition_committed'] != expected
             or counts['unique_transition_ids'] != [expected, expected, expected, expected]):
         raise RuntimeError('B2_SOAK_V1 four-ledger counts do not reconcile: '+repr(counts))
+    motion_coverage = _r08_motion_coverage(packet['run_root'], run_id=packet['run_id'],
+        invocation_id=io.descriptor['invocation_id'], session_id=io.descriptor['session_id'],
+        config_hash=io.descriptor['config_hash'],
+        backend_instance_id=io.descriptor['backend_instance_id'])
     return {'case':'R08','resets_confirmed':resets,'policy_steps_committed':committed_steps,
         'ledger_counts':counts,'terminal_records':terminal_records,
         'collection_cutoff':bool(cutoff_records),'collection_cutoff_records':cutoff_records,
+        'motion_coverage':motion_coverage,
         'completed_ns':time.monotonic_ns()}
 
 

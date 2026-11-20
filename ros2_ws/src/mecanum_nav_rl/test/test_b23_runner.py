@@ -639,10 +639,15 @@ def test_r08_unfinished_scheduled_slots_are_collection_cutoffs_and_continue(tmp_
         return original_read_counts(root)
 
     monkeypatch.setattr(runner_module, '_soak_ledger_counts', read_counts_after_sync)
+    def no_physics_evidence(*_args, **_kwargs):
+        raise RuntimeError('R08 worker Physics evidence unavailable: fake')
+    monkeypatch.setattr(runner_module, '_r08_motion_coverage', no_physics_evidence)
 
     class FakeIO:
         deadline_ns = 10**30
-        descriptor = {'run_root':str(run_root)}
+        descriptor = {'run_root':str(run_root), 'invocation_id':'inv-test',
+            'session_id':'session-test','config_hash':'config-test',
+            'backend_instance_id':123}
 
         def __init__(self):
             self.episode_index = -1
@@ -669,18 +674,15 @@ def test_r08_unfinished_scheduled_slots_are_collection_cutoffs_and_continue(tmp_
         def sync(self):
             sink_state['synced'] = True
 
-    result = asyncio.run(_run_b2_soak(io, object(), {
-        'reset_target':{'x_m':0.,'y_m':0.,'z_m':0.,'yaw_rad':0.},
-        'episode_seeds':[2026102900 + index for index in range(30)],
-        'run_root':str(run_root)}, FakeSink()))
+    with pytest.raises(RuntimeError, match='R08 worker Physics evidence unavailable'):
+        asyncio.run(_run_b2_soak(io, object(), {
+            'reset_target':{'x_m':0.,'y_m':0.,'z_m':0.,'yaw_rad':0.},
+            'episode_seeds':[2026102900 + index for index in range(30)],
+            'run_root':str(run_root), 'run_id':'R08-TEST'}, FakeSink()))
 
     cutoffs = [facts for name, facts in events if name == 'COLLECTION_CUTOFF']
     assert len(io.resets) == 30
     assert len(io.actions) == 1000
-    assert result['resets_confirmed'] == 30
-    assert result['policy_steps_committed'] == 1000
-    assert result['collection_cutoff'] is True
-    assert result['collection_cutoff_records'] == cutoffs
     assert [item['episode_index'] for item in cutoffs] == list(range(30))
     assert all(item['episode_complete'] is False for item in cutoffs)
     assert cutoffs[0]['reason'] == 'scheduled_slot_unfinished'
@@ -8181,3 +8183,134 @@ def test_r06_fault_verifier_requires_real_reason_and_preserves_inhibit(tmp_path,
     assert outcome['no_observation0_commit'] is True, outcome
     assert outcome['no_policy_issuance'] is True, outcome
     assert outcome['policy_inhibited'] is True, outcome
+
+
+def _write_r08_motion_fixture(root, *, velocities=None, gap_at=None):
+    import json
+    from rclpy.serialization import serialize_message
+    from nav_msgs.msg import Odometry
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt, SimulationContactState
+
+    default_velocities = {
+        0:(0.03,0.0,0.0), 1:(-0.03,0.0,0.0), 2:(0.0,0.03,0.0),
+        3:(0.0,0.0,0.06), 4:(0.03,0.03,0.0), 5:(0.03,-0.03,0.06),
+    }
+    if velocities:
+        default_velocities.update(velocities)
+    velocities = default_velocities
+    identities = [(n+1,n+1,n+2) for n in range(30)]
+    adapter_rows = []
+    for episode, identity in enumerate(identities):
+        steps = 34 if episode < 10 else 33
+        for step in range(1, steps+1):
+            adapter_rows.append({'event':'policy_adapter_issued','facts':{
+                'identity':list(identity),'sequence':step,'step_index':step,
+                'transition_id':f't-{episode}-{step}','steady_ns':episode*10**9+step}})
+
+    published_rows, applied_rows, physics_rows = [], [], []
+    iteration = 1
+    for episode in range(6):
+        identity = identities[episode]
+        transition_id = f't-{episode}-6'
+        publisher_id, publish_sequence = 1000+episode, 2000+episode
+        receipt = FinalIssuedCommandReceipt()
+        receipt.source = receipt.SOURCE_POLICY
+        receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation = identity
+        receipt.step_index, receipt.sequence = 6, 6
+        receipt.transition_id = transition_id
+        receipt.final_publisher_instance_id = publisher_id
+        receipt.final_publish_sequence = publish_sequence
+        vx, vy, wz = velocities[episode]
+        receipt.final_command.linear.x = float(vx)
+        receipt.final_command.linear.y = float(vy)
+        receipt.final_command.angular.z = float(wz)
+        receipt_cdr = serialize_message(receipt).hex()
+        published_rows.append({'event':'policy_final_published','facts':{
+            'identity':list(identity),'receipt_cdr_hex':receipt_cdr,
+            'transition_id':transition_id,'source_sequence':6,
+            'publisher_instance_id':publisher_id,'publish_sequence':publish_sequence}})
+
+        first_stamp = 1_000_000_000 + episode*200_000_000
+        first_iteration = iteration
+        status_at_apply = SimulationContactState()
+        status_at_apply.header.frame_id = 'b2_training_arena'
+        status_at_apply.header.stamp.sec, status_at_apply.header.stamp.nanosec = divmod(first_stamp, 1_000_000_000)
+        status_at_apply.session_id, status_at_apply.config_hash = 'session', 'config'
+        status_at_apply.backend_instance_id = 3000
+        status_at_apply.episode_generation, status_at_apply.reset_epoch, status_at_apply.runtime_generation = identity
+        status_at_apply.physics_iteration = first_iteration
+        status_at_apply.applied_receipt_valid = True
+        status_at_apply.applied_final_publisher_instance_id = publisher_id
+        status_at_apply.applied_final_publish_sequence = publish_sequence
+        status_at_apply.applied_physics_iteration = first_iteration
+        status_at_apply.applied_sim_stamp.sec, status_at_apply.applied_sim_stamp.nanosec = divmod(first_stamp, 1_000_000_000)
+        applied_rows.append({'event':'policy_backend_applied','facts':{
+            'identity':list(identity),'status_cdr_hex':serialize_message(status_at_apply).hex(),
+            'transition_id':transition_id,'publisher_instance_id':publisher_id,
+            'publish_sequence':publish_sequence,'iteration':first_iteration,'stamp_ns':first_stamp}})
+
+        for sample_index in range(11):
+            stamp = first_stamp + sample_index*10_000_000
+            if gap_at == (episode,sample_index):
+                stamp += 10_000_000
+            current_iteration = iteration
+            status = SimulationContactState()
+            status.header.frame_id = 'b2_training_arena'
+            status.header.stamp.sec, status.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+            status.session_id, status.config_hash = 'session', 'config'
+            status.backend_instance_id = 3000
+            status.episode_generation, status.reset_epoch, status.runtime_generation = identity
+            status.physics_iteration = current_iteration
+            status.applied_receipt_valid = True
+            status.applied_final_publisher_instance_id = publisher_id
+            status.applied_final_publish_sequence = publish_sequence
+            status.applied_physics_iteration = first_iteration
+            status.applied_sim_stamp.sec, status.applied_sim_stamp.nanosec = divmod(first_stamp, 1_000_000_000)
+            oracle = Odometry()
+            oracle.header.frame_id, oracle.child_frame_id = 'world', 'base_link'
+            oracle.header.stamp.sec, oracle.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+            oracle.twist.twist.linear.x, oracle.twist.twist.linear.y, oracle.twist.twist.angular.z = (
+                float(value) for value in velocities[episode])
+            physics_rows.append({'event':'PHYSICS_PAIR','run_id':'R08-TEST',
+                'invocation_id':'inv-test','role':'worker','facts':{
+                    'iteration':current_iteration,'stamp_ns':stamp,
+                    'backend_cdr_hex':serialize_message(status).hex(),
+                    'trusted_oracle_cdr_hex':serialize_message(oracle).hex()}})
+            iteration += 1
+
+    for filename, rows in (
+        ('policy_adapter_issued.jsonl',adapter_rows),
+        ('policy_final_published.jsonl',published_rows),
+        ('policy_backend_applied.jsonl',applied_rows),
+        ('worker-events.jsonl',physics_rows),
+    ):
+        role = 'final' if filename == 'policy_final_published.jsonl' else 'worker'
+        (root/filename).write_text(''.join(json.dumps({**row,'role':role,
+            'run_id':'R08-TEST','invocation_id':'inv-test'})+'\n' for row in rows))
+
+
+def test_r08_motion_coverage_uses_consecutive_bound_physics_receipts(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import _r08_motion_coverage
+
+    _write_r08_motion_fixture(tmp_path)
+    result = _r08_motion_coverage(tmp_path, run_id='R08-TEST', invocation_id='inv-test',
+        session_id='session', config_hash='config', backend_instance_id=3000)
+    assert set(result['motion_windows']) == {
+        'forward','reverse','lateral','rotation','diagonal','mixed'}
+    assert all(window['sample_count'] == 11
+        and window['last_stamp_ns']-window['first_stamp_ns'] == 100_000_000
+        for window in result['motion_windows'].values()), result
+
+
+@pytest.mark.parametrize(('velocities','gap_at'), [
+    ({0:(0.01,0,0)},None),
+    (None,(0,5)),
+])
+def test_r08_motion_coverage_rejects_below_threshold_or_physics_gap(
+        tmp_path, velocities, gap_at):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import _r08_motion_coverage
+
+    _write_r08_motion_fixture(tmp_path, velocities=velocities, gap_at=gap_at)
+    with pytest.raises(RuntimeError, match='R08 motion coverage missing'):
+        _r08_motion_coverage(tmp_path, run_id='R08-TEST', invocation_id='inv-test',
+            session_id='session', config_hash='config', backend_instance_id=3000)

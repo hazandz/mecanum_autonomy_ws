@@ -971,7 +971,25 @@ public:
       ApplyEmergencyZero(ecm);
       return;
     }
+    // Gazebo 8.11 consumes Link velocity commands for one Physics step and
+    // clears the command component afterward. Re-issue the currently selected
+    // POLICY receipt while its existing gate/admission/watchdog checks remain
+    // valid; this holds the actuator command without fabricating another
+    // receipt-application fact. A newly accepted receipt still owns the one
+    // application record emitted by PostUpdate.
+    const ReceiptFacts *receipt_to_apply = nullptr;
+    bool newly_accepted_for_application = false;
     if (decision.accepted)
+    {
+      receipt_to_apply = &*decision.accepted;
+      newly_accepted_for_application = true;
+    }
+    else if (policy_open_ && selected_receipt_ &&
+             selected_receipt_->source == Receipt::SOURCE_POLICY)
+    {
+      receipt_to_apply = &*selected_receipt_;
+    }
+    if (receipt_to_apply)
     {
       std::string reason;
       const auto pose = base_link_.WorldPose(ecm);
@@ -988,7 +1006,7 @@ public:
       const auto &q = pose->Rot();
       MeasuredWorldTwist3D measurement{{world_linear->X(), world_linear->Y(), world_linear->Z()},
                                        {world_angular->X(), world_angular->Y(), world_angular->Z()}};
-      const auto &twist = decision.accepted->twist;
+      const auto &twist = receipt_to_apply->twist;
       const auto command = ComposeBodyPlanarCommand(
           measurement, {q.X(), q.Y(), q.Z(), q.W()},
           twist[0], twist[1], twist[5], reason);
@@ -1008,7 +1026,8 @@ public:
         base_link_.SetAngularVelocity(
             ecm, {command->angular[0], command->angular[1], command->angular[2]});
       }
-      pending_applied_receipt_ = decision.accepted;
+      if (newly_accepted_for_application)
+        pending_applied_receipt_ = *receipt_to_apply;
       local_zero_override_ = false;
     }
   }

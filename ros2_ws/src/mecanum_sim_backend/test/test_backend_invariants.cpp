@@ -2174,7 +2174,7 @@ static void RunNativeResetObservation0Chain(
     int safety_freshness_case = 0, int query_revocation_case = 0,
     int admission_case = 0, int pause_case = 0, int closing_case = 0,
     bool lifecycle_heartbeat = false, bool inhibit_cache_revocation = false,
-    bool pause_cache_revocation = false)
+    bool pause_cache_revocation = false, bool policy_velocity_hold = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -2675,6 +2675,45 @@ static void RunNativeResetObservation0Chain(
     ASSERT_FALSE(io->applied_commands.empty());
     EXPECT_NEAR(io->applied_commands.back().linear[0], 0.12, 1.0e-9);
 
+    if (policy_velocity_hold)
+    {
+      const auto command_count = io->applied_commands.size();
+      const auto application_count = BackendSystemTestPeer::ApplicationHistory(system).size();
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'020'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 24, 480'000'000);
+      EXPECT_TRUE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_EQ(io->applied_commands.size(), command_count + 1u);
+      EXPECT_NEAR(io->applied_commands.back().linear[0], 0.12, 1.0e-9);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), application_count)
+          << "holding a command must not fabricate another receipt application";
+
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'030'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 25, 490'000'000);
+      EXPECT_TRUE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_EQ(io->applied_commands.size(), command_count + 2u);
+      EXPECT_NEAR(io->applied_commands.back().linear[0], 0.12, 1.0e-9);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), application_count);
+
+      safety.sample_sequence = 2;
+      safety.admission_state = SafetyInput::ADMISSION_INHIBITED;
+      SetStamp(safety.header.stamp, 500'000'000);
+      BackendSystemTestPeer::ReceiveSafetyInput(system, safety);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'040'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 26, 500'000'000);
+      EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_EQ(io->applied_commands.size(), command_count + 3u);
+      EXPECT_DOUBLE_EQ(io->applied_commands.back().linear[0], 0.0);
+      EXPECT_DOUBLE_EQ(io->applied_commands.back().linear[1], 0.0);
+      EXPECT_DOUBLE_EQ(io->applied_commands.back().angular[2], 0.0);
+      BackendSystemTestPeer::SetSteadyClockNow(system, 2'050'000'000);
+      BackendSystemTestPeer::RunProductionTick(system, ecm, 27, 510'000'000);
+      EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+      ASSERT_EQ(io->applied_commands.size(), command_count + 4u);
+      EXPECT_DOUBLE_EQ(io->applied_commands.back().linear[0], 0.0);
+      EXPECT_EQ(BackendSystemTestPeer::ApplicationHistory(system).size(), application_count);
+      return;
+    }
+
     if (closing_case != 0)
     {
       const int path = (closing_case - 1) / 3;
@@ -3033,6 +3072,13 @@ TEST(BackendSystemControlReceiver,
      PolicyReceiptTraversesReceiverObservationProofAndActuatorSeam)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, true);
+}
+
+TEST(BackendSystemControlReceiver,
+     PolicyVelocityCommandPersistsAcrossPhysicsTicksAndStopsOnInhibit)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true,
+      0, 0, 0, 0, 0, false, false, false, true);
 }
 
 TEST(BackendSystemControlReceiver,
