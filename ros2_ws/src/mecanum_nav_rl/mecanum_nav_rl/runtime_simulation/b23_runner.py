@@ -1932,12 +1932,14 @@ async def await_r04a_post_rejection_zero(io, rejection, *, deadline_ns):
 def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
         run_id, invocation_id, policy_receipts, final_rows, applied_rows,
         committed_rows, worker_events):
-    """Verify R04b rejected the bound candidate before final publication.
+    """Verify a dropped post-ACK admission prevented POLICY issuance.
 
-    Adapter issuance records a POLICY candidate delivered to Safety; it is not
-    evidence that the candidate passed Safety or reached the actuator path.
-    This check binds the one expected candidate to the active B1 slot and then
-    requires every downstream ledger to contain no record for that slot.
+    The production runner waits for a valid post-ACK noisy sample before it
+    publishes an adapter candidate. If the Safety input callback drops that
+    admission, there must therefore be no adapter issuance for this slot and
+    no downstream POLICY effect. Keeping this ordering explicit prevents the
+    fault verifier from requiring evidence that production correctly cannot
+    create after the injected loss.
     """
     if transition_identity is None:
         raise RuntimeError('R04b lost the active B1 transition identity')
@@ -1954,17 +1956,8 @@ def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
         if row.get('event') == 'policy_adapter_issued'
         and row.get('run_id') == run_id
         and row.get('invocation_id') == invocation_id]
-    if len(candidates) != 1:
-        raise RuntimeError('R04b requires exactly one run-bound adapter candidate')
-    row = candidates[0]
-    facts = row.get('facts', {})
-    if (facts.get('transition_id') != transition_id
-            or facts.get('step_index') != step_index
-            or facts.get('sequence') != step_index
-            or facts.get('identity') != identity
-            or type(facts.get('source_instance_id')) is not int
-            or type(facts.get('steady_ns')) is not int):
-        raise RuntimeError('R04b adapter candidate does not match active B1 slot')
+    if candidates:
+        raise RuntimeError('R04b dropped admission unexpectedly produced an adapter candidate')
 
     if any(getattr(receipt, 'source', None) == 1 for receipt in policy_receipts):
         raise RuntimeError('R04b POLICY receipt reached native ingress')
@@ -1972,17 +1965,24 @@ def verify_r04b_missing_noisy_admission(*, issued_rows, transition_identity,
     if any(any(item.get('facts', {}).get('transition_id') == transition_id
             for item in ledger) for ledger in downstream):
         raise RuntimeError('R04b rejected POLICY slot reached a downstream ledger')
+    armed = [(name, event_facts) for name, event_facts in worker_events
+        if name == 'B23_R04_FAULT_ARMED' and event_facts.get('case') == 'R04b'
+        and type(event_facts.get('steady_ns')) is int
+        and type(event_facts.get('step_deadline_ns')) is int]
+    if len(armed) != 1:
+        raise RuntimeError('R04b missing or ambiguous fault-arm evidence')
+    armed_facts = armed[0][1]
     dropped = [(name, event_facts) for name, event_facts in worker_events
         if name == 'B23_R04_NOISY_ODOMETRY_DROPPED'
         and event_facts.get('case') == 'R04b'
         and type(event_facts.get('sample_sequence')) is int
         and type(event_facts.get('steady_ns')) is int]
-    if not dropped or any(event_facts['steady_ns'] < facts['steady_ns']
-            for _, event_facts in dropped):
-        raise RuntimeError('R04b missing-noisy hook is not bound after the active candidate')
+    if (not dropped or any(not armed_facts['steady_ns'] <= event_facts['steady_ns']
+            < armed_facts['step_deadline_ns'] for _, event_facts in dropped)):
+        raise RuntimeError('R04b dropped admission is outside the active fault window')
     return {'step_index':step_index, 'transition_id':transition_id,
-        'source_instance_id':facts['source_instance_id'],
-        'identity':identity, 'adapter_candidates':1,
+        'identity':identity, 'adapter_candidates':0,
+        'policy_issuance_prevented_by_missing_admission':True,
         'native_policy_receipts':0, 'final_publications':0,
         'backend_applications':0, 'b1_policy_commits':0,
         'dropped_sample_sequence':dropped[0][1]['sample_sequence'],
@@ -8110,7 +8110,7 @@ async def training_child(path):
                         outcome = {'case':'R04b','resets_confirmed':1,'policy_steps_committed':0,
                             'expected_rejection':True,'failure_mode':'post-ACK noisy admission was dropped before Safety received it',
                             'dropped_policy_inputs':state['triggered'],
-                            'pre_safety_candidate_verified':True,
+                            'policy_issuance_prevented_by_missing_admission':True,
                             'native_fault_flags':0 if native_state is None else native_state.fault_flags,
                             'local_zero_override':False if native_state is None else native_state.local_zero_override,
                             'baseline_zero_application_sequence':(native_state.applied_final_publish_sequence
