@@ -691,7 +691,7 @@ class MainNode:
 for mode in ('LOCAL_TRAINING', 'NAV2_BASELINE'):
     module.SafetySupervisorNode = lambda mode=mode: MainNode(mode)
     module.main([])
-assert ('init', 2) in executor_calls and ('add', 'LOCAL_TRAINING') in executor_calls
+assert ('init', 4) in executor_calls and ('add', 'LOCAL_TRAINING') in executor_calls
 assert ('single_spin', 'NAV2_BASELINE') in executor_calls
 assert executor_calls.count(('shutdown',)) == 1
 '''

@@ -354,7 +354,11 @@ def main(args: list[str] | None = None) -> None:
     try:
         if node.get_parameter('navigation_mode').value == 'LOCAL_TRAINING':
             from rclpy.executors import MultiThreadedExecutor
-            executor = MultiThreadedExecutor(num_threads=2)
+            # Two TransformListener subscriptions use a ReentrantCallbackGroup.
+            # Reserve a worker for the steady Safety timer in addition to the
+            # local-training input group and TF callbacks, so TF traffic cannot
+            # occupy both workers and starve the 20 ms watchdog-feeding loop.
+            executor = MultiThreadedExecutor(num_threads=4)
             executor.add_node(node)
             executor.spin()
         else:
