@@ -3946,7 +3946,8 @@ class TrainingWorkerIO:
         after = self.ros_now()
         rollback = await self.until(lambda: self._r07b_rollback_observed,
             deadline_ns=min(self.deadline_ns, self.now() + 1_000_000_000),
-            phase='R07b ROS clock rollback event')
+            phase='R07b ROS clock rollback event',
+            expected_native_fault_flags=r07b_post_rollback_fault_flags())
         self.emit('B23_R07B_CLOCK_ROLLBACK_OBSERVED', rollback)
         self.emit('B23_R07B_TIME_ONLY_RESET', {
             'world':'b2_training_arena','pause':False,'reset_all':False,

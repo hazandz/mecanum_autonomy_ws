@@ -2217,6 +2217,7 @@ def test_r07a_pause_and_resume_control_rpc_tolerate_only_the_pinned_native_fault
 
 def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
     from ros_gz_interfaces.srv import ControlWorld
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07b_post_rollback_fault_flags
     worker = object.__new__(TrainingWorkerIO)
     worker.control_world_type = ControlWorld
     worker.world_client = object()
@@ -2246,6 +2247,7 @@ def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
     worker.call = fake_call
     async def fake_until(predicate, **kwargs):
         assert kwargs['phase'] == 'R07b ROS clock rollback event'
+        assert kwargs['expected_native_fault_flags'] == r07b_post_rollback_fault_flags()
         return predicate()
     worker.until = fake_until
     before, after, jump = asyncio.run(worker.reset_world_time_only(timeout_s=1.0))
