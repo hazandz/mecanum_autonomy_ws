@@ -498,6 +498,45 @@ def test_local_safety_backend_contact_gate_records_stale_receive_status(local_ad
     assert gate['status_age_valid'] is False, gate
 
 
+def test_backend_state_serialization_does_not_hold_safety_tick_lock(local_adapter, monkeypatch):
+    """A slow backend snapshot must not block the watchdog-fed Safety tick."""
+    import threading
+    import rclpy.serialization
+
+    f = local_adapter
+    backend = copy.deepcopy(f.backend)
+    backend.status_sequence += 1
+    original_serialize = rclpy.serialization.serialize_message
+    serializing = threading.Event()
+    release_serializer = threading.Event()
+    tick_completed = threading.Event()
+
+    def blocked_serialize(message):
+        serializing.set()
+        if not release_serializer.wait(timeout=2.0):
+            raise TimeoutError('test serializer release timed out')
+        return original_serialize(message)
+
+    monkeypatch.setattr(rclpy.serialization, 'serialize_message', blocked_serialize)
+    backend_thread = threading.Thread(target=f.adapter.on_backend, args=(backend,), daemon=True)
+    tick_thread = threading.Thread(
+        target=lambda: (f.adapter.tick(), tick_completed.set()), daemon=True)
+    backend_thread.start()
+    try:
+        assert serializing.wait(timeout=1.0), 'backend callback did not reach serialization seam'
+        tick_thread.start()
+        assert tick_completed.wait(timeout=0.05), (
+            'Safety tick waited behind backend serialization/copy work')
+    finally:
+        release_serializer.set()
+        backend_thread.join(timeout=1.0)
+        if tick_thread.ident is not None:
+            tick_thread.join(timeout=1.0)
+    assert not backend_thread.is_alive()
+    assert tick_thread.ident is not None and not tick_thread.is_alive()
+    assert f.adapter.status.status_sequence == backend.status_sequence
+
+
 def test_local_safety_uses_verified_base_link_scan_transform(local_adapter):
     f = local_adapter; f.adapter.tick(); f.advance()
     assert f.adapter.tick().source == f.candidate.SOURCE_POLICY

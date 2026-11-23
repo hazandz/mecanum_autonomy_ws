@@ -534,20 +534,29 @@ class LocalTrainingSafetyAdapter:
     def on_backend(self, msg):
         import copy
         from rclpy.serialization import serialize_message
-        with self.lock:
-            if (msg.schema_version != msg.SCHEMA_VERSION
-                    or msg.session_id != self.context['session_id']
-                    or msg.config_hash != self.context['config_hash']
-                    or msg.backend_instance_id != self.context['backend_instance_id']
-                    or msg.header.frame_id != 'b2_training_arena' or msg.status_sequence == 0):
+        received_ns = self.now()
+        if (msg.schema_version != msg.SCHEMA_VERSION
+                or msg.session_id != self.context['session_id']
+                or msg.config_hash != self.context['config_hash']
+                or msg.backend_instance_id != self.context['backend_instance_id']
+                or msg.header.frame_id != 'b2_training_arena' or msg.status_sequence == 0):
+            with self.lock:
                 self.fail('BACKEND_IDENTITY'); return
-            raw = serialize_message(msg)
+        # ROS message serialization/copy can occasionally take long enough to
+        # starve the steady Safety timer. Prepare the immutable callback
+        # snapshot before taking the adapter lock; the receive time stays at
+        # callback entry so this work cannot make an old backend status appear
+        # fresher than it was. The lock below only compares and publishes the
+        # completed snapshot to the concurrent Safety tick.
+        raw = serialize_message(msg)
+        snapshot = copy.deepcopy(msg)
+        with self.lock:
             if self.status is not None and msg.status_sequence <= self.status.status_sequence:
                 if msg.status_sequence != self.status.status_sequence or raw != self.status_bytes:
                     self.fail('BACKEND_REPLAY_OR_CONFLICT')
                 return
-            self.status, self.status_bytes = copy.deepcopy(msg), raw
-            self.status_received = self.now()
+            self.status, self.status_bytes = snapshot, raw
+            self.status_received = received_ns
 
     def set_stream_enabled(self, enabled):
         if type(enabled) is not bool:
