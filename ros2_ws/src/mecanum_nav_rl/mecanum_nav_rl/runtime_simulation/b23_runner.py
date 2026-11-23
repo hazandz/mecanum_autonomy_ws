@@ -732,7 +732,9 @@ async def prepare_r07d_final_publisher_restart(io, b1, packet):
     return drained
 
 
-def r07b_stale_rollback_input_reason(topic, message, wire, ingress):
+def r07b_stale_rollback_input_reason(topic, message, wire, ingress, *,
+                                    rollback_before_ns=None,
+                                    rollback_observed=False):
     """Nhận diện đúng sample cũ cần quarantine trước khi ingress latch lỗi."""
     stamp = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
     with ingress.lock:
@@ -740,6 +742,10 @@ def r07b_stale_rollback_input_reason(topic, message, wire, ingress):
             watermark = ingress._last_receipt_stamp_ns
             if stamp < watermark:
                 return 'receipt_source_stamp_below_pinned_high_watermark', stamp, watermark
+            if (rollback_observed and type(rollback_before_ns) is int
+                    and stamp >= rollback_before_ns):
+                return ('receipt_source_stamp_at_or_after_pre_rollback_clock_baseline',
+                    stamp, rollback_before_ns)
         elif topic == '/mecanum/internal/ground_truth/odom':
             watermark = ingress._last_gt_stamp
             if stamp < watermark:
@@ -3140,7 +3146,9 @@ class TrainingWorkerIO:
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
                          or getattr(self, '_r07b_rollback_observed', None) is not None))
                 if rollback_active and getattr(self, 'ingress', None) is not None:
-                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress)
+                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress,
+                        rollback_before_ns=getattr(self, '_r07b_rollback_pending_before_ns', None),
+                        rollback_observed=getattr(self, '_r07b_rollback_observed', None) is not None)
                     if stale is not None:
                         reason, source_stamp_ns, watermark_ns = stale
                         event = {
@@ -3283,7 +3291,9 @@ class TrainingWorkerIO:
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
                          or getattr(self, '_r07b_rollback_observed', None) is not None))
                 if rollback_active and getattr(self, 'ingress', None) is not None:
-                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress)
+                    stale = r07b_stale_rollback_input_reason(topic, message, wire, self.ingress,
+                        rollback_before_ns=getattr(self, '_r07b_rollback_pending_before_ns', None),
+                        rollback_observed=getattr(self, '_r07b_rollback_observed', None) is not None)
                     if stale is not None:
                         reason, source_stamp_ns, watermark_ns = stale
                         event = {
@@ -3354,6 +3364,31 @@ class TrainingWorkerIO:
     def _deliver_future_receipts_after_clock(self):
         """Process only after the owned ROS clock catches up, retaining DDS receive age."""
         with self._pending_future_receipts_lock:
+            rollback_observed = getattr(self, '_r07b_rollback_observed', None)
+            rollback_before_ns = getattr(self, '_r07b_rollback_pending_before_ns', None)
+            rollback_active = (
+                'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                and rollback_observed is not None
+                and type(rollback_before_ns) is int)
+            if rollback_active and self._pending_future_receipts:
+                # A time_only reset changes the ROS-time epoch. Receipts already
+                # waiting for clock catch-up cannot be delivered across that
+                # boundary without confusing the old and new simulation epochs.
+                quarantined_ns = self.now()
+                while self._pending_future_receipts:
+                    source_stamp_ns, received_ns, _process, _message, wire = (
+                        self._pending_future_receipts.popleft())
+                    self.emit('B23_R07B_DEFERRED_RECEIPT_QUARANTINED_ON_ROLLBACK', {
+                        'reason':'pending_receipt_crossed_simulation_clock_epoch',
+                        'source_stamp_ns':source_stamp_ns,
+                        'received_steady_ns':received_ns,
+                        'quarantined_steady_ns':quarantined_ns,
+                        'original_receive_age_ns':max(0, quarantined_ns-received_ns),
+                        'max_original_receive_age_ns':self._receipt_max_age_ns,
+                        'pre_rollback_clock_baseline_ns':rollback_before_ns,
+                        'rollback_observed_steady_ns':rollback_observed.get('observed_steady_ns'),
+                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'quarantined_before_ingress_validation':True})
             while self._pending_future_receipts:
                 source_stamp_ns, received_ns, process, message, wire = self._pending_future_receipts[0]
                 now_ns = self.now()

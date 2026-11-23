@@ -3073,7 +3073,9 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     worker = object.__new__(TrainingWorkerIO)
     worker.descriptor = {'backend_instance_id':101}
     worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
-    worker._r07b_rollback_observed = {'delta_ns':-1}
+    worker._r07b_rollback_pending_before_ns = 370_000_000
+    worker._r07b_rollback_observed = {
+        'delta_ns':-370_000_000,'observed_steady_ns':700}
     worker._r07b_replacement_backend_statuses = []
     worker.ros_now = lambda: 50
     from collections import deque
@@ -3110,6 +3112,19 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     assert events[-1][1]['quarantined_before_ingress_validation'] is True
     assert worker.ingress.fault is None
 
+    # A queued receipt stamped exactly at the old clock baseline is also an
+    # old-epoch sample, even though it is not below the prior receipt watermark.
+    receipt.header.stamp.nanosec = 370_000_000
+    returned = worker.observed_callback(FinalIssuedCommandReceipt,
+        '/mecanum/final_issued_command',
+        lambda _, **_kwargs: pytest.fail('pre-rollback epoch receipt was delivered'))(
+            serialize_message(receipt), {})
+    assert returned is None
+    assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED'
+    assert events[-1][1]['reason'] == (
+        'receipt_source_stamp_at_or_after_pre_rollback_clock_baseline')
+    assert worker.ingress.fault is None
+
     receipt.header.stamp.nanosec = 200
     worker.ros_now = lambda: 200
 
@@ -3118,6 +3133,46 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
             '/mecanum/final_issued_command',
             lambda _, **_kwargs: (_ for _ in ()).throw(ValueError('unrelated receipt failure')))(
                 serialize_message(receipt), {})
+
+
+def test_r07b_quarantines_deferred_receipts_when_clock_epoch_rolls_back():
+    from collections import deque
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    value, clock = worker()
+    value.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    value._r07b_rollback_pending_before_ns = 370_000_000
+    value._r07b_rollback_observed = {
+        'delta_ns':-370_000_000,'observed_steady_ns':clock.ns + 1}
+    value._receipt_max_age_ns = 500_000_000
+    value.ros_now = lambda: 180_000_000
+    events = []
+    value.emit = lambda name, facts: events.append((name, facts))
+
+    receipt = FinalIssuedCommandReceipt()
+    receipt.header.stamp.sec, receipt.header.stamp.nanosec = 0, 370_000_000
+    receipt.final_publish_sequence = 41
+    wire = serialize_message(receipt)
+    received_ns = clock.ns - 600_000_000
+    value._pending_future_receipts.append((
+        370_000_000, received_ns,
+        lambda *_args: pytest.fail('pre-rollback deferred receipt was delivered'),
+        receipt, wire))
+
+    # The source clock is still behind and the original freshness limit is
+    # already exceeded; epoch quarantine must precede ordinary catch-up expiry.
+    value._deliver_future_receipts_after_clock()
+    assert not value._pending_future_receipts
+    assert [event for event, _facts in events] == [
+        'B23_R07B_DEFERRED_RECEIPT_QUARANTINED_ON_ROLLBACK']
+    facts = events[0][1]
+    assert facts['source_stamp_ns'] == 370_000_000
+    assert facts['received_steady_ns'] == received_ns
+    assert facts['pre_rollback_clock_baseline_ns'] == 370_000_000
+    assert facts['rollback_observed_steady_ns'] == clock.ns + 1
+    assert facts['original_receive_age_ns'] > value._receipt_max_age_ns
+    assert facts['max_original_receive_age_ns'] == 500_000_000
 
 
 def test_r07c_callback_records_replacement_backend_without_fault_hook():
