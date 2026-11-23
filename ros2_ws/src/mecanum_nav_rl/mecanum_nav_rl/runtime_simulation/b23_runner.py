@@ -772,11 +772,13 @@ def r07b_post_rollback_backend_disposition(io, *, old_backend_instance_id,
     ingress = io.ingress
     state = ingress.backend_state
     received_ns = ingress.backend_received_ns
+    expected_fault_flags = r07b_post_rollback_fault_flags()
     if (state is not None and received_ns > rollback_observed_ns
             and state.backend_instance_id == old_backend_instance_id
             and state.session_id == descriptor['session_id']
             and state.config_hash == descriptor['config_hash']
-            and state.fault_flags & 64 and state.local_zero_override
+            and state.fault_flags in expected_fault_flags
+            and state.local_zero_override
             and state.actuator_inhibited):
         return {
             'kind':'pinned_backend_clock_fault',
@@ -799,6 +801,24 @@ def r07b_post_rollback_backend_disposition(io, *, old_backend_instance_id,
                 and status['actuator_inhibited']):
             return {'kind':'replacement_backend', **status}
     return None
+
+
+def r07b_post_rollback_fault_flags():
+    """Exact pinned-backend masks observed for a time-only reset disposition.
+
+    Gazebo's system reset clears the physics/contact epoch before the next
+    backend update. The backend latches CLOCK; that first post-reset update
+    may also latch the known contact coverage, stale command, command sequence
+    and context faults. Keep this exact observed composite bounded: unrelated
+    fault bits remain a rejection.
+    """
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    clock = SimulationContactState.FAULT_CLOCK
+    reset_side_effects = (SimulationContactState.FAULT_CONTACT_COVERAGE
+        | SimulationContactState.FAULT_COMMAND_STALE
+        | SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_CONTEXT)
+    return (clock, clock | reset_side_effects)
 
 
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
@@ -7752,10 +7772,13 @@ async def training_child(path):
                     fresh_ack = error.ack
                 state = await io.until(lambda: io.ingress.backend_state
                     if (io.ingress.backend_state is not None
-                        and io.ingress.backend_state.fault_flags & 64
-                        and io.ingress.backend_state.local_zero_override) else None,
+                        and io.ingress.backend_state.fault_flags
+                            in r07b_post_rollback_fault_flags()
+                        and io.ingress.backend_state.local_zero_override
+                        and io.ingress.backend_state.actuator_inhibited) else None,
                     deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                    phase='R07b native clock rollback inhibit', expected_native_fault_flags=64)
+                    phase='R07b native clock rollback inhibit',
+                    expected_native_fault_flags=r07b_post_rollback_fault_flags())
                 inhibit_ack = await io.control.inhibit(
                     deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
                 checked = verify_r07b_revocation(response=fresh_ack.response,

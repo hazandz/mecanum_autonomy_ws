@@ -2258,11 +2258,16 @@ def test_r07b_time_only_reset_accepts_real_controlworld_response_shape():
 
 
 def test_r07b_rollback_disposition_requires_post_rollback_native_clock_fault():
-    from mecanum_nav_rl.runtime_simulation.b23_runner import r07b_post_rollback_backend_disposition
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r07b_post_rollback_backend_disposition,
+        r07b_post_rollback_fault_flags,
+    )
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
     old_id = 101
     state = NS(backend_instance_id=old_id, session_id='r07b-session',
         config_hash='a'*64, status_sequence=8, physics_iteration=50,
-        fault_flags=64, local_zero_override=True, actuator_inhibited=True)
+        fault_flags=SimulationContactState.FAULT_CLOCK,
+        local_zero_override=True, actuator_inhibited=True)
     io = NS(descriptor={'backend_instance_id':old_id,'session_id':'r07b-session',
         'config_hash':'a'*64}, ingress=NS(backend_state=state,
         backend_received_ns=1_999), _r07b_replacement_backend_statuses=[])
@@ -2274,10 +2279,23 @@ def test_r07b_rollback_disposition_requires_post_rollback_native_clock_fault():
         old_backend_instance_id=old_id, rollback_observed_ns=2_000)
     assert disposition == {
         'kind':'pinned_backend_clock_fault','backend_instance_id':old_id,
-        'status_sequence':8,'physics_iteration':50,'fault_flags':64,
+        'status_sequence':8,'physics_iteration':50,
+        'fault_flags':SimulationContactState.FAULT_CLOCK,
         'local_zero_override':True,'actuator_inhibited':True,'received_ns':2_001}
     io.ingress.backend_received_ns = 2_002
     io.ingress.backend_state.fault_flags = 0
+    assert r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000) is None
+    io.ingress.backend_state.fault_flags = (
+        SimulationContactState.FAULT_CLOCK
+        | SimulationContactState.FAULT_CONTACT_COVERAGE
+        | SimulationContactState.FAULT_COMMAND_STALE
+        | SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_CONTEXT)
+    assert io.ingress.backend_state.fault_flags in r07b_post_rollback_fault_flags()
+    assert r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000)['fault_flags'] == 87
+    io.ingress.backend_state.fault_flags |= 128
     assert r07b_post_rollback_backend_disposition(io,
         old_backend_instance_id=old_id, rollback_observed_ns=2_000) is None
 
