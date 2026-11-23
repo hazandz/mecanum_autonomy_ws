@@ -3980,6 +3980,32 @@ TEST(BackendSystemControlReceiver, ResetBindReanchorsOnlyAppliedZeroWatchdogFaul
       << "a selected nonzero receipt cannot be re-anchored as reset W0";
 }
 
+TEST(BackendSystemReceiptFault, RepeatedZeroWatchdogDoesNotBecomeSequenceFault)
+{
+  GateResult repeated_watchdog;
+  repeated_watchdog.disposition = GateDisposition::Faulted;
+  repeated_watchdog.reason = "actuator_watchdog_expired";
+
+  EXPECT_TRUE(backend_detail::IsRepeatedZeroWatchdogFault(
+      repeated_watchdog, BackendState::FAULT_COMMAND_STALE,
+      "actuator_watchdog_expired"));
+  EXPECT_FALSE(backend_detail::IsRepeatedZeroWatchdogFault(
+      repeated_watchdog,
+      BackendState::FAULT_COMMAND_STALE | BackendState::FAULT_COMMAND_SEQUENCE,
+      "actuator_watchdog_expired"))
+      << "an independently latched sequence fault must not be cleared by reset";
+
+  repeated_watchdog.reason = "receipt_sequence_invalid";
+  EXPECT_FALSE(backend_detail::IsRepeatedZeroWatchdogFault(
+      repeated_watchdog, BackendState::FAULT_COMMAND_STALE,
+      "actuator_watchdog_expired"));
+  repeated_watchdog.disposition = GateDisposition::Applied;
+  repeated_watchdog.reason = "actuator_watchdog_expired";
+  EXPECT_FALSE(backend_detail::IsRepeatedZeroWatchdogFault(
+      repeated_watchdog, BackendState::FAULT_COMMAND_STALE,
+      "actuator_watchdog_expired"));
+}
+
 TEST(BackendSystemControlReceiver, ProbeStartUsesReceiverUpdateAndInjectedTransport)
 {
   BackendSystem system;

@@ -80,6 +80,21 @@ using SetEntityPose = ros_gz_interfaces::srv::SetEntityPose;
 using DeleteEntity = ros_gz_interfaces::srv::DeleteEntity;
 using ControlWorld = ros_gz_interfaces::srv::ControlWorld;
 
+bool IsRepeatedZeroWatchdogFault(
+    const GateResult &decision, std::uint32_t fault_flags,
+    const std::string &gate_fault_reason)
+{
+  // The first watchdog expiry is already latched as FAULT_COMMAND_STALE.
+  // Subsequent gate updates report that same latched reason as Faulted; do not
+  // relabel it as an independent sequence fault, or the narrowly guarded W0
+  // reset re-anchor can no longer distinguish this recoverable reset boundary.
+  return decision.disposition == GateDisposition::Faulted &&
+      decision.reason == "actuator_watchdog_expired" &&
+      gate_fault_reason == decision.reason &&
+      fault_flags ==
+          mecanum_nav_rl_interfaces::msg::SimulationContactState::FAULT_COMMAND_STALE;
+}
+
 // R02b is a test-only ordering hook. It must survive the real Safety tick
 // deferred at a scan cutoff; the production ReceiptGate still enforces its
 // independent 40 ms receipt-to-admission window.
@@ -906,7 +921,9 @@ public:
       ApplyEmergencyZero(ecm);
       return;
     }
-    if (decision.disposition == GateDisposition::Faulted)
+    if (decision.disposition == GateDisposition::Faulted &&
+        !backend_detail::IsRepeatedZeroWatchdogFault(
+            decision, fault_flags_, gate_->FaultReason()))
       SetFault(BackendState::FAULT_COMMAND_SEQUENCE, decision.reason);
     if (decision.disposition == GateDisposition::Applied ||
         decision.disposition == GateDisposition::Anchored)
