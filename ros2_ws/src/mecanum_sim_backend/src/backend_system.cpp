@@ -466,6 +466,7 @@ bool OperationFieldsValid(const ControlRequest &request)
 
 class BackendSystem final : public gz::sim::System,
                             public gz::sim::ISystemConfigure,
+                            public gz::sim::ISystemReset,
                             public gz::sim::ISystemPreUpdate,
                             public gz::sim::ISystemPostUpdate
 {
@@ -796,6 +797,40 @@ private:
     // missing trusted B2.3 binding keeps PreUpdate inhibited but still allows
     // the backend to publish its faulted, identity-bound status heartbeat.
     configured_ = runtime_resources_ready_ && base_link_.Valid(ecm);
+  }
+
+  void Reset(const gz::sim::UpdateInfo &info,
+             gz::sim::EntityComponentManager &ecm) override
+  {
+    if (shutdown_started_ || initialization_state_ != InitializationState::READY)
+      return;
+    {
+      std::lock_guard<std::mutex> lock(callback_mutex_);
+      if (gate_) gate_->Invalidate("simulation_clock_rollback");
+      safety_admission_candidate_ = false;
+      if (pause_intent_)
+        FailPauseLocked(ControlResponse::REASON_CANCELLED,
+                        "pause_cancelled_by_simulation_reset");
+      reset_pause_hold_ = false;
+      reset_resume_seen_ = false;
+    }
+    // Gazebo's optimized reset hook keeps this plugin's ROS endpoints and
+    // identity alive. Revoke all session-derived authority before the next
+    // update so a time-only reset cannot leave a cached proof or POLICY gate
+    // usable across the simulation-clock epoch boundary.
+    SetFault(BackendState::FAULT_CLOCK, "simulation_clock_rollback");
+    policy_open_ = false;
+    local_zero_override_ = true;
+    last_sim_ns_ = TimeNs(info);
+    last_sim_advance_steady_ns_ = steady_clock_now_();
+    if (base_link_.Valid(ecm)) ApplyEmergencyZero(ecm);
+    EmitStructuredDiagnostic([&]() {
+      gzerr << "B23_SIMULATION_RESET_INVALIDATED backend=" << backend_instance_id_
+          << " sim_ns=" << last_sim_ns_
+          << " iteration=" << info.iterations
+          << " fault_flags=" << fault_flags_ << std::endl;
+      std::fflush(stderr);
+    });
   }
 
 public:
@@ -4392,7 +4427,8 @@ private:
 }  // namespace mecanum_sim_backend
 
 GZ_ADD_PLUGIN(mecanum_sim_backend::BackendSystem, gz::sim::System,
-              gz::sim::ISystemConfigure, gz::sim::ISystemPreUpdate,
+              gz::sim::ISystemConfigure, gz::sim::ISystemReset,
+              gz::sim::ISystemPreUpdate,
               gz::sim::ISystemPostUpdate)
 GZ_ADD_PLUGIN_ALIAS(mecanum_sim_backend::BackendSystem,
                     "mecanum_sim_backend::BackendSystem")

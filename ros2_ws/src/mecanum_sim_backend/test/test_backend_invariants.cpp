@@ -82,6 +82,10 @@ struct NativePauseIo
 class BackendSystemTestPeer
 {
 public:
+  static void SimulationReset(BackendSystem &system,
+      const gz::sim::UpdateInfo &info, gz::sim::EntityComponentManager &ecm)
+  { system.Reset(info, ecm); }
+
   static std::filesystem::path DescriptionFile(const std::string &relative)
   {
     return std::filesystem::path(
@@ -2174,7 +2178,8 @@ static void RunNativeResetObservation0Chain(
     int safety_freshness_case = 0, int query_revocation_case = 0,
     int admission_case = 0, int pause_case = 0, int closing_case = 0,
     bool lifecycle_heartbeat = false, bool inhibit_cache_revocation = false,
-    bool pause_cache_revocation = false, bool policy_velocity_hold = false)
+    bool pause_cache_revocation = false, bool policy_velocity_hold = false,
+    bool simulation_reset_revocation = false)
 {
   BackendSystem system;
   gz::sim::EntityComponentManager ecm;
@@ -2275,6 +2280,43 @@ static void RunNativeResetObservation0Chain(
   EXPECT_EQ(BackendSystemTestPeer::Cached(system, 3).contact_capability_state,
             ControlResponse::CAPABILITY_VERIFIED);
   EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+
+  if (simulation_reset_revocation)
+  {
+    const auto original_backend_instance = BackendSystemTestPeer::Cached(
+        system, 3).backend_instance_id;
+    gz::sim::UpdateInfo reset_info;
+    reset_info.iterations = 14;
+    reset_info.simTime = std::chrono::nanoseconds(0);
+    BackendSystemTestPeer::SimulationReset(system, reset_info, ecm);
+    EXPECT_FALSE(BackendSystemTestPeer::CapabilityVerified(system));
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+    EXPECT_NE(BackendSystemTestPeer::FaultFlags(system) &
+              BackendState::FAULT_CLOCK, 0u);
+    const auto query_replay = BackendSystemTestPeer::Receive(system, query);
+    EXPECT_NE(query_replay.contact_capability_state,
+              ControlResponse::CAPABILITY_VERIFIED);
+    EXPECT_EQ(query_replay.proof_backend_instance_id, 0u);
+    EXPECT_TRUE(query_replay.proof_session_id.empty());
+
+    auto inhibit = BaseControlRequest(4);
+    BindTestRequestToConfiguredBackend(inhibit, system);
+    inhibit.operation = ControlRequest::OP_INHIBIT;
+    inhibit.expected_binding_revision = 1;
+    ASSERT_EQ(BackendSystemTestPeer::Receive(system, inhibit).result,
+              ControlResponse::RESULT_QUEUED);
+    BackendSystemTestPeer::RunProductionTick(system, ecm, 15, 10'000'000);
+    const auto inhibit_ack = BackendSystemTestPeer::Cached(system, 4);
+    EXPECT_EQ(inhibit_ack.result, ControlResponse::RESULT_APPLIED)
+        << "reason=" << inhibit_ack.reason_code;
+    EXPECT_EQ(inhibit_ack.backend_instance_id, original_backend_instance);
+    EXPECT_TRUE(BackendSystemTestPeer::LocalOverride(system));
+    EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+    EXPECT_EQ(BackendSystemTestPeer::Revision(system), 2u);
+    EXPECT_EQ(io->spawn_calls, 1u);
+    return;
+  }
 
   if (pause_cache_revocation)
   {
@@ -5131,6 +5173,12 @@ TEST(ContactOnlyMode, CallbackWaitingOnControlMutexSeesProofRevocation)
 TEST(NormalContactQuery, CachedProofRevokedAfterClockRollback)
 {
   RunNativeResetObservation0Chain(false, false, false, false, false, false, 0, 1);
+}
+
+TEST(NormalContactQuery, GazeboResetHookRevokesProofAndKeepsPinnedBackendInhibited)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, false,
+      0, 0, 0, 0, 0, false, false, false, false, true);
 }
 
 TEST(NormalContactQuery, CachedProofRevokedAfterEngineChange)
