@@ -8321,7 +8321,7 @@ async def training_child(path):
                     deadline_ns=verification_deadline_ns,
                     phase='R04d exact ingress lifecycle delivery')
                 rejected = await io.until(lambda: r04d_stale_safety_rejection_after_delivery(
-                    io.events, delivery_ns=final_lifecycle_delivery['delivery_ns'],
+                    io.events, delivery_ns=delayed['delivery_ns'],
                     source_stamp_ns=scheduled['source_stamp_ns']),
                     deadline_ns=verification_deadline_ns,
                     phase='R04d delivered stale lifecycle rejected by actual Safety')
@@ -8336,7 +8336,6 @@ async def training_child(path):
                         int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)]]
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
-                        or rejected['steady_ns'] < final_lifecycle_delivery['delivery_ns']
                         or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000
                         or ingress_scheduled is None or ingress_delivered is None
                         or ingress_scheduled.get('source_stamp_ns') != scheduled.get('source_stamp_ns')

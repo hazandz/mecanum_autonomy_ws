@@ -4088,24 +4088,24 @@ def test_r04d_safety_lifecycle_repeats_stay_held_until_original_delivers():
     assert adapter.calls == [6,6]
 
 
-def test_r04d_stale_safety_observation_must_follow_delayed_lifecycle_delivery():
+def test_r04d_stale_safety_observation_must_follow_safety_callback_delivery():
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_stale_safety_rejection_after_delivery
 
-    before_final_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+    before_safety_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
         'steady_ns':660, 'ros_ns':1_850_000_001})
-    final_delivery_ns = 700
-    after_final_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
+    safety_delivery_ns = 650
+    after_safety_delivery = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
         'steady_ns':720, 'ros_ns':1_850_000_001})
     assert r04d_stale_safety_rejection_after_delivery(
-        [before_final_delivery, after_final_delivery], delivery_ns=final_delivery_ns,
-        source_stamp_ns=1_050_000_000) is after_final_delivery[1]
+        [before_safety_delivery, after_safety_delivery], delivery_ns=safety_delivery_ns,
+        source_stamp_ns=1_050_000_000) is before_safety_delivery[1]
     assert r04d_stale_safety_rejection_after_delivery(
-        [before_final_delivery], delivery_ns=final_delivery_ns,
+        [before_safety_delivery], delivery_ns=700,
         source_stamp_ns=1_050_000_000) is None
     not_stale_enough = ('SAFETY_REJECTED', {'reasons':['LIFECYCLE_STALE_OR_FUTURE'],
         'steady_ns':700, 'ros_ns':1_550_000_000})
     assert r04d_stale_safety_rejection_after_delivery(
-        [not_stale_enough], delivery_ns=final_delivery_ns,
+        [not_stale_enough], delivery_ns=safety_delivery_ns,
         source_stamp_ns=1_050_000_000) is None
 
 
