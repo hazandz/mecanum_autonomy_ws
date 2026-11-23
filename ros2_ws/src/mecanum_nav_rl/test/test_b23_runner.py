@@ -117,6 +117,37 @@ def test_worker_scheduler_snapshot_binds_cgroup_and_normalizes_cpu_pressure():
     assert set(incomplete['errors']) == {'cgroup','schedstat','cpu_stat','cpu_max','cpu_pressure'}
 
 
+def test_backend_control_client_uses_isolated_receipt_executor_node():
+    source = Path(runner_module.__file__).read_text()
+    tree = ast.parse(source)
+    worker = next(node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == 'TrainingWorkerIO')
+    initializer = next(node for node in worker.body
+        if isinstance(node, ast.FunctionDef) and node.name == '__init__')
+    control_calls = [node for node in ast.walk(initializer)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == 'BackendControlSession']
+    assert len(control_calls) == 1
+    port_calls = [node for node in ast.walk(control_calls[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'from_node'
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == 'LocalTrainingBackendControlPort']
+    assert len(port_calls) == 1
+    assert len(port_calls[0].args) == 1
+    node_arg = port_calls[0].args[0]
+    assert (isinstance(node_arg, ast.Attribute)
+        and isinstance(node_arg.value, ast.Name)
+        and node_arg.value.id == 'self'
+        and node_arg.attr == 'receipt_executor_node')
+    assert not any(isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name) and node.value.id == 'self'
+        and node.attr == 'node'
+        for node in ast.walk(port_calls[0]))
+
+
 def test_worker_thread_identity_snapshot_maps_native_ids_to_python_threads(monkeypatch):
     threads = [
         NS(native_id=44133, name='policy_timer', ident=9933, daemon=True),

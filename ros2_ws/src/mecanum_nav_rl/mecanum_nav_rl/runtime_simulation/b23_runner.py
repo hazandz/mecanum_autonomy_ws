@@ -3104,7 +3104,14 @@ class TrainingWorkerIO:
             self.receipt_executor_thread.start()
             self.safety.local_training.state_observer = lambda state: self.ingress.register_safety_publication(
                 state, source_instance_id=self.safe_stop_source_id)
-            self.control = BackendControlSession(LocalTrainingBackendControlPort.from_node(self.node), identity, emit=emit)
+            # Keep backend-control ACK handling out of the high-rate worker
+            # ingress executor.  A queued /clock or backend-status callback
+            # can otherwise delay the BIND_PENDING_STEP response long enough
+            # to consume the native receipt-watchdog budget before the first
+            # post-ACK admission and POLICY receipt are ready.
+            self.control = BackendControlSession(
+                LocalTrainingBackendControlPort.from_node(self.receipt_executor_node),
+                identity, emit=emit)
             self.control_world_type, self.pose_type, self.trigger_type = ControlWorld, SetEntityPose, Trigger
             self.world_client = self.node.create_client(ControlWorld, '/world/b2_training_arena/control')
             # Capture the ROS service-client boundary separately from the
