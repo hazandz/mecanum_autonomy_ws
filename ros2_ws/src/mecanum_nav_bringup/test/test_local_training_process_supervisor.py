@@ -15,6 +15,7 @@ from mecanum_nav_bringup.local_training_process_supervisor import (
     CleanupEvidenceAck,
     LocalTrainingProcessSupervisor,
     RclpyReadiness,
+    _observer_start_failure_detail,
 )
 from mecanum_nav_bringup.local_training_readiness_worker import (
     WORLD_IDENTITY_SOURCE,
@@ -526,6 +527,30 @@ def test_observer_initialization_failure_keeps_collection_unready(tmp_path):
         assert event['trace_error']
         assert event['observer']['ready'] is False
     asyncio.run(run())
+
+
+def test_observer_child_start_failure_detail_preserves_snapshot_reason():
+    started = {
+        'kind': 'started', 'started': False,
+        'snapshot': {
+            'ready': False, 'thread_alive': False, 'joined': True,
+            'errors': ['observer_loop:RuntimeError'],
+            'writer_opened': False, 'end_written': False,
+            'handle_closed': True, 'writer_closed': False,
+            'private_extra': 'must not be copied',
+        },
+        'nonce': 'must not be copied',
+    }
+    detail = json.loads(_observer_start_failure_detail(started))
+    assert detail == {
+        'kind': 'started', 'started': False,
+        'snapshot': {
+            'ready': False, 'thread_alive': False, 'joined': True,
+            'errors': ['observer_loop:RuntimeError'],
+            'writer_opened': False, 'end_written': False,
+            'handle_closed': True, 'writer_closed': False,
+        },
+    }
 
 
 def test_nonjoined_observer_residue_is_reported_by_supervisor(tmp_path):

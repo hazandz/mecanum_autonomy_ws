@@ -80,6 +80,25 @@ class CleanupEvidenceBatch:
     events: tuple[tuple[str, tuple], ...]
 
 
+def _observer_start_failure_detail(started):
+    """Keep bounded child startup diagnostics when observer binding fails."""
+    snapshot = started.get('snapshot') if isinstance(started, dict) else None
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    detail = {
+        'kind': started.get('kind') if isinstance(started, dict) else None,
+        'started': started.get('started') if isinstance(started, dict) else None,
+        'snapshot': {
+            key: snapshot.get(key) for key in (
+                'ready', 'thread_alive', 'joined', 'errors',
+                'writer_opened', 'end_written', 'handle_closed',
+                'writer_closed',
+            ) if key in snapshot
+        },
+    }
+    return json.dumps(detail, sort_keys=True, separators=(',', ':'))[:640]
+
+
 @dataclass(frozen=True)
 class CleanupEvidenceAck:
     """Explicit acknowledgement bound to one immutable cleanup batch."""
@@ -1834,7 +1853,10 @@ class LocalTrainingProcessSupervisor:
                 or started.get('started') is not True
                 or not isinstance(started.get('snapshot'), dict)
                 or started['snapshot'].get('ready') is not True):
-            self._heartbeat_trace_error = 'observer_initialization_failed'
+            self._heartbeat_trace_error = (
+                'observer_initialization_failed:'
+                + _observer_start_failure_detail(started)
+            )
             return
         self._heartbeat_clock_domain_certificate = started.get(
             'clock_domain_certificate',
