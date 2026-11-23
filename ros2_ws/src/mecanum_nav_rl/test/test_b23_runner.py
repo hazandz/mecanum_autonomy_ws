@@ -19,7 +19,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r02e_prebind_admission_rejected, verify_r02e_safety_input_enqueued,
     verify_r02g_close, r02g_inhibit_operation,
     await_r02g_exact_safe_stop_application,
-    drain_r02g_final_publication, r02g_close_admission,
+    drain_final_publication_before_close, drain_r02g_final_publication,
+    r02g_close_admission,
     verify_r03_receipt_fault, install_r04_delivery_fault,
     enable_r04_adapter_fault_dispatch, verify_r04_stale_delivery,
     r04_policy_step_fault_plan,
@@ -3832,9 +3833,9 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
 
     assert result is receipt
     assert calls[0] == ('stream',False)
-    assert calls[1] == ('until','R02g last Safety output receipt before close',150)
+    assert calls[1] == ('until','last Safety output receipt before close',150)
     assert calls[2] == ('receipt',{'source':CommandEnvelope.SOURCE_POLICY,'sequence':3})
-    assert calls[3] == ('until','R02g last POLICY application before close',150)
+    assert calls[3] == ('until','last POLICY application before close',150)
     assert calls[4] == ('application',receipt)
     assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
@@ -5745,6 +5746,14 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value, clock = worker()
     calls, events = [], []
     source = CommandEnvelope.SOURCE_SAFE_STOP if last_source == 'safe_stop' else CommandEnvelope.SOURCE_POLICY
+    source_enum = source
+    pre_receipt = NS(source=source_enum, sequence=7, final_publish_sequence=20,
+        final_publisher_instance_id=55, final_command=NS(linear=NS(x=0., y=0.),
+            angular=NS(z=0.)))
+    state = NS(fault_flags=0, applied_final_publish_sequence=20,
+        applied_final_publisher_instance_id=55, local_zero_override=False,
+        applied_receipt_valid=True, paused=False, applied_physics_iteration=304,
+        applied_sim_stamp=NS(sec=3,nanosec=40_000_000))
     adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
@@ -5764,18 +5773,23 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         return watermark[0]
     value.read_native_input_watermark = read_watermark
     stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
-    value.final = NS(publisher_instance_id=55, last_publication=NS(source=source,
-        source_instance_id=44, sequence=7, final_publish_sequence=20),
-        publication_for_source_sequence=lambda *, source, sequence: NS(
-            source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44,
-            sequence=8, final_publish_sequence=21)
-            if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 8 else None)
-    value.ingress.backend_state = NS(fault_flags=0, applied_final_publish_sequence=20,
-        applied_final_publisher_instance_id=55, local_zero_override=False,
-        applied_receipt_valid=True, paused=False)
+    closing_receipt = NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
+        source_instance_id=44, sequence=8, final_publish_sequence=21,
+        final_publisher_instance_id=55, final_command=NS(linear=NS(x=0., y=0.),
+            angular=NS(z=0.)))
+    value.final = NS(publisher_instance_id=55,
+        last_publication=NS(source=source, source_instance_id=44,
+            sequence=7, final_publish_sequence=20),
+        publication_for_source_sequence=lambda *, source, sequence: (
+            pre_receipt if sequence == 7 else closing_receipt
+            if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 8 else None))
+    value.ingress.backend_state = state
     value.ingress.application_for_receipt = lambda receipt: (
-        {'state':value.ingress.backend_state, 'received_ns':clock.ns}
-        if receipt.final_publish_sequence == 21 else None)
+        {'state':state, 'received_ns':clock.ns}
+        if receipt.final_publish_sequence in (20, 21) else None)
+    value.ingress.policy_application_for_receipt = lambda receipt: (
+        {'state':state, 'received_ns':clock.ns}
+        if receipt.final_publish_sequence == 20 else None)
     value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
         source=__import__('mecanum_nav_rl.core.issued_command_cutoff',
             fromlist=['ReceiptSource']).ReceiptSource.SAFE_STOP,
@@ -5802,15 +5816,21 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+20_000_000))
     assert ('hold', True) in calls
     assert ('stream', True) in calls
-    assert ('stream', False) not in calls
+    assert ('stream', False) in calls
     assert ('inhibit', False) in calls
-    assert events[0][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
-    assert events[0][1]['sample_sequence'] == 10
-    assert events[0][1]['native_input_watermark'] == 10
+    assert events[0][0] == 'STEP_PRE_CLOSE_OUTPUT_DRAINED'
+    assert events[1][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
+    assert events[1][1]['sample_sequence'] == 10
+    assert events[1][1]['native_input_watermark'] == 10
     names = [name for name, _ in events]
+    assert names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < names.index('INHIBITED_SAFETY_INPUT_DRAINED')
     assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
     assert names.index('ADMISSION_STREAM_FROZEN') < names.index('STEP_STREAMS_FROZEN')
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
+    assert calls.index(('stream', False)) < calls.index(('stream', True))
+    event_names = [name for name, _ in events]
+    assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(
+        'INHIBITED_SAFETY_INPUT_DRAINED')
     assert adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
     assert calls.index(('hold', True)) < calls.index(('stream', True))
     assert events[-1][0] == 'STEP_STREAMS_FROZEN'
@@ -5831,6 +5851,14 @@ def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
         source_sequence=10, final_command=(0.0, 0.0, 0.0))
     candidate = NS(source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=10,
         final_publish_sequence=22, final_publisher_instance_id=55)
+    pre_close_receipt = NS(source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=7,
+        final_publish_sequence=20, final_publisher_instance_id=55,
+        final_command=NS(linear=NS(x=0., y=0.), angular=NS(z=0.)))
+    pre_close_state = NS(fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=55,
+        applied_final_publish_sequence=20, applied_physics_iteration=304,
+        physics_iteration=304, applied_sim_stamp=NS(sec=3, nanosec=40_000_000),
+        header=NS(stamp=NS(sec=3, nanosec=40_000_000)))
     state = NS(fault_flags=0, paused=False, local_zero_override=False,
         applied_receipt_valid=True, applied_final_publisher_instance_id=55,
         applied_final_publish_sequence=22, applied_physics_iteration=305,
@@ -5854,15 +5882,18 @@ def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
     value.ingress.inhibit = inhibit
     value.ingress.pause_admission_publication = lambda: calls.append(('pause_admission',))
     value.ingress.application_for_receipt = lambda receipt: (
-        {'state':state,'received_ns':clock.ns}
-        if receipt.final_publish_sequence == candidate.final_publish_sequence else None)
+        {'state':pre_close_state if receipt.final_publish_sequence == 20 else state,
+            'received_ns':clock.ns}
+        if receipt.final_publish_sequence in (20, candidate.final_publish_sequence) else None)
     value.ingress.receipt_for_publication_sequence = lambda sequence: (
         candidate_view if sequence == candidate.final_publish_sequence else None)
     value.read_native_input_watermark = lambda: watermark[0]
     value._native_input_watermark = 9
     value.final = NS(publisher_instance_id=55, last_publication=None,
         publication_for_source_sequence=lambda *, source, sequence: (
-            candidate if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 10 else None))
+            pre_close_receipt if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 7
+            else candidate if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 10
+            else None))
     async def pause(seconds):
         await clock.pause(seconds)
         value.ingress.last_published_sample_sequence = 10
@@ -6037,7 +6068,7 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
             applied_sim_stamp=NS(sec=3, nanosec=50_000_000),
             header=NS(stamp=NS(sec=3, nanosec=50_000_000))),
          'received_ns':clock.ns}
-        if receipt.final_publish_sequence == 21 else None)
+        if receipt.final_publish_sequence in (20, 21) else None)
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
         source=ReceiptSource.SAFE_STOP, final_publisher_instance_id=55,
@@ -6046,14 +6077,19 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     stop = NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP)
     exact_receipt = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44,
         sequence=8, final_publish_sequence=21)
+    prior_receipt = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44,
+        sequence=7, final_publish_sequence=20, final_publisher_instance_id=55,
+        final_command=NS(linear=NS(x=0., y=0.), angular=NS(z=0.)))
     later_receipt = NS(source=stop.SOURCE_SAFE_STOP, source_instance_id=44,
         sequence=9, final_publish_sequence=22)
     selected = []
     value.final = NS(publisher_instance_id=55, last_publication=NS(
         source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
         final_publish_sequence=20), publication_for_source_sequence=lambda *, source, sequence: (
-            selected.append((source, sequence)) or (exact_receipt
-                if (source, sequence) == (stop.SOURCE_SAFE_STOP, 8) else None)))
+            selected.append((source, sequence)) or (
+                prior_receipt if (source, sequence) == (stop.SOURCE_SAFE_STOP, 7)
+                else exact_receipt if (source, sequence) == (stop.SOURCE_SAFE_STOP, 8)
+                else None)))
     value.last_safe_stop_publish_sequence = 20
 
     async def pause(seconds):
@@ -6249,6 +6285,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         lock=threading.RLock())
     value.safety = NS(local_training=adapter)
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    prior_safe_stop_receipt = FinalIssuedCommandReceipt()
+    prior_safe_stop_receipt.final_publisher_instance_id=55
+    prior_safe_stop_receipt.final_publish_sequence=2
+    prior_safe_stop_receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    prior_safe_stop_receipt.sequence=1
+    prior_safe_stop_receipt.source_instance_id=44
     zero_policy_receipt = FinalIssuedCommandReceipt()
     zero_policy_receipt.final_publisher_instance_id=55
     zero_policy_receipt.final_publish_sequence=4
@@ -6266,6 +6308,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     safe_stop_receipt.sequence=2
     policy_receipt_observed_ns = []
     def publication_for_source_sequence(*, source, sequence):
+        if (source, sequence) == (FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, 1):
+            return prior_safe_stop_receipt
         if (source, sequence) == (FinalIssuedCommandReceipt.SOURCE_POLICY, 1):
             policy_receipt_observed_ns.append(clock.ns)
             return zero_policy_receipt
@@ -6348,6 +6392,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.scans[clock.ns] = True
     value.pause = pause
     value.ingress.application_for_receipt = lambda receipt: (
+        {'state':NS(applied_receipt_valid=True, local_zero_override=False, fault_flags=0,
+                paused=False, applied_final_publisher_instance_id=55,
+                applied_final_publish_sequence=2, applied_physics_iteration=11,
+                physics_iteration=11, applied_sim_stamp=NS(sec=1, nanosec=100_000_000),
+                header=NS(stamp=NS(sec=1, nanosec=100_000_000))),
+         'received_ns':clock.ns} if receipt.final_publish_sequence == 2 else
         {'state':value.ingress.backend_state, 'received_ns':clock.ns}
         if (receipt.final_publish_sequence == 3
             and value.ingress.backend_state.applied_final_publish_sequence == 3
@@ -6474,7 +6524,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
     assert ('stream', True) in history
-    stream_off = history.index(('stream', False))
+    stream_off_indices = [i for i, row in enumerate(history) if row == ('stream', False)]
+    stream_off_initial = stream_off_indices[0]
+    drain_index = tags.index('STEP_PRE_CLOSE_OUTPUT_DRAINED')
     bind = next(i for i, row in enumerate(history) if row[0] == 'bind')
     issued = next(i for i, row in enumerate(history) if row[0] == 'issued')
     stream_on_after_issue = next(i for i, row in enumerate(history)
@@ -6486,9 +6538,16 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     refresh = next((i for i,row in enumerate(history) if row[0]=='prebind_zero_refresh'),None)
     if timing == 'r09b_before_bind':
         assert refresh is None
-        assert stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+        stream_on_before_bind = next(i for i, row in enumerate(history)
+            if row == ('stream', True))
+        callback_index=tags.index('r09b_fixture_before_pending_bind')
+        clear_zero_index=tags.index('r09b_clear_scan_zero_applied')
+        assert stream_off_initial < drain_index < stream_on_before_bind
+        assert tags.index('b1_begin_step') < callback_index < clear_zero_index < bind
+        assert bind < issued < hold_off_after_issue < stream_on_after_issue
     else:
         assert refresh is not None
+        stream_off = max(stream_off_indices)
         assert refresh < stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
     sample_ready = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_sample_ready')
@@ -6544,7 +6603,6 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert len(before_issue_calls) == 1
         callback_index=tags.index('r09b_fixture_before_pending_bind')
         clear_zero_index=tags.index('r09b_clear_scan_zero_applied')
-        assert tags.index('b1_begin_step') < callback_index < clear_zero_index < stream_off < bind
         assert ('stream', True) in history[:callback_index]
         witness = before_issue_calls[0][3]
         assert witness['receipt'].source == CommandEnvelope.SOURCE_SAFE_STOP

@@ -2458,8 +2458,10 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
         'native_local_zero_override':bool(backend_state.local_zero_override)}
 
 
-async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
-    """Quiesce Safety and join its final output before starting a close route.
+async def drain_final_publication_before_close(
+        io, adapter, *, deadline_ns,
+        event_name='FINAL_OUTPUT_DRAINED_BEFORE_CLOSE'):
+    """Quiesce Safety and join its last output before publishing a close zero.
 
     A POLICY output already selected by the steady Safety timer can still be
     in transit after B1 commits. Starting a SAFE_STOP at that moment lets the
@@ -2472,31 +2474,39 @@ async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
     output = adapter.last_output
     if output is None or output.source not in (
             CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
-        raise RuntimeError('R02g cannot bind the last Safety output before close')
+        raise RuntimeError('cannot bind the last Safety output before close')
     receipt = await io.until(lambda: io.final.publication_for_source_sequence(
         source=output.source, sequence=output.sequence),
-        deadline_ns=deadline_ns, phase='R02g last Safety output receipt before close')
+        deadline_ns=deadline_ns, phase='last Safety output receipt before close')
     if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
         application = await await_r02g_exact_safe_stop_application(
-            io, receipt=receipt, deadline_ns=deadline_ns, route='pre-close')
+            io, receipt=receipt, deadline_ns=deadline_ns,
+            route='last-output-before-close')
     else:
         application = await io.until(
             lambda: io.ingress.policy_application_for_receipt(receipt),
-            deadline_ns=deadline_ns, phase='R02g last POLICY application before close')
+            deadline_ns=deadline_ns, phase='last POLICY application before close')
     if not isinstance(application, dict) or application.get('state') is None:
-        raise RuntimeError('R02g last Safety output lacks exact native application evidence')
+        raise RuntimeError('last Safety output lacks exact native application evidence')
     state = application['state']
     if (not state.applied_receipt_valid or state.local_zero_override
             or state.fault_flags != 0
             or state.applied_final_publisher_instance_id != receipt.final_publisher_instance_id
             or state.applied_final_publish_sequence != receipt.final_publish_sequence):
-        raise RuntimeError('R02g last Safety output was not applied cleanly before close')
-    io.emit('R02G_PRE_CLOSE_OUTPUT_DRAINED', {
+        raise RuntimeError('last Safety output was not applied cleanly before close')
+    io.emit(event_name, {
         'source': receipt.source, 'source_sequence': receipt.sequence,
         'final_publish_sequence': receipt.final_publish_sequence,
         'application_received_ns': application.get('received_ns'),
         'steady_ns': io.now()})
     return receipt
+
+
+async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
+    """R02g wrapper retaining its case-specific evidence label."""
+    return await drain_final_publication_before_close(
+        io, adapter, deadline_ns=deadline_ns,
+        event_name='R02G_PRE_CLOSE_OUTPUT_DRAINED')
 
 
 def r02g_inhibit_operation():
@@ -5450,15 +5460,22 @@ class TrainingWorkerIO:
 
 
     async def freeze_step_streams(self, *, deadline_ns):
-        """Giữ native watchdog sống bằng zero SAFE_STOP trước pending step.
+        """Drain output cuối trước zero SAFE_STOP rồi bind pending step.
 
-        Đóng POLICY trước, nhưng giữ timer/receipt SAFE_STOP chạy khi đang chờ
-        bind slot mới. Tắt stream ở đây làm receipt gần nhất quá hạn watchdog.
+        Sau B1 cutoff, một tick Safety có thể đã phát POLICY cuối nhưng receipt
+        đó chưa được native áp dụng. Phải ghép publication và application này
+        trước khi phát SAFE_STOP; gate sẽ fault-close nếu SAFE_STOP vượt qua
+        POLICY đang chờ. Sau khi drain, tiếp tục giữ zero SAFE_STOP sống khi
+        chờ bind slot mới.
         """
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope
         adapter = self.safety.local_training
         previous_safe_stop = adapter.safe_stop_sequence
         adapter.set_policy_hold(True)
+        if adapter.last_output is not None:
+            await drain_final_publication_before_close(
+                self, adapter, deadline_ns=deadline_ns,
+                event_name='STEP_PRE_CLOSE_OUTPUT_DRAINED')
         adapter.set_stream_enabled(True)
         # Revoke the consumed slot token and let native observe a fresh
         # closing sample before freezing the stream.  Merely pausing here can
