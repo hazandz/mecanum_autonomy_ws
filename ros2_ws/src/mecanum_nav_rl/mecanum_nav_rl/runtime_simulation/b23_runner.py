@@ -2671,6 +2671,84 @@ class FinalPublicationView:
         return None
 
 
+def r02g_published_safe_stop_from_ledger(io, stop):
+    """Recover an exact SAFE_STOP receipt from FinalTwistPublisher's raw ledger.
+
+    R02g still requires the selected publication and native application to be
+    observed within the route deadline. This producer-side record is useful
+    when the worker's KEEP_LAST(1) receipt subscription coalesces a single
+    sample; it does not substitute a synthetic receipt or a latest-value
+    backend status for the exact publication/application join.
+    """
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+    if (stop is None or stop.source != CommandEnvelope.SOURCE_SAFE_STOP
+            or type(stop.sequence) is not int or stop.sequence <= 0
+            or type(stop.source_instance_id) is not int or stop.source_instance_id <= 0):
+        raise RuntimeError('R02g ledger lookup requires a pinned SAFE_STOP output identity')
+    rows = _ledger_rows(io.descriptor['run_root'], 'final-events.jsonl')
+    matches = []
+    for row in rows:
+        facts = row.get('facts', {})
+        if (row.get('event') == 'FINAL_PUBLISHED'
+                and row.get('run_id') == io.descriptor.get('run_id')
+                and facts.get('publisher_instance_id') == io.final.publisher_instance_id
+                and facts.get('source_instance_id') == stop.source_instance_id
+                and facts.get('source_sequence') == stop.sequence):
+            matches.append((row, facts))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise RuntimeError('R02g publisher ledger has duplicate exact SAFE_STOP publications')
+    row, facts = matches[0]
+    raw_hex = facts.get('receipt_cdr_hex')
+    publish_sequence = facts.get('publish_sequence')
+    steady_ns = facts.get('steady_ns')
+    recorded_identity = facts.get('identity')
+    if (not isinstance(raw_hex, str) or not raw_hex
+            or type(publish_sequence) is not int or publish_sequence <= 0
+            or type(steady_ns) is not int or steady_ns <= 0
+            or not isinstance(recorded_identity, list) or len(recorded_identity) != 3):
+        raise RuntimeError('R02g publisher ledger record lacks exact receipt provenance')
+    try:
+        receipt = deserialize_message(bytes.fromhex(raw_hex), FinalIssuedCommandReceipt)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('R02g publisher ledger contains invalid receipt bytes') from error
+    command = (receipt.final_command.linear.x, receipt.final_command.linear.y,
+        receipt.final_command.angular.z)
+    receipt_identity = lifecycle_identity(receipt)
+    if (row.get('invocation_id') != io.descriptor.get('invocation_id')
+            or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+            or receipt.sequence != stop.sequence
+            or receipt.source_instance_id != stop.source_instance_id
+            or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+            or receipt.final_publish_sequence != publish_sequence
+            or (receipt_identity.episode_generation, receipt_identity.reset_epoch,
+                receipt_identity.runtime_generation) != tuple(recorded_identity)
+            or receipt.final_command.linear.z != 0.
+            or receipt.final_command.angular.x != 0.
+            or receipt.final_command.angular.y != 0.
+            or any(command)
+            or receipt.header.frame_id != 'base_link'
+            or receipt.step_index != 0 or receipt.transition_id):
+        raise RuntimeError('R02g publisher ledger receipt differs from the pinned SAFE_STOP identity')
+    return receipt
+
+
+def r02g_resolve_safe_stop_publication(io, stop):
+    """Prefer receive-side receipt bytes, then exact publisher evidence bytes."""
+    receipt = io.final.publication_for_source_sequence(
+        source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence)
+    if receipt is not None:
+        return {'receipt':receipt, 'evidence_source':'worker_receipt_ingress'}
+    receipt = r02g_published_safe_stop_from_ledger(io, stop)
+    if receipt is not None:
+        return {'receipt':receipt, 'evidence_source':'publisher_raw_ledger'}
+    return None
+
+
 def _new_local_training_safety_executor(context):
     """Keep the steady Safety timer schedulable beside subscription callbacks."""
     from rclpy.executors import MultiThreadedExecutor
@@ -8079,10 +8157,15 @@ async def training_child(path):
                     and adapter.last_output.sequence > safe_stop_before else None,
                     deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                     phase='R02g closing SAFE_STOP output: ' + route)
-                receipt = await io.until(lambda: io.final.publication_for_source_sequence(
-                    source=stop.SOURCE_SAFE_STOP, sequence=stop.sequence),
+                publication = await io.until(lambda: r02g_resolve_safe_stop_publication(io, stop),
                     deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
                     phase='R02g closing SAFE_STOP receipt: ' + route)
+                receipt = publication['receipt']
+                if publication['evidence_source'] == 'publisher_raw_ledger':
+                    io.emit('R02G_RECEIPT_BOUND_FROM_PUBLISHER_LEDGER', {
+                        'route':route, 'safe_stop_sequence':stop.sequence,
+                        'final_publish_sequence':receipt.final_publish_sequence,
+                        'steady_ns':io.now()})
                 application = await await_r02g_exact_safe_stop_application(
                     io, receipt=receipt,
                     deadline_ns=min(io.deadline_ns, io.now() + 1_000_000_000),
