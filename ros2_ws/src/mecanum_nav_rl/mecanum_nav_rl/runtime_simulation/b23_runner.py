@@ -2758,7 +2758,10 @@ def r02g_resolve_safe_stop_publication(io, stop):
 def _new_local_training_safety_executor(context):
     """Keep the steady Safety timer schedulable beside subscription callbacks."""
     from rclpy.executors import MultiThreadedExecutor
-    return MultiThreadedExecutor(num_threads=2, context=context)
+    # The worker embeds this node in a separate executor from its ingress
+    # pump.  Four workers leave capacity for the steady Safety timer while
+    # backend-state and lifecycle subscriptions are concurrently ready.
+    return MultiThreadedExecutor(num_threads=4, context=context)
 
 
 SAFETY_EXECUTOR_WAIT_S = 0.001

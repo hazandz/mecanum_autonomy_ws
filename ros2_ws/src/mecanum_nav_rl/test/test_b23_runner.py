@@ -451,7 +451,7 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     assert worker.safety_thread is not None and not worker.safety_thread.is_alive()
 
 
-def test_local_training_safety_executor_uses_two_workers_for_isolated_timer_group(monkeypatch):
+def test_local_training_safety_executor_uses_four_workers_for_isolated_timer_group(monkeypatch):
     import sys
     calls = []
     context = object()
@@ -465,7 +465,7 @@ def test_local_training_safety_executor_uses_two_workers_for_isolated_timer_grou
     result = runner_module._new_local_training_safety_executor(context)
 
     assert isinstance(result, MultiThreadedExecutorFake)
-    assert calls == [(2, context)]
+    assert calls == [(4, context)]
 
 
 def test_run_evidence_serializes_concurrent_safety_and_worker_records(tmp_path):
