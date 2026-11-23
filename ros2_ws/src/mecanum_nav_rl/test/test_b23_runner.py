@@ -6123,8 +6123,9 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     async def freeze_step_streams(*, deadline_ns):
         events.append('fresh_applied_zero')
         return {'zero_receipt_age_ns': 0}
-    async def align_policy_window(*, deadline_ns, zero_witness):
-        events.append('scan_alignment')
+    async def align_policy_window(*, deadline_ns, zero_witness,
+            launch_window_ns=(40_000_000, 60_000_000)):
+        events.append(('scan_alignment', launch_window_ns))
         assert zero_witness == {'zero_receipt_age_ns': 0}
         return zero_witness
     async def refresh_zero(*, deadline_ns, zero_witness=None):
@@ -6149,16 +6150,20 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     with pytest.raises(BindReached):
         asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0),
             close_after_held_receipt=close_after))
-    assert events == ['fresh_applied_zero', 'scan_alignment', 'refresh_zero',
+    expected_window = ((50_000_000, 70_000_000) if close_after == 'safe_stop'
+        else (40_000_000, 60_000_000))
+    assert events == ['fresh_applied_zero', ('scan_alignment', expected_window), 'refresh_zero',
         ('stream_enabled', False), 'begin_pending_step']
 
-    # Ordinary POLICY and both held-receipt fault cases share the production
-    # scan-boundary alignment; the fault begins only after an actual receipt.
+    # Ordinary POLICY keeps the normal measured scan window; R02c alone asks
+    # for earlier time because its late-receipt hold consumes watchdog margin.
     events.clear()
     class AlignmentReached(Exception):
         pass
-    async def observe_alignment(*, deadline_ns, zero_witness):
+    async def observe_alignment(*, deadline_ns, zero_witness,
+            launch_window_ns=(40_000_000, 60_000_000)):
         events.append('scan_alignment')
+        assert launch_window_ns == (40_000_000, 60_000_000)
         raise AlignmentReached
     value.align_policy_step_launch_window = observe_alignment
     with pytest.raises(AlignmentReached):
@@ -8883,6 +8888,15 @@ def test_policy_bind_uses_later_measured_scan_window(phase_ns, expected_remainin
     remaining = policy_bind_launch_window_remaining_ns(2_400_000_000 + phase_ns, 100_000_000)
     assert remaining == expected_remaining_ns
     assert policy_bind_launch_window_ready(remaining) is ready
+
+
+@pytest.mark.parametrize(('remaining_ns','ready'), [
+    (49_000_000, False), (50_000_000, True), (60_000_000, True),
+    (70_000_000, True), (71_000_000, False),
+])
+def test_r02c_uses_earlier_policy_bind_window(remaining_ns, ready):
+    assert policy_bind_launch_window_ready(
+        remaining_ns, window_ns=(50_000_000, 70_000_000)) is ready
 
 
 @pytest.mark.parametrize(('ros_ns','period_ns'), [(-1, 100), (0, 0), (True, 100)])

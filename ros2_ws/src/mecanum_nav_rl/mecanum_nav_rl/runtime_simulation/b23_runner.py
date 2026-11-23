@@ -1375,16 +1375,22 @@ def policy_bind_launch_window_remaining_ns(ros_ns, period_ns):
     return period_ns - phase_ns if phase_ns else 0
 
 
-def policy_bind_launch_window_ready(remaining_ns):
-    """Select the measured 40-60 ms pre-scan window for a pending bind.
+def policy_bind_launch_window_ready(remaining_ns, *, window_ns=(40_000_000, 60_000_000)):
+    """Select a measured pre-scan window for a pending bind.
 
     Runtime evidence showed that an 80 ms window could spend about 20 ms on
     the bind ACK, about 69 ms waiting for the first post-ACK sample, then
     cross a deferred scan edge and exceed the unchanged 100 ms native
-    watchdog. The narrower later window leaves that sensor wait inside the
-    watchdog budget while retaining the existing post-cutoff tick check.
+    watchdog. The normal path keeps the narrower later window. R02c uses
+    50-70 ms after its own receipt trace showed that 40 ms could leave the
+    Safety tick one scheduling interval from the cutoff and consume the
+    remaining watchdog margin.
     """
-    return type(remaining_ns) is int and 40_000_000 <= remaining_ns <= 60_000_000
+    if (not isinstance(window_ns, (tuple, list)) or len(window_ns) != 2
+            or any(type(value) is not int or value < 0 for value in window_ns)
+            or window_ns[0] > window_ns[1]):
+        raise ValueError('POLICY bind window requires ordered non-negative integer bounds')
+    return type(remaining_ns) is int and window_ns[0] <= remaining_ns <= window_ns[1]
 
 
 def r05_contact_coverage_mask_event(path):
@@ -5630,7 +5636,8 @@ class TrainingWorkerIO:
             'steady_ns': self.now()})
         return receipt, application['state'], application['received_ns']
 
-    async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness):
+    async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness,
+            launch_window_ns=(40_000_000, 60_000_000)):
         """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
 
         Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
@@ -5655,7 +5662,7 @@ class TrainingWorkerIO:
         # band was selected from the observed bind, post-ACK sample, and
         # deferred-tick timings. It changes scheduling only, not any contract
         # freshness, scan-gap, cutoff, or native watchdog limit.
-        if policy_bind_launch_window_ready(remaining_ns):
+        if policy_bind_launch_window_ready(remaining_ns, window_ns=launch_window_ns):
             return zero_witness
 
         target_cutoff_ns = now_ros_ns + remaining_ns
@@ -5686,7 +5693,8 @@ class TrainingWorkerIO:
                     continue
                 phase = receipt.publish_stamp_ns % period_ns
                 remaining_to_cutoff = period_ns - phase if phase else 0
-                if not policy_bind_launch_window_ready(remaining_to_cutoff):
+                if not policy_bind_launch_window_ready(
+                        remaining_to_cutoff, window_ns=launch_window_ns):
                     continue
                 current_ros_ns = self.ros_now()
                 # A matching phase modulo ``period_ns`` is not enough: a
@@ -5700,7 +5708,8 @@ class TrainingWorkerIO:
                     continue
                 current_remaining_ns = policy_bind_launch_window_remaining_ns(
                     current_ros_ns, period_ns)
-                if not policy_bind_launch_window_ready(current_remaining_ns):
+                if not policy_bind_launch_window_ready(
+                        current_remaining_ns, window_ns=launch_window_ns):
                     continue
                 publication = self.final.publication_for_source_sequence(
                     source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
@@ -5803,7 +5812,8 @@ class TrainingWorkerIO:
             phase='exact post-cutoff SAFE_STOP application in POLICY bind window')
         remaining_after_application = policy_bind_launch_window_remaining_ns(
             self.ros_now(), period_ns)
-        if not policy_bind_launch_window_ready(remaining_after_application):
+        if not policy_bind_launch_window_ready(
+                remaining_after_application, window_ns=launch_window_ns):
             self.emit('POLICY_STEP_BIND_WINDOW_APPLICATION_OBSERVED_LATE', {
                 'source_sequence': aligned_receipt.source_sequence,
                 'final_publish_sequence': aligned_receipt.final_publish_sequence,
@@ -5820,7 +5830,8 @@ class TrainingWorkerIO:
             # under the same preparation deadline; never bind from this stale
             # window or extend the deadline.
             return await self.align_policy_step_launch_window(
-                deadline_ns=deadline_ns, zero_witness=applied_zero)
+                deadline_ns=deadline_ns, zero_witness=applied_zero,
+                launch_window_ns=launch_window_ns)
         self.emit('POLICY_STEP_BIND_WINDOW_ZERO_APPLIED', {
             'source_sequence': aligned_receipt.source_sequence,
             'final_publish_sequence': aligned_receipt.final_publish_sequence,
@@ -6334,8 +6345,13 @@ class TrainingWorkerIO:
             # alignment keeps real SAFE_STOP receipts flowing until the
             # pending slot is bound; it does not extend either deadline.
             if not prebind_admission:
-                zero_witness = await self.align_policy_step_launch_window(
-                    deadline_ns=deadline, zero_witness=zero_witness)
+                if close_after_held_receipt == 'safe_stop':
+                    zero_witness = await self.align_policy_step_launch_window(
+                        deadline_ns=deadline, zero_witness=zero_witness,
+                        launch_window_ns=(50_000_000, 70_000_000))
+                else:
+                    zero_witness = await self.align_policy_step_launch_window(
+                        deadline_ns=deadline, zero_witness=zero_witness)
                 zero_witness = await self.refresh_zero_before_pending_bind(
                     deadline_ns=deadline, zero_witness=zero_witness)
             self.safety.local_training.set_stream_enabled(False)
