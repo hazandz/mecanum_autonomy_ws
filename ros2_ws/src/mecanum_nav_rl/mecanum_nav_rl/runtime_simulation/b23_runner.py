@@ -5911,7 +5911,8 @@ class TrainingWorkerIO:
                     'FINAL_POLICY_PUBLICATION_DEFERRED_BEFORE_SCAN_CUTOFF'}:
                 self._final_policy_deferral_events.append(row)
 
-    def _final_policy_deferral_for(self, *, step_index, identity):
+    def _final_policy_deferral_for(self, *, step_index, identity,
+            after_boundary_ns=0):
         self._refresh_final_policy_deferral_events()
         for row in reversed(self._final_policy_deferral_events):
             facts = row.get('facts', {})
@@ -5924,6 +5925,8 @@ class TrainingWorkerIO:
                 boundary_ns = facts.get('boundary_ns')
                 if type(boundary_ns) is not int or boundary_ns <= 0:
                     raise RuntimeError('pinned final-publisher cutoff record lacks a valid boundary')
+                if boundary_ns <= after_boundary_ns:
+                    continue
                 return row
         return None
 
@@ -5960,6 +5963,7 @@ class TrainingWorkerIO:
 
         previous_tick_ros_ns = adapter.last_tick_ros_ns
         previous_boundary_ns = getattr(adapter, '_last_deferred_scan_cutoff_ns', None)
+        last_handled_boundary_ns = 0
         ready_ros_ns = self.ros_now()
         self.emit('POLICY_READY_IMMEDIATE_SAFETY_TICK', {
             'step_index': step_index,
@@ -5981,7 +5985,8 @@ class TrainingWorkerIO:
                     if receipt is not None:
                         return {'receipt':receipt}
                     row = self._final_policy_deferral_for(
-                        step_index=step_index, identity=identity)
+                        step_index=step_index, identity=identity,
+                        after_boundary_ns=last_handled_boundary_ns)
                     return {'deferred':row} if row is not None else None
 
                 outcome = await self.until(published_or_deferred,
@@ -5990,6 +5995,10 @@ class TrainingWorkerIO:
                 if 'receipt' in outcome:
                     return
                 boundary_ns = outcome['deferred']['facts']['boundary_ns']
+            # A cutoff is a one-shot wakeup for this POLICY step. Re-reading
+            # the same publisher record after its retry must wait for a new
+            # receipt or a strictly later cutoff instead of spinning.
+            last_handled_boundary_ns = max(last_handled_boundary_ns, boundary_ns)
 
             def crossed_boundary():
                 current_ros_ns = self.ros_now()

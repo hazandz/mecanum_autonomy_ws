@@ -8449,6 +8449,76 @@ def test_policy_safety_tick_does_not_retry_if_exact_receipt_arrives_at_cutoff():
     }], retry
 
 
+def test_policy_cutoff_record_is_consumed_while_waiting_for_later_receipt(tmp_path):
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+
+    io = object.__new__(TrainingWorkerIO)
+    io.events = []
+    io.now = time.monotonic_ns
+    started_ns = io.now()
+    io.deadline_ns = started_ns + 150_000_000
+    io.ros_now = lambda: 201
+    io.emit = lambda name, facts: io.events.append((name, facts))
+    io.check = lambda **_kwargs: None
+    io.descriptor = {'run_id':'test-cutoff-consumption', 'session_id':'session-cutoff',
+        'run_root':str(tmp_path)}
+    io.policy_source_id = 71
+    io.ingress = NS(lifecycle=NS(episode_generation=3, reset_epoch=4, runtime_generation=5))
+    io._final_events_offset = 0
+    io._final_events_partial = b''
+    io._final_policy_deferral_events = []
+
+    class Adapter:
+        def __init__(self):
+            self.last_tick_ros_ns = 100
+            self._last_deferred_scan_cutoff_ns = None
+            self.lock = threading.RLock()
+            self.calls = 0
+
+        def tick(self):
+            self.calls += 1
+            self.last_tick_ros_ns = 101 if self.calls == 1 else 202
+
+    adapter = Adapter()
+    io.safety = NS(local_training=adapter)
+    receipt = NS(source=FinalIssuedCommandReceipt.SOURCE_POLICY, sequence=6,
+        source_instance_id=71, final_publisher_instance_id=72,
+        episode_generation=3, reset_epoch=4, runtime_generation=5)
+    available = {'receipt':None}
+    io.final = NS(publisher_instance_id=72,
+        publication_for_source_sequence=lambda **_kwargs: available['receipt'])
+    io.pause_calls = 0
+
+    async def pause(duration):
+        assert 0 < duration <= 0.002
+        io.pause_calls += 1
+        await asyncio.sleep(duration)
+        available['receipt'] = receipt
+
+    io.pause = pause
+    publisher_event_path = tmp_path / 'final-events.jsonl'
+    publisher_event_path.write_text(json.dumps({
+        'run_id':io.descriptor['run_id'],
+        'event':'FINAL_POLICY_PUBLICATION_DEFERRED_AT_SCAN_CUTOFF',
+        'facts':{'source_sequence':6, 'source_instance_id':71,
+            'identity':[3,4,5], 'session_id':'session-cutoff',
+            'publisher_instance_id':72, 'boundary_ns':200,
+            'source_stamp_ns':190},
+    }) + '\n')
+
+    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+        deadline_ns=io.deadline_ns, step_index=6, sample_sequence=80))
+
+    retries = [facts for name, facts in io.events
+        if name == 'POLICY_SAFETY_TICK_RETRIED_AFTER_SCAN_CUTOFF']
+    assert available['receipt'] is receipt, {
+        'retry_count':len(retries), 'pause_calls':io.pause_calls,
+        'adapter_calls':adapter.calls, 'events':io.events}
+    assert io.pause_calls == 1, {'pause_calls':io.pause_calls, 'events':io.events}
+    assert adapter.calls == 2, {'adapter_calls':adapter.calls, 'events':io.events}
+    assert [row['boundary_ns'] for row in retries] == [200], retries
+
+
 @pytest.mark.parametrize(('phase_ns','expected_remaining_ns','ready'), [
     (10_000_000, 90_000_000, False),
     (40_000_000, 60_000_000, True),
