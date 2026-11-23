@@ -5881,6 +5881,26 @@ class TrainingWorkerIO:
 
         adapter = self.safety.local_training
         if zero_witness is not None:
+            candidate_receipt = (zero_witness.get('receipt')
+                if isinstance(zero_witness, dict) else None)
+            candidate_sequence = getattr(candidate_receipt, 'source_sequence', None)
+            # A SAFE_STOP can be published and accepted by native while the
+            # worker still holds an older backend-state snapshot. Reusing that
+            # older application's steady timestamp would let us freeze the
+            # stream before the latest zero has actually advanced through the
+            # native gate. Require the witness to cover the current Safety
+            # sequence; otherwise keep the stream live and join a newer exact
+            # zero application below.
+            if (type(candidate_sequence) is int
+                    and candidate_sequence < adapter.safe_stop_sequence):
+                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
+                    'reason':'safety_safe_stop_sequence_advanced',
+                    'witness_source_sequence':candidate_sequence,
+                    'latest_safe_stop_sequence':adapter.safe_stop_sequence,
+                    'steady_ns':self.now(),
+                })
+                zero_witness = None
+        if zero_witness is not None:
             receipt = zero_witness.get('receipt') if isinstance(zero_witness, dict) else None
             state = zero_witness.get('state') if isinstance(zero_witness, dict) else None
             received_ns = zero_witness.get('received_ns') if isinstance(zero_witness, dict) else None
