@@ -232,6 +232,76 @@ class LocalTrainingIngress:
             self._last_join_iteration = 0
             self.emit('EMULATOR_RESET', {'seed': seed, 'steady_ns': self.now()})
 
+    def reset_pairing_epoch_after_r07b_rollback(self, status, *, received_ns,
+            rollback_observed, expected_fault_flags):
+        """Clear only old-epoch oracle/status joins after a bound time-only rollback.
+
+        This does not reset lifecycle, noise, Safety, receipts, or POLICY state.
+        The caller supplies the actual decoded native status and the clock-jump
+        facts captured by the runner; every binding is checked again here.
+        """
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        if not isinstance(status, SimulationContactState):
+            return None
+        if (not isinstance(rollback_observed, dict)
+                or type(rollback_observed.get('delta_ns')) is not int
+                or rollback_observed['delta_ns'] >= 0
+                or type(rollback_observed.get('request_started_ns')) is not int
+                or type(rollback_observed.get('observed_steady_ns')) is not int
+                or rollback_observed['observed_steady_ns'] < rollback_observed['request_started_ns']
+                or type(received_ns) is not int
+                or received_ns <= rollback_observed['observed_steady_ns']):
+            return None
+        stamp = stamp_ns(status.header.stamp)
+        with self.lock:
+            previous = self.backend_state
+            if (previous is None
+                    or previous.backend_instance_id != self.identity.backend_instance_id
+                    or previous.session_id != self.identity.session_id
+                    or previous.config_hash != self.identity.config_hash
+                    or status.backend_instance_id != self.identity.backend_instance_id
+                    or status.session_id != self.identity.session_id
+                    or status.config_hash != self.identity.config_hash
+                    or status.schema_version != status.SCHEMA_VERSION
+                    or status.header.frame_id != 'b2_training_arena'
+                    or type(status.status_sequence) is not int
+                    or status.status_sequence <= previous.status_sequence
+                    or type(status.physics_iteration) is not int
+                    or status.physics_iteration <= 0
+                    or status.physics_iteration >= previous.physics_iteration
+                    or stamp >= stamp_ns(previous.header.stamp)
+                    or status.fault_flags not in expected_fault_flags
+                    or not status.local_zero_override
+                    or not status.actuator_inhibited
+                    or status.paused):
+                return None
+            before = {
+                'oracle_buffer_count':len(self._oracles),
+                'backend_buffer_count':len(self._states),
+                'physics_pair_count':len(self.physics_pairs),
+                'last_oracle_stamp_ns':self._last_gt_stamp,
+                'last_join_iteration':self._last_join_iteration,
+                'prior_backend_stamp_ns':stamp_ns(previous.header.stamp),
+                'prior_backend_iteration':previous.physics_iteration,
+            }
+            self._oracles.clear()
+            self._states.clear()
+            self.physics_pairs.clear()
+            self._last_gt_stamp, self._last_gt_bytes = -1, None
+            self._last_join_iteration = 0
+            return {
+                **before,
+                'status_sequence':status.status_sequence,
+                'backend_instance_id':status.backend_instance_id,
+                'session_id':status.session_id,
+                'config_hash':status.config_hash,
+                'physics_iteration':status.physics_iteration,
+                'stamp_ns':stamp,
+                'fault_flags':status.fault_flags,
+                'received_ns':received_ns,
+                'rollback_observed_ns':rollback_observed['observed_steady_ns'],
+            }
+
     def _check_ack(self, ack, operation):
         if not isinstance(ack, BackendControlAck):
             raise TypeError('actual validated control ACK required')

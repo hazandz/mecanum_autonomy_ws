@@ -3285,6 +3285,166 @@ def test_r07b_callback_records_and_drops_only_the_rollback_oracle_sample():
                 serialize_message(oracle), {})
 
 
+def test_r07b_verified_time_rollback_starts_new_physics_pair_epoch_before_ingress():
+    from collections import OrderedDict, deque
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r07b_post_rollback_fault_flags
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendSessionIdentity
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+    identity = BackendSessionIdentity('r07b-pair-epoch', 'a'*64, 'b'*64, 11, 12)
+    def status(*, sequence, iteration, stamp_ns, flags=0, backend_id=12):
+        value = SimulationContactState()
+        value.schema_version = value.SCHEMA_VERSION
+        value.session_id, value.config_hash = identity.session_id, identity.config_hash
+        value.backend_instance_id, value.status_sequence = backend_id, sequence
+        value.physics_iteration = iteration
+        value.header.frame_id = 'b2_training_arena'
+        value.header.stamp.sec, value.header.stamp.nanosec = divmod(stamp_ns, 1_000_000_000)
+        value.fault_flags = flags
+        value.local_zero_override = flags != 0
+        value.actuator_inhibited = flags != 0
+        value.paused = False
+        return value
+
+    previous = status(sequence=100, iteration=36, stamp_ns=360_000_000)
+    current = status(sequence=101, iteration=1, stamp_ns=10_000_000,
+        flags=SimulationContactState.FAULT_CLOCK
+            | SimulationContactState.FAULT_CONTACT_COVERAGE
+            | SimulationContactState.FAULT_COMMAND_STALE
+            | SimulationContactState.FAULT_COMMAND_SEQUENCE
+            | SimulationContactState.FAULT_CONTEXT)
+    ingress = object.__new__(LocalTrainingIngress)
+    ingress.identity = identity
+    ingress.lock = threading.RLock()
+    ingress.backend_state = previous
+    ingress._oracles = OrderedDict({10_000_000:(b'old-epoch-oracle', 10)})
+    ingress._states = OrderedDict({10_000_000:(serialize_message(current), 11)})
+    ingress.physics_pairs = deque([NS(stamp_ns=360_000_000, iteration=36)])
+    ingress._last_gt_stamp, ingress._last_gt_bytes = 360_000_000, b'old-epoch-oracle'
+    ingress._last_join_iteration = 36
+
+    # Đây là đúng lỗi quan sát được: iteration 1 không thể nối với high-water 36.
+    stale = object.__new__(LocalTrainingIngress)
+    stale._oracles = OrderedDict({10_000_000:(b'new-epoch-oracle', 12)})
+    stale._states = OrderedDict({10_000_000:(serialize_message(current), 13)})
+    stale._last_join_iteration = 36
+    stale.physics_pairs = deque()
+    stale.now, stale.emit = lambda: 14, lambda *_args: None
+    stale._pose_mutation = stale._pause_transition = stale.pending_ack = None
+    stale.admission_state = 1
+    with pytest.raises(ValueError, match='physics iteration missing or gap at exact oracle/status join'):
+        stale._join_physics(10_000_000)
+
+    worker = object.__new__(TrainingWorkerIO)
+    worker.fault_hooks = {'time_only_rollback_after_contact_proof'}
+    worker._r07b_rollback_pending_before_ns = 360_000_000
+    worker._r07b_request_started_ns = 50
+    worker._r07b_rollback_observed = {
+        'request_baseline_ns':360_000_000, 'request_started_ns':50,
+        'observed_steady_ns':60,
+        'delta_ns':-360_000_000}
+    worker._r07b_pair_epoch_reset = False
+    worker._r07c_restart_started_ns = None
+    worker.descriptor = {'backend_instance_id':12}
+    worker.ingress = ingress
+    worker.now = lambda:70
+    events = []
+    worker.emit = lambda name, facts: events.append((name, facts))
+    callback_calls = []
+    result = worker.observed_callback(SimulationContactState,
+        '/mecanum/local_training/backend_state',
+        lambda message: (callback_calls.append(message), message)[1])(
+            serialize_message(current), {})
+
+    assert result.backend_instance_id == 12
+    assert len(callback_calls) == 1
+    assert worker._r07b_pair_epoch_reset is True
+    assert ingress._oracles == {} and ingress._states == {}
+    assert list(ingress.physics_pairs) == []
+    assert ingress._last_gt_stamp == -1 and ingress._last_gt_bytes is None
+    assert ingress._last_join_iteration == 0
+    reset = next(facts for name, facts in events
+        if name == 'B23_R07B_PHYSICS_PAIR_EPOCH_RESET')
+    assert reset['prior_backend_iteration'] == 36
+    assert reset['physics_iteration'] == 1
+    assert reset['fault_flags'] == 87
+
+    worker._r07b_pair_epoch_reset = False
+    worker._r07b_rollback_observed = {
+        **worker._r07b_rollback_observed,
+        'request_baseline_ns':359_000_000}
+    worker.observed_callback(SimulationContactState,
+        '/mecanum/local_training/backend_state',
+        lambda message: message)(serialize_message(current), {})
+    assert worker._r07b_pair_epoch_reset is False
+    assert sum(name == 'B23_R07B_PHYSICS_PAIR_EPOCH_RESET' for name, _facts in events) == 1
+
+    # The next exact oracle/status pair in the verified new epoch can join.
+    ingress._oracles[10_000_000] = (b'new-epoch-oracle', 71)
+    ingress._states[10_000_000] = (serialize_message(current), 72)
+    pair = ingress._join_physics(10_000_000)
+    assert pair[0] == 'PHYSICS_PAIR'
+    assert pair[1]['iteration'] == 1
+
+
+def test_r07b_pair_epoch_reset_rejects_unbound_or_nonzero_status_without_mutation():
+    from collections import OrderedDict, deque
+    from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendSessionIdentity
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+    identity = BackendSessionIdentity('r07b-pair-reject', 'c'*64, 'd'*64, 21, 22)
+    previous = SimulationContactState()
+    previous.schema_version = previous.SCHEMA_VERSION
+    previous.session_id, previous.config_hash = identity.session_id, identity.config_hash
+    previous.backend_instance_id, previous.status_sequence = 22, 4
+    previous.physics_iteration = 36
+    previous.header.frame_id = 'b2_training_arena'
+    previous.header.stamp.nanosec = 360_000_000
+    status = SimulationContactState()
+    status.schema_version = status.SCHEMA_VERSION
+    status.session_id, status.config_hash = identity.session_id, identity.config_hash
+    status.backend_instance_id, status.status_sequence = 22, 5
+    status.physics_iteration = 1
+    status.header.frame_id = 'b2_training_arena'
+    status.header.stamp.nanosec = 10_000_000
+    status.fault_flags = SimulationContactState.FAULT_CLOCK
+    status.local_zero_override = True
+    status.actuator_inhibited = True
+    ingress = object.__new__(LocalTrainingIngress)
+    ingress.identity, ingress.lock, ingress.backend_state = identity, threading.RLock(), previous
+    ingress._oracles, ingress._states = OrderedDict({10:(b'oracle', 1)}), OrderedDict()
+    ingress.physics_pairs = deque([NS(iteration=36)])
+    ingress._last_gt_stamp, ingress._last_gt_bytes = 360, b'old'
+    ingress._last_join_iteration = 36
+    before = (dict(ingress._oracles), dict(ingress._states), list(ingress.physics_pairs),
+        ingress._last_gt_stamp, ingress._last_gt_bytes, ingress._last_join_iteration)
+    rollback = {'request_started_ns':50, 'observed_steady_ns':60, 'delta_ns':-350}
+    allowed = {SimulationContactState.FAULT_CLOCK}
+    assert ingress.reset_pairing_epoch_after_r07b_rollback(status,
+        received_ns=70, rollback_observed=rollback, expected_fault_flags=allowed) is not None
+    after_valid = (dict(ingress._oracles), dict(ingress._states), list(ingress.physics_pairs),
+        ingress._last_gt_stamp, ingress._last_gt_bytes, ingress._last_join_iteration)
+    assert after_valid != before
+    ingress._oracles[10] = (b'oracle', 1)
+    ingress._last_gt_stamp, ingress._last_gt_bytes, ingress._last_join_iteration = 360, b'old', 36
+    ingress.physics_pairs.append(NS(iteration=36))
+    before_reject = (dict(ingress._oracles), dict(ingress._states), list(ingress.physics_pairs),
+        ingress._last_gt_stamp, ingress._last_gt_bytes, ingress._last_join_iteration)
+    status.backend_instance_id = 99
+    assert ingress.reset_pairing_epoch_after_r07b_rollback(status,
+        received_ns=80, rollback_observed=rollback, expected_fault_flags=allowed) is None
+    status.backend_instance_id = 22
+    status.local_zero_override = False
+    assert ingress.reset_pairing_epoch_after_r07b_rollback(status,
+        received_ns=80, rollback_observed=rollback, expected_fault_flags=allowed) is None
+    after_reject = (dict(ingress._oracles), dict(ingress._states), list(ingress.physics_pairs),
+        ingress._last_gt_stamp, ingress._last_gt_bytes, ingress._last_join_iteration)
+    assert after_reject == before_reject
+
+
 def test_r07b_same_stamp_conflicting_scan_is_quarantined_before_ingress_fault():
     from sensor_msgs.msg import LaserScan
     from rclpy.serialization import serialize_message

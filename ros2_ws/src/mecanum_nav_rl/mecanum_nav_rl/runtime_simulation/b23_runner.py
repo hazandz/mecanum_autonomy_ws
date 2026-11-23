@@ -2997,6 +2997,7 @@ class TrainingWorkerIO:
         self.contact_start_request_sequence = None
         self._r07b_rollback_pending_before_ns = None
         self._r07b_rollback_observed = None
+        self._r07b_pair_epoch_reset = False
         self._r07b_request_started_ns = None
         self._r07b_replacement_backend_statuses = []
         self._r07b_cleanup_control = None
@@ -3311,6 +3312,22 @@ class TrainingWorkerIO:
                     self._r07c_replacement_backend_statuses.append(status)
                     self.emit('B23_R07C_REPLACEMENT_BACKEND_STATUS', status)
                     return message
+                if (topic == '/mecanum/local_training/backend_state'
+                        and 'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
+                        and self._r07b_rollback_observed is not None
+                        and self._r07b_rollback_observed.get('request_baseline_ns')
+                            == getattr(self, '_r07b_rollback_pending_before_ns', None)
+                        and self._r07b_rollback_observed.get('request_started_ns')
+                            == getattr(self, '_r07b_request_started_ns', None)
+                        and not getattr(self, '_r07b_pair_epoch_reset', False)
+                        and getattr(self, 'ingress', None) is not None):
+                    epoch = self.ingress.reset_pairing_epoch_after_r07b_rollback(
+                        message, received_ns=received_ns,
+                        rollback_observed=self._r07b_rollback_observed,
+                        expected_fault_flags=r07b_post_rollback_fault_flags())
+                    if epoch is not None:
+                        self._r07b_pair_epoch_reset = True
+                        self.emit('B23_R07B_PHYSICS_PAIR_EPOCH_RESET', epoch)
                 if (topic == '/mecanum/final_issued_command'
                         and 'hold_observation0_adjacent_receipt_until_reset_deadline' in getattr(self, 'fault_hooks', ())
                         and self._r06c_hold_after_sequence is not None
@@ -4029,6 +4046,7 @@ class TrainingWorkerIO:
             self._r07b_request_started_ns = request_started_ns
             self._r07b_rollback_pending_before_ns = before
         self._r07b_rollback_observed = None
+        self._r07b_pair_epoch_reset = False
         response = await self.call(self.world_client, request, timeout_s=timeout_s,
             phase='R07b_world_time_only_rollback', before_submit=arm_rollback_observer)
         after = self.ros_now()
