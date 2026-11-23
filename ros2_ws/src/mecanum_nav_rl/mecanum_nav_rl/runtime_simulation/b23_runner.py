@@ -821,6 +821,16 @@ def r07b_post_rollback_fault_flags():
     return (clock, clock | reset_side_effects)
 
 
+async def wait_r07b_post_rollback_backend_disposition(io, *, old_backend_instance_id,
+        rollback_observed_ns, deadline_ns):
+    """Wait boundedly for the pinned/replacement native reset disposition."""
+    return await io.until(lambda: r07b_post_rollback_backend_disposition(
+        io, old_backend_instance_id=old_backend_instance_id,
+        rollback_observed_ns=rollback_observed_ns),
+        deadline_ns=deadline_ns, phase='R07b native post-rollback disposition',
+        expected_native_fault_flags=r07b_post_rollback_fault_flags())
+
+
 def verify_r07a_unexpected_pause(*, world_ack, world_pause_state, backend_state,
                                  pre_pause_policy_step_identities,
                                  post_pause_policy_step_identities, reset_count_before,
@@ -7730,12 +7740,10 @@ async def training_child(path):
             original_backend_id = io.descriptor['backend_instance_id']
             before, after, rollback = await io.reset_world_time_only(timeout_s=
                 min(1.0, max(0.0, (io.deadline_ns-io.now())/1e9)))
-            rollback_disposition = await io.until(
-                lambda: r07b_post_rollback_backend_disposition(
-                    io, old_backend_instance_id=original_backend_id,
-                    rollback_observed_ns=rollback['observed_steady_ns']),
-                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
-                phase='R07b native post-rollback disposition')
+            rollback_disposition = await wait_r07b_post_rollback_backend_disposition(io,
+                old_backend_instance_id=original_backend_id,
+                rollback_observed_ns=rollback['observed_steady_ns'],
+                deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000))
             io.emit('B23_R07B_NATIVE_ROLLBACK_DISPOSITION', rollback_disposition)
             # Keep the clock rollback exception scoped to this reset until
             # native proof invalidation/backend replacement is observable.

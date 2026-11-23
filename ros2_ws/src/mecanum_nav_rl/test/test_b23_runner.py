@@ -2263,6 +2263,7 @@ def test_r07b_rollback_disposition_requires_post_rollback_native_clock_fault():
     from mecanum_nav_rl.runtime_simulation.b23_runner import (
         r07b_post_rollback_backend_disposition,
         r07b_post_rollback_fault_flags,
+        wait_r07b_post_rollback_backend_disposition,
     )
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     old_id = 101
@@ -2300,6 +2301,17 @@ def test_r07b_rollback_disposition_requires_post_rollback_native_clock_fault():
     io.ingress.backend_state.fault_flags |= 128
     assert r07b_post_rollback_backend_disposition(io,
         old_backend_instance_id=old_id, rollback_observed_ns=2_000) is None
+    io.ingress.backend_state.fault_flags = 87
+    async def fake_until(predicate, **kwargs):
+        assert kwargs == {'deadline_ns':3_000,
+            'phase':'R07b native post-rollback disposition',
+            'expected_native_fault_flags':r07b_post_rollback_fault_flags()}
+        return predicate()
+    io.until = fake_until
+    waited = asyncio.run(wait_r07b_post_rollback_backend_disposition(io,
+        old_backend_instance_id=old_id, rollback_observed_ns=2_000,
+        deadline_ns=3_000))
+    assert waited['fault_flags'] == 87 and waited['local_zero_override']
 
 
 def test_r07b_rollback_disposition_accepts_only_bound_replacement_zero_status():
