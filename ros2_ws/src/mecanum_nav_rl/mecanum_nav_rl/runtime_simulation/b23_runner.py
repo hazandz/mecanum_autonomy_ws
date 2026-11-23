@@ -742,9 +742,8 @@ def r07b_stale_rollback_input_reason(topic, message, wire, ingress, *,
             watermark = ingress._last_receipt_stamp_ns
             if stamp < watermark:
                 return 'receipt_source_stamp_below_pinned_high_watermark', stamp, watermark
-            if (rollback_observed and type(rollback_before_ns) is int
-                    and stamp >= rollback_before_ns):
-                return ('receipt_source_stamp_at_or_after_pre_rollback_clock_baseline',
+            if rollback_observed and type(rollback_before_ns) is int:
+                return ('receipt_received_during_clock_epoch_transition',
                     stamp, rollback_before_ns)
         elif topic == '/mecanum/internal/ground_truth/odom':
             watermark = ingress._last_gt_stamp

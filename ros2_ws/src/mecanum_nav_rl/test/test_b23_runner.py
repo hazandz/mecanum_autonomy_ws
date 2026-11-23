@@ -3112,19 +3112,22 @@ def test_r07b_callback_records_replacement_status_and_expected_future_receipt_wi
     assert events[-1][1]['quarantined_before_ingress_validation'] is True
     assert worker.ingress.fault is None
 
-    # A queued receipt stamped exactly at the old clock baseline is also an
-    # old-epoch sample, even though it is not below the prior receipt watermark.
-    receipt.header.stamp.nanosec = 370_000_000
+    # During the observed epoch transition, a receipt between the old watermark
+    # and baseline is quarantined even if the reset clock has caught up to it.
+    receipt.header.stamp.nanosec = 365_000_000
+    worker.ros_now = lambda: 365_000_000
     returned = worker.observed_callback(FinalIssuedCommandReceipt,
         '/mecanum/final_issued_command',
         lambda _, **_kwargs: pytest.fail('pre-rollback epoch receipt was delivered'))(
             serialize_message(receipt), {})
     assert returned is None
     assert events[-1][0] == 'B23_R07B_POST_ROLLBACK_RECEIPT_REJECTED'
-    assert events[-1][1]['reason'] == (
-        'receipt_source_stamp_at_or_after_pre_rollback_clock_baseline')
+    assert events[-1][1]['reason'] == 'receipt_received_during_clock_epoch_transition'
     assert worker.ingress.fault is None
 
+    # Production clears the armed transition immediately after native
+    # invalidation/replacement has been observed.
+    worker._r07b_rollback_pending_before_ns = None
     receipt.header.stamp.nanosec = 200
     worker.ros_now = lambda: 200
 
