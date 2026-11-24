@@ -7433,7 +7433,10 @@ class RunEvidence:
                 messages = re.split(r'\[Msg\]\s*', text) if '[Msg]' in text else [text]
                 parsed = []
                 embedded_markers = []
-                for index, message in enumerate(messages):
+                index = 0
+                while index < len(messages):
+                    message_index = index
+                    message = messages[index]
                     match = re.match(r'\s*(B23_[A-Z_]+)\s+(.*)', message)
                     if match is None:
                         # Parse one allowlisted Gazebo stderr record only. Other
@@ -7442,10 +7445,36 @@ class RunEvidence:
                             r'\s*\[Err\]\s+\[backend_system\.cpp:\d+\]\s+'
                             r'(B23_PAUSE_FAILURE_LATCHED)\s+(.*)', message)
                     if match:
-                        parsed.append((index, match[1], match[2]))
+                        kind, payload = match[1], match[2]
+                        # Gazebo can emit one diagnostic across adjacent [Msg]
+                        # chunks when the native logger starts a second message
+                        # for its identity fields. Reassemble only this R03a
+                        # record shape, from an exact key set, inside the same
+                        # owned stdout record. Keep the original chunks in
+                        # raw_record and reject incomplete identities below.
+                        if (kind in ('B23_RECEIPT_FAULT',
+                                     'B23_POLICY_RECEIPT_SUPPRESSED')
+                                and 'mode=drop_policy_until_watchdog' in payload):
+                            required = {'publisher', 'sequence', 'step',
+                                'source_sequence', 'receive_ns'}
+                            if index + 1 < len(messages):
+                                continuation = messages[index + 1].strip()
+                                continuation_pairs = re.findall(
+                                    r'(\w+)=([^\s]+)', continuation)
+                                continuation_fields = dict(continuation_pairs)
+                                if (continuation and len(continuation_fields) ==
+                                        len(continuation_pairs) and
+                                        set(continuation_fields) == required and
+                                        re.fullmatch(
+                                            r'(?:\w+=[^\s]+)(?:\s+\w+=[^\s]+)*',
+                                            continuation)):
+                                    payload = payload + ' ' + continuation
+                                    index += 1
+                        parsed.append((message_index, kind, payload))
                     else:
                         embedded_markers.extend((index, found[1]) for found in
                             re.finditer(r'\b(B23_[A-Z_]+)\b', message))
+                    index += 1
                 common = {'raw_record': record, 'server_leader_pid': facts['pid'],
                     'run_id': self.run_id, 'invocation_id': self.invocation_id,
                     'collected_ns': time.monotonic_ns()}
@@ -7473,6 +7502,15 @@ class RunEvidence:
                                 or any(re.fullmatch(r'[0-9]+', fields[key]) is None
                                        for key in numeric)):
                             reason = 'incomplete_unexpected_pause_latch'
+                    elif (kind in ('B23_RECEIPT_FAULT',
+                                   'B23_POLICY_RECEIPT_SUPPRESSED')
+                            and fields.get('mode') == 'drop_policy_until_watchdog'):
+                        required = ('mode', 'publisher', 'sequence', 'step',
+                            'source_sequence', 'receive_ns')
+                        if (set(fields) != set(required)
+                                or any(re.fullmatch(r'[0-9]+', fields.get(key, '')) is None
+                                       for key in required[1:])):
+                            reason = 'incomplete_native_receipt_fault_identity'
                     event_record = dict(common, message_index=index,
                         message_text_sha256=hashlib.sha256(payload.encode()).hexdigest())
                     if reason is not None:

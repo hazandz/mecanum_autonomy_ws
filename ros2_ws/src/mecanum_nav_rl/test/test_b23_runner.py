@@ -7597,6 +7597,55 @@ def test_evidence_sink_routes_actual_server_output_and_keeps_books_distinct(tmp_
         sink.record('late', {})
 
 
+def test_r03_receipt_fault_identity_is_reassembled_from_gazebo_message_chunks(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import RunEvidence
+    sink = RunEvidence(tmp_path, 'parent', run_id='B23_R03_CHUNKED',
+        invocation_id='inv-chunked')
+    text = (
+        '\x1b[1;32m[Msg] \x1b[0m\x1b[1;32m'
+        'B23_RECEIPT_FAULT mode=drop_policy_until_watchdog\x1b[0m'
+        '\x1b[1;32m[Msg] \x1b[0m\x1b[1;32m'
+        'publisher=7697729344208353595 sequence=45 step=1 '
+        'source_sequence=1 receive_ns=122412133998605\x1b[0m'
+        '\x1b[1;32m[Msg] \x1b[0m\x1b[1;32m\x1b[0m')
+    try:
+        sink.record('owned_process_output', {
+            'process':'server', 'pid':777, 'command':['gz', 'sim'], 'text':text})
+        sink.sync()
+        rows = [json.loads(line) for line in
+            (tmp_path/'native-events.jsonl').read_text().splitlines()]
+        faults = [row for row in rows if row['kind'] == 'B23_RECEIPT_FAULT']
+        assert len(faults) == 1
+        assert faults[0]['fields'] == {
+            'mode':'drop_policy_until_watchdog', 'publisher':'7697729344208353595',
+            'sequence':'45', 'step':'1', 'source_sequence':'1',
+            'receive_ns':'122412133998605'}
+        assert faults[0]['raw_record']['facts']['text'] == text
+        assert faults[0]['invocation_id'] == 'inv-chunked'
+        assert faults[0]['message_index'] == 1
+    finally:
+        sink.close()
+
+    malformed = tmp_path/'malformed'
+    malformed.mkdir()
+    sink = RunEvidence(malformed, 'parent', run_id='B23_R03_CHUNKED_BAD',
+        invocation_id='inv-chunked-bad')
+    try:
+        sink.record('owned_process_output', {
+            'process':'server', 'pid':778, 'command':['gz', 'sim'],
+            'text':('[Msg] B23_RECEIPT_FAULT mode=drop_policy_until_watchdog'
+                '[Msg] publisher=7697729344208353595 sequence=45')})
+        sink.sync()
+        rows = [json.loads(line) for line in
+            (malformed/'native-events.jsonl').read_text().splitlines()]
+        assert not any(row['kind'] == 'B23_RECEIPT_FAULT' for row in rows)
+        rejected = [row for row in rows if row['kind'] == 'B23_NATIVE_OUTPUT_REJECTED']
+        assert len(rejected) == 1
+        assert rejected[0]['fields']['reason'] == 'incomplete_native_receipt_fault_identity'
+    finally:
+        sink.close()
+
+
 def test_cleanup_ack_is_bound_to_exact_batch_after_flush(tmp_path, monkeypatch):
     from mecanum_nav_rl.runtime_simulation import b23_runner as module
     from mecanum_nav_bringup.local_training_process_supervisor import CleanupEvidenceBatch
