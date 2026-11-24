@@ -6571,8 +6571,14 @@ class TrainingWorkerIO:
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness)
+                # The scan-window witness may already be several Safety ticks
+                # old by the time the ACK and first post-ACK sample arrive.
+                # R08 showed that a witness fresh at bind could age past the
+                # unchanged native 100 ms watchdog before the first POLICY
+                # receipt. Re-anchor with a newly applied zero after alignment;
+                # no SAFE_STOP is emitted after the pending slot is bound.
                 zero_witness = await self.refresh_zero_before_pending_bind(
-                    deadline_ns=deadline, zero_witness=zero_witness)
+                    deadline_ns=deadline)
             self.safety.local_training.set_stream_enabled(False)
         if prebind_admission:
             # Build the held input after native has observed the closing

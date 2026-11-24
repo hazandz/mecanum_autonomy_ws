@@ -6457,7 +6457,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
         return zero_witness
     async def refresh_zero(*, deadline_ns, zero_witness=None):
         events.append('refresh_zero')
-        assert zero_witness is not None
+        assert zero_witness is None
         return {'zero_receipt_age_ns': 0, 'refreshed': True}
     value.freeze_step_streams = freeze_step_streams
     value.align_policy_step_launch_window = align_policy_window
@@ -6561,7 +6561,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.align_policy_step_launch_window = aligned_window
     async def refreshed_zero(*, deadline_ns, zero_witness=None):
         history.append(('prebind_zero_refresh', deadline_ns))
-        assert zero_witness is not None
+        assert zero_witness is None
         if timing == 'prebind_elapsed_deadline':
             await clock.pause(.150)
         prebind_refresh_times.append(clock.ns)
