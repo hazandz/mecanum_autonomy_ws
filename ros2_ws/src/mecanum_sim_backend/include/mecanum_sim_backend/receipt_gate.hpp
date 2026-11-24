@@ -135,7 +135,7 @@ private:
   struct QueuedReceipt { ReceiptFacts facts; std::int64_t receive_steady_ns{}; };
   GateResult Fault(std::string reason);
   bool ValidPayload(const ReceiptFacts &, std::string &) const;
-  bool HasFreshContiguousQueuedSafeStop(std::int64_t now_steady_ns) const;
+  bool HasFreshQueuedSafeStop(std::int64_t now_steady_ns) const;
   static bool Equal(const ReceiptFacts &, const ReceiptFacts &);
   GateBinding binding_;
   std::deque<QueuedReceipt> queue_;

@@ -1968,7 +1968,7 @@ def verify_r02_policy_order(root, *, case, step_started_ns):
             if row.get('kind') == 'B23_RECEIPT_GATE_RESULT'
             and row.get('fields', {}).get('source') == '1'
             and row.get('fields', {}).get('key') == str(receipt_sequence)
-            and row.get('fields', {}).get('reason') == 'accepted_once']
+            and row.get('fields', {}).get('reason') in ('accepted_once','coalesced_gap')]
         if not gate_acceptances:
             raise RuntimeError('R02b lacks accepted native gate result for the observed POLICY receipt')
         gate_accepted_ns = int(gate_acceptances[0]['fields']['steady_ns'])

@@ -5392,6 +5392,13 @@ def test_r02b_measures_receipt_residence_until_matching_native_gate_acceptance(t
     assert result['receipt_residence_ns']==5_775_000, result
     assert result['receipt_to_admission_ns']==5_600_000, result
 
+    rows[2]['fields']['reason']='coalesced_gap'
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    coalesced=verify_r02_policy_order(
+        tmp_path,case='R02b',step_started_ns=admission_receive_ns-1)
+    assert coalesced['receipt_residence_ns']==5_775_000, coalesced
+    rows[2]['fields']['reason']='accepted_once'
+
     rows[2]['fields']['steady_ns']=str(receipt_ns+40_000_001)
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     with pytest.raises(RuntimeError,match='40 ms bounded gate hold'):

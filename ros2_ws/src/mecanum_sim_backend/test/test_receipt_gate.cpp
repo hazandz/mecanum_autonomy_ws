@@ -184,13 +184,50 @@ TEST(ReceiptGate, PendingBarrierKeepsCurrentAndSafeStopLiveUntilPromotion)
   EXPECT_EQ(gate.Watermark(), 104u);
 }
 
-TEST(ReceiptGate, FinalPublicationSequenceGapFaultsBeforePolicyApply)
+TEST(ReceiptGate, CoalescedGapAcceptsBoundPolicyReceipt)
 {
   ReceiptGate gate(Binding()); AcceptAnchor(gate);
   auto skipped = Policy(); skipped.key.publish_sequence = 103;
   ASSERT_TRUE(gate.Enqueue(skipped, 2'100));
-  EXPECT_EQ(gate.ConsumeNext(2'100, 2'100).reason,
-            "final_publication_sequence_gap");
+  const auto result = gate.ConsumeNext(2'100, 2'100);
+  EXPECT_EQ(result.disposition, GateDisposition::Applied);
+  EXPECT_EQ(result.reason, "coalesced_gap");
+  ASSERT_TRUE(result.accepted.has_value());
+  EXPECT_EQ(result.accepted->key.publish_sequence, 103u);
+  EXPECT_EQ(gate.Watermark(), 103u);
+}
+
+TEST(ReceiptGate, CoalescedGapStillRequiresExactPolicyBinding)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  auto wrong_step = Policy();
+  wrong_step.key.publish_sequence = 103;
+  wrong_step.step_index = 2;
+  ASSERT_TRUE(gate.Enqueue(wrong_step, 2'100));
+  const auto result = gate.ConsumeNext(2'100, 2'100);
+  EXPECT_EQ(result.disposition, GateDisposition::Faulted);
+  EXPECT_EQ(result.reason, "policy_issuance_binding_mismatch");
+  EXPECT_FALSE(result.accepted.has_value());
+  EXPECT_EQ(gate.Watermark(), 100u);
+}
+
+TEST(ReceiptGate, CoalescedSafeStopGapAdvancesBothMonotonicSequences)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  auto safe_stop = Anchor();
+  safe_stop.key.publish_sequence = 104;
+  safe_stop.sequence = 5;
+  safe_stop.stamp_ns = 1'010;
+  ASSERT_TRUE(gate.Enqueue(safe_stop, 2'100));
+
+  const auto result = gate.ConsumeNext(2'100, 2'100);
+  EXPECT_EQ(result.disposition, GateDisposition::Applied);
+  EXPECT_EQ(result.reason, "coalesced_gap");
+  ASSERT_TRUE(result.accepted.has_value());
+  EXPECT_EQ(result.accepted->key.publish_sequence, 104u);
+  EXPECT_EQ(result.accepted->sequence, 5u);
+  EXPECT_EQ(gate.Watermark(), 104u);
+  EXPECT_EQ(gate.ExpectedSafeStopSequence(), 6u);
 }
 
 TEST(ReceiptGate, RejectsWrongIdentityFrameBarrierAndNonPlanarPayload)
@@ -289,7 +326,7 @@ TEST(ReceiptGate, FreshQueuedSafeStopsPreventFalseWatchdogDuringClockCatchup)
   EXPECT_FALSE(gate.WatchdogExpired(120'002'003));
 }
 
-TEST(ReceiptGate, WatchdogDeferralRequiresContiguousValidZeroSafeStops)
+TEST(ReceiptGate, WatchdogDeferralRejectsMalformedOrNonmonotonicSafeStops)
 {
   const auto check = [](ReceiptFacts queued) {
     ReceiptGate gate(Binding());
@@ -312,11 +349,32 @@ TEST(ReceiptGate, WatchdogDeferralRequiresContiguousValidZeroSafeStops)
   nonzero.twist[0] = 0.01;
   check(nonzero);
 
-  auto sequence_gap = Anchor();
-  sequence_gap.key.publish_sequence = 102;
-  sequence_gap.sequence = 2;
-  sequence_gap.stamp_ns = 1'010;
-  check(sequence_gap);
+  auto source_sequence_replay = Anchor();
+  source_sequence_replay.key.publish_sequence = 102;
+  source_sequence_replay.sequence = 1;
+  source_sequence_replay.stamp_ns = 1'010;
+  check(source_sequence_replay);
+}
+
+TEST(ReceiptGate, FreshQueuedCoalescedSafeStopPreventsFalseWatchdogDuringClockCatchup)
+{
+  ReceiptGate gate(Binding());
+  AcceptAnchor(gate);
+  auto safe_stop = Anchor();
+  safe_stop.key.publish_sequence = 104;
+  safe_stop.sequence = 5;
+  safe_stop.stamp_ns = 1'010;
+  ASSERT_TRUE(gate.Enqueue(safe_stop, 120'002'000));
+
+  const auto waiting = gate.ConsumeNext(1'009, 120'002'001);
+  EXPECT_EQ(waiting.disposition, GateDisposition::Pending);
+  EXPECT_FALSE(gate.WatchdogExpired(120'002'001));
+
+  const auto applied = gate.ConsumeNext(1'010, 120'002'002);
+  EXPECT_EQ(applied.disposition, GateDisposition::Applied);
+  EXPECT_EQ(applied.reason, "coalesced_gap");
+  EXPECT_EQ(gate.Watermark(), 104u);
+  EXPECT_EQ(gate.ExpectedSafeStopSequence(), 6u);
 }
 
 TEST(ReceiptGate, FutureDatedPolicyAndMalformedSafeStopStillFault)

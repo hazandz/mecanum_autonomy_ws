@@ -138,13 +138,18 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     // the next PreUpdate observes that same sim stamp. A valid zero SAFE_STOP
     // remains queued until its stamp is current; it is never applied early.
     // Other future-dated receipts still fault closed.
+    const bool safe_stop_sequence_valid =
+        r.sequence == binding_.next_safe_stop_sequence ||
+        (anchored_ && r.sequence > binding_.next_safe_stop_sequence &&
+         r.key.publish_sequence > watermark_ + 1);
+    const bool final_sequence_valid = r.key.publish_sequence > watermark_ &&
+        (anchored_ || !require_contiguous_anchor_ ||
+         r.key.publish_sequence == watermark_ + 1);
     const bool valid_future_safe_stop = r.source == 4 && IsZero(r) &&
         r.source_instance_id == binding_.safe_stop_source_instance_id &&
-        r.sequence == binding_.next_safe_stop_sequence && r.step_index == 0 &&
-        r.transition_id.empty() && r.key.publish_sequence > watermark_ &&
-        (!anchored_ || r.key.publish_sequence == watermark_ + 1) &&
-        (!require_contiguous_anchor_ || anchored_ ||
-         r.key.publish_sequence == watermark_ + 1);
+        safe_stop_sequence_valid &&
+        r.step_index == 0 && r.transition_id.empty() &&
+        final_sequence_valid;
     if (valid_future_safe_stop)
       return {GateDisposition::Pending, "safe_stop_waiting_for_sim_clock", std::nullopt, false};
     return Fault("future_timestamp");
@@ -191,7 +196,8 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     queue_.pop_front();
     return {GateDisposition::Anchored, "safe_stop_anchor", accepted, true};
   }
-  if (r.key.publish_sequence != watermark_ + 1)
+  const bool coalesced_gap = r.key.publish_sequence > watermark_ + 1;
+  if (!coalesced_gap && r.key.publish_sequence != watermark_ + 1)
     return Fault("final_publication_sequence_gap");
   if (r.source == 1)
   {
@@ -266,13 +272,14 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   else if (r.source == 4)
   {
     if (r.source_instance_id != binding_.safe_stop_source_instance_id ||
-        r.sequence != binding_.next_safe_stop_sequence ||
+        r.sequence < binding_.next_safe_stop_sequence ||
+        (r.sequence > binding_.next_safe_stop_sequence && !coalesced_gap) ||
         r.step_index != 0 || !r.transition_id.empty() || !IsZero(r))
       return Fault("safe_stop_identity_mismatch");
-    if (binding_.next_safe_stop_sequence ==
+    if (r.sequence ==
         std::numeric_limits<std::uint64_t>::max())
       return Fault("safe_stop_source_sequence_exhausted");
-    ++binding_.next_safe_stop_sequence;
+    binding_.next_safe_stop_sequence = r.sequence + 1;
     if (binding_.require_policy_admission)
     {
       // A zero received before this slot was bound is drained after control
@@ -305,7 +312,8 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   replay_history_.push_back(accepted);
   if (replay_history_.size() > kQueueCapacity) replay_history_.pop_front();
   queue_.pop_front();
-  return {GateDisposition::Applied, "accepted_once", accepted, true};
+  return {GateDisposition::Applied,
+          coalesced_gap ? "coalesced_gap" : "accepted_once", accepted, true};
 }
 
 bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
@@ -314,10 +322,10 @@ bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
   if (!anchored_) return false;
   if (now_steady_ns < last_accepted_steady_ns_) return true;
   if (now_steady_ns - last_accepted_steady_ns_ <= kWatchdogNs) return false;
-  return !HasFreshContiguousQueuedSafeStop(now_steady_ns);
+  return !HasFreshQueuedSafeStop(now_steady_ns);
 }
 
-bool ReceiptGate::HasFreshContiguousQueuedSafeStop(
+bool ReceiptGate::HasFreshQueuedSafeStop(
     std::int64_t now_steady_ns) const
 {
   if (now_steady_ns < 0 || queue_.empty() || watermark_ ==
@@ -335,11 +343,14 @@ bool ReceiptGate::HasFreshContiguousQueuedSafeStop(
   {
     const auto &receipt = item.facts;
     std::string reason;
+    const bool publication_gap = receipt.key.publish_sequence > expected_publish_sequence;
     if (!ValidPayload(receipt, reason) || receipt.source != 4 ||
         receipt.source_instance_id != binding_.safe_stop_source_instance_id ||
-        receipt.sequence != expected_source_sequence || receipt.step_index != 0 ||
+        receipt.sequence < expected_source_sequence ||
+        (receipt.sequence > expected_source_sequence && !publication_gap) ||
+        receipt.step_index != 0 ||
         !receipt.transition_id.empty() || !IsZero(receipt) ||
-        receipt.key.publish_sequence != expected_publish_sequence ||
+        receipt.key.publish_sequence < expected_publish_sequence ||
         (previous_stamp_ns && receipt.stamp_ns < *previous_stamp_ns) ||
         item.receive_steady_ns <= previous_receive_steady_ns ||
         item.receive_steady_ns > now_steady_ns)
@@ -349,11 +360,11 @@ bool ReceiptGate::HasFreshContiguousQueuedSafeStop(
       has_fresh_safe_stop = true;
     previous_stamp_ns = receipt.stamp_ns;
     previous_receive_steady_ns = item.receive_steady_ns;
-    if (expected_publish_sequence == std::numeric_limits<std::uint64_t>::max() ||
-        expected_source_sequence == std::numeric_limits<std::uint64_t>::max())
+    if (receipt.key.publish_sequence == std::numeric_limits<std::uint64_t>::max() ||
+        receipt.sequence == std::numeric_limits<std::uint64_t>::max())
       break;
-    ++expected_publish_sequence;
-    ++expected_source_sequence;
+    expected_publish_sequence = receipt.key.publish_sequence + 1;
+    expected_source_sequence = receipt.sequence + 1;
   }
   return has_fresh_safe_stop;
 }

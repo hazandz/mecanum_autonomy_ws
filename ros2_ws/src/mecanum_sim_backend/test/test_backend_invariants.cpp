@@ -3,6 +3,7 @@
 #include <chrono>
 #include <limits>
 #include <future>
+#include <mutex>
 #include <thread>
 #include <cstdlib>
 #include <filesystem>
@@ -139,6 +140,10 @@ public:
     std::lock_guard<std::mutex> lock(system.callback_mutex_);
     return ReceiptGateTestPeer::QueueSize(*system.gate_);
   }
+
+  static std::unique_lock<std::mutex> LockReceiptCallbackMutex(
+      BackendSystem &system)
+  { return std::unique_lock<std::mutex>(system.callback_mutex_); }
 
   static std::uint64_t Watermark(BackendSystem &system)
   {
@@ -1725,7 +1730,8 @@ Receipt SafeStopReceipt(
 }
 }  // namespace
 
-TEST(BackendSystemLifecycle, ReceiptIngressKeepsUpWhileMainExecutorCallbackIsBusy)
+TEST(BackendSystemLifecycle,
+     ReceiptIngressKeepsUpAndAcceptsCoalescedGapWhenReceiptCallbackIsBlocked)
 {
   BackendSystem system;
   BackendSystemTestPeer::CreateReceiptIngressRuntime(system);
@@ -1812,6 +1818,46 @@ TEST(BackendSystemLifecycle, ReceiptIngressKeepsUpWhileMainExecutorCallbackIsBus
     EXPECT_EQ(applied.accepted->key.publish_sequence, sequence);
   }
   EXPECT_EQ(BackendSystemTestPeer::Watermark(system), kBurstCount + 1);
+
+  // The receipt contract uses TRANSIENT_LOCAL + KEEP_LAST(1). Block the real
+  // native receipt callback while a SAFE_STOP burst arrives, then verify the
+  // newest zero receipt is accepted across the expected coalesced sequence gap.
+  auto callback_lock =
+      BackendSystemTestPeer::LockReceiptCallbackMutex(system);
+  constexpr std::uint64_t kCoalescedLast = 15;
+  publish_zero(10, 10);
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  for (std::uint64_t sequence = 11; sequence <= kCoalescedLast; ++sequence)
+  {
+    publish_zero(sequence, sequence);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  callback_lock.unlock();
+  const auto coalesced_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(2);
+  while (BackendSystemTestPeer::ReceiptQueueSize(system) == 0 &&
+         std::chrono::steady_clock::now() < coalesced_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_GT(BackendSystemTestPeer::ReceiptQueueSize(system), 0u);
+  bool observed_coalesced_gap = false;
+  bool observed_latest = false;
+  while (BackendSystemTestPeer::ReceiptQueueSize(system) > 0)
+  {
+    const auto queued = BackendSystemTestPeer::ReceiptQueueSize(system);
+    ASSERT_GT(queued, 0u);
+    const auto applied = BackendSystemTestPeer::ConsumeReceipt(
+        system, 1'000'000'000LL +
+            static_cast<std::int64_t>(kCoalescedLast) * 10'000'000LL,
+        BackendSystemTestPeer::SteadyNow(system));
+    EXPECT_EQ(applied.disposition, GateDisposition::Applied) << applied.reason;
+    ASSERT_TRUE(applied.accepted.has_value());
+    observed_coalesced_gap |= applied.reason == "coalesced_gap";
+    observed_latest |= applied.accepted->key.publish_sequence == kCoalescedLast;
+  }
+  EXPECT_TRUE(observed_coalesced_gap);
+  EXPECT_TRUE(observed_latest);
+  EXPECT_EQ(BackendSystemTestPeer::Watermark(system), kCoalescedLast);
+
   busy_timer->cancel();
   publisher.reset();
   publisher_node.reset();
