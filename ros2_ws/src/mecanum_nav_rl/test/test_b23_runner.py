@@ -40,6 +40,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
+    safety_executor_cycle_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
     worker_async_task_snapshot, spin_ready_callback_batch,
     spin_receipt_executor_until_stopped, instrument_executor_waits,
@@ -73,6 +74,39 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
             process_cpu_started_ns=1)
+
+
+def test_safety_executor_cycle_diagnostic_separates_schedule_and_spin_time():
+    result = safety_executor_cycle_diagnostic(
+        previous_completed_ns=0, started_ns=90_000_000,
+        spin_started_ns=90_100_000, spin_completed_ns=165_100_000,
+        completed_ns=166_300_000,
+        previous_thread_cpu_ns=0, started_thread_cpu_ns=100_000,
+        spin_started_thread_cpu_ns=100_000,
+        spin_completed_thread_cpu_ns=73_100_000,
+        completed_thread_cpu_ns=73_900_000)
+    assert result == {
+        'threshold_ns':20_000_000,
+        'inter_cycle_scheduling': {
+            'wall_ns':90_000_000, 'thread_cpu_ns':100_000,
+            'non_cpu_wait_lower_bound_ns':89_900_000,
+            'threshold_ns':20_000_000},
+        'spin_once': {
+            'wall_ns':75_000_000, 'thread_cpu_ns':73_000_000,
+            'non_cpu_wait_lower_bound_ns':2_000_000,
+            'threshold_ns':20_000_000},
+        'post_spin_sleep_and_work': None}
+
+
+def test_safety_executor_cycle_diagnostic_omits_normal_cycle():
+    assert safety_executor_cycle_diagnostic(
+        previous_completed_ns=0, started_ns=1_000_000,
+        spin_started_ns=1_100_000, spin_completed_ns=2_000_000,
+        completed_ns=3_000_000,
+        previous_thread_cpu_ns=0, started_thread_cpu_ns=50_000,
+        spin_started_thread_cpu_ns=50_000,
+        spin_completed_thread_cpu_ns=600_000,
+        completed_thread_cpu_ns=650_000) is None
 
 
 def test_worker_async_task_snapshot_captures_suspended_production_task():

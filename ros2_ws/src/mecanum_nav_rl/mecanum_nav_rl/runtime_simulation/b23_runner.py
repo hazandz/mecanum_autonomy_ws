@@ -168,6 +168,35 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     return result
 
 
+def safety_executor_cycle_diagnostic(*, previous_completed_ns, started_ns,
+        spin_started_ns, spin_completed_ns, completed_ns,
+        previous_thread_cpu_ns, started_thread_cpu_ns,
+        spin_started_thread_cpu_ns, spin_completed_thread_cpu_ns,
+        completed_thread_cpu_ns, threshold_ns=20_000_000):
+    """Separate Safety executor scheduling gaps from time spent in spin_once."""
+    scheduling = worker_latency_diagnostic(
+        started_ns=previous_completed_ns, completed_ns=started_ns,
+        thread_cpu_started_ns=previous_thread_cpu_ns,
+        thread_cpu_completed_ns=started_thread_cpu_ns,
+        threshold_ns=threshold_ns)
+    spinning = worker_latency_diagnostic(
+        started_ns=spin_started_ns, completed_ns=spin_completed_ns,
+        thread_cpu_started_ns=spin_started_thread_cpu_ns,
+        thread_cpu_completed_ns=spin_completed_thread_cpu_ns,
+        threshold_ns=threshold_ns)
+    completing = worker_latency_diagnostic(
+        started_ns=spin_completed_ns, completed_ns=completed_ns,
+        thread_cpu_started_ns=spin_completed_thread_cpu_ns,
+        thread_cpu_completed_ns=completed_thread_cpu_ns,
+        threshold_ns=threshold_ns)
+    if scheduling is None and spinning is None and completing is None:
+        return None
+    return {'threshold_ns': threshold_ns,
+        'inter_cycle_scheduling': scheduling,
+        'spin_once': spinning,
+        'post_spin_sleep_and_work': completing}
+
+
 def parse_worker_scheduler_snapshot(*, cgroup_text, schedstat_text,
         cpu_stat_text, cpu_max_text, cpu_pressure_text):
     """Normalize read-only scheduler counters for a worker latency finding."""
@@ -3592,6 +3621,8 @@ class TrainingWorkerIO:
 
     def _spin_safety_executor(self):
         try:
+            previous_completed_ns = time.monotonic_ns()
+            previous_thread_cpu_ns = time.thread_time_ns()
             # ``Executor.spin()`` immediately loops while reliable status
             # callbacks remain ready. Under a burst this Python polling loop
             # can retain the GIL long enough to starve the separate ingress
@@ -3601,8 +3632,36 @@ class TrainingWorkerIO:
             # group and all existing Safety freshness/watchdog checks remain
             # unchanged.
             while not self.stop_requested:
+                started_ns = time.monotonic_ns()
+                started_thread_cpu_ns = time.thread_time_ns()
                 self.safety_executor.spin_once(timeout_sec=SAFETY_EXECUTOR_WAIT_S)
+                spin_completed_ns = time.monotonic_ns()
+                spin_completed_thread_cpu_ns = time.thread_time_ns()
                 time.sleep(SAFETY_EXECUTOR_GIL_YIELD_S)
+                completed_ns = time.monotonic_ns()
+                completed_thread_cpu_ns = time.thread_time_ns()
+                cycle_diagnostic = safety_executor_cycle_diagnostic(
+                    previous_completed_ns=previous_completed_ns,
+                    started_ns=started_ns,
+                    spin_started_ns=started_ns,
+                    spin_completed_ns=spin_completed_ns,
+                    completed_ns=completed_ns,
+                    previous_thread_cpu_ns=previous_thread_cpu_ns,
+                    started_thread_cpu_ns=started_thread_cpu_ns,
+                    spin_started_thread_cpu_ns=started_thread_cpu_ns,
+                    spin_completed_thread_cpu_ns=spin_completed_thread_cpu_ns,
+                    completed_thread_cpu_ns=completed_thread_cpu_ns)
+                if cycle_diagnostic is not None:
+                    self.emit('SAFETY_EXECUTOR_CYCLE_SLOW', {
+                        **cycle_diagnostic,
+                        'started_ns':started_ns,
+                        'spin_completed_ns':spin_completed_ns,
+                        'completed_ns':completed_ns,
+                        'thread_name':threading.current_thread().name,
+                        'thread_native_id':threading.get_native_id(),
+                    })
+                previous_completed_ns = completed_ns
+                previous_thread_cpu_ns = completed_thread_cpu_ns
             if not self.stop_requested:
                 raise RuntimeError('LOCAL_TRAINING Safety executor stopped unexpectedly')
         except BaseException as error:
