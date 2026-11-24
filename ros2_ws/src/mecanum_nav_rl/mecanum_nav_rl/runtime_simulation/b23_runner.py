@@ -168,6 +168,21 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     return result
 
 
+def policy_cutoff_attempt_batch(cutoffs, fallback_cursor):
+    """Bound B1 cutoff work per event-loop turn while retaining older fallback."""
+    if type(fallback_cursor) is not int or fallback_cursor < 0:
+        raise ValueError('POLICY cutoff fallback cursor must be a nonnegative integer')
+    ordered = sorted(set(cutoffs), reverse=True)
+    if not ordered:
+        return (), 0
+    if len(ordered) == 1:
+        return (ordered[0],), 0
+    fallback_count = len(ordered) - 1
+    fallback_index = 1 + (fallback_cursor % fallback_count)
+    next_cursor = (fallback_cursor + 1) % fallback_count
+    return (ordered[0], ordered[fallback_index]), next_cursor
+
+
 def exception_cause_chain(error):
     """Preserve causal exception details in worker failure evidence."""
     if not isinstance(error, BaseException):
@@ -7250,17 +7265,19 @@ class TrainingWorkerIO:
             await self.align_r09b_application_cutoff(b1, policy_receipt=receipt,
                 minimum_cutoff_ns=minimum_cutoff, deadline_ns=deadline)
         last_pending = None
+        cutoff_fallback_cursor = 0
         emitted_pending_cutoff_reasons = set()
         while self.now() < deadline:
             self.check()
-            # Try the newest retained cutoff first. Older cutoffs remain
-            # available as fallback, but evaluating them first can consume
-            # the step budget and let their exact scan/noisy/backend facts
-            # expire before a fresh cutoff with its adjacent receipt is
-            # considered.
-            for cutoff in sorted(
-                    (stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff),
-                    reverse=True):
+            # Try the newest cutoff and at most one rotating older fallback
+            # per event-loop turn. B1 may scan an ever-growing history, so a
+            # full sweep while the newest adjacent receipt is pending can hold
+            # the Python GIL long enough to starve the independent Safety
+            # watchdog timer. Yield below before trying the next fallback.
+            cutoffs, cutoff_fallback_cursor = policy_cutoff_attempt_batch(
+                (stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff),
+                cutoff_fallback_cursor)
+            for cutoff in cutoffs:
                 try:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:

@@ -40,6 +40,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
+    policy_cutoff_attempt_batch,
     exception_cause_chain,
     safety_executor_cycle_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
@@ -85,6 +86,18 @@ def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
     with pytest.raises(ValueError, match='moved backward'):
         worker_latency_diagnostic(started_ns=2, completed_ns=1,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2)
+
+
+def test_policy_cutoff_attempt_batch_bounds_history_work_and_rotates_fallback():
+    stamps = [10, 20, 30, 40]
+    first, cursor = policy_cutoff_attempt_batch(stamps, 0)
+    second, cursor = policy_cutoff_attempt_batch(stamps, cursor)
+    third, cursor = policy_cutoff_attempt_batch(stamps, cursor)
+    assert first == (40, 30)
+    assert second == (40, 20)
+    assert third == (40, 10)
+    assert policy_cutoff_attempt_batch([50], cursor) == ((50,), 0)
+    assert policy_cutoff_attempt_batch([], cursor) == ((), 0)
     with pytest.raises(ValueError, match='process CPU timestamps'):
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
@@ -7001,6 +7014,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.policy_publisher = NS(publish=publish)
     async def pause(seconds):
         await clock.pause(seconds)
+        if timing == 'pending_cutoff_dedup':
+            history.append(('yield', seconds))
         if not (timing == 'near_scan_cutoff'
                 and adapter._last_deferred_scan_cutoff_ns is not None):
             adapter.last_tick_ros_ns = clock.ns
@@ -7154,8 +7169,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         emitted = [(facts['cutoff_ns'], facts['reason']) for facts in pending_events]
         assert len(emitted) >= 2, f'expected multiple pending cutoffs: {history!r}'
         assert len(emitted) == len(set(emitted)), f'pending cutoff evidence was duplicated: {history!r}'
-        assert commit_calls[:3] == sorted(value.ingress.scans, reverse=True), (
-            f'policy step must try freshest cutoff first: {commit_calls!r}')
+        ordered_cutoffs = sorted(value.ingress.scans, reverse=True)
+        assert commit_calls[:4] == [ordered_cutoffs[0], ordered_cutoffs[1],
+            ordered_cutoffs[0], ordered_cutoffs[2]], (
+            f'policy step must try the freshest cutoff plus one rotating fallback per yield: {commit_calls!r}')
+        assert ('yield', .002) in history, (
+            f'pending B1 cutoff work did not yield to the Safety executor: {history!r}')
         repeated_cutoffs = {cutoff for cutoff in commit_calls
             if commit_calls.count(cutoff) > 1}
         assert len(repeated_cutoffs) >= 2, (
