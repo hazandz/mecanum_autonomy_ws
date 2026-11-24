@@ -902,6 +902,11 @@ public:
     if (!system.gate_) throw std::runtime_error("test receipt gate missing");
   }
 
+  static void DropPolicyReceiptsUntilWatchdog(BackendSystem &system)
+  {
+    system.receipt_fault_mode_ = "drop_policy_until_watchdog";
+  }
+
   static void InvalidateReceiptGate(BackendSystem &system, const std::string &reason)
   {
     if (!system.gate_) throw std::runtime_error("test receipt gate missing");
@@ -4271,6 +4276,35 @@ TEST(BackendSystemReceiptFault, InhibitHoldSuppressesLaterPolicyUntilClose)
   EXPECT_EQ(after_close.disposition, GateDisposition::Faulted);
   EXPECT_EQ(after_close.reason, "policy_issuance_binding_mismatch");
   EXPECT_TRUE(BackendSystemTestPeer::ReceiptGateFaulted(system));
+}
+
+TEST(BackendSystemReceiptFault, DropRepeatedPolicyReceiptsUntilWatchdog)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::DropPolicyReceiptsUntilWatchdog(system);
+
+  Receipt policy;
+  policy.header.frame_id = "base_link";
+  SetStamp(policy.header.stamp, 130);
+  policy.final_publisher_instance_id = 11;
+  policy.episode_generation = 2;
+  policy.reset_epoch = 3;
+  policy.runtime_generation = 4;
+  policy.step_index = 1;
+  policy.transition_id = "policy-step-1";
+  policy.source = Receipt::SOURCE_POLICY;
+  policy.sequence = 1;
+  policy.source_instance_id = 22;
+
+  policy.final_publish_sequence = 51;
+  BackendSystemTestPeer::EarlyReceipt(system, policy);
+  policy.final_publish_sequence = 52;
+  SetStamp(policy.header.stamp, 140);
+  BackendSystemTestPeer::EarlyReceipt(system, policy);
+
+  EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
+      << "repeated publications for the pending POLICY step are deliberately dropped";
 }
 
 TEST(BackendSystemControlReceiver, ResetBindReanchorsOnlyAppliedZeroWatchdogFault)

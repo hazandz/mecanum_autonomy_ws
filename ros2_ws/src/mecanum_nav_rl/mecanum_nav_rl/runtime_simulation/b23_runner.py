@@ -1004,7 +1004,7 @@ def case_environment(case, hooks):
     if case == 'R01d' and hooks == ['drop_native_pause_ack_once']:
         return {'B23_PAUSE_ACK_FAULT': 'drop_once'}
     if case == 'R03a' and hooks == ['drop_native_policy_receipt_once']:
-        return {'B23_RECEIPT_FAULT': 'drop_policy_once'}
+        return {'B23_RECEIPT_FAULT': 'drop_policy_until_watchdog'}
     if case == 'R03b' and hooks == ['mutate_native_policy_transition_id_once']:
         return {'B23_RECEIPT_FAULT': 'mutate_policy_transition_id_once'}
     if case == 'R02c' and hooks == ['hold_policy_receipt_until_safe_stop']:
@@ -1611,7 +1611,7 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
         raise RuntimeError('R03 did not stop through the expected cutoff/receipt path')
     rows = [json.loads(line) for line in
         (Path(io.descriptor['run_root'])/'native-events.jsonl').read_text().splitlines() if line.strip()]
-    mode = 'drop_policy_once' if case == 'R03a' else 'mutate_policy_transition_id_once'
+    mode = 'drop_policy_until_watchdog' if case == 'R03a' else 'mutate_policy_transition_id_once'
     injected = [row for row in rows if row.get('kind') == 'B23_RECEIPT_FAULT'
         and row.get('fields', {}).get('mode') == mode]
     if len(injected) != 1:
@@ -1661,7 +1661,19 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
         raise RuntimeError('R03 final publication bytes do not match the native hook identity')
     receipt_ingress = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
         and row.get('fields', {}).get('sequence') == str(fault_sequence)]
-    if (case == 'R03a' and receipt_ingress) or (case == 'R03b' and len(receipt_ingress) != 1):
+    suppressed = []
+    if case == 'R03a':
+        step_ingress = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_INGRESS'
+            and row.get('fields', {}).get('publisher') == str(fault_publisher)
+            and row.get('fields', {}).get('step') == str(step_index)]
+        suppressed = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_SUPPRESSED'
+            and row.get('fields', {}).get('mode') == mode
+            and row.get('fields', {}).get('publisher') == str(fault_publisher)
+            and row.get('fields', {}).get('step') == str(step_index)
+            and row.get('fields', {}).get('source_sequence') == str(step_index)]
+        if step_ingress or not suppressed:
+            raise RuntimeError('R03a did not suppress repeated POLICY receipts through the watchdog window')
+    elif len(receipt_ingress) != 1:
         raise RuntimeError('R03 native receipt ingress does not match packet fault')
     state = io.ingress.backend_state
     if expected_native_flags is not None and (state is None or state.fault_flags != expected_native_flags):
@@ -1688,7 +1700,8 @@ async def verify_r03_receipt_fault(io, *, case, step_index, error):
             if expected_native_flags is not None else type(error).__name__),
         'published_policy_sequence': fault_sequence,
         'native_fault_flags': state.fault_flags, 'local_zero_override': True,
-        'policy_step_committed': False, 'native_receipt_hook': fault_fields}
+        'policy_step_committed': False, 'native_receipt_hook': fault_fields,
+        'suppressed_policy_receipts': len(suppressed)}
 
 
 async def verify_r01_pause_ack_failure(io, error):

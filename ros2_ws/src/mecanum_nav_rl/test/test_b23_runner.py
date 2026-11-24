@@ -1999,7 +1999,7 @@ def test_case_hook_and_assessment_are_bound_to_packet_case():
     assert case_environment('R01d', case_fault_hooks('R01d')) == {
         'B23_PAUSE_ACK_FAULT':'drop_once'}
     assert case_environment('R03a', case_fault_hooks('R03a')) == {
-        'B23_RECEIPT_FAULT':'drop_policy_once'}
+        'B23_RECEIPT_FAULT':'drop_policy_until_watchdog'}
     assert case_environment('R03b', case_fault_hooks('R03b')) == {
         'B23_RECEIPT_FAULT':'mutate_policy_transition_id_once'}
     assert case_environment('R05', case_fault_hooks('R05')) == {
@@ -3987,7 +3987,7 @@ def test_r05_accepts_only_exact_native_rejection_for_fresh_revoked_query():
 
 
 @pytest.mark.parametrize('case,mode,ingress_count', [
-    ('R03a','drop_policy_once',0),
+    ('R03a','drop_policy_until_watchdog',0),
     ('R03b','mutate_policy_transition_id_once',1),
 ])
 def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
@@ -4020,6 +4020,15 @@ def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
         with native.open('a') as stream:
             stream.write(json.dumps({'kind':'B23_POLICY_RECEIPT_INGRESS',
                 'fields':{'sequence':'77'}})+'\n')
+    if case == 'R03a':
+        publication_again = dict(publication)
+        publication_again['facts'] = dict(publication['facts'], publish_sequence=78)
+        with (tmp_path/'policy_final_published.jsonl').open('a') as stream:
+            stream.write(json.dumps(publication_again,separators=(',',':'))+'\n')
+        with native.open('a') as stream:
+            stream.write(json.dumps({'kind':'B23_POLICY_RECEIPT_SUPPRESSED','fields':{
+                'mode':mode,'publisher':'42','sequence':'78','step':'1',
+                'source_sequence':'1'}})+'\n')
     io=NS(descriptor={'run_root':str(tmp_path)},
         events=[], final=NS(publisher_instance_id=42),
         ingress=NS(receipts=[],
@@ -4036,6 +4045,7 @@ def test_r03_verifier_binds_native_receipt_fault_to_real_policy_publication(
     assert result['local_zero_override'] is True
     if case == 'R03a':
         assert io.ingress.receipts == []  # the faulted publication was not received
+        assert result['suppressed_policy_receipts'] == 1
     with pytest.raises(RuntimeError,match='expected cutoff/receipt path'):
         asyncio.run(verify_r03_receipt_fault(io,case=case,step_index=1,error=RuntimeError('unexpected')))
 

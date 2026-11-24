@@ -532,7 +532,7 @@ public:
     }
     const char *receipt_fault_env = std::getenv("B23_RECEIPT_FAULT");
     receipt_fault_mode_ = receipt_fault_env ? receipt_fault_env : "";
-    if (!receipt_fault_mode_.empty() && receipt_fault_mode_ != "drop_policy_once" &&
+    if (!receipt_fault_mode_.empty() && receipt_fault_mode_ != "drop_policy_until_watchdog" &&
         receipt_fault_mode_ != "mutate_policy_transition_id_once" &&
         receipt_fault_mode_ != "hold_policy_until_safe_stop" &&
         receipt_fault_mode_ != "hold_policy_until_inhibit")
@@ -3795,21 +3795,33 @@ private:
       });
       return;
     }
+    if (msg.source == Receipt::SOURCE_POLICY &&
+        receipt_fault_mode_ == "drop_policy_until_watchdog")
+    {
+      const bool first_dropped_receipt = !receipt_fault_used_;
+      receipt_fault_used_ = true;
+      EmitStructuredDiagnostic([&]() {
+        if (first_dropped_receipt)
+        {
+          gzmsg << "B23_RECEIPT_FAULT mode=drop_policy_until_watchdog";
+        }
+        else
+        {
+          gzmsg << "B23_POLICY_RECEIPT_SUPPRESSED mode=drop_policy_until_watchdog";
+        }
+        gzmsg << " publisher=" << msg.final_publisher_instance_id
+            << " sequence=" << msg.final_publish_sequence
+            << " step=" << msg.step_index
+            << " source_sequence=" << msg.sequence
+            << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+      });
+      return;
+    }
     if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
         !receipt_fault_mode_.empty())
     {
       receipt_fault_used_ = true;
-      if (receipt_fault_mode_ == "drop_policy_once")
-      {
-        EmitStructuredDiagnostic([&]() {
-          gzmsg << "B23_RECEIPT_FAULT mode=drop_policy_once publisher="
-              << msg.final_publisher_instance_id << " sequence="
-              << msg.final_publish_sequence << " source_sequence="
-              << msg.sequence << " receive_ns=" << receive_ns << std::endl;
-          std::fflush(stdout);
-        });
-        return;
-      }
       if (receipt_fault_mode_ == "mutate_policy_transition_id_once")
       {
         const auto original_transition_id = facts.transition_id;
