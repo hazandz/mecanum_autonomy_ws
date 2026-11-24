@@ -40,11 +40,25 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
+    exception_cause_chain,
     safety_executor_cycle_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
     worker_async_task_snapshot, spin_ready_callback_batch,
     spin_receipt_executor_until_stopped, instrument_executor_waits,
 )
+
+
+def test_worker_failure_evidence_preserves_exception_cause_chain():
+    try:
+        try:
+            raise ValueError('callback source detail')
+        except ValueError as cause:
+            raise RuntimeError('executor callback failed') from cause
+    except RuntimeError as error:
+        assert exception_cause_chain(error) == [
+            {'type':'builtins.RuntimeError', 'repr':"RuntimeError('executor callback failed')"},
+            {'type':'builtins.ValueError', 'repr':"ValueError('callback source detail')"},
+        ]
 
 
 def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():

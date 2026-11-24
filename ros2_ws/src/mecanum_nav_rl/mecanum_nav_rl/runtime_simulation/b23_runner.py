@@ -168,6 +168,20 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     return result
 
 
+def exception_cause_chain(error):
+    """Preserve causal exception details in worker failure evidence."""
+    if not isinstance(error, BaseException):
+        raise TypeError('worker failure must be an exception')
+    chain, seen = [], set()
+    current = error
+    while isinstance(current, BaseException) and id(current) not in seen:
+        seen.add(id(current))
+        chain.append({'type':type(current).__module__ + '.' + type(current).__qualname__,
+            'repr':repr(current)})
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return chain
+
+
 def safety_executor_cycle_diagnostic(*, previous_completed_ns, started_ns,
         spin_started_ns, spin_completed_ns, completed_ns,
         previous_thread_cpu_ns, started_thread_cpu_ns,
@@ -8865,7 +8879,8 @@ async def training_child(path):
             raise TimeoutError('smoke completed after active deadline')
     except BaseException as exc:
         primary = repr(exc)
-        sink.record('WORKER_PRIMARY_ERROR', {'error': primary})
+        sink.record('WORKER_PRIMARY_ERROR', {
+            'error': primary, 'cause_chain':exception_cause_chain(exc)})
     finally:
         cleanup_started = time.monotonic_ns()
         cleanup_deadline = min(descriptor['total_deadline_ns'], cleanup_started + 60_000_000_000)
