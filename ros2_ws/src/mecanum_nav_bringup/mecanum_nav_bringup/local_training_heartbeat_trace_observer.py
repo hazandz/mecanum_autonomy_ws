@@ -89,7 +89,12 @@ def prepare_trace_pair(directory, *, collection_id):
         )
         try:
             os.fchmod(fd, 0o600)
-            os.ftruncate(fd, HEADER_SIZE + TRACE_CAPACITY * RECORD_SIZE)
+            trace_size = HEADER_SIZE + TRACE_CAPACITY * RECORD_SIZE
+            os.ftruncate(fd, trace_size)
+            # The native producer and observer append through shared mmap while
+            # Gazebo is running. Reserve every backing block now so a sparse
+            # file's first-touch allocation cannot stall a runtime callback.
+            os.posix_fallocate(fd, 0, trace_size)
             info = os.fstat(fd)
             if (
                 not stat.S_ISREG(info.st_mode)

@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from mecanum_nav_bringup.local_training_heartbeat_trace_observer import (
     EVENT_CALLBACK_ENTRY, EVENT_HEARTBEAT_CHECK, EVENT_STATUS_BASELINE,
     EVENT_STATUS_VALIDATION,
-    LocalTrainingHeartbeatTraceObserver, clock_context,
+    LocalTrainingHeartbeatTraceObserver, TRACE_CAPACITY, HEADER_SIZE,
+    RECORD_SIZE, clock_context, prepare_trace_pair,
     measure_clock_domain_certificate,
 )
 
@@ -81,6 +82,19 @@ def _status(*, backend=42, sequence=1, session='session-1', config='a' * 64,
         actuator_inhibited=inhibited, fault_flags=faults,
         applied_receipt_valid=receipt,
     )
+
+
+def test_prepare_trace_pair_allocates_backing_storage_before_runtime(tmp_path):
+    """Trace writes must not allocate sparse-file blocks in Gazebo callbacks."""
+    tmp_path.chmod(0o700)
+    files = prepare_trace_pair(tmp_path, collection_id='session-1')
+    expected_size = HEADER_SIZE + TRACE_CAPACITY * RECORD_SIZE
+
+    assert len(files) == 2
+    for entry in files:
+        info = Path(entry['path']).stat()
+        assert info.st_size == expected_size
+        assert info.st_blocks * 512 >= expected_size
 
 
 def test_status_callback_records_binding_validation_without_runtime_control():
