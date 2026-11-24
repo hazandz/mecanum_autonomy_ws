@@ -463,6 +463,67 @@ def test_local_safety_rejection_records_candidate_and_selected_zero_identity(loc
     assert 'POLICY_HELD' in event['reasons']
 
 
+def test_local_safety_defers_next_identity_input_until_lifecycle_callback(local_adapter):
+    """DDS callbacks may deliver the already-bound sample before its lifecycle callback."""
+    f = local_adapter
+    adapter = f.adapter
+    next_life = copy.deepcopy(f.life)
+    next_life.sequence += 1
+    next_life.episode_generation += 1
+    next_life.reset_epoch += 1
+    next_life.runtime_generation += 1
+    next_life.header.stamp = f.stamp(f.clock.ros)
+    next_input = copy.deepcopy(f.noisy)
+    next_input.sample_sequence += 1
+    next_input.episode_generation = next_life.episode_generation
+    next_input.reset_epoch = next_life.reset_epoch
+    next_input.runtime_generation = next_life.runtime_generation
+    next_input.header.stamp = f.stamp(f.clock.ros)
+
+    adapter.on_safety_input(next_input)
+
+    assert adapter.fault is None
+    assert adapter.noisy.sample_sequence == f.noisy.sample_sequence
+    assert any(name == 'SAFETY_INPUT_DEFERRED_FOR_LIFECYCLE' for name, _ in f.evidence)
+    assert 'SAFETY_INPUT_IDENTITY_PENDING' in adapter._reasons(f.clock.ros, f.clock.steady)
+    held = adapter.tick()
+    assert held.source == held.SOURCE_SAFE_STOP
+    assert not any((held.twist.linear.x, held.twist.linear.y, held.twist.angular.z))
+    assert 'SAFETY_INPUT_IDENTITY_PENDING' in f.state[-1].intervention_reasons
+
+    received_ns = f.clock.steady
+    adapter.on_lifecycle(next_life)
+
+    assert adapter.fault is None
+    assert adapter.identity(adapter.noisy) == adapter.identity(next_life)
+    assert adapter.noisy.sample_sequence == next_input.sample_sequence
+    assert adapter.noisy_received == received_ns
+    assert not any(name == 'SAFETY_INPUT_IDENTITY_PENDING' for name in adapter._reasons(f.clock.ros, f.clock.steady))
+
+
+def test_local_safety_rejects_nonforward_safety_input_identity(local_adapter):
+    f = local_adapter
+    bad = copy.deepcopy(f.noisy)
+    bad.episode_generation = f.life.episode_generation - 1
+    f.adapter.on_safety_input(bad)
+    assert f.adapter.fault == 'SAFETY_INPUT_IDENTITY'
+
+
+def test_local_safety_identity_pending_expires_without_lifecycle_match(local_adapter):
+    f = local_adapter
+    future = copy.deepcopy(f.noisy)
+    future.sample_sequence += 1
+    future.episode_generation += 1
+    future.reset_epoch += 1
+    future.runtime_generation += 1
+    f.adapter.on_safety_input(future)
+    f.clock.steady += 2 * f.adapter.safety_period_ns
+    output = f.adapter.tick()
+    assert output.source == output.SOURCE_SAFE_STOP
+    assert f.adapter.fault == 'SAFETY_INPUT_IDENTITY'
+    assert f.adapter._pending_safety_input is None
+
+
 @pytest.mark.parametrize('field,value', [('contact_active', True), ('fault_flags', 1),
     ('coverage_complete', False), ('contact_source_healthy', False),
     ('observed_collision_mask', 1), ('paused', True), ('backend_instance_id', 99)])

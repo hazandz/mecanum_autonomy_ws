@@ -429,6 +429,8 @@ class LocalTrainingSafetyAdapter:
             p['max_jerk_xy_mps3'], p['max_jerk_xy_mps3'], p['max_jerk_yaw_radps3'])
         self.lock = threading.RLock()
         self.command = self.scan = self.noisy = self.life = self.status = None
+        self._pending_safety_input = None
+        self._pending_safety_input_deadline_ns = None
         self.command_bytes = None
         self.command_received = self.scan_received = self.noisy_received = 0
         self.life_received = self.status_received = 0
@@ -453,6 +455,20 @@ class LocalTrainingSafetyAdapter:
     @staticmethod
     def identity(msg):
         return msg.episode_generation, msg.reset_epoch, msg.runtime_generation
+
+    @staticmethod
+    def _identity_is_forward(current, candidate):
+        return (current is None or
+                (all(new >= old for old, new in zip(current, candidate))
+                 and any(new > old for old, new in zip(current, candidate))))
+
+    def _accept_safety_input(self, snapshot, raw, received_ns):
+        if self.noisy is not None and snapshot.sample_sequence <= self.noisy.sample_sequence:
+            if snapshot.sample_sequence != self.noisy.sample_sequence or raw != self.noisy_bytes:
+                self.fail('SAFETY_INPUT_REPLAY_OR_CONFLICT')
+            return
+        self.noisy, self.noisy_bytes = snapshot, raw
+        self.noisy_received = received_ns
 
     @staticmethod
     def stamp(value):
@@ -483,6 +499,24 @@ class LocalTrainingSafetyAdapter:
                     self.command_bytes = self.noisy_bytes = None
             self.life = copy.deepcopy(msg)
             self.life_received = self.now()
+            pending = self._pending_safety_input
+            if pending is not None:
+                pending_msg, pending_raw, pending_received_ns = pending
+                pending_identity = self.identity(pending_msg)
+                current_identity = self.identity(self.life)
+                if pending_identity == current_identity:
+                    self._pending_safety_input = None
+                    self._pending_safety_input_deadline_ns = None
+                    self._accept_safety_input(pending_msg, pending_raw, pending_received_ns)
+                    self.emit('SAFETY_INPUT_BOUND_TO_LIFECYCLE', {
+                        'identity': list(current_identity),
+                        'sample_sequence': pending_msg.sample_sequence,
+                        'received_ns': pending_received_ns,
+                        'steady_ns': self.now()})
+                elif not self._identity_is_forward(current_identity, pending_identity):
+                    self._pending_safety_input = None
+                    self._pending_safety_input_deadline_ns = None
+                    self.fail('SAFETY_INPUT_IDENTITY')
 
     def on_command(self, msg):
         import copy
@@ -519,21 +553,56 @@ class LocalTrainingSafetyAdapter:
     def on_safety_input(self, msg):
         import copy
         from rclpy.serialization import serialize_message
+        received_ns = self.now()
+        identity = self.identity(msg)
         with self.lock:
             if (msg.schema_version != msg.SCHEMA_VERSION or msg.SCHEMA_VERSION != 2
                     or msg.session_id != self.context['session_id']
                     or msg.config_hash != self.context['config_hash']
                     or msg.ingress_instance_id != self.context['ingress_instance_id']
                     or msg.header.frame_id != 'base_link' or msg.sample_sequence == 0
-                    or self.life is None or self.identity(msg) != self.identity(self.life)):
+                    or any(value <= 0 for value in identity)):
                 self.fail('SAFETY_INPUT_IDENTITY'); return
             raw = serialize_message(msg)
-            if self.noisy is not None and msg.sample_sequence <= self.noisy.sample_sequence:
-                if msg.sample_sequence != self.noisy.sample_sequence or raw != self.noisy_bytes:
-                    self.fail('SAFETY_INPUT_REPLAY_OR_CONFLICT')
+            snapshot = copy.deepcopy(msg)
+            current_identity = self.identity(self.life) if self.life is not None else None
+            if current_identity == identity:
+                pending = self._pending_safety_input
+                if pending is not None:
+                    pending_msg = pending[0]
+                    if self.identity(pending_msg) == identity:
+                        if msg.sample_sequence <= pending_msg.sample_sequence:
+                            if msg.sample_sequence != pending_msg.sample_sequence or raw != pending[1]:
+                                self.fail('SAFETY_INPUT_REPLAY_OR_CONFLICT')
+                            return
+                        self._pending_safety_input = None
+                        self._pending_safety_input_deadline_ns = None
+                    elif self._identity_is_forward(current_identity, self.identity(pending_msg)):
+                        # A newer context is already queued; an older input cannot clear its hold.
+                        return
+                self._accept_safety_input(snapshot, raw, received_ns)
                 return
-            self.noisy, self.noisy_bytes = copy.deepcopy(msg), raw
-            self.noisy_received = self.now()
+            if self._identity_is_forward(current_identity, identity):
+                pending = self._pending_safety_input
+                if pending is not None:
+                    pending_msg, pending_raw, _pending_received_ns = pending
+                    pending_identity = self.identity(pending_msg)
+                    if pending_identity == identity:
+                        if msg.sample_sequence <= pending_msg.sample_sequence:
+                            if msg.sample_sequence != pending_msg.sample_sequence or raw != pending_raw:
+                                self.fail('SAFETY_INPUT_REPLAY_OR_CONFLICT')
+                            return
+                    elif not self._identity_is_forward(pending_identity, identity):
+                        self.fail('SAFETY_INPUT_IDENTITY'); return
+                self._pending_safety_input = (snapshot, raw, received_ns)
+                self._pending_safety_input_deadline_ns = received_ns + 2 * self.safety_period_ns
+                self.emit('SAFETY_INPUT_DEFERRED_FOR_LIFECYCLE', {
+                    'current_identity': list(current_identity) if current_identity is not None else None,
+                    'input_identity': list(identity), 'sample_sequence': msg.sample_sequence,
+                    'received_ns': received_ns,
+                    'deadline_ns': self._pending_safety_input_deadline_ns})
+                return
+            self.fail('SAFETY_INPUT_IDENTITY')
 
     def on_backend(self, msg):
         import copy
@@ -595,6 +664,13 @@ class LocalTrainingSafetyAdapter:
         from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
         p = self.context['profile']
         reasons = []
+        if self._pending_safety_input is not None:
+            if steady_ns >= self._pending_safety_input_deadline_ns:
+                self._pending_safety_input = None
+                self._pending_safety_input_deadline_ns = None
+                self.fail('SAFETY_INPUT_IDENTITY')
+            else:
+                reasons.append('SAFETY_INPUT_IDENTITY_PENDING')
         for name, msg, received, budget in (
                 ('COMMAND', self.command, self.command_received, p['policy_ttl_ms']),
                 ('SCAN', self.scan, self.scan_received, p['scan_max_age_ms']),
