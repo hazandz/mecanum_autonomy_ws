@@ -4423,7 +4423,8 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
         marker = Path(directory)/'marker.json'
         marker.write_text(json.dumps({'schema':'b23_r04d_delay_marker/v1',
             'run_id':'RUN-1','invocation_id':'INV-1','baseline_identity':[1,2,3],
-            'safe_stop_source_instance_id':77,'delay_ns':700_000_000}))
+            'safe_stop_source_instance_id':77,'delay_ns':700_000_000,
+            'safe_stop_delay_ns':20_000_000}))
         node=NS(_b23_r04d_run_id='RUN-1',_b23_r04d_invocation_id='INV-1')
         envelope=NS(source=1,source_instance_id=77,sequence=8,episode_generation=2,
             reset_epoch=2,runtime_generation=3)
@@ -4434,7 +4435,7 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
         assert dispatch(node,envelope) is None
         assert calls == [] and len(scheduled)==1
         assert events[0][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
-        assert scheduled[0][0] >= events[0][1]['received_ns'] + 700_000_000
+        assert scheduled[0][0] >= events[0][1]['received_ns'] + 20_000_000
         scheduled[0][1]()
         assert calls == [8]
         assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'

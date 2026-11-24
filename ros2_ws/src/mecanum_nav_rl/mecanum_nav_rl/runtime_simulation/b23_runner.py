@@ -1365,9 +1365,8 @@ def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
     if (type(safety_lifecycle_delay_s) not in (int, float)
             or safety_lifecycle_delay_s <= 0):
         raise ValueError('R04d Safety lifecycle delay must be positive')
-    # The held new-context SAFE_STOP receipt is released after the same delay
-    # from the final-publisher callback. Let ingress switch just after that
-    # callback, so old-context receipts cannot straddle the ingress binding.
+    # Keep the held new-context SAFE_STOP long enough to cross the ingress
+    # lifecycle callback, while remaining well inside the actuator watchdog.
     final_publisher_delay_s = 0.700
     return max(float(safety_lifecycle_delay_s) + 0.075,
         final_publisher_delay_s + 0.025)
@@ -1393,6 +1392,8 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
                 or not isinstance(marker.get('baseline_identity'), list)
                 or len(marker['baseline_identity']) != 3
                 or type(marker.get('delay_ns')) is not int or marker['delay_ns'] <= 0
+                or type(marker.get('safe_stop_delay_ns')) is not int
+                or marker['safe_stop_delay_ns'] <= 0
                 or type(marker.get('safe_stop_source_instance_id')) is not int):
             raise RuntimeError('R04d final SAFE_STOP marker ownership/schema mismatch')
         identity = [int(envelope.episode_generation), int(envelope.reset_epoch),
@@ -1406,12 +1407,12 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
             return None
         pending.add(key)
         received_ns = time.monotonic_ns()
-        release_after_ns = received_ns + marker['delay_ns']
+        release_after_ns = received_ns + marker['safe_stop_delay_ns']
         emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD', {
             'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
             'source_sequence':int(envelope.sequence),'source_instance_id':int(envelope.source_instance_id),
             'identity':identity,'received_ns':received_ns,'release_after_ns':release_after_ns,
-            'delay_ns':marker['delay_ns']})
+            'delay_ns':marker['safe_stop_delay_ns']})
         def deliver():
             original(node, envelope)
             emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED', {
@@ -8614,8 +8615,9 @@ async def training_child(path):
                         int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)],
                     'armed_ns':marker_armed_ns,
                     'delay_ns':700_000_000,
+                    'safe_stop_delay_ns':20_000_000,
                     'safe_stop_source_instance_id':int(io.safe_stop_source_id),
-                    'reason':'hold final lifecycle delivery and a mismatched new-context SAFE_STOP receipt until the R04d stale-Safety observation window closes'})
+                    'reason':'delay final lifecycle delivery through stale-Safety observation; briefly hold bound zero SAFE_STOP until ingress lifecycle catches up'})
                 marker_write_completed_ns = io.now()
                 io.emit('R04D_MARKER_WRITE_COMPLETED', {
                     'steady_ns': marker_write_completed_ns,
