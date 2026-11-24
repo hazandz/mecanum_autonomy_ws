@@ -6682,6 +6682,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     def arm(ack, *, publish_admission=True):
         history.append(('arm', ack.observed_steady_ns, publish_admission)); armed.append(ack)
     value.ingress.arm_pending = arm
+    admission_delivery_phase = [0]
     def publish(envelope):
         history.append(('publish', envelope)); adapter.command = envelope
     value.policy_publisher = NS(publish=publish)
@@ -6694,9 +6695,13 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.last_published_sample_sequence = 3
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             native_watermark[0] = 3
-            adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
-                admission_token=[7]*16, sample_sequence=3)
-            history.append(('post_ack_admission_sample_ready', clock.ns))
+            if admission_delivery_phase[0] == 0:
+                admission_delivery_phase[0] = 1
+                history.append(('post_ack_admission_published', clock.ns))
+            else:
+                adapter.noisy = NS(admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
+                    admission_token=[7]*16, sample_sequence=3)
+                history.append(('post_ack_admission_sample_ready', clock.ns))
         else:
             value.ingress.last_published_sample_sequence = 2
             value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
@@ -6873,10 +6878,14 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert refresh is not None
         stream_off = max(stream_off_indices)
         assert refresh < stream_off < bind < issued < hold_off_after_issue < stream_on_after_issue
+    admission_published = next(i for i, row in enumerate(history)
+        if row[0] == 'post_ack_admission_published')
     sample_ready = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_sample_ready')
-    assert sample_ready < issued < hold_off_after_issue < stream_on_after_issue, (
-        f'the single POLICY issuance must follow the exact post-ACK admission: {history!r}')
+    assert admission_published < issued < hold_off_after_issue < stream_on_after_issue, (
+        f'POLICY issuance must follow producer publication of the exact post-ACK admission: {history!r}')
+    assert issued < sample_ready, (
+        f'normal flow must pipeline the candidate after admission publication while Safety consumes its exact input: {history!r}')
     assert ('freeze_admission',) in history
     assert value.safety.local_training.noisy.sample_sequence == 3
     assert stream_on_after_issue < immediate_policy_tick, (

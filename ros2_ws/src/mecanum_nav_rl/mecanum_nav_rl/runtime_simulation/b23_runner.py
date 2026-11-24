@@ -6715,6 +6715,7 @@ class TrainingWorkerIO:
                 'admission_ready_steady_ns': self.now()})
             self.ingress.pause_admission_publication()
         held_sample_sequence = None
+        policy_candidate_published = False
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
             await self.release_r02e_prebind_input_before_admission(
@@ -6733,13 +6734,25 @@ class TrainingWorkerIO:
             self.emit('POST_ACK_ADMISSION_FROZEN', {
                 'sample_sequence': target_sample_sequence,
                 'steady_ns': self.now()})
+            # In an ordinary step the producer has now received the fresh
+            # post-ACK sample, built its token-bound admission, and published
+            # that input. Pipeline the independent POLICY candidate while the
+            # Safety executor consumes the input. The Safety stream and policy
+            # hold remain closed until the exact admission is observed below,
+            # so this cannot authorize or publish motion early.
+            if (not getattr(self, 'fault_hooks', ()) and held_prebind is None
+                    and close_after_held_receipt is None
+                    and not require_admission_before_receipt
+                    and not hold_after_adapter_issuance):
+                await publish_policy_candidate(refresh_stamp=True)
+                policy_candidate_published = True
         await self.until(lambda: self.safety.local_training.noisy if self.safety.local_training.noisy is not None
             and self.safety.local_training.noisy.sample_sequence == target_sample_sequence
             and self.safety.local_training.noisy.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
             and bytes(self.safety.local_training.noisy.admission_token) == bytes(ack.response.pending_admission_token)
             and self.ingress.last_published_sample_sequence == target_sample_sequence
             else None, deadline_ns=deadline, phase='post-ACK admission delivered to Safety')
-        if not align_admission_after_scan_boundary:
+        if not align_admission_after_scan_boundary and not policy_candidate_published:
             # The exact post-ACK admission is now in Safety. Issue at this
             # observed ROS time instead of waiting for another scan phase while
             # the native 100 ms receipt watchdog is running with the stream
