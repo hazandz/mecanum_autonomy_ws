@@ -317,6 +317,8 @@ class LocalTrainingIngress:
         if (type(ack.observed_steady_ns) is not int
                 or not 0 <= ack.observed_steady_ns <= self.now()):
             self._fail('ACK receive timestamp invalid')
+        # The native APPLIED stamp is an application fact; the client /clock
+        # callback can trail the Physics iteration that produced this ACK.
         if (req.operation != operation or req.schema_version != req.SCHEMA_VERSION
                 or res.schema_version != res.RESPONSE_SCHEMA_VERSION
                 or res.result != res.RESULT_APPLIED or res.reason_code != res.REASON_NONE
@@ -328,7 +330,6 @@ class LocalTrainingIngress:
                 or res.backend_instance_id != self.identity.backend_instance_id
                 or res.applied_binding_revision != res.binding_revision
                 or res.binding_revision != req.expected_binding_revision + 1
-                or stamp_ns(res.applied_sim_stamp) > self.ros_now()
                 or res.applied_physics_iteration == 0 or self.lifecycle is None):
             self._fail('ACK identity/schema/application fact mismatch')
         if lifecycle_identity(req) != lifecycle_identity(self.lifecycle) and operation != req.OP_BIND_PENDING_STEP:

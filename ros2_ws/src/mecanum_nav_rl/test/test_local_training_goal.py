@@ -317,6 +317,9 @@ def test_production_coordinator_bridges_300ms_b1_cutoffs_with_actual_samples():
         scans=scans,
         noisy_samples=noisy_samples,
         physics_pairs=physics_pairs,
+        physics_pairs_at=lambda stamp: tuple(
+            pair for pair in physics_pairs if pair.stamp_ns == stamp
+        ),
         receipts=receipts,
         safety_states=safety_states,
         final_publisher_id=11,

@@ -297,6 +297,7 @@ def test_goal_settle_window_collects_only_exact_applied_intermediate_cutoffs():
             backend_bytes=serialize_message(status)))
     adapter.ingress = SimpleNamespace(
         scans=scans, noisy_samples=noisy_samples, physics_pairs=pairs,
+        physics_pairs_at=lambda stamp: tuple(pair for pair in pairs if pair.stamp_ns == stamp),
         receipts=receipt_rows, safety_states=safety_rows,
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
@@ -431,6 +432,7 @@ def test_goal_settle_window_skips_missing_cutoff_when_valid_cadence_is_within_li
         noisy_samples={stamp: SimpleNamespace(received_steady_ns=stamp)
                        for stamp in (1_100_000_000, 1_200_000_000, 1_300_000_000)},
         physics_pairs=pairs,
+        physics_pairs_at=lambda stamp: tuple(pair for pair in pairs if pair.stamp_ns == stamp),
         receipts=receipt_rows, safety_states=safety_rows,
         final_publisher_id=7,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64),
@@ -744,7 +746,9 @@ def test_goal_settle_sequence_uses_current_zero_across_dense_scan_cutoffs():
             SimpleNamespace(reset_epoch=3, runtime_generation=4)))
         rows.append(current)
     adapter.ingress = SimpleNamespace(scans=scans, noisy_samples=noisy,
-        physics_pairs=pairs, receipts=[receipt], safety_states=safety,
+        physics_pairs=pairs,
+        physics_pairs_at=lambda stamp: tuple(pair for pair in pairs if pair.stamp_ns == stamp),
+        receipts=[receipt], safety_states=safety,
         final_publisher_id=11, identity=SimpleNamespace(session_id='bound-session',
             config_hash='a'*64, backend_instance_id=13),
         lifecycle_received_ns=2_000_000_000,
@@ -862,6 +866,7 @@ def test_goal_settle_sequence_checks_freshness_at_each_actual_collection_clock()
         fault=None, binding=None, lifecycle=lifecycle,
         lifecycle_received_ns=2_000_000_000,
         scans=scans, noisy_samples=noisy, physics_pairs=pairs,
+        physics_pairs_at=lambda stamp: tuple(pair for pair in pairs if pair.stamp_ns == stamp),
         safety_states=safety,
         identity=SimpleNamespace(session_id='session', config_hash='a' * 64,
             backend_instance_id=13),

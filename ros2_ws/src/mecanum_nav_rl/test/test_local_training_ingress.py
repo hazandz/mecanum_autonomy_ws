@@ -440,6 +440,25 @@ def test_context_change_revokes_pending_and_flushes_sensor_pair_buffers(source):
     assert not f.ingress.admission_publication_enabled
 
 
+def test_native_applied_pending_ack_can_lead_lagging_client_ros_clock(source):
+    f = source
+    f.ingress.on_ground_truth(f.gt())
+    f.ingress.confirm_observation0(f.ack(Control.Request.OP_CONFIRM_OBSERVATION0))
+
+    ack = f.ack(Control.Request.OP_BIND_PENDING_STEP, 2)
+    response = ack.response
+    response.applied_physics_iteration = 2
+    response.applied_sim_stamp = stamp(f.clock.ros + 10_000_000)
+    ack = BackendControlAck(ack.request_bytes, serialize_message(response), ack.observed_steady_ns)
+
+    # Native APPLIED identifies its actual Physics application.  The separate
+    # ROS /clock callback may still be one publication behind that iteration.
+    assert f.ingress.arm_pending(ack) is None
+    assert f.ingress.pending_ack.response.applied_physics_iteration == 2
+    assert stamp(f.clock.ros + 10_000_000) == f.ingress.pending_ack.response.applied_sim_stamp
+    assert f.ingress.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+
+
 def b1_runtime_chain(f, before_reset_commit=None, stop_after_observation0=False, commit_runner=None):
     """Dữ liệu biên I/O xác định; gọi ingress, assembler và transaction B1 thật."""
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import LocalTrainingB1Adapter
