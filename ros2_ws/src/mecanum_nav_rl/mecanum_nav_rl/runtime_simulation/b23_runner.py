@@ -4003,7 +4003,11 @@ class TrainingWorkerIO:
             if state.fault_flags not in expected_flags:
                 raise RuntimeError('native fault flags=' + str(state.fault_flags))
 
-    async def until(self, predicate, *, deadline_ns, phase, expected_native_fault_flags=None):
+    async def until(self, predicate, *, deadline_ns, phase, expected_native_fault_flags=None,
+            poll_interval_s=0.002):
+        if (type(poll_interval_s) not in (int, float) or poll_interval_s <= 0
+                or not math.isfinite(poll_interval_s)):
+            raise ValueError('worker polling interval must be finite and positive')
         deadline_ns = min(deadline_ns, self.deadline_ns)
         while self.now() < deadline_ns:
             self.check(expected_native_fault_flags=expected_native_fault_flags)
@@ -4013,7 +4017,7 @@ class TrainingWorkerIO:
                     raise TimeoutError(phase + ': observation completed late')
                 return value
             before = self.now()
-            duration = min(0.002, max(0., (deadline_ns - before) / 1e9))
+            duration = min(poll_interval_s, max(0., (deadline_ns - before) / 1e9))
             if duration > 0:
                 await self.pause(duration)
                 if self.now() <= before:
@@ -6118,7 +6122,8 @@ class TrainingWorkerIO:
 
         applied_zero = await self.until(exact_aligned_zero_application,
             deadline_ns=deadline_ns,
-            phase='exact post-cutoff SAFE_STOP application in POLICY bind window')
+            phase='exact post-cutoff SAFE_STOP application in POLICY bind window',
+            poll_interval_s=0.0005)
         if applied_zero.get('freshness_expired'):
             self.emit('POLICY_STEP_BIND_WINDOW_ZERO_RECEIPT_FRESHNESS_EXPIRED', {
                 'source_sequence': aligned_receipt.source_sequence,

@@ -1179,7 +1179,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         (3_650_000_000,200,aligned),
     ]
 
-    async def until(predicate, *, deadline_ns, phase):
+    async def until(predicate, *, deadline_ns, phase, poll_interval_s=0.002):
         waits.append((deadline_ns,phase))
         if phase == 'post-cutoff native SAFE_STOP ingress with POLICY bind window':
             for stamp,steady,view in samples:
@@ -1197,6 +1197,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
                     return value
             raise AssertionError('eligible native-ingress receipt was not selected')
         assert phase == 'exact post-cutoff SAFE_STOP application in POLICY bind window'
+        assert poll_interval_s == 0.0005
         clock['steady_ns']=200
         return predicate()
 
@@ -1303,9 +1304,11 @@ def test_policy_bind_realigns_after_exact_zero_application_is_observed_late(
         with native_path.open('ab') as stream:
             stream.write((json.dumps(row)+'\n').encode())
 
-    async def until(predicate,*,deadline_ns,phase):
+    async def until(predicate,*,deadline_ns,phase,poll_interval_s=0.002):
         waits.append((deadline_ns,phase))
         assert deadline_ns==deadline
+        if phase=='exact post-cutoff SAFE_STOP application in POLICY bind window':
+            assert poll_interval_s==0.0005
         if phase=='post-cutoff native SAFE_STOP ingress with POLICY bind window':
             if len(waits)==1:
                 clock.update(ros_ns=3_540_000_000,steady_ns=200)
@@ -1417,9 +1420,11 @@ def test_policy_bind_realigns_when_selected_native_zero_expires_freshness(
         with native_path.open('ab') as stream:
             stream.write((json.dumps(row)+'\n').encode())
 
-    async def until(predicate,*,deadline_ns,phase):
+    async def until(predicate,*,deadline_ns,phase,poll_interval_s=0.002):
         waits.append((deadline_ns,phase))
         assert deadline_ns==deadline
+        if phase=='exact post-cutoff SAFE_STOP application in POLICY bind window':
+            assert poll_interval_s==0.0005
         if phase=='post-cutoff native SAFE_STOP ingress with POLICY bind window':
             sequence=2 if len(waits)==1 else 3
             view=first if sequence==2 else second
@@ -5678,6 +5683,27 @@ def test_until_waits_in_common_budget_and_does_not_accept_late_data():
         return 'ready'
     with pytest.raises(TimeoutError, match='completed late'):
         asyncio.run(value.until(late, deadline_ns=1_005_000_000, phase='test'))
+
+
+def test_until_supports_bounded_submillisecond_poll_for_native_application_window():
+    value, clock = worker()
+    deadline = clock.ns + 5_000_000
+    seen = []
+    def observation():
+        seen.append(clock.ns)
+        return 'applied' if clock.ns >= 1_001_000_000 else None
+    assert asyncio.run(value.until(observation, deadline_ns=deadline,
+        phase='exact native application', poll_interval_s=0.0005)) == 'applied'
+    assert seen == [1_000_000_000, 1_000_500_000, 1_001_000_000]
+    assert clock.ns <= deadline
+
+
+@pytest.mark.parametrize('interval', [0, -0.001, float('nan'), float('inf'), True])
+def test_until_rejects_invalid_poll_interval(interval):
+    value, clock = worker()
+    with pytest.raises(ValueError, match='polling interval'):
+        asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000,
+            phase='invalid interval', poll_interval_s=interval))
 
 
 def test_until_none_and_frozen_pause_fail_bounded():
