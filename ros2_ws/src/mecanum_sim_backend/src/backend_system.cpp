@@ -1210,7 +1210,7 @@ public:
     if (state_pub_ || backend_state_sink_)
     {
       const auto backend_publish_started_ns = steady_clock_now_();
-      PublishBackendState(info, sim_ns);
+      const auto backend_status_lock_wait_ns = PublishBackendState(info, sim_ns);
       const auto backend_publish_elapsed_ns =
           steady_clock_now_() - backend_publish_started_ns;
       const auto post_update_elapsed_ns = steady_clock_now_() - post_update_started_ns;
@@ -1221,6 +1221,7 @@ public:
           gzmsg << "B23_POST_UPDATE_SLOW iteration=" << info.iterations
               << " sim_ns=" << sim_ns
               << " ground_truth_publish_ns=" << ground_truth_publish_elapsed_ns
+              << " backend_status_lock_wait_ns=" << backend_status_lock_wait_ns
               << " backend_status_publish_ns=" << backend_publish_elapsed_ns
               << " total_ns=" << post_update_elapsed_ns << std::endl;
           std::fflush(stdout);
@@ -3441,6 +3442,12 @@ private:
   }
 
   // callback_mutex_ phải được giữ khi ghi terminal cache/mutation state.
+  struct StatusPublishTiming
+  {
+    std::int64_t mutex_wait_ns{};
+    std::int64_t publish_ns{};
+  };
+
   void FailPauseLocked(std::uint16_t reason, const std::string &detail)
   {
     const bool first_failure = !reset_pause_failed_;
@@ -3492,17 +3499,31 @@ private:
           << " steady_ns=" << steady_clock_now_() << std::endl;
       std::fflush(stderr);
     }
-    PublishPauseFaultStatusLocked();
+    const auto status_timing = PublishPauseFaultStatusLocked();
+    constexpr std::int64_t kSlowPauseFaultStatusNs = 20'000'000;
+    if (status_timing.mutex_wait_ns >= kSlowPauseFaultStatusNs ||
+        status_timing.publish_ns >= kSlowPauseFaultStatusNs)
+    {
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_PAUSE_FAULT_STATUS_SLOW"
+              << " mutex_wait_ns=" << status_timing.mutex_wait_ns
+              << " publish_ns=" << status_timing.publish_ns
+              << " detail=" << detail << std::endl;
+      });
+    }
   }
 
   // A wall-clock pause watchdog can expire while Gazebo is paused, when no
   // PostUpdate will publish the newly latched fault. Publish the last measured
   // status as a fault/inhibit update without inventing a physics iteration,
   // timestamp, receipt application, or sensor measurement.
-  void PublishPauseFaultStatusLocked()
+  StatusPublishTiming PublishPauseFaultStatusLocked()
   {
+    StatusPublishTiming timing;
+    const auto lock_wait_started_ns = steady_clock_now_();
     std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
-    if (!last_backend_state_) return;
+    timing.mutex_wait_ns = steady_clock_now_() - lock_wait_started_ns;
+    if (!last_backend_state_) return timing;
 
     auto msg = *last_backend_state_;
     msg.status_sequence = ++status_sequence_;
@@ -3518,15 +3539,18 @@ private:
 
     if (backend_state_sink_)
     {
+      const auto publish_started_ns = steady_clock_now_();
       backend_state_sink_(msg);
+      timing.publish_ns = steady_clock_now_() - publish_started_ns;
       last_backend_state_ = msg;
       last_backend_state_publish_steady_ns_ = steady_clock_now_();
       last_backend_state_publish_paused_ = msg.paused;
-      return;
+      return timing;
     }
-    if (!state_pub_) return;
+    if (!state_pub_) return timing;
     if (heartbeat_trace_writer_)
       RecordHeartbeatTrace(1, msg.status_sequence);
+    const auto publish_started_ns = steady_clock_now_();
     try
     {
       state_pub_->publish(msg);
@@ -3537,11 +3561,13 @@ private:
         RecordHeartbeatTrace(3, msg.status_sequence);
       throw;
     }
+    timing.publish_ns = steady_clock_now_() - publish_started_ns;
     if (heartbeat_trace_writer_)
       RecordHeartbeatTrace(2, msg.status_sequence);
     last_backend_state_ = msg;
     last_backend_state_publish_steady_ns_ = steady_clock_now_();
     last_backend_state_publish_paused_ = msg.paused;
+    return timing;
   }
 
   bool ProcessPauseAcksLocked(std::int64_t now_ns)
@@ -4224,9 +4250,11 @@ private:
     gt_publisher_->Publish(msg);
   }
 
-  void PublishBackendState(const gz::sim::UpdateInfo &info, std::int64_t stamp_ns)
+  std::int64_t PublishBackendState(const gz::sim::UpdateInfo &info, std::int64_t stamp_ns)
   {
+    const auto lock_wait_started_ns = steady_clock_now_();
     std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
+    const auto status_lock_wait_ns = steady_clock_now_() - lock_wait_started_ns;
     const auto publish_steady_ns = steady_clock_now_();
     // Gazebo continues to call PostUpdate while paused. In that state sim
     // time and physics iteration are unchanged, so publishing every callback
@@ -4239,7 +4267,7 @@ private:
         publish_steady_ns - last_backend_state_publish_steady_ns_ <
             kPausedStatusPeriodNs)
     {
-      return;
+      return status_lock_wait_ns;
     }
     BackendState msg;
     msg.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
@@ -4307,6 +4335,7 @@ private:
     last_backend_state_ = msg;
     last_backend_state_publish_steady_ns_ = publish_steady_ns;
     last_backend_state_publish_paused_ = info.paused;
+    return status_lock_wait_ns;
   }
 
   void RecordQueueFault(std::uint32_t cause_id, const char *cause,
