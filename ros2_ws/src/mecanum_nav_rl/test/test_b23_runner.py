@@ -4472,12 +4472,21 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation(monkeyp
         ack_path=marker.with_name('r04d-ingress-binding-ack.json')
         ack_path.write_text(json.dumps({'schema':'b23_r04d_ingress_binding_ack/v1',
             'run_id':'RUN-1','invocation_id':'INV-1','sequence':5,
-            'identity':[2,2,3],'completed_ns':events[0][1]['received_ns']+1}))
+            'identity':[2,2,3],
+            'final_publisher_delivery_ns':events[0][1]['received_ns'],
+            'completed_ns':events[0][1]['received_ns']+1}))
         now[0]=scheduled[1][0]
         scheduled[1][1]()
         assert calls == [8]
         assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
         assert events[1][1]['ingress_sequence']==5
+        later_envelope=NS(source=1,source_instance_id=77,sequence=9,
+            episode_generation=2,reset_epoch=2,runtime_generation=3)
+        assert dispatch(node,later_envelope) is None
+        now[0]=scheduled[2][0]
+        scheduled[2][1]()
+        assert calls == [8,9]
+        assert events[3][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
 
 
 def test_r04d_accepts_released_zero_safe_stop_with_other_safe_stops_still_held():

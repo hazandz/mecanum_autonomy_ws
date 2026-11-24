@@ -1436,8 +1436,9 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
                 and ack.get('invocation_id') == marker['invocation_id']
                 and ack.get('identity') == identity
                 and type(ack.get('sequence')) is int
+                and type(ack.get('final_publisher_delivery_ns')) is int
                 and type(ack.get('completed_ns')) is int
-                and ack['completed_ns'] >= received_ns)
+                and ack['completed_ns'] >= ack['final_publisher_delivery_ns'])
             if not ack_matches:
                 if now_ns >= ack_deadline_ns:
                     pending.discard(key)
