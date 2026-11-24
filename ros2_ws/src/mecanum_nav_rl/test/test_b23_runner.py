@@ -4261,30 +4261,46 @@ def test_r04c_delays_scan_only_after_control_policy_commit_path():
 
 
 def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
     from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
 
-    now = [1_000_000_000]
-    delivered, events = [], []
-    io = object.__new__(TrainingWorkerIO)
-    io._r04d_fault_state = {'case':'R04d','delay_s':.650,'ingress_scheduled':False}
-    io._r04d_pending_ingress_lifecycle = (1_625_000_000,
-        lambda message: delivered.append(message), object(), 900_000_000)
-    io.now = lambda: now[0]
-    io.emit = lambda name, facts: events.append((name, facts))
+    with TemporaryDirectory() as directory:
+        run_root=Path(directory)
+        now = [1_000_000_000]
+        delivered, events = [], []
+        message=type('Lifecycle', (), {'sequence':5,'episode_generation':2,
+            'reset_epoch':2,'runtime_generation':3})()
+        io = object.__new__(TrainingWorkerIO)
+        io.descriptor={'run_root':str(run_root),'run_id':'RUN-1','invocation_id':'INV-1'}
+        io._r04d_fault_state = {'case':'R04d','delay_s':.650,'ingress_scheduled':False}
+        io._r04d_pending_ingress_lifecycle = (3_000_000_000,
+            lambda value: delivered.append(value), message, 900_000_000, 1_000_000_000)
+        io.now = lambda: now[0]
+        io.emit = lambda name, facts: events.append((name, facts))
 
-    io._deliver_r04d_ingress_lifecycle_if_due()
-    assert delivered == []
-    now[0] = 1_624_999_999
-    io._deliver_r04d_ingress_lifecycle_if_due()
-    assert delivered == []
-    now[0] = 1_625_000_001
-    io._deliver_r04d_ingress_lifecycle_if_due()
+        io._deliver_r04d_ingress_lifecycle_if_due()
+        assert delivered == []
+        assert not (run_root/'r04d-ingress-binding-ack.json').exists()
+        (run_root/'final-events.jsonl').write_text(json.dumps({
+            'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+                'sequence':5,'identity':[2,2,3],'delivery_ns':1_625_000_000}})+'\n')
+        now[0] = 1_625_000_001
+        io._deliver_r04d_ingress_lifecycle_if_due()
 
-    assert len(delivered) == 1
-    assert events == [('B23_R04_INGRESS_DELIVERY_COMPLETED', {
-        'case':'R04d','source_stamp_ns':900_000_000,
-        'due_ns':1_625_000_000,'delivery_ns':1_625_000_001})]
-    assert io._r04d_pending_ingress_lifecycle is None
+        assert delivered == [message]
+        assert events[0][0] == 'B23_R04_INGRESS_DELIVERY_COMPLETED'
+        assert events[0][1] == {
+            'case':'R04d','source_stamp_ns':900_000_000,'sequence':5,
+            'identity':[2,2,3],'final_publisher_delivery_ns':1_625_000_000,
+            'received_ns':1_000_000_000,'deadline_ns':3_000_000_000,
+            'delivery_ns':1_625_000_001,
+            'binding_ack_sha256':events[0][1]['binding_ack_sha256']}
+        assert len(events[0][1]['binding_ack_sha256']) == 64
+        ack=json.loads((run_root/'r04d-ingress-binding-ack.json').read_text())
+        assert ack['identity']==[2,2,3] and ack['sequence']==5
+        assert io._r04d_pending_ingress_lifecycle is None
 
 
 def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
@@ -4294,12 +4310,12 @@ def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
     safety_lifecycle_delay_s = 0.650
     final_lifecycle_delay_s = 0.700
     ingress_delay_s = r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s)
-    # Safety delivery remains at 650 ms; final publisher switches at 700 ms;
-    # ingress switches after it, so a receipt cannot cross an identity gap.
+    # Ingress waits for the exact final-publisher delivery; the 650 ms delay
+    # remains the minimum duration measured by this fault.
     safety_delivery_delay_s = 0.650
-    assert safety_delivery_delay_s < final_lifecycle_delay_s < ingress_delay_s
-    assert ingress_delay_s == 0.725
-    assert r04d_final_publisher_precedes_ingress(700_000_000, 725_000_000)
+    assert safety_delivery_delay_s < final_lifecycle_delay_s
+    assert ingress_delay_s == 0.650
+    assert r04d_final_publisher_precedes_ingress(700_000_000, 700_000_001)
     assert r04d_final_publisher_precedes_ingress(725_000_000, 725_000_000)
     assert not r04d_final_publisher_precedes_ingress(730_000_000, 725_000_000)
     assert not r04d_final_publisher_precedes_ingress(None, 725_000_000)
@@ -4315,29 +4331,40 @@ def test_r04d_ingress_binding_delay_rejects_invalid_final_delay():
 
 
 def test_r04d_ingress_holds_repeated_new_identity_until_first_delivery():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
     from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
     from rclpy.serialization import serialize_message
     from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
 
-    target=SafetyLifecycleState(); target.sequence=5
-    repeated=SafetyLifecycleState(); repeated.sequence=6
-    delivered,events=[],[]
-    io=object.__new__(TrainingWorkerIO)
-    io._r04d_fault_state={'case':'R04d','delay_s':.650,'ingress_scheduled':True,
-        'ingress_repeats_held':0}
-    io._r04d_pending_ingress_lifecycle=(10_000,(lambda value:delivered.append(value)),
-        target,900)
-    io.now=lambda:20_000
-    io.emit=lambda name,facts:events.append((name,facts))
-    receive=io.observed_callback(SafetyLifecycleState,'/mecanum/safety_lifecycle_state',
-        lambda value:delivered.append(value))
-    assert receive(serialize_message(repeated),{}) is None
-    assert delivered==[] and io._r04d_fault_state['ingress_repeats_held']==1
-    assert events[-1][0]=='B23_R04_INGRESS_LIFECYCLE_REPEAT_HELD'
+    with TemporaryDirectory() as directory:
+        target=SafetyLifecycleState(); target.sequence=5
+        target.episode_generation=2; target.reset_epoch=2; target.runtime_generation=3
+        repeated=SafetyLifecycleState(); repeated.sequence=6
+        repeated.episode_generation=2; repeated.reset_epoch=2; repeated.runtime_generation=3
+        delivered,events=[],[]
+        run_root=Path(directory)
+        io=object.__new__(TrainingWorkerIO)
+        io.descriptor={'run_root':str(run_root),'run_id':'RUN-1','invocation_id':'INV-1'}
+        io._r04d_fault_state={'case':'R04d','delay_s':.650,'ingress_scheduled':True,
+            'ingress_repeats_held':0}
+        io._r04d_pending_ingress_lifecycle=(10_000,(lambda value:delivered.append(value)),
+            target,900,1)
+        io.now=lambda:20_000
+        io.emit=lambda name,facts:events.append((name,facts))
+        receive=io.observed_callback(SafetyLifecycleState,'/mecanum/safety_lifecycle_state',
+            lambda value:delivered.append(value))
+        assert receive(serialize_message(repeated),{}) is None
+        assert delivered==[] and io._r04d_fault_state['ingress_repeats_held']==1
+        assert events[-1][0]=='B23_R04_INGRESS_LIFECYCLE_REPEAT_HELD'
 
-    io._deliver_r04d_ingress_lifecycle_if_due()
-    assert delivered==[target]
-    assert io._r04d_pending_ingress_lifecycle is None
+        (run_root/'final-events.jsonl').write_text(json.dumps({
+            'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+                'sequence':5,'identity':[2,2,3],'delivery_ns':15_000}})+'\n')
+        io._deliver_r04d_ingress_lifecycle_if_due()
+        assert delivered==[target]
+        assert io._r04d_pending_ingress_lifecycle is None
 
 
 def test_r04d_safety_lifecycle_repeats_stay_held_until_original_delivers():
@@ -4412,19 +4439,22 @@ def test_r04d_final_lifecycle_delivery_is_pinned_to_sequence_and_identity():
         [wrong_sequence, wrong_identity], sequence=6, identity=[2,2,2]) is None
 
 
-def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
+def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation(monkeypatch):
     import json
     from pathlib import Path
     from tempfile import TemporaryDirectory
     from types import SimpleNamespace as NS
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_safe_stop_dispatch
+    from mecanum_nav_rl.runtime_simulation import b23_runner
 
     with TemporaryDirectory() as directory:
+        now=[1_000_000_000]
+        monkeypatch.setattr(b23_runner.time, 'monotonic_ns', lambda:now[0])
         marker = Path(directory)/'marker.json'
         marker.write_text(json.dumps({'schema':'b23_r04d_delay_marker/v1',
             'run_id':'RUN-1','invocation_id':'INV-1','baseline_identity':[1,2,3],
             'safe_stop_source_instance_id':77,'delay_ns':700_000_000,
-            'safe_stop_delay_ns':20_000_000}))
+            'safe_stop_delay_ns':20_000_000,'safe_stop_ack_timeout_ns':80_000_000}))
         node=NS(_b23_r04d_run_id='RUN-1',_b23_r04d_invocation_id='INV-1')
         envelope=NS(source=1,source_instance_id=77,sequence=8,episode_generation=2,
             reset_epoch=2,runtime_generation=3)
@@ -4436,9 +4466,18 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
         assert calls == [] and len(scheduled)==1
         assert events[0][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
         assert scheduled[0][0] >= events[0][1]['received_ns'] + 20_000_000
+        now[0]=scheduled[0][0]
         scheduled[0][1]()
+        assert calls == [] and len(scheduled)==2
+        ack_path=marker.with_name('r04d-ingress-binding-ack.json')
+        ack_path.write_text(json.dumps({'schema':'b23_r04d_ingress_binding_ack/v1',
+            'run_id':'RUN-1','invocation_id':'INV-1','sequence':5,
+            'identity':[2,2,3],'completed_ns':events[0][1]['received_ns']+1}))
+        now[0]=scheduled[1][0]
+        scheduled[1][1]()
         assert calls == [8]
         assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
+        assert events[1][1]['ingress_sequence']==5
 
 
 def test_r04d_accepts_released_zero_safe_stop_with_other_safe_stops_still_held():

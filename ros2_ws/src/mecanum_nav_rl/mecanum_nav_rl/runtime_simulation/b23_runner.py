@@ -1361,15 +1361,11 @@ def r04d_unexpected_new_context_publications(rows, *, marker_armed_ns,
 
 
 def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
-    """Keep ingress bound until after both lifecycle consumers can switch."""
+    """Return the measured fault's minimum expected ingress delay."""
     if (type(safety_lifecycle_delay_s) not in (int, float)
             or safety_lifecycle_delay_s <= 0):
         raise ValueError('R04d Safety lifecycle delay must be positive')
-    # Keep the held new-context SAFE_STOP long enough to cross the ingress
-    # lifecycle callback, while remaining well inside the actuator watchdog.
-    final_publisher_delay_s = 0.700
-    return max(float(safety_lifecycle_delay_s) + 0.075,
-        final_publisher_delay_s + 0.025)
+    return float(safety_lifecycle_delay_s)
 
 
 def r04d_final_publisher_precedes_ingress(final_delivery_ns, ingress_delivery_ns):
@@ -1379,7 +1375,7 @@ def r04d_final_publisher_precedes_ingress(final_delivery_ns, ingress_delivery_ns
 
 
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
-    """Keep a new-context zero receipt out of the native gate until R04d observes stale Safety."""
+    """Release a held zero only after this invocation's ingress binds its identity."""
     marker_path = Path(marker_path)
     pending = set()
     def dispatch(node, envelope):
@@ -1394,6 +1390,9 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
                 or type(marker.get('delay_ns')) is not int or marker['delay_ns'] <= 0
                 or type(marker.get('safe_stop_delay_ns')) is not int
                 or marker['safe_stop_delay_ns'] <= 0
+                or type(marker.get('safe_stop_ack_timeout_ns')) is not int
+                or marker['safe_stop_ack_timeout_ns'] <= marker['safe_stop_delay_ns']
+                or marker['safe_stop_ack_timeout_ns'] >= 100_000_000
                 or type(marker.get('safe_stop_source_instance_id')) is not int):
             raise RuntimeError('R04d final SAFE_STOP marker ownership/schema mismatch')
         identity = [int(envelope.episode_generation), int(envelope.reset_epoch),
@@ -1408,16 +1407,54 @@ def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe
         pending.add(key)
         received_ns = time.monotonic_ns()
         release_after_ns = received_ns + marker['safe_stop_delay_ns']
+        ack_deadline_ns = received_ns + marker['safe_stop_ack_timeout_ns']
+        ack_path = marker_path.with_name('r04d-ingress-binding-ack.json')
         emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD', {
             'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
             'source_sequence':int(envelope.sequence),'source_instance_id':int(envelope.source_instance_id),
             'identity':identity,'received_ns':received_ns,'release_after_ns':release_after_ns,
-            'delay_ns':marker['safe_stop_delay_ns']})
+            'ack_deadline_ns':ack_deadline_ns,'delay_ns':marker['safe_stop_delay_ns']})
         def deliver():
+            now_ns = time.monotonic_ns()
+            if now_ns < release_after_ns:
+                schedule(node, release_after_ns, deliver)
+                return
+            try:
+                ack = json.loads(ack_path.read_bytes())
+            except FileNotFoundError:
+                ack = None
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                pending.discard(key)
+                emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_ACK_INVALID', {
+                    'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
+                    'source_sequence':int(envelope.sequence),'identity':identity,
+                    'error':repr(error),'detected_ns':now_ns})
+                return
+            ack_matches = (isinstance(ack, dict)
+                and ack.get('schema') == 'b23_r04d_ingress_binding_ack/v1'
+                and ack.get('run_id') == marker['run_id']
+                and ack.get('invocation_id') == marker['invocation_id']
+                and ack.get('identity') == identity
+                and type(ack.get('sequence')) is int
+                and type(ack.get('completed_ns')) is int
+                and ack['completed_ns'] >= received_ns)
+            if not ack_matches:
+                if now_ns >= ack_deadline_ns:
+                    pending.discard(key)
+                    emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_ACK_TIMEOUT', {
+                        'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
+                        'source_sequence':int(envelope.sequence),'identity':identity,
+                        'received_ns':received_ns,'ack_deadline_ns':ack_deadline_ns,
+                        'checked_ns':now_ns})
+                    return
+                schedule(node, min(ack_deadline_ns, now_ns + 5_000_000), deliver)
+                return
             original(node, envelope)
+            pending.discard(key)
             emit('R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED', {
                 'run_id':marker['run_id'],'invocation_id':marker['invocation_id'],
                 'source_sequence':int(envelope.sequence),'identity':identity,
+                'ingress_sequence':ack['sequence'],'ingress_completed_ns':ack['completed_ns'],
                 'received_ns':received_ns,'delivery_ns':time.monotonic_ns()})
         schedule(node, release_after_ns, deliver)
         return None
@@ -3528,9 +3565,8 @@ class TrainingWorkerIO:
                     self._r06c_held_receipts.append(record)
                     self.emit('B23_R06C_OBSERVATION0_RECEIPT_WITHHELD_FROM_B1', record)
                     return receipt_view
-                # R04d delays lifecycle delivery to both consumers. Delaying
-                # Safety alone lets ingress advance first and rejects the old
-                # SAFE_STOP identity before the stale lifecycle is measured.
+                # R04d delays Safety, then holds ingress until the final
+                # publisher has recorded the exact new lifecycle binding.
                 pending_ingress = getattr(self, '_r04d_pending_ingress_lifecycle', None)
                 if (topic == '/mecanum/safety_lifecycle_state'
                         and self._r04d_fault_state is not None
@@ -3551,15 +3587,17 @@ class TrainingWorkerIO:
                     state = self._r04d_fault_state
                     state['ingress_scheduled'] = True
                     delay_s = r04d_ingress_lifecycle_delay_s(state['delay_s'])
-                    due_ns = self.now() + int(delay_s * 1_000_000_000)
+                    received_ns = self.now()
+                    due_ns = min(self.deadline_ns, received_ns + 2_000_000_000)
                     source_stamp_ns = (message.header.stamp.sec * 1_000_000_000
                         + message.header.stamp.nanosec)
                     self._r04d_pending_ingress_lifecycle = (
-                        due_ns, callback, copy.deepcopy(message), source_stamp_ns)
+                        due_ns, callback, copy.deepcopy(message), source_stamp_ns, received_ns)
                     self.emit('B23_R04_INGRESS_DELIVERY_SCHEDULED', {
-                        'case':'R04d','delay_s':delay_s,
+                        'case':'R04d','minimum_delay_s':delay_s,
                         'source_stamp_ns':source_stamp_ns,
-                        'received_ns':self.now(),'due_ns':due_ns})
+                        'received_ns':received_ns,'deadline_ns':due_ns,
+                        'wait_for':'exact_final_publisher_lifecycle_delivery'})
                     return None
                 if topic == '/mecanum/final_issued_command':
                     return callback(message, received_ns=received_ns)
@@ -3864,15 +3902,41 @@ class TrainingWorkerIO:
 
     def _deliver_r04d_ingress_lifecycle_if_due(self):
         pending = self._r04d_pending_ingress_lifecycle
-        if pending is None or self.now() < pending[0]:
+        if pending is None:
+            return
+        deadline_ns, callback, message, source_stamp_ns, received_ns = pending
+        delivered_ns = self.now()
+        sequence = int(message.sequence)
+        identity = [int(message.episode_generation), int(message.reset_epoch),
+            int(message.runtime_generation)]
+        final_events_path = Path(self.descriptor['run_root'])/'final-events.jsonl'
+        rows = (_ledger_rows(self.descriptor['run_root'], 'final-events.jsonl')
+            if final_events_path.exists() else [])
+        final_delivery = r04d_final_lifecycle_delivery(rows, sequence=sequence,
+            identity=identity)
+        if final_delivery is None:
+            if delivered_ns >= deadline_ns:
+                self._r04d_pending_ingress_lifecycle = None
+                raise TimeoutError('R04d final-publisher lifecycle binding was not observed before ingress deadline')
             return
         self._r04d_pending_ingress_lifecycle = None
-        due_ns, callback, message, source_stamp_ns = pending
-        delivered_ns = self.now()
         callback(message)
+        completed_ns = self.now()
+        ack_path = Path(self.descriptor['run_root'])/'r04d-ingress-binding-ack.json'
+        ack_sha256 = write_record_once(ack_path, {
+            'schema':'b23_r04d_ingress_binding_ack/v1',
+            'run_id':self.descriptor['run_id'],
+            'invocation_id':self.descriptor['invocation_id'],
+            'sequence':sequence,'identity':identity,
+            'source_stamp_ns':source_stamp_ns,
+            'final_publisher_delivery_ns':final_delivery['delivery_ns'],
+            'completed_ns':completed_ns})
         self.emit('B23_R04_INGRESS_DELIVERY_COMPLETED', {
             'case':'R04d','source_stamp_ns':source_stamp_ns,
-            'due_ns':due_ns,'delivery_ns':delivered_ns})
+            'sequence':sequence,'identity':identity,
+            'final_publisher_delivery_ns':final_delivery['delivery_ns'],
+            'received_ns':received_ns,'deadline_ns':deadline_ns,
+            'delivery_ns':completed_ns,'binding_ack_sha256':ack_sha256})
 
     def check(self, *, expected_native_fault_flags=None):
         if self.stop_requested or self.abort_requested is not None:
@@ -8616,6 +8680,7 @@ async def training_child(path):
                     'armed_ns':marker_armed_ns,
                     'delay_ns':700_000_000,
                     'safe_stop_delay_ns':20_000_000,
+                    'safe_stop_ack_timeout_ns':80_000_000,
                     'safe_stop_source_instance_id':int(io.safe_stop_source_id),
                     'reason':'delay final lifecycle delivery through stale-Safety observation; briefly hold bound zero SAFE_STOP until ingress lifecycle catches up'})
                 marker_write_completed_ns = io.now()
