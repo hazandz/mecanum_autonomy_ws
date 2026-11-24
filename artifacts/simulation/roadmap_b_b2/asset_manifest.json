@@ -39,7 +39,7 @@
     "wall_thickness_m": 0.2
   },
   "backend_contract": {
-    "fingerprint_sha256": "2998bfb6293c075e78f345fa4bcd836a1a04f934117e58a72703af28981ad60a",
+    "fingerprint_sha256": "1a3a8b408090dd271e62122e869905a87442a0a52a2017138b48bc267c445a81",
     "mecanum_nav_bringup/config/bridge/local_training.runtime.yaml": "fa9205af3a5c55460fbe46addb9813b169336ba797da1592b33f31286fe81adb",
     "mecanum_nav_rl_interfaces/CMakeLists.txt": "34dd61114b01846adf78328e9c6b7b72c3c4b1273f08337e2809f5c074c06859",
     "mecanum_nav_rl_interfaces/msg/FinalIssuedCommandReceipt.msg": "bc8bfd11960079271b78ddfe2b3c3dbf0204959d6dcef44fa8565b6a6384fa0c",
@@ -51,11 +51,11 @@
     "mecanum_sim_backend/env-hooks/mecanum_sim_backend.dsv.in": "777d044a3a3d3751f77abe96cc461d03fbbb59e8b80c6921338cda4f74dcfbf3",
     "mecanum_sim_backend/include/mecanum_sim_backend/backend_system.hpp": "bc428bf22faeb1ec73e2ca8d4150d4dd7d6712b805961e5e4c626f93c1e4f1d2",
     "mecanum_sim_backend/include/mecanum_sim_backend/contact_coverage.hpp": "a5b4bf4323cb2739fda9c47d2f9ec3e7abe9e2aa41bccc654670b3e67f72506d",
-    "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "e70ccc2130c0b174263672f44e872ac6fae5627d6bfe8f365ffe8c4d64efd4a0",
+    "mecanum_sim_backend/include/mecanum_sim_backend/receipt_gate.hpp": "935a405b34400284f9fdbc0e70774c2b5fd0b4c928449d803d6a0a2ee20be03b",
     "mecanum_sim_backend/package.xml": "97b144b11c483e38689439fc47bb1d62286aaac137f54cb5989199228b9ffaad",
-    "mecanum_sim_backend/src/backend_system.cpp": "bf8096c2a31df21e0dc7eeb062f7fb60d6f83ee95408c0edd64acb148b0ca101",
+    "mecanum_sim_backend/src/backend_system.cpp": "7aa44e17d0b06585b8a5464008cb5257ff6e19c69f5af93c22fd3d93f12909c0",
     "mecanum_sim_backend/src/contact_coverage.cpp": "840a38cb229a0487ccb358abefc403ba58848c613b5faf054bb7a5db5988c07a",
-    "mecanum_sim_backend/src/receipt_gate.cpp": "012cd6f500ddd1136322089f572c9660b8b40cf8a0f6dd0dac5e84eae116f402"
+    "mecanum_sim_backend/src/receipt_gate.cpp": "f80e5fd53bcc91a3f04c1692f2c3567477354765fa3eadb1bb481cc410e82712"
   },
   "backend_id": "NATIVE_B2_BACKEND_V1",
   "collision_registry": {
