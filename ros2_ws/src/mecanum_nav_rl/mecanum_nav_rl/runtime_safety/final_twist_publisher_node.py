@@ -178,6 +178,23 @@ class FinalTwistPublisherNode(Node):
             if is_safe_stop and any(values):
                 self.get_logger().error('LOCAL_SAFE_STOP_MUST_BE_ZERO')
                 return
+            if is_safe_stop:
+                if identity is None:
+                    self.get_logger().error('LOCAL_SAFE_STOP_LIFECYCLE_IDENTITY_UNAVAILABLE')
+                    return
+                envelope_identity = (
+                    envelope.episode_generation,
+                    envelope.reset_epoch,
+                    envelope.runtime_generation,
+                )
+                lifecycle_identity = (
+                    identity.episode_generation,
+                    identity.reset_epoch,
+                    identity.runtime_generation,
+                )
+                if envelope_identity != lifecycle_identity:
+                    self.get_logger().error('LOCAL_SAFE_STOP_LIFECYCLE_IDENTITY_MISMATCH')
+                    return
         if not is_safe_stop:
             if identity is None:
                 return

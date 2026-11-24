@@ -202,6 +202,40 @@ def test_local_training_publisher_preserves_policy_key_and_safe_stop_counter(mon
     assert evidence[-1][0] == 'ERROR'
 
 
+def test_local_final_publisher_rejects_stale_safe_stop_after_lifecycle_switch(monkeypatch):
+    """Queued old-context zero must not emit a receipt after lifecycle advances."""
+    from types import SimpleNamespace as NS
+    from builtin_interfaces.msg import Time
+    from geometry_msgs.msg import Twist
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState
+    from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: 2_000_000_000)
+    life = SafetyLifecycleState()
+    life.header.stamp = Time(sec=10)
+    life.primary_state, life.barrier_state = life.PRIMARY_ACTIVE, life.BARRIER_READY
+    life.episode_generation, life.reset_epoch, life.runtime_generation = 2, 2, 2
+    commands, receipts, errors = [], [], []
+    node = NS(_local_training=True, _local_admitted=False, _session_id='b23-stale-stop',
+        _policy_source=123, _safe_stop_source=456, _identity=life,
+        _identity_received_ns=1_900_000_000, _scan_period_ns=100_000_000,
+        _physics_step_ns=10_000_000, _final_publish_sequence=7,
+        _publisher_instance_id=789, _cmd_pub=NS(publish=commands.append),
+        _receipt_pub=NS(publish=receipts.append),
+        get_clock=lambda:NS(now=lambda:NS(nanoseconds=10_100_000_000,
+            to_msg=lambda:Time(sec=10, nanosec=100_000_000))),
+        get_logger=lambda:NS(error=errors.append))
+    command = CommandEnvelope()
+    command.header.frame_id = 'base_link'
+    command.source, command.sequence, command.source_instance_id = command.SOURCE_SAFE_STOP, 8, 456
+    command.episode_generation, command.reset_epoch, command.runtime_generation = 1, 1, 2
+    command.twist = Twist()
+
+    module.FinalTwistPublisherNode._on_accepted(node, command)
+
+    assert not commands and not receipts
+    assert errors[-1] == 'LOCAL_SAFE_STOP_LIFECYCLE_IDENTITY_MISMATCH'
+
+
 def test_local_final_publisher_drops_queued_policy_crossing_scan_cutoff(monkeypatch):
     from types import SimpleNamespace as NS
     from builtin_interfaces.msg import Time
@@ -294,6 +328,7 @@ def test_local_final_publisher_defers_policy_with_one_physics_step_before_cutoff
     stop = CommandEnvelope()
     stop.header.frame_id = 'base_link'
     stop.source, stop.source_instance_id, stop.sequence = stop.SOURCE_SAFE_STOP, 12, 1
+    stop.episode_generation, stop.reset_epoch, stop.runtime_generation = 1, 2, 3
     module.FinalTwistPublisherNode._on_accepted(node, stop)
     assert len(published) == len(receipts) == 1
     assert receipts[0].source == receipts[0].SOURCE_SAFE_STOP
@@ -312,7 +347,7 @@ def test_local_final_publisher_defers_policy_with_one_physics_step_before_cutoff
 def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):
     from types import SimpleNamespace as NS
     from builtin_interfaces.msg import Time
-    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, SafetyLifecycleState
     from mecanum_nav_rl.runtime_safety import final_twist_publisher_node as module
     import pytest
     events = []
@@ -323,7 +358,7 @@ def test_local_training_final_publish_without_receipt_is_recorded(monkeypatch):
     def fail(_):
         raise RuntimeError('receipt transport failure')
 
-    node = NS(_local_training=True, _local_admitted=True, _identity=None, _policy_source=123, _safe_stop_source=456,
+    node = NS(_local_training=True, _local_admitted=True, _identity=SafetyLifecycleState(), _policy_source=123, _safe_stop_source=456,
               _final_publish_sequence=0, _publisher_instance_id=789,
               _cmd_pub=NS(publish=lambda m: events.append('cmd')), _receipt_pub=NS(publish=fail),
               _emit=lambda name, record: events.append((name, record)),
