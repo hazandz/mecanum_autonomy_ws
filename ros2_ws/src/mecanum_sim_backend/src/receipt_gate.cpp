@@ -310,8 +310,52 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
 
 bool ReceiptGate::WatchdogExpired(std::int64_t now_steady_ns) const
 {
-  return faulted_ || (anchored_ && (now_steady_ns < last_accepted_steady_ns_ ||
-         now_steady_ns - last_accepted_steady_ns_ > kWatchdogNs));
+  if (faulted_) return true;
+  if (!anchored_) return false;
+  if (now_steady_ns < last_accepted_steady_ns_) return true;
+  if (now_steady_ns - last_accepted_steady_ns_ <= kWatchdogNs) return false;
+  return !HasFreshContiguousQueuedSafeStop(now_steady_ns);
+}
+
+bool ReceiptGate::HasFreshContiguousQueuedSafeStop(
+    std::int64_t now_steady_ns) const
+{
+  if (now_steady_ns < 0 || queue_.empty() || watermark_ ==
+      std::numeric_limits<std::uint64_t>::max() ||
+      binding_.next_safe_stop_sequence ==
+      std::numeric_limits<std::uint64_t>::max())
+    return false;
+
+  auto expected_publish_sequence = watermark_ + 1;
+  auto expected_source_sequence = binding_.next_safe_stop_sequence;
+  auto previous_stamp_ns = last_source_stamp_ns_;
+  auto previous_receive_steady_ns = last_accepted_steady_ns_;
+  bool has_fresh_safe_stop = false;
+  for (const auto &item : queue_)
+  {
+    const auto &receipt = item.facts;
+    std::string reason;
+    if (!ValidPayload(receipt, reason) || receipt.source != 4 ||
+        receipt.source_instance_id != binding_.safe_stop_source_instance_id ||
+        receipt.sequence != expected_source_sequence || receipt.step_index != 0 ||
+        !receipt.transition_id.empty() || !IsZero(receipt) ||
+        receipt.key.publish_sequence != expected_publish_sequence ||
+        (previous_stamp_ns && receipt.stamp_ns < *previous_stamp_ns) ||
+        item.receive_steady_ns <= previous_receive_steady_ns ||
+        item.receive_steady_ns > now_steady_ns)
+      return false;
+
+    if (now_steady_ns - item.receive_steady_ns <= kWatchdogNs)
+      has_fresh_safe_stop = true;
+    previous_stamp_ns = receipt.stamp_ns;
+    previous_receive_steady_ns = item.receive_steady_ns;
+    if (expected_publish_sequence == std::numeric_limits<std::uint64_t>::max() ||
+        expected_source_sequence == std::numeric_limits<std::uint64_t>::max())
+      break;
+    ++expected_publish_sequence;
+    ++expected_source_sequence;
+  }
+  return has_fresh_safe_stop;
 }
 bool ReceiptGate::SetExpectedPolicyStep(std::uint64_t step_index,
                                        std::uint64_t source_sequence,

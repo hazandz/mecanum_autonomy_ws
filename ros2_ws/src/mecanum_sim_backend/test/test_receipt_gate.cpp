@@ -258,6 +258,67 @@ TEST(ReceiptGate, FutureDatedZeroSafeStopAfterAnchorWaitsWithoutAdvancingWaterma
   EXPECT_EQ(gate.Watermark(), 101u);
 }
 
+TEST(ReceiptGate, FreshQueuedSafeStopsPreventFalseWatchdogDuringClockCatchup)
+{
+  ReceiptGate gate(Binding());
+  AcceptAnchor(gate);
+
+  auto first = Anchor();
+  first.key.publish_sequence = 101;
+  first.sequence = 2;
+  first.stamp_ns = 1'010;
+  auto second = first;
+  second.key.publish_sequence = 102;
+  second.sequence = 3;
+  ASSERT_TRUE(gate.Enqueue(first, 20'000'000));
+  ASSERT_TRUE(gate.Enqueue(second, 100'000'000));
+
+  // The first zero is waiting for sim time. It is older than the actuator
+  // watchdog by the time the clock catches up, but a later contiguous zero
+  // receipt is already fresh in the same ordered queue.
+  const auto waiting = gate.ConsumeNext(1'009, 120'002'001);
+  ASSERT_EQ(waiting.disposition, GateDisposition::Pending);
+  EXPECT_FALSE(gate.WatchdogExpired(120'002'001));
+
+  const auto first_applied = gate.ConsumeNext(1'010, 120'002'002);
+  ASSERT_EQ(first_applied.disposition, GateDisposition::Applied);
+  EXPECT_FALSE(gate.WatchdogExpired(120'002'002));
+  const auto second_applied = gate.ConsumeNext(1'010, 120'002'003);
+  ASSERT_EQ(second_applied.disposition, GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 102u);
+  EXPECT_FALSE(gate.WatchdogExpired(120'002'003));
+}
+
+TEST(ReceiptGate, WatchdogDeferralRequiresContiguousValidZeroSafeStops)
+{
+  const auto check = [](ReceiptFacts queued) {
+    ReceiptGate gate(Binding());
+    AcceptAnchor(gate);
+    ASSERT_TRUE(gate.Enqueue(queued, 100'000'000));
+    EXPECT_TRUE(gate.WatchdogExpired(120'002'001));
+  };
+
+  auto wrong_identity = Anchor();
+  wrong_identity.key.publish_sequence = 101;
+  wrong_identity.sequence = 2;
+  wrong_identity.stamp_ns = 1'010;
+  wrong_identity.source_instance_id = 999;
+  check(wrong_identity);
+
+  auto nonzero = Anchor();
+  nonzero.key.publish_sequence = 101;
+  nonzero.sequence = 2;
+  nonzero.stamp_ns = 1'010;
+  nonzero.twist[0] = 0.01;
+  check(nonzero);
+
+  auto sequence_gap = Anchor();
+  sequence_gap.key.publish_sequence = 102;
+  sequence_gap.sequence = 2;
+  sequence_gap.stamp_ns = 1'010;
+  check(sequence_gap);
+}
+
 TEST(ReceiptGate, FutureDatedPolicyAndMalformedSafeStopStillFault)
 {
   {
