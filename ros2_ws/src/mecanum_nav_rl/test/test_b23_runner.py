@@ -6275,7 +6275,7 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     assert (stop.SOURCE_SAFE_STOP, 8) in selected
 
 
-def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_receipt():
+def test_r02_held_receipt_path_runs_production_safety_tick_before_native_hold_wait():
     import ast
     import inspect
     import textwrap
@@ -6298,11 +6298,15 @@ def test_r02_held_receipt_path_enables_real_safety_timer_before_waiting_for_rece
         raise AssertionError(f'{method}({value}) is missing in held-receipt path')
     release_hold = call_index('set_policy_hold', False)
     stream_on = call_index('set_stream_enabled', True)
-    wait_receipt = next(index for index, statement in enumerate(body)
-        if any(isinstance(node, ast.Constant) and node.value == 'actual held POLICY publication receipt'
+    immediate_tick = next(index for index, statement in enumerate(body)
+        if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'tick_policy_after_deferred_scan_cutoff'
             for node in ast.walk(statement)))
-    assert release_hold < wait_receipt
-    assert release_hold < stream_on < wait_receipt
+    wait_receipt = next(index for index, statement in enumerate(body)
+        if any(isinstance(node, ast.Constant) and node.value == 'native held exact final POLICY receipt'
+            for node in ast.walk(statement)))
+    assert release_hold < immediate_tick < wait_receipt
+    assert release_hold < stream_on < immediate_tick
 
 
 @pytest.mark.parametrize('close_after', ['safe_stop', 'admission_inhibited'])
@@ -6360,6 +6364,39 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     with pytest.raises(AlignmentReached):
         asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0)))
     assert events == ['fresh_applied_zero', 'scan_alignment']
+
+
+def test_r02_late_receipt_path_runs_immediate_production_safety_tick_before_hold_wait():
+    import ast
+    import inspect
+    import textwrap
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(TrainingWorkerIO.policy_step)))
+    close_branch = next(node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == 'close_after_held_receipt is not None')
+    statements = close_branch.body
+    tick_line = next(node.lineno for node in ast.walk(close_branch)
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == 'tick_policy_after_deferred_scan_cutoff')
+    held_wait_line = next(node.lineno for node in ast.walk(close_branch)
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == 'until'
+        and any(isinstance(value, ast.Constant)
+            and value.value == 'native held exact final POLICY receipt'
+            for value in ast.walk(node)))
+    assert tick_line < held_wait_line, 'R02 must tick the production selector before waiting on the native hold'
+    assert any(isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == 'policy_receipt'
+            for target in node.targets)
+        and isinstance(node.value, ast.Await)
+        and isinstance(node.value.value, ast.Call)
+        and isinstance(node.value.value.func, ast.Attribute)
+        and node.value.value.func.attr == 'tick_policy_after_deferred_scan_cutoff'
+        for node in statements)
 
 
 @pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
@@ -8796,9 +8833,10 @@ def test_policy_safety_tick_retries_immediately_after_deferred_scan_cutoff():
         return value
 
     io.until = until
-    asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
+    result = asyncio.run(io.tick_policy_after_deferred_scan_cutoff(
         deadline_ns=900, step_index=7, sample_sequence=42))
 
+    assert result is receipt
     assert adapter.calls == 2
     assert adapter.last_tick_ros_ns == 101
     retry = [facts for name, facts in io.events

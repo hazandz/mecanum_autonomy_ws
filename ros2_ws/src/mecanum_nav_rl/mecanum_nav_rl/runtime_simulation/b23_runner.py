@@ -6332,7 +6332,7 @@ class TrainingWorkerIO:
                     deadline_ns=deadline_ns,
                     phase='exact POLICY receipt or pinned publisher cutoff evidence')
                 if 'receipt' in outcome:
-                    return
+                    return outcome['receipt']
                 boundary_ns = outcome['deferred']['facts']['boundary_ns']
             # A cutoff is a one-shot wakeup for this POLICY step. Re-reading
             # the same publisher record after its retry must wait for a new
@@ -6740,9 +6740,14 @@ class TrainingWorkerIO:
             # receipt before the case-specific close condition is injected.
             self.safety.local_training.set_policy_hold(False)
             self.safety.local_training.set_stream_enabled(True)
-            policy_receipt = await self.until(lambda: self.final.publication_for_source_sequence(
-                source=CommandEnvelope.SOURCE_POLICY, sequence=token.step_index),
-                deadline_ns=deadline, phase='actual held POLICY publication receipt')
+            # Evaluate the already-delivered candidate through the normal
+            # Safety selector now, rather than waiting for the next periodic
+            # timer phase. R02 holds this receipt while the unchanged native
+            # 100 ms watchdog remains active, so a scheduler-sized delay here
+            # can leave no time for the intended SAFE_STOP close.
+            policy_receipt = await self.tick_policy_after_deferred_scan_cutoff(
+                deadline_ns=deadline, step_index=token.step_index,
+                sample_sequence=target_sample_sequence)
             expected_mode = ('hold_policy_until_safe_stop' if close_after_held_receipt == 'safe_stop'
                 else 'hold_policy_until_inhibit')
             def held_row():
