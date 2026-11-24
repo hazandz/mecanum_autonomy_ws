@@ -6737,11 +6737,12 @@ class TrainingWorkerIO:
                     # 70 ms in the prior bounded run; selecting a window with
                     # only 40-60 ms left made the first Safety tick land on
                     # the scan cutoff, then deferred the receipt past the
-                    # watchdog. Start this close path earlier without
-                    # changing any freshness, cutoff, or watchdog threshold.
+                    # watchdog. Keep the earlier window inside the measured
+                    # 100 ms scan period; the scan/cutoff and watchdog limits
+                    # remain unchanged.
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness,
-                        launch_window_ns=(150_000_000, 250_000_000))
+                        launch_window_ns=(70_000_000, 90_000_000))
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness)

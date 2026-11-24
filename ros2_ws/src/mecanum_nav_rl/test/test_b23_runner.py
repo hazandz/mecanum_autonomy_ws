@@ -6564,8 +6564,8 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     value.freeze_step_streams = freeze_step_streams
     value.align_policy_step_launch_window = align_policy_window
     value.refresh_zero_before_pending_bind = refresh_zero
-    value.safety = NS(local_training=NS(set_stream_enabled=lambda enabled:
-        events.append(('stream_enabled', enabled))))
+    value.safety = NS(local_training=NS(scan_period_ns=100_000_000,
+        set_stream_enabled=lambda enabled: events.append(('stream_enabled', enabled))))
     value.ingress.lifecycle = NS(barrier_stamp=Time())
     value.ros_now = lambda: 1_000_000_000
 
@@ -6580,7 +6580,8 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
         asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0),
             close_after_held_receipt=close_after))
     expected_window = ((50_000_000, 70_000_000) if close_after == 'safe_stop'
-        else (150_000_000, 250_000_000))
+        else (70_000_000, 90_000_000))
+    assert expected_window[1] <= value.safety.local_training.scan_period_ns
     assert events == ['fresh_applied_zero', ('scan_alignment', expected_window), 'refresh_zero',
         ('stream_enabled', False), 'begin_pending_step']
 
