@@ -3693,6 +3693,7 @@ private:
   void OnReceipt(const Receipt &msg)
   {
     if (shutdown_started_.load()) return;
+    const auto callback_entry_ns = steady_clock_now_();
     ReceiptFacts facts;
     facts.session_id = session_id_; facts.config_hash = config_hash_;
     facts.key = {msg.final_publisher_instance_id, msg.final_publish_sequence};
@@ -3701,23 +3702,17 @@ private:
     facts.transition_id = msg.transition_id; facts.source = msg.source; facts.sequence = msg.sequence;
     facts.source_instance_id = msg.source_instance_id;
     facts.stamp_ns = static_cast<std::int64_t>(msg.header.stamp.sec) * 1'000'000'000LL + msg.header.stamp.nanosec;
+    const auto receipt_stamp_ns = facts.stamp_ns;
     facts.frame_id = msg.header.frame_id;
     facts.twist = {msg.final_command.linear.x, msg.final_command.linear.y,
                    msg.final_command.linear.z, msg.final_command.angular.x,
                    msg.final_command.angular.y, msg.final_command.angular.z};
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    const auto receive_ns = steady_clock_now_();
-    if (msg.source == Receipt::SOURCE_SAFE_STOP)
+    const auto lock_wait_started_ns = steady_clock_now_();
+    std::int64_t receive_ns = 0;
+    std::int64_t enqueue_completed_ns = 0;
     {
-      EmitStructuredDiagnostic([&]() {
-        gzmsg << "B23_SAFE_STOP_RECEIPT_INGRESS publisher="
-            << msg.final_publisher_instance_id << " key="
-            << msg.final_publish_sequence << " source_sequence="
-            << msg.sequence << " stamp_ns=" << facts.stamp_ns
-            << " receive_ns=" << receive_ns << std::endl;
-        std::fflush(stdout);
-      });
-    }
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    receive_ns = steady_clock_now_();
     if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
         !receipt_fault_mode_.empty())
     {
@@ -3786,6 +3781,7 @@ private:
       if (gate_reason == "invalid_receive_clock" || gate_reason == "queue_overflow")
         RecordQueueFault(2, "receipt_gate_enqueue", gate_reason.c_str());
     }
+    enqueue_completed_ns = steady_clock_now_();
     if (msg.source == Receipt::SOURCE_SAFE_STOP &&
         receipt_fault_mode_ == "hold_policy_until_safe_stop" && held_policy_receipt_)
     {
@@ -3820,6 +3816,23 @@ private:
             << " sequence=" << held.first.key.publish_sequence
             << " source_sequence=" << held.first.sequence
             << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+      });
+    }
+    }
+    if (msg.source == Receipt::SOURCE_SAFE_STOP)
+    {
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_SAFE_STOP_RECEIPT_INGRESS publisher="
+            << msg.final_publisher_instance_id << " key="
+            << msg.final_publish_sequence << " source_sequence="
+            << msg.sequence << " stamp_ns=" << receipt_stamp_ns
+            << " callback_entry_ns=" << callback_entry_ns
+            << " lock_wait_ns=" << receive_ns - lock_wait_started_ns
+            << " receive_ns=" << receive_ns
+            << " enqueue_completed_ns=" << enqueue_completed_ns
+            << " callback_completed_ns=" << steady_clock_now_()
+            << std::endl;
         std::fflush(stdout);
       });
     }
