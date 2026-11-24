@@ -7110,6 +7110,30 @@ class TrainingWorkerIO:
         await self.tick_policy_after_deferred_scan_cutoff(
             deadline_ns=deadline, step_index=token.step_index,
             sample_sequence=target_sample_sequence)
+        if (not getattr(self, 'fault_hooks', ())
+                and measurement_fault_case is None
+                and after_policy_applied is None
+                and before_pending_bind is None
+                and not prebind_admission
+                and not align_admission_after_scan_boundary
+                and not require_admission_before_receipt):
+            # The first post-ACK sample is frozen only to bind the initial
+            # POLICY admission to the exact input Safety observed. Once the
+            # production selector has emitted the matching POLICY receipt,
+            # keep the same pending token current with later real noisy
+            # samples while B1 waits for an exact cutoff join. Otherwise one
+            # sample can age out before scan/noisy/oracle/backend alignment
+            # completes, leaving no adjacent POLICY receipts and making the
+            # fixed B1 500 ms issuance freshness window impossible to satisfy.
+            self.ingress.resume_admission_publication()
+            self.emit('POLICY_ADMISSION_REFRESH_RESUMED', {
+                'step_index': token.step_index,
+                'transition_id': token.transition_id,
+                'pending_request_sequence': ack.request.request_sequence,
+                'last_published_sample_sequence':
+                    self.ingress.last_published_sample_sequence,
+                'steady_ns': self.now(),
+            })
         if after_policy_applied is not None:
             from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
             if not callable(after_policy_applied):

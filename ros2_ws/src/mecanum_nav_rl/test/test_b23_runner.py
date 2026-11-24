@@ -6636,7 +6636,8 @@ def test_r02_late_receipt_path_runs_immediate_production_safety_tick_before_hold
 
 @pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
-    'nominal_issued_cutoff','prebind_elapsed_deadline'])
+    'nominal_issued_cutoff','prebind_elapsed_deadline',
+    'admission_refresh_after_issue'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -6785,6 +6786,12 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     def arm(ack, *, publish_admission=True):
         history.append(('arm', ack.observed_steady_ns, publish_admission)); armed.append(ack)
     value.ingress.arm_pending = arm
+    admission_resumed = [False]
+    def resume_admission_publication():
+        admission_resumed[0] = True
+        history.append(('admission_resume', clock.ns,
+            value.ingress.last_published_sample_sequence))
+    value.ingress.resume_admission_publication = resume_admission_publication
     admission_delivery_phase = [0]
     def publish(envelope):
         history.append(('publish', envelope)); adapter.command = envelope
@@ -6864,6 +6871,10 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     commit_attempts = {}
     def commit(cutoff):
         commit_calls.append(cutoff)
+        if timing == 'admission_refresh_after_issue':
+            history.append(('commit_attempt', cutoff, admission_resumed[0]))
+            if not admission_resumed[0]:
+                raise B1SnapshotPending('fresh admission stream has not resumed')
         if timing == 'nominal_issued_cutoff':
             if cutoff == nominal_cutoff:
                 return transition
@@ -6919,7 +6930,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','near_scan_cutoff','r09b_callback','r09b_before_bind',
             'candidate_after_admission','nominal_issued_cutoff',
-            'prebind_elapsed_deadline'):
+            'prebind_elapsed_deadline','admission_refresh_after_issue'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -6932,6 +6943,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         else:
             with pytest.raises(TimeoutError, match='step deadline'):
                 asyncio.run(value.policy_step(b1, (0., .4, 0.)))
+    tags = [row[0] for row in history]
     if timing == 'pending_cutoff_dedup':
         pending_events = [facts for row in history
             if isinstance(row, tuple) and len(row) == 2
@@ -6948,11 +6960,19 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing == 'nominal_issued_cutoff':
         assert commit_calls == [nominal_cutoff], (
             f'production runner skipped the actual post-issuance cutoff within the nominal 100 ms period: {commit_calls!r}')
+    if timing == 'admission_refresh_after_issue':
+        assert admission_resumed[0], f'normal POLICY step did not resume fresh admissions: {history!r}'
+        resume_index = tags.index('admission_resume')
+        issued_index = tags.index('issued')
+        immediate_tick_index = next(i for i, row in enumerate(history)
+            if i > issued_index and row[0] == 'safety_tick')
+        first_commit_index = tags.index('commit_attempt')
+        assert immediate_tick_index < resume_index < first_commit_index, (
+            f'admission refresh must resume only after the exact POLICY receipt and before cutoff selection: {history!r}')
     if timing == 'prebind_elapsed_deadline':
         assert bind_deadlines == [b1_begin_times[0] + 2_000_000_000], (
             f'B1 step deadline must start at the actual B1 slot, after pre-bind safety preparation; '
             f'begin={b1_begin_times!r}, bind_deadline={bind_deadlines!r}')
-    tags = [row[0] for row in history]
     assert tags.index('hold') < tags.index('bind') < tags.index('arm') < tags.index('publish') < tags.index('issued')
     assert ('hold', True) in history
     assert ('stream', True) in history
