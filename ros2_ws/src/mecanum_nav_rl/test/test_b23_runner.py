@@ -5883,6 +5883,39 @@ def test_r02_held_marker_remains_observable_across_expected_close_fault():
             held_predicate=lambda: None, deadline_ns=clock.ns+5_000_000))
 
 
+def test_r02_binds_native_held_sequence_to_exact_publisher_receipt_bytes(tmp_path):
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r02_held_policy_receipt_from_ledger
+    receipt = FinalIssuedCommandReceipt()
+    receipt.episode_generation=1; receipt.reset_epoch=1; receipt.runtime_generation=2
+    receipt.step_index=1; receipt.transition_id='a2ebca3f-9027-52eb-84fc-10376b70da2d'
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_POLICY; receipt.sequence=1
+    receipt.source_instance_id=56; receipt.final_publisher_instance_id=34
+    receipt.final_publish_sequence=51
+    raw=serialize_message(receipt)
+    (tmp_path/'policy_final_published.jsonl').write_text(json.dumps({
+        'event':'policy_final_published','run_id':'run-1','invocation_id':'inv-1',
+        'facts':{'identity':[1,1,2],'publish_sequence':51,'publisher_instance_id':34,
+            'receipt_cdr_hex':raw.hex(),'source_instance_id':56,'source_sequence':1,
+            'step_index':1,'transition_id':receipt.transition_id,'steady_ns':1234}})+'\n')
+    io=NS(descriptor={'run_root':str(tmp_path),'run_id':'run-1','invocation_id':'inv-1'},
+        final=NS(publisher_instance_id=34),policy_source_id=56,
+        ingress=NS(lifecycle=NS(episode_generation=1,reset_epoch=1,runtime_generation=2)))
+    held={'kind':'B23_POLICY_RECEIPT_HELD','run_id':'run-1','invocation_id':'inv-1',
+        'fields':{'publisher':'34','sequence':'51','source_sequence':'1'}}
+    selected=r02_held_policy_receipt_from_ledger(io,held_row=held,
+        step_index=1,transition_id=receipt.transition_id)
+    assert selected.final_publish_sequence == 51
+    assert selected.source == FinalIssuedCommandReceipt.SOURCE_POLICY
+    assert selected.transition_id == receipt.transition_id
+
+    held['fields']['sequence']='52'
+    with pytest.raises(RuntimeError,match='no unique publisher ledger record'):
+        r02_held_policy_receipt_from_ledger(io,held_row=held,
+            step_index=1,transition_id=receipt.transition_id)
+
+
 def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted():
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02e_prebind_admission_rejected
     identity = {'session':'session-1','backend':'22','ingress':'11'}

@@ -2777,6 +2777,64 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
         'policy_backend_applied':False, 'b1_transition_committed':False}
 
 
+def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_id):
+    """Recover the exact receipt native held, from the publisher's raw bytes ledger."""
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+    if (not isinstance(held_row, dict)
+            or held_row.get('kind') != 'B23_POLICY_RECEIPT_HELD'
+            or held_row.get('run_id') != io.descriptor.get('run_id')
+            or held_row.get('invocation_id') != io.descriptor.get('invocation_id')):
+        raise RuntimeError('R02 held POLICY marker ownership mismatch')
+    fields = held_row.get('fields')
+    if not isinstance(fields, dict):
+        raise RuntimeError('R02 held POLICY marker fields missing')
+    try:
+        publish_sequence = int(fields['sequence'])
+        publisher = int(fields['publisher'])
+        source_sequence = int(fields['source_sequence'])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError('R02 held POLICY marker identity incomplete') from error
+    if (publish_sequence <= 0 or source_sequence != step_index
+            or publisher != io.final.publisher_instance_id):
+        raise RuntimeError('R02 held POLICY marker identity differs from active publisher/step')
+    rows = _ledger_rows(io.descriptor['run_root'], 'policy_final_published.jsonl')
+    matches = [(row, row.get('facts', {})) for row in rows
+        if row.get('event') == 'policy_final_published'
+        and row.get('run_id') == io.descriptor.get('run_id')
+        and row.get('invocation_id') == io.descriptor.get('invocation_id')
+        and row.get('facts', {}).get('publish_sequence') == publish_sequence]
+    if len(matches) != 1:
+        raise RuntimeError('R02 held POLICY marker has no unique publisher ledger record')
+    row, facts = matches[0]
+    raw_hex = facts.get('receipt_cdr_hex')
+    if (facts.get('publisher_instance_id') != publisher
+            or facts.get('source_sequence') != step_index
+            or facts.get('step_index') != step_index
+            or facts.get('source_instance_id') != io.policy_source_id
+            or facts.get('transition_id') != transition_id
+            or type(facts.get('steady_ns')) is not int or facts['steady_ns'] <= 0
+            or not isinstance(raw_hex, str) or not raw_hex):
+        raise RuntimeError('R02 held POLICY publisher ledger identity mismatch')
+    try:
+        receipt = deserialize_message(bytes.fromhex(raw_hex), FinalIssuedCommandReceipt)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('R02 held POLICY ledger receipt bytes are invalid') from error
+    expected_identity = lifecycle_identity(io.ingress.lifecycle)
+    if (receipt.source != FinalIssuedCommandReceipt.SOURCE_POLICY
+            or receipt.final_publisher_instance_id != publisher
+            or receipt.final_publish_sequence != publish_sequence
+            or receipt.source_instance_id != io.policy_source_id
+            or receipt.sequence != step_index or receipt.step_index != step_index
+            or receipt.transition_id != transition_id
+            or lifecycle_identity(receipt) != expected_identity
+            or facts.get('identity') != [expected_identity.episode_generation,
+                expected_identity.reset_epoch, expected_identity.runtime_generation]):
+        raise RuntimeError('R02 held POLICY receipt bytes do not match its exact ledger identity')
+    return receipt
+
+
 def r02d_held_receipt_queue_fault_rows(rows):
     """Select only raw native diagnostics for the packet-pinned R02d hook."""
     return [row for row in rows
@@ -7021,10 +7079,19 @@ class TrainingWorkerIO:
                 rows = complete_jsonl_rows(self.descriptor['native_events_path'])
                 return next((row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
                     and row.get('fields', {}).get('mode') == expected_mode
-                    and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
                     and row.get('fields', {}).get('source_sequence') == str(token.step_index)), None)
-            await await_r02_held_policy_receipt(self, held_predicate=held_row,
+            held_marker = await await_r02_held_policy_receipt(self, held_predicate=held_row,
                 deadline_ns=deadline)
+            selected_policy_publish_sequence = policy_receipt.final_publish_sequence
+            policy_receipt = r02_held_policy_receipt_from_ledger(self,
+                held_row=held_marker, step_index=token.step_index,
+                transition_id=token.transition_id)
+            self.emit('R02_HELD_POLICY_RECEIPT_BOUND_TO_PUBLISHER_BYTES', {
+                'native_held_publish_sequence':policy_receipt.final_publish_sequence,
+                'selected_tick_publish_sequence':selected_policy_publish_sequence,
+                'same_publication':policy_receipt.final_publish_sequence == selected_policy_publish_sequence,
+                'step_index':token.step_index, 'transition_id':token.transition_id,
+                'steady_ns':self.now()})
             self.safety.local_training.set_policy_hold(True)
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()
