@@ -5737,7 +5737,7 @@ class TrainingWorkerIO:
         return receipt, application['state'], application['received_ns']
 
     async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness,
-            launch_window_ns=(40_000_000, 60_000_000)):
+            launch_window_ns=(40_000_000, 60_000_000), force_alignment=False):
         """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
 
         Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
@@ -5762,7 +5762,8 @@ class TrainingWorkerIO:
         # band was selected from the observed bind, post-ACK sample, and
         # deferred-tick timings. It changes scheduling only, not any contract
         # freshness, scan-gap, cutoff, or native watchdog limit.
-        if policy_bind_launch_window_ready(remaining_ns, window_ns=launch_window_ns):
+        if (not force_alignment
+                and policy_bind_launch_window_ready(remaining_ns, window_ns=launch_window_ns)):
             return zero_witness
 
         target_cutoff_ns = now_ros_ns + remaining_ns
@@ -5880,10 +5881,20 @@ class TrainingWorkerIO:
                 native_receive_ns = int(native_ingress['fields']['receive_ns'])
             except (TypeError, KeyError, ValueError):
                 return None
-            native_age_ns = self.now() - native_receive_ns
+            observed_ns = self.now()
+            native_age_ns = observed_ns - native_receive_ns
+            # A selected receipt cannot become a fresh bind witness once its
+            # native ingress is older than the unchanged 100 ms contract.
+            # Retire only this alignment attempt and seek a newer receipt under
+            # the caller's original absolute deadline; never accept stale state.
+            if native_age_ns < 0:
+                return None
+            if native_age_ns > 100_000_000:
+                return {'freshness_expired': True, 'receipt': aligned_receipt,
+                    'native_receive_ns': native_receive_ns,
+                    'native_age_ns': native_age_ns,
+                    'application': application}
             if (applied is None or type(received_ns) is not int or latest is None
-                    or self.now() < received_ns or self.now() - received_ns > 100_000_000
-                    or native_age_ns < 0 or native_age_ns > 100_000_000
                     or aligned_receipt.source is not ReceiptSource.SAFE_STOP
                     or aligned_receipt.final_publisher_instance_id != self.final.publisher_instance_id
                     or any(aligned_receipt.final_command)
@@ -5911,6 +5922,15 @@ class TrainingWorkerIO:
                     or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
                     or any(current_receipt.final_command)):
                 return None
+            application_age_ns = observed_ns - received_ns
+            if application_age_ns < 0:
+                return None
+            if application_age_ns > 100_000_000:
+                return {'freshness_expired': True, 'receipt': aligned_receipt,
+                    'native_receive_ns': native_receive_ns,
+                    'native_age_ns': native_age_ns,
+                    'application': application,
+                    'application_age_ns': application_age_ns}
             return {'receipt': aligned_receipt, 'state': applied,
                 'received_ns': received_ns, 'application': application,
                 'native_receive_ns':native_receive_ns, 'native_age_ns':native_age_ns}
@@ -5918,6 +5938,25 @@ class TrainingWorkerIO:
         applied_zero = await self.until(exact_aligned_zero_application,
             deadline_ns=deadline_ns,
             phase='exact post-cutoff SAFE_STOP application in POLICY bind window')
+        if applied_zero.get('freshness_expired'):
+            self.emit('POLICY_STEP_BIND_WINDOW_ZERO_RECEIPT_FRESHNESS_EXPIRED', {
+                'source_sequence': aligned_receipt.source_sequence,
+                'final_publish_sequence': aligned_receipt.final_publish_sequence,
+                'native_receive_ns': applied_zero['native_receive_ns'],
+                'native_age_ns': applied_zero['native_age_ns'],
+                'application_received_ns': (
+                    applied_zero['application'].get('received_ns')
+                    if isinstance(applied_zero.get('application'), dict) else None),
+                'application_age_ns': applied_zero.get('application_age_ns'),
+                'deadline_ns': deadline_ns,
+                'steady_ns': self.now(),
+            })
+            # The expired attempt is not a zero witness. Keep the preceding
+            # verified witness and align to a strictly newer receipt without
+            # refreshing the absolute preparation deadline.
+            return await self.align_policy_step_launch_window(
+                deadline_ns=deadline_ns, zero_witness=zero_witness,
+                launch_window_ns=launch_window_ns, force_alignment=True)
         remaining_after_application = policy_bind_launch_window_remaining_ns(
             self.ros_now(), period_ns)
         if not policy_bind_launch_window_ready(
