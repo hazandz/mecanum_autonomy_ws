@@ -1265,6 +1265,79 @@ def r04d_final_lifecycle_delivery(rows, *, sequence, identity):
         and type(row.get('facts', {}).get('delivery_ns')) is int), None)
 
 
+def r04d_unexpected_new_context_publications(rows, *, marker_armed_ns,
+                                            baseline_identity, held_safe_stops,
+                                            released_safe_stops,
+                                            safe_stop_source_instance_id,
+                                            final_publisher_instance_id,
+                                            decode_receipt=None):
+    """Allow only the exact held zero SAFE_STOP to publish after its release."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    if decode_receipt is None:
+        from rclpy.serialization import deserialize_message
+        decode_receipt = lambda raw: deserialize_message(raw, FinalIssuedCommandReceipt)
+
+    errors = []
+    if len(held_safe_stops) != 1 or len(released_safe_stops) != 1:
+        return ['expected one held and one released new-context SAFE_STOP']
+    held = held_safe_stops[0]
+    released = released_safe_stops[0]
+    held_key = (held.get('source_sequence'), tuple(held.get('identity', ())),
+        held.get('source_instance_id'))
+    released_key = (released.get('source_sequence'), tuple(released.get('identity', ())),
+        released.get('source_instance_id', held.get('source_instance_id')))
+    if (held_key != released_key
+            or held.get('source_instance_id') != safe_stop_source_instance_id
+            or type(held.get('release_after_ns')) is not int
+            or type(released.get('delivery_ns')) is not int
+            or released['delivery_ns'] < held['release_after_ns']):
+        errors.append('held/released SAFE_STOP identity or release timing mismatch')
+
+    expected_publications = 0
+    for row in rows:
+        if row.get('event') != 'FINAL_PUBLISHED':
+            continue
+        facts = row.get('facts', {})
+        identity = facts.get('identity')
+        if (type(facts.get('steady_ns')) is not int
+                or facts['steady_ns'] < marker_armed_ns
+                or identity == baseline_identity):
+            continue
+        raw_hex = facts.get('receipt_cdr_hex')
+        if not isinstance(raw_hex, str):
+            errors.append('new-context publication lacks receipt bytes')
+            continue
+        try:
+            receipt = decode_receipt(bytes.fromhex(raw_hex))
+        except (TypeError, ValueError, RuntimeError) as error:
+            errors.append('new-context receipt cannot be decoded: ' + type(error).__name__)
+            continue
+        receipt_identity = [int(receipt.episode_generation), int(receipt.reset_epoch),
+            int(receipt.runtime_generation)]
+        command = receipt.final_command
+        components = (command.linear.x, command.linear.y, command.linear.z,
+            command.angular.x, command.angular.y, command.angular.z)
+        exact_safe_stop = (
+            receipt.source == CommandEnvelope.SOURCE_SAFE_STOP
+            and receipt.source_instance_id == safe_stop_source_instance_id
+            and receipt.sequence == held.get('source_sequence')
+            and receipt.final_publisher_instance_id == final_publisher_instance_id
+            and receipt_identity == list(held.get('identity', ()))
+            and facts.get('source_instance_id') == receipt.source_instance_id
+            and facts.get('source_sequence') == receipt.sequence
+            and facts.get('publish_sequence') == receipt.final_publish_sequence
+            and identity == receipt_identity
+            and all(value == 0.0 for value in components)
+            and facts['steady_ns'] >= held.get('release_after_ns', 0))
+        if exact_safe_stop:
+            expected_publications += 1
+        else:
+            errors.append('new-context publication is not the released bound zero SAFE_STOP')
+    if expected_publications != 1:
+        errors.append('released zero SAFE_STOP publication count is not exactly one')
+    return errors
+
+
 def r04d_ingress_lifecycle_delay_s(safety_lifecycle_delay_s):
     """Keep ingress bound until after both lifecycle consumers can switch."""
     if (type(safety_lifecycle_delay_s) not in (int, float)
@@ -8572,11 +8645,16 @@ async def training_child(path):
                 held_zero = [row['facts'] for row in final_rows
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
                     and row.get('facts', {}).get('identity') == expected_lifecycle_identity]
-                published_new_context = [row['facts'] for row in final_rows
-                    if row.get('event') == 'FINAL_PUBLISHED'
-                    and int(row.get('facts', {}).get('steady_ns', 0)) >= marker_armed_ns
-                    and row.get('facts', {}).get('identity') != [int(baseline_lifecycle.episode_generation),
-                        int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)]]
+                released_zero = [row['facts'] for row in final_rows
+                    if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
+                    and row.get('facts', {}).get('identity') == expected_lifecycle_identity]
+                publication_errors = r04d_unexpected_new_context_publications(
+                    final_rows, marker_armed_ns=marker_armed_ns,
+                    baseline_identity=[int(baseline_lifecycle.episode_generation),
+                        int(baseline_lifecycle.reset_epoch), int(baseline_lifecycle.runtime_generation)],
+                    held_safe_stops=held_zero, released_safe_stops=released_zero,
+                    safe_stop_source_instance_id=int(io.safe_stop_source_id),
+                    final_publisher_instance_id=int(io.final.publisher_instance_id))
                 if (scheduled is None or delayed is None or scheduled.get('source_stamp_ns') is None
                         or delayed['delivery_ns'] - scheduled['callback_received_ns'] < 650_000_000
                         or rejected.get('ros_ns', 0) - scheduled['source_stamp_ns'] <= 500_000_000
@@ -8589,7 +8667,7 @@ async def training_child(path):
                         or ingress_delivered['delivery_ns'] - ingress_scheduled['received_ns'] <= 500_000_000
                         or state.get('repeat_held', 0) < 1
                         or state.get('ingress_repeats_held', 0) < 1
-                        or not held_zero or published_new_context):
+                        or not held_zero or not released_zero or publication_errors):
                     raise RuntimeError('R04d Safety rejection is not bound to delayed stale lifecycle source')
                 issued_path = Path(packet['run_root'])/'policy_adapter_issued.jsonl'
                 commit_path = Path(packet['run_root'])/'b1_transition_committed.jsonl'
@@ -8605,7 +8683,8 @@ async def training_child(path):
                     'safety_repeat_callbacks_held':state['repeat_held'],
                     'ingress_repeat_callbacks_held':state['ingress_repeats_held'],
                     'final_new_context_safe_stop_held':len(held_zero),
-                    'final_new_context_receipts_published':len(published_new_context),
+                    'final_new_context_safe_stop_released':len(released_zero),
+                    'final_new_context_publication_errors':publication_errors,
                     'source_stamp_ns':scheduled['source_stamp_ns'],
                     'source_ros_age_ns':rejected['ros_ns']-scheduled['source_stamp_ns'],
                     'no_policy_issued':True,'b1_commits_before_fault':prior_commits,

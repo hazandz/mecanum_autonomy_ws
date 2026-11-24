@@ -4440,6 +4440,44 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
         assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
 
 
+def test_r04d_accepts_only_the_bound_zero_safe_stop_after_release():
+    from types import SimpleNamespace as NS
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_unexpected_new_context_publications
+
+    identity = [2, 2, 3]
+    held = {'source_sequence':83, 'source_instance_id':77, 'identity':identity,
+        'received_ns':100, 'release_after_ns':800}
+    released = {'source_sequence':83, 'identity':identity,
+        'received_ns':100, 'delivery_ns':810}
+    receipt = NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=77,
+        sequence=83, final_publisher_instance_id=99, final_publish_sequence=4,
+        episode_generation=2, reset_epoch=2, runtime_generation=3,
+        final_command=NS(linear=NS(x=0.0, y=0.0, z=0.0),
+            angular=NS(x=0.0, y=0.0, z=0.0)))
+    row = {'event':'FINAL_PUBLISHED', 'facts':{'steady_ns':805,
+        'identity':identity, 'source_instance_id':77, 'source_sequence':83,
+        'publisher_instance_id':99, 'publish_sequence':4, 'receipt_cdr_hex':'01'}}
+    decode = lambda raw: receipt if raw == b'\x01' else None
+    kwargs = {'marker_armed_ns':90, 'baseline_identity':[1,2,3],
+        'held_safe_stops':[held], 'released_safe_stops':[released],
+        'safe_stop_source_instance_id':77, 'final_publisher_instance_id':99,
+        'decode_receipt':decode}
+
+    assert r04d_unexpected_new_context_publications([row], **kwargs) == []
+
+    receipt.source = CommandEnvelope.SOURCE_POLICY
+    assert r04d_unexpected_new_context_publications([row], **kwargs)
+    receipt.source = CommandEnvelope.SOURCE_SAFE_STOP
+    receipt.final_command.linear.x = 0.01
+    assert r04d_unexpected_new_context_publications([row], **kwargs)
+    receipt.final_command.linear.x = 0.0
+    row['facts']['steady_ns'] = 799
+    assert r04d_unexpected_new_context_publications([row], **kwargs)
+    row['facts']['steady_ns'] = 805
+    assert r04d_unexpected_new_context_publications([row, row], **kwargs)
+
+
 def test_r04d_final_publisher_keeps_bound_identity_until_stale_safety_window():
     import json
     from pathlib import Path
