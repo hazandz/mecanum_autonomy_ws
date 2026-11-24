@@ -4440,7 +4440,7 @@ def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation():
         assert events[1][0]=='R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
 
 
-def test_r04d_accepts_only_the_bound_zero_safe_stop_after_release():
+def test_r04d_accepts_released_zero_safe_stop_with_other_safe_stops_still_held():
     from types import SimpleNamespace as NS
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_unexpected_new_context_publications
@@ -4448,6 +4448,8 @@ def test_r04d_accepts_only_the_bound_zero_safe_stop_after_release():
     identity = [2, 2, 3]
     held = {'source_sequence':83, 'source_instance_id':77, 'identity':identity,
         'received_ns':100, 'release_after_ns':800}
+    held_later = {'source_sequence':84, 'source_instance_id':77, 'identity':identity,
+        'received_ns':200, 'release_after_ns':900}
     released = {'source_sequence':83, 'identity':identity,
         'received_ns':100, 'delivery_ns':810}
     receipt = NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=77,
@@ -4460,11 +4462,15 @@ def test_r04d_accepts_only_the_bound_zero_safe_stop_after_release():
         'publisher_instance_id':99, 'publish_sequence':4, 'receipt_cdr_hex':'01'}}
     decode = lambda raw: receipt if raw == b'\x01' else None
     kwargs = {'marker_armed_ns':90, 'baseline_identity':[1,2,3],
-        'held_safe_stops':[held], 'released_safe_stops':[released],
+        'held_safe_stops':[held, held_later], 'released_safe_stops':[released],
         'safe_stop_source_instance_id':77, 'final_publisher_instance_id':99,
         'decode_receipt':decode}
 
     assert r04d_unexpected_new_context_publications([row], **kwargs) == []
+    assert r04d_unexpected_new_context_publications([row],
+        **{**kwargs, 'released_safe_stops':[]})
+    assert r04d_unexpected_new_context_publications([row],
+        **{**kwargs, 'released_safe_stops':[released, released]})
 
     receipt.source = CommandEnvelope.SOURCE_POLICY
     assert r04d_unexpected_new_context_publications([row], **kwargs)

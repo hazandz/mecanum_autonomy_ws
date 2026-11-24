@@ -1278,22 +1278,37 @@ def r04d_unexpected_new_context_publications(rows, *, marker_armed_ns,
         decode_receipt = lambda raw: deserialize_message(raw, FinalIssuedCommandReceipt)
 
     errors = []
-    if len(held_safe_stops) != 1 or len(released_safe_stops) != 1:
-        return ['expected one held and one released new-context SAFE_STOP']
-    held = held_safe_stops[0]
-    released = released_safe_stops[0]
-    held_key = (held.get('source_sequence'), tuple(held.get('identity', ())),
-        held.get('source_instance_id'))
-    released_key = (released.get('source_sequence'), tuple(released.get('identity', ())),
-        released.get('source_instance_id', held.get('source_instance_id')))
-    if (held_key != released_key
-            or held.get('source_instance_id') != safe_stop_source_instance_id
-            or type(held.get('release_after_ns')) is not int
-            or type(released.get('delivery_ns')) is not int
-            or released['delivery_ns'] < held['release_after_ns']):
-        errors.append('held/released SAFE_STOP identity or release timing mismatch')
+    held_by_key = {}
+    for held in held_safe_stops:
+        key = (held.get('source_sequence'), tuple(held.get('identity', ())),
+            held.get('source_instance_id'))
+        if (type(held.get('source_sequence')) is not int
+                or held.get('source_instance_id') != safe_stop_source_instance_id
+                or type(held.get('release_after_ns')) is not int
+                or not key[1] or list(key[1]) == baseline_identity
+                or key in held_by_key):
+            errors.append('held SAFE_STOP identity or release timing is invalid')
+            continue
+        held_by_key[key] = held
+    if not held_by_key:
+        errors.append('no bound new-context SAFE_STOP was held')
+
+    released_keys = set()
+    for released in released_safe_stops:
+        key = (released.get('source_sequence'), tuple(released.get('identity', ())),
+            released.get('source_instance_id', safe_stop_source_instance_id))
+        held = held_by_key.get(key)
+        if (held is None or key in released_keys
+                or type(released.get('delivery_ns')) is not int
+                or released['delivery_ns'] < held['release_after_ns']):
+            errors.append('released SAFE_STOP has no matching held identity or is early/duplicate')
+            continue
+        released_keys.add(key)
+    if not released_keys:
+        errors.append('no held SAFE_STOP release was observed')
 
     expected_publications = 0
+    publication_sequences = set()
     for row in rows:
         if row.get('event') != 'FINAL_PUBLISHED':
             continue
@@ -1314,27 +1329,34 @@ def r04d_unexpected_new_context_publications(rows, *, marker_armed_ns,
             continue
         receipt_identity = [int(receipt.episode_generation), int(receipt.reset_epoch),
             int(receipt.runtime_generation)]
+        receipt_key = (int(receipt.sequence), tuple(receipt_identity),
+            int(receipt.source_instance_id))
+        held = held_by_key.get(receipt_key)
+        released = receipt_key in released_keys
         command = receipt.final_command
         components = (command.linear.x, command.linear.y, command.linear.z,
             command.angular.x, command.angular.y, command.angular.z)
         exact_safe_stop = (
             receipt.source == CommandEnvelope.SOURCE_SAFE_STOP
             and receipt.source_instance_id == safe_stop_source_instance_id
-            and receipt.sequence == held.get('source_sequence')
+            and held is not None
+            and released
             and receipt.final_publisher_instance_id == final_publisher_instance_id
-            and receipt_identity == list(held.get('identity', ()))
+            and receipt_identity == list(held['identity'])
             and facts.get('source_instance_id') == receipt.source_instance_id
             and facts.get('source_sequence') == receipt.sequence
             and facts.get('publish_sequence') == receipt.final_publish_sequence
             and identity == receipt_identity
             and all(value == 0.0 for value in components)
-            and facts['steady_ns'] >= held.get('release_after_ns', 0))
+            and facts['steady_ns'] >= held['release_after_ns']
+            and receipt.final_publish_sequence not in publication_sequences)
         if exact_safe_stop:
             expected_publications += 1
+            publication_sequences.add(receipt.final_publish_sequence)
         else:
             errors.append('new-context publication is not the released bound zero SAFE_STOP')
-    if expected_publications != 1:
-        errors.append('released zero SAFE_STOP publication count is not exactly one')
+    if expected_publications < 1:
+        errors.append('no released zero SAFE_STOP publication was observed')
     return errors
 
 
@@ -8641,6 +8663,13 @@ async def training_child(path):
                     source_stamp_ns=scheduled['source_stamp_ns']),
                     deadline_ns=verification_deadline_ns,
                     phase='R04d delivered stale lifecycle rejected by actual Safety')
+                final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
+                await io.until(lambda: next((row.get('facts', {}) for row in
+                    _ledger_rows(packet['run_root'], 'final-events.jsonl')
+                    if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
+                    and row.get('facts', {}).get('identity') == expected_lifecycle_identity), None),
+                    deadline_ns=verification_deadline_ns,
+                    phase='R04d bound zero SAFE_STOP released after hold')
                 final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
                 held_zero = [row['facts'] for row in final_rows
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
