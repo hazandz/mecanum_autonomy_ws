@@ -2952,13 +2952,12 @@ def _new_local_training_safety_executor(context):
     return MultiThreadedExecutor(num_threads=4, context=context)
 
 
-# The native command watchdog is only 100 ms. A wait-set call that is nominally
-# bounded to 1 ms can still oversleep under queued callbacks (observed as a
-# 58 ms non-CPU wait on Jazzy), which leaves too little time for scan-cutoff
-# deferral and the first POLICY receipt. Poll without blocking and retain the
-# explicit 1 ms GIL yield below; this changes scheduling only, not Safety's
-# timer, freshness, cutoff, or watchdog limits.
-SAFETY_EXECUTOR_WAIT_S = 0.0
+# The steady Safety timer is itself the executor wakeup deadline. Waiting for
+# the next ready callback or timer avoids repeatedly rebuilding a ROS wait set
+# between timer ticks. Keep the explicit yield after each callback so queued
+# reliable samples cannot monopolize the GIL; Safety's timer, freshness,
+# cutoff, and native watchdog limits remain unchanged.
+SAFETY_EXECUTOR_WAIT_S = None
 SAFETY_EXECUTOR_GIL_YIELD_S = 0.001
 
 

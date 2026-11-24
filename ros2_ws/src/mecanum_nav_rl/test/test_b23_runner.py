@@ -123,6 +123,23 @@ def test_safety_executor_cycle_diagnostic_omits_normal_cycle():
         completed_thread_cpu_ns=650_000) is None
 
 
+def test_safety_executor_waits_for_ready_timer_instead_of_zero_timeout_polling(monkeypatch):
+    calls = []
+
+    class ReadyExecutor:
+        def spin_once(self, *, timeout_sec):
+            calls.append(timeout_sec)
+            worker.stop_requested = True
+
+    worker = NS(stop_requested=False, safety_executor_error=None,
+        safety_executor=ReadyExecutor(), emit=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner_module.time, 'sleep', lambda _seconds: None)
+
+    TrainingWorkerIO._spin_safety_executor(worker)
+
+    assert calls == [None]
+
+
 def test_worker_async_task_snapshot_captures_suspended_production_task():
     async def blocked_worker():
         release = asyncio.Event()
@@ -494,7 +511,7 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     assert observed['safety_thread'] == 'b23-safety-steady-executor'
     assert observed['main_thread'] != observed['safety_thread']
     assert observed['main_timeout'] == 0.0
-    assert observed['safety_timeout'] == 0.0
+    assert observed['safety_timeout'] is None
     assert observed['safety_shutdown_timeout'] == 1.0
     assert observed['context_shutdown'] is True
     assert worker.safety_thread is not None and not worker.safety_thread.is_alive()
