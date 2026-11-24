@@ -3713,6 +3713,24 @@ private:
     {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     receive_ns = steady_clock_now_();
+    // R02d holds the first real POLICY receipt until a later INHIBIT closes
+    // admission. Suppress subsequent POLICY receipts while that exact receipt
+    // is held; otherwise a later publication can cross the injected hold and
+    // fault the gate on the missing sequence before the intended close edge.
+    if (msg.source == Receipt::SOURCE_POLICY && held_policy_receipt_ &&
+        receipt_fault_mode_ == "hold_policy_until_inhibit")
+    {
+      EmitStructuredDiagnostic([&]() {
+        gzmsg << "B23_POLICY_RECEIPT_SUPPRESSED_WHILE_HELD"
+            << " publisher=" << msg.final_publisher_instance_id
+            << " sequence=" << msg.final_publish_sequence
+            << " source_sequence=" << msg.sequence
+            << " held_sequence=" << held_policy_receipt_->first.key.publish_sequence
+            << " receive_ns=" << receive_ns << std::endl;
+        std::fflush(stdout);
+      });
+      return;
+    }
     if (msg.source == Receipt::SOURCE_POLICY && !receipt_fault_used_ &&
         !receipt_fault_mode_.empty())
     {

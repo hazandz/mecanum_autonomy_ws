@@ -817,6 +817,12 @@ public:
     if (!system.gate_) throw std::runtime_error("test receipt gate missing");
   }
 
+  static void HoldPolicyReceiptUntilInhibit(BackendSystem &system)
+  {
+    system.receipt_fault_mode_ = "hold_policy_until_inhibit";
+    if (!system.gate_) throw std::runtime_error("test receipt gate missing");
+  }
+
   static void InvalidateReceiptGate(BackendSystem &system, const std::string &reason)
   {
     if (!system.gate_) throw std::runtime_error("test receipt gate missing");
@@ -3984,6 +3990,74 @@ TEST(BackendSystemReceiptFault, LateHeldPolicyReceiptDoesNotAddQueueFault)
             "actuator_watchdog_expired");
   EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
       << "từ chối receipt muộn dự kiến không được nâng thành FAULT_QUEUE";
+}
+
+TEST(BackendSystemReceiptFault, InhibitHoldSuppressesLaterPolicyUntilClose)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::SeedRunDescriptor(system);
+  BackendSystemTestPeer::SeedPolicyAdmissionGateForOrdering(system);
+  BackendSystemTestPeer::HoldPolicyReceiptUntilInhibit(system);
+
+  Receipt policy;
+  policy.header.frame_id = "base_link";
+  SetStamp(policy.header.stamp, 130);
+  policy.final_publisher_instance_id = 11;
+  policy.final_publish_sequence = 2;
+  policy.episode_generation = 2;
+  policy.reset_epoch = 3;
+  policy.runtime_generation = 4;
+  policy.step_index = 1;
+  policy.transition_id = "policy-step-1";
+  policy.source = Receipt::SOURCE_POLICY;
+  policy.sequence = 1;
+  policy.source_instance_id = 22;
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'010);
+  BackendSystemTestPeer::EarlyReceipt(system, policy);
+  ASSERT_TRUE(BackendSystemTestPeer::HeldPolicyReceipt(system));
+
+  auto later_policy = policy;
+  later_policy.final_publish_sequence = 3;
+  later_policy.sequence = 2;
+  later_policy.step_index = 2;
+  later_policy.transition_id = "policy-step-2";
+  SetStamp(later_policy.header.stamp, 140);
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'020);
+  BackendSystemTestPeer::EarlyReceipt(system, later_policy);
+
+  const auto before_close = BackendSystemTestPeer::ConsumeNextGateReceipt(
+      system, 150, 2'000'000'030);
+  EXPECT_EQ(before_close.disposition, GateDisposition::Inhibited)
+      << before_close.reason;
+  EXPECT_FALSE(BackendSystemTestPeer::ReceiptGateFaulted(system));
+  EXPECT_TRUE(BackendSystemTestPeer::HeldPolicyReceipt(system));
+  EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u);
+
+  SafetyInput close;
+  SetStamp(close.header.stamp, 150);
+  close.header.frame_id = "base_link";
+  close.schema_version = SafetyInput::SCHEMA_VERSION;
+  close.session_id = "test-session";
+  close.config_hash = std::string(64, 'a');
+  close.ingress_instance_id = 7;
+  close.sample_sequence = 1;
+  close.episode_generation = 2;
+  close.reset_epoch = 3;
+  close.runtime_generation = 4;
+  close.admission_state = SafetyInput::ADMISSION_INHIBITED;
+  BackendSystemTestPeer::SetSteadyClockNow(system, 2'000'000'040);
+  BackendSystemTestPeer::ReceiveSafetyInput(system, close);
+  BackendSystemTestPeer::ProcessCallbackInputs(system, 150, 2'000'000'050);
+
+  EXPECT_FALSE(BackendSystemTestPeer::HeldPolicyReceipt(system));
+  EXPECT_FALSE(BackendSystemTestPeer::PolicyOpen(system));
+  EXPECT_EQ(BackendSystemTestPeer::CallbackFaultFlags(system), 0u)
+      << "the deliberate late release is not a callback queue failure";
+  const auto after_close = BackendSystemTestPeer::ConsumeNextGateReceipt(
+      system, 160, 2'000'000'060);
+  EXPECT_EQ(after_close.disposition, GateDisposition::Faulted);
+  EXPECT_EQ(after_close.reason, "policy_issuance_binding_mismatch");
+  EXPECT_TRUE(BackendSystemTestPeer::ReceiptGateFaulted(system));
 }
 
 TEST(BackendSystemControlReceiver, ResetBindReanchorsOnlyAppliedZeroWatchdogFault)
