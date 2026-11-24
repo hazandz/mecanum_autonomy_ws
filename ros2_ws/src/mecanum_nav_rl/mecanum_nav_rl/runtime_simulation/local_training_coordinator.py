@@ -435,7 +435,7 @@ class LocalTrainingB1Adapter:
                     else next(reversed(source.noisy_samples))),
             })
         scan, noisy = source.scans[cutoff_ns], source.noisy_samples[cutoff_ns]
-        pairs = [pair for pair in source.physics_pairs if pair.stamp_ns == cutoff_ns]
+        pairs = source.physics_pairs_at(cutoff_ns)
         if len(pairs) != 1:
             raise B1SnapshotPending('exact oracle/backend iteration pair is not available')
         pair = pairs[0]
@@ -1032,8 +1032,7 @@ class LocalTrainingB1Adapter:
             for sample_cutoff in candidate_stamps:
                 scan = source.scans.get(sample_cutoff)
                 noisy = source.noisy_samples.get(sample_cutoff)
-                pairs = [pair for pair in source.physics_pairs
-                         if pair.stamp_ns == sample_cutoff]
+                pairs = source.physics_pairs_at(sample_cutoff)
                 if scan is None or noisy is None or len(pairs) != 1:
                     self.emit('GOAL_SETTLE_SAMPLE_GAP', {
                         'cutoff_ns': sample_cutoff,

@@ -125,6 +125,11 @@ class LocalTrainingIngress:
         self._pause_transition = None
         self._paused_pose_raw = None
         self._last_join_iteration = 0
+        # Keep exact Physics pairs addressable by their source stamp. B1 may
+        # evaluate many retained scan cutoffs while waiting for a receipt;
+        # scanning the 4096-entry history for every cutoff starves the live
+        # receive path and can evict the exact noisy sample being joined.
+        self._physics_pairs_by_stamp = {}
         self._sample_sequence = 0
         self.last_published_admission_state = None
         self.last_published_sample_sequence = 0
@@ -203,6 +208,7 @@ class LocalTrainingIngress:
                 if lifecycle_identity(raw) != lifecycle_identity(self.lifecycle):
                     self.noisy_samples.clear(); self.scans.clear()
                     self._oracles.clear(); self._states.clear(); self.physics_pairs.clear()
+                    self._clear_physics_pair_index()
                     self.safety_states.clear()
                     self.pending_ack = self.observation0_ack = None
                     self.admission_state = LocalTrainingSafetyInput.ADMISSION_INHIBITED
@@ -228,6 +234,7 @@ class LocalTrainingIngress:
             self._noise_ready = True
             self.noisy_samples.clear(); self.scans.clear()
             self._oracles.clear(); self._states.clear(); self.physics_pairs.clear()
+            self._clear_physics_pair_index()
             self.safety_states.clear()
             self._last_join_iteration = 0
             self.emit('EMULATOR_RESET', {'seed': seed, 'steady_ns': self.now()})
@@ -287,6 +294,7 @@ class LocalTrainingIngress:
             self._oracles.clear()
             self._states.clear()
             self.physics_pairs.clear()
+            self._clear_physics_pair_index()
             self._last_gt_stamp, self._last_gt_bytes = -1, None
             self._last_join_iteration = 0
             return {
@@ -561,10 +569,40 @@ class LocalTrainingIngress:
         self._last_join_iteration = status.physics_iteration
         pair = TrustedPhysicsPair(stamp, status.physics_iteration, oracle, backend,
                                   oracle_received, backend_received)
-        self.physics_pairs.append(pair)
+        self._retain_physics_pair(pair)
         return ('PHYSICS_PAIR', {'iteration': pair.iteration, 'stamp_ns': stamp,
             'oracle_received_ns': oracle_received, 'backend_received_ns': backend_received,
             'trusted_oracle_cdr_hex': oracle.hex(), 'backend_cdr_hex': backend.hex()})
+
+    def _retain_physics_pair(self, pair):
+        """Retain a bounded pair and its exact-stamp index in lockstep."""
+        stamp = pair.stamp_ns
+        indexed = getattr(self, '_physics_pairs_by_stamp', None)
+        if not isinstance(indexed, dict):
+            indexed = self._physics_pairs_by_stamp = {}
+        if stamp in indexed:
+            self._fail('duplicate joined physics pair source stamp')
+        capacity = self.physics_pairs.maxlen
+        if capacity is not None and len(self.physics_pairs) >= capacity:
+            expired = self.physics_pairs.popleft()
+            indexed.pop(expired.stamp_ns, None)
+        self.physics_pairs.append(pair)
+        indexed[stamp] = pair
+
+    def _clear_physics_pair_index(self):
+        indexed = getattr(self, '_physics_pairs_by_stamp', None)
+        if isinstance(indexed, dict):
+            indexed.clear()
+
+    def physics_pairs_at(self, stamp):
+        """Return pairs at one exact stamp without scanning production history."""
+        indexed = getattr(self, '_physics_pairs_by_stamp', None)
+        if isinstance(indexed, dict) and len(indexed) == len(self.physics_pairs):
+            pair = indexed.get(stamp)
+            return () if pair is None else (pair,)
+        # Compatibility for narrow offline fixtures that replace the deque
+        # directly; production callbacks keep the index and deque in lockstep.
+        return tuple(pair for pair in self.physics_pairs if pair.stamp_ns == stamp)
 
     def on_scan(self, msg):
         from sensor_msgs.msg import LaserScan

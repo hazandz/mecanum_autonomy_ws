@@ -3546,6 +3546,36 @@ def test_r07b_verified_time_rollback_starts_new_physics_pair_epoch_before_ingres
     assert pair[1]['iteration'] == 1
 
 
+def test_exact_physics_pair_index_tracks_bounded_history_without_scanning():
+    from collections import deque
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+
+    class CountingDeque(deque):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    ingress = object.__new__(LocalTrainingIngress)
+    old = NS(stamp_ns=10, iteration=1)
+    current = NS(stamp_ns=20, iteration=2)
+    ingress.physics_pairs = CountingDeque([old, current], maxlen=2)
+    ingress._physics_pairs_by_stamp = {10: old, 20: current}
+
+    assert ingress.physics_pairs_at(20) == (current,)
+    assert ingress.physics_pairs_at(15) == ()
+    assert ingress.physics_pairs.iterations == 0
+
+    # Production retention evicts the same oldest entry from both structures.
+    next_pair = NS(stamp_ns=30, iteration=3)
+    ingress._retain_physics_pair(next_pair)
+    assert list(ingress.physics_pairs) == [current, next_pair]
+    assert ingress.physics_pairs_at(10) == ()
+    assert ingress.physics_pairs_at(20) == (current,)
+    assert ingress.physics_pairs_at(30) == (next_pair,)
+
+
 def test_r07b_pair_epoch_reset_rejects_unbound_or_nonzero_status_without_mutation():
     from collections import OrderedDict, deque
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendSessionIdentity
