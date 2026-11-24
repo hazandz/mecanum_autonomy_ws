@@ -244,6 +244,22 @@ def test_worker_thread_identity_snapshot_maps_native_ids_to_python_threads(monke
     ]
 
 
+def test_worker_thread_identity_snapshot_keeps_unstarted_thread_diagnostic_nonfatal(monkeypatch):
+    thread = NS(native_id=None, name='not_started', ident=None, daemon=True)
+    monkeypatch.setattr(runner_module.threading, 'enumerate', lambda: [thread])
+    calls = []
+    monkeypatch.setattr(runner_module.time, 'pthread_getcpuclockid',
+        lambda ident: calls.append(ident))
+
+    snapshot = worker_thread_identity_snapshot()
+
+    assert calls == []
+    assert snapshot == [{
+        'native_id':None,'name':'not_started','ident':None,'daemon':True,
+        'thread_cpu_ns':None,'thread_cpu_error':'thread ident unavailable',
+    }]
+
+
 def test_worker_thread_identity_snapshot_can_capture_bounded_python_stacks(monkeypatch):
     import sys
     current = threading.current_thread()

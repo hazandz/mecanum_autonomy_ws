@@ -339,11 +339,14 @@ def worker_thread_identity_snapshot(*, capture_python_stacks=False):
         row = {'native_id':thread.native_id, 'name':thread.name,
                'ident':thread.ident, 'daemon':thread.daemon,
                'thread_cpu_ns':None, 'thread_cpu_error':None}
-        try:
-            clock_id = time.pthread_getcpuclockid(thread.ident)
-            row['thread_cpu_ns'] = time.clock_gettime_ns(clock_id)
-        except (OSError, OverflowError, ValueError, AttributeError) as error:
-            row['thread_cpu_error'] = repr(error)
+        if thread.ident is None:
+            row['thread_cpu_error'] = 'thread ident unavailable'
+        else:
+            try:
+                clock_id = time.pthread_getcpuclockid(thread.ident)
+                row['thread_cpu_ns'] = time.clock_gettime_ns(clock_id)
+            except (OSError, OverflowError, ValueError, TypeError, AttributeError) as error:
+                row['thread_cpu_error'] = repr(error)
         if capture_python_stacks:
             frame = frames.get(thread.ident)
             stack = []
