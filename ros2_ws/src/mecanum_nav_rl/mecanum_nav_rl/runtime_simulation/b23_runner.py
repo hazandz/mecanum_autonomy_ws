@@ -2810,6 +2810,16 @@ async def await_r02_late_receipt_close(io, *, release_predicate, deadline_ns,
         expected_native_fault_flags=allowed_transition)
 
 
+async def await_r02_held_policy_receipt(io, *, held_predicate, deadline_ns):
+    """Wait for the exact native hold marker across its expected close-fault race."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    stale = SimulationContactState.FAULT_COMMAND_STALE
+    sequence_stale = SimulationContactState.FAULT_COMMAND_SEQUENCE | stale
+    return await io.until(held_predicate, deadline_ns=deadline_ns,
+        phase='native held exact final POLICY receipt',
+        expected_native_fault_flags=(stale, sequence_stale))
+
+
 def verify_guard_authority(packet, authority, packet_sha256):
     """Bind a capacity-one guard to the packet's case, phase, and run."""
     expected_phase = campaign_phase(packet['case'])
@@ -7013,8 +7023,8 @@ class TrainingWorkerIO:
                     and row.get('fields', {}).get('mode') == expected_mode
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
                     and row.get('fields', {}).get('source_sequence') == str(token.step_index)), None)
-            await self.until(held_row, deadline_ns=deadline,
-                phase='native held exact final POLICY receipt')
+            await await_r02_held_policy_receipt(self, held_predicate=held_row,
+                deadline_ns=deadline)
             self.safety.local_training.set_policy_hold(True)
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()

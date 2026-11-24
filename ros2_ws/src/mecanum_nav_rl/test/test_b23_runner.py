@@ -5846,6 +5846,43 @@ def test_r02_close_marker_remains_observable_when_expected_fault_arrives_first()
             expected_native_fault_flags=expected))
 
 
+def test_r02_held_marker_remains_observable_across_expected_close_fault():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import await_r02_held_policy_receipt
+    expected = (SimulationContactState.FAULT_COMMAND_SEQUENCE
+        | SimulationContactState.FAULT_COMMAND_STALE)
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected, local_zero_override=True)
+    calls = {'count':0}
+    marker = {'value':None}
+
+    async def delayed_native_event_flush(_duration_s):
+        calls['count'] += 1
+        clock.ns += 1_000_000
+        if calls['count'] == 2:
+            marker['value'] = {'kind':'B23_POLICY_RECEIPT_HELD',
+                'sequence':'58','source_sequence':'1'}
+        await asyncio.sleep(0)
+
+    value.pause = delayed_native_event_flush
+    expected_marker = marker
+    # The native sequence/stale fault may reach the worker before its stdout
+    # event writer exposes the exact hold marker. The wait may tolerate only
+    # this packet-pinned close transition and must still require that marker.
+    result = asyncio.run(await_r02_held_policy_receipt(value,
+        held_predicate=lambda: marker['value'], deadline_ns=clock.ns+5_000_000))
+    assert result == expected_marker['value']
+    assert result['sequence'] == '58'
+    assert calls['count'] == 2
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected
+        | SimulationContactState.FAULT_CLOCK, local_zero_override=True)
+    with pytest.raises(RuntimeError, match='native fault flags=70'):
+        asyncio.run(await_r02_held_policy_receipt(value,
+            held_predicate=lambda: None, deadline_ns=clock.ns+5_000_000))
+
+
 def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted():
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02e_prebind_admission_rejected
     identity = {'session':'session-1','backend':'22','ingress':'11'}
@@ -6619,7 +6656,9 @@ def test_r02_held_receipt_path_runs_production_safety_tick_before_native_hold_wa
             and node.func.attr == 'tick_policy_after_deferred_scan_cutoff'
             for node in ast.walk(statement)))
     wait_receipt = next(index for index, statement in enumerate(body)
-        if any(isinstance(node, ast.Constant) and node.value == 'native held exact final POLICY receipt'
+        if any(isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == 'await_r02_held_policy_receipt'
             for node in ast.walk(statement)))
     assert release_hold < immediate_tick < wait_receipt
     assert release_hold < stream_on < immediate_tick
@@ -6700,11 +6739,8 @@ def test_r02_late_receipt_path_runs_immediate_production_safety_tick_before_hold
         and node.value.func.attr == 'tick_policy_after_deferred_scan_cutoff')
     held_wait_line = next(node.lineno for node in ast.walk(close_branch)
         if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Attribute)
-        and node.value.func.attr == 'until'
-        and any(isinstance(value, ast.Constant)
-            and value.value == 'native held exact final POLICY receipt'
-            for value in ast.walk(node)))
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == 'await_r02_held_policy_receipt')
     assert tick_line < held_wait_line, 'R02 must tick the production selector before waiting on the native hold'
     assert any(isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == 'policy_receipt'
