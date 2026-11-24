@@ -4439,6 +4439,15 @@ def test_r04d_final_lifecycle_delivery_is_pinned_to_sequence_and_identity():
         [wrong_sequence, wrong_identity], sequence=6, identity=[2,2,2]) is None
 
 
+def test_r04d_final_lifecycle_delivery_accepts_later_sequence_for_same_identity():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_final_lifecycle_delivery
+
+    final_delivery = {'event':'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED','facts':{
+        'sequence':6, 'identity':[2,2,2], 'delivery_ns':700}}
+    assert r04d_final_lifecycle_delivery(
+        [final_delivery], sequence=5, identity=[2,2,2]) == final_delivery['facts']
+
+
 def test_r04d_final_new_context_safe_stop_is_held_for_identity_isolation(monkeypatch):
     import json
     from pathlib import Path

@@ -1257,10 +1257,11 @@ def r04d_stale_safety_rejection_after_delivery(events, *, delivery_ns, source_st
 
 
 def r04d_final_lifecycle_delivery(rows, *, sequence, identity):
-    """Find the exact live final-publisher lifecycle delivery for this reset."""
+    """Find a live final-publisher delivery at or beyond this identity's sequence."""
     return next((row.get('facts', {}) for row in rows
         if row.get('event') == 'R04D_FINAL_LIFECYCLE_DELIVERY_COMPLETED'
-        and row.get('facts', {}).get('sequence') == sequence
+        and type(row.get('facts', {}).get('sequence')) is int
+        and row.get('facts', {}).get('sequence') >= sequence
         and row.get('facts', {}).get('identity') == identity
         and type(row.get('facts', {}).get('delivery_ns')) is int), None)
 
