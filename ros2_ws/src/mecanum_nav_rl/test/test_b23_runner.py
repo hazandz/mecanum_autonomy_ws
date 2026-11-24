@@ -45,6 +45,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
     worker_async_task_snapshot, spin_ready_callback_batch,
     spin_receipt_executor_until_stopped, instrument_executor_waits,
+    r08_final_callback_diagnostic,
 )
 
 
@@ -402,6 +403,57 @@ def test_final_child_evidence_callback_is_decoupled_from_blocked_filesystem_sink
     assert len(rows) == 1
     assert rows[0][0:2] == ('FINAL_PUBLISHED', {'publish_sequence':7})
     assert type(rows[0][2]) is int and rows[0][2] > 0
+
+
+def test_r08_final_callback_diagnostic_records_receiver_gap_and_slow_callback():
+    now = {'ns':100}
+    events = []
+    def callback(_node, _envelope):
+        now['ns'] += 30_000_000
+        return 'published'
+    wrapped = r08_final_callback_diagnostic(callback,
+        lambda name, facts: events.append((name, facts)),
+        monotonic_ns=lambda:now['ns'])
+    first = NS(sequence=775, source=4, episode_generation=4,
+        reset_epoch=4, runtime_generation=5)
+    second = NS(sequence=780, source=4, episode_generation=4,
+        reset_epoch=4, runtime_generation=5)
+
+    assert wrapped(object(), first) == 'published'
+    now['ns'] = 3_000_000_200
+    assert wrapped(object(), second) == 'published'
+
+    assert [name for name, _ in events] == [
+        'FINAL_CALLBACK_SLOW', 'FINAL_CALLBACK_ARRIVAL_GAP',
+        'FINAL_CALLBACK_SLOW']
+    gap = events[1][1]
+    assert gap == {
+        'previous_callback_ns':100,
+        'callback_started_ns':3_000_000_200,
+        'arrival_gap_ns':3_000_000_100,
+        'previous_sequence':775,
+        'previous_source':4,
+        'sequence':780,
+        'source':4,
+        'identity':[4, 4, 5],
+    }
+    assert events[2][1]['callback_elapsed_ns'] == 30_000_000
+
+
+def test_r08_final_callback_diagnostic_leaves_normal_callbacks_unrecorded():
+    now = {'ns':100}
+    events = []
+    def callback(_node, _envelope):
+        now['ns'] += 1_000_000
+        return None
+    wrapped = r08_final_callback_diagnostic(callback,
+        lambda name, facts: events.append((name, facts)),
+        monotonic_ns=lambda:now['ns'])
+    for sequence in (1, 2):
+        wrapped(object(), NS(sequence=sequence, source=4,
+            episode_generation=1, reset_epoch=1, runtime_generation=1))
+        now['ns'] += 200_000_000
+    assert events == []
 
 
 def test_queued_run_evidence_records_original_monotonic_collection_time(tmp_path):

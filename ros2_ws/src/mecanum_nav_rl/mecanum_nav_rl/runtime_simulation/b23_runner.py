@@ -7603,6 +7603,59 @@ def final_child_evidence_sink(root, *, role, run_id, invocation_id, capacity=409
     return QueuedRunEvidence(evidence, capacity=capacity)
 
 
+def r08_final_callback_diagnostic(original, record, *, monotonic_ns=None):
+    """Record only anomalous Final callback gaps/latency for an R08 diagnosis."""
+    clock = time.monotonic_ns if monotonic_ns is None else monotonic_ns
+    state = {'previous_ns':None, 'previous_sequence':None, 'previous_source':None}
+
+    def wrapped(node, envelope):
+        started_ns = clock()
+        previous_ns = state['previous_ns']
+        sequence = getattr(envelope, 'sequence', None)
+        source = getattr(envelope, 'source', None)
+        if previous_ns is not None and started_ns - previous_ns > 500_000_000:
+            record('FINAL_CALLBACK_ARRIVAL_GAP', {
+                'previous_callback_ns':previous_ns,
+                'callback_started_ns':started_ns,
+                'arrival_gap_ns':started_ns-previous_ns,
+                'previous_sequence':state['previous_sequence'],
+                'previous_source':state['previous_source'],
+                'sequence':sequence, 'source':source,
+                'identity':[getattr(envelope, 'episode_generation', None),
+                    getattr(envelope, 'reset_epoch', None),
+                    getattr(envelope, 'runtime_generation', None)],
+            })
+        state.update(previous_ns=started_ns, previous_sequence=sequence,
+            previous_source=source)
+        try:
+            result = original(node, envelope)
+        except BaseException as error:
+            completed_ns = clock()
+            elapsed_ns = completed_ns-started_ns
+            if elapsed_ns > 20_000_000:
+                record('FINAL_CALLBACK_SLOW', {
+                    'callback_started_ns':started_ns,
+                    'callback_completed_ns':completed_ns,
+                    'callback_elapsed_ns':elapsed_ns,
+                    'sequence':sequence, 'source':source,
+                    'exception_type':type(error).__name__,
+                })
+            raise
+        completed_ns = clock()
+        elapsed_ns = completed_ns-started_ns
+        if elapsed_ns > 20_000_000:
+            record('FINAL_CALLBACK_SLOW', {
+                'callback_started_ns':started_ns,
+                'callback_completed_ns':completed_ns,
+                'callback_elapsed_ns':elapsed_ns,
+                'sequence':sequence, 'source':source,
+                'exception_type':None,
+            })
+        return result
+
+    return wrapped
+
+
 def load_child_descriptor(path, role):
     """Child chỉ thuộc unit/parent/packet đã consume; không là CLI bypass guard."""
     import os
@@ -7657,6 +7710,7 @@ def final_child(path):
     error = None
     r04d_original_lifecycle = None
     r04d_original_accepted = None
+    r08_original_accepted = None
     try:
         rclpy.init(context=context)
         if packet['case'] == 'R04d':
@@ -7680,6 +7734,10 @@ def final_child(path):
             FinalTwistPublisherNode._on_accepted = r04d_final_safe_stop_dispatch(
                 r04d_original_accepted, marker_path, sink.record, schedule_steady,
                 safe_stop_source=CommandEnvelope.SOURCE_SAFE_STOP)
+        elif packet['case'] == 'R08':
+            r08_original_accepted = FinalTwistPublisherNode._on_accepted
+            FinalTwistPublisherNode._on_accepted = r08_final_callback_diagnostic(
+                r08_original_accepted, sink.record)
         node = FinalTwistPublisherNode(context=context, parameter_overrides=[
             Parameter('use_sim_time', value=True), Parameter('navigation_mode', value='LOCAL_TRAINING'),
             Parameter('session_id', value=descriptor['session_id']),
@@ -7694,12 +7752,34 @@ def final_child(path):
             'identity': process_identity(os.getpid()), 'publisher_instance_id': node.publisher_instance_id})
         applied = False
         active_cutoff = False
+        previous_spin_completed_ns = None
         while not stop and time.monotonic_ns() < descriptor['total_deadline_ns']:
             if not active_cutoff and time.monotonic_ns() >= descriptor['active_deadline_ns']:
                 node._local_admitted = False
                 active_cutoff = True
                 sink.record('FINAL_ACTIVE_CUTOFF', {'steady_ns':time.monotonic_ns()})
+            spin_started_ns = time.monotonic_ns()
             executor.spin_once(timeout_sec=0.002)
+            spin_completed_ns = time.monotonic_ns()
+            if (previous_spin_completed_ns is not None
+                    and spin_started_ns-previous_spin_completed_ns > 500_000_000):
+                sink.record('FINAL_EXECUTOR_SPIN_GAP', {
+                    'previous_spin_completed_ns':previous_spin_completed_ns,
+                    'spin_started_ns':spin_started_ns,
+                    'inter_spin_gap_ns':spin_started_ns-previous_spin_completed_ns,
+                    'spin_completed_ns':spin_completed_ns,
+                    'spin_duration_ns':spin_completed_ns-spin_started_ns,
+                })
+            if spin_completed_ns-spin_started_ns > 500_000_000:
+                sink.record('FINAL_EXECUTOR_SPIN_GAP', {
+                    'previous_spin_completed_ns':previous_spin_completed_ns,
+                    'spin_started_ns':spin_started_ns,
+                    'inter_spin_gap_ns':None if previous_spin_completed_ns is None
+                        else spin_started_ns-previous_spin_completed_ns,
+                    'spin_completed_ns':spin_completed_ns,
+                    'spin_duration_ns':spin_completed_ns-spin_started_ns,
+                })
+            previous_spin_completed_ns = spin_completed_ns
             binding_path = Path(descriptor['final_binding_path'])
             if not active_cutoff and not applied and binding_path.exists():
                 raw = binding_path.read_bytes(); binding = json.loads(raw)
