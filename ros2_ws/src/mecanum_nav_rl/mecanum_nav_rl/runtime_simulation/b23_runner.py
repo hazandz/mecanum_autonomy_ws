@@ -7520,6 +7520,12 @@ class QueuedRunEvidence:
             self.raise_if_error()
 
 
+def final_child_evidence_sink(root, *, role, run_id, invocation_id, capacity=4096):
+    """Keep synchronous filesystem flushes off the Final ROS callback thread."""
+    evidence = RunEvidence(root, role, run_id=run_id, invocation_id=invocation_id)
+    return QueuedRunEvidence(evidence, capacity=capacity)
+
+
 def load_child_descriptor(path, role):
     """Child chỉ thuộc unit/parent/packet đã consume; không là CLI bypass guard."""
     import os
@@ -7562,8 +7568,9 @@ def final_child(path):
     from mecanum_nav_rl.runtime_safety.final_twist_publisher_node import FinalTwistPublisherNode
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, BackendSessionIdentity
     descriptor, packet = load_child_descriptor(path, 'final')
-    sink = RunEvidence(descriptor['run_root'], descriptor['evidence_role'],
-        run_id=descriptor['run_id'], invocation_id=descriptor['invocation_id'])
+    sink = final_child_evidence_sink(descriptor['run_root'],
+        role=descriptor['evidence_role'], run_id=descriptor['run_id'],
+        invocation_id=descriptor['invocation_id'])
     context = Context(); node = executor = None
     stop = False
     def stopping(_sig, _frame):
@@ -7659,7 +7666,7 @@ def final_child(path):
             FinalTwistPublisherNode._on_lifecycle = r04d_original_lifecycle
         if r04d_original_accepted is not None:
             FinalTwistPublisherNode._on_accepted = r04d_original_accepted
-        sink.close()
+        sink.close(deadline_ns=descriptor['total_deadline_ns'])
     return 0 if error is None else 1
 
 

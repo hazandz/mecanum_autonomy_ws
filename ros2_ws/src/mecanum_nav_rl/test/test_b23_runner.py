@@ -365,6 +365,45 @@ def test_queued_run_evidence_preserves_order_and_does_not_wait_for_blocked_sink(
     assert all(type(row[2]) is int and row[2] > 0 for row in rows)
 
 
+def test_final_child_evidence_callback_is_decoupled_from_blocked_filesystem_sink(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    rows = []
+
+    class SlowFinalEvidence:
+        def __init__(self, root, role, *, run_id, invocation_id):
+            assert role == 'final'
+            self.run_id, self.invocation_id = run_id, invocation_id
+
+        def record(self, event, facts, *, collected_ns=None):
+            entered.set()
+            assert release.wait(2.)
+            rows.append((event, facts, collected_ns))
+
+        def sync(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(runner_module, 'RunEvidence', SlowFinalEvidence)
+    sink = runner_module.final_child_evidence_sink('/unused',
+        role='final', run_id='B23_FINAL_SINK_TEST',
+        invocation_id='inv-final-sink-test')
+    callback_started = time.monotonic_ns()
+    sink.record('FINAL_PUBLISHED', {'publish_sequence': 7})
+    callback_elapsed_ns = time.monotonic_ns() - callback_started
+    try:
+        assert entered.wait(1.)
+        assert callback_elapsed_ns < 20_000_000, (
+            'Final publisher callback waited on its evidence filesystem sink')
+    finally:
+        release.set()
+    sink.close(deadline_ns=runner_module.time.monotonic_ns()+2_000_000_000)
+    assert len(rows) == 1
+    assert rows[0][0:2] == ('FINAL_PUBLISHED', {'publish_sequence':7})
+    assert type(rows[0][2]) is int and rows[0][2] > 0
+
+
 def test_queued_run_evidence_records_original_monotonic_collection_time(tmp_path):
     underlying = RunEvidence(tmp_path, 'worker', run_id='B23_TEST', invocation_id='test-invocation')
     sink = QueuedRunEvidence(underlying)
