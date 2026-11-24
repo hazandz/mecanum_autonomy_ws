@@ -5446,6 +5446,12 @@ TEST(BackendSystemControlReceiver, PauseReplayPreservesTerminalRejectionAfterPro
                                   0, 0, 0, 0, 0, false, false, true);
 }
 
+TEST(BackendSystemControlReceiver, PolicyReceiptIsReissuedWithoutDuplicateApplication)
+{
+  RunNativeResetObservation0Chain(false, false, false, false, false, true,
+                                  0, 0, 0, 0, 0, false, false, false, true);
+}
+
 TEST(BackendSystemControlReceiver, CallbackAfterTickSampleWaitsForNextTickWithoutExpiring)
 {
   BackendSystem system;
