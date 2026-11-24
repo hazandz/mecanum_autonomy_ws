@@ -6580,7 +6580,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
         asyncio.run(value.policy_step(B1(), (0.4, 0.0, 0.0),
             close_after_held_receipt=close_after))
     expected_window = ((50_000_000, 70_000_000) if close_after == 'safe_stop'
-        else (40_000_000, 60_000_000))
+        else (150_000_000, 250_000_000))
     assert events == ['fresh_applied_zero', ('scan_alignment', expected_window), 'refresh_zero',
         ('stream_enabled', False), 'begin_pending_step']
 

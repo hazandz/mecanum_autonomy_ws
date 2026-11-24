@@ -6730,6 +6730,18 @@ class TrainingWorkerIO:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness,
                         launch_window_ns=(50_000_000, 70_000_000))
+                elif close_after_held_receipt == 'admission_inhibited':
+                    # R02d must publish the held POLICY receipt and dispatch
+                    # INHIBIT before the unchanged 100 ms native receipt
+                    # watchdog expires. Its ACK/admission path took about
+                    # 70 ms in the prior bounded run; selecting a window with
+                    # only 40-60 ms left made the first Safety tick land on
+                    # the scan cutoff, then deferred the receipt past the
+                    # watchdog. Start this close path earlier without
+                    # changing any freshness, cutoff, or watchdog threshold.
+                    zero_witness = await self.align_policy_step_launch_window(
+                        deadline_ns=deadline, zero_witness=zero_witness,
+                        launch_window_ns=(150_000_000, 250_000_000))
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness)
