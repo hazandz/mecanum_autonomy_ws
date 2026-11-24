@@ -1122,7 +1122,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
                 ingress.receipts.append(view)
                 fields={'publisher':'77','key':str(view.final_publish_sequence),
                     'source_sequence':str(view.source_sequence),'stamp_ns':str(view.publish_stamp_ns),
-                    'receive_ns':str(steady+1)}
+                    'receive_ns':str(steady)}
                 with native_path.open('a') as stream:
                     stream.write(json.dumps({'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
                         'server_leader_pid':777,'invocation_id':'inv-1',
@@ -1153,7 +1153,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     assert facts['target_cutoff_ns']==target_cutoff_ns
     assert facts['zero_publish_sequence']==3
     assert facts['zero_publish_stamp_ns']==3_640_000_000
-    assert facts['native_receive_ns']==201
+    assert facts['native_receive_ns']==200
     assert facts['remaining_to_cutoff_ns']==50_000_000
     assert facts['prior_applied_zero_sequence']==1
     assert facts['remaining_to_next_cutoff_ns']==50_000_000
@@ -1163,7 +1163,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
     assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ZERO_APPLIED'
     assert worker._native_offset == native_path.stat().st_size
     assert worker._native_safe_stop_ingress[
-        ('77','3','3','3640000000')]['fields']['receive_ns'] == '201'
+        ('77','3','3','3640000000')]['fields']['receive_ns'] == '200'
 
 
 def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_open():
@@ -1323,6 +1323,7 @@ def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
         publication_for_source_sequence=lambda *,source,sequence:
             publication if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==12 else None)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    value.native_safe_stop_ingress_for_receipt=lambda _receipt:{'fields':{'receive_ns':'995000000'}}
     events=[]
     value.emit=lambda name,facts:events.append((name,facts))
     async def until(predicate, *, deadline_ns, phase):
@@ -1395,6 +1396,7 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
     value.final=NS(publisher_instance_id=77)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,
         'backend_instance_id':99}
+    value.native_safe_stop_ingress_for_receipt=lambda _receipt:{'fields':{'receive_ns':'1000000000'}}
     events=[]
     value.emit=lambda name,facts:events.append((name,facts))
     async def until(predicate, *, deadline_ns, phase):
@@ -1487,6 +1489,12 @@ def test_prebind_zero_refresh_waits_when_safety_has_published_a_newer_zero():
     value.final=NS(publisher_instance_id=77,
         publication_for_source_sequence=lambda *,source,sequence:publications.get(sequence))
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    value.descriptor.update({'native_events_path':'/unused/native-events.jsonl',
+        'server_leader_pid':777,'invocation_id':'inv-1'})
+    value.read_native_input_watermark=lambda:None
+    value._native_safe_stop_ingress={
+        ('77','101','12','1001'):{'fields':{'receive_ns':'880000000'}},
+        ('77','102','14','1002'):{'fields':{'receive_ns':'995000000'}}}
     events=[]; waits=[]
     value.emit=lambda name,facts:events.append((name,facts))
     async def until(predicate, *, deadline_ns, phase):
@@ -1506,12 +1514,14 @@ def test_prebind_zero_refresh_waits_when_safety_has_published_a_newer_zero():
     assert result['receipt'] is fresh
     assert result['state'] is fresh_state
     assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED'
-    assert events[0][1]['reason']=='safety_safe_stop_sequence_advanced'
-    assert events[0][1]['witness_source_sequence']==12
-    assert events[0][1]['latest_safe_stop_sequence']==13
+    assert events[0][1]['reason']=='native_safe_stop_ingress_stale_or_missing'
+    assert events[0][1]['native_receive_ns']==880_000_000
+    assert events[0][1]['native_age_ns']==120_000_000
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
     assert events[-1][1]['baseline_safe_stop_sequence']==13
     assert events[-1][1]['source_sequence']==14
+    assert result['native_receive_ns']==995_000_000
+    assert result['native_age_ns']==5_000_000
 
 
 def test_prebind_zero_override_waits_for_new_exact_safe_stop_application():
@@ -1567,6 +1577,7 @@ def test_prebind_zero_override_waits_for_new_exact_safe_stop_application():
         publication_for_source_sequence=lambda *,source,sequence:publication
             if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==13 else None)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    value.native_safe_stop_ingress_for_receipt=lambda _receipt:{'fields':{'receive_ns':'990000000'}}
     events=[]; waits=[]
     value.emit=lambda name,facts:events.append((name,facts))
     async def until(predicate, *, deadline_ns, phase):
@@ -1628,6 +1639,7 @@ def test_prebind_zero_refresh_rejects_stale_or_mismatched_evidence():
         publication_for_source_sequence=lambda *,source,sequence:
             publication if source==CommandEnvelope.SOURCE_SAFE_STOP and sequence==12 else None)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,'backend_instance_id':99}
+    value.native_safe_stop_ingress_for_receipt=lambda _receipt:{'fields':{'receive_ns':'990000000'}}
     value.emit=lambda *_args:None
     async def until(predicate, *, deadline_ns, phase):
         assert predicate() is None

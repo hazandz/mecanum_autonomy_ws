@@ -4641,6 +4641,27 @@ class TrainingWorkerIO:
             self._native_input_watermark = max(self._native_input_watermark, sample)
         return self._native_input_watermark
 
+    def native_safe_stop_ingress_for_receipt(self, receipt):
+        """Return the exact, invocation-bound native ingress record for a receipt."""
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+
+        self.read_native_input_watermark()
+        publisher = getattr(receipt, 'final_publisher_instance_id', None)
+        publish_sequence = getattr(receipt, 'final_publish_sequence', None)
+        source_sequence = getattr(receipt, 'source_sequence', getattr(receipt, 'sequence', None))
+        publish_stamp_ns = getattr(receipt, 'publish_stamp_ns', None)
+        if publish_stamp_ns is None:
+            header = getattr(receipt, 'header', None)
+            stamp = getattr(header, 'stamp', None)
+            if stamp is None:
+                return None
+            publish_stamp_ns = stamp_ns(stamp)
+        if any(type(value) is not int or value <= 0 for value in
+                (publisher, publish_sequence, source_sequence, publish_stamp_ns)):
+            return None
+        key = (str(publisher), str(publish_sequence), str(source_sequence), str(publish_stamp_ns))
+        return getattr(self, '_native_safe_stop_ingress', {}).get(key)
+
     async def freeze_admission(self, *, deadline_ns):
         self.ingress.pause_admission_publication()
         target = self.ingress.last_published_sample_sequence
@@ -5795,8 +5816,15 @@ class TrainingWorkerIO:
             applied = application.get('state')
             received_ns = application.get('received_ns')
             latest = self.ingress.backend_state
+            native_ingress = self.native_safe_stop_ingress_for_receipt(aligned_receipt)
+            try:
+                native_receive_ns = int(native_ingress['fields']['receive_ns'])
+            except (TypeError, KeyError, ValueError):
+                return None
+            native_age_ns = self.now() - native_receive_ns
             if (applied is None or type(received_ns) is not int or latest is None
                     or self.now() < received_ns or self.now() - received_ns > 100_000_000
+                    or native_age_ns < 0 or native_age_ns > 100_000_000
                     or aligned_receipt.source is not ReceiptSource.SAFE_STOP
                     or aligned_receipt.final_publisher_instance_id != self.final.publisher_instance_id
                     or any(aligned_receipt.final_command)
@@ -5825,7 +5853,8 @@ class TrainingWorkerIO:
                     or any(current_receipt.final_command)):
                 return None
             return {'receipt': aligned_receipt, 'state': applied,
-                'received_ns': received_ns, 'application': application}
+                'received_ns': received_ns, 'application': application,
+                'native_receive_ns':native_receive_ns, 'native_age_ns':native_age_ns}
 
         applied_zero = await self.until(exact_aligned_zero_application,
             deadline_ns=deadline_ns,
@@ -5880,6 +5909,25 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
 
         adapter = self.safety.local_training
+        if zero_witness is not None:
+            candidate_receipt = (zero_witness.get('receipt')
+                if isinstance(zero_witness, dict) else None)
+            native_ingress = (self.native_safe_stop_ingress_for_receipt(candidate_receipt)
+                if candidate_receipt is not None else None)
+            try:
+                native_receive_ns = int(native_ingress['fields']['receive_ns'])
+                native_age_ns = self.now() - native_receive_ns
+            except (TypeError, KeyError, ValueError):
+                native_receive_ns = None
+                native_age_ns = None
+            if (native_age_ns is None or native_age_ns < 0 or native_age_ns > 100_000_000):
+                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
+                    'reason':'native_safe_stop_ingress_stale_or_missing',
+                    'native_receive_ns':native_receive_ns,
+                    'native_age_ns':native_age_ns,
+                    'steady_ns':self.now(),
+                })
+                zero_witness = None
         if zero_witness is not None:
             candidate_receipt = (zero_witness.get('receipt')
                 if isinstance(zero_witness, dict) else None)
@@ -6002,7 +6050,8 @@ class TrainingWorkerIO:
                 age_ns = self.now() - received_ns
                 refreshed = {'receipt':receipt,
                     'application':zero_witness.get('application', {'state':state,'received_ns':received_ns}),
-                    'age_ns':age_ns, 'state':state, 'received_ns':received_ns}
+                    'age_ns':age_ns, 'state':state, 'received_ns':received_ns,
+                    'native_receive_ns':native_receive_ns,'native_age_ns':native_age_ns}
                 self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
                     'baseline_safe_stop_sequence':adapter.safe_stop_sequence,
                     'source_sequence':receipt.source_sequence,
@@ -6011,6 +6060,7 @@ class TrainingWorkerIO:
                     'native_stamp_ns':(state.applied_sim_stamp.sec * 1_000_000_000
                         + state.applied_sim_stamp.nanosec),
                     'receipt_received_steady_ns':received_ns,'receipt_age_ns':age_ns,
+                    'native_receive_ns':native_receive_ns,'native_receipt_age_ns':native_age_ns,
                     'deadline_ns':deadline_ns,'steady_ns':self.now(),
                     'reused_exact_scan_window_application':True})
                 return refreshed
@@ -6056,6 +6106,14 @@ class TrainingWorkerIO:
                 application = self.ingress.application_for_receipt(receipt)
                 if application is None:
                     continue
+                native_ingress = self.native_safe_stop_ingress_for_receipt(receipt)
+                try:
+                    native_receive_ns = int(native_ingress['fields']['receive_ns'])
+                except (TypeError, KeyError, ValueError):
+                    continue
+                native_age_ns = self.now() - native_receive_ns
+                if native_age_ns < 0 or native_age_ns > 100_000_000:
+                    continue
                 applied_state = application['state']
                 if (state.applied_final_publisher_instance_id != self.final.publisher_instance_id
                         or state.applied_final_publish_sequence < receipt.final_publish_sequence
@@ -6082,7 +6140,8 @@ class TrainingWorkerIO:
                     continue
                 return {'receipt': receipt, 'publication': publication,
                     'application': application, 'state':applied_state,
-                    'received_ns':receipt.received_steady_ns, 'age_ns': age_ns}
+                    'received_ns':receipt.received_steady_ns, 'age_ns': age_ns,
+                    'native_receive_ns':native_receive_ns,'native_age_ns':native_age_ns}
             return None
 
         refreshed = await self.until(newly_applied_zero, deadline_ns=deadline_ns,
@@ -6096,6 +6155,8 @@ class TrainingWorkerIO:
                 * 1_000_000_000 + refreshed['application']['state'].applied_sim_stamp.nanosec),
             'receipt_received_steady_ns': refreshed['receipt'].received_steady_ns,
             'receipt_age_ns': refreshed['age_ns'],
+            'native_receive_ns':refreshed['native_receive_ns'],
+            'native_receipt_age_ns':refreshed['native_age_ns'],
             'deadline_ns': deadline_ns,
             'steady_ns': self.now(),
         })
