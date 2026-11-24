@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <limits>
 #include <future>
 #include <thread>
@@ -22,6 +24,7 @@ using namespace mecanum_sim_backend;
 using ControlRequest = mecanum_nav_rl_interfaces::srv::LocalTrainingBackendControl::Request;
 using ControlResponse = mecanum_nav_rl_interfaces::srv::LocalTrainingBackendControl::Response;
 using SafetyInput = mecanum_nav_rl_interfaces::msg::LocalTrainingSafetyInput;
+using Receipt = mecanum_nav_rl_interfaces::msg::FinalIssuedCommandReceipt;
 
 namespace mecanum_sim_backend
 {
@@ -71,6 +74,9 @@ public:
     else gate.RevokePolicyAdmission();
     return true;
   }
+
+  static std::size_t QueueSize(const ReceiptGate &gate)
+  { return gate.queue_.size(); }
 };
 
 struct NativePauseIo
@@ -82,6 +88,74 @@ struct NativePauseIo
 class BackendSystemTestPeer
 {
 public:
+  static void CreateReceiptIngressRuntime(BackendSystem &system)
+  {
+    system.context_ = std::make_shared<rclcpp::Context>();
+    system.context_->init(0, nullptr);
+    system.session_id_ = "receipt-executor-test";
+    system.config_hash_ = std::string(64, 'a');
+    GateBinding binding;
+    binding.session_id = system.session_id_;
+    binding.config_hash = system.config_hash_;
+    binding.final_publisher_instance_id = 11;
+    binding.safe_stop_source_instance_id = 33;
+    binding.next_safe_stop_sequence = 1;
+    binding.barrier_stamp_ns = 1'000'000'000;
+    binding.episode_generation = 1;
+    binding.reset_epoch = 1;
+    binding.runtime_generation = 1;
+    system.gate_ = std::make_shared<ReceiptGate>(binding);
+    for (const auto resource : {
+        backend_detail::RuntimeResourceKind::Node,
+        backend_detail::RuntimeResourceKind::ReceiptNode,
+        backend_detail::RuntimeResourceKind::ReceiptSubscription,
+        backend_detail::RuntimeResourceKind::ReceiptExecutor,
+        backend_detail::RuntimeResourceKind::ReceiptExecutorNodeRegistration,
+        backend_detail::RuntimeResourceKind::ReceiptExecutorThread,
+        backend_detail::RuntimeResourceKind::Executor,
+        backend_detail::RuntimeResourceKind::ExecutorNodeRegistration,
+        backend_detail::RuntimeResourceKind::ExecutorThread})
+      system.CreateActualRuntimeResource(resource);
+  }
+
+  static rclcpp::Node::SharedPtr MainNode(BackendSystem &system)
+  { return system.node_; }
+
+  static std::shared_ptr<rclcpp::Context> Context(BackendSystem &system)
+  { return system.context_; }
+
+  static bool ReceiptIngressIsolated(const BackendSystem &system)
+  {
+    return system.receipt_node_ && system.node_ &&
+        system.receipt_node_ != system.node_ && system.receipt_executor_ &&
+        system.receipt_executor_thread_.joinable();
+  }
+
+  static std::size_t ReceiptHistoryDepth(const BackendSystem &system)
+  { return system.receipt_sub_->get_actual_qos().depth(); }
+
+  static std::size_t ReceiptQueueSize(BackendSystem &system)
+  {
+    std::lock_guard<std::mutex> lock(system.callback_mutex_);
+    return ReceiptGateTestPeer::QueueSize(*system.gate_);
+  }
+
+  static std::uint64_t Watermark(BackendSystem &system)
+  {
+    std::lock_guard<std::mutex> lock(system.callback_mutex_);
+    return system.gate_->Watermark();
+  }
+
+  static std::int64_t SteadyNow(const BackendSystem &system)
+  { return system.steady_clock_now_(); }
+
+  static GateResult ConsumeReceipt(
+      BackendSystem &system, std::int64_t ros_ns, std::int64_t steady_ns)
+  {
+    std::lock_guard<std::mutex> lock(system.callback_mutex_);
+    return system.gate_->ConsumeNext(ros_ns, steady_ns);
+  }
+
   static void SimulationReset(BackendSystem &system,
       const gz::sim::UpdateInfo &info, gz::sim::EntityComponentManager &ecm)
   { system.Reset(info, ecm); }
@@ -1650,6 +1724,99 @@ Receipt SafeStopReceipt(
   return receipt;
 }
 }  // namespace
+
+TEST(BackendSystemLifecycle, ReceiptIngressKeepsUpWhileMainExecutorCallbackIsBusy)
+{
+  BackendSystem system;
+  BackendSystemTestPeer::CreateReceiptIngressRuntime(system);
+  ASSERT_TRUE(BackendSystemTestPeer::ReceiptIngressIsolated(system));
+  EXPECT_EQ(BackendSystemTestPeer::ReceiptHistoryDepth(system), 1u);
+
+  rclcpp::NodeOptions options;
+  options.context(BackendSystemTestPeer::Context(system));
+  auto publisher_node = std::make_shared<rclcpp::Node>(
+      "mecanum_sim_backend_receipt_test_publisher", options);
+  const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+  auto publisher = publisher_node->create_publisher<Receipt>(
+      "/mecanum/final_issued_command", qos);
+  const auto discovery_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(3);
+  while (publisher->get_subscription_count() == 0 &&
+         std::chrono::steady_clock::now() < discovery_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  ASSERT_GT(publisher->get_subscription_count(), 0u);
+
+  const auto publish_zero = [&](std::uint64_t final_sequence,
+                                std::uint64_t safe_stop_sequence) {
+    Receipt receipt;
+    receipt.header.frame_id = "base_link";
+    const auto stamp_ns = 1'000'000'000LL +
+        static_cast<std::int64_t>(final_sequence) * 10'000'000LL;
+    receipt.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+    receipt.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+    receipt.episode_generation = 1;
+    receipt.reset_epoch = 1;
+    receipt.runtime_generation = 1;
+    receipt.source = Receipt::SOURCE_SAFE_STOP;
+    receipt.sequence = safe_stop_sequence;
+    receipt.source_instance_id = 33;
+    receipt.final_publisher_instance_id = 11;
+    receipt.final_publish_sequence = final_sequence;
+    publisher->publish(receipt);
+  };
+
+  publish_zero(1, 1);
+  const auto first_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(2);
+  while (BackendSystemTestPeer::ReceiptQueueSize(system) < 1 &&
+         std::chrono::steady_clock::now() < first_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_EQ(BackendSystemTestPeer::ReceiptQueueSize(system), 1u);
+  auto anchored = BackendSystemTestPeer::ConsumeReceipt(
+      system, 1'020'000'000, BackendSystemTestPeer::SteadyNow(system));
+  ASSERT_EQ(anchored.disposition, GateDisposition::Anchored) << anchored.reason;
+
+  std::atomic_bool main_executor_busy{false};
+  auto busy_timer = BackendSystemTestPeer::MainNode(system)->create_wall_timer(
+      std::chrono::milliseconds(5), [&main_executor_busy]() {
+        if (!main_executor_busy.exchange(true))
+          std::this_thread::sleep_for(std::chrono::milliseconds(180));
+      });
+  const auto busy_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(2);
+  while (!main_executor_busy.load() && std::chrono::steady_clock::now() < busy_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_TRUE(main_executor_busy.load());
+
+  constexpr std::uint64_t kBurstCount = 8;
+  for (std::uint64_t offset = 0; offset < kBurstCount; ++offset)
+  {
+    publish_zero(offset + 2, offset + 2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const auto burst_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(2);
+  while (BackendSystemTestPeer::ReceiptQueueSize(system) < kBurstCount &&
+         std::chrono::steady_clock::now() < burst_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  ASSERT_EQ(BackendSystemTestPeer::ReceiptQueueSize(system), kBurstCount);
+
+  for (std::uint64_t sequence = 2; sequence < kBurstCount + 2; ++sequence)
+  {
+    const auto stamp_ns = 1'000'000'000LL +
+        static_cast<std::int64_t>(sequence) * 10'000'000LL;
+    const auto applied = BackendSystemTestPeer::ConsumeReceipt(
+        system, stamp_ns, BackendSystemTestPeer::SteadyNow(system));
+    EXPECT_EQ(applied.disposition, GateDisposition::Applied) << applied.reason;
+    ASSERT_TRUE(applied.accepted.has_value());
+    EXPECT_EQ(applied.accepted->key.publish_sequence, sequence);
+  }
+  EXPECT_EQ(BackendSystemTestPeer::Watermark(system), kBurstCount + 1);
+  busy_timer->cancel();
+  publisher.reset();
+  publisher_node.reset();
+  BackendSystemTestPeer::Shutdown(system);
+}
 
 TEST(BackendSystemLifecycle, StructuredDiagnosticRecordsAreNotInterleaved)
 {

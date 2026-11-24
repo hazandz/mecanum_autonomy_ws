@@ -109,7 +109,11 @@ enum class RuntimeResourceKind
 {
   Context,
   Node,
+  ReceiptNode,
   ReceiptSubscription,
+  ReceiptExecutor,
+  ReceiptExecutorNodeRegistration,
+  ReceiptExecutorThread,
   TwistSubscription,
   SafetySubscription,
   BackendStatePublisher,
@@ -124,10 +128,14 @@ enum class RuntimeResourceKind
   GazeboTransportNode,
   GroundTruthPublisher,
 };
-constexpr std::array<RuntimeResourceKind, 16> kRuntimeResourceOrder{
+constexpr std::array<RuntimeResourceKind, 20> kRuntimeResourceOrder{
   RuntimeResourceKind::Context,
   RuntimeResourceKind::Node,
+  RuntimeResourceKind::ReceiptNode,
   RuntimeResourceKind::ReceiptSubscription,
+  RuntimeResourceKind::ReceiptExecutor,
+  RuntimeResourceKind::ReceiptExecutorNodeRegistration,
+  RuntimeResourceKind::ReceiptExecutorThread,
   RuntimeResourceKind::TwistSubscription,
   RuntimeResourceKind::SafetySubscription,
   RuntimeResourceKind::BackendStatePublisher,
@@ -1398,7 +1406,9 @@ private:
     runtime_resources_ready_ = false;
     policy_open_ = false;
     local_zero_override_ = true;
+    if (receipt_executor_) receipt_executor_->cancel();
     if (executor_) executor_->cancel();
+    if (receipt_executor_thread_.joinable()) receipt_executor_thread_.join();
     if (executor_thread_.joinable()) executor_thread_.join();
     control_service_.reset();
     probe_spawn_client_.reset();
@@ -1406,11 +1416,13 @@ private:
     probe_delete_client_.reset();
     reset_pause_client_.reset();
     receipt_sub_.reset();
+    receipt_node_.reset();
     twist_sub_.reset();
     safety_sub_.reset();
     state_pub_.reset();
     gt_publisher_.reset();
     gt_pub_.reset();
+    receipt_executor_.reset();
     executor_.reset();
     node_.reset();
     if (context_ && context_->is_valid()) context_->shutdown("backend shutdown");
@@ -2357,15 +2369,41 @@ private:
         if (!node_) throw std::runtime_error("runtime_node_missing");
         return;
       }
+      case backend_detail::RuntimeResourceKind::ReceiptNode:
+      {
+        rclcpp::NodeOptions options;
+        options.context(context_);
+        receipt_node_ = std::make_shared<rclcpp::Node>(
+            "mecanum_sim_backend_receipt_ingress", options);
+        if (!receipt_node_) throw std::runtime_error("receipt_node_missing");
+        return;
+      }
       case backend_detail::RuntimeResourceKind::ReceiptSubscription:
       {
         const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
-        receipt_sub_ = node_->create_subscription<Receipt>(
+        receipt_sub_ = receipt_node_->create_subscription<Receipt>(
             "/mecanum/final_issued_command", qos,
             [this](Receipt::ConstSharedPtr msg) { OnReceipt(*msg); });
         if (!receipt_sub_) throw std::runtime_error("receipt_subscription_missing");
         return;
       }
+      case backend_detail::RuntimeResourceKind::ReceiptExecutor:
+      {
+        rclcpp::ExecutorOptions options;
+        options.context = context_;
+        receipt_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>(
+            options);
+        if (!receipt_executor_) throw std::runtime_error("receipt_executor_missing");
+        return;
+      }
+      case backend_detail::RuntimeResourceKind::ReceiptExecutorNodeRegistration:
+        receipt_executor_->add_node(receipt_node_);
+        return;
+      case backend_detail::RuntimeResourceKind::ReceiptExecutorThread:
+        receipt_executor_thread_ = std::thread([this] { receipt_executor_->spin(); });
+        if (!receipt_executor_thread_.joinable())
+          throw std::runtime_error("receipt_executor_thread_missing");
+        return;
       case backend_detail::RuntimeResourceKind::TwistSubscription:
       {
         const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
@@ -4345,8 +4383,11 @@ private:
   std::unordered_set<std::string> wheel_floor_collisions_;
   std::shared_ptr<rclcpp::Context> context_;
   rclcpp::Node::SharedPtr node_;
+  rclcpp::Node::SharedPtr receipt_node_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> receipt_executor_;
   std::thread executor_thread_;
+  std::thread receipt_executor_thread_;
   rclcpp::Subscription<Receipt>::SharedPtr receipt_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub_;
   rclcpp::Subscription<SafetyInput>::SharedPtr safety_sub_;
