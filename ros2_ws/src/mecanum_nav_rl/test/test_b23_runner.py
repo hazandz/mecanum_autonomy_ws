@@ -9508,6 +9508,26 @@ def test_residue_revalidation_maps_legacy_absolute_paths_under_explicit_local_ro
             cgroup_root=cgroup_root, proc_root=proc_root)
 
 
+def test_b23_evidence_root_allows_only_canonical_or_fixed_internal_root(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import _resolve_b23_evidence_root
+
+    home = tmp_path / 'home'
+    home.mkdir()
+    canonical = home / 'mecanum_runtime_evidence'
+    local = home / 'mecanum_runtime_evidence_local'
+    canonical.mkdir()
+    local.mkdir()
+    assert _resolve_b23_evidence_root(str(canonical), canonical_root=canonical,
+        local_root=local, home_root=home) == canonical
+    assert _resolve_b23_evidence_root(str(local), canonical_root=canonical,
+        local_root=local, home_root=home) == local
+    arbitrary = tmp_path / 'other-evidence'
+    arbitrary.mkdir()
+    with pytest.raises(ValueError, match='not an approved B2.3 root'):
+        _resolve_b23_evidence_root(str(arbitrary), canonical_root=canonical,
+            local_root=local, home_root=home)
+
+
 def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_residue_revalidation_attestation
 

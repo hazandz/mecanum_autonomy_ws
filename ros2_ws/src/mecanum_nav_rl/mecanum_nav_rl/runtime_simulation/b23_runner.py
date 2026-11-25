@@ -9376,6 +9376,20 @@ async def training_child(path):
     return 0 if primary is None and not cleanup_errors and outcome is not None else 1
 
 
+def _resolve_b23_evidence_root(path, *, canonical_root='/home/hazan/mecanum_runtime_evidence',
+        local_root='/home/hazan/mecanum_runtime_evidence_local', home_root='/home/hazan'):
+    """Allow the legacy root or one fixed internal B2.3 root, never an arbitrary path."""
+    import os
+    selected = Path(path).resolve(strict=True)
+    canonical = Path(canonical_root).resolve(strict=True)
+    local = Path(local_root).resolve(strict=True)
+    if selected not in (canonical, local):
+        raise ValueError('evidence root is not an approved B2.3 root')
+    if selected == local and os.stat(local).st_dev != os.stat(home_root).st_dev:
+        raise ValueError('internal B2.3 evidence root is not on the home filesystem')
+    return selected
+
+
 def verify_packet(path, expected_sha256):
     """Pin mọi input trước spawn; packet không tự cấp thêm phase/hook."""
     import os
@@ -9440,14 +9454,8 @@ def verify_packet(path, expected_sha256):
             or document['map_identity']['training_binding']['binding_status'] != 'BOUND'):
         raise ValueError('packet config/asset/scenario binding mismatch')
     root = Path(packet['run_root']).resolve(strict=True)
-    evidence_root = Path(packet.get('evidence_root', '/home/hazan/mecanum_runtime_evidence')).resolve(strict=True)
-    canonical = Path('/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
-    local_root = Path('/home/hazan/mecanum_runtime_evidence_local').resolve(strict=False)
-    if evidence_root not in (canonical, local_root):
-        raise ValueError('runtime evidence root is not an approved B2.3 root')
-    if (evidence_root == local_root
-            and os.stat(evidence_root).st_dev != os.stat('/home/hazan').st_dev):
-        raise ValueError('local B2.3 evidence root is not on the internal home filesystem')
+    evidence_root = _resolve_b23_evidence_root(
+        packet.get('evidence_root', '/home/hazan/mecanum_runtime_evidence'))
     if not root.is_relative_to(evidence_root) or root == evidence_root:
         raise ValueError('runtime evidence root outside packet-pinned root')
     if Path(packet['guard_path']).parent != Path('/home/hazan/.local/state/ros2_nav2_drl/b23'):
@@ -10395,15 +10403,8 @@ def prepare_packet(args):
     import re
     if not re.fullmatch(r'B23_[A-Z0-9_]{1,60}', args.run_id):
         raise ValueError('run ID invalid')
-    evidence_root = Path(getattr(args, 'evidence_root', None)
-        or '/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
-    canonical = Path('/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
-    local_root = Path('/home/hazan/mecanum_runtime_evidence_local').resolve(strict=False)
-    if evidence_root not in (canonical, local_root):
-        raise ValueError('evidence root must be canonical or the approved internal B2.3 root')
-    if (evidence_root == local_root
-            and os.stat(evidence_root).st_dev != os.stat('/home/hazan').st_dev):
-        raise ValueError('internal B2.3 evidence root is not on the home filesystem')
+    evidence_root = _resolve_b23_evidence_root(getattr(args, 'evidence_root', None)
+        or '/home/hazan/mecanum_runtime_evidence')
     root = evidence_root/args.run_id
     root.mkdir(mode=0o700)  # EEXIST giữ toàn bộ lượt cũ, không retry.
     (root/'trace').mkdir(mode=0o700)
