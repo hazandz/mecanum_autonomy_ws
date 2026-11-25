@@ -9292,6 +9292,49 @@ def test_r02d_closed_admission_binding_mismatch_is_exact_fail_closed_result(tmp_
             receipt=receipt,rejection_rows=rejection)
 
 
+def test_r02d_rebinds_exact_later_zero_safe_stop_from_retained_receipt_ledger():
+    from threading import RLock
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r02d_closing_safe_stop_receipt
+    identity=EpisodeLifecycleIdentity(1,1,2)
+    def view(source, publisher, source_sequence, publish_sequence, life, command=(0.,0.,0.)):
+        return NS(source=source,final_publisher_instance_id=publisher,
+            source_sequence=source_sequence,final_publish_sequence=publish_sequence,
+            lifecycle=life,final_command=command)
+    retained=[
+        view(ReceiptSource.SAFE_STOP,81,47,48,identity),
+        view(ReceiptSource.POLICY,81,49,50,identity),
+        view(ReceiptSource.SAFE_STOP,99,49,51,identity),
+        view(ReceiptSource.SAFE_STOP,81,48,52,identity),
+        view(ReceiptSource.SAFE_STOP,81,49,53,EpisodeLifecycleIdentity(1,1,3)),
+        view(ReceiptSource.SAFE_STOP,81,49,54,identity,(0.1,0.,0.)),
+        view(ReceiptSource.SAFE_STOP,81,49,55,identity),
+    ]
+    def receipt(source_sequence,publish_sequence):
+        return NS(source=CommandEnvelope.SOURCE_SAFE_STOP,sequence=source_sequence,
+            final_publish_sequence=publish_sequence,final_publisher_instance_id=81,
+            episode_generation=1,reset_epoch=1,runtime_generation=2,
+            final_command=NS(linear=NS(x=0.,y=0.,z=0.),
+                angular=NS(x=0.,y=0.,z=0.)))
+    by_sequence={49:receipt(49,55)}
+    final=NS(publisher_instance_id=81,
+        publication_for_source_sequence=lambda *,source,sequence:
+            by_sequence.get(sequence) if source==CommandEnvelope.SOURCE_SAFE_STOP else None)
+    ingress=NS(lifecycle=NS(episode_generation=1,reset_epoch=1,runtime_generation=2),
+        lock=RLock(),receipts=retained)
+    io=NS(ingress=ingress,final=final)
+    policy=NS(final_publish_sequence=49)
+    selected=r02d_closing_safe_stop_receipt(io,policy_receipt=policy,
+        safe_stop_sequence_before_close=48)
+    assert selected is by_sequence[49]
+
+    ingress.receipts=retained[:-1]
+    assert r02d_closing_safe_stop_receipt(io,policy_receipt=policy,
+        safe_stop_sequence_before_close=48) is None
+
+
 def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(tmp_path):
     native=tmp_path/'native-events.jsonl'
     native.write_text('\n'.join(json.dumps(row) for row in (

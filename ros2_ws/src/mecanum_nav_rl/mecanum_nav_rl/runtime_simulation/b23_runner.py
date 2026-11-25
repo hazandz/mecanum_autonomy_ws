@@ -3024,6 +3024,37 @@ async def await_r02_late_receipt_close(io, *, release_predicate, receipt, step_i
     return rejection
 
 
+def r02d_closing_safe_stop_receipt(io, *, policy_receipt, safe_stop_sequence_before_close):
+    """Rebind a real post-hold SAFE_STOP from retained publisher receipt bytes."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+    lifecycle = io.ingress.lifecycle
+    if lifecycle is None:
+        return None
+    identity = lifecycle_identity(lifecycle)
+    with io.ingress.lock:
+        views = tuple(io.ingress.receipts)
+    for view in reversed(views):
+        if (view.source is not ReceiptSource.SAFE_STOP
+                or view.final_publisher_instance_id != io.final.publisher_instance_id
+                or view.source_sequence <= safe_stop_sequence_before_close
+                or view.final_publish_sequence <= policy_receipt.final_publish_sequence
+                or view.lifecycle != identity or any(view.final_command)):
+            continue
+        receipt = io.final.publication_for_source_sequence(
+            source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=view.source_sequence)
+        if (receipt is None or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+                or receipt.final_publish_sequence != view.final_publish_sequence
+                or receipt.final_publish_sequence <= policy_receipt.final_publish_sequence
+                or lifecycle_identity(receipt) != identity
+                or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                    receipt.final_command.angular.z))):
+            continue
+        return receipt
+    return None
+
+
 async def await_r02_held_policy_receipt(io, *, held_predicate, deadline_ns):
     """Wait for the exact native hold marker across its expected close-fault race."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -7184,18 +7215,10 @@ class TrainingWorkerIO:
                     **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
                 return {'expected_rejection':True, 'policy_issued':True, **checked,
                     'b1_step_aborted':True, 'transition_id':token.transition_id}
-            from mecanum_nav_rl_interfaces.msg import CommandEnvelope
-            closing_stop = await self.until(lambda: self.safety.local_training.last_output
-                if self.safety.local_training.last_output is not None
-                and self.safety.local_training.last_output.source
-                    == CommandEnvelope.SOURCE_SAFE_STOP
-                and self.safety.local_training.last_output.sequence
-                    > safe_stop_sequence_before_close else None,
-                deadline_ns=deadline, phase='R02d SAFE_STOP output after inhibited admission')
             closing_stop_receipt = await self.until(lambda:
-                self.final.publication_for_source_sequence(
-                    source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=closing_stop.sequence),
-                deadline_ns=deadline, phase='R02d exact closing SAFE_STOP receipt',
+                r02d_closing_safe_stop_receipt(self, policy_receipt=policy_receipt,
+                    safe_stop_sequence_before_close=safe_stop_sequence_before_close),
+                deadline_ns=deadline, phase='R02d exact later zero SAFE_STOP receipt',
                 expected_native_fault_flags=0)
             closing_stop_application = await self.until(lambda:
                 self.ingress.application_for_receipt(closing_stop_receipt),
