@@ -1340,7 +1340,8 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
         lambda _path: pytest.fail('POLICY bind polling must not reparse the full native log'))
     witness={'receipt':old,'state':status,'received_ns':90}
     result=asyncio.run(worker.align_policy_step_launch_window(
-        deadline_ns=2_000_000_000,zero_witness=witness))
+        deadline_ns=2_000_000_000,zero_witness=witness,
+        launch_window_ns=(40_000_000, 60_000_000)))
     assert [phase for _,phase in waits] == [
         'post-cutoff native SAFE_STOP ingress with POLICY bind window',
         'exact post-cutoff SAFE_STOP application in POLICY bind window']
@@ -1368,7 +1369,7 @@ def test_policy_step_waits_for_applied_zero_after_cutoff_when_bind_window_is_too
 
 def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_open():
     worker=object.__new__(TrainingWorkerIO)
-    worker.ros_now=lambda:3_340_000_000
+    worker.ros_now=lambda:3_320_000_000
     worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
     worker.ingress=NS(receipts=[])
     witness={'bound':'actual zero witness'}
@@ -1469,7 +1470,8 @@ def test_policy_bind_realigns_after_exact_zero_application_is_observed_late(
     worker.until=until
     witness={'receipt':old,'state':state(1,3_420_000_000,342),'received_ns':90}
     result=asyncio.run(worker.align_policy_step_launch_window(
-        deadline_ns=deadline,zero_witness=witness))
+        deadline_ns=deadline,zero_witness=witness,
+        launch_window_ns=(40_000_000, 60_000_000)))
     assert result['receipt'] is second
     assert result['state'] is second_state
     assert result['received_ns']==550
@@ -1589,7 +1591,8 @@ def test_policy_bind_realigns_when_selected_native_zero_expires_freshness(
     witness={'receipt':old,'state':state(1,3_420_000_000,342),
         'received_ns':999_000_000}
     result=asyncio.run(worker.align_policy_step_launch_window(
-        deadline_ns=deadline,zero_witness=witness))
+        deadline_ns=deadline,zero_witness=witness,
+        launch_window_ns=(40_000_000, 60_000_000)))
     assert result['receipt'] is second
     assert result['state'] is second_state
     assert result['received_ns']==1_205_000_000
@@ -6992,15 +6995,15 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     assert events == ['fresh_applied_zero', ('scan_alignment', expected_window), 'refresh_zero',
         ('stream_enabled', False), 'begin_pending_step']
 
-    # Ordinary POLICY keeps the normal measured scan window; R02c alone asks
-    # for earlier time because its late-receipt hold consumes watchdog margin.
+    # Ordinary POLICY also uses the earlier window because its measured
+    # ACK/admission path needs more than 60 ms before cutoff.
     events.clear()
     class AlignmentReached(Exception):
         pass
     async def observe_alignment(*, deadline_ns, zero_witness,
-            launch_window_ns=(40_000_000, 60_000_000)):
+            launch_window_ns=(70_000_000, 90_000_000)):
         events.append('scan_alignment')
-        assert launch_window_ns == (40_000_000, 60_000_000)
+        assert launch_window_ns == (70_000_000, 90_000_000)
         raise AlignmentReached
     value.align_policy_step_launch_window = observe_alignment
     with pytest.raises(AlignmentReached):
@@ -7078,8 +7081,9 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.policy_source_id = 33
     history = []
     prebind_refresh_times = []
-    async def aligned_window(*, deadline_ns, zero_witness):
+    async def aligned_window(*, deadline_ns, zero_witness, launch_window_ns):
         history.append(('scan_alignment', deadline_ns))
+        assert launch_window_ns == (70_000_000, 90_000_000)
         if timing == 'near_scan_cutoff':
             clock.ns = 1_070_000_000
         if timing == 'prebind_elapsed_deadline':
@@ -10102,13 +10106,14 @@ def test_policy_cutoff_record_is_consumed_while_waiting_for_later_receipt(tmp_pa
 
 
 @pytest.mark.parametrize(('phase_ns','expected_remaining_ns','ready'), [
-    (10_000_000, 90_000_000, False),
-    (40_000_000, 60_000_000, True),
-    (60_000_000, 40_000_000, True),
-    (80_000_000, 20_000_000, False),
     (0, 0, False),
+    (10_000_000, 90_000_000, True),
+    (30_000_000, 70_000_000, True),
+    (40_000_000, 60_000_000, False),
+    (80_000_000, 20_000_000, False),
 ])
-def test_policy_bind_uses_later_measured_scan_window(phase_ns, expected_remaining_ns, ready):
+def test_policy_bind_uses_earlier_window_for_measured_ack_path(
+        phase_ns, expected_remaining_ns, ready):
     remaining = policy_bind_launch_window_remaining_ns(2_400_000_000 + phase_ns, 100_000_000)
     assert remaining == expected_remaining_ns
     assert policy_bind_launch_window_ready(remaining) is ready

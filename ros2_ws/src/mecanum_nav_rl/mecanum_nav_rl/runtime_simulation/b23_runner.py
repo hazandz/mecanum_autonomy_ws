@@ -1633,7 +1633,7 @@ def policy_bind_launch_window_remaining_ns(ros_ns, period_ns):
     return period_ns - phase_ns if phase_ns else 0
 
 
-def policy_bind_launch_window_ready(remaining_ns, *, window_ns=(40_000_000, 60_000_000)):
+def policy_bind_launch_window_ready(remaining_ns, *, window_ns=(70_000_000, 90_000_000)):
     """Select a measured pre-scan window for a pending bind.
 
     Runtime evidence showed that an 80 ms window could spend about 20 ms on
@@ -6245,7 +6245,7 @@ class TrainingWorkerIO:
         return receipt, application['state'], application['received_ns']
 
     async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness,
-            launch_window_ns=(40_000_000, 60_000_000), force_alignment=False):
+            launch_window_ns=(70_000_000, 90_000_000), force_alignment=False):
         """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
 
         Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
@@ -6266,10 +6266,12 @@ class TrainingWorkerIO:
         # instant as the closed edge of the current window, not as a fresh
         # full period; only a strictly post-cutoff tick opens the next window.
         remaining_ns = policy_bind_launch_window_remaining_ns(now_ros_ns, period_ns)
-        # Keep bind/sample processing away from the 100 ms edge: the 40-60 ms
-        # band was selected from the observed bind, post-ACK sample, and
-        # deferred-tick timings. It changes scheduling only, not any contract
-        # freshness, scan-gap, cutoff, or native watchdog limit.
+        # Keep bind/sample processing away from the 100 ms edge. The ordinary
+        # 40-60 ms window allowed the measured ACK + post-ACK admission path
+        # (~71 ms) to reach the cutoff before final publication, where the
+        # publisher correctly deferred and the native watchdog expired. Start
+        # in the earlier 70-90 ms window; this changes scheduling only, not
+        # any freshness, scan-gap, cutoff, or native watchdog limit.
         if (not force_alignment
                 and policy_bind_launch_window_ready(remaining_ns, window_ns=launch_window_ns)):
             return zero_witness
@@ -6948,7 +6950,8 @@ class TrainingWorkerIO:
                         launch_window_ns=(70_000_000, 90_000_000))
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
-                        deadline_ns=deadline, zero_witness=zero_witness)
+                        deadline_ns=deadline, zero_witness=zero_witness,
+                        launch_window_ns=(70_000_000, 90_000_000))
                 # The scan-window witness may already be several Safety ticks
                 # old by the time the ACK and first post-ACK sample arrive.
                 # R08 showed that a witness fresh at bind could age past the
