@@ -462,6 +462,23 @@ class LocalTrainingSafetyAdapter:
                 (all(new >= old for old, new in zip(current, candidate))
                  and any(new > old for old, new in zip(current, candidate))))
 
+    @staticmethod
+    def _identity_is_behind(current, candidate):
+        return (current is not None
+                and all(new <= old for old, new in zip(current, candidate))
+                and any(new < old for old, new in zip(current, candidate)))
+
+    def _discard_stale_safety_input(self, *, current_identity, input_identity,
+                                    sample_sequence, received_ns, stage):
+        self.emit('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
+            'current_identity': list(current_identity),
+            'input_identity': list(input_identity),
+            'sample_sequence': sample_sequence,
+            'received_ns': received_ns,
+            'stage': stage,
+            'steady_ns': self.now(),
+        })
+
     def _accept_safety_input(self, snapshot, raw, received_ns):
         if self.noisy is not None and snapshot.sample_sequence <= self.noisy.sample_sequence:
             if snapshot.sample_sequence != self.noisy.sample_sequence or raw != self.noisy_bytes:
@@ -513,6 +530,15 @@ class LocalTrainingSafetyAdapter:
                         'sample_sequence': pending_msg.sample_sequence,
                         'received_ns': pending_received_ns,
                         'steady_ns': self.now()})
+                elif self._identity_is_behind(current_identity, pending_identity):
+                    self._pending_safety_input = None
+                    self._pending_safety_input_deadline_ns = None
+                    self._discard_stale_safety_input(
+                        current_identity=current_identity,
+                        input_identity=pending_identity,
+                        sample_sequence=pending_msg.sample_sequence,
+                        received_ns=pending_received_ns,
+                        stage='lifecycle_advanced_past_pending_input')
                 elif not self._identity_is_forward(current_identity, pending_identity):
                     self._pending_safety_input = None
                     self._pending_safety_input_deadline_ns = None
@@ -601,6 +627,14 @@ class LocalTrainingSafetyAdapter:
                     'input_identity': list(identity), 'sample_sequence': msg.sample_sequence,
                     'received_ns': received_ns,
                     'deadline_ns': self._pending_safety_input_deadline_ns})
+                return
+            if self._identity_is_behind(current_identity, identity):
+                self._discard_stale_safety_input(
+                    current_identity=current_identity,
+                    input_identity=identity,
+                    sample_sequence=msg.sample_sequence,
+                    received_ns=received_ns,
+                    stage='callback_arrived_after_lifecycle_advance')
                 return
             self.fail('SAFETY_INPUT_IDENTITY')
 

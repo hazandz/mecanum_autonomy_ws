@@ -501,12 +501,85 @@ def test_local_safety_defers_next_identity_input_until_lifecycle_callback(local_
     assert not any(name == 'SAFETY_INPUT_IDENTITY_PENDING' for name in adapter._reasons(f.clock.ros, f.clock.steady))
 
 
-def test_local_safety_rejects_nonforward_safety_input_identity(local_adapter):
+def test_local_safety_discards_strictly_older_safety_input_identity(local_adapter):
     f = local_adapter
     bad = copy.deepcopy(f.noisy)
-    bad.episode_generation = f.life.episode_generation - 1
+    advanced_life = copy.deepcopy(f.life)
+    advanced_life.sequence += 1
+    advanced_life.episode_generation += 1
+    advanced_life.reset_epoch += 1
+    advanced_life.runtime_generation += 1
+    advanced_life.header.stamp = f.stamp(f.clock.ros)
+    f.adapter.on_lifecycle(advanced_life)
+    f.adapter.on_safety_input(bad)
+    assert f.adapter.fault is None
+    assert f.adapter.noisy is None
+    assert any(name == 'SAFETY_INPUT_STALE_CONTEXT_DISCARDED'
+               for name, _ in f.evidence)
+
+
+def test_local_safety_still_faults_incomparable_safety_input_identity(local_adapter):
+    f = local_adapter
+    bad = copy.deepcopy(f.noisy)
+    bad.episode_generation -= 1
+    bad.reset_epoch += 1
     f.adapter.on_safety_input(bad)
     assert f.adapter.fault == 'SAFETY_INPUT_IDENTITY'
+
+
+def test_local_safety_discards_previous_context_input_after_lifecycle_advances(local_adapter):
+    f = local_adapter
+    stale = copy.deepcopy(f.noisy)
+    next_life = copy.deepcopy(f.life)
+    next_life.sequence += 1
+    next_life.episode_generation += 1
+    next_life.reset_epoch += 1
+    next_life.runtime_generation += 1
+    next_life.header.stamp = f.stamp(f.clock.ros)
+
+    f.adapter.on_lifecycle(next_life)
+    assert f.adapter.noisy is None
+    f.adapter.on_safety_input(stale)
+
+    assert f.adapter.fault is None
+    assert f.adapter.noisy is None
+    output = f.adapter.tick()
+    assert output.source == output.SOURCE_SAFE_STOP
+    assert not any((output.twist.linear.x, output.twist.linear.y,
+                    output.twist.angular.z))
+    assert any(name == 'SAFETY_INPUT_STALE_CONTEXT_DISCARDED'
+               and data['stage'] == 'callback_arrived_after_lifecycle_advance'
+               for name, data in f.evidence)
+
+
+def test_local_safety_discards_pending_input_when_lifecycle_advances_past_it(local_adapter):
+    f = local_adapter
+    pending_life = copy.deepcopy(f.life)
+    pending_life.episode_generation += 1
+    pending_life.reset_epoch += 1
+    pending_life.runtime_generation += 1
+    pending_input = copy.deepcopy(f.noisy)
+    pending_input.sample_sequence += 1
+    pending_input.episode_generation = pending_life.episode_generation
+    pending_input.reset_epoch = pending_life.reset_epoch
+    pending_input.runtime_generation = pending_life.runtime_generation
+    f.adapter.on_safety_input(pending_input)
+    assert f.adapter._pending_safety_input is not None
+
+    later_life = copy.deepcopy(pending_life)
+    later_life.sequence += 2
+    later_life.episode_generation += 1
+    later_life.reset_epoch += 1
+    later_life.runtime_generation += 1
+    later_life.header.stamp = f.stamp(f.clock.ros)
+    f.adapter.on_lifecycle(later_life)
+
+    assert f.adapter.fault is None
+    assert f.adapter._pending_safety_input is None
+    assert f.adapter.noisy is None
+    assert any(name == 'SAFETY_INPUT_STALE_CONTEXT_DISCARDED'
+               and data['stage'] == 'lifecycle_advanced_past_pending_input'
+               for name, data in f.evidence)
 
 
 def test_local_safety_identity_pending_expires_without_lifecycle_match(local_adapter):
