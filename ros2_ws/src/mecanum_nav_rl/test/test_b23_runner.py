@@ -4512,6 +4512,36 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
         assert io._r04d_pending_ingress_lifecycle is None
 
 
+def test_r04d_wait_tolerates_only_receipt_watchdog_while_native_zero_is_active():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_expected_native_fault_flags
+
+    expected = SimulationContactState.FAULT_COMMAND_STALE
+    assert r04d_expected_native_fault_flags() == expected
+    value, clock = worker()
+    state = NS(fault_flags=expected, local_zero_override=True,
+        actuator_inhibited=True, status_sequence=17, physics_iteration=42)
+    value.ingress.backend_state = state
+    assert asyncio.run(value.until(lambda: state
+        if state.local_zero_override and state.actuator_inhibited else None,
+        deadline_ns=clock.ns + 5_000_000, phase='R04d expected fail-closed zero',
+        expected_native_fault_flags=expected)) is state
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected | SimulationContactState.FAULT_CLOCK,
+        local_zero_override=True, actuator_inhibited=True)
+    with pytest.raises(RuntimeError, match='native fault flags=68'):
+        asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000,
+            phase='R04d unexpected fault', expected_native_fault_flags=expected))
+
+    value, clock = worker()
+    value.ingress.backend_state = NS(fault_flags=expected,
+        local_zero_override=False, actuator_inhibited=False)
+    with pytest.raises(TimeoutError, match='deadline expired'):
+        asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000,
+            phase='R04d fault without native zero', expected_native_fault_flags=expected))
+
+
 def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
     from mecanum_nav_rl.runtime_simulation.b23_runner import (
         r04d_final_publisher_precedes_ingress, r04d_ingress_lifecycle_delay_s)

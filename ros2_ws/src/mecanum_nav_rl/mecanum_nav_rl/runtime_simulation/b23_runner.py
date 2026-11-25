@@ -1412,6 +1412,12 @@ def r04d_final_publisher_precedes_ingress(final_delivery_ns, ingress_delivery_ns
         and final_delivery_ns <= ingress_delivery_ns)
 
 
+def r04d_expected_native_fault_flags():
+    """Only the receipt watchdog fault is expected during the 650 ms delay."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    return SimulationContactState.FAULT_COMMAND_STALE
+
+
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
     """Release a held zero only after this invocation's ingress binds its identity."""
     marker_path = Path(marker_path)
@@ -9050,7 +9056,8 @@ async def training_child(path):
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
                 await io.until(lambda: state if state['scheduled'] >= 1 and state['delivered'] >= 1 else None,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
-                    phase='R04d delayed lifecycle callback completion')
+                    phase='R04d delayed lifecycle callback completion',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 if state['scheduled'] != 1 or state['delivered'] != 1:
                     raise RuntimeError('R04d delayed lifecycle callback did not complete exactly once')
                 scheduled = next((facts for name, facts in io.events
@@ -9069,25 +9076,29 @@ async def training_child(path):
                         _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else [],
                         sequence=fault_lifecycle.sequence, identity=expected_lifecycle_identity),
                     deadline_ns=verification_deadline_ns,
-                    phase='R04d exact final-publisher lifecycle delivery')
+                    phase='R04d exact final-publisher lifecycle delivery',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 ingress_scheduled = next((facts for name, facts in io.events
                     if name == 'B23_R04_INGRESS_DELIVERY_SCHEDULED' and facts.get('case') == 'R04d'), None)
                 ingress_delivered = await io.until(lambda: next((facts for name, facts in io.events
                     if name == 'B23_R04_INGRESS_DELIVERY_COMPLETED' and facts.get('case') == 'R04d'), None),
                     deadline_ns=verification_deadline_ns,
-                    phase='R04d exact ingress lifecycle delivery')
+                    phase='R04d exact ingress lifecycle delivery',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 rejected = await io.until(lambda: r04d_stale_safety_rejection_after_delivery(
                     io.events, delivery_ns=delayed['delivery_ns'],
                     source_stamp_ns=scheduled['source_stamp_ns']),
                     deadline_ns=verification_deadline_ns,
-                    phase='R04d delivered stale lifecycle rejected by actual Safety')
+                    phase='R04d delivered stale lifecycle rejected by actual Safety',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
                 await io.until(lambda: next((row.get('facts', {}) for row in
                     _ledger_rows(packet['run_root'], 'final-events.jsonl')
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_RELEASED'
                     and row.get('facts', {}).get('identity') == expected_lifecycle_identity), None),
                     deadline_ns=verification_deadline_ns,
-                    phase='R04d bound zero SAFE_STOP released after hold')
+                    phase='R04d bound zero SAFE_STOP released after hold',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 final_rows = _ledger_rows(packet['run_root'], 'final-events.jsonl') if final_path.exists() else []
                 held_zero = [row['facts'] for row in final_rows
                     if row.get('event') == 'R04D_FINAL_NEW_CONTEXT_SAFE_STOP_HELD'
@@ -9124,6 +9135,19 @@ async def training_child(path):
                     if commit_path.exists() else 0
                 if issued_count != 0 or commit_count != prior_commits:
                     raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
+                native_state = io.ingress.backend_state
+                expected_fault = r04d_expected_native_fault_flags()
+                if (native_state is None or native_state.fault_flags != expected_fault
+                        or not native_state.local_zero_override
+                        or not native_state.actuator_inhibited):
+                    raise RuntimeError('R04d watchdog fault did not retain native zero/inhibit')
+                io.emit('R04D_NATIVE_WATCHDOG_ZERO_VERIFIED', {
+                    'fault_flags':int(native_state.fault_flags),
+                    'local_zero_override':bool(native_state.local_zero_override),
+                    'actuator_inhibited':bool(native_state.actuator_inhibited),
+                    'status_sequence':int(native_state.status_sequence),
+                    'physics_iteration':int(native_state.physics_iteration),
+                    'steady_ns':io.now()})
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
                     'stale_input_disposition':rejected['disposition'],
                     'stale_rejection_reason':('LIFECYCLE_STALE_OR_FUTURE'
@@ -9134,6 +9158,9 @@ async def training_child(path):
                     'final_new_context_safe_stop_held':len(held_zero),
                     'final_new_context_safe_stop_released':len(released_zero),
                     'final_new_context_publication_errors':publication_errors,
+                    'native_fault_flags':int(native_state.fault_flags),
+                    'native_local_zero_override':bool(native_state.local_zero_override),
+                    'native_actuator_inhibited':bool(native_state.actuator_inhibited),
                     'source_stamp_ns':scheduled['source_stamp_ns'],
                     'source_ros_age_ns':rejected['ros_ns']-scheduled['source_stamp_ns'],
                     'no_policy_issued':True,'b1_commits_before_fault':prior_commits,
