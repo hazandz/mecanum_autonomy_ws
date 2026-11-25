@@ -7826,6 +7826,7 @@ class TrainingWorkerIO:
             self.ingress.pause_admission_publication()
         held_sample_sequence = None
         policy_candidate_published = False
+        active_hooks = tuple(getattr(self, 'fault_hooks', ()))
         if held_prebind is not None:
             held_sample_sequence = held_prebind.sample_sequence
             await self.release_r02e_prebind_input_before_admission(
@@ -7850,7 +7851,8 @@ class TrainingWorkerIO:
             # Safety executor consumes the input. The Safety stream and policy
             # hold remain closed until the exact admission is observed below,
             # so this cannot authorize or publish motion early.
-            if (not getattr(self, 'fault_hooks', ()) and held_prebind is None
+            if ((not active_hooks or active_hooks == ('pre_bind_admission_sample',))
+                    and held_prebind is None
                     and close_after_held_receipt is None
                     and not require_admission_before_receipt
                     and not hold_after_adapter_issuance):
@@ -8106,7 +8108,7 @@ class TrainingWorkerIO:
                 pending_token=ack.response.pending_admission_token,
                 step_index=token.step_index,
                 transition_id=token.transition_id)
-        if (not getattr(self, 'fault_hooks', ())
+        if ((not active_hooks or active_hooks == ('pre_bind_admission_sample',))
                 and measurement_fault_case is None
                 and after_policy_applied is None
                 and before_pending_bind is None

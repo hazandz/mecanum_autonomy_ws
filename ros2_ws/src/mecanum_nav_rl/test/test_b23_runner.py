@@ -7971,7 +7971,7 @@ def test_r02d_inhibits_before_waiting_for_native_hold_marker():
 @pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
     'nominal_issued_cutoff','prebind_elapsed_deadline',
-    'admission_refresh_after_issue'])
+    'admission_refresh_after_issue','r02e_first_slot'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -7979,6 +7979,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     from mecanum_nav_rl.runtime_simulation.local_training_coordinator import BackendControlAck, B1SnapshotPending
     from rclpy.serialization import serialize_message
     value, clock = worker()
+    if timing == 'r02e_first_slot':
+        value.fault_hooks = ('pre_bind_admission_sample',)
     clock.ns += 20_000_000
     value.deadline_ns = clock.ns + 3_000_000_000
     ros = lambda: clock.ns
@@ -8213,7 +8215,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     commit_attempts = {}
     def commit(cutoff):
         commit_calls.append(cutoff)
-        if timing == 'admission_refresh_after_issue':
+        if timing in ('admission_refresh_after_issue','r02e_first_slot'):
             history.append(('commit_attempt', cutoff, admission_resumed[0]))
             if not admission_resumed[0]:
                 raise B1SnapshotPending('fresh admission stream has not resumed')
@@ -8272,7 +8274,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.align_r09b_application_cutoff = align_r09b_application_cutoff
     if timing in ('ready','near_scan_cutoff','r09b_callback','r09b_before_bind',
             'candidate_after_admission','nominal_issued_cutoff',
-            'prebind_elapsed_deadline','admission_refresh_after_issue'):
+            'prebind_elapsed_deadline','admission_refresh_after_issue',
+            'r02e_first_slot'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -8306,7 +8309,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing == 'nominal_issued_cutoff':
         assert commit_calls == [nominal_cutoff], (
             f'production runner skipped the actual post-issuance cutoff within the nominal 100 ms period: {commit_calls!r}')
-    if timing == 'admission_refresh_after_issue':
+    if timing in ('admission_refresh_after_issue','r02e_first_slot'):
         assert admission_resumed[0], f'normal POLICY step did not resume fresh admissions: {history!r}'
         resume_index = tags.index('admission_resume')
         issued_index = tags.index('issued')
