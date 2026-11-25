@@ -10074,6 +10074,41 @@ def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(
             safe_stop_receipt=safe_stop_receipt)
 
 
+def test_r02c_close_verifies_the_exact_application_snapshot_without_relookup(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02c_safe_stop_close
+
+    native=tmp_path/'native-events.jsonl'
+    native.write_text('\n'.join(json.dumps(row) for row in (
+        {'kind':'B23_POLICY_RECEIPT_HELD','fields':{
+            'sequence':'52','source_sequence':'1','receive_ns':'100'}},
+        {'kind':'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE','fields':{
+            'sequence':'52','source_sequence':'1','reason':'safe_stop','receive_ns':'200'}}))+'\n')
+    policy_receipt=NS(final_publish_sequence=52)
+    safe_stop_receipt=NS(final_publish_sequence=53,final_publisher_instance_id=81,
+        final_command=NS(linear=NS(x=0.0,y=0.0),angular=NS(z=0.0)))
+    state=NS(applied_receipt_valid=True,applied_final_publisher_instance_id=81,
+        applied_final_publish_sequence=53,fault_flags=0,local_zero_override=False,
+        actuator_inhibited=True)
+    lookups=[]
+    def later_bounded_lookup(_receipt):
+        lookups.append('called')
+        return None
+    io=NS(descriptor={'native_events_path':str(native)},
+        ingress=NS(policy_application_for_receipt=lambda _receipt: None,
+            application_for_receipt=later_bounded_lookup),events=[])
+
+    # The exact result was returned by the production wait against the pinned
+    # receipt view. A second lookup may no longer find it in bounded ingress
+    # retention, so close verification must consume this captured snapshot.
+    captured={'state':state,'received_ns':300}
+    result=verify_r02c_safe_stop_close(io,step_index=1,policy_receipt=policy_receipt,
+        safe_stop_receipt=safe_stop_receipt,safe_stop_application=captured)
+
+    assert lookups == []
+    assert result['safe_stop_applied_ns'] == 300
+    assert result['safe_stop_final_publish_sequence'] == 53
+
+
 def _postmortem_residue_fixture(tmp_path):
     import hashlib
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_postmortem_residue_attestation

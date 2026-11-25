@@ -3082,7 +3082,7 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
 
 
 def verify_r02c_safe_stop_close(io, *, step_index, policy_receipt,
-        safe_stop_receipt):
+        safe_stop_receipt, safe_stop_application=None):
     """Verify R02c through the accepted SAFE_STOP path, not a required fault.
 
     A SAFE_STOP may advance the publication watermark before the held POLICY
@@ -3093,7 +3093,12 @@ def verify_r02c_safe_stop_close(io, *, step_index, policy_receipt,
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     if policy_receipt is None or safe_stop_receipt is None:
         raise RuntimeError('R02c exact SAFE_STOP application evidence is incomplete')
-    safe_stop_application = io.ingress.application_for_receipt(safe_stop_receipt)
+    # The worker waits for the exact application through a receipt view pinned
+    # to the raw publisher/native-ingress records. Keep that immutable result
+    # for verification: looking it up again can race bounded ingress retention
+    # or a later callback advancing the current lifecycle snapshot.
+    if safe_stop_application is None:
+        safe_stop_application = io.ingress.application_for_receipt(safe_stop_receipt)
     if (not isinstance(safe_stop_application, dict)
             or safe_stop_application.get('state') is None):
         raise RuntimeError('R02c exact SAFE_STOP application evidence is incomplete')
@@ -7709,7 +7714,8 @@ class TrainingWorkerIO:
                         self, safe_stop_receipt_view),
                     deadline_ns=deadline, phase='R02c exact inhibited SAFE_STOP application')
                 checked = verify_r02c_safe_stop_close(self, step_index=token.step_index,
-                    policy_receipt=policy_receipt, safe_stop_receipt=safe_stop_receipt)
+                    policy_receipt=policy_receipt, safe_stop_receipt=safe_stop_receipt,
+                    safe_stop_application=safe_stop_application)
                 aborted = b1.lifecycle.abort_step('R02_late_policy_receipt_after_safe_stop')
                 self.emit('R02_LATE_POLICY_RECEIPT_REJECTED', {
                     **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
