@@ -4683,6 +4683,19 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
     assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
 
+def test_r02g_preclose_receipt_join_budget_stays_inside_native_watchdog():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        R02G_PRE_CLOSE_RECEIPT_JOIN_NS, r02g_pre_close_receipt_deadline)
+
+    io = NS(deadline_ns=10_000_000_000, now=lambda:1_000_000_000)
+    assert R02G_PRE_CLOSE_RECEIPT_JOIN_NS == 90_000_000
+    assert R02G_PRE_CLOSE_RECEIPT_JOIN_NS < 100_000_000
+    assert r02g_pre_close_receipt_deadline(io) == 1_090_000_000
+
+    io.deadline_ns = 1_050_000_000
+    assert r02g_pre_close_receipt_deadline(io) == 1_050_000_000
+
+
 @pytest.mark.parametrize('zero_only', [False, True])
 def test_r02g_admission_close_holds_policy_before_revoking_gate(zero_only):
     calls = []

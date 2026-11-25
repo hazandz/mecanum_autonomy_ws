@@ -3001,6 +3001,14 @@ async def drain_final_publication_before_close(
     return receipt
 
 
+R02G_PRE_CLOSE_RECEIPT_JOIN_NS = 90_000_000
+
+
+def r02g_pre_close_receipt_deadline(io):
+    """Keep the end-to-end close join inside the unchanged 100 ms watchdog."""
+    return min(io.deadline_ns, io.now() + R02G_PRE_CLOSE_RECEIPT_JOIN_NS)
+
+
 async def drain_r02g_final_publication(io, adapter, *, deadline_ns):
     """R02g wrapper retaining its case-specific evidence label."""
     return await drain_final_publication_before_close(
@@ -9762,7 +9770,7 @@ async def training_child(path):
                     raise RuntimeError('R02g POLICY step terminated before closing-path check: ' + route)
                 adapter = io.safety.local_training
                 await drain_r02g_final_publication(io, adapter,
-                    deadline_ns=min(io.deadline_ns, io.now() + 50_000_000))
+                    deadline_ns=r02g_pre_close_receipt_deadline(io))
                 safe_stop_before = adapter.safe_stop_sequence
                 if route == 'safe_stop':
                     adapter.set_policy_hold(True)
