@@ -4512,10 +4512,11 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
     assert calls[1] == ('writer_ack',50)
     assert calls[2] == ('writer_ack',50)
     assert calls[3][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
-    assert calls[4] == ('until','exact last Safety output receipt before close',150)
+    assert calls[4] == ('until','latest last Safety-key receipt before close',150)
     assert calls[5] == ('exact_receipt',3)
-    assert calls[6] == ('until','last POLICY application before close',150)
+    assert calls[6] == ('until','latest POLICY application before close',150)
     assert calls[7] == ('application',receipt)
+    assert calls[8] == ('exact_receipt',3)
     assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
 
@@ -5730,6 +5731,62 @@ def test_final_publication_view_joins_repeated_source_sequence_to_exact_output()
     assert (selected.header.stamp.sec, selected.header.stamp.nanosec) == (11, 20_000_000)
 
 
+def test_final_publication_view_close_lookup_uses_newest_receipt_for_same_key():
+    from collections import OrderedDict
+    import threading
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource)
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.b23_runner import FinalPublicationView
+
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    output = CommandEnvelope()
+    output.header.frame_id = 'base_link'
+    output.header.stamp.sec, output.header.stamp.nanosec = 11, 20_000_000
+    output.source, output.sequence, output.source_instance_id = (
+        CommandEnvelope.SOURCE_POLICY, 29, 35866929034594931)
+    output.episode_generation, output.reset_epoch, output.runtime_generation = 2, 3, 4
+    output.twist.linear.x, output.twist.linear.y, output.twist.angular.z = 0.1, -0.02, 0.03
+
+    def record(publish_sequence, stamp_ns, source_id=output.source_instance_id):
+        sec, nanosec = divmod(stamp_ns, 1_000_000_000)
+        receipt = FinalIssuedCommandReceipt()
+        receipt.header.frame_id = 'base_link'
+        receipt.header.stamp.sec, receipt.header.stamp.nanosec = sec, nanosec
+        receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation = 2, 3, 4
+        receipt.source, receipt.sequence = output.source, output.sequence
+        receipt.source_instance_id = source_id
+        receipt.final_publisher_instance_id = 55
+        receipt.final_publish_sequence = publish_sequence
+        receipt.final_command.linear.x = output.twist.linear.x
+        receipt.final_command.linear.y = output.twist.linear.y
+        receipt.final_command.angular.z = output.twist.angular.z
+        view = IssuedCommandReceiptView(
+            publish_stamp_ns=stamp_ns, final_publisher_instance_id=55,
+            final_publish_sequence=publish_sequence, source=ReceiptSource.POLICY,
+            source_instance_id=source_id, source_sequence=29, step_index=29,
+            transition_id='step-29', lifecycle=identity, session_id='session',
+            ingress_config_hash='a'*64, final_command=(0.1, -0.02, 0.03),
+            received_steady_ns=publish_sequence, frame_id='base_link', admission_valid=True)
+        return view, serialize_message(receipt)
+
+    stale, stale_bytes = record(1717, 11_020_000_000)
+    newest, newest_bytes = record(1718, 11_030_000_000)
+    wrong_identity, wrong_bytes = record(1719, 11_040_000_000, source_id=7)
+    view = FinalPublicationView(55)
+    view.ingress = NS(receipts=[stale, newest, wrong_identity], lock=threading.RLock(),
+        _receipt_bytes=OrderedDict([
+            (1717, stale_bytes), (1718, newest_bytes), (1719, wrong_bytes)]))
+
+    selected = view.latest_publication_for_output(output)
+    assert selected is not None
+    assert selected.final_publish_sequence == 1718
+    assert selected.source_instance_id == output.source_instance_id
+    assert (selected.header.stamp.sec, selected.header.stamp.nanosec) == (11, 30_000_000)
+
+
 def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     import json
     path=tmp_path/'native-events.jsonl'
@@ -6784,7 +6841,7 @@ def test_final_output_drain_resnapshots_same_sequence_after_writer_ack():
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
 
     def output(stamp_ns):
-        return NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44,
+        return NS(source=CommandEnvelope.SOURCE_POLICY, source_instance_id=44,
             sequence=7, episode_generation=1, reset_epoch=2, runtime_generation=3,
             header=NS(frame_id='base_link', stamp=NS(sec=1, nanosec=stamp_ns)),
             twist=NS(linear=NS(x=0., y=0., z=0.),
@@ -6801,37 +6858,56 @@ def test_final_output_drain_resnapshots_same_sequence_after_writer_ack():
             adapter.last_output = current
         return True
 
-    receipt = FinalIssuedCommandReceipt()
-    receipt.source = CommandEnvelope.SOURCE_SAFE_STOP
-    receipt.source_instance_id = 44
-    receipt.sequence = 7
-    receipt.final_publisher_instance_id = 55
-    receipt.final_publish_sequence = 20
-    receipt.final_command.linear.x = 0.
-    receipt.final_command.linear.y = 0.
-    receipt.final_command.angular.z = 0.
+    def receipt(publish_sequence, stamp):
+        value = FinalIssuedCommandReceipt()
+        value.header.frame_id = 'base_link'
+        value.header.stamp.sec = 1
+        value.header.stamp.nanosec = stamp
+        value.source = CommandEnvelope.SOURCE_POLICY
+        value.source_instance_id = 44
+        value.sequence = 7
+        value.final_publisher_instance_id = 55
+        value.final_publish_sequence = publish_sequence
+        value.final_command.linear.x = 0.
+        value.final_command.linear.y = 0.
+        value.final_command.angular.z = 0.
+        return value
+    first, late = receipt(20, 260_000_000), receipt(21, 270_000_000)
+    current_receipt = [first]
+    lookup_count = [0]
     state = NS(applied_receipt_valid=True, local_zero_override=False,
         fault_flags=0, applied_final_publisher_instance_id=55,
         applied_final_publish_sequence=20)
     selected = []
-    app = {'state': state, 'received_ns': 123}
+    applications = {20:{'state':state, 'received_ns':123}}
+    clock = [100]
     async def until(predicate, *, deadline_ns, phase, **_kwargs):
         value = predicate()
         if value is None:
             raise AssertionError(f'unexpected wait in {phase}')
         return value
-    io = NS(now=lambda: 100, final=NS(publisher_instance_id=55,
-        publication_for_output=lambda value: (selected.append(value.header.stamp.nanosec)
-            or (receipt if value.header.stamp.nanosec == 260_000_000 else None))),
-        ingress=NS(application_for_receipt=lambda _receipt: app),
-        emit=lambda *_args: None, until=until)
+    def latest_for_output(value):
+        lookup_count[0] += 1
+        if lookup_count[0] == 2:
+            # A duplicate publication of the same Safety key reaches the
+            # receipt ingress after the first already-applied receipt.
+            current_receipt[0] = late
+            state.applied_final_publish_sequence = 21
+            applications[21] = {'state':state, 'received_ns':456}
+        selected.append(value.header.stamp.nanosec)
+        return current_receipt[0]
+    io = NS(now=lambda: clock[0], final=NS(publisher_instance_id=55,
+        latest_publication_for_output=latest_for_output),
+        ingress=NS(policy_application_for_receipt=lambda item: applications.get(
+            item.final_publish_sequence)),
+        emit=lambda *_args: None, until=until, pause=asyncio.sleep)
     adapter.node = NS(_accepted_pub=NS(wait_for_all_acked=wait_for_all_acked))
 
     asyncio.run(drain_final_publication_before_close(
         io, adapter, deadline_ns=1_000_000_000))
 
     assert len(ack_calls) == 2
-    assert selected == [260_000_000]
+    assert selected == [260_000_000, 260_000_000, 260_000_000]
 
 
 @pytest.mark.parametrize('last_source', ['safe_stop', 'policy'])

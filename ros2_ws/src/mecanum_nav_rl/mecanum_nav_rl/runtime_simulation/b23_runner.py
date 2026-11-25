@@ -2799,16 +2799,42 @@ async def drain_final_publication_before_close(
         'source': output.source, 'source_instance_id': output.source_instance_id,
         'source_sequence': output.sequence,
         'stamp_ns': stamp_ns(output.header.stamp), 'steady_ns': io.now()})
-    receipt = await io.until(lambda: io.final.publication_for_output(output),
-        deadline_ns=deadline_ns, phase='exact last Safety output receipt before close')
-    if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
-        application = await await_r02g_exact_safe_stop_application(
-            io, receipt=receipt, deadline_ns=deadline_ns,
-            route='last-output-before-close')
-    else:
-        application = await io.until(
-            lambda: io.ingress.policy_application_for_receipt(receipt),
-            deadline_ns=deadline_ns, phase='last POLICY application before close')
+    latest_receipt = getattr(io.final, 'latest_publication_for_output', None)
+    if not callable(latest_receipt):
+        # Test doubles and older isolated callers still exercise the exact
+        # path; the production FinalPublicationView always provides the
+        # latest-key lookup used for this close barrier.
+        latest_receipt = io.final.publication_for_output
+    receipt = await io.until(lambda: latest_receipt(output),
+        deadline_ns=deadline_ns, phase='latest last Safety-key receipt before close')
+    # A reliable writer ACK confirms transport to the reader, not completion
+    # of its callback. Yield the worker/event loop briefly so its bounded
+    # callback pump can observe queued receipts, then rejoin the newest
+    # same-key publication. Keep repeating within the original step deadline
+    # until that newest receipt has a native application and no later receipt
+    # appeared during the handoff. This prevents SAFE_STOP from overtaking a
+    # duplicate POLICY publication already in flight when the stream stopped.
+    while True:
+        if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
+            application = await await_r02g_exact_safe_stop_application(
+                io, receipt=receipt, deadline_ns=deadline_ns,
+                route='last-output-before-close')
+        else:
+            application = await io.until(
+                lambda: io.ingress.policy_application_for_receipt(receipt),
+                deadline_ns=deadline_ns, phase='latest POLICY application before close')
+        remaining_ns = deadline_ns - io.now()
+        if remaining_ns <= 0:
+            raise TimeoutError('latest Safety-key receipt did not quiesce before close')
+        await asyncio.sleep(min(0.01, remaining_ns / 1_000_000_000))
+        newest = latest_receipt(output)
+        if newest is None:
+            raise RuntimeError('latest Safety-key receipt disappeared before close')
+        if newest.final_publish_sequence < receipt.final_publish_sequence:
+            raise RuntimeError('Safety-key receipt publication sequence regressed before close')
+        if newest.final_publish_sequence == receipt.final_publish_sequence:
+            break
+        receipt = newest
     if not isinstance(application, dict) or application.get('state') is None:
         raise RuntimeError('last Safety output lacks exact native application evidence')
     state = application['state']
@@ -2820,6 +2846,8 @@ async def drain_final_publication_before_close(
     io.emit(event_name, {
         'source': receipt.source, 'source_sequence': receipt.sequence,
         'final_publish_sequence': receipt.final_publish_sequence,
+        'receipt_publish_stamp_ns': (stamp_ns(receipt.header.stamp)
+            if getattr(receipt, 'header', None) is not None else None),
         'application_received_ns': application.get('received_ns'),
         'steady_ns': io.now()})
     return receipt
@@ -3362,6 +3390,60 @@ class FinalPublicationView:
                         receipt.final_command.angular.z) != command
                     or receipt.final_publish_sequence != view.final_publish_sequence):
                 raise RuntimeError('retained receipt bytes do not match the exact Safety output')
+            return receipt
+        return None
+
+    def latest_publication_for_output(self, output):
+        """Return the newest receipt for this Safety key and command.
+
+        Safety can publish the same source sequence on consecutive timer ticks.
+        During stream shutdown, an earlier matching receipt may already be in
+        the ingress deque while a later tick for that same key is still being
+        processed by FinalTwistPublisher.  The exact-stamp lookup above is
+        useful for observation cutoffs; a close drain must instead join the
+        newest real receipt for the pinned identity/key/command.
+        """
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        if self.ingress is None or output is None:
+            return None
+        expected = {CommandEnvelope.SOURCE_POLICY: ReceiptSource.POLICY,
+            CommandEnvelope.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP}.get(output.source)
+        if expected is None or type(output.sequence) is not int or output.sequence <= 0:
+            return None
+        lifecycle = (output.episode_generation, output.reset_epoch, output.runtime_generation)
+        source_stamp = stamp_ns(output.header.stamp)
+        command = (output.twist.linear.x, output.twist.linear.y, output.twist.angular.z)
+        with self.ingress.lock:
+            retained_views = tuple(self.ingress.receipts)
+            retained_bytes = dict(self.ingress._receipt_bytes)
+        for view in reversed(retained_views):
+            if (view.source is not expected
+                    or view.source_sequence != output.sequence
+                    or view.source_instance_id != output.source_instance_id
+                    or view.final_publisher_instance_id != self.publisher_instance_id
+                    or (view.lifecycle.episode_generation, view.lifecycle.reset_epoch,
+                        view.lifecycle.runtime_generation) != lifecycle
+                    or view.final_command != command
+                    or view.publish_stamp_ns < source_stamp):
+                continue
+            raw = retained_bytes.get(view.final_publish_sequence)
+            if raw is None:
+                raise RuntimeError('latest Safety-key receipt bytes are not retained')
+            receipt = deserialize_message(raw, FinalIssuedCommandReceipt)
+            if (receipt.final_publisher_instance_id != self.publisher_instance_id
+                    or receipt.source != output.source
+                    or receipt.source_instance_id != output.source_instance_id
+                    or receipt.sequence != output.sequence
+                    or (receipt.episode_generation, receipt.reset_epoch,
+                        receipt.runtime_generation) != lifecycle
+                    or stamp_ns(receipt.header.stamp) != view.publish_stamp_ns
+                    or (receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z) != command
+                    or receipt.final_publish_sequence != view.final_publish_sequence):
+                raise RuntimeError('latest Safety-key receipt bytes do not match retained identity')
             return receipt
         return None
 
