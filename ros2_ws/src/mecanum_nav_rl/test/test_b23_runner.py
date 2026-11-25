@@ -4304,6 +4304,98 @@ def test_r02g_does_not_recover_safe_stop_from_mismatched_publisher_ledger(tmp_pa
         r02g_resolve_safe_stop_publication(io,stop)
 
 
+def test_r02c_recovers_safe_stop_application_when_worker_receipt_callback_is_coalesced(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r02c_safe_stop_application_from_ledgers, r02g_resolve_safe_stop_publication)
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    receipt=FinalIssuedCommandReceipt()
+    receipt.header.frame_id='base_link'
+    receipt.header.stamp.sec=2
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.sequence=51
+    receipt.source_instance_id=801
+    receipt.step_index=0
+    receipt.transition_id=''
+    receipt.final_publisher_instance_id=55
+    receipt.final_publish_sequence=54
+    receipt.episode_generation=1
+    receipt.reset_epoch=2
+    receipt.runtime_generation=3
+    raw=serialize_message(receipt)
+    (tmp_path/'final-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LEDGER','invocation_id':'inv-1','event':'FINAL_PUBLISHED',
+        'facts':{'identity':[1,2,3],'publisher_instance_id':55,
+            'publish_sequence':54,'receipt_cdr_hex':raw.hex(),
+            'source_instance_id':801,'source_sequence':51,'steady_ns':900}})+'\n')
+    (tmp_path/'native-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LEDGER','invocation_id':'inv-1',
+        'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+        'fields':{'publisher':'55','key':'54','source_sequence':'51','receive_ns':'950'}})+'\n')
+    stop=NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP,
+        source=CommandEnvelope.SOURCE_SAFE_STOP,sequence=51,source_instance_id=801)
+    seen=[]
+    state=object()
+    ingress=NS(identity=NS(session_id='session-r02c',config_hash='c'*64),
+        application_for_receipt=lambda view: (seen.append(view)
+            or {'state':state,'received_ns':975}))
+    io=NS(descriptor={'run_root':str(tmp_path),'run_id':'R02C-LEDGER',
+            'invocation_id':'inv-1'},final=NS(publisher_instance_id=55,
+                publication_for_source_sequence=lambda **_kwargs:None),ingress=ingress)
+
+    publication=r02g_resolve_safe_stop_publication(io,stop)
+    assert publication['evidence_source']=='publisher_raw_ledger'
+    application=r02c_safe_stop_application_from_ledgers(io,publication['receipt'],stop)
+
+    assert application=={'state':state,'received_ns':975,
+        'receipt_evidence_source':'publisher_and_native_ledgers'}
+    assert len(seen)==1
+    assert seen[0].final_publish_sequence==54
+    assert seen[0].source_sequence==51
+    assert seen[0].received_steady_ns==950
+    assert seen[0].lifecycle.episode_generation==1
+    assert seen[0].lifecycle.reset_epoch==2
+    assert seen[0].lifecycle.runtime_generation==3
+
+
+def test_r02c_does_not_use_publisher_ledger_without_matching_native_receipt(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r02c_safe_stop_application_from_ledgers, r02g_resolve_safe_stop_publication)
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from rclpy.serialization import serialize_message
+
+    receipt=FinalIssuedCommandReceipt()
+    receipt.header.frame_id='base_link'
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.sequence=8
+    receipt.source_instance_id=80
+    receipt.final_publisher_instance_id=55
+    receipt.final_publish_sequence=9
+    receipt.episode_generation=1
+    receipt.reset_epoch=1
+    receipt.runtime_generation=2
+    (tmp_path/'final-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LEDGER','invocation_id':'inv-1','event':'FINAL_PUBLISHED',
+        'facts':{'identity':[1,1,2],'publisher_instance_id':55,
+            'publish_sequence':9,'receipt_cdr_hex':serialize_message(receipt).hex(),
+            'source_instance_id':80,'source_sequence':8,'steady_ns':900}})+'\n')
+    (tmp_path/'native-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LEDGER','invocation_id':'inv-1',
+        'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+        'fields':{'publisher':'55','key':'10','source_sequence':'8','receive_ns':'950'}})+'\n')
+    stop=NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP,
+        source=CommandEnvelope.SOURCE_SAFE_STOP,sequence=8,source_instance_id=80)
+    io=NS(descriptor={'run_root':str(tmp_path),'run_id':'R02C-LEDGER',
+            'invocation_id':'inv-1'},final=NS(publisher_instance_id=55,
+                publication_for_source_sequence=lambda **_kwargs:None),
+        ingress=NS(identity=NS(session_id='session',config_hash='d'*64),
+            application_for_receipt=lambda _view:pytest.fail('no native key match')))
+
+    publication=r02g_resolve_safe_stop_publication(io,stop)
+    assert r02c_safe_stop_application_from_ledgers(io,publication['receipt'],stop) is None
+
+
 def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     receipt = NS(source=CommandEnvelope.SOURCE_POLICY, sequence=3,

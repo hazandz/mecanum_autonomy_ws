@@ -2959,6 +2959,111 @@ def verify_r02c_safe_stop_close(io, *, step_index, policy_receipt,
         'b1_transition_committed':False}
 
 
+def r02c_safe_stop_application_from_ledgers(io, receipt, stop):
+    """Join a SAFE_STOP receipt missed by worker KEEP_LAST ingress to raw source records.
+
+    The receipt bytes come from FinalTwistPublisher's immutable publication
+    ledger, and native ingress independently records the same publisher key.
+    Native application is still joined by LocalTrainingIngress's exact status
+    CDR map; this does not synthesize a callback, receipt, or application fact.
+    """
+    from rclpy.serialization import deserialize_message
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
+
+    if (receipt is None or stop is None
+            or stop.source != CommandEnvelope.SOURCE_SAFE_STOP
+            or receipt.source != FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+            or receipt.sequence != stop.sequence
+            or receipt.source_instance_id != stop.source_instance_id
+            or receipt.final_publisher_instance_id != io.final.publisher_instance_id
+            or receipt.final_publish_sequence <= 0
+            or receipt.header.frame_id != 'base_link'
+            or receipt.step_index != 0 or receipt.transition_id
+            or any((receipt.final_command.linear.x, receipt.final_command.linear.y,
+                receipt.final_command.angular.z))):
+        raise RuntimeError('R02c SAFE_STOP receipt identity is not pinned')
+
+    rows = _ledger_rows(io.descriptor['run_root'], 'final-events.jsonl')
+    publications = []
+    for row in rows:
+        facts = row.get('facts', {})
+        if (row.get('event') == 'FINAL_PUBLISHED'
+                and row.get('run_id') == io.descriptor.get('run_id')
+                and row.get('invocation_id') == io.descriptor.get('invocation_id')
+                and facts.get('publisher_instance_id') == io.final.publisher_instance_id
+                and facts.get('source_instance_id') == stop.source_instance_id
+                and facts.get('source_sequence') == stop.sequence
+                and facts.get('publish_sequence') == receipt.final_publish_sequence):
+            publications.append((row, facts))
+    if len(publications) != 1:
+        raise RuntimeError('R02c exact publisher SAFE_STOP record missing or duplicated')
+    _, facts = publications[0]
+    raw_hex = facts.get('receipt_cdr_hex')
+    steady_ns = facts.get('steady_ns')
+    identity = facts.get('identity')
+    if (not isinstance(raw_hex, str) or type(steady_ns) is not int or steady_ns <= 0
+            or not isinstance(identity, list) or len(identity) != 3):
+        raise RuntimeError('R02c publisher SAFE_STOP record lacks raw binding')
+    try:
+        raw_receipt = deserialize_message(bytes.fromhex(raw_hex), FinalIssuedCommandReceipt)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('R02c publisher SAFE_STOP bytes are invalid') from error
+    receipt_identity = lifecycle_identity(receipt)
+    if (raw_receipt.source != receipt.source
+            or raw_receipt.sequence != receipt.sequence
+            or raw_receipt.source_instance_id != receipt.source_instance_id
+            or raw_receipt.final_publisher_instance_id != receipt.final_publisher_instance_id
+            or raw_receipt.final_publish_sequence != receipt.final_publish_sequence
+            or lifecycle_identity(raw_receipt) != receipt_identity
+            or tuple(identity) != (receipt_identity.episode_generation,
+                receipt_identity.reset_epoch, receipt_identity.runtime_generation)
+            or raw_receipt.header.frame_id != receipt.header.frame_id
+            or raw_receipt.final_command.linear.x != receipt.final_command.linear.x
+            or raw_receipt.final_command.linear.y != receipt.final_command.linear.y
+            or raw_receipt.final_command.angular.z != receipt.final_command.angular.z):
+        raise RuntimeError('R02c publisher SAFE_STOP bytes differ from selected receipt')
+
+    native_rows = _ledger_rows(io.descriptor['run_root'], 'native-events.jsonl')
+    receives = [row for row in native_rows
+        if row.get('kind') == 'B23_SAFE_STOP_RECEIPT_INGRESS'
+        and row.get('run_id') == io.descriptor.get('run_id')
+        and row.get('invocation_id') == io.descriptor.get('invocation_id')
+        and row.get('fields', {}).get('publisher') == str(io.final.publisher_instance_id)
+        and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
+        and row.get('fields', {}).get('source_sequence') == str(receipt.sequence)]
+    if len(receives) != 1:
+        return None
+    received_ns = receives[0].get('fields', {}).get('receive_ns')
+    if not isinstance(received_ns, str) or not received_ns.isdigit() or int(received_ns) <= 0:
+        raise RuntimeError('R02c native SAFE_STOP receive record lacks steady time')
+    if int(received_ns) < steady_ns:
+        raise RuntimeError('R02c native SAFE_STOP receive predates publisher evidence')
+
+    view = IssuedCommandReceiptView(
+        publish_stamp_ns=stamp_ns(receipt.header.stamp),
+        final_publisher_instance_id=receipt.final_publisher_instance_id,
+        final_publish_sequence=receipt.final_publish_sequence,
+        source=ReceiptSource.SAFE_STOP,
+        source_instance_id=receipt.source_instance_id,
+        source_sequence=receipt.sequence,
+        step_index=receipt.step_index,
+        transition_id=receipt.transition_id,
+        lifecycle=receipt_identity,
+        session_id=io.ingress.identity.session_id,
+        ingress_config_hash=io.ingress.identity.config_hash,
+        final_command=(receipt.final_command.linear.x, receipt.final_command.linear.y,
+            receipt.final_command.angular.z),
+        received_steady_ns=int(received_ns),
+        frame_id=receipt.header.frame_id,
+        admission_valid=True)
+    application = io.ingress.application_for_receipt(view)
+    if application is None:
+        return None
+    return {**application, 'receipt_evidence_source':'publisher_and_native_ledgers'}
+
+
 def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_id):
     """Recover the exact receipt native held, from the publisher's raw bytes ledger."""
     from rclpy.serialization import deserialize_message
@@ -7258,12 +7363,18 @@ class TrainingWorkerIO:
                     and self.safety.local_training.last_output.sequence
                         > safe_stop_sequence_before_close else None,
                     deadline_ns=deadline, phase='R02c SAFE_STOP output after POLICY close')
-                safe_stop_receipt = await self.until(lambda:
-                    self.final.publication_for_source_sequence(
-                        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=stop.sequence),
+                safe_stop_publication = await self.until(lambda:
+                    r02g_resolve_safe_stop_publication(self, stop),
                     deadline_ns=deadline, phase='R02c exact SAFE_STOP receipt')
+                safe_stop_receipt = safe_stop_publication['receipt']
+                if safe_stop_publication['evidence_source'] == 'publisher_raw_ledger':
+                    self.emit('R02C_RECEIPT_BOUND_FROM_PUBLISHER_LEDGER', {
+                        'safe_stop_sequence':stop.sequence,
+                        'final_publish_sequence':safe_stop_receipt.final_publish_sequence,
+                        'steady_ns':self.now()})
                 safe_stop_application = await self.until(lambda:
-                    self.ingress.application_for_receipt(safe_stop_receipt),
+                    r02c_safe_stop_application_from_ledgers(self,
+                        safe_stop_receipt, stop),
                     deadline_ns=deadline, phase='R02c exact inhibited SAFE_STOP application')
                 checked = verify_r02c_safe_stop_close(self, step_index=token.step_index,
                     policy_receipt=policy_receipt, safe_stop_receipt=safe_stop_receipt)
