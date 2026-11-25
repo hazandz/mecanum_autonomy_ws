@@ -43,7 +43,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     query_replacement_backend_then_inhibit, verify_r09a_goal_settle,
     verify_r09b_task_contact, require_r09_scenario,
     should_emit_policy_cutoff_pending, worker_latency_diagnostic,
-    policy_cutoff_attempt_batch,
+    policy_cutoff_attempt_batch, policy_cutoff_pending_preference,
     exception_cause_chain,
     safety_executor_cycle_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
@@ -176,6 +176,26 @@ def test_policy_cutoff_batch_retries_recent_pending_before_rotating_history():
         stamps, cursor, preferred_cutoff=5)
     assert batch == (40, 20)
     assert cursor == 2
+
+
+def test_policy_cutoff_fallback_does_not_replace_newest_pending_retry():
+    preferred = policy_cutoff_pending_preference(
+        None, 1900, is_newest_attempt=True)
+    preferred = policy_cutoff_pending_preference(
+        preferred, 1800, is_newest_attempt=False)
+    assert preferred == 1900
+    batch, _ = policy_cutoff_attempt_batch(
+        [1800, 1900, 2000], 0, preferred_cutoff=preferred)
+    assert batch == (2000, 1900)
+    preferred = policy_cutoff_pending_preference(
+        preferred, 2000, is_newest_attempt=True)
+    preferred = policy_cutoff_pending_preference(
+        preferred, 1900, is_newest_attempt=False)
+    assert preferred == 2000
+    batch, _ = policy_cutoff_attempt_batch(
+        [1800, 1900, 2000, 2100], 1, preferred_cutoff=preferred)
+    assert batch[0] == 2100
+    assert batch[1] != 1800
     with pytest.raises(ValueError, match='process CPU timestamps'):
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,

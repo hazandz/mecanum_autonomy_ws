@@ -184,9 +184,23 @@ def policy_cutoff_attempt_batch(cutoffs, fallback_cursor, *, preferred_cutoff=No
         fallback_index = ordered.index(preferred_cutoff)
         next_cursor = (fallback_cursor + 1) % fallback_count
         return (ordered[0], ordered[fallback_index]), next_cursor
+    if preferred_cutoff == ordered[0]:
+        # The most recent unresolved cutoff has become the newest candidate.
+        # Retry its immediate predecessor as the bounded fallback instead of
+        # rotating past it into older history before its callback facts arrive.
+        next_cursor = (fallback_cursor + 1) % fallback_count
+        return (ordered[0], ordered[1]), next_cursor
     fallback_index = 1 + (fallback_cursor % fallback_count)
     next_cursor = (fallback_cursor + 1) % fallback_count
     return (ordered[0], ordered[fallback_index]), next_cursor
+
+
+def policy_cutoff_pending_preference(current_preference, attempted_cutoff,
+        *, is_newest_attempt):
+    """Keep an older fallback from replacing the newest unresolved cutoff."""
+    if type(is_newest_attempt) is not bool:
+        raise TypeError('newest-attempt marker must be bool')
+    return attempted_cutoff if is_newest_attempt else current_preference
 
 
 def exception_cause_chain(error):
@@ -8019,12 +8033,14 @@ class TrainingWorkerIO:
             cutoffs, cutoff_fallback_cursor = policy_cutoff_attempt_batch(
                 available_cutoffs, cutoff_fallback_cursor,
                 preferred_cutoff=recent_pending_cutoff)
-            for cutoff in cutoffs:
+            for attempt_index, cutoff in enumerate(cutoffs):
                 try:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
-                    recent_pending_cutoff = cutoff
+                    recent_pending_cutoff = policy_cutoff_pending_preference(
+                        recent_pending_cutoff, cutoff,
+                        is_newest_attempt=attempt_index == 0)
                     if should_emit_policy_cutoff_pending(
                             emitted_pending_cutoff_reasons, cutoff, last_pending):
                         pending_facts = {'step_index': token.step_index,
