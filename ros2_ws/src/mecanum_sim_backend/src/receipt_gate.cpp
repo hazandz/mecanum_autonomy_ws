@@ -130,6 +130,20 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
   if (!ValidPayload(r, reason)) return Fault(reason);
   if (now_steady_ns < item.receive_steady_ns)
     return Fault("future_timestamp");
+  // Classify receipts behind the accepted publication watermark before their
+  // old source stamp can be mistaken for a new timestamp rollback. They do
+  // not refresh the actuator watchdog. If this exact publication was already
+  // accepted, changed bytes under the same key remain a protocol fault.
+  if (r.key.publish_sequence <= watermark_)
+  {
+    const auto seen = std::find_if(replay_history_.begin(), replay_history_.end(),
+        [&r](const auto &old) { return old.key.publisher_instance_id == r.key.publisher_instance_id &&
+            old.key.publish_sequence == r.key.publish_sequence; });
+    if (seen != replay_history_.end() && !Equal(r, *seen))
+      return Fault("publication_key_content_conflict");
+    queue_.pop_front();
+    return {GateDisposition::Rejected, "replay_or_old_sequence", std::nullopt, false};
+  }
   if (now_steady_ns - item.receive_steady_ns > binding_.max_steady_age_ns)
     return Fault("stale_receipt");
   if (now_ros_ns < r.stamp_ns)
@@ -158,19 +172,6 @@ GateResult ReceiptGate::ConsumeNext(std::int64_t now_ros_ns,
     return Fault("source_timestamp_rollback");
   if (now_ros_ns - r.stamp_ns > binding_.max_ros_age_ns)
     return Fault("stale_receipt");
-
-  if (last_receipt_ && r.key.publisher_instance_id == last_receipt_->key.publisher_instance_id &&
-      r.key.publish_sequence == last_receipt_->key.publish_sequence)
-  {
-    if (!Equal(r, *last_receipt_)) return Fault("publication_key_content_conflict");
-    queue_.pop_front();
-    return {GateDisposition::Duplicate, "exact_duplicate", std::nullopt, false};
-  }
-  if (r.key.publish_sequence <= watermark_)
-  {
-    queue_.pop_front();
-    return {GateDisposition::Rejected, "replay_or_old_sequence", std::nullopt, false};
-  }
 
   if (!anchored_)
   {

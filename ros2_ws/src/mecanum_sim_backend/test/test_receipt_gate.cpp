@@ -122,6 +122,58 @@ TEST(ReceiptGate, RejectsReplayAndFaultsSequenceGap)
             "policy_issuance_binding_mismatch");
 }
 
+TEST(ReceiptGate, OlderSequenceReplayDoesNotFaultOnOlderSourceTimestamp)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  auto policy = Policy();
+  ASSERT_TRUE(gate.Enqueue(policy, 2'100));
+  ASSERT_EQ(gate.ConsumeNext(2'100, 2'100).disposition,
+            GateDisposition::Applied);
+  ASSERT_TRUE(gate.SetExpectedPolicyStep(2, 2, "policy-uuid-2"));
+
+  auto safe_stop = Anchor();
+  safe_stop.key.publish_sequence = 102;
+  safe_stop.sequence = 2;
+  safe_stop.stamp_ns = 1'003;
+  ASSERT_TRUE(gate.Enqueue(safe_stop, 2'200));
+  ASSERT_EQ(gate.ConsumeNext(2'200, 2'200).disposition,
+            GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 102U);
+
+  // A delayed copy of a publication older than the applied SAFE_STOP must
+  // remain an inert replay. Its older source timestamp must not turn the
+  // already-applied close into a new sticky gate fault.
+  ASSERT_TRUE(gate.Enqueue(policy, 2'300));
+  const auto replay = gate.ConsumeNext(2'300, 2'300);
+  EXPECT_EQ(replay.disposition, GateDisposition::Rejected);
+  EXPECT_EQ(replay.reason, "replay_or_old_sequence");
+  EXPECT_FALSE(replay.refresh_watchdog);
+  EXPECT_FALSE(gate.Faulted());
+  EXPECT_EQ(gate.Watermark(), 102U);
+}
+
+TEST(ReceiptGate, UnseenOlderSequenceAfterSafeStopIsRejectedBeforeTimestampRollback)
+{
+  ReceiptGate gate(Binding()); AcceptAnchor(gate);
+  auto safe_stop = Anchor();
+  safe_stop.key.publish_sequence = 102;  // POLICY key 101 was held outside the gate.
+  safe_stop.sequence = 2;
+  safe_stop.stamp_ns = 1'003;
+  ASSERT_TRUE(gate.Enqueue(safe_stop, 2'200));
+  ASSERT_EQ(gate.ConsumeNext(2'200, 2'200).disposition,
+            GateDisposition::Applied);
+  EXPECT_EQ(gate.Watermark(), 102U);
+
+  auto late_policy = Policy();
+  ASSERT_TRUE(gate.Enqueue(late_policy, 2'300));
+  const auto replay = gate.ConsumeNext(2'300, 2'300);
+  EXPECT_EQ(replay.disposition, GateDisposition::Rejected);
+  EXPECT_EQ(replay.reason, "replay_or_old_sequence");
+  EXPECT_FALSE(replay.refresh_watchdog);
+  EXPECT_FALSE(gate.Faulted());
+  EXPECT_EQ(gate.Watermark(), 102U);
+}
+
 TEST(ReceiptGate, PendingBarrierKeepsCurrentAndSafeStopLiveUntilPromotion)
 {
   ReceiptGate gate(Binding());
