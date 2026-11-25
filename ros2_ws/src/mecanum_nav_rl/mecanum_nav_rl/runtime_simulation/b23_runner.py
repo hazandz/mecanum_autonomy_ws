@@ -9654,10 +9654,6 @@ async def training_child(path):
                         and lifecycle_mismatch_evidence is None):
                     raise RuntimeError(
                         'R04d native sequence fault lacks matching released lifecycle-mismatch SAFE_STOP')
-                if (lifecycle_mismatch_evidence is not None
-                        and not native_status['fault_flags'] & SimulationContactState.FAULT_COMMAND_SEQUENCE):
-                    raise RuntimeError(
-                        'R04d native status after lifecycle-mismatch gate event lacks sequence fault')
                 io.emit('R04D_NATIVE_ZERO_INHIBIT_STATUS_VERIFIED', {
                     **{key:native_status[key] for key in (
                         'backend_instance_id','session_id','config_hash','lifecycle_identity',

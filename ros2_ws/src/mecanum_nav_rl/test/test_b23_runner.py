@@ -4816,6 +4816,14 @@ def test_r04d_native_zero_inhibit_uses_bound_raw_status_even_if_later_status_cha
         session_id='session-a',config_hash='cfg-a',lifecycle_identity=[2,3,4],after_ns=600)
     assert selected is base
     assert selected['received_ns'] == 700
+    # A gate's raw lifecycle_mismatch row is the rejection evidence; the
+    # later native status proves the pinned old context stayed zero/inhibited.
+    assert r04d_native_zero_inhibit_status(
+        [base], backend_instance_id=71, session_id='session-a',
+        config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=699) is base
+    assert r04d_native_zero_inhibit_status(
+        [base], backend_instance_id=71, session_id='session-a',
+        config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=700) is None
 
     watchdog = {**base,'fault_flags':SimulationContactState.FAULT_COMMAND_STALE}
     assert r04d_native_zero_inhibit_status(
