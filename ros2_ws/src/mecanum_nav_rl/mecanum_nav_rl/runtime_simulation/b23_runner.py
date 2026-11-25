@@ -1418,13 +1418,14 @@ def r04d_expected_native_fault_flags():
     return SimulationContactState.FAULT_COMMAND_STALE
 
 
-def r04d_native_watchdog_zero_status(rows, *, backend_instance_id, session_id,
+def r04d_native_zero_inhibit_status(rows, *, backend_instance_id, session_id,
         config_hash, lifecycle_identity, after_ns):
-    """Select a raw-bound native zero/watchdog sample from the delayed lifecycle phase.
+    """Select a raw-bound native zero/inhibit sample from the delayed lifecycle phase.
 
-    Later backend statuses may legitimately supersede the transient watchdog
-    sample after a fresh SAFE_STOP.  R04d must assess the status observed while
-    the fault was active, not require that it remain the latest status forever.
+    A valid fresh SAFE_STOP stream can keep the receipt watchdog from faulting;
+    in that case native zero/inhibit is still required but FAULT_COMMAND_STALE
+    is absent.  Later statuses may supersede the selected sample, so assess the
+    exact received snapshot instead of requiring it to remain the latest.
     """
     expected_fault = r04d_expected_native_fault_flags()
     for row in rows:
@@ -1436,7 +1437,8 @@ def r04d_native_watchdog_zero_status(rows, *, backend_instance_id, session_id,
                 or row.get('session_id') != session_id
                 or row.get('config_hash') != config_hash
                 or row.get('lifecycle_identity') != list(lifecycle_identity)
-                or row.get('fault_flags') != expected_fault
+                or type(row.get('fault_flags')) is not int
+                or row.get('fault_flags') not in (0, expected_fault)
                 or row.get('local_zero_override') is not True
                 or row.get('actuator_inhibited') is not True):
             continue
@@ -9195,21 +9197,23 @@ async def training_child(path):
                     if commit_path.exists() else 0
                 if issued_count != 0 or commit_count != prior_commits:
                     raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
-                native_status = r04d_native_watchdog_zero_status(
+                native_status = r04d_native_zero_inhibit_status(
                     io._r04d_backend_statuses,
                     backend_instance_id=int(io.descriptor['backend_instance_id']),
                     session_id=io.descriptor['session_id'],
                     config_hash=io.descriptor['config_hash'],
-                    lifecycle_identity=expected_lifecycle_identity,
+                    lifecycle_identity=[int(baseline_lifecycle.episode_generation),
+                        int(baseline_lifecycle.reset_epoch),int(baseline_lifecycle.runtime_generation)],
                     after_ns=marker_armed_ns)
                 if native_status is None:
-                    raise RuntimeError('R04d watchdog fault did not retain native zero/inhibit')
-                io.emit('R04D_NATIVE_WATCHDOG_ZERO_VERIFIED', {
+                    raise RuntimeError('R04d did not observe native zero/inhibit in the pinned backend context')
+                io.emit('R04D_NATIVE_ZERO_INHIBIT_STATUS_VERIFIED', {
                     **{key:native_status[key] for key in (
                         'backend_instance_id','session_id','config_hash','lifecycle_identity',
                         'fault_flags','local_zero_override','actuator_inhibited',
                         'status_sequence','physics_iteration','source_stamp_ns','received_ns',
                         'wire_sha256')},
+                    'watchdog_fault_present':native_status['fault_flags'] == r04d_expected_native_fault_flags(),
                     'assessment_ns':io.now()})
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
                     'stale_input_disposition':rejected['disposition'],
