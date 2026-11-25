@@ -9553,14 +9553,14 @@ async def training_child(path):
                 prior_commits = len([row for row in Path(packet['run_root'],
                     'b1_transition_committed.jsonl').read_text().splitlines() if row.strip()]) \
                     if Path(packet['run_root'], 'b1_transition_committed.jsonl').exists() else 0
-                state = install_r04_delivery_fault(io.safety.local_training,
-                    packet['case'], io.emit)
-                io._r04d_fault_state = state
-                marker_armed_ns = io.now()
                 baseline_lifecycle = io.ingress.lifecycle
                 if baseline_lifecycle is None:
                     raise RuntimeError('R04d requires a bound lifecycle before fault arming')
                 io._r04d_baseline_lifecycle = copy.deepcopy(baseline_lifecycle)
+                state = install_r04_delivery_fault(io.safety.local_training,
+                    packet['case'], io.emit)
+                io._r04d_fault_state = state
+                marker_armed_ns = io.now()
                 marker_path = Path(packet['run_root'])/'r04d-final-lifecycle-delay.json'
                 marker_write_started_ns = io.now()
                 io.emit('R04D_MARKER_WRITE_STARTED', {
