@@ -6797,7 +6797,8 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
     assert names.index('ADMISSION_STREAM_FROZEN') < names.index('STEP_STREAMS_FROZEN')
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
-    assert calls.index(('inhibit', False)) < calls.index(('immediate_safety_tick',)) < calls.index(('pause_admission',))
+    assert calls.index(('stream', True)) < calls.index(('immediate_safety_tick',)) < calls.index(('inhibit', False))
+    assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     assert calls.index(('stream', False)) < calls.index(('stream', True))
     event_names = [name for name, _ in events]
     assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(

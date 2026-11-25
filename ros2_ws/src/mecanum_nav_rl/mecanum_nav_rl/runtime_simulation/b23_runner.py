@@ -6170,18 +6170,16 @@ class TrainingWorkerIO:
                 self, adapter, deadline_ns=deadline_ns,
                 event_name='STEP_PRE_CLOSE_OUTPUT_DRAINED')
         adapter.set_stream_enabled(True)
+        # The last POLICY receipt is now joined. Publish the closing SAFE_STOP
+        # before waiting for another producer sample, so it cannot overtake
+        # an unapplied POLICY receipt and does not wait for a periodic timer
+        # interval that can consume the native watchdog at accelerated RTF.
+        adapter.tick()
         # Revoke the consumed slot token and let native observe a fresh
         # closing sample before freezing the stream.  Merely pausing here can
         # leave POLICY_OPEN carrying an already-consumed token; native then
         # rejects every later sample and the watermark drain cannot complete.
         await self.inhibit_and_drain(deadline_ns=deadline_ns)
-        # The last POLICY receipt is now joined and admission is natively
-        # inhibited, so it is safe to publish the closing SAFE_STOP without
-        # risking a zero receipt overtaking an unapplied POLICY receipt. Do
-        # not wait for the next periodic timer tick here: at accelerated RTF
-        # one 20 ms steady timer interval can consume the native 100 ms
-        # simulation-time command watchdog before its receipt is applied.
-        adapter.tick()
         await self.until(lambda: adapter.last_output
             if adapter.safe_stop_sequence > previous_safe_stop
             and adapter.last_output is not None
