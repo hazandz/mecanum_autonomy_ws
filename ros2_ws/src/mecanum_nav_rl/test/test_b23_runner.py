@@ -4510,11 +4510,12 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
     assert result is receipt
     assert calls[0] == ('stream',False)
     assert calls[1] == ('writer_ack',50)
-    assert calls[2][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
-    assert calls[3] == ('until','exact last Safety output receipt before close',150)
-    assert calls[4] == ('exact_receipt',3)
-    assert calls[5] == ('until','last POLICY application before close',150)
-    assert calls[6] == ('application',receipt)
+    assert calls[2] == ('writer_ack',50)
+    assert calls[3][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
+    assert calls[4] == ('until','exact last Safety output receipt before close',150)
+    assert calls[5] == ('exact_receipt',3)
+    assert calls[6] == ('until','last POLICY application before close',150)
+    assert calls[7] == ('application',receipt)
     assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
 
@@ -6777,6 +6778,60 @@ def test_native_policy_admission_ack_is_bound_before_stream_freeze(native_reader
     record['kind'] = 'B23_ADMISSION_ACCEPTED'
     path.write_text(json.dumps(record) + '\n')
     assert value.read_native_input_watermark() == 9
+
+
+def test_final_output_drain_resnapshots_same_sequence_after_writer_ack():
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+
+    def output(stamp_ns):
+        return NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44,
+            sequence=7, episode_generation=1, reset_epoch=2, runtime_generation=3,
+            header=NS(frame_id='base_link', stamp=NS(sec=1, nanosec=stamp_ns)),
+            twist=NS(linear=NS(x=0., y=0., z=0.),
+                angular=NS(x=0., y=0., z=0.)))
+
+    stale, current = output(250_000_000), output(260_000_000)
+    adapter = NS(last_output=stale, set_stream_enabled=lambda _enabled: None)
+    ack_calls = []
+    def wait_for_all_acked(timeout):
+        ack_calls.append(timeout.nanoseconds)
+        if len(ack_calls) == 1:
+            # A timer tick that had already entered publish completes after
+            # stream disable. It reuses source sequence 7 with a newer stamp.
+            adapter.last_output = current
+        return True
+
+    receipt = FinalIssuedCommandReceipt()
+    receipt.source = CommandEnvelope.SOURCE_SAFE_STOP
+    receipt.source_instance_id = 44
+    receipt.sequence = 7
+    receipt.final_publisher_instance_id = 55
+    receipt.final_publish_sequence = 20
+    receipt.final_command.linear.x = 0.
+    receipt.final_command.linear.y = 0.
+    receipt.final_command.angular.z = 0.
+    state = NS(applied_receipt_valid=True, local_zero_override=False,
+        fault_flags=0, applied_final_publisher_instance_id=55,
+        applied_final_publish_sequence=20)
+    selected = []
+    app = {'state': state, 'received_ns': 123}
+    async def until(predicate, *, deadline_ns, phase, **_kwargs):
+        value = predicate()
+        if value is None:
+            raise AssertionError(f'unexpected wait in {phase}')
+        return value
+    io = NS(now=lambda: 100, final=NS(publisher_instance_id=55,
+        publication_for_output=lambda value: (selected.append(value.header.stamp.nanosec)
+            or (receipt if value.header.stamp.nanosec == 260_000_000 else None))),
+        ingress=NS(application_for_receipt=lambda _receipt: app),
+        emit=lambda *_args: None, until=until)
+    adapter.node = NS(_accepted_pub=NS(wait_for_all_acked=wait_for_all_acked))
+
+    asyncio.run(drain_final_publication_before_close(
+        io, adapter, deadline_ns=1_000_000_000))
+
+    assert len(ack_calls) == 2
+    assert selected == [260_000_000]
 
 
 @pytest.mark.parametrize('last_source', ['safe_stop', 'policy'])

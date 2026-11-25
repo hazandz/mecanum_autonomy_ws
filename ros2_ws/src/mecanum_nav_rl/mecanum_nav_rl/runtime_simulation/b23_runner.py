@@ -2743,28 +2743,58 @@ async def drain_final_publication_before_close(
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
     adapter.set_stream_enabled(False)
-    output = adapter.last_output
-    if output is None or output.source not in (
-            CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
-        raise RuntimeError('cannot bind the last Safety output before close')
     # A source sequence can have more than one final publication (for example,
     # periodic Safety ticks can republish the still-current POLICY candidate).
-    # Waiting for any receipt with that sequence is insufficient: a later
-    # timestamped receipt may still be queued in the native gate.  First fence
-    # the reliable Safety writer after stream disable, then join the exact last
-    # Safety output by source identity, sequence, lifecycle, stamp and twist.
+    # A timer callback already in flight when the stream is disabled can also
+    # publish after the first output snapshot. Fence the reliable writer, then
+    # take a fresh snapshot and fence it once more. If the timer completed an
+    # output between fences, repeat until the output is stable across a writer
+    # acknowledgement. This prevents joining a stale timestamp for a reused
+    # source sequence while a later receipt for that same sequence is queued.
     publisher = getattr(getattr(adapter, 'node', None), '_accepted_pub', None)
     wait_for_all_acked = getattr(publisher, 'wait_for_all_acked', None)
     if not callable(wait_for_all_acked):
         raise RuntimeError('Safety output publisher acknowledgement is unavailable')
-    remaining_ns = deadline_ns - io.now()
-    if remaining_ns <= 0:
-        raise TimeoutError('last Safety output acknowledgement deadline expired')
     from rclpy.duration import Duration
-    acknowledged = await asyncio.to_thread(
-        wait_for_all_acked, Duration(nanoseconds=remaining_ns))
-    if acknowledged is not True:
-        raise TimeoutError('last Safety output was not acknowledged before close')
+    def output_identity(value):
+        if value is None:
+            return None
+        header = getattr(value, 'header', None)
+        twist = getattr(value, 'twist', None)
+        linear = getattr(twist, 'linear', None)
+        angular = getattr(twist, 'angular', None)
+        stamp = getattr(header, 'stamp', None)
+        return (getattr(value, 'source', None),
+            getattr(value, 'source_instance_id', None), getattr(value, 'sequence', None),
+            getattr(value, 'episode_generation', None), getattr(value, 'reset_epoch', None),
+            getattr(value, 'runtime_generation', None), getattr(header, 'frame_id', None),
+            stamp_ns(stamp) if stamp is not None else None,
+            getattr(linear, 'x', None), getattr(linear, 'y', None), getattr(linear, 'z', None),
+            getattr(angular, 'x', None), getattr(angular, 'y', None), getattr(angular, 'z', None))
+
+    output = None
+    while True:
+        remaining_ns = deadline_ns - io.now()
+        if remaining_ns <= 0:
+            raise TimeoutError('last Safety output acknowledgement deadline expired')
+        acknowledged = await asyncio.to_thread(
+            wait_for_all_acked, Duration(nanoseconds=remaining_ns))
+        if acknowledged is not True:
+            raise TimeoutError('last Safety output was not acknowledged before close')
+        first_snapshot = copy.deepcopy(adapter.last_output)
+        if first_snapshot is None or first_snapshot.source not in (
+                CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
+            raise RuntimeError('cannot bind the last Safety output before close')
+        remaining_ns = deadline_ns - io.now()
+        if remaining_ns <= 0:
+            raise TimeoutError('last Safety output acknowledgement deadline expired')
+        acknowledged = await asyncio.to_thread(
+            wait_for_all_acked, Duration(nanoseconds=remaining_ns))
+        if acknowledged is not True:
+            raise TimeoutError('last Safety output was not acknowledged before close')
+        output = copy.deepcopy(adapter.last_output)
+        if output_identity(first_snapshot) == output_identity(output):
+            break
     io.emit('SAFETY_OUTPUT_WRITER_ACKED', {
         'source': output.source, 'source_instance_id': output.source_instance_id,
         'source_sequence': output.sequence,
