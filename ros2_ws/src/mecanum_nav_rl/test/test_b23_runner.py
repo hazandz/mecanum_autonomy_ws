@@ -4452,6 +4452,99 @@ def test_r02c_recovers_safe_stop_application_when_worker_receipt_callback_is_coa
     assert seen[0].lifecycle.runtime_generation==3
 
 
+def test_r02c_pins_file_evidence_once_then_joins_late_exact_native_status(tmp_path, monkeypatch):
+    import threading
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r02c_safe_stop_application_for_bound_receipt,
+        r02c_safe_stop_receipt_view_from_ledgers,
+    )
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import LocalTrainingIngress
+    from mecanum_nav_rl_interfaces.msg import (
+        CommandEnvelope, FinalIssuedCommandReceipt, SimulationContactState,
+    )
+    from rclpy.serialization import serialize_message
+
+    receipt=FinalIssuedCommandReceipt()
+    receipt.header.frame_id='base_link'
+    receipt.header.stamp.sec=2
+    receipt.source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
+    receipt.sequence=51
+    receipt.source_instance_id=801
+    receipt.final_publisher_instance_id=55
+    receipt.final_publish_sequence=54
+    receipt.episode_generation=1
+    receipt.reset_epoch=2
+    receipt.runtime_generation=3
+    receipt_raw=serialize_message(receipt)
+    (tmp_path/'final-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LATE-STATUS','invocation_id':'inv-late','event':'FINAL_PUBLISHED',
+        'facts':{'identity':[1,2,3],'publisher_instance_id':55,
+            'publish_sequence':54,'receipt_cdr_hex':receipt_raw.hex(),
+            'source_instance_id':801,'source_sequence':51,'steady_ns':900}})+'\n')
+    (tmp_path/'native-events.jsonl').write_text(json.dumps({
+        'run_id':'R02C-LATE-STATUS','invocation_id':'inv-late',
+        'kind':'B23_SAFE_STOP_RECEIPT_INGRESS',
+        'fields':{'publisher':'55','key':'54','source_sequence':'51','receive_ns':'950'}})+'\n')
+    stop=NS(SOURCE_SAFE_STOP=CommandEnvelope.SOURCE_SAFE_STOP,
+        source=CommandEnvelope.SOURCE_SAFE_STOP,sequence=51,source_instance_id=801)
+
+    state=SimulationContactState()
+    state.header.frame_id='b2_training_arena'
+    state.header.stamp.sec=2
+    state.session_id='session-r02c-late'
+    state.config_hash='c'*64
+    state.backend_instance_id=99
+    state.episode_generation=1
+    state.reset_epoch=2
+    state.runtime_generation=3
+    state.status_sequence=1
+    state.physics_iteration=10
+    state.applied_receipt_valid=True
+    state.applied_final_publisher_instance_id=55
+    state.applied_final_publish_sequence=54
+    state.applied_physics_iteration=10
+    state.applied_sim_stamp.sec=2
+    state.local_zero_override=False
+    state.fault_flags=0
+    state.paused=False
+    state.actuator_inhibited=True
+    state_raw=serialize_message(state)
+
+    ingress=object.__new__(LocalTrainingIngress)
+    ingress.lock=threading.RLock()
+    ingress._application_bytes={}
+    ingress._application_received_ns={}
+    ingress._last_applied_sequence=0
+    ingress._unresolved_applications={}
+    ingress._receipt_views={}
+    ingress.identity=NS(session_id='session-r02c-late',config_hash='c'*64,
+        backend_instance_id=99)
+    ingress.lifecycle=state
+    ingress.final_publisher_id=55
+    ingress.safe_stop_source_id=801
+    io=NS(descriptor={'run_root':str(tmp_path),'run_id':'R02C-LATE-STATUS',
+        'invocation_id':'inv-late'}, final=NS(publisher_instance_id=55), ingress=ingress)
+
+    view=r02c_safe_stop_receipt_view_from_ledgers(io,receipt,stop)
+    assert view is not None
+    assert view.source is ReceiptSource.SAFE_STOP
+    assert view.final_publish_sequence==54
+    assert view.received_steady_ns==950
+    # The status callback may arrive after the receipt ledger is pinned.
+    # Exercise the production retention and exact-key validator directly.
+    assert r02c_safe_stop_application_for_bound_receipt(io,view) is None
+    ingress._record_application(state,state_raw,975)
+    # Repeated application polling must not reopen or reparse the ledgers.
+    monkeypatch.setattr(runner_module,'_ledger_rows',
+        lambda *_args,**_kwargs: pytest.fail('R02c repolled file-backed ledgers'))
+    application=r02c_safe_stop_application_for_bound_receipt(io,view)
+    assert application['receipt_evidence_source']=='publisher_and_native_ledgers'
+    assert application['state'].applied_final_publish_sequence==54
+    assert application['state'].actuator_inhibited is True
+    assert application['received_ns']==975
+
+
 def test_r02c_does_not_use_publisher_ledger_without_matching_native_receipt(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import (
         r02c_safe_stop_application_from_ledgers, r02g_resolve_safe_stop_publication)

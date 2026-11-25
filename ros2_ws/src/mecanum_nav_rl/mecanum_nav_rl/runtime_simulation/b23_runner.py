@@ -3143,13 +3143,12 @@ def verify_r02c_safe_stop_close(io, *, step_index, policy_receipt,
         'b1_transition_committed':False}
 
 
-def r02c_safe_stop_application_from_ledgers(io, receipt, stop):
-    """Join a SAFE_STOP receipt missed by worker KEEP_LAST ingress to raw source records.
+def r02c_safe_stop_receipt_view_from_ledgers(io, receipt, stop):
+    """Pin the exact SAFE_STOP receipt to publisher and native ingress records.
 
-    The receipt bytes come from FinalTwistPublisher's immutable publication
-    ledger, and native ingress independently records the same publisher key.
-    Native application is still joined by LocalTrainingIngress's exact status
-    CDR map; this does not synthesize a callback, receipt, or application fact.
+    This does the file-backed joins once. The caller can then wait on the
+    in-memory, receipt-keyed native status map without repeatedly parsing the
+    growing run ledgers on every short polling interval.
     """
     from rclpy.serialization import deserialize_message
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
@@ -3225,7 +3224,7 @@ def r02c_safe_stop_application_from_ledgers(io, receipt, stop):
     if int(received_ns) < steady_ns:
         raise RuntimeError('R02c native SAFE_STOP receive predates publisher evidence')
 
-    view = IssuedCommandReceiptView(
+    return IssuedCommandReceiptView(
         publish_stamp_ns=stamp_ns(receipt.header.stamp),
         final_publisher_instance_id=receipt.final_publisher_instance_id,
         final_publish_sequence=receipt.final_publish_sequence,
@@ -3242,10 +3241,22 @@ def r02c_safe_stop_application_from_ledgers(io, receipt, stop):
         received_steady_ns=int(received_ns),
         frame_id=receipt.header.frame_id,
         admission_valid=True)
+
+
+def r02c_safe_stop_application_for_bound_receipt(io, view):
+    """Join a previously pinned receipt to exact in-memory native status bytes."""
     application = io.ingress.application_for_receipt(view)
     if application is None:
         return None
     return {**application, 'receipt_evidence_source':'publisher_and_native_ledgers'}
+
+
+def r02c_safe_stop_application_from_ledgers(io, receipt, stop):
+    """Compatibility wrapper for one-shot callers and focused regression tests."""
+    view = r02c_safe_stop_receipt_view_from_ledgers(io, receipt, stop)
+    if view is None:
+        return None
+    return r02c_safe_stop_application_for_bound_receipt(io, view)
 
 
 def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_id):
@@ -7684,9 +7695,18 @@ class TrainingWorkerIO:
                         'safe_stop_sequence':stop.sequence,
                         'final_publish_sequence':safe_stop_receipt.final_publish_sequence,
                         'steady_ns':self.now()})
+                safe_stop_receipt_view = r02c_safe_stop_receipt_view_from_ledgers(
+                    self, safe_stop_receipt, stop)
+                if safe_stop_receipt_view is None:
+                    raise RuntimeError('R02c exact native SAFE_STOP receipt binding is incomplete')
+                self.emit('R02C_SAFE_STOP_RECEIPT_BINDING_PINNED', {
+                    'safe_stop_sequence':stop.sequence,
+                    'final_publish_sequence':safe_stop_receipt_view.final_publish_sequence,
+                    'native_received_ns':safe_stop_receipt_view.received_steady_ns,
+                    'steady_ns':self.now()})
                 safe_stop_application = await self.until(lambda:
-                    r02c_safe_stop_application_from_ledgers(self,
-                        safe_stop_receipt, stop),
+                    r02c_safe_stop_application_for_bound_receipt(
+                        self, safe_stop_receipt_view),
                     deadline_ns=deadline, phase='R02c exact inhibited SAFE_STOP application')
                 checked = verify_r02c_safe_stop_close(self, step_index=token.step_index,
                     policy_receipt=policy_receipt, safe_stop_receipt=safe_stop_receipt)
