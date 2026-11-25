@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import json
+import shutil
 import threading
 import textwrap
 import time
@@ -10,6 +11,7 @@ from types import SimpleNamespace as NS
 import pytest
 import mecanum_nav_rl.runtime_simulation.b23_runner as runner_module
 from mecanum_nav_rl.runtime_simulation.b23_runner import (
+    create_heartbeat_trace_staging_directory,
     TrainingWorkerIO, case_environment, case_fault_hooks, technical_outcome,
     QueuedRunEvidence, RunEvidence,
     policy_bind_launch_window_remaining_ns, policy_bind_launch_window_ready,
@@ -49,6 +51,27 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     spin_receipt_executor_until_stopped, instrument_executor_waits,
     r08_final_callback_diagnostic,
 )
+
+
+def test_heartbeat_trace_staging_directory_is_run_bound_and_private(tmp_path):
+    tmp_path.chmod(0o700)
+    root, trace = create_heartbeat_trace_staging_directory(
+        'B23_R08_TEST001', temp_root=tmp_path)
+    assert root.parent == tmp_path
+    assert root.name.startswith('b23-hbtrace-b23_r08_test001-')
+    assert root.stat().st_mode & 0o777 == 0o700
+    assert trace.stat().st_mode & 0o777 == 0o700
+    assert trace.is_dir()
+    with pytest.raises(ValueError, match='run ID invalid'):
+        create_heartbeat_trace_staging_directory('../B23_BAD', temp_root=tmp_path)
+    default_root, default_trace = create_heartbeat_trace_staging_directory(
+        'B23_R08_DEFAULT_TMP001')
+    try:
+        assert default_root.parent == Path('/tmp')
+        assert default_trace.is_dir()
+        assert default_root.stat().st_mode & 0o777 == 0o700
+    finally:
+        shutil.rmtree(default_root)
 
 
 def test_worker_failure_evidence_preserves_exception_cause_chain():

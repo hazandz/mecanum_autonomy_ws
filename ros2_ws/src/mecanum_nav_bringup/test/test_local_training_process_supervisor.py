@@ -1,6 +1,7 @@
 """Injected process/readiness tests; no Gazebo or ROS process is spawned."""
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import signal
@@ -630,6 +631,47 @@ def _controlled_supervisor(tmp_path, launcher, identity_reader):
 async def _start_fake_observer(supervisor):
     await supervisor._prepare_heartbeat_diagnostics()
     await supervisor._bind_heartbeat_readiness()
+
+
+def test_heartbeat_trace_archive_copies_closed_stage_bytes_and_hash(tmp_path):
+    """Trace staging stays local during runtime; archive copy is byte-bound."""
+    stage = tmp_path/'stage'
+    archive = tmp_path/'archive'
+    stage.mkdir(mode=0o700)
+    archive.mkdir(mode=0o700)
+    source = stage/'backend.hbtrace'
+    raw = bytes(range(256)) * 1024
+    source.write_bytes(raw)
+    source.chmod(0o600)
+    identity = source.stat()
+    supervisor = object.__new__(LocalTrainingProcessSupervisor)
+    supervisor.heartbeat_diagnostics_enabled = True
+    supervisor.heartbeat_trace_directory = stage
+    supervisor.heartbeat_trace_archive_directory = archive
+    supervisor._heartbeat_trace_reported = True
+    supervisor._cleanup_observer_facts = {
+        'trace_error':None,
+        'join_evidence':{
+            'server_process_joined':True, 'server_group_absent':True,
+            'observer_writer_closed':True, 'observer_process_joined':True,
+            'observer_process_group_absent':True,
+        },
+    }
+    supervisor._heartbeat_files = ({
+        'role':'backend', 'path':str(source), 'device':identity.st_dev,
+        'inode':identity.st_ino, 'size':identity.st_size,
+    },)
+
+    rows = supervisor.archive_heartbeat_trace_files(
+        deadline_ns=__import__('time').monotonic_ns()+2_000_000_000)
+
+    target = archive/'backend.hbtrace'
+    assert target.read_bytes() == raw
+    assert len(rows) == 1
+    assert rows[0]['archive_path'] == str(target)
+    assert rows[0]['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert rows[0]['staged_device'] == identity.st_dev
+    assert rows[0]['staged_inode'] == identity.st_ino
 
 
 def test_isolated_observer_clean_exit_uses_process_join_evidence(tmp_path):

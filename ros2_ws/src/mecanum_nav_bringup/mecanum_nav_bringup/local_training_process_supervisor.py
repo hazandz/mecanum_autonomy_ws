@@ -1390,6 +1390,7 @@ class LocalTrainingProcessSupervisor:
         readiness: Readiness, evidence_sink: EvidenceSink,
         heartbeat_diagnostics_enabled: bool = False,
         heartbeat_trace_directory: Path | None = None,
+        heartbeat_trace_archive_directory: Path | None = None,
         heartbeat_observer_factory=None,
         heartbeat_library_path: Path | None = None,
         heartbeat_identity_reader=None,
@@ -1409,6 +1410,9 @@ class LocalTrainingProcessSupervisor:
             heartbeat_diagnostics_enabled is True
         )
         self.heartbeat_trace_directory = heartbeat_trace_directory
+        self.heartbeat_trace_archive_directory = (
+            heartbeat_trace_archive_directory
+        )
         self.heartbeat_observer_factory = heartbeat_observer_factory
         self.heartbeat_library_path = heartbeat_library_path
         self._heartbeat_identity_reader = (
@@ -3739,6 +3743,117 @@ class LocalTrainingProcessSupervisor:
             )
         else:
             self._record_runtime_event('heartbeat_trace_collection', facts)
+
+    def archive_heartbeat_trace_files(self, *, deadline_ns: int) -> list[dict]:
+        """Copy closed mmap traces from fast local staging to evidence storage.
+
+        The Gazebo callback must not page-fault heartbeat records against a
+        removable/slow evidence filesystem. This runs only after owned writers
+        have stopped; the archive is byte-checked before it is reported.
+        """
+        if not self.heartbeat_diagnostics_enabled:
+            return []
+        if self.heartbeat_trace_archive_directory is None:
+            raise RuntimeError('heartbeat_trace_archive_directory_missing')
+        cleanup = self._cleanup_observer_facts
+        if (not self._heartbeat_trace_reported or not isinstance(cleanup, dict)
+                or cleanup.get('trace_error')
+                or cleanup.get('join_evidence', {}).get('server_process_joined') is not True
+                or cleanup.get('join_evidence', {}).get('server_group_absent') is not True
+                or cleanup.get('join_evidence', {}).get('observer_writer_closed') is not True
+                or cleanup.get('join_evidence', {}).get('observer_process_joined') is not True
+                or cleanup.get('join_evidence', {}).get('observer_process_group_absent') is not True):
+            raise RuntimeError('heartbeat_trace_writers_not_confirmed_closed')
+        staging = Path(self.heartbeat_trace_directory).resolve(strict=True)
+        archive = Path(self.heartbeat_trace_archive_directory).resolve(strict=True)
+        if staging == archive or not self._heartbeat_files:
+            raise RuntimeError('heartbeat_trace_stage_or_file_binding_invalid')
+        archive_stat = archive.stat(follow_symlinks=False)
+        if (not archive.is_dir() or archive_stat.st_uid != os.geteuid()
+                or (archive_stat.st_mode & 0o777) != 0o700):
+            raise RuntimeError('heartbeat_trace_archive_directory_invalid')
+        rows = []
+        for entry in self._heartbeat_files:
+            source = Path(entry['path']).resolve(strict=True)
+            try:
+                relative = source.relative_to(staging)
+            except ValueError as error:
+                raise RuntimeError('heartbeat_trace_source_escaped_stage') from error
+            source_stat = source.stat(follow_symlinks=False)
+            if (not source.is_file() or source_stat.st_uid != os.geteuid()
+                    or (source_stat.st_mode & 0o777) != 0o600
+                    or source_stat.st_nlink != 1
+                    or source_stat.st_dev != entry['device']
+                    or source_stat.st_ino != entry['inode']
+                    or source_stat.st_size != entry['size']):
+                raise RuntimeError('heartbeat_trace_source_identity_changed')
+            destination = archive / relative
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            parent_stat = destination.parent.stat(follow_symlinks=False)
+            if (not destination.parent.is_dir()
+                    or parent_stat.st_uid != os.geteuid()
+                    or (parent_stat.st_mode & 0o777) != 0o700):
+                raise RuntimeError('heartbeat_trace_archive_parent_invalid')
+            source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            digest = hashlib.sha256()
+            copied = 0
+            destination_fd = None
+            try:
+                destination_fd = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                )
+                os.fchmod(destination_fd, 0o600)
+                while True:
+                    if time.monotonic_ns() >= deadline_ns:
+                        raise TimeoutError('heartbeat_trace_archive_deadline')
+                    block = os.read(source_fd, 1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(destination_fd, view)
+                        if written <= 0:
+                            raise OSError('heartbeat_trace_archive_short_write')
+                        view = view[written:]
+                    copied += len(block)
+                os.fsync(destination_fd)
+            finally:
+                if destination_fd is not None:
+                    os.close(destination_fd)
+                os.close(source_fd)
+            target_stat = destination.stat(follow_symlinks=False)
+            target_hash = hashlib.sha256()
+            with destination.open('rb') as target_file:
+                while True:
+                    if time.monotonic_ns() >= deadline_ns:
+                        raise TimeoutError('heartbeat_trace_archive_verify_deadline')
+                    block = target_file.read(1024 * 1024)
+                    if not block:
+                        break
+                    target_hash.update(block)
+            target_digest = target_hash.hexdigest()
+            source_digest = digest.hexdigest()
+            if (copied != source_stat.st_size or target_stat.st_size != copied
+                    or target_stat.st_uid != os.geteuid()
+                    or (target_stat.st_mode & 0o777) != 0o600
+                    or target_digest != source_digest):
+                raise RuntimeError('heartbeat_trace_archive_verification_failed')
+            rows.append({
+                'role': entry['role'],
+                'staged_path': str(source),
+                'staged_device': entry['device'],
+                'staged_inode': entry['inode'],
+                'archive_path': str(destination),
+                'archive_device': target_stat.st_dev,
+                'archive_inode': target_stat.st_ino,
+                'size': copied,
+                'sha256': source_digest,
+                'verified_ns': time.monotonic_ns(),
+            })
+        return rows
 
     def cleanup_snapshot(self) -> dict[str, object]:
         """Return a detached view of cleanup state and retained evidence."""

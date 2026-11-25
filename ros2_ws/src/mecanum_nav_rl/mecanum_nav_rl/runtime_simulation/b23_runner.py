@@ -12,6 +12,7 @@ import json
 import math
 from collections import deque
 from pathlib import Path
+import tempfile
 import threading
 import time
 
@@ -9951,9 +9952,22 @@ async def run_parent(packet_path, packet_sha256):
     values['commands'] = tuple(tuple(command) for command in values['commands'])
     values['bridge_command'] = tuple(values['bridge_command'])
     plan = LaunchPlan(**values)
-    supervisor = sp.LocalTrainingProcessSupervisor(plan=plan, launcher=sp.SubprocessProcessLauncher(),
-        readiness=sp.RclpyReadiness(), evidence_sink=sink, heartbeat_diagnostics_enabled=True,
-        heartbeat_trace_directory=root/'trace', cleanup_evidence_publisher=sink.cleanup_publisher)
+    trace_stage_root, trace_stage_dir = create_heartbeat_trace_staging_directory(
+        packet['run_id'])
+    try:
+        sink.record('HEARTBEAT_TRACE_STAGE_CREATED', {
+            'directory':str(trace_stage_dir), 'filesystem':os.statvfs(trace_stage_dir).f_fsid,
+            'run_id':packet['run_id'], 'packet_sha256':packet_sha256,
+        })
+        supervisor = sp.LocalTrainingProcessSupervisor(plan=plan, launcher=sp.SubprocessProcessLauncher(),
+            readiness=sp.RclpyReadiness(), evidence_sink=sink, heartbeat_diagnostics_enabled=True,
+            heartbeat_trace_directory=trace_stage_dir,
+            heartbeat_trace_archive_directory=root/'trace',
+            cleanup_evidence_publisher=sink.cleanup_publisher)
+    except BaseException:
+        import shutil
+        shutil.rmtree(trace_stage_root)
+        raise
     abort = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -10174,6 +10188,45 @@ async def run_parent(packet_path, packet_sha256):
             clean = await supervisor.cleanup(deadline=deadline/1e9)
         except BaseException as error:
             sink.record('PARENT_CLEANUP_ERROR', {'error': repr(error)})
+            clean = False
+        if supervisor._heartbeat_files:
+            try:
+                archive = supervisor.archive_heartbeat_trace_files(
+                    deadline_ns=deadline)
+                sink.record('HEARTBEAT_TRACE_ARCHIVE', {
+                    'files':archive, 'run_id':packet['run_id'],
+                    'packet_sha256':packet_sha256,
+                    'completed_ns':time.monotonic_ns(),
+                })
+            except BaseException as error:
+                primary = primary or repr(error)
+                clean = False
+                sink.record('HEARTBEAT_TRACE_ARCHIVE_ERROR', {
+                    'error':repr(error), 'run_id':packet['run_id'],
+                    'packet_sha256':packet_sha256,
+                    'failed_ns':time.monotonic_ns(),
+                })
+        if clean:
+            try:
+                if time.monotonic_ns() >= deadline:
+                    raise TimeoutError('heartbeat_trace_stage_cleanup_deadline')
+                import shutil
+                shutil.rmtree(trace_stage_root)
+                removed_ns = time.monotonic_ns()
+                if removed_ns > deadline:
+                    raise TimeoutError('heartbeat_trace_stage_cleanup_deadline')
+                sink.record('HEARTBEAT_TRACE_STAGE_REMOVED', {
+                    'directory':str(trace_stage_root), 'run_id':packet['run_id'],
+                    'packet_sha256':packet_sha256, 'completed_ns':removed_ns,
+                })
+            except BaseException as error:
+                primary = primary or repr(error)
+                clean = False
+                sink.record('HEARTBEAT_TRACE_STAGE_CLEANUP_ERROR', {
+                    'error':repr(error), 'directory':str(trace_stage_root),
+                    'run_id':packet['run_id'], 'packet_sha256':packet_sha256,
+                    'failed_ns':time.monotonic_ns(),
+                })
         for task in (startup_task, abort_task):
             if task is not None:
                 pending = not task.done()
@@ -10196,6 +10249,38 @@ async def run_parent(packet_path, packet_sha256):
     return 0 if primary is None and clean and result['completed_ns'] <= total_end else 1
 
 
+
+
+def create_heartbeat_trace_staging_directory(run_id, *, temp_root=Path('/tmp')):
+    """Allocate run-bound trace files on local storage, outside evidence I/O."""
+    import os
+    import re
+    import stat
+    if not re.fullmatch(r'B23_[A-Z0-9_]{1,60}', str(run_id)):
+        raise ValueError('heartbeat trace staging run ID invalid')
+    temp_root = Path(temp_root)
+    if (not temp_root.is_absolute()
+            or temp_root.resolve(strict=True) != temp_root.absolute()):
+        raise ValueError('heartbeat trace temp root must be canonical')
+    info = temp_root.stat(follow_symlinks=False)
+    private_user_root = (
+        info.st_uid == os.geteuid()
+        and (info.st_mode & 0o022) == 0
+    )
+    sticky_shared_root = (
+        bool(info.st_mode & stat.S_ISVTX)
+        and os.access(temp_root, os.W_OK | os.X_OK)
+    )
+    if not temp_root.is_dir() or not (private_user_root or sticky_shared_root):
+        raise ValueError('heartbeat trace temp root ownership invalid')
+    root = Path(tempfile.mkdtemp(
+        prefix='b23-hbtrace-' + str(run_id).lower() + '-',
+        dir=temp_root,
+    ))
+    os.chmod(root, 0o700)
+    trace = root/'trace'
+    trace.mkdir(mode=0o700)
+    return root, trace
 
 
 def cleanup_window_deadline(record, *, run_id, invocation, total_end, now_ns):
