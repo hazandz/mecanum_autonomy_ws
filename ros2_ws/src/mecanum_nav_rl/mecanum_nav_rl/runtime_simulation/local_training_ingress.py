@@ -468,17 +468,22 @@ class LocalTrainingIngress:
                 receive_steady_ns=sample.received_steady_ns, now_steady_ns=now_steady_ns,
                 max_age_ns=max_age_ns)
         except ValueError as error:
-            closed_states = (LocalTrainingSafetyInput.ADMISSION_INHIBITED,
-                LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY)
+            non_fault_states = (LocalTrainingSafetyInput.ADMISSION_INHIBITED,
+                LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY,
+                LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN)
             if (str(error) == 'input exceeds ROS or local steady receive age'
-                    and self.admission_state in closed_states):
-                # Old sensor samples can arrive while reset is still inhibited.
-                # Drop them without publishing or tearing down the executor;
-                # the native admission remains closed and B1 independently
-                # applies its exact-cutoff freshness checks. POLICY_OPEN keeps
-                # the fail-closed exception path below.
+                    and self.admission_state in non_fault_states):
+                # A stale sample is never published to Safety, regardless of
+                # whether the gate is closed or a POLICY slot is open. Drop it
+                # without tearing down the executor so a later fresh sample
+                # can satisfy the existing pending step before its deadline.
+                # Native watchdog, B1 exact-cutoff checks, and step deadlines
+                # remain authoritative; this does not extend or relax them.
+                reason = ('stale dual-clock freshness while admission is open'
+                    if self.admission_state == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                    else 'stale dual-clock freshness while admission is closed')
                 self.emit('ADMISSION_SAMPLE_REJECTED', {
-                    'reason':'stale dual-clock freshness while admission is closed',
+                    'reason':reason,
                     'admission_state':self.admission_state,
                     'source_ros_ns':source_ns, 'now_ros_ns':now_ros_ns,
                     'ros_age_ns':now_ros_ns-source_ns,
