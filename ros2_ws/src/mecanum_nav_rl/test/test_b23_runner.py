@@ -6845,21 +6845,33 @@ def test_r02e_requires_prebind_sample_rejected_and_fresh_pending_token_accepted(
             session_id='session-1', backend_instance_id=22, ingress_instance_id=11)
 
 
-def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
+def test_r02e_waits_incrementally_for_delayed_native_acceptance_record(tmp_path, monkeypatch):
     value, clock = worker()
     native = tmp_path/'native-events.jsonl'
     identity = {'session':'session-1','backend':'22','ingress':'11'}
     records = [
-        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'10','receive_ns':'100'}},
-        {'kind':'B23_SAFETY_INPUT_ENQUEUED','fields':{**identity,'sample':'11','receive_ns':'200'}},
-        {'kind':'B23_ADMISSION_ACCEPTED','fields':{**identity,'sample':'11'}},
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','run_id':'run-1','server_leader_pid':700,
+            'invocation_id':'inv-1','fields':{**identity,'sample':'10','receive_ns':'100'}},
+        {'kind':'B23_SAFETY_INPUT_ENQUEUED','run_id':'run-1','server_leader_pid':700,
+            'invocation_id':'inv-1','fields':{**identity,'sample':'11','receive_ns':'200'}},
+        {'kind':'B23_ADMISSION_ACCEPTED','run_id':'run-1','server_leader_pid':700,
+            'invocation_id':'inv-1','fields':{**identity,'sample':'11'}},
     ]
     content = b''.join((json.dumps(row).encode()+b'\n') for row in records)
     partial = content[:9]
     native.write_bytes(partial)
     value.descriptor = {'native_events_path':str(native), 'session_id':'session-1',
-        'backend_instance_id':22,'coordinator_ingress_instance_id':11}
+        'backend_instance_id':22,'coordinator_ingress_instance_id':11,
+        'run_id':'run-1','server_leader_pid':700,'invocation_id':'inv-1'}
+    value._native_offset = 0
+    value._native_partial = b''
+    value._native_input_watermark = 0
+    value._native_r02e_rows = []
+    value._native_safe_stop_ingress = {}
+    value._native_receipt_gate_acceptance = {}
     value.ros_now = lambda: 0
+    monkeypatch.setattr(runner_module, 'complete_jsonl_rows',
+        lambda _path: (_ for _ in ()).throw(AssertionError('full native JSONL reread')))
     pauses = []
     async def pause(seconds):
         await clock.pause(seconds)
@@ -6878,6 +6890,7 @@ def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
         'prebind_enqueued_before_fresh':True,
         'pending_token_nonzero':True}
     assert len(pauses) == 1
+    assert len(value._native_r02e_rows) == 3
 
 
 def test_r02e_resumes_fresh_admission_only_after_exact_native_acceptance():

@@ -3968,6 +3968,8 @@ class TrainingWorkerIO:
         self.last_clock_ns, self.last_clock_advance_ns = 0, self.now()
         self._native_offset, self._native_partial = 0, b''
         self._native_input_watermark = 0
+        self._native_r02e_offset, self._native_r02e_partial = 0, b''
+        self._native_r02e_rows = []
         self._native_safe_stop_ingress = {}
         self._native_receipt_gate_acceptance = {}
         self.contact_ack = None
@@ -4951,10 +4953,10 @@ class TrainingWorkerIO:
 
     async def wait_r02e_native_admission(self, *, held_sample_sequence,
             fresh_sample_sequence, pending_token, deadline_ns):
-        """Wait within the active step budget for the native event-pipe record."""
-        path = self.descriptor['native_events_path']
+        """Wait on incrementally collected native rows within the active step budget."""
         return await self.until(lambda: verify_r02e_prebind_admission_rejected(
-                complete_jsonl_rows(path), held_sample_sequence=held_sample_sequence,
+                self.read_native_r02e_rows(),
+                held_sample_sequence=held_sample_sequence,
                 fresh_sample_sequence=fresh_sample_sequence, pending_token=pending_token,
                 session_id=self.descriptor['session_id'],
                 backend_instance_id=self.descriptor['backend_instance_id'],
@@ -5012,9 +5014,9 @@ class TrainingWorkerIO:
         return native_row
 
     async def wait_r02e_native_input_enqueued(self, *, sample_sequence, deadline_ns):
-        path = self.descriptor['native_events_path']
         return await self.until(lambda: verify_r02e_safety_input_enqueued(
-                complete_jsonl_rows(path), sample_sequence=sample_sequence,
+                self.read_native_r02e_rows(),
+                sample_sequence=sample_sequence,
                 session_id=self.descriptor['session_id'],
                 backend_instance_id=self.descriptor['backend_instance_id'],
                 ingress_instance_id=self.descriptor['coordinator_ingress_instance_id'],
@@ -5792,6 +5794,31 @@ class TrainingWorkerIO:
                 raise RuntimeError('native input evidence ownership mismatch')
             self._native_input_watermark = max(self._native_input_watermark, sample)
         return self._native_input_watermark
+
+    def read_native_r02e_rows(self):
+        """Read only newly appended R02E evidence rows from the native JSONL."""
+        offset = getattr(self, '_native_r02e_offset', 0)
+        partial = getattr(self, '_native_r02e_partial', b'')
+        rows = getattr(self, '_native_r02e_rows', None)
+        if rows is None:
+            rows = self._native_r02e_rows = []
+        path = Path(self.descriptor['native_events_path'])
+        if not path.exists():
+            return tuple(rows)
+        with path.open('rb') as stream:
+            stream.seek(offset)
+            raw = partial + stream.read(1_048_576)
+            self._native_r02e_offset = stream.tell()
+        lines = raw.split(b'\n')
+        self._native_r02e_partial = lines.pop()
+        for line in lines:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get('kind') in (
+                    'B23_SAFETY_INPUT_ENQUEUED', 'B23_ADMISSION_ACCEPTED'):
+                rows.append(row)
+        return tuple(rows)
 
     def native_safe_stop_gate_acceptance_for_receipt(self, receipt):
         """Return the invocation-bound native gate acceptance for one exact SAFE_STOP."""
