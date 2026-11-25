@@ -4701,7 +4701,8 @@ def test_r04d_wait_tolerates_only_bound_lifecycle_and_watchdog_faults_while_zero
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_expected_native_fault_flags
 
     expected = r04d_expected_native_fault_flags()
-    assert expected == (SimulationContactState.FAULT_COMMAND_STALE,
+    assert expected == (SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        SimulationContactState.FAULT_COMMAND_STALE,
         SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
     for expected_flag in expected:
         value, clock = worker()
@@ -4732,24 +4733,29 @@ def test_r04d_wait_tolerates_only_bound_lifecycle_and_watchdog_faults_while_zero
 def test_r04d_composite_fault_requires_the_exact_released_new_context_zero_receipt():
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_lifecycle_mismatch_fault_evidence
 
-    released = [{'identity':[2,2,2],'source_sequence':81,'received_ns':520,
-        'delivery_ns':530}]
-    gate = [{'kind':'B23_RECEIPT_GATE_RESULT','collected_ns':550,'fields':{
-        'reason':'lifecycle_mismatch','disposition':'6','source':'4','key':'81',
-        'source_sequence':'81','watermark':'80','steady_ns':'540'}}]
+    released = [{'identity':[2,2,2],'source_sequence':74,
+        'received_ns':168900371594110,'delivery_ns':168900392685082}]
+    gate = [{'kind':'B23_RECEIPT_GATE_RESULT','collected_ns':168900402403596,'fields':{
+        'reason':'lifecycle_mismatch','disposition':'6','source':'4','key':'74',
+        'source_sequence':'74','watermark':'72','next_safe_stop':'73',
+        'steady_ns':'168900401864271'}}]
     result = r04d_lifecycle_mismatch_fault_evidence(gate, released,
-        baseline_identity=[1,1,2],after_ns=500)
-    assert result == {'source_sequence':81,'publish_sequence':81,
+        baseline_identity=[1,1,2],after_ns=168900350566578)
+    assert result == {'source_sequence':74,'publish_sequence':74,
         'baseline_identity':[1,1,2],'receipt_identity':[2,2,2],
-        'released_ns':530,'gate_ns':540,'reason':'lifecycle_mismatch','watermark':80}
+        'released_ns':168900392685082,'gate_ns':168900401864271,
+        'reason':'lifecycle_mismatch','watermark':72,'next_safe_stop':73}
     assert r04d_lifecycle_mismatch_fault_evidence(gate, [],
-        baseline_identity=[1,1,2],after_ns=500) is None
+        baseline_identity=[1,1,2],after_ns=168900350566578) is None
     assert r04d_lifecycle_mismatch_fault_evidence(
         [{**gate[0],'fields':{**gate[0]['fields'],'source':'1'}}], released,
-        baseline_identity=[1,1,2],after_ns=500) is None
+        baseline_identity=[1,1,2],after_ns=168900350566578) is None
     assert r04d_lifecycle_mismatch_fault_evidence(
         [{**gate[0],'fields':{**gate[0]['fields'],'reason':'final_publication_sequence_gap'}}],
-        released,baseline_identity=[1,1,2],after_ns=500) is None
+        released,baseline_identity=[1,1,2],after_ns=168900350566578) is None
+    assert r04d_lifecycle_mismatch_fault_evidence(
+        [{**gate[0],'fields':{**gate[0]['fields'],'next_safe_stop':'75'}}], released,
+        baseline_identity=[1,1,2],after_ns=168900350566578) is None
 
 
 def test_r04d_native_zero_inhibit_uses_bound_raw_status_even_if_later_status_changes():
@@ -4785,6 +4791,9 @@ def test_r04d_native_zero_inhibit_uses_bound_raw_status_even_if_later_status_cha
     assert r04d_native_zero_inhibit_status(
         [sequence_watchdog], backend_instance_id=71, session_id='session-a',
         config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is sequence_watchdog
+    assert r04d_native_zero_inhibit_status(
+        [sequence_watchdog], backend_instance_id=71, session_id='session-a',
+        config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=700) is None
     assert r04d_native_zero_inhibit_status(
         [wrong_identity], backend_instance_id=71, session_id='session-a',
         config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is None

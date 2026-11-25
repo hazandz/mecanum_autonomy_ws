@@ -1422,7 +1422,8 @@ def r04d_expected_native_fault_flags():
     joined to the exact released SAFE_STOP below.
     """
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
-    return (SimulationContactState.FAULT_COMMAND_STALE,
+    return (SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        SimulationContactState.FAULT_COMMAND_STALE,
         SimulationContactState.FAULT_COMMAND_SEQUENCE |
         SimulationContactState.FAULT_COMMAND_STALE)
 
@@ -1465,21 +1466,23 @@ def r04d_lifecycle_mismatch_fault_evidence(native_rows, released_safe_stops, *,
             sequence = int(fields.get('source_sequence'))
             disposition = int(fields.get('disposition'))
             watermark = int(fields.get('watermark'))
+            next_safe_stop = int(fields.get('next_safe_stop'))
             gate_ns = int(fields.get('steady_ns'))
         except (TypeError, ValueError):
             continue
         receipt = released.get(sequence)
         if (row.get('kind') != 'B23_RECEIPT_GATE_RESULT'
                 or fields.get('reason') != 'lifecycle_mismatch'
-                or source != 4 or disposition != 6 or key != sequence
-                or watermark != key - 1 or gate_ns <= after_ns
+                or source != 4 or disposition != 6 or key <= watermark
+                or next_safe_stop > sequence or gate_ns <= after_ns
                 or type(collected_ns) is not int or collected_ns < gate_ns
                 or receipt is None or receipt['delivery_ns'] > gate_ns):
             continue
         return {'source_sequence':sequence,'publish_sequence':key,
             'baseline_identity':list(baseline_identity),
             'receipt_identity':receipt['identity'],'released_ns':receipt['delivery_ns'],
-            'gate_ns':gate_ns,'reason':'lifecycle_mismatch','watermark':watermark}
+            'gate_ns':gate_ns,'reason':'lifecycle_mismatch','watermark':watermark,
+            'next_safe_stop':next_safe_stop}
     return None
 
 
@@ -9616,14 +9619,21 @@ async def training_child(path):
                         int(baseline_lifecycle.reset_epoch),
                         int(baseline_lifecycle.runtime_generation)],
                     after_ns=marker_armed_ns)
-                native_status = r04d_native_zero_inhibit_status(
+                native_status_after_ns = max(
+                    [int(rejected['steady_ns']), *[int(row['delivery_ns']) for row in released_zero],
+                        *([int(lifecycle_mismatch_evidence['gate_ns'])]
+                            if lifecycle_mismatch_evidence is not None else [])])
+                native_status = await io.until(lambda: r04d_native_zero_inhibit_status(
                     io._r04d_backend_statuses,
                     backend_instance_id=int(io.descriptor['backend_instance_id']),
                     session_id=io.descriptor['session_id'],
                     config_hash=io.descriptor['config_hash'],
                     lifecycle_identity=[int(baseline_lifecycle.episode_generation),
                         int(baseline_lifecycle.reset_epoch),int(baseline_lifecycle.runtime_generation)],
-                    after_ns=marker_armed_ns)
+                    after_ns=native_status_after_ns),
+                    deadline_ns=verification_deadline_ns,
+                    phase='R04d native zero/inhibit status after rejection and released SAFE_STOP',
+                    expected_native_fault_flags=r04d_expected_native_fault_flags())
                 if native_status is None:
                     raise RuntimeError('R04d did not observe native zero/inhibit in the pinned backend context')
                 from mecanum_nav_rl_interfaces.msg import SimulationContactState
@@ -9633,6 +9643,14 @@ async def training_child(path):
                         and lifecycle_mismatch_evidence is None):
                     raise RuntimeError(
                         'R04d composite native fault lacks matching released lifecycle-mismatch SAFE_STOP')
+                if (native_status['fault_flags'] & SimulationContactState.FAULT_COMMAND_SEQUENCE
+                        and lifecycle_mismatch_evidence is None):
+                    raise RuntimeError(
+                        'R04d native sequence fault lacks matching released lifecycle-mismatch SAFE_STOP')
+                if (lifecycle_mismatch_evidence is not None
+                        and not native_status['fault_flags'] & SimulationContactState.FAULT_COMMAND_SEQUENCE):
+                    raise RuntimeError(
+                        'R04d native status after lifecycle-mismatch gate event lacks sequence fault')
                 io.emit('R04D_NATIVE_ZERO_INHIBIT_STATUS_VERIFIED', {
                     **{key:native_status[key] for key in (
                         'backend_instance_id','session_id','config_hash','lifecycle_identity',
@@ -9654,6 +9672,8 @@ async def training_child(path):
                     'final_new_context_safe_stop_released':len(released_zero),
                     'final_new_context_publication_errors':publication_errors,
                     'native_fault_flags':int(native_status['fault_flags']),
+                    'native_status_after_ns':native_status_after_ns,
+                    'native_lifecycle_mismatch_fault_evidence':lifecycle_mismatch_evidence,
                     'native_local_zero_override':bool(native_status['local_zero_override']),
                     'native_actuator_inhibited':bool(native_status['actuator_inhibited']),
                     'source_stamp_ns':scheduled['source_stamp_ns'],
