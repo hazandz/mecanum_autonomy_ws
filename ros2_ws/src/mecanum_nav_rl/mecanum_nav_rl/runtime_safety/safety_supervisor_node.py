@@ -468,14 +468,24 @@ class LocalTrainingSafetyAdapter:
                 and all(new <= old for old, new in zip(current, candidate))
                 and any(new < old for old, new in zip(current, candidate)))
 
+    @staticmethod
+    def _safety_input_stamp_ns(message):
+        stamp = message.header.stamp
+        if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
+                or stamp.sec < 0 or not 0 <= stamp.nanosec < 1_000_000_000):
+            return None
+        return stamp.sec * 1_000_000_000 + stamp.nanosec
+
     def _discard_stale_safety_input(self, *, current_identity, input_identity,
-                                    sample_sequence, received_ns, stage):
+                                    sample_sequence, received_ns, source_stamp_ns, stage):
         self.emit('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
             'current_identity': list(current_identity),
             'input_identity': list(input_identity),
             'sample_sequence': sample_sequence,
             'received_ns': received_ns,
             'stage': stage,
+            'source_stamp_ns': source_stamp_ns,
+            'ros_ns': self.node.get_clock().now().nanoseconds,
             'steady_ns': self.now(),
         })
 
@@ -538,6 +548,7 @@ class LocalTrainingSafetyAdapter:
                         input_identity=pending_identity,
                         sample_sequence=pending_msg.sample_sequence,
                         received_ns=pending_received_ns,
+                        source_stamp_ns=self._safety_input_stamp_ns(pending_msg),
                         stage='lifecycle_advanced_past_pending_input')
                 elif not self._identity_is_forward(current_identity, pending_identity):
                     self._pending_safety_input = None
@@ -634,6 +645,7 @@ class LocalTrainingSafetyAdapter:
                     input_identity=identity,
                     sample_sequence=msg.sample_sequence,
                     received_ns=received_ns,
+                    source_stamp_ns=self._safety_input_stamp_ns(snapshot),
                     stage='callback_arrived_after_lifecycle_advance')
                 return
             self.fail('SAFETY_INPUT_IDENTITY')

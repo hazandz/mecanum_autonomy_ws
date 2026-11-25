@@ -4565,7 +4565,7 @@ def test_r04d_stale_safety_observation_must_follow_safety_callback_delivery():
         'steady_ns':720, 'ros_ns':1_850_000_001})
     assert r04d_stale_safety_rejection_after_delivery(
         [before_safety_delivery, after_safety_delivery], delivery_ns=safety_delivery_ns,
-        source_stamp_ns=1_050_000_000) is before_safety_delivery[1]
+        source_stamp_ns=1_050_000_000)['disposition'] == 'rejected'
     assert r04d_stale_safety_rejection_after_delivery(
         [before_safety_delivery], delivery_ns=700,
         source_stamp_ns=1_050_000_000) is None
@@ -4574,6 +4574,33 @@ def test_r04d_stale_safety_observation_must_follow_safety_callback_delivery():
     assert r04d_stale_safety_rejection_after_delivery(
         [not_stale_enough], delivery_ns=safety_delivery_ns,
         source_stamp_ns=1_050_000_000) is None
+
+
+def test_r04d_old_context_callback_discard_after_delivery_keeps_staleness_evidence():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_stale_safety_rejection_after_delivery
+
+    discarded = ('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
+        'current_identity':[2,2,2], 'input_identity':[1,1,2], 'sample_sequence':17,
+        'received_ns':700, 'stage':'callback_arrived_after_lifecycle_advance',
+        'source_stamp_ns':1_050_000_000, 'ros_ns':1_850_000_001, 'steady_ns':720})
+    selected = r04d_stale_safety_rejection_after_delivery(
+        [discarded], delivery_ns=700, source_stamp_ns=1_050_000_000)
+    assert selected['disposition'] == 'discarded_old_context'
+    assert selected['event'] == 'SAFETY_INPUT_STALE_CONTEXT_DISCARDED'
+    assert selected['ros_ns'] - selected['source_stamp_ns'] > 500_000_000
+
+    before_delivery = ('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
+        **discarded[1], 'steady_ns':699})
+    wrong_identity = ('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
+        **discarded[1], 'input_identity':[3,1,2]})
+    insufficient_age = ('SAFETY_INPUT_STALE_CONTEXT_DISCARDED', {
+        **discarded[1], 'ros_ns':1_550_000_000})
+    assert r04d_stale_safety_rejection_after_delivery(
+        [before_delivery], delivery_ns=700, source_stamp_ns=1_050_000_000) is None
+    assert r04d_stale_safety_rejection_after_delivery(
+        [wrong_identity], delivery_ns=700, source_stamp_ns=1_050_000_000) is None
+    assert r04d_stale_safety_rejection_after_delivery(
+        [insufficient_age], delivery_ns=700, source_stamp_ns=1_050_000_000) is None
 
 
 def test_r04d_final_lifecycle_delivery_is_pinned_to_sequence_and_identity():

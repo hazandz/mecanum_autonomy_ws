@@ -1262,15 +1262,33 @@ def r04d_final_lifecycle_dispatch(original, marker_path, emit, schedule):
 
 
 def r04d_stale_safety_rejection_after_delivery(events, *, delivery_ns, source_stamp_ns):
-    """Select only the stale-Safety fact observed after the injected callback ran."""
+    """Select stale rejection or old-context discard after delayed delivery."""
     for name, facts in events:
         if (name == 'SAFETY_REJECTED'
-                and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())
-                and type(facts.get('steady_ns')) is int
-                and facts['steady_ns'] >= delivery_ns
-                and type(facts.get('ros_ns')) is int
-                and facts['ros_ns'] - source_stamp_ns > 500_000_000):
-            return facts
+                and 'LIFECYCLE_STALE_OR_FUTURE' in facts.get('reasons', ())):
+            disposition = 'rejected'
+        elif (name == 'SAFETY_INPUT_STALE_CONTEXT_DISCARDED'
+                and facts.get('stage') == 'callback_arrived_after_lifecycle_advance'
+                and isinstance(facts.get('current_identity'), list)
+                and isinstance(facts.get('input_identity'), list)
+                and len(facts['current_identity']) == 3
+                and len(facts['input_identity']) == 3
+                and all(type(value) is int for value in facts['current_identity'] + facts['input_identity'])
+                and all(old <= current for old, current in zip(
+                    facts['input_identity'], facts['current_identity']))
+                and any(old < current for old, current in zip(
+                    facts['input_identity'], facts['current_identity']))):
+            disposition = 'discarded_old_context'
+        else:
+            continue
+        steady_ns = facts.get('steady_ns')
+        ros_ns = facts.get('ros_ns')
+        observed_source_stamp_ns = facts.get('source_stamp_ns', source_stamp_ns)
+        if (type(steady_ns) is int and steady_ns >= delivery_ns
+                and type(ros_ns) is int and type(observed_source_stamp_ns) is int
+                and observed_source_stamp_ns == source_stamp_ns
+                and ros_ns - source_stamp_ns > 500_000_000):
+            return {**facts, 'disposition': disposition, 'event': name}
     return None
 
 
@@ -9052,7 +9070,9 @@ async def training_child(path):
                 if issued_count != 0 or commit_count != prior_commits:
                     raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
-                    'stale_rejection_reason':'LIFECYCLE_STALE_OR_FUTURE',
+                    'stale_input_disposition':rejected['disposition'],
+                    'stale_rejection_reason':('LIFECYCLE_STALE_OR_FUTURE'
+                        if rejected['disposition'] == 'rejected' else None),
                     'rejected_steady_ns':rejected['steady_ns'], 'delayed_callbacks':state['scheduled'],
                     'safety_repeat_callbacks_held':state['repeat_held'],
                     'ingress_repeat_callbacks_held':state['ingress_repeats_held'],
